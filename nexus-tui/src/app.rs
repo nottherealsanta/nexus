@@ -162,6 +162,17 @@ pub struct SideEntry {
     pub heading: Option<String>,
 }
 
+/// One line of the settings modal.
+#[derive(Debug, Clone)]
+pub enum SettingsItem {
+    Heading(String),
+    Row {
+        row: Box<crate::manifest::Row>,
+        /// The section's unavailable reason, which disables its rows.
+        section_reason: Option<String>,
+    },
+}
+
 /// One drawable row of the Files tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileRow {
@@ -179,6 +190,12 @@ pub struct FileRow {
 pub struct Ui {
     pub focus: Focus,
     pub left_open: bool,
+    /// The docked left sidebar shows one letter per session instead of rows.
+    pub left_rail: bool,
+    /// Width of the full left sidebar (dragged by its edge).
+    pub left_width: u16,
+    /// A drag of the left sidebar's edge is in progress.
+    pub left_drag: bool,
     pub right_open: bool,
     pub drawer: Option<Side>,
     pub tab: Tab,
@@ -197,11 +214,8 @@ pub struct Ui {
     pub unread_sessions: HashSet<String>,
     pub failed_sessions: HashSet<String>,
     pub view: View,
-    pub settings_section: usize,
     pub settings_row: usize,
-    pub settings_pane: SettingsPane,
     pub settings_search: Composer,
-    pub settings_searching: bool,
     pub overlay: Option<Overlay>,
     pub dialog: Option<Dialog>,
     pub edit: Option<TextEdit>,
@@ -298,7 +312,7 @@ impl App {
             Flags {
                 left_open: true,
                 right_open: true,
-                drawer: None,
+                ..Flags::default()
             },
             |_| Default::default(),
         );
@@ -309,6 +323,9 @@ impl App {
             ui: Ui {
                 focus: Focus::Composer,
                 left_open: true,
+                left_rail: false,
+                left_width: 0,
+                left_drag: false,
                 right_open: true,
                 drawer: None,
                 tab,
@@ -325,11 +342,8 @@ impl App {
                 unread_sessions: HashSet::new(),
                 failed_sessions: HashSet::new(),
                 view: View::Session,
-                settings_section: 0,
                 settings_row: 0,
-                settings_pane: SettingsPane::Nav,
                 settings_search: Composer::new(),
-                settings_searching: false,
                 overlay: None,
                 dialog: None,
                 edit: None,
@@ -950,14 +964,12 @@ impl App {
         Restore {
             focus: self.ui.focus,
             scroll: self.ui.scroll,
-            settings_pane: self.ui.settings_pane,
         }
     }
 
     fn apply_restore(&mut self, r: Restore) {
         self.ui.focus = r.focus;
         self.ui.scroll = r.scroll;
-        self.ui.settings_pane = r.settings_pane;
     }
 
     pub fn focus_order(&self) -> Vec<Focus> {
@@ -1777,7 +1789,8 @@ impl App {
                     self.ui.focus = Focus::Composer;
                 } else {
                     self.ui.view = View::Settings;
-                    self.ui.settings_pane = SettingsPane::Nav;
+                    self.ui.settings_search = Composer::new();
+                    self.ui.settings_row = 0;
                     self.ui.focus = Focus::Timeline;
                     self.ui.drawer = None;
                 }
@@ -2470,48 +2483,14 @@ impl App {
             return;
         }
         if self.ui.view == View::Settings
-            && self.ui.settings_pane == SettingsPane::Nav
             && self.ui.overlay.is_none()
             && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
+            && self.settings_key(&name, ev.code, ev.modifiers)
         {
-            if name == "/" && !self.ui.settings_searching {
-                self.ui.settings_searching = true;
-                return;
-            }
-            if self.ui.settings_searching {
-                match ev.code {
-                    KeyCode::Esc => {
-                        self.ui.settings_searching = false;
-                        return;
-                    }
-                    KeyCode::Enter => {
-                        self.ui.settings_searching = false;
-                        return;
-                    }
-                    KeyCode::Backspace => self.ui.settings_search.backspace(),
-                    KeyCode::Char(c)
-                        if ev.modifiers.is_empty() || ev.modifiers == KeyModifiers::SHIFT =>
-                    {
-                        self.ui.settings_search.insert_char(c)
-                    }
-                    _ => return,
-                }
-                if let Some(index) = self.settings_indices().first() {
-                    self.ui.settings_section = *index;
-                }
-                return;
-            }
+            return;
         }
         if name == "esc" {
-            if self.ui.view == View::Settings
-                && self.ui.settings_pane == SettingsPane::Rows
-                && self.ui.overlay.is_none()
-                && self.ui.dialog.is_none()
-                && self.ui.edit.is_none()
-            {
-                self.ui.settings_pane = SettingsPane::Nav;
-                return;
-            }
             if self.ui.file_open
                 && self.ui.overlay.is_none()
                 && self.ui.dialog.is_none()
@@ -3075,9 +3054,6 @@ impl App {
                 }
             }
         }
-        if self.ui.view == View::Settings {
-            self.settings_key(name);
-        }
     }
 
     pub fn scroll_timeline(&mut self, delta: isize) {
@@ -3155,73 +3131,87 @@ impl App {
 
     // ---- settings view ---------------------------------------------------------------------
 
-    pub fn settings_indices(&self) -> Vec<usize> {
+    /// The settings list as drawn: section headings and rows, filtered by
+    /// the search text (a section whose label matches keeps all its rows).
+    pub fn settings_items(&self) -> Vec<SettingsItem> {
         let query = self.ui.settings_search.text().to_lowercase();
-        self.manifest
-            .settings_for_tui()
+        let query = query.trim();
+        let mut out = Vec::new();
+        for section in self.manifest.settings_for_tui() {
+            let section_hit = section.label.to_lowercase().contains(query);
+            let rows: Vec<_> = section
+                .row
+                .iter()
+                .filter(|row| {
+                    query.is_empty()
+                        || section_hit
+                        || row.label.to_lowercase().contains(query)
+                        || row.note.to_lowercase().contains(query)
+                })
+                .cloned()
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            out.push(SettingsItem::Heading(section.label.clone()));
+            for row in rows {
+                out.push(SettingsItem::Row {
+                    row: Box::new(row),
+                    section_reason: section.unavailable_reason.clone(),
+                });
+            }
+        }
+        out
+    }
+
+    /// Indexes of the selectable rows in `settings_items`.
+    pub fn settings_rows(&self) -> Vec<usize> {
+        self.settings_items()
             .iter()
             .enumerate()
-            .filter(|(_, section)| {
-                query.is_empty()
-                    || section.label.to_lowercase().contains(&query)
-                    || section
-                        .row
-                        .iter()
-                        .any(|row| row.label.to_lowercase().contains(&query))
-            })
-            .map(|(index, _)| index)
+            .filter(|(_, item)| matches!(item, SettingsItem::Row { .. }))
+            .map(|(i, _)| i)
             .collect()
     }
 
-    pub fn settings_rows(&self) -> Vec<crate::manifest::Row> {
-        let sections = self.manifest.settings_for_tui();
-        sections
-            .get(self.ui.settings_section)
-            .map(|s| s.row.clone())
-            .unwrap_or_default()
-    }
-
-    fn settings_key(&mut self, name: &str) {
-        let indices = self.settings_indices();
-        let position = indices
-            .iter()
-            .position(|i| *i == self.ui.settings_section)
-            .unwrap_or(0);
-        let rows = self.settings_rows().len();
-        match (self.ui.settings_pane, name) {
-            (SettingsPane::Nav, "a") => {
-                let mut options = self.theme.opts;
-                options.reduced_motion = !options.reduced_motion;
-                self.theme = self.theme.with(options);
-            }
-            (SettingsPane::Nav, "m") => self.toggle_monochrome(),
-            (SettingsPane::Nav, "up" | "k") => {
-                if let Some(index) = indices.get(position.saturating_sub(1)) {
-                    self.ui.settings_section = *index;
+    /// Keys while the settings modal is open. Typing filters; arrows move and
+    /// change; Esc clears the search, then closes. Returns false for keys the
+    /// shell should still handle (palette, quit).
+    fn settings_key(&mut self, name: &str, code: KeyCode, mods: KeyModifiers) -> bool {
+        let rows = self.settings_rows();
+        let last = rows.len().saturating_sub(1);
+        let sel = self.ui.settings_row.min(last);
+        match name {
+            "esc" => {
+                if self.ui.settings_search.text().is_empty() {
+                    self.execute("app.settings");
+                } else {
+                    self.ui.settings_search = Composer::new();
+                    self.ui.settings_row = 0;
                 }
+            }
+            "up" | "shift+tab" => self.ui.settings_row = sel.saturating_sub(1),
+            "down" | "tab" => self.ui.settings_row = (sel + 1).min(last),
+            "pageup" => self.ui.settings_row = sel.saturating_sub(8),
+            "pagedown" => self.ui.settings_row = (sel + 8).min(last),
+            "home" => self.ui.settings_row = 0,
+            "end" => self.ui.settings_row = last,
+            "left" => self.settings_change(sel, -1),
+            "right" => self.settings_change(sel, 1),
+            "enter" => self.settings_activate(sel),
+            "backspace" => {
+                self.ui.settings_search.backspace();
                 self.ui.settings_row = 0;
             }
-            (SettingsPane::Nav, "down" | "j") => {
-                if let Some(index) =
-                    indices.get((position + 1).min(indices.len().saturating_sub(1)))
-                {
-                    self.ui.settings_section = *index;
+            _ => match code {
+                KeyCode::Char(c) if mods.is_empty() || mods == KeyModifiers::SHIFT => {
+                    self.ui.settings_search.insert_char(c);
+                    self.ui.settings_row = 0;
                 }
-                self.ui.settings_row = 0;
-            }
-            (SettingsPane::Nav, "right" | "enter" | "tab") if !indices.is_empty() => {
-                self.ui.settings_pane = SettingsPane::Rows
-            }
-            (SettingsPane::Rows, "up" | "k") => {
-                self.ui.settings_row = self.ui.settings_row.saturating_sub(1)
-            }
-            (SettingsPane::Rows, "down" | "j") => {
-                self.ui.settings_row = (self.ui.settings_row + 1).min(rows.saturating_sub(1))
-            }
-            (SettingsPane::Rows, "left" | "shift+tab") => self.ui.settings_pane = SettingsPane::Nav,
-            (SettingsPane::Rows, "enter" | "space") => self.settings_activate(self.ui.settings_row),
-            _ => {}
+                _ => return false,
+            },
         }
+        true
     }
 
     pub fn settings_wired(id: &str) -> bool {
@@ -3229,10 +3219,79 @@ impl App {
             id,
             "appearance.theme"
                 | "appearance.monochrome"
+                | "appearance.animations"
+                | "appearance.sidebar"
+                | "appearance.details"
+                | "appearance.session_scope"
+                | "appearance.show_archived"
                 | "about.versions"
                 | "about.daemon"
                 | "keybindings.list"
         )
+    }
+
+    /// The row at selectable position `index`, when it can be changed.
+    fn settings_row_at(&mut self, index: usize) -> Option<crate::manifest::Row> {
+        let items = self.settings_items();
+        let at = *self.settings_rows().get(index)?;
+        let SettingsItem::Row {
+            row,
+            section_reason,
+        } = items.into_iter().nth(at)?
+        else {
+            return None;
+        };
+        if let Some(why) = row.unavailable_reason.clone().or(section_reason) {
+            self.toast(Level::Warning, format!("{}: {why}", row.label));
+            return None;
+        }
+        if !Self::settings_wired(&row.id) {
+            self.toast(Level::Warning, format!("{}: {NOT_WIRED}", row.label));
+            return None;
+        }
+        Some(*row)
+    }
+
+    /// Left/right: step a choice or flip a toggle.
+    fn settings_change(&mut self, index: usize, step: isize) {
+        let Some(row) = self.settings_row_at(index) else {
+            return;
+        };
+        match row.id.as_str() {
+            "appearance.sidebar" => {
+                let modes = [(true, false), (true, true), (false, false)];
+                let now = modes
+                    .iter()
+                    .position(|m| *m == (self.ui.left_open, self.ui.left_rail))
+                    .unwrap_or(0) as isize;
+                let (open, rail) = modes[(now + step).rem_euclid(3) as usize];
+                self.ui.left_open = open;
+                self.ui.left_rail = rail;
+            }
+            "keybindings.list" | "about.versions" | "about.daemon" => {}
+            _ => self.settings_activate(index),
+        }
+    }
+
+    fn settings_activate(&mut self, index: usize) {
+        let Some(row) = self.settings_row_at(index) else {
+            return;
+        };
+        match row.id.as_str() {
+            "appearance.theme" => self.execute("app.theme"),
+            "appearance.monochrome" => self.toggle_monochrome(),
+            "appearance.animations" => {
+                let mut options = self.theme.opts;
+                options.reduced_motion = !options.reduced_motion;
+                self.theme = self.theme.with(options);
+            }
+            "appearance.sidebar" => self.settings_change(index, 1),
+            "appearance.details" => self.ui.right_open = !self.ui.right_open,
+            "appearance.session_scope" => self.run_command("sessions.scope_toggle"),
+            "appearance.show_archived" => self.run_command("sessions.archived_filter"),
+            "keybindings.list" => self.execute("app.help_keys"),
+            _ => {}
+        }
     }
 
     fn toggle_monochrome(&mut self) {
@@ -3245,22 +3304,6 @@ impl App {
             }
         }
         self.theme = self.theme.with(options);
-    }
-
-    fn settings_activate(&mut self, index: usize) {
-        let Some(row) = self.settings_rows().get(index).cloned() else {
-            return;
-        };
-        if row.unavailable_reason.is_some() || !Self::settings_wired(&row.id) {
-            let why = row.unavailable_reason.unwrap_or_else(|| NOT_WIRED.into());
-            return self.toast(Level::Warning, format!("{}: {why}", row.label));
-        }
-        match row.id.as_str() {
-            "appearance.theme" => self.execute("app.theme"),
-            "appearance.monochrome" => self.toggle_monochrome(),
-            "keybindings.list" => self.execute("app.help_keys"),
-            _ => {}
-        }
     }
 
     // ---- mouse ----------------------------------------------------------------------------------
@@ -3292,6 +3335,17 @@ impl App {
                     self.click(t);
                 }
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.ui.left_drag => {
+                let x0 = self.regions.left.map_or(0, |l| l.x);
+                let want = ev.column.saturating_sub(x0) + 1;
+                if want < crate::layout::RAIL_SNAP {
+                    self.ui.left_rail = true;
+                } else {
+                    self.ui.left_rail = false;
+                    self.ui.left_width =
+                        want.clamp(crate::layout::LEFT_MIN, crate::layout::LEFT_MAX);
+                }
+            }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some((start, top)) = self.ui.composer_drag {
                     let inner = crate::render::composer_inner(self.regions.composer);
@@ -3309,7 +3363,10 @@ impl App {
                     self.composer().select_range(start, end);
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) => self.ui.composer_drag = None,
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.ui.composer_drag = None;
+                self.ui.left_drag = false;
+            }
             MouseEventKind::ScrollUp => self.wheel(ev.column, ev.row, -3),
             MouseEventKind::ScrollDown => self.wheel(ev.column, ev.row, 3),
             _ => {}
@@ -3368,20 +3425,15 @@ impl App {
                 };
                 self.run_command(id);
             }
-            Target::SettingsQuickMotion => {
-                let mut options = self.theme.opts;
-                options.reduced_motion = !options.reduced_motion;
-                self.theme = self.theme.with(options);
-            }
-            Target::SettingsQuickMono => self.toggle_monochrome(),
             Target::SettingsEntry => self.run_command("app.settings"),
             Target::SideRow(i) => {
                 self.ui.focus = Focus::Sidebar;
                 self.ui.cursor.insert(self.ui.tab, i);
                 self.sidebar_activate(i);
             }
-            Target::ScopeToggle => self.run_command("sessions.scope_toggle"),
-            Target::ArchivedToggle => self.run_command("sessions.archived_filter"),
+            Target::SidebarEdge => self.ui.left_drag = true,
+            Target::RailSearch => self.run_command("session.switch"),
+            Target::NewSession => self.run_command("session.new"),
             Target::RightSection(_) => self.ui.focus = Focus::Right,
             Target::Timeline => self.ui.focus = Focus::Timeline,
             Target::Block(i) => {
@@ -3430,16 +3482,8 @@ impl App {
                 }
                 self.confirm_dialog(i == 1);
             }
-            Target::SettingsNav(i) => {
-                self.ui.settings_section = i;
-                self.ui.settings_row = 0;
-                self.ui.settings_pane = SettingsPane::Rows;
-                self.ui.focus = Focus::Timeline;
-            }
             Target::SettingsRow(i) => {
-                self.ui.settings_pane = SettingsPane::Rows;
                 self.ui.settings_row = i;
-                self.ui.focus = Focus::Timeline;
                 self.settings_activate(i);
             }
         }

@@ -60,7 +60,7 @@ fn shell_anatomy_at_every_size_dark_and_mono() {
                     .left_sidebar
                     .tab
                     .iter()
-                    .map(|t| col_of(&rows[1], &t.label))
+                    .map(|t| col_of(&rows[0], &t.label))
                     .collect();
                 assert!(tabs.windows(2).all(|p| p[0] < p[1]), "{tabs:?}");
                 assert!(
@@ -101,9 +101,9 @@ fn monochrome_frames_carry_no_colour() {
 fn dark_frames_use_the_theme_file_surfaces() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     let (buf, _) = draw(&mut app, 120, 36);
-    // Timeline and sidebar share the canvas (values from interface/theme.toml).
+    // Timeline on the canvas, left sidebar on its own surface (interface/theme.toml).
     assert_eq!(buf[(60, 10)].bg, Color::Rgb(0x0b, 0x0b, 0x0b));
-    assert_eq!(buf[(3, 20)].bg, Color::Rgb(0x0b, 0x0b, 0x0b));
+    assert_eq!(buf[(3, 20)].bg, Color::Rgb(0x14, 0x14, 0x14));
     assert_eq!(buf[(29, 32)].bg, Color::Rgb(0x1e, 0x1e, 0x1e));
     assert!(
         buf.content
@@ -138,9 +138,9 @@ fn narrow_layout_uses_drawers_and_keeps_the_anchors() {
     press(&mut app, &["ctrl+b"]);
     let (_, rows) = draw(&mut app, 80, 24);
     assert!(
-        rows[1].contains("Sessions") && rows[1].contains("Files"),
+        rows[0].contains("Sessions") && rows[0].contains("Files"),
         "{:?}",
-        rows[1]
+        rows[0]
     );
     assert!(
         rows[0].starts_with(" \u{25e7}"),
@@ -817,33 +817,40 @@ fn old_nexus_shimmer_keeps_graphemes_and_reduced_motion_static() {
 }
 
 #[test]
-fn settings_uses_old_nexus_centered_modal_and_close_control() {
+fn settings_is_a_centred_modal_over_the_session() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("app.settings");
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(rows[2].contains("Settings"));
-    let close_x = col_of(&rows[2], "[×]") as u16;
-    assert_eq!(app.hits.at(close_x, 2), Some(&Target::SettingsEntry));
-    app.click(Target::SettingsNav(0));
-    assert_eq!(app.ui.settings_pane, nexus_tui::ui::SettingsPane::Rows);
-    press(&mut app, &["esc"]);
-    assert_eq!(app.ui.settings_pane, nexus_tui::ui::SettingsPane::Nav);
+    let top = rows
+        .iter()
+        .position(|r| r.contains("Settings") && r.contains("esc"))
+        .unwrap();
+    let close_x = col_of(&rows[top], "esc") as u16;
+    assert_eq!(
+        app.hits.at(close_x, top as u16),
+        Some(&Target::SettingsEntry)
+    );
+    assert!(rows[top + 2].contains("Search"));
+    assert!(joined(&rows).contains("Appearance"));
     app.click(Target::SettingsEntry);
     assert_eq!(app.ui.view, nexus_tui::ui::View::Session);
 }
 
 #[test]
-fn settings_search_filters_and_drills_to_matching_section() {
+fn settings_search_filters_rows_and_esc_clears_then_closes() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("app.settings");
-    press(&mut app, &["/", "m", "o", "d", "e", "l"]);
+    press(&mut app, &["m", "o", "d", "e", "l"]);
     let (_, rows) = draw(&mut app, 120, 36);
     let text = joined(&rows);
-    assert!(text.contains("Search: model"));
+    assert!(text.contains("model"));
     assert!(text.contains("Models"));
     assert!(!text.contains("Dictation"));
-    press(&mut app, &["enter", "enter"]);
-    assert_eq!(app.ui.settings_pane, nexus_tui::ui::SettingsPane::Rows);
+    press(&mut app, &["esc"]);
+    assert!(app.ui.settings_search.text().is_empty());
+    assert_eq!(app.ui.view, nexus_tui::ui::View::Settings);
+    press(&mut app, &["esc"]);
+    assert_eq!(app.ui.view, nexus_tui::ui::View::Session);
 }
 
 #[test]
@@ -949,16 +956,28 @@ fn worktree_groups_keep_cursor_on_the_same_session_when_branch_data_arrives() {
 }
 
 #[test]
-fn settings_quick_motion_and_monochrome_work_by_keyboard_and_mouse() {
+fn settings_arrows_change_animations_monochrome_and_sidebar() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("app.settings");
+    press(&mut app, &["a", "n", "i", "m"]);
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("motion off [a]"));
-    assert!(app.hits.rect_of(&Target::SettingsQuickMotion).is_some());
-    press(&mut app, &["a"]);
-    assert!(!app.theme.opts.reduced_motion);
-    app.click(Target::SettingsQuickMono);
+    assert!(joined(&rows).contains("Animations"));
+    let before = app.theme.opts.reduced_motion;
+    press(&mut app, &["right"]);
+    assert_ne!(app.theme.opts.reduced_motion, before);
+    press(&mut app, &["esc"]);
+    press(&mut app, &["m", "o", "n", "o"]);
+    draw(&mut app, 120, 36);
+    app.click(Target::SettingsRow(0));
     assert_eq!(app.theme.opts.tier, Tier::Mono);
-    press(&mut app, &["m"]);
+    press(&mut app, &["left"]);
     assert_eq!(app.theme.opts.tier, Tier::TrueColor);
+    press(&mut app, &["esc"]);
+    press(&mut app, &["s", "i", "d", "e", "b", "a", "r"]);
+    press(&mut app, &["right"]);
+    assert!(app.ui.left_open && app.ui.left_rail);
+    press(&mut app, &["right"]);
+    assert!(!app.ui.left_open);
+    press(&mut app, &["right"]);
+    assert!(app.ui.left_open && !app.ui.left_rail);
 }

@@ -296,25 +296,27 @@ fn every_vocabulary_term_is_known_to_this_client() {
 fn settings_navigation_follows_the_manifest_order() {
     let mut a = app();
     press(&mut a, &["ctrl+,"]);
-    let (_, rows) = draw(&mut a, 120, 36);
-    let text = rows.join("\n");
-    let order: Vec<usize> = a
-        .manifest
-        .settings
-        .section
-        .iter()
-        .map(|s| {
-            text.find(&format!(" {}", s.label))
-                .unwrap_or_else(|| panic!("{} missing", s.label))
+    let headings: Vec<String> = a
+        .settings_items()
+        .into_iter()
+        .filter_map(|item| match item {
+            nexus_tui::app::SettingsItem::Heading(label) => Some(label),
+            _ => None,
         })
         .collect();
-    assert!(order.windows(2).all(|p| p[0] < p[1]), "{order:?}");
-    // down moves through sections in order, enter goes into the rows
+    let manifest: Vec<String> = a
+        .manifest
+        .settings_for_tui()
+        .into_iter()
+        .filter(|s| !s.row.is_empty())
+        .map(|s| s.label)
+        .collect();
+    assert_eq!(headings, manifest);
+    let (_, rows) = draw(&mut a, 120, 36);
+    assert!(rows.join("\n").contains("Appearance"));
+    // down moves through the rows; esc closes
     press(&mut a, &["down", "down"]);
-    assert_eq!(
-        a.manifest.settings.section[a.ui.settings_section].id,
-        "models"
-    );
+    assert_eq!(a.ui.settings_row, 2);
     press(&mut a, &["esc"]);
     assert_eq!(a.ui.view, View::Session);
     assert_eq!(a.ui.tab, Tab::Sessions);

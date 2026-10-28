@@ -61,7 +61,7 @@ def main(path):
         if r < need:
             errors.append(f"{name}: {r:.2f} < {need}")
 
-    surfaces = ("surface.canvas", "surface.panel", "surface.raised")
+    surfaces = ("surface.canvas", "surface.panel", "surface.raised", "surface.sidebar")
     for tn in meta["themes"]:
         t = flatten(data[tn])
         c = {k: hex_rgb(v) for k, v in t.items()}

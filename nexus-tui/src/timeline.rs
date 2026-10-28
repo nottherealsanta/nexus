@@ -651,11 +651,8 @@ impl Builder<'_> {
                     if !folded && is_diagnostic(e) {
                         self.activity_group(&mut activity, &results, &traces, &waiting, busy);
                     }
-                    if !folded && self.diagnostic(e) {
-                        // Diagnostics belong to the turn they were produced in.
-                        if turn_open {
-                            self.blank();
-                        }
+                    if !folded {
+                        self.diagnostic(e);
                     }
                 }
             }
@@ -1808,7 +1805,7 @@ impl Builder<'_> {
             ),
             "retry_scheduled" => (
                 format!(
-                    "provider retry {}/{} in {}s",
+                    "provider retry {}/{} in {:.1}s",
                     d["attempt"].as_u64().unwrap_or(0),
                     d["max_attempts"].as_u64().unwrap_or(0),
                     d["delay"].as_f64().unwrap_or(0.0)
@@ -1863,6 +1860,18 @@ impl Builder<'_> {
             }
             _ => return false,
         };
+        // Detail the head already says (`codex: HTTP 429` / `HTTP 429`) is noise.
+        let detail = detail.filter(|d| !text.contains(d.as_str()));
+        // A run of diagnostics (a retry sequence) reads as one stack: no
+        // blank line between them.
+        if self
+            .blocks
+            .last()
+            .is_some_and(|b| b.kind == BlockKind::Diagnostic && b.end + 1 == self.out.len())
+            && self.out.last().is_some_and(|l| l.spans.is_empty())
+        {
+            self.out.pop();
+        }
         let key = format!("diag:{}", e.id);
         let (glyph, _label, token) = match level {
             "error" => self.t.status("error"),

@@ -4,8 +4,9 @@ The visual reference is the old Nexus TUI in `../nexus/rust/tui/src`. This
 client adapts its patterns to the Core API and the one-timeline model. The
 shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
 
-- Canvas holds the timeline and sidebars; panel surfaces hold the composer and
-  navigation; raised surfaces hold user messages and modal panels. Borders are
+- Canvas holds the timeline and the details sidebar; the left sidebar and its
+  rail sit on `surface.sidebar`; panel surfaces hold the composer and the
+  settings modal; raised surfaces hold user messages and modal panels. Borders are
   quiet hairlines. A focused row uses the focus bar as well as its selection
   surface so the state remains visible without colour.
 - Primary text carries content and headings. Secondary text carries labels;
@@ -19,10 +20,17 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   consecutive activity folds into a verb group. Folded content remains
   accessible, and any clipped output is labelled. Running activity uses the
   old Nexus soft shimmer; reduced motion and monochrome stay static.
-- Sidebars and panels reserve consistent gutters. Session rows show title and
-  project on separate lines; the open session is bold, focus is a bar, hover is
-  a surface, and waiting is marked. Settings uses a centered framed modal with
-  a searchable root and drill-in pages. Escape returns through that hierarchy.
+- The first row carries the Sessions / Files / Projects tabs (active tab bold on
+  a surface), the breadcrumb title and the bell. Sidebars and panels reserve
+  consistent gutters. Session rows show title and `project ⌥ branch` on
+  separate lines and end with `+ New session`; the open session is bold, focus
+  is a bar, hover is a surface, and waiting is marked. The left sidebar resizes
+  by its edge and collapses to a rail of one letter per session whose hover
+  shows the title and place. Settings is a centred modal over the dimmed
+  session: search, violet section headings, values right-aligned, the selected
+  row on an accent fill, ←/→ to change. Escape clears the search, then closes.
+- The location strip under the composer names the project in bold over an
+  accent segment of the closing rule, then directory, branch and checkout kind.
 - Narrow layouts keep the centre readable and use drawers for sidebars. Large
   text, CJK and combined graphemes must fit without splitting; keyboard and
   mouse hit targets follow the painted geometry. Empty, loading, error and

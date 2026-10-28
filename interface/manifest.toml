@@ -273,6 +273,52 @@ clients = "tui"
 default = false
 note = "Meaning is preserved without colour."
 
+[[settings.section.row]]
+id = "appearance.animations"
+label = "Animations"
+kind = "toggle"
+scope = "client"
+clients = "tui"
+default = true
+note = "Spinners and the working shimmer; off keeps an idle terminal still."
+
+[[settings.section.row]]
+id = "appearance.sidebar"
+label = "Sidebar"
+kind = "choice"
+scope = "client"
+clients = "tui"
+default = "full"
+options = ["full", "rail", "hidden"]
+note = "Rail shows one letter per session; hover a letter for its title. Drag the edge to resize."
+
+[[settings.section.row]]
+id = "appearance.details"
+label = "Details sidebar"
+kind = "toggle"
+scope = "client"
+clients = "tui"
+default = true
+
+[[settings.section.row]]
+id = "appearance.session_scope"
+label = "Sessions shown"
+kind = "choice"
+scope = "client"
+clients = "tui"
+default = "this project"
+options = ["this project", "all projects"]
+command = "sessions.scope_toggle"
+
+[[settings.section.row]]
+id = "appearance.show_archived"
+label = "Archived sessions"
+kind = "toggle"
+scope = "client"
+clients = "tui"
+default = false
+command = "sessions.archived_filter"
+
 [[settings.section]]
 id = "providers"
 label = "Providers"

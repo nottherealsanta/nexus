@@ -744,3 +744,47 @@ fn reasoning_reports_its_measured_duration() {
     let text = rows(&mut a).join("\n");
     assert!(text.contains("Thought for 3.5s"), "{text}");
 }
+
+#[test]
+fn a_retry_sequence_is_one_tight_stack_with_rounded_delays() {
+    let mut a = app();
+    let mk = |id: u64, kind: &str, data: serde_json::Value| {
+        serde_json::json!({"id": id, "type": kind, "session_id": SESSION,
+            "cursor": format!("log_c915bfc9b6d826c4:{id}"), "data": data})
+    };
+    for v in [
+        mk(
+            400,
+            "retry_scheduled",
+            serde_json::json!({"attempt": 1, "max_attempts": 3,
+            "delay": 0.8421336129301662, "reason": "codex: HTTP 429"}),
+        ),
+        mk(401, "retry_started", serde_json::json!({"attempt": 2})),
+        mk(
+            402,
+            "session.error",
+            serde_json::json!({"kind": "provider",
+            "message": "codex: HTTP 429", "status": 429}),
+        ),
+    ] {
+        if let Ok(nexus_tui::api::Frame::Event(e)) =
+            nexus_tui::api::Frame::from_value(v["type"].as_str().unwrap(), None, &v)
+        {
+            a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+        }
+    }
+    let drawn = rows(&mut a);
+    let text = drawn.join("\n");
+    assert!(text.contains("provider retry 1/3 in 0.8s"), "{text}");
+    let first = drawn.iter().position(|r| r.contains("retry 1/3")).unwrap();
+    assert!(drawn[first + 1].contains("codex: HTTP 429"), "{text}");
+    assert!(drawn[first + 2].contains("retry started"), "no gap: {text}");
+    let err = drawn
+        .iter()
+        .position(|r| r.contains("provider: codex: HTTP 429"))
+        .unwrap();
+    assert!(
+        !drawn[err + 1].contains("HTTP 429"),
+        "detail not repeated: {text}"
+    );
+}

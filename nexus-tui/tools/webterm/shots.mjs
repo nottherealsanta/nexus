@@ -81,6 +81,22 @@ async function shot({ name, cols, rows, theme = "dark", args = [], env = {}, hom
       }
       throw new Error(`${name}: "${needle}" never appeared:\n${await h.text()}`);
     },
+    // Move the pointer to cell (col, row), zero-based.
+    hover: async (col, row, wait = 300) => {
+      const box = await page.locator("#term .xterm-screen").boundingBox();
+      await page.mouse.move(box.x + (col + 0.5) * (box.width / cols), box.y + (row + 0.5) * (box.height / rows));
+      await sleep(wait);
+    },
+    // Switch the left sidebar between full, rail and hidden from Settings.
+    sidebar: async (steps = 1) => {
+      await h.key("Control+p", 300);
+      await h.type("open settings", 300);
+      await h.key("Enter", 400);
+      await h.type("sidebar", 200);
+      for (let i = 0; i < steps; i++) await h.key("ArrowRight", 100);
+      await h.key("Escape", 100);
+      await h.key("Escape", 300);
+    },
     // Open the seeded conversation through the session switcher (ctrl+k).
     openSession: async () => {
       await h.key("Control+k", 400);
@@ -136,6 +152,9 @@ await shot({ name: "drawer-80x24-dark", cols: 80, rows: 24, steps: async (h) => 
 await shot({ name: "drawer-right-80x24-dark", cols: 80, rows: 24, steps: async (h) => { await h.openSession(); await h.key("Alt+b", 500); } });
 await shot({ name: "drawer-80x24-light", cols: 80, rows: 24, theme: "light", steps: async (h) => { await h.openSession(); await h.key("Control+b", 500); } });
 await shot({ name: "sidebars-closed-160x48-dark", cols: 160, rows: 48, steps: async (h) => { await h.openSession(); await h.key("Control+b", 200); await h.key("Alt+b", 400); } });
+await shot({ name: "rail-160x48-dark", cols: 160, rows: 48, steps: async (h) => { await h.openSession(); await h.sidebar(1); } });
+await shot({ name: "rail-hover-160x48-dark", cols: 160, rows: 48, steps: async (h) => { await h.openSession(); await h.sidebar(1); await h.hover(3, 5, 500); } });
+await shot({ name: "rail-hover-120x36-light", cols: 120, rows: 36, theme: "light", steps: async (h) => { await h.openSession(); await h.sidebar(1); await h.hover(3, 8, 500); } });
 await shot({ name: "projects-tab-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.key("Alt+3", 500); } });
 await shot({ name: "files-tab-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.key("Alt+2", 500); } });
 await shot({ name: "editor-selection-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.type("Selected text", 100); for (let i = 0; i < 4; i++) await h.key("Shift+ArrowLeft", 80); } });

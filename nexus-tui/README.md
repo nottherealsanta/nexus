@@ -7,7 +7,7 @@ reads Nexus state files, SQLite or provider credentials. Old Nexus's client in
 
 **Status (PLAN.md Steps 12.3 and most of 12.4):** the keyboard-first shell is
 usable against a real Core: workspace header, both sidebars, session view, waiting
-card, composer, command palette, settings navigation and unified alerts, with an
+card, composer, command palette, the settings modal and unified alerts, with an
 explicit focus model, the manifest's Esc chain, mouse and keyboard parity, and
 terminal hygiene. The status footer has been removed; key hints are available
 in the palette and F1, and stop appears in the composer. Existing sessions
@@ -15,8 +15,21 @@ show their branch and linked-worktree marker from Core below the composer; a
 project with no session shows its own branch. The composer shows the agent in
 its colour, catalog model names, a pending model change, effort and context
 occupancy against price tiers and the window, explained on hover.
-The Sessions sidebar shows two-line rows with project and cached branch details;
-branch details load when the session is opened.
+The first row holds the Sessions / Files / Projects tabs, the breadcrumb title
+and the notification bell. The left sidebar has its own surface
+(`surface.sidebar`): two-line session rows (title, `project ⌥ branch`) and a
+closing `+ New session` row. Drag its inner edge to resize it (20–60 columns);
+dragging below 14 columns collapses it to a rail of one letter per session,
+with search on top and `+` below, and hovering a letter shows the session's
+title and place. Settings → Sidebar switches full / rail / hidden. The location
+strip under the composer names the project (underlined by the accent rule),
+directory, branch and checkout kind.
+
+Settings is a centred modal over the dimmed session: type to search, ↑/↓ to
+move, ←/→ to change a value, Enter to act, Esc to clear the search and then
+close. Rows the TUI cannot change yet are muted and say why below the list.
+Consecutive diagnostics (a provider retry sequence) form one tight stack with
+delays rounded to tenths.
 
 The timeline is complete for one session: turn headers and footers, folding,
 collapsed reasoning, old-Nexus CommonMark text (supported Mermaid diagrams retain their source below), tool-specific expansion (diffs, output

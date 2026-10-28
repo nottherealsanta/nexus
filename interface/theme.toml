@@ -18,6 +18,7 @@ nontext_min = 3.0       # border.focus, focus, accent, status marks, diff marks
 canvas = "#0B0B0B"      # app background, timeline, sidebars
 panel  = "#1e1e1e"      # cards, composer, notices
 raised = "#242424"      # dialogs, menus, toasts, user message
+sidebar = "#141414"     # left sidebar and session rail
 
 
 [dark.agent]
@@ -63,6 +64,7 @@ del_bg = "#2e1b20"
 canvas = "#f7f7f5"
 panel  = "#efefec"
 raised = "#ffffff"
+sidebar = "#f0f0ed"
 
 
 [light.agent]
@@ -182,6 +184,7 @@ style = ""
 "surface.canvas" = 232
 "surface.panel" = 234
 "surface.raised" = 235
+"surface.sidebar" = 233
 "text.primary" = 254
 "text.secondary" = 248
 "text.muted" = 246
@@ -214,6 +217,7 @@ style = ""
 "surface.canvas" = 255
 "surface.panel" = 254
 "surface.raised" = 231
+"surface.sidebar" = 255
 "text.primary" = 235
 "text.secondary" = 238
 "text.muted" = 240
@@ -246,6 +250,7 @@ style = ""
 "surface.canvas" = "default"
 "surface.panel" = "default"
 "surface.raised" = "default"
+"surface.sidebar" = "default"
 "text.primary" = "default"
 "text.secondary" = "white"
 "text.muted" = "bright_black"
@@ -278,6 +283,7 @@ style = ""
 "surface.canvas" = "default"
 "surface.panel" = "default"
 "surface.raised" = "default"
+"surface.sidebar" = "default"
 "text.primary" = "default"
 "text.secondary" = "bright_black"
 "text.muted" = "bright_black"
@@ -314,6 +320,7 @@ style = ""
 "surface.canvas" = []
 "surface.panel" = []
 "surface.raised" = []
+"surface.sidebar" = []
 "text.primary" = []
 "text.secondary" = []
 "text.muted" = ["dim"]

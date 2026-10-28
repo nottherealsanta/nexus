@@ -14,12 +14,41 @@ use crate::ui::{Side, Target};
 /// Below this many columns the sidebars become drawers (INTERFACE_PLAN.md Scale).
 pub const NARROW_BELOW: u16 = 100;
 pub const MIN_CENTRE: u16 = 40;
+/// The collapsed left sidebar: one letter per session.
+pub const RAIL_WIDTH: u16 = 6;
+/// The full left sidebar's drag bounds; a drag below `RAIL_SNAP` collapses it
+/// to the rail.
+pub const LEFT_MIN: u16 = 20;
+pub const LEFT_MAX: u16 = 60;
+pub const RAIL_SNAP: u16 = 14;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Flags {
     pub left_open: bool,
     pub right_open: bool,
     pub drawer: Option<Side>,
+    pub left_rail: bool,
+    /// Stored full width of the left sidebar; 0 means the default.
+    pub left_width: u16,
+}
+
+/// Width of the docked left sidebar, bounded so the centre keeps `MIN_CENTRE`.
+pub fn left_width(total: u16, flags: Flags) -> u16 {
+    if flags.left_rail {
+        return RAIL_WIDTH;
+    }
+    let right = if flags.right_open {
+        sidebar_width(total)
+    } else {
+        0
+    };
+    let room = total.saturating_sub(MIN_CENTRE + right).max(LEFT_MIN);
+    let want = if flags.left_width == 0 {
+        sidebar_width(total)
+    } else {
+        flags.left_width
+    };
+    want.clamp(LEFT_MIN, LEFT_MAX.min(room))
 }
 
 /// Heights the centre column needs, given its width.
@@ -84,9 +113,10 @@ impl Regions {
         let mut right = None;
         if !narrow {
             if flags.left_open {
-                left = Some(r(x, body_y, sw, body_h));
-                x += sw;
-                w -= sw;
+                let lw = left_width(area.width, flags);
+                left = Some(r(x, body_y, lw, body_h));
+                x += lw;
+                w -= lw;
             }
             if flags.right_open {
                 w -= sw;
@@ -226,7 +256,7 @@ mod tests {
         Flags {
             left_open: l,
             right_open: r,
-            drawer: None,
+            ..Flags::default()
         }
     }
     fn heights(_: u16) -> Heights {
@@ -249,6 +279,20 @@ mod tests {
             g.composer.y + g.composer.height,
             g.centre.y + g.centre.height
         );
+    }
+
+    #[test]
+    fn left_sidebar_resizes_and_collapses_to_a_rail() {
+        let mut f = flags(true, true);
+        f.left_width = 44;
+        let g = Regions::compute(Rect::new(0, 0, 160, 40), f, heights);
+        assert_eq!(g.left.unwrap().width, 44);
+        f.left_width = 200;
+        let g = Regions::compute(Rect::new(0, 0, 120, 40), f, heights);
+        assert!(g.centre.width >= MIN_CENTRE);
+        f.left_rail = true;
+        let g = Regions::compute(Rect::new(0, 0, 120, 40), f, heights);
+        assert_eq!(g.left.unwrap().width, RAIL_WIDTH);
     }
 
     #[test]

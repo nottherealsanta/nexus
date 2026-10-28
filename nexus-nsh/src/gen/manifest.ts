@@ -357,6 +357,59 @@ export const manifest = {
       "clients": "tui",
       "default": false,
       "note": "Meaning is preserved without colour."
+     },
+     {
+      "id": "appearance.animations",
+      "label": "Animations",
+      "kind": "toggle",
+      "scope": "client",
+      "clients": "tui",
+      "default": true,
+      "note": "Spinners and the working shimmer; off keeps an idle terminal still."
+     },
+     {
+      "id": "appearance.sidebar",
+      "label": "Sidebar",
+      "kind": "choice",
+      "scope": "client",
+      "clients": "tui",
+      "default": "full",
+      "options": [
+       "full",
+       "rail",
+       "hidden"
+      ],
+      "note": "Rail shows one letter per session; hover a letter for its title. Drag the edge to resize."
+     },
+     {
+      "id": "appearance.details",
+      "label": "Details sidebar",
+      "kind": "toggle",
+      "scope": "client",
+      "clients": "tui",
+      "default": true
+     },
+     {
+      "id": "appearance.session_scope",
+      "label": "Sessions shown",
+      "kind": "choice",
+      "scope": "client",
+      "clients": "tui",
+      "default": "this project",
+      "options": [
+       "this project",
+       "all projects"
+      ],
+      "command": "sessions.scope_toggle"
+     },
+     {
+      "id": "appearance.show_archived",
+      "label": "Archived sessions",
+      "kind": "toggle",
+      "scope": "client",
+      "clients": "tui",
+      "default": false,
+      "command": "sessions.archived_filter"
      }
     ]
    },

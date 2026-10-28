@@ -79,13 +79,6 @@ impl Default for Scroll {
 pub struct Restore {
     pub focus: Focus,
     pub scroll: Scroll,
-    pub settings_pane: SettingsPane,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsPane {
-    Nav,
-    Rows,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,11 +305,12 @@ pub enum Target {
     Notifications,
     Tab(Tab),
     SettingsEntry,
-    SettingsQuickMotion,
-    SettingsQuickMono,
     SideRow(usize),
-    ScopeToggle,
-    ArchivedToggle,
+    /// The left sidebar's inner edge: drag to resize.
+    SidebarEdge,
+    /// Rail search (opens the session switcher).
+    RailSearch,
+    NewSession,
     RightSection(usize),
     Timeline,
     /// One timeline block, by index in the last built timeline.
@@ -345,6 +339,6 @@ pub enum Target {
     Swallow,
     /// Outside an overlay: clicking closes it.
     Scrim,
-    SettingsNav(usize),
+    /// A row of the settings list, by index into `App::settings_items`.
     SettingsRow(usize),
 }

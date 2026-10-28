@@ -46,7 +46,7 @@ def css(mode: str) -> dict[str, str]:
         "border": g("border.default"),
         "input": g("border.default"),
         "ring": g("border.focus"),
-        "sidebar": g("surface.panel"),
+        "sidebar": g("surface.sidebar"),
         "sidebar-foreground": g("text.primary"),
         "sidebar-primary": g("interactive.accent"),
         "sidebar-primary-foreground": g("interactive.on_accent"),
