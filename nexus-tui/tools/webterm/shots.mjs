@@ -53,6 +53,8 @@ console.log("browser up");
 async function shot({ name, cols, rows, theme = "dark", args = [], env = {}, home = cfg.WEBTERM_HOME, steps = async () => {} }) {
   if (only && !name.includes(only)) return;
   const t = THEMES[theme];
+  // Each shot starts from default client preferences.
+  fs.rmSync(path.join(home, "tui.json"), { force: true });
   const profile = `p${results.length}`;
   server.profiles.set(profile, {
     file: bin,

@@ -1619,6 +1619,10 @@ impl App {
         if tab == Tab::Files {
             self.request_files(String::new(), false);
         }
+        // The rail lists sessions only; another tab needs the full sidebar.
+        if tab != Tab::Sessions {
+            self.ui.left_rail = false;
+        }
         if self.narrow() {
             self.ui.drawer = Some(Side::Left);
         } else {

@@ -1441,3 +1441,14 @@ fn escape_on_a_question_follows_the_manifest_chain() {
     assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Composer);
     assert!(answers_sent(&app).is_empty());
 }
+
+#[test]
+fn files_and_projects_tabs_expand_the_rail() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.ui.left_rail = true;
+    app.execute("sidebar.tab.files");
+    assert!(!app.ui.left_rail);
+    app.ui.left_rail = true;
+    app.execute("sidebar.tab.sessions");
+    assert!(app.ui.left_rail);
+}
