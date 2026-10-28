@@ -48,7 +48,7 @@ function Line(p: { k: string; v: string; mono?: boolean }) {
   return (
     <View class="flex-row gap-3 py-2 border-b border-border">
       <Text class={`w-[88px] ${T.meta} pt-0.5`}>{p.k}</Text>
-      <Text selectable class={`flex-1 min-w-0 ${p.mono ? "font-mono text-xs leading-5" : "text-[13px] leading-5"} text-foreground`}>{p.v}</Text>
+      <Text style={{ userSelect: "text" }} class={`flex-1 min-w-0 ${p.mono ? "font-mono text-xs leading-5" : "text-[13px] leading-5"} text-foreground`}>{p.v}</Text>
     </View>
   );
 }

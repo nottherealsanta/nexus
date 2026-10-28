@@ -178,8 +178,8 @@ export function Composer() {
                       <Button onPress={() => accept(r())} selected={sel()} testID={`completion-${r().key}`}
                         class={`flex-row items-center gap-3 h-8 px-3 hover:bg-accent selected:bg-selection ${FOCUS}`}>
                         <If when={sel()}>{() => <View class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary" />}</If>
-                        <Text numberOfLines={1} class={`font-mono text-[12.5px] leading-5 font-medium ${r().muted ? "text-muted-foreground" : "text-foreground"}`}>{r().value}</Text>
-                        <Text numberOfLines={1} class="flex-1 min-w-0 text-[12px] leading-4 text-muted-foreground">{r().muted ? `${r().help} · ${r().muted}` : r().help}</Text>
+                        <Text style={{ numberOfLines: 1 }} class={`font-mono text-[12.5px] leading-5 font-medium ${r().muted ? "text-muted-foreground" : "text-foreground"}`}>{r().value}</Text>
+                        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[12px] leading-4 text-muted-foreground">{r().muted ? `${r().help} · ${r().muted}` : r().help}</Text>
                         <If when={!!r().hint}><Text class="text-xs leading-4 text-muted-foreground">{r().hint ?? ""}</Text></If>
                       </Button>
                     );
@@ -205,10 +205,10 @@ export function Composer() {
             placeholder={reason() ?? (centre() === "new_session" ? "Message to start a new session" : "Type a message…")}
             readonly={!live() || !!ses()?.archived}
             submitBehavior="submit" onSubmit={() => void send()}
-            onChange={(t) => { selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); }}
+            onChange={({ value: t }) => { selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); }}
             onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
             onKeyPress={(e: { key: string }) => { if (String(e.key).toLowerCase() === "escape" && open()) dismissed.set(text()); }}
-            onContentSizeChange={(s) => h.set(Math.min(220, Math.max(44, Math.ceil(s.height) + 16)))}
+            onContentSizeChange={(s) => h.set(Math.min(220, Math.max(44, Math.ceil(s.size.height) + 16)))}
             style={{ height: h() }}
             class="px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
           />
@@ -232,7 +232,7 @@ export function Composer() {
                       <View class={`h-full rounded-full ${agentRailColor(agent())}`} style={{ width: `${meterPct()}%` }} />
                     </View>
                   </If>
-                  <Text numberOfLines={1} class={T.meta} testID="composer-usage">{usageLabel()}</Text>
+                  <Text style={{ numberOfLines: 1 }} class={T.meta} testID="composer-usage">{usageLabel()}</Text>
                 </View>
               </If>
               <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={canSend() ? "bg-primary hover:bg-primary" : "bg-raised"} tint={canSend() ? "tint-on-accent" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
@@ -268,8 +268,8 @@ function Selector(p: { command: string; label: string; dot?: string; labelClass?
       class={`flex-row items-center gap-1.5 min-w-0 shrink h-7 px-2 rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
     >
       <If when={!!p.dot}>{() => <View class={`size-2 shrink-0 rounded-full ${p.dot}`} />}</If>
-      <Text numberOfLines={1} class={`text-[13px] leading-5 ${p.labelClass ?? "text-foreground-secondary"}`}>{p.label}</Text>
-      <If when={!!p.sub}><Text numberOfLines={1} class="text-[13px] leading-5 text-muted-foreground">{p.sub!}</Text></If>
+      <Text style={{ numberOfLines: 1 }} class={`text-[13px] leading-5 ${p.labelClass ?? "text-foreground-secondary"}`}>{p.label}</Text>
+      <If when={!!p.sub}><Text style={{ numberOfLines: 1 }} class="text-[13px] leading-5 text-muted-foreground">{p.sub!}</Text></If>
       <Icon name="chevron-down" size={12} class="tint-muted-foreground" />
     </Button>
   );
@@ -346,24 +346,24 @@ function LocationStrip() {
   return (
     <If when={project() && directory()}>
       <View class="w-full flex-row items-center gap-2 min-h-7 pt-1.5 px-1 min-w-0" testID="location-strip">
-        <Text numberOfLines={1} class="shrink-0 max-w-[30%] text-[13px] leading-5 font-semibold text-foreground">{project()?.name ?? ""}</Text>
+        <Text style={{ numberOfLines: 1 }} class="shrink-0 max-w-[30%] text-[13px] leading-5 font-semibold text-foreground">{project()?.name ?? ""}</Text>
         <If when={!!session()}>
           <Button
             disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
             accessibilityLabel={`Directory ${path()}, unavailable: ${directoryAvailability().reason ?? ""}`}
             tooltip={tooltip(directoryAvailability().reason ?? "Change session directory")}
             class={`min-w-0 shrink rounded-(--radius) disabled:opacity-50 ${FOCUS}`}
-          ><Text numberOfLines={1} class={`${T.meta} min-w-0`}>{path()}</Text></Button>
+          ><Text style={{ numberOfLines: 1 }} class={`${T.meta} min-w-0`}>{path()}</Text></Button>
         </If>
-        <If when={!session()}><Text testID="location-directory" numberOfLines={1} class={`min-w-0 shrink ${T.meta}`}>{path()}</Text></If>
+        <If when={!session()}><Text testID="location-directory" style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.meta}`}>{path()}</Text></If>
         <If when={!!branch()}>
-          <If when={!!session()} else={<Text numberOfLines={1} class={`${T.sec} shrink`}>{`⌥ ${branch()!}`}</Text>}>
+          <If when={!!session()} else={<Text style={{ numberOfLines: 1 }} class={`${T.sec} shrink`}>{`⌥ ${branch()!}`}</Text>}>
             <Button
               disabled={!worktreeAvailability().ok} onPress={() => void run("session.worktrees")} testID="location-branch"
               accessibilityLabel={`Branch ${branch()}, unavailable: ${worktreeAvailability().reason ?? ""}`}
               tooltip={tooltip(worktreeAvailability().reason ?? "Worktree controls")}
               class={`min-w-0 shrink rounded-(--radius) disabled:opacity-50 ${FOCUS}`}
-            ><Text numberOfLines={1} class={T.sec}>{`⌥ ${branch()!}`}</Text></Button>
+            ><Text style={{ numberOfLines: 1 }} class={T.sec}>{`⌥ ${branch()!}`}</Text></Button>
           </If>
         </If>
         <If when={linked()} else={<Text testID="location-checkout" class={`shrink-0 ${T.meta}`}>checkout</Text>}>
@@ -425,7 +425,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
       <View class="flex-1 min-w-0 gap-2 px-3.5 py-3">
         <View class="flex-row items-center gap-2">
           <Status kind="waiting" word />
-          <Text numberOfLines={1} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground">
+          <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground">
             <If when={approval()}>{() => <Text>{`${approval()!.tool}${from()}`}</Text>}</If>
             <If when={question()}>{() => <Text>{`question${from()}`}</Text>}</If>
           </Text>
@@ -451,7 +451,7 @@ function ApprovalBody(p: { a: Approval }) {
   return (
     <View class="gap-2.5">
       <View class="rounded-(--radius) border border-border bg-background px-3 py-2 max-h-40 overflow-hidden">
-        <Text selectable class="font-mono text-xs leading-[18px] text-foreground">{cmd}</Text>
+        <Text style={{ userSelect: "text" }} class="font-mono text-xs leading-[18px] text-foreground">{cmd}</Text>
       </View>
       <If when={!busyWait()} else={<View class="flex-row items-center gap-2"><Status kind="running" /><Text class={T.sec}>sending…</Text></View>}>
         <View class="flex-row flex-wrap items-center gap-2">
@@ -489,7 +489,7 @@ function QuestionBody(p: { q: Question }) {
                 )}
               </Each>
               <If when={qq().allow_free_text}>
-                <Input placeholder="Or type an answer" onChange={(t) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class="rounded-(--radius) border border-border bg-background px-2.5 h-8 text-[13px] text-foreground" />
+                <Input placeholder="Or type an answer" onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class="rounded-(--radius) border border-border bg-background px-2.5 h-8 text-[13px] text-foreground" />
               </If>
             </View>
           );

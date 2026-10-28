@@ -14,7 +14,6 @@ function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null
  * on hover.
  */
 function SessionTab(p: { id: string }) {
-  const hot = signal(false);
   const session = () => { m(); return model.sessions.get(p.id); };
   const title = () => session()?.title || "Untitled";
   const active = () => centre() !== "settings" && centre() !== "new_session" && viewed()?.id === p.id;
@@ -33,8 +32,7 @@ function SessionTab(p: { id: string }) {
   };
   return (
     <View
-      onHoverIn={() => hot.set(true)} onHoverOut={() => hot.set(false)}
-      class={`flex-row min-w-0 max-w-[224px] h-7 items-center rounded-(--radius) ${active() ? "bg-background" : "hover:bg-accent"}`}
+      class={`group/tab flex-row min-w-0 max-w-[224px] h-7 items-center rounded-(--radius) ${active() ? "bg-background" : "hover:bg-accent"}`}
     >
       <Button
         onPress={activate} selected={active()} accessibilityLabel={`${active() ? "Rename" : "Open"} ${title()}, ${status().label}`}
@@ -42,12 +40,12 @@ function SessionTab(p: { id: string }) {
       >
         <Text class={`shrink-0 text-[13px] leading-5 ${status().tone}`} accessibilityLabel={status().label}>{status().glyph}</Text>
         <If when={active() && renaming()} else={
-          <Text testID={`tab-title-${p.id}`} numberOfLines={1} ellipsizeMode="tail" class={`min-w-0 flex-1 text-[13px] leading-5 ${active() ? "font-semibold text-foreground" : "text-muted-foreground"}`}>{title()}</Text>
+          <Text testID={`tab-title-${p.id}`} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 text-[13px] leading-5 ${active() ? "font-semibold text-foreground" : "text-muted-foreground"}`}>{title()}</Text>
         }>
           <RenameField initial={title()} />
         </If>
       </Button>
-      <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`shrink-0 items-center justify-center rounded-r-(--radius) px-1.5 h-7 text-muted-foreground hover:text-foreground ${active() || hot() ? "opacity-100" : "opacity-0"} ${FOCUS}`}>
+      <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`shrink-0 items-center justify-center rounded-r-(--radius) px-1.5 h-7 text-muted-foreground hover:text-foreground ${active() ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100 focus:opacity-100"} ${FOCUS}`}>
         <Text class="text-[15px] leading-5">×</Text>
       </Button>
     </View>
@@ -59,7 +57,7 @@ function RenameField(p: { initial: string }) {
   const done = (commit: boolean) => { renaming.set(false); if (commit && text.trim() && text.trim() !== p.initial) void renameSession(text.trim()); };
   return (
     <Input
-      autoFocus defaultValue={p.initial} onChange={(t) => (text = t)} onSubmit={() => done(true)} submitBehavior="submit"
+      autoFocus defaultValue={p.initial} onChange={({ value: t }) => (text = t)} onSubmit={() => done(true)} submitBehavior="submit"
       accessibilityLabel="Session title" testID="rename-input" onBlur={() => done(true)}
       class="min-w-[100px] max-w-[170px] rounded-(--radius) border border-ring bg-card px-1 h-7 text-[13px] text-foreground"
     />

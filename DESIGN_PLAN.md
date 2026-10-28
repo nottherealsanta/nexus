@@ -581,14 +581,15 @@ start at the `+`/`-` column instead of the text column), then I6–I10 for both 
   Edit/patch diffs have no line numbers when the tool input has none. The Git diff view has
   no screenshot (the seed workspace is not a Git repo). Split-diff wrap bug above.
 - TUI dependency: `ratatui-markdown` was dropped in I4 (unused; `pulldown-cmark` parses).
-- NSH: nothing has been type-checked or run against the real runtime. The installed `nsh`
-  is 0.2.0 and lacks exports the app already used before this work (`windowSize`,
-  `colorScheme`, `keymap`, `Clipboard`, `Input`…). `nsh check` stays at the 29-error
-  baseline; `nsh test` and `nsh package` fail on the same missing exports. Update the NSH
-  toolchain, then run `nsh check`, `nsh test --target web` and the e2e shots over all
-  NSH commits above. NSH also lacks: thought durations (parts carry no timing), message
-  tags, the live shimmer; the split diff's empty side is a flat fill, not a hatch; the
-  sticky bar's line count is an estimate and its layout coordinates need a runtime check.
+- NSH: verified on `nsh 0.3.0 (09c1632)` (`nsh check` clean, `nsh test --target web` 28 of 32,
+  `npm run build` needs `llvm-ar` on PATH, e2e shots at the three sizes, dark and light). The
+  sticky bar's offsets are now summed from measured row heights (an item's `onLayout` frame is
+  relative to its own container); the split diff's empty side is a hatch (`repeating-linear-gradient`).
+  The four failing tests are harness limits, not app bugs: two need a held SSE stream (the stub's
+  stream ends at once, so the view flaps to "reconnecting" and a send is disabled), two use
+  `clock: {}`, which hangs on `--target web` in nsh 09c1632. NSH also lacks thought durations
+  (parts carry no timing), message tags and the live shimmer; the sticky bar's line count is an
+  estimate.
 
 **How to continue:**
 - Visual review without node: `cd nexus-tui && NEXUS_CMD=../nexus-core/.venv/bin/nexus

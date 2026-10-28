@@ -38,7 +38,7 @@ function Seg(p: { options: string[]; value: string; onPick?: (v: string) => void
   );
 }
 
-function Value(p: { text: string; mono?: boolean }) { return <Text selectable class={`${p.mono ? "font-mono text-xs" : "text-[13px]"} leading-5 text-foreground-secondary ${isNarrow() ? "text-left" : "text-right"}`}>{p.text}</Text>; }
+function Value(p: { text: string; mono?: boolean }) { return <Text style={{ userSelect: "text" }} class={`${p.mono ? "font-mono text-xs" : "text-[13px]"} leading-5 text-foreground-secondary ${isNarrow() ? "text-left" : "text-right"}`}>{p.text}</Text>; }
 
 function listFor(id: string): JSX.Element {
   const d = data();

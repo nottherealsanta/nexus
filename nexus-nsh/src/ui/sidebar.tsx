@@ -110,7 +110,7 @@ function SessionsTab() {
       <View class="gap-2 p-2">
         <View class="flex-row items-center gap-2">
           <Button onPress={() => run("project.switch")} accessibilityLabel="Current project" class={`flex-1 min-w-0 flex-row items-center gap-1.5 rounded-(--radius) px-2 hover:bg-accent ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}>
-            <Text numberOfLines={1} class="flex-1 text-[13px] leading-5 font-medium text-foreground">{scopeAll() ? "All projects" : currentProject() ? projectName(currentProject()!) : "No project"}</Text>
+            <Text style={{ numberOfLines: 1 }} class="flex-1 text-[13px] leading-5 font-medium text-foreground">{scopeAll() ? "All projects" : currentProject() ? projectName(currentProject()!) : "No project"}</Text>
             <Icon name="chevron-down" size={14} class="tint-muted-foreground" />
           </Button>
           <IconButton icon="plus" label="New session" testID="new-session" onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} reason={availability(byId.get("session.new")!).ok ? hint("session.new") ?? undefined : availability(byId.get("session.new")!).reason} />
@@ -127,11 +127,11 @@ function SessionsTab() {
           <Empty title="No projects yet" body="Add a project directory to start a session." action={<Btn label="Add project" icon="plus" onPress={() => run("project.add")} kind="primary" />} />
         </If>
       }>
-        <List each={rowItems()} keyExtractor={(x) => x.key} class="flex-1" contentClass="px-2 pb-2 gap-0.5" testID="session-list">
+        <List each={rowItems()} keyExtractor={(x) => x.key} class="flex-1" contentStyle={{ paddingHorizontal: 8, paddingBottom: 8, gap: 2 }} testID="session-list">
           {(x) => (
             <If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}>
               <View class="flex-row items-center gap-2 px-1.5 pt-3 pb-1">
-                <Text numberOfLines={1} class="flex-1 text-xs leading-4 font-medium text-muted-foreground">{(x() as any).title}</Text>
+                <Text style={{ numberOfLines: 1 }} class="flex-1 text-xs leading-4 font-medium text-muted-foreground">{(x() as any).title}</Text>
                 <Text class={T.meta}>{String((x() as any).n)}</Text>
               </View>
             </If>
@@ -159,7 +159,7 @@ function SessionRow(p: { s: () => Session }) {
   return (
     <ContextMenu
       open={sidebarRowMenu()?.kind === "session" && sidebarRowMenu()?.id === s().id}
-      onOpenChange={(open) => {
+      onOpenChange={({ open }) => {
         if (open) {
           focusedSidebarRow.set(ref());
           sidebarRowMenu.set(ref());
@@ -177,7 +177,7 @@ function SessionRow(p: { s: () => Session }) {
           <View class="w-3.5 items-center">
             <If when={att()} else={<If when={s().status === "busy"} else={<Text class="text-[13px] leading-5 text-transparent"> </Text>}><Status kind="running" /></If>}><AttentionMark kind="waiting" /></If>
           </View>
-          <Text numberOfLines={1} class={`flex-1 min-w-0 text-[13px] leading-5 ${sel() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{s().title || "Untitled"}</Text>
+          <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[13px] leading-5 ${sel() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{s().title || "Untitled"}</Text>
           <View class="flex-row items-center gap-1.5">
             <If when={n() > 0}><Text class={T.meta}>{`${n()}↳`}</Text></If>
             <Text class={`${T.meta} w-7 text-right`}>{relTime(s().updated, (tick(), Date.now()))}</Text>
@@ -243,7 +243,7 @@ function ProjectsTab() {
         <Text class="flex-1 text-[13px] leading-5 font-medium text-foreground px-1">Projects</Text>
       </View>
       <If when={rows().length === 0}><Empty title="No projects yet" body="Add a project by its directory path. Core creates it if it is new." /></If>
-      <List each={items()} keyExtractor={(x) => x.id} class="flex-1" contentClass="px-2 pb-2 gap-0.5" testID="project-list">
+      <List each={items()} keyExtractor={(x) => x.id} class="flex-1" contentStyle={{ paddingHorizontal: 8, paddingBottom: 8, gap: 2 }} testID="project-list">
         {(item) => {
           const row = item();
           if (row.kind === "add") return <Button onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} testID="add-project" accessibilityLabel="+ Add project"
@@ -265,7 +265,7 @@ function ProjectRow(p: { project: () => Project; count: (id: string) => number }
   return (
     <ContextMenu
       open={sidebarRowMenu()?.kind === "project" && sidebarRowMenu()?.id === project().id}
-      onOpenChange={(open) => {
+      onOpenChange={({ open }) => {
         if (open) {
           focusedSidebarRow.set(ref());
           sidebarRowMenu.set(ref());
@@ -279,10 +279,10 @@ function ProjectRow(p: { project: () => Project; count: (id: string) => number }
           onPress={() => { focusedSidebarRow.set(ref()); selectProject(project().id); }} accessibilityState={{ selected: selected() }} testID={`project-${project().id}`} accessibilityLabel={`Project ${project().name}`}
           class={`gap-0.5 rounded-(--radius) px-2.5 py-1.5 hover:bg-accent selected:bg-selection ${FOCUS}`}>
           <View class="flex-row items-center gap-2">
-            <Text numberOfLines={1} class={`flex-1 text-[13px] leading-5 ${selected() ? "text-foreground font-medium" : "text-foreground"}`}>{project().name}</Text>
+            <Text style={{ numberOfLines: 1 }} class={`flex-1 text-[13px] leading-5 ${selected() ? "text-foreground font-medium" : "text-foreground"}`}>{project().name}</Text>
             <Text class={T.meta}>{`${p.count(project().id)} · ${relTime(project().updated)}`}</Text>
           </View>
-          <Text numberOfLines={1} class={`${T.meta} font-mono`}>{midTruncate(project().path, 32)}</Text>
+          <Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono`}>{midTruncate(project().path, 32)}</Text>
         </View>
       }
     >

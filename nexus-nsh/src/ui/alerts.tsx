@@ -79,7 +79,7 @@ export function Banners() {
 const TG = { success: { g: "✓", t: "text-success" }, info: { g: "i", t: "text-info" }, warning: { g: "!", t: "text-warning" }, error: { g: "✕", t: "text-error" } };
 export function Toasts() {
   return (
-    <View class={`absolute right-3 left-3 items-end gap-2 ${isNarrow() ? "top-2" : "bottom-[128px]"}`} pointerEvents="box-none" testID="toasts" accessibilityLabel="Notifications">
+    <View class={`absolute right-3 left-3 items-end gap-2 ${isNarrow() ? "top-2" : "bottom-[128px]"}`} style={{ pointerEvents: "box-none" }} testID="toasts" accessibilityLabel="Notifications">
       <Each of={toasts()} key={(t) => t.id}>
         {(t) => (
           <Button onPress={() => dismissToast(t().id)} role="alert" accessibilityLabel={`${t().level}: ${t().text}`} class={`flex-row items-center gap-2 rounded-(--radius-card) border border-border bg-popover px-3.5 min-h-10 max-w-[420px] shadow-lg ${FOCUS}`}>

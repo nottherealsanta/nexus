@@ -1,7 +1,7 @@
 // Diffs for edit, write and patch tool details (DESIGN_PLAN D09, I4): split at window width 1100 px
 // and up, unified below. Built from the tool detail lines, so the detail cap and its announced
 // "lines hidden" marker still apply: the view only lays out the lines it is given.
-import { Text, View } from "nsh";
+import { Text, token, View } from "nsh";
 import type { ToolDetailLine } from "./timeline";
 import { width } from "../store";
 
@@ -77,7 +77,7 @@ export function DiffView(p: { lines: () => ToolDetailLine[] }) {
 function Hunk(p: { text: string }) {
   return (
     <View class="h-6 justify-center px-3">
-      <Text numberOfLines={1} class="font-mono text-xs leading-4 text-muted-foreground">{`⋯ ${p.text}`}</Text>
+      <Text style={{ numberOfLines: 1 }} class="font-mono text-xs leading-4 text-muted-foreground">{`⋯ ${p.text}`}</Text>
     </View>
   );
 }
@@ -120,14 +120,17 @@ function SplitCell(p: { num: string; text: string; tint?: string; numClass?: str
   return (
     <View class={`flex-1 min-w-0 flex-row ${p.tint ?? ""}`}>
       <Text class={`w-12 shrink-0 text-right pr-2 font-mono text-xs leading-5 text-muted-foreground ${p.numClass ?? ""}`}>{p.num}</Text>
-      <Text numberOfLines={1} class={`flex-1 min-w-0 pl-2 pr-2 ${MONO} text-foreground`}>{p.text}</Text>
+      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 pl-2 pr-2 ${MONO} text-foreground`}>{p.text}</Text>
     </View>
   );
 }
 
-/** The missing side of an add or a remove: a flat empty fill (NSH views cannot draw the hatch). */
+/** The missing side of an add or a remove: a diagonal hatch in the strong border colour, as in the mock-up. */
 function Empty() {
-  return <View class="flex-1 min-w-0 bg-border-strong opacity-20" />;
+  return (
+    <View class="flex-1 min-w-0 opacity-40" testID="diff-empty-side"
+      style={{ backgroundImage: `repeating-linear-gradient(135deg, ${token("border-strong")} 0px, ${token("border-strong")} 1px, transparent 1px, transparent 6px)` }} />
+  );
 }
 
 function UnifiedView(p: { lines: () => ToolDetailLine[] }) {
@@ -149,7 +152,7 @@ function UnifiedView(p: { lines: () => ToolDetailLine[] }) {
               <Text class="w-12 shrink-0 text-right pr-2 font-mono text-xs leading-5 text-muted-foreground">{num(oldNo)}</Text>
               <Text class="w-12 shrink-0 text-right pr-2 font-mono text-xs leading-5 text-muted-foreground">{num(newNo)}</Text>
               <Text class={`w-5 text-center ${MONO} ${signClass}`}>{sign}</Text>
-              <Text numberOfLines={1} class={`flex-1 min-w-0 pr-2 ${MONO} ${textClass}`}>{it.text}</Text>
+              <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 pr-2 ${MONO} ${textClass}`}>{it.text}</Text>
             </View>
           );
         }}

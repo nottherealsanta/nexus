@@ -65,13 +65,14 @@ const NOTICE = /^\[(Nexus notice|Nexus recovery|Notification)/;
 const closedTurns = signal<Record<string, boolean>>({});
 // Sticky user bar: the bands' geometry (content coordinates) and the list's scroll offset.
 type Band = { key: string; top: number; height: number; n: number; text: string; turnKey: string };
-const bands = signal<Record<string, Band>>({});
+const rowHeights = signal<Record<string, number>>({});
 const scrollY = signal(0);
-const hoveredBand = signal<string | null>(null);
 const focusedBand = signal<string | null>(null);
 // Sticky user bar line height (secondary text) and bar height, for the push-up geometry.
 const STICKY_LINE = 20;
 const STICKY_BAR = 28;
+const LIST_PAD = 12; // the list's `py-3`
+const ROW_ESTIMATE = 72; // the list's estimatedItemSize, for rows not laid out yet
 
 function open(key: string, fallback: boolean): boolean {
   const v = timelineOpen()[key];
@@ -564,22 +565,17 @@ function groupActivities(rows: Row[]): Row[] {
 const RAIL: Record<string, string> = { info: "bg-info", accent: "bg-primary", warning: "bg-warning" };
 function Rail(p: { color: string }) { return <View class={`w-[3px] self-stretch rounded-full ${p.color}`} />; }
 
-/** Band geometry for the sticky bar: reported by each user band's layout. */
-function bandLayout(row: Row): ((b: { origin: { x: number; y: number }; size: { width: number; height: number } }) => void) | undefined {
-  if (row.kind !== "user") return undefined;
-  return (b) => {
-    const cur = bands();
-    const prev = cur[row.key];
-    const next: Band = { key: row.key, top: b.origin.y, height: b.size.height, n: row.n, text: firstLine(row.text), turnKey: row.turnKey };
-    if (prev && prev.top === next.top && prev.height === next.height && prev.text === next.text && prev.n === next.n) return;
-    bands.set({ ...cur, [row.key]: next });
-  };
+/** Row heights for the sticky bar: an item's `onLayout` frame is relative to its own container, so content offsets are summed from the heights. */
+function reportHeight(row: Row, h: number) {
+  const cur = rowHeights();
+  if (cur[row.key] === h) return;
+  rowHeights.set({ ...cur, [row.key]: h });
 }
 
 function RowView(p: { r: () => Row }) {
   const r = p.r;
   return (
-    <View class="w-full items-center px-4" onLayout={(b: any) => bandLayout(r())?.(b)}>
+    <View class="w-full items-center px-4" onLayout={(b: any) => reportHeight(r(), b.size.height)}>
       <View class="w-full max-w-[760px]">
         <If when={r().kind === "context"}>
           {() => {
@@ -620,7 +616,7 @@ function RowView(p: { r: () => Row }) {
             const f = r() as Extract<Row, { kind: "footer" }>;
             return (
               <View class="w-full items-end gap-0.5 pt-3 pb-1" testID="turn-footer">
-                <If when={!!f.error}><Text selectable class="text-xs leading-4 text-error">{`✕ ${f.error}`}</Text></If>
+                <If when={!!f.error}><Text style={{ userSelect: "text" }} class="text-xs leading-4 text-error">{`✕ ${f.error}`}</Text></If>
                 <View class="flex-row flex-wrap justify-end items-center">
                   <If when={!!f.agent}><Text class={`text-xs leading-4 font-semibold ${agentColor(f.agent)}`}>{`▪ ${titleCase(f.agent)}`}</Text></If>
                   <Each of={f.segments} key={(s, i) => `${i}`}>
@@ -641,7 +637,7 @@ function RowView(p: { r: () => Row }) {
             <Rail color={RAIL[(r() as any).tone] ?? "bg-info"} />
             <View class="flex-1 min-w-0 gap-0.5">
               <Text class="text-xs leading-4 font-medium text-muted-foreground">{(r() as any).label}</Text>
-              <Text selectable class={T.sec}>{(r() as any).text}</Text>
+              <Text style={{ userSelect: "text" }} class={T.sec}>{(r() as any).text}</Text>
             </View>
           </View>
         </If>
@@ -675,10 +671,10 @@ function RowView(p: { r: () => Row }) {
                     <Status kind={c.tone === "accent" ? "waiting" : c.status === "running" ? "running" : "done"} />
                     <Text class="text-xs leading-4 text-muted-foreground">child</Text>
                     <Text class={`text-[13px] leading-5 ${agentColor(c.agent)}`}>{c.agent}</Text>
-                    <Text numberOfLines={1} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.title ? `“${c.title}”` : ""}</Text>
+                    <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.title ? `“${c.title}”` : ""}</Text>
                     <Text class={T.meta}>{c.status}</Text>
                   </Button>
-                  <Text numberOfLines={2} class={`${T.meta} pl-6`}>{c.body}</Text>
+                  <Text style={{ numberOfLines: 2 }} class={`${T.meta} pl-6`}>{c.body}</Text>
                 </View>
               </View>
             );
@@ -689,7 +685,7 @@ function RowView(p: { r: () => Row }) {
             <Rail color={RAIL[(r() as any).tone] ?? "bg-warning"} />
             <View class="flex-1 min-w-0 gap-0.5">
               <Text class="text-xs leading-4 font-medium text-muted-foreground">{(r() as any).label}</Text>
-              <Text selectable class={T.sec}>{(r() as any).text}</Text>
+              <Text style={{ userSelect: "text" }} class={T.sec}>{(r() as any).text}</Text>
               <If when={(r() as any).detail}><Text class={T.meta}>{(r() as any).detail}</Text></If>
             </View>
           </View>
@@ -715,7 +711,7 @@ function CodeFence(p: { block: TextViewCodeBlock }) {
       </View>
       <Scroll horizontal contentClass="px-4 pb-3.5">
         <View class="gap-0">
-          {code().split("\n").map((line) => <Text selectable class="font-mono text-[13px] leading-5 text-foreground">{line || " "}</Text>)}
+          {code().split("\n").map((line) => <Text style={{ userSelect: "text" }} class="font-mono text-[13px] leading-5 text-foreground">{line || " "}</Text>)}
         </View>
       </Scroll>
     </View>
@@ -731,17 +727,16 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   const meta = () => `#${r().n} · ${r().time}`;
   return (
     <If when={r().folded} else={
-      <View class="w-full rounded-(--radius-card) bg-raised px-4 py-3 relative" testID="msg-user"
-        onHoverIn={() => hoveredBand.set(r().key)} onHoverOut={() => hoveredBand.set(null)}
+      <View class="group/band w-full rounded-(--radius-card) bg-raised px-4 py-3 relative" testID="msg-user"
         onFocus={() => focusedBand.set(r().key)} onBlur={() => { if (focusedBand() === r().key) focusedBand.set(null); }}>
         <If when={focusedBand() === r().key}>
           {() => <View class="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-primary" />}
         </If>
         <View class="flex-row items-start gap-3">
-          <Text selectable class="flex-1 min-w-0 text-[15px] leading-6 text-foreground">{r().text}</Text>
+          <Text style={{ userSelect: "text" }} class="flex-1 min-w-0 text-[15px] leading-6 text-foreground">{r().text}</Text>
           <View class="flex-row items-center gap-1 pt-0.5">
             {/* Hover icons: kept mounted (keyboard reachable), shown while the card is hovered or focused. */}
-            <View class={`flex-row items-center ${hoveredBand() === r().key || focusedBand() === r().key ? "" : "opacity-0"}`}>
+            <View class={`flex-row items-center ${focusedBand() === r().key ? "" : "opacity-0 group-hover/band:opacity-100"}`}>
               <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
               <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
             </View>
@@ -753,7 +748,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
       <Button onPress={fold} accessibilityLabel={`${meta()} folded, show`} testID={`msg-user-folded-${r().n}`}
         class={`w-full flex-row items-center gap-2 rounded-(--radius-card) bg-raised px-4 min-h-9 hover:bg-accent ${FOCUS}`}>
         <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
-        <Text numberOfLines={1} class="flex-1 min-w-0 text-[14px] leading-[22px] text-foreground">{r().text}</Text>
+        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[14px] leading-[22px] text-foreground">{r().text}</Text>
         <If when={r().tools > 0 || !!r().duration}>
           {() => <Text class={T.meta}>{[r().tools ? `${r().tools} tool${r().tools === 1 ? "" : "s"}` : "", r().duration].filter(Boolean).join(" · ")}</Text>}
         </If>
@@ -765,16 +760,23 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
 }
 
 /** The sticky copy of the current turn's user band, under the header; the next band pushes it up. */
-function StickyBar(p: { scrollTo: (offset: number) => void }) {
-  const sid = () => model.selected?.sessionId ?? "";
-  const list = () => Object.values(bands())
-    .filter((b) => b.turnKey.startsWith(`turn:${sid()}:`))
-    .sort((a, b) => a.top - b.top);
+function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void }) {
+  const list = (): Band[] => {
+    const h = rowHeights();
+    let top = LIST_PAD;
+    const out: Band[] = [];
+    for (const r of p.rows()) {
+      const height = h[r.key] ?? ROW_ESTIMATE;
+      if (r.kind === "user") out.push({ key: r.key, top, height, n: r.n, text: firstLine(r.text), turnKey: r.turnKey });
+      top += height;
+    }
+    return out;
+  };
   const current = () => {
     const y = scrollY();
     const all = list();
     let idx = -1;
-    all.forEach((b, i) => { if (b.top < y) idx = i; });
+    all.forEach((b, i) => { if (b.top + b.height <= y) idx = i; });
     return idx < 0 ? null : { band: all[idx], next: all[idx + 1] as Band | undefined };
   };
   return (
@@ -785,11 +787,11 @@ function StickyBar(p: { scrollTo: (offset: number) => void }) {
         const lines = Math.max(0, Math.floor((Math.min(y, c.next?.top ?? Infinity) - c.band.top) / STICKY_LINE));
         const offset = c.next ? Math.min(0, c.next.top - y - STICKY_BAR) : 0;
         return (
-          <View class="absolute left-0 right-0 items-center" pointerEvents="box-none" style={{ top: offset }} testID="sticky-user">
+          <View class="absolute left-0 right-0 items-center" style={{ top: offset, pointerEvents: "box-none" }} testID="sticky-user">
             <View class="w-full max-w-[760px] px-4">
               <Button onPress={() => p.scrollTo(c.band.top)} accessibilityLabel="Scroll to this message" testID="sticky-user-button"
                 class={`w-full flex-row items-center gap-3 rounded-(--radius) bg-raised border-b border-border px-3 min-h-7 hover:bg-accent ${FOCUS}`}>
-                <Text numberOfLines={1} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.band.text}</Text>
+                <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.band.text}</Text>
                 <Text class={T.meta}>{`↑ ${lines} lines of this turn above`}</Text>
               </Button>
             </View>
@@ -811,7 +813,7 @@ function ContextItem(p: { item: () => Extract<Row, { kind: "context" }>["items"]
         <If when={!!item().tokens}><Text class={T.meta}>{item().tokens!}</Text></If>
       </View>
       <Each of={item().details} key={(x, i) => `${item().key}-${i}`}>
-        {(detail) => <Text class={T.meta} numberOfLines={2}>{detail()}</Text>}
+        {(detail) => <Text class={T.meta} style={{ numberOfLines: 2 }}>{detail()}</Text>}
       </Each>
     </View>
   );
@@ -845,7 +847,7 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
         class={`w-full flex-row items-center gap-2 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`}>
         <Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
-        <Text numberOfLines={1} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{r().summary}</Text>
+        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{r().summary}</Text>
         <If when={!!r().diff}>
           {() => <Text class={T.meta}><Text class="text-success">{`+${r().diff!.add}`}</Text>{" "}<Text class="text-error">{`−${r().diff!.del}`}</Text></Text>}
         </If>
@@ -898,7 +900,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
             {() => <Text class="text-[13px] leading-5 italic text-muted-foreground">encrypted, replayed to the provider</Text>}
           </If>
           <If when={!x().encrypted}>
-            {() => <Text numberOfLines={1} class="flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground">{firstLine(x().text)}</Text>}
+            {() => <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground">{firstLine(x().text)}</Text>}
           </If>
         </Button>
       }>
@@ -911,7 +913,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
           <If when={x().running && hidden() > 0}>
             {() => <Text class="text-xs leading-4 text-muted-foreground">{`… ${hidden()} earlier lines`}</Text>}
           </If>
-          <Text selectable class="text-[13px] leading-5 italic text-foreground-secondary">
+          <Text style={{ userSelect: "text" }} class="text-[13px] leading-5 italic text-foreground-secondary">
             {x().running ? lines().slice(-5).join("\n") : x().text}
           </Text>
         </View>
@@ -922,7 +924,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
 
 /** One line of a member's detail output (the hidden-lines marker is shown as the foot instead). */
 function ToolDetail(p: { line: () => ToolDetailLine }) {
-  return <Text selectable class={`font-mono text-xs leading-[18px] ${ToolTone(p.line().tone)}`}>{p.line().text}</Text>;
+  return <Text style={{ userSelect: "text" }} class={`font-mono text-xs leading-[18px] ${ToolTone(p.line().tone)}`}>{p.line().text}</Text>;
 }
 
 function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
@@ -945,7 +947,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
           {() => <Status kind={stateKind()} />}
         </If>
         <Text class="min-w-[52px] text-[13px] leading-5 font-medium text-foreground">{verbLabel(r().name)}</Text>
-        <Text numberOfLines={1} ellipsizeMode="middle" class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground-secondary">{r().arg}</Text>
+        <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground-secondary">{r().arg}</Text>
         <If when={r().state !== "waiting" && !!r().summary}>
           <Text class={T.meta}><Text class={r().summary.startsWith("+") ? "text-success" : r().summary.startsWith("−") ? "text-error" : "text-muted-foreground"}>{r().summary}</Text></Text>
         </If>
@@ -956,7 +958,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
         <View class="ml-[18px] mt-1 mb-1 rounded-(--radius) bg-card overflow-hidden">
           <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
             <Text class="text-xs leading-4 font-semibold text-foreground">{verbLabel(r().name)}</Text>
-            <Text numberOfLines={1} class="flex-1 min-w-0 font-mono text-xs leading-4 text-foreground-secondary">{r().arg}</Text>
+            <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 font-mono text-xs leading-4 text-foreground-secondary">{r().arg}</Text>
             <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
               <Text class={T.meta}>{r().raw ? "[raw]" : "raw · r"}</Text>
             </Button>
@@ -1003,7 +1005,7 @@ export function Timeline() {
     <View class="flex-1 min-h-0" testID="timeline">
       <If when={rows().length > 0} else={<EmptyTimeline />}>
         <List
-          ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentClass="py-3"
+          ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingVertical: 12 }}
           maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 96 }}
           onScroll={(e) => {
             scrollY.set(e.offset.y);
@@ -1014,9 +1016,9 @@ export function Timeline() {
           {(r) => <RowView r={r} />}
         </List>
       </If>
-      <StickyBar scrollTo={(offset) => { try { ref?.scrollToOffset({ offset, animated: true }); } catch {} }} />
+      <StickyBar rows={rows} scrollTo={(offset) => { try { ref?.scrollToOffset({ offset, animated: true }); } catch {} }} />
       <If when={scrolledUp()}>
-        <View class="absolute bottom-3 left-0 right-0 items-center" pointerEvents="box-none">
+        <View class="absolute bottom-3 left-0 right-0 items-center" style={{ pointerEvents: "box-none" }}>
           <Button onPress={() => run("session.jump_latest")} accessibilityLabel="Jump to latest" testID="jump-latest" class={`flex-row items-center gap-1.5 rounded-full border border-border bg-popover px-3 min-h-8 shadow-md hover:bg-accent ${FOCUS}`}>
             <Icon name="arrow-up" size={14} class="tint-foreground-secondary rotate-180" />
             <Text class="text-[13px] leading-5 text-popover-foreground">Jump to latest</Text>

@@ -34,12 +34,12 @@ function PaletteBody() {
   void offs;
   return (
     <Dialog
-      open onOpenChange={(o) => { if (!o) paletteOpen.set(false); }} closeOnEscape={false} onCancel={() => escape()} animation="fade"
+      open onOpenChange={({ open }) => { if (!open) paletteOpen.set(false); }} closeOnEscape={false} onCancel={() => escape()} animation="fade"
       backdropClass="bg-black/50" class={`absolute left-0 right-0 ${isNarrow() ? "top-3 mx-3" : "top-[12%] mx-auto w-[560px]"} max-h-[72%] rounded-(--radius-card) border border-border bg-popover shadow-2xl overflow-hidden`}
     >
       <View testID="palette" accessibilityLabel="Command palette" role="menu">
         <View class="border-b border-border px-3">
-          <Input autoFocus placeholder="Type a command…" accessibilityLabel="Search commands" testID="palette-input" onChange={(t) => { q.set(t); idx.set(0); }} onSubmit={() => { const it = items()[idx()]; if (it) pick(it.c); }} submitBehavior="submit" class="h-11 text-[14px] text-foreground placeholder:text-muted-foreground" />
+          <Input autoFocus placeholder="Type a command…" accessibilityLabel="Search commands" testID="palette-input" onChange={({ value: t }) => { q.set(t); idx.set(0); }} onSubmit={() => { const it = items()[idx()]; if (it) pick(it.c); }} submitBehavior="submit" class="h-11 text-[14px] text-foreground placeholder:text-muted-foreground" />
         </View>
         <If when={items().length > 0} else={<View class="p-4"><Text class={T.sec}>No command matches “{q()}”.</Text></View>}>
           <Scroll class="max-h-[420px]" contentClass="p-1.5 gap-0.5" testID="palette-list">
@@ -51,10 +51,10 @@ function PaletteBody() {
                   <Button onPress={() => pick(c())} selected={idx() === i()} accessibilityLabel={`${c().title}${dis() ? `, unavailable: ${it().a.reason}` : ""}`} testID={`cmd-${c().id}`}
                     class={`rounded-(--radius) px-2.5 py-1.5 selected:bg-selection hover:bg-accent ${FOCUS}`}>
                     <View class="flex-row items-center gap-3">
-                      <Text numberOfLines={1} class={`flex-1 min-w-0 text-[14px] leading-[22px] ${dis() ? "text-muted-foreground" : "text-popover-foreground"}`}>{c().title}</Text>
+                      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-[22px] ${dis() ? "text-muted-foreground" : "text-popover-foreground"}`}>{c().title}</Text>
                       <Text class={T.meta}>{keyLabel(c()) ?? (c().slash ? `/${c().slash}` : "")}</Text>
                     </View>
-                    <If when={dis()}><Text numberOfLines={2} class={T.meta}>{it().a.reason!}</Text></If>
+                    <If when={dis()}><Text style={{ numberOfLines: 2 }} class={T.meta}>{it().a.reason!}</Text></If>
                   </Button>
                 );
               }}
@@ -75,7 +75,7 @@ function PickerBody() {
   const p = () => picker()!;
   const runItem = (i: { id: string; label: string; run: () => void | Promise<void> }) => { void i.run(); };
   return (
-    <Dialog open onOpenChange={(o) => { if (!o) picker.set(null); }} closeOnEscape={false} onCancel={() => escape()} animation="fade"
+    <Dialog open onOpenChange={({ open }) => { if (!open) picker.set(null); }} closeOnEscape={false} onCancel={() => escape()} animation="fade"
       backdropClass="bg-black/50" class={`absolute left-0 right-0 ${isNarrow() ? "top-3 mx-3" : "top-[14%] mx-auto w-[520px]"} max-h-[70%] rounded-(--radius-card) border border-border bg-popover shadow-2xl overflow-hidden`}>
       <View testID="picker" accessibilityLabel={p().title} role="menu">
         <View class="border-b border-border px-4 h-11 items-start justify-center">
@@ -88,7 +88,7 @@ function PickerBody() {
                 <Button onPress={() => runItem(it())} accessibilityLabel={it().label} testID={`pick-${i}`}
                   class={`rounded-(--radius) px-2.5 py-1.5 hover:bg-accent ${FOCUS}`}>
                   <View class="flex-row items-center gap-3">
-                    <Text numberOfLines={1} class={`flex-1 min-w-0 text-[14px] leading-[22px] ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{it().label}</Text>
+                    <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-[22px] ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{it().label}</Text>
                     <If when={!!it().hint}><Text class={T.meta}>{it().hint}</Text></If>
                   </View>
                 </Button>
@@ -186,7 +186,7 @@ function AddProjectBody() {
           <Text class="text-[15px] leading-5 font-semibold text-popover-foreground">Add project</Text>
           <Text class={T.sec}>Absolute path of a directory on the machine running Core. Core creates the project if it is new.</Text>
         </View>
-        <Input autoFocus placeholder="/path/to/repo" accessibilityLabel="Project path" testID="project-path" onChange={(t) => path.set(t)} onSubmit={() => void submit()} submitBehavior="submit" class={`h-9 rounded-(--radius) border bg-background px-3 font-mono text-[13px] text-foreground ${err() ? "border-error" : "border-border"}`} />
+        <Input autoFocus placeholder="/path/to/repo" accessibilityLabel="Project path" testID="project-path" onChange={({ value: t }) => path.set(t)} onSubmit={() => void submit()} submitBehavior="submit" class={`h-9 rounded-(--radius) border bg-background px-3 font-mono text-[13px] text-foreground ${err() ? "border-error" : "border-border"}`} />
         <If when={err()}><Text class="text-[13px] leading-5 text-error">{"✕ " + err()}</Text></If>
         <View class="flex-row justify-end gap-2">
           <Btn label="Cancel" onPress={() => addProjectOpen.set(false)} />
@@ -213,7 +213,7 @@ function EdgeDrawer(p: { side: "left" | "right"; width: number; label: string; c
 export function Drawers() {
   const side = (s: "left" | "right" | "notifications") => drawer() === s;
   return (
-    <View class="absolute inset-0" pointerEvents="box-none">
+    <View class="absolute inset-0" style={{ pointerEvents: "box-none" }}>
       <If when={isNarrow() && side("left")}><EdgeDrawer side="left" width={320} label="Left sidebar drawer"><LeftSidebar drawer /></EdgeDrawer></If>
       <If when={isNarrow() && side("right")}><EdgeDrawer side="right" width={340} label="Right sidebar drawer"><RightSidebar drawer /></EdgeDrawer></If>
       <If when={side("notifications")}><EdgeDrawer side="right" width={isNarrow() ? 340 : 380} label="Notifications drawer"><NotificationList /></EdgeDrawer></If>
@@ -230,7 +230,7 @@ function NotificationList() {
         <IconButton icon="x" label="Close" onPress={() => drawer.set(null)} />
       </View>
       <If when={notifications().length > 0} else={<View class="p-4"><Text class={T.sec}>Nothing yet. Toasts and alerts are kept here, newest first.</Text></View>}>
-        <List each={notifications()} keyExtractor={(n) => String(n.id)} class="flex-1" contentClass="p-2 gap-1">
+        <List each={notifications()} keyExtractor={(n) => String(n.id)} class="flex-1" contentStyle={{ padding: 8, gap: 4 }}>
           {(n) => (
             <View class="flex-row gap-2 rounded-(--radius) px-2.5 py-2 hover:bg-accent">
               <Text class="w-3.5 text-center text-[13px] leading-5 text-foreground-secondary">{GL[n().level]}</Text>

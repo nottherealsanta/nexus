@@ -13,7 +13,7 @@ function Field(p: { k: string; v?: string | null; mono?: boolean; children?: JSX
     <View class="flex-row items-start gap-3 py-1">
       <Text class={`w-[76px] shrink-0 ${T.meta} pt-0.5`}>{p.k}</Text>
       <View class="flex-1 min-w-0">
-        {p.children ?? <Text selectable class={`${p.mono ? "font-mono text-xs leading-5" : "text-[13px] leading-5"} text-foreground`}>{p.v || "—"}</Text>}
+        {p.children ?? <Text style={{ userSelect: "text" }} class={`${p.mono ? "font-mono text-xs leading-5" : "text-[13px] leading-5"} text-foreground`}>{p.v || "—"}</Text>}
       </View>
     </View>
   );
@@ -112,7 +112,7 @@ export function RightSidebar(p: { drawer?: boolean }) {
   const s = () => viewed();
   return (
     <View class={`bg-sidebar ${p.drawer ? "flex-1" : "w-[300px]"}`} testID="right-sidebar" accessibilityLabel="Right sidebar">
-      <Scroll class="flex-1" contentClass="">
+      <Scroll class="flex-1">
         <Section title={sections[0].label}>
           <If when={s()} else={<Text class={T.sec}>Select a session to see its details.</Text>}>
             {() => {
@@ -128,7 +128,7 @@ export function RightSidebar(p: { drawer?: boolean }) {
               return (
                 <View>
                   <Field k="Title" v={ses().title || "Untitled"} />
-                  <Field k="Id"><View class="flex-row items-center gap-1"><Text selectable class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground">{midTruncate(ses().id, 18)}</Text><IconButton icon="copy" label="Copy session id" onPress={() => run("session.copy_id")} class="size-7" /></View></Field>
+                  <Field k="Id"><View class="flex-row items-center gap-1"><Text style={{ userSelect: "text" }} class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground">{midTruncate(ses().id, 18)}</Text><IconButton icon="copy" label="Copy session id" onPress={() => run("session.copy_id")} class="size-7" /></View></Field>
                   <Field k="Status"><View class="flex-row"><Status kind={ses().status === "busy" ? "running" : ses().archived ? "cancelled" : "done"} word /></View></Field>
                   <Field k="Agent"><Text class={agentColor(ses().agent)}>{ses().agent}</Text></Field>
                   <Field k="Model" v={`${ses().model || "default"}${ses().model_source ? ` (${ses().model_source})` : ""}`} mono />
