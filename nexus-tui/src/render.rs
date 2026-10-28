@@ -2925,6 +2925,7 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
         }),
         "appearance.monochrome" => Some(on_off(a.theme.mono())),
         "appearance.animations" => Some(on_off(!a.theme.opts.reduced_motion)),
+        "notifications.terminal" => Some(a.ui.notify.label().into()),
         "appearance.sidebar" => Some(
             match (a.ui.left_open, a.ui.left_rail) {
                 (false, _) => "hidden",

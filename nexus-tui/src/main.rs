@@ -210,6 +210,7 @@ async fn run(cfg: SyncConfig, home: PathBuf, opts: Options) -> std::io::Result<(
                     let _ = write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
                     let _ = out.flush();
                 }
+                Effect::Notify(text) => term::notify(&text),
                 Effect::OpenUrl(url) => {
                     let (cmd, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
                         ("open", &[])
