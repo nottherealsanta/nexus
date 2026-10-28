@@ -236,8 +236,11 @@ pub struct WaitItem {
 
 pub struct SideEntry {
     pub id: String,
-    /// Project name heading printed before this row (all-projects scope).
-    pub heading: Option<String>,
+    /// Project name header printed before this row (first row of a project).
+    pub project: Option<String>,
+    /// Worktree sub-group `(branch or folder, root path)` printed before this
+    /// row: the first row of a linked worktree in a project with several roots.
+    pub tree: Option<(String, String)>,
 }
 
 /// One line of the settings modal.
@@ -927,6 +930,22 @@ impl App {
         Some(format!("Nexus: {title} {what}"))
     }
 
+    /// The attention mark of a session row, by precedence: `waiting`, `error`,
+    /// `running`, `unread`.
+    pub fn session_mark(&self, id: &str) -> Option<&'static str> {
+        if self.session_waiting(id) {
+            Some("waiting")
+        } else if self.ui.failed_sessions.contains(id) {
+            Some("error")
+        } else if self.is_busy(id) {
+            Some("running")
+        } else if self.ui.unread_sessions.contains(id) {
+            Some("unread")
+        } else {
+            None
+        }
+    }
+
     pub fn session_waiting(&self, id: &str) -> bool {
         let m = &self.state.model;
         m.approvals
@@ -1037,34 +1056,35 @@ impl App {
                 let multiple = roots
                     .get(&s.project_id)
                     .is_some_and(|items| items.len() > 1);
-                let heading = (last.as_ref() != Some(&group) && (self.ui.scope_all || multiple))
-                    .then(|| {
-                        let project = m
-                            .projects
-                            .get(&s.project_id)
-                            .map_or(s.project_id.as_str(), |p| p.name.as_str());
-                        let label = self
-                            .session_worktree(s)
-                            .and_then(|tree| tree["branch"].as_str())
-                            .filter(|name| !name.is_empty())
-                            .or_else(|| {
-                                std::path::Path::new(&worktree)
-                                    .file_name()
-                                    .and_then(|name| name.to_str())
-                            })
-                            .unwrap_or("worktree");
-                        if self.ui.scope_all && multiple {
-                            format!("{project} · {label}")
-                        } else if self.ui.scope_all {
-                            project.to_owned()
-                        } else {
-                            label.to_owned()
-                        }
-                    });
+                let new_project = last.as_ref().map(|g| &g.0) != Some(&group.0);
+                let new_root = last.as_ref() != Some(&group);
+                let linked = self
+                    .session_worktree(s)
+                    .is_some_and(|tree| tree["main"].as_bool() == Some(false));
+                let project = new_project.then(|| {
+                    m.projects
+                        .get(&s.project_id)
+                        .map_or(s.project_id.as_str(), |p| p.name.as_str())
+                        .to_owned()
+                });
+                let tree = (new_root && multiple && linked).then(|| {
+                    let label = self
+                        .session_worktree(s)
+                        .and_then(|tree| tree["branch"].as_str())
+                        .filter(|name| !name.is_empty())
+                        .or_else(|| {
+                            std::path::Path::new(&worktree)
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                        })
+                        .unwrap_or("worktree");
+                    (label.to_owned(), worktree.clone())
+                });
                 last = Some(group);
                 SideEntry {
                     id: s.id.clone(),
-                    heading,
+                    project,
+                    tree,
                 }
             })
             .collect()

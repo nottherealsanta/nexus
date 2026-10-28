@@ -76,10 +76,10 @@ fn shell_anatomy_at_every_size_dark_and_mono() {
                     rows[h as usize - 1]
                 );
                 // right sidebar: session info and the Git status reason from the manifest
-                assert!(all.contains("Session info") && all.contains("Git status"));
+                assert!(all.contains("SESSION") && all.contains("GIT"));
                 assert!(all.contains("Loading Git status") || all.contains("Open a session"));
             } else {
-                assert!(!all.contains("Session info"), "narrow shows one pane");
+                assert!(!all.contains("SESSION"), "narrow shows one pane");
             }
         }
     }
@@ -194,7 +194,7 @@ fn narrow_layout_uses_drawers_and_keeps_the_anchors() {
     // the right toggle opens the right drawer from the trailing anchor
     press(&mut app, &["alt+b"]);
     let (_, rows) = draw(&mut app, 80, 24);
-    assert!(joined(&rows).contains("Session info"));
+    assert!(joined(&rows).contains("SESSION"));
 }
 
 #[test]
@@ -560,7 +560,7 @@ fn project_worktrees_supply_sidebar_and_location_branches_without_a_session_list
     });
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
-    assert!(all.contains("x \u{2325} project-branch"), "{all}");
+    assert!(all.contains("build \u{b7} \u{2325} project-"), "{all}");
     assert!(
         all.contains("/work/nexus-home/ws  \u{2325} project-branch  worktree"),
         "{all}"
@@ -776,7 +776,7 @@ fn session_rows_show_project_and_cached_branch_and_both_lines_are_clickable() {
     let (_, rows) = draw(&mut app, 120, 36);
     let row = rows
         .iter()
-        .position(|line| line.contains("x ⌥ main"))
+        .position(|line| line.contains("build · ⌥ main"))
         .unwrap();
     assert!(rows[row - 1].contains("New session"));
     assert_eq!(app.hits.at(4, row as u16), Some(&Target::SideRow(0)));
@@ -921,8 +921,12 @@ fn git_sidebar_shows_status_from_the_selected_session() {
     });
     let (_, rows) = draw(&mut app, 120, 36);
     let text = joined(&rows);
-    assert!(text.contains("main  ↑2 ↓1"));
-    assert!(text.contains("example.rs +3 -2"));
+    assert!(text.contains("⌥ main  ↑2  ↓1"), "{text}");
+    let row = rows.iter().find(|l| l.contains("example.rs")).unwrap();
+    assert!(
+        row.contains("+3") && row.trim_end().ends_with("−2"),
+        "{row:?}"
+    );
 }
 
 #[test]
@@ -1012,46 +1016,27 @@ fn sidebar_tracks_unread_and_error_until_opened_or_retried() {
 }
 
 #[test]
-fn long_session_titles_fade_in_truecolour_and_use_ellipsis_in_256() {
-    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.state.model.sessions.get_mut(SESSION).unwrap().title =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".into();
-    let (buf, rows) = draw(&mut app, 120, 36);
-    // Row 0 is the header's tab; the fade belongs to the sidebar row.
-    let row = rows
-        .iter()
-        .skip(1)
-        .position(|row| {
-            row.chars()
-                .take(27)
-                .collect::<String>()
-                .contains("ABCDEFGHIJKLMNOP")
-        })
-        .unwrap()
-        + 1;
-    let start = col_of(&rows[row], "ABCDEFGHIJKLMNOP") as u16;
-    let visible = rows[row]
-        .chars()
-        .skip(start as usize)
-        .take(23)
-        .take_while(|c| c.is_ascii_uppercase())
-        .count() as u16;
-    assert!(visible >= 4);
-    let last = buf[(start + visible - 1, row as u16)].fg;
-    let earlier = buf[(start + visible - 4, row as u16)].fg;
-    assert_ne!(last, earlier, "last cells fade toward the surface");
-    let mut fallback = with_turn(opts(Mode::Dark, Tier::Ansi256), (120, 36));
-    fallback
-        .state
-        .model
-        .sessions
-        .get_mut(SESSION)
-        .unwrap()
-        .title = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".into();
-    let (_, rows) = draw(&mut fallback, 120, 36);
-    assert!(rows
-        .iter()
-        .any(|row| row.contains("ABCDEFGHIJKLMNOP") && row.contains('…')));
+fn long_session_titles_end_in_an_ellipsis_in_every_tier() {
+    // D03 shows `han…`: the old truecolour fade gave way to the ellipsis.
+    for tier in [Tier::TrueColor, Tier::Ansi256, Tier::Ansi16] {
+        let mut app = with_turn(opts(Mode::Dark, tier), (120, 36));
+        app.state.model.sessions.get_mut(SESSION).unwrap().title =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".into();
+        let (_, rows) = draw(&mut app, 120, 36);
+        let row = rows
+            .iter()
+            .skip(1)
+            .find(|row| {
+                row.chars()
+                    .take(34)
+                    .collect::<String>()
+                    .contains("ABCDEFGHIJ")
+            })
+            .unwrap_or_else(|| panic!("{tier:?}: {rows:#?}"));
+        let side: String = row.chars().take(34).collect();
+        assert!(side.contains('…'), "{tier:?}: {side:?}");
+        assert!(!side.contains("XYZ"), "{tier:?}: {side:?}");
+    }
 }
 
 #[test]
@@ -1080,12 +1065,12 @@ fn worktree_groups_keep_cursor_on_the_same_session_when_branch_data_arrives() {
     let entries = app.side_entries();
     assert_eq!(entries[app.cursor(Tab::Sessions)].id, "worktree-session");
     assert_eq!(
-        entries[app.cursor(Tab::Sessions)].heading.as_deref(),
-        Some("feature")
+        entries[app.cursor(Tab::Sessions)].tree,
+        Some(("feature".to_owned(), "/work/aaa".to_owned()))
     );
     assert!(entries
         .iter()
-        .any(|entry| entry.id == SESSION && entry.heading.is_some()));
+        .any(|entry| entry.id == SESSION && entry.project.is_some() && entry.tree.is_none()));
 }
 
 #[test]
@@ -1141,23 +1126,33 @@ fn session_rows_end_with_child_count_and_age_and_truncate_the_place_first() {
     let (_, rows) = draw(&mut app, 120, 36);
     let row = rows
         .iter()
-        .find(|line| line.contains("x ⌥ main"))
+        .position(|line| line.contains("build · ⌥ main"))
         .expect("parent row");
-    assert!(row.contains("2 ↳ 3h"), "{row:?}");
+    let side: String = rows[row].chars().take(28).collect();
+    assert!(side.trim_end().ends_with("2 ↳"), "{side:?}");
+    assert!(
+        rows[row - 1].contains("3h"),
+        "age on the title line: {:?}",
+        rows[row - 1]
+    );
     // Child sessions are not listed, so only the parent row has a meta.
     assert!(!rows.iter().any(|l| l.contains("1 ↳")), "{rows:#?}");
 
-    // A long place is truncated and the meta survives.
-    app.state.model.projects.values_mut().for_each(|p| {
-        p.name = "a-very-long-project-name-that-cannot-fit".into();
-    });
+    // A long branch is truncated and the child count survives.
+    app.state.worktrees.insert(
+        SESSION.into(),
+        serde_json::json!({
+            "session_directory": "/work/nexus-home/ws",
+            "worktrees": [{"path": "/work/nexus-home", "branch": "feature/a-very-long-branch-name-that-cannot-fit"}]
+        }),
+    );
     let (_, rows) = draw(&mut app, 120, 36);
     let row = rows
         .iter()
-        .find(|line| line.trim_start().starts_with("a-very-long"))
+        .find(|line| line.contains("build · ⌥ feature"))
         .expect("long row");
     assert!(row.contains('…'), "{row:?}");
-    assert!(row.contains("2 ↳ 3h"), "{row:?}");
+    assert!(row.contains("2 ↳"), "{row:?}");
     assert!(!row.contains("that-cannot-fit"), "{row:?}");
 }
 
@@ -1258,10 +1253,18 @@ fn git_status_splits_staged_unstaged_and_untracked() {
     );
     let (_, lines) = draw(&mut app, 120, 36);
     let text = joined(&lines);
-    for heading in ["Staged 2", "Unstaged 1", "Untracked 1"] {
-        assert!(text.contains(heading), "{heading}: {text}");
+    // D12: the group label with its count right-aligned on the same row.
+    for (heading, count) in [("Staged", "2"), ("Unstaged", "1"), ("Untracked", "1")] {
+        assert!(
+            lines.iter().any(|l| {
+                let l = l.trim_end();
+                l.contains(heading) && l.ends_with(&format!(" {count}"))
+            }),
+            "{heading} {count}: {text}"
+        );
     }
-    assert!(text.contains("both.rs +2 -1"));
+    let both = lines.iter().find(|l| l.contains("both.rs")).unwrap();
+    assert!(both.contains("+2") && both.contains("−1"), "{both:?}");
     assert!(text.contains("new.txt"));
     let row = lines.iter().position(|l| l.contains("idx.rs")).unwrap();
     let x = col_of(&lines[row], "idx.rs") as u16;
@@ -1692,8 +1695,15 @@ fn session_info_totals_tokens_tools_context_and_cost() {
     let (_, rows) = draw(&mut app, 160, 40);
     let all = joined(&rows);
     for needle in [
-        "effort", "turns", "2 calls", "input", "60.0K", "cached", "output", "context", "25%",
-        "cost",
+        "Effort",
+        "Turns",
+        "2 tools",
+        "CONTEXT",
+        "50k of 200k",
+        "25%",
+        "60k in",
+        "3k out",
+        "Cost",
     ] {
         assert!(all.contains(needle), "missing {needle:?}:\n{all}");
     }
@@ -2191,4 +2201,258 @@ fn completion_is_a_borderless_block_as_wide_as_the_card_with_key_hints() {
     assert!(rows[hint]
         .chars()
         .all(|c| !"\u{2502}\u{250c}\u{2514}\u{256d}".contains(c)));
+}
+
+/// The left sidebar's text, cut at its width (the centre column starts after it).
+fn sidebar(rows: &[String], width: usize) -> Vec<String> {
+    rows.iter()
+        .map(|r| r.chars().take(width).collect::<String>())
+        .collect()
+}
+
+#[test]
+fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
+    for w in [22u16, 28, 34] {
+        let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
+        app.ui.left_width = w;
+        app.state.model.sessions.get_mut(SESSION).unwrap().title = "Refactor the loader".into();
+        app.ui.unread_sessions.insert(SESSION.into());
+        let parent = app.state.model.sessions[SESSION].clone();
+        let mut child = parent.clone();
+        child.id = "ses_child".into();
+        child.parent_id = Some(SESSION.into());
+        app.state.model.sessions.insert(child.id.clone(), child);
+        app.state.worktrees.insert(
+            SESSION.into(),
+            serde_json::json!({
+                "session_directory": "/work/nexus-home/ws",
+                "worktrees": [{"path": "/work/nexus-home", "branch": "main"}]
+            }),
+        );
+        let (buf, rows) = draw(&mut app, 160, 40);
+        let side = app.regions.left.expect("sidebar");
+        assert_eq!(side.width, w, "width {w}");
+        let text = sidebar(&rows, (w - 1) as usize);
+        let first = text
+            .iter()
+            .position(|l| l.contains("⌕"))
+            .expect("search row");
+        // search row, blank, project header, title line, detail line, spacer, new
+        let key = col_of(&text[first], "ctrl+k");
+        assert_eq!(
+            text[first].find('⌕').map(|_| col_of(&text[first], "⌕")),
+            Some(2)
+        );
+        assert!(
+            key + 6 < w as usize,
+            "{w}: key hint inside: {:?}",
+            text[first]
+        );
+        assert!(text[first + 1].trim().is_empty(), "{w}");
+        assert!(text[first + 2].trim_end().ends_with('X') && text[first + 2].starts_with("  X"));
+        let title = &text[first + 3];
+        let detail = &text[first + 4];
+        assert!(text[first + 5].trim().is_empty(), "spacer {w}");
+        assert!(text[first + 6].contains("+ New session"), "{w}");
+        // mark slot at x=2, title at x=4, time right-aligned with a margin of 1.
+        assert!(title.starts_with("  ●"), "{w}: unread mark: {title:?}");
+        assert_eq!(col_of(title, "Refactor"), 4, "{w}");
+        assert!(
+            title.trim_end().ends_with('h') || title.trim_end().ends_with("now"),
+            "{title:?}"
+        );
+        assert!(
+            nexus_tui::text::width(title.trim_end()) < w as usize - 1,
+            "{w}: margin"
+        );
+        // line 2: the agent, then the branch; the child count right-aligned.
+        assert_eq!(col_of(detail, "build"), 4, "{w}");
+        assert!(detail.trim_end().ends_with("1 ↳"), "{w}: {detail:?}");
+        assert!(
+            nexus_tui::text::width(detail.trim_end()) < w as usize - 1,
+            "{w}"
+        );
+        if w >= 28 {
+            assert!(detail.contains("⌥ main"), "{w}: {detail:?}");
+        }
+        // The open session carries the selection band on both lines.
+        let band = buf[(w / 2, (first + 3) as u16)].bg;
+        assert_eq!(band, buf[(w / 2, (first + 4) as u16)].bg, "{w}");
+        assert_ne!(
+            band,
+            buf[(w / 2, (first + 2) as u16)].bg,
+            "{w}: band vs header"
+        );
+        // Settings is pinned to the bottom row.
+        assert!(
+            text.last().unwrap().trim_start().starts_with("Settings"),
+            "{w}"
+        );
+    }
+}
+
+#[test]
+fn a_focused_session_row_has_the_bar_on_both_lines_and_headers_group_worktrees() {
+    use nexus_tui::ui::Focus;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
+    let mut other = app.state.model.sessions[SESSION].clone();
+    other.id = "worktree-session".into();
+    other.directory = "/work/aaa".into();
+    other.title = "Worktree task".into();
+    app.state.model.sessions.insert(other.id.clone(), other);
+    app.state.worktrees.insert(
+        "worktree-session".into(),
+        serde_json::json!({"session_directory": "/work/aaa",
+            "worktrees": [{"path": "/work/aaa", "branch": "feat/cache", "main": false}]}),
+    );
+    app.ui.focus = Focus::Sidebar;
+    let (_, rows) = draw(&mut app, 160, 40);
+    let text = sidebar(&rows, 33);
+    let tree = text
+        .iter()
+        .position(|l| l.contains("⌥ feat/cache"))
+        .expect("worktree sub-group");
+    assert_eq!(col_of(&text[tree], "⌥"), 2);
+    assert!(
+        text[tree].contains("/work/aaa") || text[tree].contains('…'),
+        "{:?}",
+        text[tree]
+    );
+    assert!(text[tree + 1].contains("Worktree task"));
+    let cursor = app.cursor(nexus_tui::ui::Tab::Sessions);
+    let id = &app.side_entries()[cursor].id;
+    let title = text
+        .iter()
+        .position(|l| {
+            l.contains(
+                &app.state.model.sessions[id.as_str()]
+                    .title
+                    .chars()
+                    .take(8)
+                    .collect::<String>(),
+            )
+        })
+        .unwrap();
+    assert!(
+        text[title].starts_with('▌') && text[title + 1].starts_with('▌'),
+        "{text:#?}"
+    );
+}
+
+#[test]
+fn the_mark_slot_follows_attention_precedence() {
+    // waiting > error > running > unread.
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    assert_eq!(app.session_mark(SESSION), None);
+    app.ui.unread_sessions.insert(SESSION.into());
+    assert_eq!(app.session_mark(SESSION), Some("unread"));
+    busy(&mut app);
+    assert_eq!(app.session_mark(SESSION), Some("running"));
+    app.ui.failed_sessions.insert(SESSION.into());
+    assert_eq!(app.session_mark(SESSION), Some("error"));
+    app.state.model.approvals.insert(
+        "perm".into(),
+        serde_json::from_value(serde_json::json!({
+            "id": "perm", "session_id": SESSION, "tool": "bash", "input": {}, "created": 1.0
+        }))
+        .unwrap(),
+    );
+    assert_eq!(app.session_mark(SESSION), Some("waiting"));
+    // and the row draws that mark in the slot at x=2
+    let (_, rows) = draw(&mut app, 120, 36);
+    let row = sidebar(&rows, 27)
+        .into_iter()
+        .find(|l| l.contains("New session") && l.contains('◆'))
+        .expect("waiting mark on the title row");
+    assert_eq!(col_of(&row, "◆"), 2);
+}
+
+#[test]
+fn right_sidebar_uses_uppercase_labels_a_nine_cell_key_column_and_middle_truncation() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.state.model.sessions.get_mut(SESSION).unwrap().id =
+        "ses_0123456789abcdefghijklmnopqrstuvwxyz".into();
+    let (_, rows) = draw(&mut app, 120, 36);
+    let right = app.regions.right.expect("right sidebar");
+    let col = |row: &String| -> String { row.chars().skip(right.x as usize + 2).collect() };
+    let lines: Vec<String> = rows.iter().map(col).collect();
+    for label in ["SESSION", "CONTEXT", "GIT"] {
+        assert!(
+            lines.iter().any(|l| l.trim_end() == label),
+            "{label}: {lines:#?}"
+        );
+    }
+    let id = lines.iter().find(|l| l.starts_with("Id")).expect("Id row");
+    assert_eq!(
+        col_of(id, "ses_"),
+        9,
+        "values start after a 9-cell key column: {id:?}"
+    );
+    assert!(
+        id.contains('…') && id.trim_end().ends_with("wxyz"),
+        "middle truncation: {id:?}"
+    );
+    // Core reports no usage here: the rows say so.
+    for key in ["Used", "Tokens", "Cost"] {
+        let row = lines.iter().find(|l| l.starts_with(key)).expect(key);
+        assert!(row.contains("not reported"), "{row:?}");
+    }
+}
+
+#[test]
+fn the_row_menu_is_a_raised_popover_beside_the_row_and_delete_asks_to_confirm() {
+    use nexus_tui::ui::{Overlay, OverlayKind, PaletteMode};
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    draw(&mut app, 120, 36);
+    let row = app.hits.rect_of(&Target::SideRow(0)).expect("row");
+    right_click(&mut app, row.x + 2, row.y);
+    assert!(matches!(
+        app.ui.overlay,
+        Some(Overlay { kind: OverlayKind::Palette(ref p), .. }) if p.mode == PaletteMode::RowMenu
+    ));
+    let (buf, rows) = draw(&mut app, 120, 36);
+    let delete = rows
+        .iter()
+        .position(|l| l.contains("Delete session"))
+        .expect("Delete item");
+    let x = col_of(&rows[delete], "Delete session") as u16;
+    assert!(
+        x < row.right() + 4,
+        "popover sits beside the row, not centred: {x}"
+    );
+    assert!(
+        rows.iter().all(|l| !l.contains("choose an action")),
+        "no search row"
+    );
+    let menu_bg = buf[(x, delete as u16)].bg;
+    let page_bg = buf[(100, 5)].bg;
+    assert_ne!(menu_bg, page_bg, "raised surface");
+    assert_eq!(
+        buf[(x, delete as u16)].fg,
+        app.theme.color("status.error").unwrap()
+    );
+    // Choosing Delete opens the existing confirmation.
+    let rect = app.hits.rect_of(&Target::PaletteItem(
+        app.palette_items()
+            .iter()
+            .position(|i| i.label == "Delete session")
+            .unwrap(),
+    ));
+    let rect = rect.expect("item hit");
+    click(&mut app, rect.x + 3, rect.y);
+    assert!(app.ui.dialog.is_some(), "confirm dialog");
+}
+
+#[test]
+fn the_rail_marks_the_open_session_with_the_selection_band() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.ui.left_width = 10;
+    app.ui.left_rail = true;
+    let (buf, _) = draw(&mut app, 120, 36);
+    let band = app
+        .hits
+        .rect_of(&Target::SideRow(0))
+        .expect("rail item for the open session");
+    let selection = app.theme.bg("interactive.selection").bg;
+    assert_eq!(Some(buf[(band.x + 1, band.y)].bg), selection);
 }

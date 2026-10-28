@@ -25,8 +25,10 @@ left sidebar (a column on the rail, the drawer's first row when narrow;
 hovering shows the label), the session tabs, the run status at the centre's
 right edge, the notification count and the right toggle. Sidebars are 34 / 36
 cells from 160 columns and 28 / 30 below. `paint::scrim` dims a buffer under a
-modal. The left sidebar has two-line session rows (title, `project ⌥ branch`) and a
-closing `+ New session` row. Drag its inner edge to resize it (20–60 columns);
+modal. The left sidebar (D03) opens with a `⌕ Search sessions` row (`ctrl+k`, it opens the
+switcher) and shows an UPPERCASE project header, `⌥ branch  ~/…/dir` sub-groups for
+linked worktrees, and two-line rows (mark slot, title, time; agent in its colour,
+`· ⌥ branch`, `2 ↳`) ending with `+ New session`; `Settings` is pinned at the bottom. Drag its inner edge to resize it (20–60 columns);
 dragging below 14 columns collapses it to a rail of one letter per session,
 with search on top and `+` below, and hovering a letter shows the session's
 title and place. Settings → Sidebar switches full / rail / hidden. The project
@@ -111,7 +113,10 @@ sets off, waiting only (the default) or waiting, done and errors (a finished
 turn or a failed session too). Terminal focus is not tracked, so a session in
 view never notifies.
 
-The right sidebar's Git status groups changed files into Staged, Unstaged and
+The right sidebar (D12) has SESSION, CONTEXT and GIT sections: UPPERCASE bold muted
+labels, a 9-cell key column and values truncated in the middle. CONTEXT shows the
+`╱` meter with its percentage, `82k of 200k`, `12k in · 2k out` and Cost, each
+reading `not reported` where Core gives nothing (PLAN.md Step 12a). The GIT section groups changed files into Staged, Unstaged and
 Untracked from Core's `/api/session/{id}/git` (`staged`, `unstaged` and the
 porcelain `status` code). A file changed in both the index and the worktree
 appears in both groups. Click a row, or press Enter with the right sidebar
@@ -184,10 +189,18 @@ means truecolor), `--ascii` (also `NEXUS10_ASCII=1` or a non-UTF-8 locale),
 `--reduced-motion` (also `NEXUS10_REDUCED_MOTION=1`: spinners stay still and an
 idle terminal is never redrawn).
 
-Session rows in the left sidebar end the place line (`project ⌥ branch`) with a
-muted meta, right-aligned: the child count when the session has descendants,
-then the time of last activity (`2 ↳ 3h`, `now`, `3m`, `4d`). The place is
-truncated first; on a very narrow sidebar the meta is dropped.
+Session rows in the left sidebar (D03) have two lines. Line 1 is the mark slot at
+x=2 (waiting `◆`, error `✕`, running spinner, unread `●`, in that order of
+precedence), the title at x=4 (bold when open, ending in `…` when clipped) and the
+time of last activity right-aligned (`now`, `3m`, `4d`). Line 2 is the agent in its
+colour, `·` and `⌥ branch` muted, with the child count (`2 ↳`) right-aligned. The
+open session has the selection band on both lines; focus draws `▌` at x=0 on both.
+The title or branch is truncated first, and on a very narrow sidebar the time or
+count is dropped. The `.`/`m` row menu is a raised popover beside the row (Delete in
+red, going to the usual confirmation); the rail's open item has the selection band.
+The Git rows are `M path  +2 −3` (`M` warning, `A` and `?` success, `D` error); a
+side that is 0 is left out. Set `NEXUS_PORT` and `NEXUS_PORT_EMPTY` to run the shots
+on other ports than 4799/4798.
 
 Preferences: the TUI keeps its own client preferences in `$NEXUS10_HOME/tui.json`
 (mode 0600, written atomically through a temporary file and a rename). This is
@@ -216,7 +229,7 @@ Dependencies are pinned to exact versions in `Cargo.toml` (`=x.y.z`) and
 Try it against a real isolated Core:
 
 ```sh
-export NEXUS10_HOME=$(mktemp -d) NEXUS_PORT=4799
+export NEXUS10_HOME=$(mktemp -d) NEXUS_PORT=4799   # any free port
 chmod 700 $NEXUS10_HOME          # Core requires a private home
 NEXUS_TUI_CORE_CMD="uv run --project ../nexus-core nexus" cargo run
 ```
@@ -288,8 +301,8 @@ shapes from the docs.
 Anchors (INTERFACE_PLAN.md): left sidebar toggle at the header's leading edge,
 title and breadcrumbs centred, notification count and right toggle trailing;
 the toggles stay when a sidebar is closed. Left tabs Sessions, Files, Projects
-with Settings fixed at the bottom; right sidebar Session info and Git status
-(shown with its manifest reason). Below 100 columns the sidebars become drawers
+with Settings fixed at the bottom; right sidebar SESSION, CONTEXT and GIT
+(the Git section shows its manifest reason when unavailable). Below 100 columns the sidebars become drawers
 opened from the same toggles. The waiting card sits directly above the composer.
 It also answers `ask` questions: `Alt+W` focuses it, a number key (1-9, 0 for the
 tenth) or Up/Down with Enter picks an option, Space or a number ticks options of a
@@ -356,7 +369,7 @@ cd nexus-tui && cargo build
 cd tools/webterm && npm ci                    # pinned: xterm 5.5.0, node-pty 1.1.0, playwright 1.64.1
 npx playwright install chromium               # once
 ROOT=/tmp/nexus-shots
-./seed.sh $ROOT                               # two isolated Cores (mode 700, ports 4799/4798): seeded and empty
+./seed.sh $ROOT                               # two isolated Cores (mode 700, ports 4799/4798 by default; override with NEXUS_PORT and NEXUS_PORT_EMPTY): seeded and empty
 node shots.mjs --env $ROOT/env --out $ROOT/png            # all shots (add --only palette to filter)
 ./seed.sh $ROOT stop
 ```

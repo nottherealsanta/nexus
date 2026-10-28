@@ -51,9 +51,12 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   `root › child` with the earlier crumbs clickable. The run status (`◐ working 12s`, `◆ waiting for you`, `✕ offline`) is right-aligned
   at the centre column's right edge; the notification count and right toggle are
   at the far right. The rail keeps its icons as a column. Sidebars and panels reserve
-  consistent gutters; the left sidebar is 34 cells from 160 columns and 28 below, the right 36 and 30. Session rows show title and `project ⌥ branch` on
-  separate lines and end with `+ New session`; the open session is bold, focus
-  is a bar, hover is a surface, and waiting is marked. The left sidebar resizes
+  consistent gutters; the left sidebar is 34 cells from 160 columns and 28 below, the right 36 and 30. The left sidebar opens with a search row, then an UPPERCASE project header
+  (`⌥ branch` sub-groups for linked worktrees). Session rows show a mark slot, title and
+  time, then the agent in its colour, `⌥ branch` and the child count, and end with
+  `+ New session`; the open session is bold on the selection band, focus is a `▌`
+  on both lines, hover is a surface, and attention is marked. The right sidebar
+  uses UPPERCASE bold muted section labels and a 9-cell key column. The left sidebar resizes
   by its edge and collapses to a rail of one letter per session whose hover
   shows the title and place. Settings is a centred modal over the dimmed
   session: search, violet section headings, values right-aligned, the selected

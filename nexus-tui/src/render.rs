@@ -1245,7 +1245,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 if selected {
                     style = style
                         .add_modifier(Modifier::BOLD)
-                        .patch(cx.t.bg("interactive.hover"));
+                        .patch(cx.t.bg("interactive.selection"));
                 }
                 if focused && i == cursor {
                     put(
@@ -1346,17 +1346,6 @@ fn session_place(cx: &Cx, s: &crate::api::Session) -> String {
         || project.to_owned(),
         |b| format!("{project} {separator} {b}"),
     )
-}
-
-/// Right-aligned meta of a session row: child count, then time of last
-/// activity (`2 ↳ 3m`).
-fn session_meta(cx: &Cx, s: &crate::api::Session, children: usize) -> String {
-    let age = text::age(now_secs(), s.updated);
-    if children == 0 {
-        return age;
-    }
-    let glyph = if cx.t.opts.ascii { ">" } else { "↳" };
-    format!("{children} {glyph} {age}")
 }
 
 fn draw_files(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitMap) {
@@ -1706,12 +1695,118 @@ fn row_style(cx: &Cx, selected: bool, hover: bool) -> Style {
     }
 }
 
+/// `~/…/leaf` for a path that does not fit: the home-shortened path, else its
+/// first and last parts around an ellipsis, else middle-truncated.
+fn short_path(path: &str, max: usize, ell: &str) -> String {
+    let home = short_home(path);
+    if width(&home) <= max {
+        return home;
+    }
+    let leaf = home.rsplit('/').next().unwrap_or("");
+    let first = if home.starts_with("~/") { "~" } else { "" };
+    let compact = format!("{first}/{ell}/{leaf}");
+    if width(&compact) <= max {
+        compact
+    } else {
+        truncate_middle(&compact, max, ell)
+    }
+}
+
+/// One line of the sessions list.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum SRow {
+    Project(usize),
+    Tree(usize),
+    Title(usize),
+    Detail(usize),
+    Spacer,
+    New,
+}
+
+/// The title of a session row: the shimmer while it runs, an ellipsis when it
+/// is clipped.
+fn draw_session_title(
+    cx: &Cx,
+    buf: &mut Buffer,
+    pos: (u16, u16),
+    room: u16,
+    s: &crate::api::Session,
+    style: Style,
+    bg: Style,
+) {
+    let a = cx.app;
+    let title = if s.title.is_empty() {
+        "Untitled"
+    } else {
+        &s.title
+    };
+    let shown = truncate(title, room as usize, cx.ell());
+    let animate = a.is_busy(&s.id) && !cx.t.opts.reduced_motion && !cx.t.mono();
+    let spans = crate::theme::shimmer(
+        &shown,
+        a.frame,
+        animate,
+        style,
+        cx.st(PRIMARY, SIDEBAR).patch(bg),
+    );
+    let mut x = pos.0;
+    let end = pos.0 + room;
+    for span in spans {
+        x = put(
+            buf,
+            x,
+            pos.1,
+            &span.content,
+            span.style,
+            end.saturating_sub(x),
+        );
+    }
+}
+
 fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitMap) {
     let a = cx.app;
     if r.height < 3 {
         return;
     }
-    let list = r;
+    // The search row opens the switcher; a blank row follows it.
+    let search = Rect::new(r.x, r.y, r.width, 1);
+    let mut style = cx.st(MUTED, SIDEBAR);
+    if cx.hovered(search) {
+        style = style
+            .patch(cx.st(PRIMARY, SIDEBAR))
+            .patch(cx.t.bg("interactive.hover"));
+        clear(buf, search, style);
+    }
+    let glyph = if cx.t.opts.ascii { "/" } else { "⌕" };
+    put(buf, r.x + 2, r.y, glyph, style, 1);
+    let key = a
+        .manifest
+        .command("session.switch")
+        .and_then(|c| c.tui_key())
+        .unwrap_or("");
+    let kw = width(key) as u16;
+    let kx = r.right().saturating_sub(kw + 1);
+    // `Search sessions`, or `Search` when the key hint leaves no room for it.
+    let room = kx.saturating_sub(r.x + 6) as usize;
+    let label = if room >= 15 {
+        "Search sessions"
+    } else {
+        "Search"
+    };
+    put(
+        buf,
+        r.x + 5,
+        r.y,
+        &truncate(label, room, cx.ell()),
+        style,
+        room as u16,
+    );
+    put(buf, kx, r.y, key, style, kw);
+    hits.add(search, Target::RailSearch);
+    let list = Rect::new(r.x, r.y + 2, r.width, r.height.saturating_sub(2));
+    if list.height == 0 {
+        return;
+    }
     let entries = a.side_entries();
     if entries.is_empty() {
         let msg = if a.state.model.projects.is_empty() {
@@ -1721,243 +1816,248 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         } else {
             "No sessions yet. Type in the composer to start one."
         };
-        for (i, l) in text::wrap(msg, list.width.saturating_sub(3) as usize)
+        for (i, l) in text::wrap(msg, list.width.saturating_sub(5) as usize)
             .iter()
             .enumerate()
             .take(list.height as usize)
         {
             put(
                 buf,
-                list.x + 1,
-                list.y + 1 + i as u16,
+                list.x + 2,
+                list.y + i as u16,
                 l,
                 cx.st(MUTED, SIDEBAR),
-                list.width - 2,
+                list.width - 3,
             );
         }
         return;
     }
-    // Two selectable lines and a spacer per session; headings scroll with them.
-    struct VRow {
-        entry: usize,
-        line: u8,
-    }
+    // Headers scroll with their rows; each session is two lines and a spacer.
     let mut rows = Vec::new();
     for (i, e) in entries.iter().enumerate() {
-        if e.heading.is_some() {
-            rows.push(VRow { entry: i, line: 3 });
+        if e.project.is_some() {
+            rows.push(SRow::Project(i));
         }
-        for line in 0..3 {
-            rows.push(VRow { entry: i, line });
+        if e.tree.is_some() {
+            rows.push(SRow::Tree(i));
         }
+        rows.extend([SRow::Title(i), SRow::Detail(i), SRow::Spacer]);
     }
+    rows.push(SRow::New);
     let cursor = a.cursor(Tab::Sessions);
     let cur_row = rows
         .iter()
-        .position(|v| v.line == 0 && v.entry == cursor)
+        .position(|v| *v == SRow::Title(cursor))
         .unwrap_or(0);
-    // The new-session row closes the list (`line` 4).
-    rows.push(VRow {
-        entry: usize::MAX,
-        line: 4,
-    });
     let h = list.height as usize;
     let top = (cur_row + 3).saturating_sub(h);
     let viewed = a.viewed_id();
+    let muted = cx.st(MUTED, SIDEBAR);
+    let inner_right = list.right().saturating_sub(1);
     for (vi, v) in rows.iter().enumerate().skip(top).take(h) {
         let y = list.y + (vi - top) as u16;
-        if v.line == 4 {
-            let rr = Rect::new(list.x, y, list.width, 1);
-            let style = if cx.hovered(rr) {
-                cx.st(PRIMARY, SIDEBAR).patch(cx.t.bg("interactive.hover"))
-            } else {
-                cx.st(MUTED, SIDEBAR)
-            };
-            clear(buf, rr, style);
-            put(
-                buf,
-                rr.x + 1,
-                y,
-                "+ New session",
-                style,
-                rr.width.saturating_sub(1),
-            );
-            hits.add(rr, Target::NewSession);
-            continue;
-        }
-        let e = &entries[v.entry];
-        if v.line == 3 {
-            let name = truncate(
-                e.heading.as_deref().unwrap_or(""),
-                list.width.saturating_sub(3) as usize,
-                cx.ell(),
-            );
-            put(
-                buf,
-                list.x + 1,
-                y,
-                &name,
-                cx.st(MUTED, SIDEBAR),
-                list.width - 1,
-            );
-            continue;
-        }
-        if v.line == 2 {
-            continue;
-        }
-        let Some(s) = a.state.model.sessions.get(&e.id) else {
-            continue;
-        };
         let rr = Rect::new(list.x, y, list.width, 1);
-        let hovered = cx.hovered(rr)
-            || (v.line == 0 && cx.hovered(Rect::new(list.x, y + 1, list.width, 1)))
-            || (v.line == 1 && y > list.y && cx.hovered(Rect::new(list.x, y - 1, list.width, 1)));
-        let selected = viewed == Some(s.id.as_str());
-        let bg = if hovered {
-            cx.t.bg("interactive.hover")
-        } else {
-            Style::default()
-        };
-        clear(buf, rr, cx.st(SECONDARY, SIDEBAR).patch(bg));
-        if v.line == 0 {
-            if focused && v.entry == cursor {
-                put(
-                    buf,
-                    rr.x + 1,
-                    y,
-                    cx.t.structure("focus_bar"),
-                    cx.st("interactive.focus", SIDEBAR).patch(bg),
-                    1,
-                );
-            } else if a.session_waiting(&s.id) {
-                let (glyph, token) = cx.t.attention("waiting");
-                put(buf, rr.x + 1, y, glyph, cx.st(token, SIDEBAR).patch(bg), 1);
-            } else if a.ui.failed_sessions.contains(&s.id) {
-                let (glyph, token) = cx.t.attention("error");
-                put(buf, rr.x + 1, y, glyph, cx.st(token, SIDEBAR).patch(bg), 1);
-            } else if a.ui.unread_sessions.contains(&s.id) {
-                let (glyph, token) = cx.t.attention("unread");
-                put(buf, rr.x + 1, y, glyph, cx.st(token, SIDEBAR).patch(bg), 1);
-            }
-            let title = if s.title.is_empty() {
-                "Untitled"
-            } else {
-                &s.title
-            };
-            let token = if s.archived {
-                MUTED
-            } else if selected || a.ui.unread_sessions.contains(&s.id) {
-                PRIMARY
-            } else {
-                SECONDARY
-            };
-            let mut style = cx.st(token, SIDEBAR).patch(bg);
-            if selected {
-                style = style.add_modifier(Modifier::BOLD);
-            }
-            let tw = rr.width.saturating_sub(4);
-            let clipped = width(title) > tw as usize;
-            let fade = clipped && cx.t.opts.tier == crate::theme::Tier::TrueColor;
-            let shown = if fade {
-                use unicode_segmentation::UnicodeSegmentation;
-                let mut used = 0;
-                title
-                    .graphemes(true)
-                    .take_while(|g| {
-                        let next = used + width(g);
-                        if next > tw as usize {
-                            false
-                        } else {
-                            used = next;
-                            true
-                        }
-                    })
-                    .collect::<String>()
-            } else {
-                truncate(title, tw as usize, cx.ell())
-            };
-            let animate = a.is_busy(&s.id) && !cx.t.opts.reduced_motion && !cx.t.mono();
-            let spans = crate::theme::shimmer(
-                &shown,
-                a.frame,
-                animate,
-                style,
-                cx.st(PRIMARY, SIDEBAR).patch(bg),
-            );
-            let fade_bg = cx.t.color(if hovered {
-                "interactive.hover"
-            } else {
-                SIDEBAR
-            });
-            let total = width(&shown);
-            let mut offset = 0;
-            let mut x = rr.x + 3;
-            for span in spans {
-                use unicode_segmentation::UnicodeSegmentation;
-                for grapheme in span.content.graphemes(true) {
-                    let cells = width(grapheme);
-                    let remaining = total.saturating_sub(offset);
-                    let mut text_style = span.style;
-                    if fade && remaining <= 3 {
-                        if let (
-                            Some(ratatui::style::Color::Rgb(r, g, b)),
-                            Some(ratatui::style::Color::Rgb(br, bg, bb)),
-                        ) = (text_style.fg, fade_bg)
-                        {
-                            let amount = remaining as f32 / 4.0;
-                            let mix = |fg: u8, bg: u8| {
-                                (f32::from(bg) + (f32::from(fg) - f32::from(bg)) * amount).round()
-                                    as u8
-                            };
-                            text_style = text_style.fg(ratatui::style::Color::Rgb(
-                                mix(r, br),
-                                mix(g, bg),
-                                mix(b, bb),
-                            ));
-                        }
-                    }
-                    x = put(
+        match *v {
+            SRow::Spacer => {}
+            SRow::New => {
+                let style = if cx.hovered(rr) {
+                    clear(
                         buf,
-                        x,
-                        y,
-                        grapheme,
-                        text_style,
-                        rr.right().saturating_sub(x),
+                        rr,
+                        cx.st(PRIMARY, SIDEBAR).patch(cx.t.bg("interactive.hover")),
                     );
-                    offset += cells;
-                }
-            }
-        } else {
-            let detail = session_place(cx, s);
-            let inner = rr.width.saturating_sub(4) as usize;
-            let meta = session_meta(cx, s, a.descendants(&s.id));
-            let muted = cx.st(MUTED, SIDEBAR).patch(bg);
-            // Drop the meta when even a short place would not fit beside it.
-            let meta_w = width(&meta);
-            if meta_w > 0 && inner >= meta_w + 6 {
-                let place = truncate(&detail, inner - meta_w - 1, cx.ell());
-                put(buf, rr.x + 3, y, &place, muted, (inner - meta_w) as u16);
+                    cx.st(PRIMARY, SIDEBAR).patch(cx.t.bg("interactive.hover"))
+                } else {
+                    muted
+                };
                 put(
                     buf,
-                    rr.x + 3 + (inner - meta_w) as u16,
+                    rr.x + 4,
                     y,
-                    &meta,
-                    muted,
-                    meta_w as u16,
+                    "+ New session",
+                    style,
+                    rr.width.saturating_sub(4),
                 );
-            } else {
+                hits.add(rr, Target::NewSession);
+            }
+            SRow::Project(i) => {
+                let name = entries[i].project.as_deref().unwrap_or("").to_uppercase();
                 put(
                     buf,
-                    rr.x + 3,
+                    rr.x + 2,
                     y,
-                    &truncate(&detail, inner, cx.ell()),
-                    muted,
+                    &truncate(&name, rr.width.saturating_sub(4) as usize, cx.ell()),
+                    muted.add_modifier(Modifier::BOLD),
+                    rr.width.saturating_sub(3),
+                );
+            }
+            SRow::Tree(i) => {
+                let Some((label, path)) = entries[i].tree.as_ref() else {
+                    continue;
+                };
+                let branch = if cx.t.opts.ascii { "~" } else { "⌥" };
+                let inner = rr.width.saturating_sub(4) as usize;
+                let label = format!("{branch} {label}");
+                let lw = width(&label).min(inner);
+                let left = truncate(&label, inner, cx.ell());
+                put(
+                    buf,
+                    rr.x + 2,
+                    y,
+                    &left,
+                    cx.st(SECONDARY, SIDEBAR),
                     inner as u16,
                 );
+                let room = inner.saturating_sub(lw + 2);
+                if room >= 8 {
+                    let p = short_path(path, room, cx.ell());
+                    put(
+                        buf,
+                        inner_right.saturating_sub(width(&p) as u16),
+                        y,
+                        &p,
+                        muted,
+                        room as u16,
+                    );
+                }
+            }
+            SRow::Title(i) | SRow::Detail(i) => {
+                let e = &entries[i];
+                let Some(s) = a.state.model.sessions.get(&e.id) else {
+                    continue;
+                };
+                let first = matches!(v, SRow::Title(_));
+                let pair = if first {
+                    Rect::new(list.x, y + 1, list.width, 1)
+                } else {
+                    Rect::new(list.x, y - 1, list.width, 1)
+                };
+                let hovered = cx.hovered(rr) || cx.hovered(pair);
+                let selected = viewed == Some(s.id.as_str());
+                let bg = if selected {
+                    cx.t.bg("interactive.selection")
+                } else if hovered {
+                    cx.t.bg("interactive.hover")
+                } else {
+                    Style::default()
+                };
+                clear(buf, rr, cx.st(SECONDARY, SIDEBAR).patch(bg));
+                if focused && i == cursor {
+                    put(
+                        buf,
+                        rr.x,
+                        y,
+                        cx.t.structure("focus_bar"),
+                        cx.st("interactive.focus", SIDEBAR)
+                            .patch(bg)
+                            .add_modifier(Modifier::BOLD),
+                        1,
+                    );
+                }
+                if first {
+                    if let Some((glyph, token)) = session_mark(cx, &s.id) {
+                        put(buf, rr.x + 2, y, &glyph, cx.st(token, SIDEBAR).patch(bg), 1);
+                    }
+                    let token = if s.archived {
+                        MUTED
+                    } else if selected || a.ui.unread_sessions.contains(&s.id) {
+                        PRIMARY
+                    } else {
+                        SECONDARY
+                    };
+                    let mut style = cx.st(token, SIDEBAR).patch(bg);
+                    if selected {
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
+                    let age = text::age(now_secs(), s.updated);
+                    let aw = width(&age) as u16;
+                    let inner = rr.width.saturating_sub(5);
+                    // The time yields when the title would be squeezed too far.
+                    let show_age = inner >= aw + 1 + 6;
+                    let room = if show_age { inner - aw - 1 } else { inner };
+                    draw_session_title(cx, buf, (rr.x + 4, y), room, s, style, bg);
+                    if show_age {
+                        put(buf, inner_right - aw, y, &age, muted.patch(bg), aw);
+                    }
+                } else {
+                    let (left, meta) = session_detail(cx, s, a.descendants(&s.id));
+                    let inner = rr.width.saturating_sub(5) as usize;
+                    let mw = width(&meta);
+                    let show_meta = mw > 0 && inner >= mw + 1 + 6;
+                    let room = if show_meta { inner - mw - 1 } else { inner };
+                    let mut x = rr.x + 4;
+                    let end = rr.x + 4 + room as u16;
+                    let mut budget = room;
+                    for (text, st) in left {
+                        let t = truncate(&text, budget, cx.ell());
+                        budget = budget.saturating_sub(width(&t));
+                        x = put(buf, x, y, &t, st.patch(bg), end.saturating_sub(x));
+                    }
+                    if show_meta {
+                        put(
+                            buf,
+                            inner_right - mw as u16,
+                            y,
+                            &meta,
+                            muted.patch(bg),
+                            mw as u16,
+                        );
+                    }
+                }
+                hits.add(rr, Target::SideRow(i));
             }
         }
-        hits.add(rr, Target::SideRow(v.entry));
     }
+}
+
+/// The mark slot of a session row from its attention data: waiting, error,
+/// running (the spinner) or unread, in that order of precedence.
+fn session_mark<'t>(cx: &Cx<'t>, id: &str) -> Option<(String, &'t str)> {
+    let a = cx.app;
+    match a.session_mark(id)? {
+        "running" => Some((cx.t.spinner(a.frame / 2).to_owned(), PRIMARY)),
+        name => {
+            let (glyph, token) = cx.t.attention(name);
+            Some((glyph.to_owned(), token))
+        }
+    }
+}
+
+/// Line 2 of a session row: the agent in its colour, `·`, `⌥ branch`, and on
+/// the right the child count (`2 ↳`).
+fn session_detail(
+    cx: &Cx,
+    s: &crate::api::Session,
+    children: usize,
+) -> (Vec<(String, Style)>, String) {
+    let a = cx.app;
+    let muted = cx.st(MUTED, SIDEBAR);
+    let mut left = Vec::new();
+    if !s.agent.is_empty() {
+        left.push((
+            s.agent.clone(),
+            cx.st(SECONDARY, SIDEBAR).patch(cx.t.agent_style(&s.agent)),
+        ));
+    }
+    let branch = a
+        .session_worktree(s)
+        .and_then(|tree| tree["branch"].as_str())
+        .filter(|branch| !branch.is_empty());
+    if let Some(branch) = branch {
+        let mark = if cx.t.opts.ascii { "~" } else { "⌥" };
+        let sep = if left.is_empty() {
+            String::new()
+        } else {
+            cx.sep()
+        };
+        left.push((format!("{sep}{mark} {branch}"), muted));
+    }
+    let meta = if children == 0 {
+        String::new()
+    } else {
+        format!("{children} {}", if cx.t.opts.ascii { ">" } else { "↳" })
+    };
+    (left, meta)
 }
 
 fn draw_projects(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitMap) {
@@ -2080,22 +2180,42 @@ fn draw_projects(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
 // right sidebar
 // ============================================================================
 
-fn kv(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, key: &str, value: &str) {
+/// Width of the key column of the right sidebar (D12).
+const KEY_W: u16 = 9;
+
+/// Where the right sidebar's values start, relative to its left edge.
+const VALUE_X: u16 = 1 + KEY_W;
+
+/// An UPPERCASE bold muted section label.
+fn section_label(cx: &Cx, buf: &mut Buffer, r: Rect, y: u16, label: &str) {
+    put(
+        buf,
+        r.x + 1,
+        y,
+        &truncate(
+            &label.to_uppercase(),
+            r.width.saturating_sub(2) as usize,
+            cx.ell(),
+        ),
+        cx.st(MUTED, SIDEBAR).add_modifier(Modifier::BOLD),
+        r.width.saturating_sub(2),
+    );
+}
+
+/// `Key      value`: a muted key in the 9-cell column and a value truncated in
+/// the middle.
+fn kv(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, key: &str, value: &str, style: Style) {
     if *y >= r.bottom() {
         return;
     }
-    put(buf, r.x + 1, *y, key, cx.st(MUTED, SIDEBAR), 9);
-    let vw = r.width.saturating_sub(12) as usize;
+    put(buf, r.x + 1, *y, key, cx.st(MUTED, SIDEBAR), KEY_W);
+    let vw = r.width.saturating_sub(VALUE_X + 1) as usize;
     put(
         buf,
-        r.x + 11,
+        r.x + VALUE_X,
         *y,
-        &truncate(value, vw, cx.ell()),
-        if key == "agent" {
-            cx.st(SECONDARY, SIDEBAR).patch(cx.t.agent_style(value))
-        } else {
-            cx.st(SECONDARY, SIDEBAR)
-        },
+        &truncate_middle(value, vw, cx.ell()),
+        style,
         vw as u16,
     );
     *y += 1;
@@ -2109,7 +2229,8 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     clear(buf, r, cx.st(SECONDARY, SIDEBAR));
     hits.add(r, Target::Swallow);
     let focused = a.ui.focus == Focus::Right;
-    let mut y = r.y;
+    // One blank row under the chrome band, as above the sidebar's search row.
+    let mut y = r.y + 1;
     for (i, sec) in a
         .manifest
         .navigation
@@ -2122,9 +2243,12 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             break;
         }
         let head = Rect::new(r.x, y, r.width, 1);
-        let mut hs = cx.st(PRIMARY, SIDEBAR).add_modifier(Modifier::BOLD);
         if cx.hovered(head) {
-            hs = hs.patch(cx.t.bg("interactive.hover"));
+            clear(
+                buf,
+                head,
+                cx.st(MUTED, SIDEBAR).patch(cx.t.bg("interactive.hover")),
+            );
         }
         if focused && i == 0 {
             put(
@@ -2137,8 +2261,12 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 1,
             );
         }
-        put(buf, r.x + 1, y, cx.t.fold(true), cx.st(MUTED, SIDEBAR), 1);
-        put(buf, r.x + 3, y, &sec.label, hs, r.width.saturating_sub(4));
+        let label = match sec.id.as_str() {
+            "session_info" => "Session",
+            "git_status" => "Git",
+            _ => sec.label.as_str(),
+        };
+        section_label(cx, buf, r, y, label);
         hits.add(head, Target::RightSection(i));
         y += 1;
         match sec.id.as_str() {
@@ -2149,11 +2277,11 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     .unavailable_reason
                     .clone()
                     .unwrap_or_else(|| "Not available.".into());
-                for l in text::wrap(&reason, r.width.saturating_sub(4) as usize) {
+                for l in text::wrap(&reason, r.width.saturating_sub(3) as usize) {
                     if y >= r.bottom() {
                         break;
                     }
-                    put(buf, r.x + 3, y, &l, cx.st(MUTED, SIDEBAR), r.width - 4);
+                    put(buf, r.x + 1, y, &l, cx.st(MUTED, SIDEBAR), r.width - 2);
                     y += 1;
                 }
             }
@@ -2162,18 +2290,20 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     }
 }
 
+/// A muted one-line note under a section label.
+fn note(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, msg: &str) {
+    for line in text::wrap(msg, r.width.saturating_sub(3) as usize) {
+        if *y >= r.bottom() {
+            break;
+        }
+        put(buf, r.x + 1, *y, &line, cx.st(MUTED, SIDEBAR), r.width - 2);
+        *y += 1;
+    }
+}
+
 fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap) {
     let Some(id) = cx.app.viewed_id() else {
-        put(
-            buf,
-            r.x + 3,
-            *y,
-            "Open a session",
-            cx.st(MUTED, SIDEBAR),
-            r.width.saturating_sub(4),
-        );
-        *y += 1;
-        return;
+        return note(cx, buf, r, y, "Open a session");
     };
     let Some((_, result)) = cx
         .app
@@ -2182,283 +2312,258 @@ fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap
         .as_ref()
         .filter(|(session, _)| session == id)
     else {
-        put(
-            buf,
-            r.x + 3,
-            *y,
-            if cx.t.opts.ascii {
-                "Loading Git status..."
-            } else {
-                "Loading Git status…"
-            },
-            cx.st(MUTED, SIDEBAR),
-            r.width.saturating_sub(4),
-        );
-        *y += 1;
-        return;
+        let msg = if cx.t.opts.ascii {
+            "Loading Git status..."
+        } else {
+            "Loading Git status…"
+        };
+        return note(cx, buf, r, y, msg);
     };
-    match result {
+    let data = match result {
         Err(error) => {
             let message = if error.contains("workspace is not a Git repository") {
                 "No Git repository"
             } else {
                 error.as_str()
             };
-            let lines = text::wrap(message, r.width.saturating_sub(4) as usize);
-            for line in lines {
-                if *y >= r.bottom() {
-                    break;
-                }
-                put(
-                    buf,
-                    r.x + 3,
-                    *y,
-                    &line,
-                    cx.st(MUTED, SIDEBAR),
-                    r.width.saturating_sub(4),
-                );
-                *y += 1;
-            }
+            return note(cx, buf, r, y, message);
         }
-        Ok(data) => {
-            let branch = data["branch"].as_str().unwrap_or("—");
-            let (up, down) = if cx.t.opts.ascii {
-                ("+", "-")
-            } else {
-                ("↑", "↓")
-            };
-            let header = format!(
-                "{}  {up}{} {down}{}",
-                branch,
-                data["ahead"].as_u64().unwrap_or(0),
-                data["behind"].as_u64().unwrap_or(0)
+        Ok(data) => data,
+    };
+    // `⌥ main  ↑1`: the branch, then what is ahead or behind when it is not 0.
+    let branch = data["branch"].as_str().unwrap_or("—");
+    let (up, down) = if cx.t.opts.ascii {
+        ("+", "-")
+    } else {
+        ("↑", "↓")
+    };
+    let mark = if cx.t.opts.ascii { "~" } else { "⌥" };
+    let mut header = format!("{mark} {branch}");
+    for (glyph, key) in [(up, "ahead"), (down, "behind")] {
+        let n = data[key].as_u64().unwrap_or(0);
+        if n > 0 {
+            header.push_str(&format!("  {glyph}{n}"));
+        }
+    }
+    put(
+        buf,
+        r.x + 1,
+        *y,
+        &truncate(&header, r.width.saturating_sub(2) as usize, cx.ell()),
+        cx.st(PRIMARY, SIDEBAR),
+        r.width.saturating_sub(2),
+    );
+    *y += 1;
+    let rows = cx.app.git_rows();
+    if rows.is_empty() && *y < r.bottom() {
+        put(
+            buf,
+            r.x + 1,
+            *y,
+            "Clean",
+            cx.st(MUTED, SIDEBAR),
+            r.width - 2,
+        );
+        *y += 1;
+    }
+    let focused = cx.app.ui.focus == Focus::Right;
+    let right = r.right().saturating_sub(1);
+    let minus = if cx.t.opts.ascii { "-" } else { "−" };
+    let mut group = None;
+    for (index, row) in rows.iter().enumerate() {
+        if group != Some(row.group) {
+            group = Some(row.group);
+            // A blank row, then `Unstaged` with its count on the right.
+            *y += 1;
+            if *y >= r.bottom() {
+                break;
+            }
+            let count = rows
+                .iter()
+                .filter(|other| other.group == row.group)
+                .count()
+                .to_string();
+            put(
+                buf,
+                r.x + 1,
+                *y,
+                row.group.label(),
+                cx.st(SECONDARY, SIDEBAR),
+                r.width.saturating_sub(2),
             );
             put(
                 buf,
-                r.x + 3,
+                right.saturating_sub(width(&count) as u16),
                 *y,
-                &truncate(&header, r.width.saturating_sub(4) as usize, cx.ell()),
-                cx.st(SECONDARY, SIDEBAR),
-                r.width.saturating_sub(4),
+                &count,
+                cx.st(MUTED, SIDEBAR),
+                width(&count) as u16,
             );
             *y += 1;
-            let rows = cx.app.git_rows();
-            if rows.is_empty() && *y < r.bottom() {
-                put(
-                    buf,
-                    r.x + 3,
-                    *y,
-                    "Clean",
-                    cx.st(MUTED, SIDEBAR),
-                    r.width.saturating_sub(4),
-                );
-                *y += 1;
+        }
+        if *y >= r.bottom() {
+            break;
+        }
+        let line = Rect::new(r.x, *y, r.width, 1);
+        let selected = index == cx.app.ui.git_cursor;
+        let mut style = cx.st(SECONDARY, SIDEBAR);
+        let mut bg = Style::default();
+        if selected && focused {
+            bg = cx.t.bg("interactive.selection");
+        } else if cx.hovered(line) {
+            bg = cx.t.bg("interactive.hover");
+        }
+        style = style.patch(bg);
+        clear(buf, line, style);
+        if selected && focused {
+            put(
+                buf,
+                r.x,
+                *y,
+                cx.t.structure("focus_bar"),
+                cx.st("interactive.focus", SIDEBAR).patch(bg),
+                1,
+            );
+        }
+        // Staged rows read the index column, the others the worktree one.
+        let code: String = match row.group {
+            GitGroup::Staged => row.status.chars().take(1).collect(),
+            GitGroup::Unstaged => row.status.chars().skip(1).take(1).collect(),
+            GitGroup::Untracked => "?".into(),
+        };
+        if let Some((glyph, token)) = git_marker(&code) {
+            put(
+                buf,
+                r.x + 1,
+                *y,
+                &glyph.to_string(),
+                cx.st(token, SIDEBAR).patch(bg),
+                1,
+            );
+        }
+        // `+N −M` right-aligned; a side that is 0 is left out.
+        let mut stats: Vec<(String, &str)> = Vec::new();
+        if row.group != GitGroup::Untracked {
+            if row.added > 0 {
+                stats.push((format!("+{}", row.added), "status.success"));
             }
-            let focused = cx.app.ui.focus == Focus::Right;
-            let mut group = None;
-            for (index, row) in rows.iter().enumerate() {
-                if group != Some(row.group) {
-                    group = Some(row.group);
-                    if *y >= r.bottom() {
-                        break;
-                    }
-                    let count = rows.iter().filter(|other| other.group == row.group).count();
-                    put(
-                        buf,
-                        r.x + 3,
-                        *y,
-                        &format!("{} {count}", row.group.label()),
-                        cx.st(MUTED, SIDEBAR).add_modifier(Modifier::BOLD),
-                        r.width.saturating_sub(4),
-                    );
-                    *y += 1;
-                }
-                if *y >= r.bottom() {
-                    break;
-                }
-                let line = Rect::new(r.x, *y, r.width, 1);
-                let selected = index == cx.app.ui.git_cursor;
-                let mut style = cx.st(SECONDARY, SIDEBAR);
-                if selected && focused {
-                    style = style.patch(cx.t.bg("interactive.selection"));
-                } else if cx.hovered(line) {
-                    style = style.patch(cx.t.bg("interactive.hover"));
-                }
-                clear(buf, line, style);
-                if selected && focused {
-                    put(
-                        buf,
-                        r.x,
-                        *y,
-                        cx.t.structure("focus_bar"),
-                        cx.st("interactive.focus", SIDEBAR),
-                        1,
-                    );
-                }
-                // Staged rows read the index column, the others the worktree one.
-                let code: String = match row.group {
-                    GitGroup::Staged => row.status.chars().take(1).collect(),
-                    GitGroup::Unstaged => row.status.chars().skip(1).take(1).collect(),
-                    GitGroup::Untracked => "?".into(),
-                };
-                let marker = git_marker(&code);
-                if let Some((glyph, token)) = marker {
-                    put(
-                        buf,
-                        r.x + 3,
-                        *y,
-                        &glyph.to_string(),
-                        cx.st(token, SIDEBAR).patch(style),
-                        1,
-                    );
-                }
-                let label = if row.group == GitGroup::Untracked {
-                    row.path.clone()
-                } else {
-                    format!("{} +{} -{}", row.path, row.added, row.removed)
-                };
-                put(
-                    buf,
-                    r.x + 5,
-                    *y,
-                    &truncate(&label, r.width.saturating_sub(6) as usize, cx.ell()),
-                    style,
-                    r.width.saturating_sub(6),
-                );
-                hits.add(line, Target::GitRow(index));
-                *y += 1;
+            if row.removed > 0 {
+                stats.push((format!("{minus}{}", row.removed), "status.error"));
             }
         }
+        let sw: usize =
+            stats.iter().map(|(t, _)| width(t)).sum::<usize>() + stats.len().saturating_sub(1);
+        let room = (right.saturating_sub(r.x + 3) as usize).saturating_sub(if sw > 0 {
+            sw + 1
+        } else {
+            0
+        });
+        put(
+            buf,
+            r.x + 3,
+            *y,
+            &truncate_middle(&row.path, room, cx.ell()),
+            style,
+            room as u16,
+        );
+        let mut x = right.saturating_sub(sw as u16);
+        for (i, (t, token)) in stats.iter().enumerate() {
+            if i > 0 {
+                x += 1;
+            }
+            x = put(
+                buf,
+                x,
+                *y,
+                t,
+                cx.st(token, SIDEBAR).patch(bg),
+                width(t) as u16,
+            );
+        }
+        hits.add(line, Target::GitRow(index));
+        *y += 1;
+    }
+}
+
+/// `82k of 200k` style: tokens as whole thousands from 10k, one decimal below.
+fn compact(n: u64) -> String {
+    if n >= 1_000_000 {
+        let m = format!("{:.1}", n as f64 / 1e6);
+        format!("{}M", m.trim_end_matches(".0"))
+    } else if n >= 10_000 {
+        format!("{}k", (n as f64 / 1000.0).round() as u64)
+    } else if n >= 1000 {
+        let k = format!("{:.1}", n as f64 / 1000.0);
+        format!("{}k", k.trim_end_matches(".0"))
+    } else {
+        n.to_string()
     }
 }
 
 fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
     let a = cx.app;
     let Some(s) = a.viewed() else {
-        put(
-            buf,
-            r.x + 3,
-            *y,
-            "No session open",
-            cx.st(MUTED, SIDEBAR),
-            r.width - 4,
-        );
-        *y += 1;
-        return;
+        return note(cx, buf, r, y, "No session open");
     };
     let now = now_secs();
+    let primary = cx.st(PRIMARY, SIDEBAR);
     kv(
         cx,
         buf,
         r,
         y,
-        "title",
-        if s.title.is_empty() {
-            "Untitled"
-        } else {
-            &s.title
-        },
+        "Agent",
+        &s.agent,
+        primary.patch(cx.t.agent_style(&s.agent)),
     );
+    kv(cx, buf, r, y, "Model", &a_model_label(cx, s), primary);
     kv(
         cx,
         buf,
         r,
         y,
-        "id",
-        &truncate_middle(&s.id, r.width.saturating_sub(13) as usize, cx.ell()),
-    );
-    kv(cx, buf, r, y, "agent", &s.agent);
-    kv(cx, buf, r, y, "model", &a_model_label(cx, s));
-    kv(
-        cx,
-        buf,
-        r,
-        y,
-        "effort",
+        "Effort",
         s.extra
             .get("effort")
             .and_then(Value::as_str)
             .filter(|e| !e.is_empty())
             .unwrap_or("default"),
+        primary,
     );
-    kv(cx, buf, r, y, "perm", &s.permission);
-    kv(
-        cx,
-        buf,
-        r,
-        y,
-        "dir",
-        &truncate_middle(&s.directory, r.width.saturating_sub(13) as usize, cx.ell()),
-    );
-    kv(
-        cx,
-        buf,
-        r,
-        y,
-        "status",
-        &if a.is_busy(&s.id) {
-            "running".to_owned()
-        } else if s.archived {
-            "archived".into()
+    // `✓ idle`: the glyph carries the status colour.
+    let (state, name) = if a.is_busy(&s.id) {
+        ("running", "running")
+    } else if s.archived {
+        ("archived", "done")
+    } else {
+        ("idle", "done")
+    };
+    if *y < r.bottom() {
+        let (glyph, _, token) = cx.t.status(name);
+        put(buf, r.x + 1, *y, "Status", cx.st(MUTED, SIDEBAR), KEY_W);
+        let glyph = if name == "running" {
+            cx.t.spinner(a.frame / 2)
         } else {
-            "idle".into()
-        },
-    );
-    kv(cx, buf, r, y, "started", &text::ago(now, s.created));
-    kv(cx, buf, r, y, "active", &text::ago(now, s.updated));
-    let more = a
-        .state
-        .model
-        .selected
-        .as_ref()
-        .is_some_and(|v| v.messages_more);
-    kv(
-        cx,
-        buf,
-        r,
-        y,
-        "messages",
-        &format!(
-            "{}{} loaded",
-            a.messages().len(),
-            if more { "+" } else { "" }
-        ),
-    );
-    let kids = a.descendants(&s.id);
-    let running = a
-        .state
-        .model
-        .running
-        .keys()
-        .filter(|k| a.ancestors_of(k).iter().any(|x| x.id == s.id) && **k != s.id)
-        .count();
-    kv(
-        cx,
-        buf,
-        r,
-        y,
-        "children",
-        &if kids == 0 {
-            "none".to_owned()
-        } else {
-            let failed = a
-                .state
-                .model
-                .sessions
-                .values()
-                .filter(|c| {
-                    c.id != s.id
-                        && a.ui.failed_sessions.contains(&c.id)
-                        && a.ancestors_of(&c.id).iter().any(|x| x.id == s.id)
-                })
-                .count();
-            let mut text = format!("{kids}, {running} running");
-            if failed > 0 {
-                text.push_str(&format!(", {failed} failed"));
-            }
-            text
-        },
-    );
+            glyph
+        };
+        let x = put(
+            buf,
+            r.x + VALUE_X,
+            *y,
+            glyph,
+            cx.st(if name == "running" { PRIMARY } else { token }, SIDEBAR),
+            2,
+        );
+        put(
+            buf,
+            x + 1,
+            *y,
+            state,
+            primary,
+            r.right().saturating_sub(x + 2),
+        );
+        *y += 1;
+    }
     let stats = a.state.model.selected.as_ref().map(|v| {
         crate::stats::compute(
             &v.messages,
@@ -2467,148 +2572,134 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
             &a.effective_model(Some(s)),
         )
     });
-    let Some(stats) = stats else { return };
-    kv(
-        cx,
-        buf,
-        r,
-        y,
-        "turns",
-        &format!(
-            "{}{}",
-            stats.turns,
-            if stats.calls > 0 {
-                format!("{}{} calls", cx.sep(), stats.calls)
-            } else {
-                String::new()
-            }
-        ),
-    );
-    if !stats.tools.is_empty() {
-        let shown: Vec<String> = stats
-            .tools
-            .iter()
-            .take(2)
-            .map(|(name, n)| format!("{name} {n}"))
-            .collect();
-        let rest = stats.tools.len().saturating_sub(2);
-        let mut line = shown.join(&cx.sep());
-        if rest > 0 {
-            line.push_str(&format!("{}+{rest}", cx.sep()));
-        }
-        kv(cx, buf, r, y, "used", &line);
-    }
-    let all_tools = s
-        .extra
-        .get("tools")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len);
-    if all_tools > 0 {
-        let off = s
-            .extra
-            .get("disabled_tools")
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len);
-        let on = all_tools.saturating_sub(off);
+    if let Some(stats) = &stats {
+        let calls = if stats.calls > 0 {
+            format!("{}{} tools", cx.sep(), stats.calls)
+        } else {
+            String::new()
+        };
         kv(
             cx,
             buf,
             r,
             y,
-            "tools",
-            &if off > 0 {
-                format!("{on} on{}{off} off", cx.sep())
-            } else {
-                format!("{on} on")
-            },
+            "Turns",
+            &format!("{}{calls}", stats.turns),
+            primary,
         );
+        if !stats.tools.is_empty() {
+            let shown: Vec<String> = stats
+                .tools
+                .iter()
+                .take(2)
+                .map(|(name, n)| format!("{name} {n}"))
+                .collect();
+            kv(cx, buf, r, y, "Tools", &shown.join(&cx.sep()), primary);
+        }
     }
-    if stats.has_tokens() {
-        kv(cx, buf, r, y, "input", &text::count(stats.input));
-        if stats.cached > 0 {
-            kv(cx, buf, r, y, "cached", &text::count(stats.cached));
-        }
-        kv(cx, buf, r, y, "output", &text::count(stats.output));
-        if stats.reasoning > 0 {
-            kv(cx, buf, r, y, "reasoning", &text::count(stats.reasoning));
-        }
-        if let Some(window) = a
-            .state
-            .models
-            .iter()
-            .find(|m| m["ref"].as_str() == Some(a.effective_model(Some(s)).as_str()))
-            .and_then(|m| m["context"].as_u64())
-            .filter(|&n| n > 0)
-        {
-            if let Some(last) = stats.last_input {
-                context_bar(cx, buf, r, y, last, window);
-            }
-        }
-        if let Some(usd) = stats.cost {
-            let value = format!(
-                "{}{}",
-                crate::stats::money(usd),
-                if stats.partial_cost { "+" } else { "" }
-            );
-            kv(cx, buf, r, y, "cost", &value);
-        }
-    } else {
-        kv(cx, buf, r, y, "tokens", "not reported");
-    }
-}
+    let started = crate::timeline::local_clock(s.created)
+        .map(|c| format!("{c}{}{}", cx.sep(), text::age(now, s.created)))
+        .unwrap_or_else(|| text::ago(now, s.created));
+    kv(cx, buf, r, y, "Started", &started, primary);
+    kv(cx, buf, r, y, "Id", &s.id, primary);
 
-/// `context  ██░░░░░░ 26%`: the latest request's input against the window.
-fn context_bar(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, used: u64, window: u64) {
+    // CONTEXT: the meter, `82k of 200k`, tokens and cost; `not reported`
+    // wherever Core gives nothing.
+    *y += 1;
     if *y >= r.bottom() {
         return;
     }
-    put(buf, r.x + 1, *y, "context", cx.st(MUTED, CANVAS), 9);
-    let pct = used as f64 / window as f64 * 100.0;
-    let label = format!(" {pct:.0}%");
-    let room = r.width.saturating_sub(12) as usize;
-    let bar = room.saturating_sub(width(&label)).clamp(0, 24);
-    if bar < 3 {
-        put(
-            buf,
-            r.x + 11,
-            *y,
-            label.trim_start(),
-            cx.st(SECONDARY, CANVAS),
-            room as u16,
-        );
-        *y += 1;
-        return;
-    }
-    let filled = ((pct / 100.0) * bar as f64).round().clamp(0.0, bar as f64) as usize;
-    let (on, off) = if cx.t.opts.ascii {
-        ("#", "-")
-    } else {
-        ("\u{2588}", "\u{2591}")
-    };
-    let token = if pct >= 95.0 {
-        "status.error"
-    } else if pct >= 80.0 {
-        "status.warning"
-    } else {
-        SECONDARY
-    };
-    let mut x = r.x + 11;
-    for i in 0..bar {
-        x = put(
-            buf,
-            x,
-            *y,
-            if i < filled { on } else { off },
-            if i < filled {
-                cx.st(token, CANVAS)
-            } else {
-                cx.st("border.default", CANVAS)
-            },
-            1,
-        );
-    }
-    put(buf, x, *y, &label, cx.st(SECONDARY, CANVAS), 6);
+    section_label(cx, buf, r, *y, "Context");
     *y += 1;
+    let none = "not reported";
+    let muted = cx.st(MUTED, SIDEBAR);
+    let tokens = stats.as_ref().filter(|st| st.has_tokens());
+    let window = a
+        .state
+        .models
+        .iter()
+        .find(|m| m["ref"].as_str() == Some(a.effective_model(Some(s)).as_str()))
+        .and_then(|m| m["context"].as_u64())
+        .filter(|&n| n > 0);
+    let used = tokens.and_then(|st| st.last_input);
+    if let (Some(used), Some(window)) = (used, window) {
+        if *y < r.bottom() {
+            let fraction = used as f64 / window as f64;
+            let label = format!("{:.0}%", fraction * 100.0);
+            let lw = width(&label) as u16;
+            let cells = r.width.saturating_sub(3 + lw);
+            if cells >= 4 {
+                let token = if fraction >= 0.95 {
+                    "status.error"
+                } else if fraction >= 0.80 {
+                    "status.warning"
+                } else {
+                    PRIMARY
+                };
+                let filled = cx.st(token, SIDEBAR).patch(if token == PRIMARY {
+                    cx.t.agent_style(&s.agent)
+                } else {
+                    Style::default()
+                });
+                crate::paint::meter(
+                    cx.t,
+                    buf,
+                    (r.x + 1, *y),
+                    cells,
+                    fraction,
+                    filled,
+                    cx.st("border.default", SIDEBAR),
+                );
+            }
+            put(
+                buf,
+                r.right().saturating_sub(lw + 1),
+                *y,
+                &label,
+                cx.st(SECONDARY, SIDEBAR),
+                lw,
+            );
+            *y += 1;
+        }
+    }
+    let used_text = match (used, window) {
+        (Some(u), Some(w)) => Some(format!("{} of {}", compact(u), compact(w))),
+        (Some(u), None) => Some(compact(u)),
+        _ => None,
+    };
+    for (key, value) in [
+        ("Used", used_text),
+        (
+            "Tokens",
+            tokens.map(|st| {
+                format!(
+                    "{} in{}{} out",
+                    compact(st.input),
+                    cx.sep(),
+                    compact(st.output)
+                )
+            }),
+        ),
+        (
+            "Cost",
+            tokens.and_then(|st| st.cost).map(|usd| {
+                format!(
+                    "{}{}",
+                    crate::stats::money(usd),
+                    if tokens.is_some_and(|st| st.partial_cost) {
+                        "+"
+                    } else {
+                        ""
+                    }
+                )
+            }),
+        ),
+    ] {
+        match value {
+            Some(v) => kv(cx, buf, r, y, key, &v, primary),
+            None => kv(cx, buf, r, y, key, none, muted),
+        }
+    }
 }
 
 // ============================================================================
@@ -4579,11 +4670,103 @@ fn boxed(cx: &Cx, buf: &mut Buffer, r: Rect, title: &str, bg: &str) {
 fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut HitMap) {
     hits.add(area, Target::Scrim);
     match &o.kind {
-        OverlayKind::Palette(p) => draw_palette(cx, buf, area, p, hits),
+        OverlayKind::Palette(p) => {
+            let anchor = (p.mode == PaletteMode::RowMenu)
+                .then(|| hits.rect_of(&Target::SideRow(cx.app.cursor(cx.app.ui.tab))))
+                .flatten();
+            match anchor {
+                Some(row) => draw_row_menu(cx, buf, area, row, p, hits),
+                None => draw_palette(cx, buf, area, p, hits),
+            }
+        }
         OverlayKind::Notifications { selected } => {
             draw_notifications(cx, buf, area, *selected, hits)
         }
         OverlayKind::Help { top } => draw_help(cx, buf, area, *top, hits),
+    }
+}
+
+/// The `.` row menu: a small raised popover beside the focused sidebar row,
+/// one item per row with its key on the right; Delete is in `status.error`.
+fn draw_row_menu(cx: &Cx, buf: &mut Buffer, area: Rect, row: Rect, p: &Palette, hits: &mut HitMap) {
+    let items = cx.app.palette_items();
+    let want = items
+        .iter()
+        .map(|it| width(&it.label) + width(&it.hint) + 6)
+        .max()
+        .unwrap_or(0)
+        .max(24) as u16;
+    let w = want.min(area.width);
+    let h = (items.len() as u16).max(1).min(area.height);
+    let x = row
+        .right()
+        .saturating_sub(5)
+        .min(area.right().saturating_sub(w));
+    let y = (row.y + 1).min(area.bottom().saturating_sub(h));
+    let b = Rect::new(x, y, w, h);
+    clear(buf, b, cx.st(PRIMARY, RAISED));
+    hits.add(b, Target::Swallow);
+    if items.is_empty() {
+        put(
+            buf,
+            b.x + 2,
+            b.y,
+            "Nothing matches.",
+            cx.st(MUTED, RAISED),
+            w - 2,
+        );
+    }
+    for (i, it) in items.iter().enumerate().take(h as usize) {
+        let rr = Rect::new(b.x, b.y + i as u16, w, 1);
+        let selected = i == p.selected;
+        let danger = matches!(&it.kind, PaletteKind::Command(id) if id.ends_with(".delete"));
+        let token = if it.reason.is_some() {
+            MUTED
+        } else if danger {
+            "status.error"
+        } else {
+            PRIMARY
+        };
+        let mut style = cx.st(token, RAISED);
+        let mut hint = cx.st(MUTED, RAISED);
+        if selected {
+            let band = cx.t.bg("interactive.selection");
+            style = style.patch(band).add_modifier(Modifier::BOLD);
+            hint = hint.patch(band);
+            clear(buf, rr, style);
+            put(
+                buf,
+                rr.x,
+                rr.y,
+                cx.t.structure("focus_bar"),
+                cx.st("interactive.focus", "interactive.selection"),
+                1,
+            );
+        } else if cx.hovered(rr) {
+            let band = cx.t.bg("interactive.hover");
+            style = style.patch(band);
+            hint = hint.patch(band);
+            clear(buf, rr, style);
+        }
+        let hw = width(&it.hint) as u16;
+        put(
+            buf,
+            rr.right().saturating_sub(hw + 2),
+            rr.y,
+            &it.hint,
+            hint,
+            hw,
+        );
+        let room = w.saturating_sub(hw + 6) as usize;
+        put(
+            buf,
+            rr.x + 2,
+            rr.y,
+            &truncate(&it.label, room, cx.ell()),
+            style,
+            room as u16,
+        );
+        hits.add(rr, Target::PaletteItem(i));
     }
 }
 

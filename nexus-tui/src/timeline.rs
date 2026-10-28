@@ -248,7 +248,7 @@ fn is_diagnostic(e: &crate::api::Event) -> bool {
 
 /// Format a stored timestamp in the terminal's local timezone.
 #[cfg(unix)]
-fn local_clock(timestamp: f64) -> Option<String> {
+pub(crate) fn local_clock(timestamp: f64) -> Option<String> {
     if !timestamp.is_finite() || timestamp < 0.0 || timestamp > libc::time_t::MAX as f64 {
         return None;
     }
@@ -268,7 +268,7 @@ fn local_clock(timestamp: f64) -> Option<String> {
     ))
 }
 #[cfg(not(unix))]
-fn local_clock(_timestamp: f64) -> Option<String> {
+pub(crate) fn local_clock(_timestamp: f64) -> Option<String> {
     None
 }
 
