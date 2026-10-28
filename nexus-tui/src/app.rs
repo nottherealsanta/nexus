@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -112,6 +112,7 @@ pub const WIRED: &[&str] = &[
     "copy.user_message",
     "waiting.allow_once",
     "waiting.deny",
+    "waiting.submit_answers",
     "waiting.next",
     "waiting.prev",
     "waiting.focus",
@@ -136,6 +137,7 @@ const MUTATING: &[&str] = &[
     "agent.change",
     "waiting.allow_once",
     "waiting.deny",
+    "waiting.submit_answers",
 ];
 
 const NOT_WIRED: &str = "Not available yet.";
@@ -145,6 +147,49 @@ const READ_ONLY: &str = "Read-only until Core is connected again.";
 pub enum WaitKind {
     Approval,
     Question,
+}
+
+/// Answers collected so far for the focused `ask` request. It belongs to one
+/// request id: another request (or none) starts from a blank draft.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AskDraft {
+    pub request: String,
+    /// Finished answers, in question order.
+    pub answers: Vec<Value>,
+    /// Highlighted option of the current question.
+    pub cursor: usize,
+    /// Ticked options of the current question (multi-select).
+    pub chosen: Vec<usize>,
+    /// The reply is in flight; a second submit would only get a 409.
+    pub sent: bool,
+}
+
+/// The question the card shows now: the next unanswered one of the focused request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AskCurrent {
+    pub wait: WaitItem,
+    pub index: usize,
+    pub total: usize,
+    pub question: Value,
+    pub draft: AskDraft,
+}
+
+impl AskCurrent {
+    pub fn options(&self) -> &[Value] {
+        self.question["options"]
+            .as_array()
+            .map_or(&[], Vec::as_slice)
+    }
+
+    pub fn multiple(&self) -> bool {
+        self.question["multiple"].as_bool().unwrap_or(false)
+    }
+
+    pub fn allows_text(&self) -> bool {
+        self.question["allow_free_text"]
+            .as_bool()
+            .unwrap_or(self.options().is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,6 +269,7 @@ pub struct Ui {
     pub scrolls: HashMap<String, Scroll>,
     pub drafts: HashMap<String, Composer>,
     pub wait_idx: usize,
+    pub ask: AskDraft,
     pub project: Option<String>,
     /// Content rows and viewport rows of the timeline at the last draw.
     pub timeline_total: usize,
@@ -352,6 +398,7 @@ impl App {
                 scrolls: HashMap::new(),
                 drafts: HashMap::new(),
                 wait_idx: 0,
+                ask: AskDraft::default(),
                 project: None,
                 timeline_total: 0,
                 timeline_height: 0,
@@ -511,6 +558,169 @@ impl App {
         items
             .get(self.ui.wait_idx.min(items.len().saturating_sub(1)))
             .cloned()
+    }
+
+    /// The focused wait's current question, when it is a question.
+    pub fn ask_current(&self) -> Option<AskCurrent> {
+        let wait = self
+            .wait_focused()
+            .filter(|w| w.kind == WaitKind::Question)?;
+        let q = self.state.model.questions.get(&wait.id)?;
+        let draft = if self.ui.ask.request == wait.id {
+            self.ui.ask.clone()
+        } else {
+            AskDraft::default()
+        };
+        let index = draft.answers.len();
+        let question = q.questions.get(index)?.clone();
+        Some(AskCurrent {
+            index,
+            total: q.questions.len(),
+            question,
+            draft,
+            wait,
+        })
+    }
+
+    /// The draft of request `id`, started blank when it belonged to another.
+    fn ask_draft(&mut self, id: &str) -> &mut AskDraft {
+        if self.ui.ask.request != id {
+            self.ui.ask = AskDraft {
+                request: id.to_owned(),
+                ..AskDraft::default()
+            };
+        }
+        &mut self.ui.ask
+    }
+
+    /// Tick (multi-select) or choose option `i` of the current question.
+    pub fn ask_pick(&mut self, i: usize) {
+        let Some(cur) = self.ask_current() else {
+            return;
+        };
+        if cur.draft.sent || i >= cur.options().len() {
+            return;
+        }
+        let multiple = cur.multiple();
+        let d = self.ask_draft(&cur.wait.id);
+        d.cursor = i;
+        if multiple {
+            match d.chosen.iter().position(|c| *c == i) {
+                Some(at) => {
+                    d.chosen.remove(at);
+                }
+                None => d.chosen.push(i),
+            }
+        } else {
+            d.chosen = vec![i];
+            self.ask_confirm(false);
+        }
+    }
+
+    fn ask_move(&mut self, down: bool) {
+        let Some(cur) = self.ask_current() else {
+            return;
+        };
+        let last = cur.options().len().saturating_sub(1);
+        let d = self.ask_draft(&cur.wait.id);
+        d.cursor = if down {
+            (cur.draft.cursor + 1).min(last)
+        } else {
+            cur.draft.cursor.saturating_sub(1)
+        };
+    }
+
+    /// Finish the current question from the ticked or highlighted option and,
+    /// when the composer holds text and the question allows it, that text. The
+    /// last question sends the whole reply. `typed` is a composer Enter: the text
+    /// is the answer, so a question that takes no text says so instead.
+    pub fn ask_confirm(&mut self, typed: bool) {
+        let Some(cur) = self.ask_current() else {
+            return;
+        };
+        if !self.writable() {
+            return self.toast(Level::Warning, READ_ONLY);
+        }
+        if cur.draft.sent {
+            return;
+        }
+        let text = self.composer_ref().expanded_text().trim().to_owned();
+        let opts = cur.options().to_vec();
+        if typed && !text.is_empty() && !cur.allows_text() {
+            return self.toast(
+                Level::Info,
+                "This question takes an option: press its number, or use up/down and enter",
+            );
+        }
+        let use_text = !text.is_empty() && cur.allows_text();
+        let mut chosen = cur.draft.chosen.clone();
+        if !cur.multiple() && chosen.is_empty() && !opts.is_empty() && !use_text {
+            chosen = vec![cur.draft.cursor.min(opts.len() - 1)];
+        }
+        if opts.is_empty() && !use_text {
+            return self.toast(
+                Level::Info,
+                "Type the answer in the composer, then press enter",
+            );
+        }
+        if cur.multiple() && chosen.is_empty() && !use_text {
+            return self.toast(Level::Info, "Pick at least one option (number or space)");
+        }
+        chosen.sort_unstable();
+        let selected: Vec<Value> = chosen
+            .iter()
+            .filter_map(|i| opts.get(*i).map(|o| o["id"].clone()))
+            .collect();
+        let answer = json!({
+            "question_id": cur.question["id"],
+            "selected": selected,
+            "text": if use_text { Value::from(text) } else { Value::Null },
+        });
+        if use_text {
+            self.composer().take();
+        }
+        let total = cur.total;
+        let (session, id) = (cur.wait.session_id.clone(), cur.wait.id.clone());
+        let d = self.ask_draft(&id);
+        d.answers.push(answer);
+        d.cursor = 0;
+        d.chosen.clear();
+        if d.answers.len() >= total {
+            d.sent = true;
+            let answers = d.answers.clone();
+            self.api(ApiCall::Answer {
+                session,
+                id,
+                answers,
+            });
+        }
+    }
+
+    fn ask_key(&mut self, ev: &KeyEvent, name: &str) {
+        let Some(cur) = self.ask_current() else {
+            return;
+        };
+        let n_opts = cur.options().len();
+        match name {
+            "up" => self.ask_move(false),
+            "down" => self.ask_move(true),
+            "enter" => self.ask_confirm(false),
+            "space" if n_opts > 0 => self.ask_pick(cur.draft.cursor),
+            _ => {
+                let digit = name
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|_| n_opts > 0 && name.len() == 1);
+                if let Some(d) = digit {
+                    // 1..9 are options 1..9, 0 is the tenth
+                    self.ask_pick((d + 9) % 10);
+                } else if keys::printable(ev).is_some() && cur.allows_text() {
+                    // typing starts the free-text answer in the composer
+                    self.ui.focus = Focus::Composer;
+                    self.composer_key(ev, name);
+                }
+            }
+        }
     }
 
     /// Waits anywhere else (other sessions).
@@ -2071,6 +2281,7 @@ impl App {
                     });
                 }
             }
+            "waiting.submit_answers" => self.ask_confirm(false),
             "waiting.next" => self.ui.wait_idx += 1,
             "waiting.prev" => self.ui.wait_idx = self.ui.wait_idx.saturating_sub(1),
             "waiting.focus" => {
@@ -2228,6 +2439,9 @@ impl App {
                 }
             }
         }
+        if self.ask_current().is_some() {
+            return self.ask_confirm(true);
+        }
         if !self.writable() {
             self.toast(Level::Warning, READ_ONLY);
             return;
@@ -2367,6 +2581,10 @@ impl App {
                 }
             }
             Err(e) => {
+                if matches!(done.call, ApiCall::Answer { .. }) {
+                    // the question still waits: start the answers over
+                    self.ui.ask = AskDraft::default();
+                }
                 if let Some((session, text)) = done.call.draft() {
                     let (session, text) = (session.map(str::to_owned), text.to_owned());
                     self.restore_draft(session.as_deref(), &text);
@@ -2550,7 +2768,7 @@ impl App {
             Focus::Composer => self.composer_key(&ev, &name),
             Focus::Timeline => self.timeline_key(&name),
             Focus::Sidebar => self.sidebar_key(&name),
-            Focus::Waiting => self.waiting_key(&name),
+            Focus::Waiting => self.waiting_key(&ev, &name),
             Focus::ToggleLeft | Focus::ToggleRight => {
                 if matches!(name.as_str(), "enter" | "space") {
                     let side = if self.ui.focus == Focus::ToggleLeft {
@@ -3118,9 +3336,12 @@ impl App {
         }
     }
 
-    fn waiting_key(&mut self, name: &str) {
+    fn waiting_key(&mut self, ev: &KeyEvent, name: &str) {
         if let Some(cmd) = self.lookup("waiting", name) {
             return self.run_command(&cmd);
+        }
+        if self.ask_current().is_some() && !matches!(name, "left" | "right") {
+            return self.ask_key(ev, name);
         }
         if name == "left" {
             self.execute("waiting.prev");
@@ -3459,7 +3680,16 @@ impl App {
                     WaitButton::Allow => "waiting.allow_once",
                     WaitButton::Deny => "waiting.deny",
                     WaitButton::Next => "waiting.next",
+                    WaitButton::Submit => "waiting.submit_answers",
                 });
+            }
+            Target::WaitOption(i) => {
+                self.ui.focus = Focus::Waiting;
+                if self.writable() {
+                    self.ask_pick(i);
+                } else {
+                    self.toast(Level::Warning, READ_ONLY);
+                }
             }
             Target::Stop => self.run_command("session.interrupt"),
             Target::Continue => self.run_command("session.continue"),
@@ -3522,6 +3752,7 @@ impl ActionDone {
             ApiCall::Rename { .. } => "Rename failed",
             ApiCall::Delete { .. } => "Delete failed",
             ApiCall::Reply { .. } => "Reply failed",
+            ApiCall::Answer { .. } => "Answer failed",
             ApiCall::SetModel { .. } => "Model change failed",
             ApiCall::SetAgent { .. } => "Agent change failed",
             ApiCall::SetEffort { .. } => "Effort change failed",

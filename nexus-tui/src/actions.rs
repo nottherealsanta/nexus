@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::api::{CoreApi, Outcome, RequestId};
 use crate::discovery;
@@ -48,6 +48,13 @@ pub enum ApiCall {
         session: String,
         id: String,
         allow: bool,
+    },
+    /// Answer a pending `ask` request: one `{question_id, selected, text}` per
+    /// question (see `docs/api.md`), submitted once with its own key.
+    Answer {
+        session: String,
+        id: String,
+        answers: Vec<Value>,
     },
     /// Apply from the next model call; an active call keeps its configuration.
     SetModel {
@@ -92,6 +99,7 @@ impl ApiCall {
             ApiCall::Delete { .. } => "Deleted",
             ApiCall::Reply { allow: true, .. } => "Allowed",
             ApiCall::Reply { .. } => "Denied",
+            ApiCall::Answer { .. } => "Answered",
             ApiCall::SetModel { .. } => "Model changed from the next call",
             ApiCall::SetAgent { .. } => "Agent changed from the next call",
             ApiCall::SetEffort { .. } => "Effort changed from the next call",
@@ -214,6 +222,17 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                     .map_err(e)?,
             )?;
         }
+        ApiCall::Answer {
+            session,
+            id,
+            answers,
+        } => {
+            conflict(
+                api.reply_question(session, id, Value::Array(answers.clone()), &key)
+                    .await
+                    .map_err(e)?,
+            )?;
+        }
         ApiCall::SetModel {
             session,
             model,
@@ -299,6 +318,63 @@ mod tests {
             .draft(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn an_answer_is_one_keyed_post_with_every_question() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut chunk).await.unwrap();
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let want: usize = head
+                        .to_ascii_lowercase()
+                        .lines()
+                        .find_map(|l| {
+                            l.strip_prefix("content-length:")
+                                .map(|v| v.trim().parse().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if body.len() >= want {
+                        break;
+                    }
+                }
+            }
+            sock.write_all(b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&buf).to_string()
+        });
+        let answers = vec![
+            json!({"question_id": "db", "selected": ["pg"], "text": null}),
+            json!({"question_id": "notes", "selected": [], "text": "small"}),
+        ];
+        let call = ApiCall::Answer {
+            session: "ses_1".into(),
+            id: "qst_1".into(),
+            answers: answers.clone(),
+        };
+        assert_eq!(call.done_label(), "Answered");
+        assert_eq!(call.draft(), None);
+        let api = Http::new(&url, "tok").ok().map(CoreApi::new);
+        let done = run(api, call).await;
+        assert!(done.result.is_ok(), "{done:?}");
+        let seen = server.await.unwrap();
+        assert!(
+            seen.starts_with("POST /api/session/ses_1/question/qst_1 "),
+            "{seen}"
+        );
+        assert!(seen.to_ascii_lowercase().contains("idempotency-key:"));
+        let body = seen.split_once("\r\n\r\n").unwrap().1;
+        let sent: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(sent, json!({ "answers": answers }));
     }
 
     #[tokio::test]

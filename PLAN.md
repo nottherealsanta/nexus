@@ -170,8 +170,6 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
    - Staged and unstaged Git split; clicking a file opens its diff (the Core
      route exists, and `git.open_diff` is still marked `blocked_core` in the
      manifest).
-4. **Waiting card**
-   - Answer `ask` questions in the TUI (NSH already can).
 5. **Files**
    - Syntax highlighting (the library is still undecided).
    - `/` search and load-more in the file view.

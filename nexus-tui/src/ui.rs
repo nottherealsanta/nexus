@@ -294,6 +294,7 @@ pub enum WaitButton {
     Allow,
     Deny,
     Next,
+    Submit,
 }
 
 /// Everything the mouse can hit. Registered by the renderer as it draws.
@@ -327,6 +328,8 @@ pub enum Target {
     /// The Files tree root line (project checkout / session worktree).
     FilesRoot,
     Wait(WaitButton),
+    /// Option `i` of the question the waiting card asks.
+    WaitOption(usize),
     Stop,
     Continue,
     BannerAction(usize),
