@@ -148,6 +148,11 @@ checked in the real app (TUI screenshots through `nexus-tui/tools/webterm`).
 
 ### Step 12 — TUI polish (current)
 
+**Design pass (2026-10-28):** [DESIGN_PLAN.md](DESIGN_PLAN.md) holds the decided look for
+both clients (the user's picks from the `nexus-design-mockup/` chooser). Increments I0–I4
+have landed (chrome band, header tabs, timeline rhythm, Markdown and diffs; NSH also the
+composer). I5 (TUI composer) through I10 remain; see DESIGN_PLAN.md "Progress".
+
 Landed 2026-10-28 (see the Done table): icon tabs in the sidebar, the
 effective model everywhere instead of "default model", a context preview in
 the new-session view, plain one-line diagnostics, `/` and `@` completion.

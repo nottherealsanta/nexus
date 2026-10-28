@@ -1,6 +1,6 @@
 # Design plan: a polished TUI and NSH
 
-Status: decided 2026-10-28. The user chose option A for every decision
+Status: decided 2026-10-28; I0–I4 landed for both clients (see Progress). The user chose option A for every decision
 (`nexus-design-mockup/choices.json`), with the notes folded into D01, D05, D10, D11,
 D13, D15 and D18 below. Mock-ups for every decision are in the temporary
 folder [`nexus-design-mockup/`](nexus-design-mockup/README.md) (open
@@ -551,6 +551,58 @@ is written for the recommended options. Where a choice differs, the matching
 decision above and its increment below are rewritten before the work starts.
 Every non-recommended option already has a mock-up, so a different choice changes
 only which recipe is followed, not the order of the increments.
+
+## Progress (2026-10-28, handed back to the user)
+
+Work stopped at the user's request after I4. State on `nexus10`:
+
+| Increment | TUI | NSH | Commit |
+| --- | --- | --- | --- |
+| I0 tooling | done: `--dump-frame --svg --keys --name`, `tools/shots.sh`, `seed.sh` honours `NEXUS_CMD` | — | `49fe129` |
+| I1 tokens, scrim, chrome | done (`paint::scrim`, `border.strong`, chrome surfaces, edge `│` only in ANSI-16/mono) | done (bg-sidebar chrome, `border-strong` from gen.py) | `fea3b41` |
+| I2 header band and tabs | done (icons in the band, session tabs restyled, child crumbs, D17 widths) | done (icons in the header, tabs on the reading column) | `fea3b41` |
+| I3 timeline rhythm | done (band, footer without status, durations, Thought rows, verb tree, detail box, sticky header, header status) | done (user card, footer, verb icons, detail box, thought rows, sticky bar) | `f83653c` |
+| I4 Markdown, fences, diffs | done (`diff.rs` split ≥ 110 and unified; fences; inline code) | done (fence cards, `diff.tsx`) | `12dfa97` |
+| I5 composer | **started**: only `paint::meter` (the `╱` meter helper) | done (soft card, no rail/band, meter, Working row, card-wide completion, strip) | `12dfa97` + this commit |
+| I6 sidebars | not started | not started | |
+| I7 modal recipe | not started | not started | |
+| I8 waiting card, alerts | not started | not started | |
+| I9 new-session view | not started | not started | |
+| I10 files, narrow, states | not started | not started | |
+
+**Next, in order:** TUI I5 (remove the rail and status band from `draw_composer`, soft card,
+`paint::meter` on the control row, Working row, borderless card-wide completion, project
+strip; also fix the split-diff wrap: continuation rows of a wrapped line in `diff.rs` start
+at the `+`/`-` column instead of the text column), then I6–I10 for both clients.
+
+**Known gaps from the landed increments:**
+- TUI: OSC 8 links and `path:line` links not done (ratatui cells carry no escapes; needs hit
+  regions). The fence copy button reads `copy` (no `c` key in the manifest). Message tags
+  (`steer`, `queued`…) render through a helper but Core sends none. The live `Working`
+  shimmer and the narrow footer wrap are covered by tests only (the seed has neither).
+  Edit/patch diffs have no line numbers when the tool input has none. The Git diff view has
+  no screenshot (the seed workspace is not a Git repo). Split-diff wrap bug above.
+- TUI dependency: `ratatui-markdown` was dropped in I4 (unused; `pulldown-cmark` parses).
+- NSH: nothing has been type-checked or run against the real runtime. The installed `nsh`
+  is 0.2.0 and lacks exports the app already used before this work (`windowSize`,
+  `colorScheme`, `keymap`, `Clipboard`, `Input`…). `nsh check` stays at the 29-error
+  baseline; `nsh test` and `nsh package` fail on the same missing exports. Update the NSH
+  toolchain, then run `nsh check`, `nsh test --target web` and the e2e shots over all
+  NSH commits above. NSH also lacks: thought durations (parts carry no timing), message
+  tags, the live shimmer; the split diff's empty side is a flat fill, not a hatch; the
+  sticky bar's line count is an estimate and its layout coordinates need a runtime check.
+
+**How to continue:**
+- Visual review without node: `cd nexus-tui && NEXUS_CMD=../nexus-core/.venv/bin/nexus
+  tools/shots.sh /tmp/nx-root /tmp/nx-shots` (docs/development.md, "Visual review of the
+  TUI"). Compare with `nexus-design-mockup/shots/tui/`.
+- `nexus-tui/src/theme.rs` is blocked by the organization's web filter for Claude (it reads
+  a method call in that file as a `.bg` URL; correlation ID
+  `9bc636aa-173c-435d-a595-58d9794d349b`). Agents worked from the Theme API's call sites
+  and put new helpers in `paint.rs`; no `theme.rs` edit was needed so far.
+- Machine notes: Homebrew is partly broken (node's `libuv`, `openssl@3`, `glib`). The Core
+  venv was rebuilt on the python.org Python 3.14 (`uv sync --python
+  /usr/local/bin/python3.14`); uv was updated to 0.13.6.
 
 ## Implementation
 

@@ -49,6 +49,40 @@ pub fn scrim(theme: &Theme, buf: &mut Buffer, area: Rect) {
     }
 }
 
+/// The context meter (DESIGN_PLAN.md D11): `cells` hatch cells, the first
+/// `ceil(cells * fraction)` painted with `filled` and the rest with `empty`.
+/// Mono and ASCII use `/` for filled and `.` for empty cells so the two stay
+/// distinguishable without colour. Returns how many cells were filled.
+pub fn meter(
+    theme: &Theme,
+    buf: &mut Buffer,
+    (x, y): (u16, u16),
+    cells: u16,
+    fraction: f64,
+    filled: ratatui::style::Style,
+    empty: ratatui::style::Style,
+) -> u16 {
+    let fraction = if fraction.is_finite() {
+        fraction.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let on = ((f64::from(cells) * fraction).ceil() as u16).min(cells);
+    let plain = theme.opts.ascii || theme.mono();
+    let (full_glyph, empty_glyph) = if plain { ("/", ".") } else { ("╱", "╱") };
+    for i in 0..cells {
+        let (glyph, style) = if i < on {
+            (full_glyph, filled)
+        } else {
+            (empty_glyph, empty)
+        };
+        if x + i < buf.area.right() && y < buf.area.bottom() {
+            buf.set_string(x + i, y, glyph, style);
+        }
+    }
+    on
+}
+
 /// Verb glyphs for tool rows (DESIGN_PLAN.md D06), as `(name, unicode, ascii)`.
 /// Mirrors `[glyphs.verb]` in `interface/theme.toml` (a test compares them).
 pub const VERBS: [(&str, &str, &str); 8] = [
