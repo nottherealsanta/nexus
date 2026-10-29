@@ -13,6 +13,11 @@ import { ApiError, newKey, request } from "./core/transport";
 import { Message } from "./core/api";
 import { imageDrafts } from "./images";
 import { disabledKey, selectedSkillCounts, setDisabledTool, shouldInstallRequestedDirectly, toggleDisabledTool } from "./skills-mcp";
+import { speakAnswer, speechPlaying, stopSpeaking } from "./speech";
+import { cancelDictation, isDictationBusy, startDictation, stopDictation } from "./dictation";
+import { appendTranscript } from "./dictation-logic";
+import { dictationPhase } from "./voice-state";
+import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
 
 export interface Cmd {
   id: string; title: string; category: string; slash?: string; keys?: { tui?: string; nsh?: string };
@@ -118,6 +123,7 @@ export function toggleRight(w: number) {
 export function openSettings() {
   if (centre() === "settings") { centre.set(previousCentre()); return; }
   previousCentre.set(centre()); centre.set("settings"); if (isNarrow()) drawer.set(null);
+  refreshVoiceOnSettingsOpen();
 }
 on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsSection.set("providers"); toast("info", "Choose Sign in in Provider settings."); }, true);
 on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsSection.set("providers"); toast("info", "Choose Sign out in Provider settings."); }, true);
@@ -424,6 +430,35 @@ on("session.unarchive", () => archive(undefined, true), true);
 on("session.delete", () => askDelete(), true);
 on("session.interrupt", interrupt, true);
 on("session.continue", continueSession, true);
+on("session.speak", async () => {
+  const session = viewed();
+  if (!session) return;
+  try { await speakAnswer(session.id); }
+  catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+}, true);
+on("session.speak_stop", async () => {
+  try { await stopSpeaking(); }
+  catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+});
+function dictateFromComposer() {
+  const phase = dictationPhase();
+  if (phase === "recording") { void stopDictation(); return; }
+  if (phase !== "idle") return;
+  if (!live()) { toast("warning", "Core is not connected: dictation is unavailable."); return; }
+  if (viewed()?.archived) { toast("warning", "Unarchive this session before dictating."); return; }
+  const target = draftKey();
+  startDictation((transcript) => {
+    draft.update((all) => ({ ...all, [target]: appendTranscript(all[target] ?? "", transcript) }));
+  });
+}
+// The manifest currently has only the deferred `composer.dictate` command. Keep the
+// requested runtime handler registered by its final ID so the mic button can invoke it
+// now and the shared manifest can expose it when that command lands.
+on("voice.dictate", dictateFromComposer, true);
+on("voice.download_stt", () => askVoiceDownload("stt"), true);
+on("voice.remove_stt", () => askVoiceRemove("stt"), true);
+on("voice.download_tts", () => askVoiceDownload("tts"), true);
+on("voice.remove_tts", () => askVoiceRemove("tts"), true);
 on("session.copy_id", () => { const s = viewed(); if (s) void Clipboard.writeText(s.id).then(() => toast("success", "Copied session id")); });
 on("session.open_inspector", () => {
   const s = viewed();
@@ -553,8 +588,14 @@ export interface Availability { ok: boolean; reason?: string }
 export function availability(c: Cmd): Availability {
   if (c.status === "blocked_core") return { ok: false, reason: BLOCKED[c.id] ?? `Needs a Core increment (PLAN.md Step 12a). ${c.unavailable_reason ?? ""}`.trim() };
   if (c.status === "deferred") return { ok: false, reason: `Deferred: ${c.unavailable_reason ?? "not built yet"}` };
+  const voiceReason = voiceCommandReason(c.id);
+  if (voiceReason) return { ok: false, reason: voiceReason };
   const h = handlers.get(c.id);
-  const whenOk = c.when.every(term);
+  // Playback is a local NSH state, not a shared manifest term: TUI consumes the
+  // same manifest but owns its independent rodio speaking state.
+  const whenOk = c.id === "session.speak_stop"
+    ? speechPlaying()
+    : c.when.every(term) && (c.id !== "session.speak" || !speechPlaying());
   if (!whenOk) return { ok: false, reason: c.unavailable_reason ?? "Not available right now." };
   if (!h) return { ok: false, reason: BLOCKED[c.id] ?? "Not built in this NSH increment yet." };
   if (h.mutates && !live()) return { ok: false, reason: "Core is not connected: the view is read-only." };
@@ -562,6 +603,7 @@ export function availability(c: Cmd): Availability {
 }
 
 export async function run(id: string) {
+  if (id === "voice.dictate") { await handlers.get(id)?.run(); return; }
   const c = byId.get(id); if (!c) return;
   const a = availability(c);
   if (!a.ok) { toast("info", `${c.title}: ${a.reason}`); return; }
@@ -582,6 +624,7 @@ const GLOBAL_CONTEXTS = new Set(["global"]);
 const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d+$/.test(k);
 /** Esc is not a per-command lookup: the manifest's ordered rules decide (interface/README.md "Esc precedence"). */
 export function escape() {
+  if (isDictationBusy()) { cancelDictation(); return "dictation"; }
   if (contextDetail()) { contextDetail.set(null); return "context_detail"; }
   for (const rule of manifest.keymap.escape as readonly { id: string; when: readonly string[]; action: string }[]) {
     if (rule.when.every(term)) {

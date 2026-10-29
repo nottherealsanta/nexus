@@ -14,7 +14,7 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
-use crate::actions::{ActionDone, ApiCall};
+use crate::actions::{ActionDone, ApiCall, Done, VoiceOperation, VoiceTarget};
 use crate::api::{Message, Session};
 use crate::composer::Composer;
 use crate::keys;
@@ -32,6 +32,7 @@ pub enum Effect {
     Suspend,
     Sync(SyncCommand),
     Api(ApiCall),
+    Dictation(crate::dictation::CaptureCommand),
     Copy(String),
     PasteImage(String),
     /// Suspend the TUI, open this path in `$VISUAL`/`$EDITOR`, and resume.
@@ -112,6 +113,13 @@ pub const WIRED: &[&str] = &[
     "session.delete",
     "session.interrupt",
     "session.continue",
+    "session.speak",
+    "session.speak_stop",
+    "voice.dictate",
+    "voice.download_stt",
+    "voice.remove_stt",
+    "voice.download_tts",
+    "voice.remove_tts",
     "session.send",
     "composer.steer",
     "composer.queue",
@@ -165,6 +173,13 @@ const MUTATING: &[&str] = &[
     "session.delete",
     "session.interrupt",
     "session.continue",
+    "session.speak",
+    "session.speak_stop",
+    "voice.dictate",
+    "voice.download_stt",
+    "voice.remove_stt",
+    "voice.download_tts",
+    "voice.remove_tts",
     "session.send",
     "session.export",
     "session.change_directory",
@@ -459,6 +474,12 @@ pub struct Ui {
     pub settings_search: Composer,
     pub overlay: Option<Overlay>,
     pub dialog: Option<Dialog>,
+    pub dictation: crate::dictation::DictationUi,
+    /// Last `/api/voice` response used by Settings and download confirmations.
+    pub voice_status: Option<Value>,
+    pub voice_status_error: Option<String>,
+    pub voice_status_generation: u64,
+    pub voice_status_loading: bool,
     pub edit: Option<TextEdit>,
     pub alerts: Alerts,
     pub scroll: Scroll,
@@ -625,6 +646,11 @@ impl App {
                 settings_search: Composer::new(),
                 overlay: None,
                 dialog: None,
+                dictation: crate::dictation::DictationUi::default(),
+                voice_status: None,
+                voice_status_error: None,
+                voice_status_generation: 0,
+                voice_status_loading: false,
                 edit: None,
                 alerts: Alerts::default(),
                 scroll: Scroll::default(),
@@ -1540,6 +1566,9 @@ impl App {
         }
         if MUTATING.contains(&c.id.as_str()) && !self.writable() {
             return Err(READ_ONLY.into());
+        }
+        if let Some(reason) = self.voice_command_disabled_reason(&c.id) {
+            return Err(reason);
         }
         if c.when.iter().all(|t| self.holds(t)) {
             Ok(())
@@ -2661,6 +2690,445 @@ impl App {
         self.effects.push(Effect::Api(call));
     }
 
+    fn refresh_voice_settings_status(&mut self) {
+        self.ui.voice_status_generation = self.ui.voice_status_generation.wrapping_add(1);
+        self.ui.voice_status_error = None;
+        self.ui.voice_status_loading = true;
+        self.api(ApiCall::VoiceSettingsStatus {
+            generation: self.ui.voice_status_generation,
+        });
+    }
+
+    fn voice_status_for(&self, target: VoiceTarget) -> Option<&Value> {
+        self.ui.voice_status.as_ref()?.get(target.id())
+    }
+
+    /// Why a model action cannot run in the current status. Settings and the
+    /// command palette share this check so they cannot disagree about state.
+    pub fn voice_action_reason(&self, row_or_command: &str) -> Option<String> {
+        let (target, operation) = voice_action_spec(row_or_command)?;
+        if self.ui.voice_status_loading {
+            return Some("Voice status is refreshing; try again when it finishes.".into());
+        }
+        if let Some(error) = self.ui.voice_status_error.as_deref() {
+            return Some(format!("Voice status unavailable: {error}"));
+        }
+        let Some(status) = self.voice_status_for(target) else {
+            return Some("Voice status is loading; open Settings to refresh it.".into());
+        };
+        let state = status["state"].as_str().unwrap_or("unknown");
+        match (operation, state) {
+            (VoiceOperation::Download, "ready" | "loaded") => {
+                Some("The model is already available in the Hugging Face cache.".into())
+            }
+            (VoiceOperation::Download, "downloading") => {
+                Some("The model download is already in progress.".into())
+            }
+            (VoiceOperation::Remove, "absent") => {
+                Some("The model is not present in the Hugging Face cache.".into())
+            }
+            (VoiceOperation::Remove, "downloading") => {
+                Some("The model cannot be removed while it is downloading.".into())
+            }
+            _ => None,
+        }
+    }
+
+    fn voice_command_disabled_reason(&self, command: &str) -> Option<String> {
+        self.voice_action_reason(command)
+    }
+
+    /// Compact status shown on the voice model's Settings row.
+    pub fn voice_info_value(&self, target: VoiceTarget) -> String {
+        let Some(status) = self.voice_status_for(target) else {
+            return if self.ui.voice_status_error.is_some() {
+                "status unavailable".into()
+            } else {
+                "loading status…".into()
+            };
+        };
+        let state = status["state"].as_str().unwrap_or("unknown");
+        let size = status["size"].as_u64().map(format_bytes);
+        let progress = if state == "downloading" {
+            let done = status["bytes_done"].as_u64().unwrap_or(0);
+            let total = status["bytes_total"]
+                .as_u64()
+                .or_else(|| status["size"].as_u64())
+                .unwrap_or(0);
+            (total > 0).then(|| format!(" · {}%", (done.saturating_mul(100) / total).min(100)))
+        } else {
+            None
+        };
+        format!(
+            "{}{}{}",
+            state,
+            progress.unwrap_or_default(),
+            size.map_or_else(String::new, |size| format!(" · {size}")),
+        )
+    }
+
+    /// Full selected-row details. The renderer wraps these onto the reserved
+    /// detail lines so repository and cache paths remain inspectable.
+    pub fn voice_info_details(&self, target: VoiceTarget) -> Vec<String> {
+        let Some(status) = self.voice_status_for(target) else {
+            return vec![self.ui.voice_status_error.as_ref().map_or_else(
+                || "Waiting for GET /api/voice…".into(),
+                |error| format!("Voice status unavailable: {error}"),
+            )];
+        };
+        let text = |key: &str| {
+            status[key]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .unwrap_or("—")
+        };
+        let size = status["size"]
+            .as_u64()
+            .map_or_else(|| "—".to_owned(), format_bytes);
+        let mut lines = vec![
+            format!("State: {}", text("state")),
+            format!("Repo: {}", text("repo")),
+            format!("Size: {size}"),
+            format!("Cache path: {}", text("cache_path")),
+        ];
+        if let Some(error) = status["error"].as_str().filter(|error| !error.is_empty()) {
+            lines.push(format!("Error: {error}"));
+        }
+        if let Some(error) = self.ui.voice_status_error.as_deref() {
+            lines.push(format!("Status refresh error: {error}"));
+        }
+        lines
+    }
+
+    fn ask_voice_model_download(&mut self, target: VoiceTarget) {
+        if let Some(reason) = self.voice_action_reason(match target {
+            VoiceTarget::Stt => "voice.download_stt",
+            VoiceTarget::Tts => "voice.download_tts",
+        }) {
+            self.toast(Level::Warning, reason);
+            return;
+        }
+        let status = self
+            .voice_status_for(target)
+            .cloned()
+            .unwrap_or(Value::Null);
+        let (repo, fallback_size) = voice_defaults(target);
+        let repo = status["repo"].as_str().unwrap_or(repo).to_owned();
+        let bytes = status["size"].as_u64().unwrap_or(fallback_size);
+        self.voice_download_consent(target, repo, bytes, Confirmed::DownloadVoice(target));
+    }
+
+    fn voice_download_consent(
+        &mut self,
+        target: VoiceTarget,
+        repo: String,
+        bytes: u64,
+        action: Confirmed,
+    ) {
+        self.ui.dialog = Some(Dialog {
+            title: format!("Download {} model?", target.label()),
+            body: vec![
+                format!("Repository: {repo}"),
+                format!("Download size: approximately {}", format_bytes(bytes)),
+                "Downloads from Hugging Face into the standard cache.".into(),
+            ],
+            cancel: "Cancel".into(),
+            confirm: "Download".into(),
+            danger: false,
+            action,
+            button: 0,
+            restore: self.restore_point(),
+        });
+    }
+
+    fn ask_voice_model_remove(&mut self, target: VoiceTarget) {
+        if let Some(reason) = self.voice_action_reason(match target {
+            VoiceTarget::Stt => "voice.remove_stt",
+            VoiceTarget::Tts => "voice.remove_tts",
+        }) {
+            self.toast(Level::Warning, reason);
+            return;
+        }
+        let (default_repo, _) = voice_defaults(target);
+        let repo = self
+            .voice_status_for(target)
+            .and_then(|status| status["repo"].as_str())
+            .unwrap_or(default_repo)
+            .to_owned();
+        self.ui.dialog = Some(Dialog {
+            title: "Remove voice model?".into(),
+            body: vec![format!(
+                "Only {repo} is removed from the Hugging Face cache."
+            )],
+            cancel: "Cancel".into(),
+            confirm: "Remove".into(),
+            danger: true,
+            action: Confirmed::RemoveVoice { target, repo },
+            button: 0,
+            restore: self.restore_point(),
+        });
+    }
+
+    fn begin_dictation(&mut self) {
+        if self.ui.dictation.phase != crate::dictation::Phase::Idle {
+            return;
+        }
+        if !self.writable() {
+            self.toast(Level::Warning, READ_ONLY);
+            return;
+        }
+        let generation = self.ui.dictation.begin(self.draft_key());
+        self.api(ApiCall::VoiceStatus { generation });
+    }
+
+    fn start_capture(&mut self) {
+        if self.ui.dictation.phase != crate::dictation::Phase::Starting {
+            let Some(phase) = self
+                .ui
+                .dictation
+                .phase
+                .transition(crate::dictation::Transition::StatusReady)
+            else {
+                return;
+            };
+            self.ui.dictation.phase = phase;
+        }
+        self.launch_capture();
+    }
+
+    fn launch_capture(&mut self) {
+        self.ui.dictation.download = None;
+        self.effects
+            .push(Effect::Dictation(crate::dictation::CaptureCommand::Start {
+                generation: self.ui.dictation.generation,
+            }));
+    }
+
+    fn stop_dictation(&mut self) {
+        let Some(phase) = self
+            .ui
+            .dictation
+            .phase
+            .transition(crate::dictation::Transition::Stop)
+        else {
+            return;
+        };
+        self.ui.dictation.phase = phase;
+        self.effects
+            .push(Effect::Dictation(crate::dictation::CaptureCommand::Stop {
+                generation: self.ui.dictation.generation,
+            }));
+    }
+
+    fn cancel_dictation(&mut self) {
+        let generation = self.ui.dictation.generation;
+        if matches!(
+            self.ui.dictation.phase,
+            crate::dictation::Phase::Starting
+                | crate::dictation::Phase::Recording
+                | crate::dictation::Phase::Stopping
+        ) {
+            self.effects.push(Effect::Dictation(
+                crate::dictation::CaptureCommand::Cancel { generation },
+            ));
+        }
+        self.ui.dictation.cancel();
+    }
+
+    fn maybe_preview(&mut self) {
+        if self.ui.dictation.phase == crate::dictation::Phase::Recording
+            && self.ui.dictation.pacer.begin(self.ui.dictation.seconds)
+        {
+            self.effects.push(Effect::Dictation(
+                crate::dictation::CaptureCommand::Preview {
+                    generation: self.ui.dictation.generation,
+                },
+            ));
+        }
+    }
+
+    fn send_final_if_ready(&mut self) {
+        if !self.ui.dictation.pacer.in_flight() {
+            if let Some(wav) = self.ui.dictation.final_wav.take() {
+                let generation = self.ui.dictation.generation;
+                self.api(ApiCall::VoiceTranscribe {
+                    wav,
+                    partial: false,
+                    generation,
+                });
+            }
+        }
+    }
+
+    fn ask_voice_download(&mut self, status: &Value) {
+        let (default_repo, fallback_size) = voice_defaults(VoiceTarget::Stt);
+        let repo = status["repo"].as_str().unwrap_or(default_repo).to_owned();
+        let bytes = status["size"].as_u64().unwrap_or(fallback_size);
+        self.ui.dictation.download = Some(crate::dictation::DownloadProgress {
+            state: "consent".into(),
+            bytes_done: 0,
+            bytes_total: bytes,
+            error: None,
+        });
+        self.voice_download_consent(VoiceTarget::Stt, repo, bytes, Confirmed::DownloadStt);
+    }
+
+    fn start_downloaded_capture(&mut self) {
+        let Some(phase) = self
+            .ui
+            .dictation
+            .phase
+            .transition(crate::dictation::Transition::DownloadReady)
+        else {
+            return;
+        };
+        self.ui.dictation.phase = phase;
+        self.launch_capture();
+    }
+
+    fn apply_voice_progress(&mut self, data: &Value) {
+        let state = data["state"].as_str().unwrap_or("downloading");
+        let target = data
+            .get("target")
+            .and_then(Value::as_str)
+            .filter(|target| matches!(*target, "stt" | "tts"))
+            .or_else(|| {
+                data.get("model")
+                    .and_then(Value::as_str)
+                    .filter(|model| matches!(*model, "stt" | "tts"))
+            });
+        let Some(target) = target else { return };
+        let bytes_done = data["bytes_done"].as_u64().unwrap_or(0);
+        let bytes_total = data["bytes_total"].as_u64().unwrap_or(0);
+        let error = data["error"].as_str().map(str::to_owned);
+        if let Some(status) = self
+            .ui
+            .voice_status
+            .as_mut()
+            .and_then(|voice| voice.get_mut(target))
+            .and_then(Value::as_object_mut)
+        {
+            status.insert("state".into(), Value::String(state.to_owned()));
+            status.insert("bytes_done".into(), Value::from(bytes_done));
+            status.insert("bytes_total".into(), Value::from(bytes_total));
+            status.insert(
+                "error".into(),
+                error.clone().map_or(Value::Null, Value::String),
+            );
+            self.ui.voice_status_error = None;
+        }
+        if (state == "ready" || state == "error") && self.ui.view == View::Settings {
+            self.refresh_voice_settings_status();
+        }
+        if target != "stt" {
+            return;
+        }
+        if state == "ready" && self.ui.dictation.phase == crate::dictation::Phase::Checking {
+            // The status GET can race the completion event: honor a ready event
+            // seen while this dictation's status request is pending.
+            self.start_capture();
+            return;
+        }
+        if self.ui.dictation.phase != crate::dictation::Phase::Downloading {
+            return;
+        }
+        let progress = crate::dictation::DownloadProgress {
+            state: state.to_owned(),
+            bytes_done,
+            bytes_total,
+            error,
+        };
+        match state {
+            "ready" => self.start_downloaded_capture(),
+            "error" => {
+                let message = progress
+                    .error
+                    .unwrap_or_else(|| "Voice model download failed".into());
+                self.ui.dictation.download = None;
+                if let Some(phase) = self
+                    .ui
+                    .dictation
+                    .phase
+                    .transition(crate::dictation::Transition::Failed)
+                {
+                    self.ui.dictation.phase = phase;
+                }
+                self.toast(Level::Error, message);
+            }
+            _ => self.ui.dictation.download = Some(progress),
+        }
+    }
+
+    pub fn apply_capture_event(&mut self, event: crate::dictation::CaptureEvent) {
+        use crate::dictation::{CaptureEvent, Phase, Transition};
+        let generation = match &event {
+            CaptureEvent::Started { generation }
+            | CaptureEvent::Cancelled { generation }
+            | CaptureEvent::Failed { generation, .. }
+            | CaptureEvent::Level { generation, .. }
+            | CaptureEvent::Preview { generation, .. }
+            | CaptureEvent::Stopped { generation, .. } => *generation,
+        };
+        if generation != self.ui.dictation.generation {
+            return;
+        }
+        match event {
+            CaptureEvent::Started { .. } => {
+                if let Some(phase) = self
+                    .ui
+                    .dictation
+                    .phase
+                    .transition(Transition::CaptureStarted)
+                {
+                    self.ui.dictation.phase = phase;
+                }
+            }
+            CaptureEvent::Level { seconds, level, .. } => {
+                if self.ui.dictation.phase == Phase::Recording {
+                    self.ui.dictation.add_level(seconds, level);
+                    self.maybe_preview();
+                }
+            }
+            CaptureEvent::Preview { wav, .. } => {
+                if matches!(self.ui.dictation.phase, Phase::Recording | Phase::Stopping) {
+                    self.api(ApiCall::VoiceTranscribe {
+                        wav,
+                        partial: true,
+                        generation,
+                    });
+                }
+            }
+            CaptureEvent::Stopped { seconds, wav, .. } => {
+                if self.ui.dictation.phase == Phase::Recording {
+                    if let Some(phase) = self.ui.dictation.phase.transition(Transition::Stop) {
+                        self.ui.dictation.phase = phase;
+                    }
+                }
+                if self.ui.dictation.phase != Phase::Stopping {
+                    return;
+                }
+                if seconds < crate::dictation::MIN_SECONDS {
+                    self.ui.dictation.phase = Phase::Idle;
+                    self.ui.dictation.preview.clear();
+                    self.toast(Level::Info, "Speak for at least 0.2 seconds to dictate");
+                } else {
+                    if let Some(phase) =
+                        self.ui.dictation.phase.transition(Transition::AudioStopped)
+                    {
+                        self.ui.dictation.phase = phase;
+                    }
+                    self.ui.dictation.final_wav = Some(wav);
+                    self.send_final_if_ready();
+                }
+            }
+            CaptureEvent::Cancelled { .. } => self.cancel_dictation(),
+            CaptureEvent::Failed { message, .. } => {
+                self.ui.dictation.cancel();
+                self.toast(Level::Error, message);
+            }
+        }
+    }
+
     /// The header's tabs: the sessions opened so far that still exist, and the
     /// viewed one if it was reached some other way.
     pub fn tab_ids(&self) -> Vec<String> {
@@ -2903,6 +3371,7 @@ impl App {
                     self.effects.push(Effect::Sync(SyncCommand::Config));
                     self.effects
                         .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
+                    self.refresh_voice_settings_status();
                     self.ui.view = View::Settings;
                     self.ui.settings_search = Composer::new();
                     self.ui.settings_row = 0;
@@ -3067,6 +3536,17 @@ impl App {
                     self.api(ApiCall::Continue { session: id });
                 }
             }
+            "session.speak" => {
+                if let Some(id) = self.viewed_id().map(str::to_owned) {
+                    self.api(ApiCall::Speak { session: id });
+                }
+            }
+            "session.speak_stop" => self.api(ApiCall::SpeakStop),
+            "voice.dictate" => self.begin_dictation(),
+            "voice.download_stt" => self.ask_voice_model_download(VoiceTarget::Stt),
+            "voice.download_tts" => self.ask_voice_model_download(VoiceTarget::Tts),
+            "voice.remove_stt" => self.ask_voice_model_remove(VoiceTarget::Stt),
+            "voice.remove_tts" => self.ask_voice_model_remove(VoiceTarget::Tts),
             "session.send" | "composer.steer" => self.send(),
             "composer.queue" => self.send_mode(Some("queue")),
             "composer.newline" => self.composer().newline(),
@@ -3436,7 +3916,36 @@ impl App {
                         self.toast(Level::Warning, READ_ONLY);
                     }
                 }
+                Confirmed::DownloadStt => {
+                    if self.ui.dictation.phase == crate::dictation::Phase::Consent {
+                        if let Some(phase) = self
+                            .ui
+                            .dictation
+                            .phase
+                            .transition(crate::dictation::Transition::ConsentGranted)
+                        {
+                            self.ui.dictation.phase = phase;
+                            self.api(ApiCall::VoiceDownload {
+                                generation: self.ui.dictation.generation,
+                            });
+                        }
+                    }
+                }
+                Confirmed::DownloadVoice(target) => {
+                    self.api(ApiCall::VoiceModel {
+                        target,
+                        operation: VoiceOperation::Download,
+                    });
+                }
+                Confirmed::RemoveVoice { target, .. } => {
+                    self.api(ApiCall::VoiceModel {
+                        target,
+                        operation: VoiceOperation::Remove,
+                    });
+                }
             }
+        } else if d.action == Confirmed::DownloadStt {
+            self.cancel_dictation();
         }
     }
 
@@ -3715,6 +4224,7 @@ impl App {
                             data["error"].as_str().unwrap_or("unknown error")
                         ),
                     ),
+                    "voice.progress" => self.apply_voice_progress(&data),
                     _ => {}
                 }
             }
@@ -3796,6 +4306,33 @@ impl App {
     }
 
     pub fn apply_done(&mut self, done: ActionDone) {
+        match done.call.clone() {
+            ApiCall::VoiceStatus { generation } => {
+                self.apply_voice_status(generation, done.result);
+                return;
+            }
+            ApiCall::VoiceSettingsStatus { generation } => {
+                self.apply_voice_settings_status(generation, done.result);
+                return;
+            }
+            ApiCall::VoiceDownload { generation } => {
+                self.apply_voice_download(generation, done.result);
+                return;
+            }
+            ApiCall::VoiceModel { target, operation } => {
+                self.apply_voice_model_action(target, operation, done.result);
+                return;
+            }
+            ApiCall::VoiceTranscribe {
+                partial,
+                generation,
+                ..
+            } => {
+                self.apply_transcription(generation, partial, done.result);
+                return;
+            }
+            _ => {}
+        }
         let name = done.call_name();
         if let ApiCall::LearnPreview {
             project,
@@ -3927,6 +4464,255 @@ impl App {
                 self.toast(Level::Error, format!("{name}: {e}"));
             }
         }
+    }
+
+    fn apply_voice_settings_status(&mut self, generation: u64, result: Result<Done, String>) {
+        if generation != self.ui.voice_status_generation {
+            return;
+        }
+        self.ui.voice_status_loading = false;
+        match result {
+            Ok(done) => match done.voice.filter(|voice| voice.is_object()) {
+                Some(voice) => {
+                    self.ui.voice_status = Some(voice);
+                    self.ui.voice_status_error = None;
+                }
+                None => {
+                    let error = "Core returned no voice status".to_owned();
+                    self.ui.voice_status_error = Some(error.clone());
+                    self.toast(Level::Warning, format!("Voice status: {error}"));
+                }
+            },
+            Err(error) => {
+                self.ui.voice_status_error = Some(error.clone());
+                self.toast(Level::Warning, format!("Voice status: {error}"));
+            }
+        }
+    }
+
+    fn apply_voice_model_action(
+        &mut self,
+        target: VoiceTarget,
+        operation: VoiceOperation,
+        result: Result<Done, String>,
+    ) {
+        match result {
+            Ok(done) => {
+                let response = done.voice.unwrap_or(Value::Null);
+                self.merge_voice_status(target, &response);
+                if response["state"].as_str() == Some("error") {
+                    self.toast(
+                        Level::Error,
+                        response["error"]
+                            .as_str()
+                            .unwrap_or("Voice model action failed")
+                            .to_owned(),
+                    );
+                } else {
+                    match operation {
+                        VoiceOperation::Download => self.toast(
+                            Level::Info,
+                            format!(
+                                "Downloading {} model; progress is shown in Settings",
+                                target.label()
+                            ),
+                        ),
+                        VoiceOperation::Remove => {
+                            let repo = response["repo"]
+                                .as_str()
+                                .or_else(|| {
+                                    self.voice_status_for(target)
+                                        .and_then(|status| status["repo"].as_str())
+                                })
+                                .unwrap_or("voice model");
+                            let freed = response["freed"].as_u64().map_or_else(
+                                || format!("Removed {repo} from the Hugging Face cache"),
+                                |bytes| {
+                                    format!(
+                                        "Removed {repo} from the Hugging Face cache · freed {}",
+                                        format_bytes(bytes)
+                                    )
+                                },
+                            );
+                            self.toast(Level::Success, freed);
+                        }
+                    }
+                }
+            }
+            Err(error) => self.toast(
+                Level::Error,
+                format!("{} model action failed: {error}", target.label()),
+            ),
+        }
+        // A download can start asynchronously and a remove can race another
+        // client. Always read Core's authoritative state after the response.
+        self.refresh_voice_settings_status();
+    }
+
+    fn merge_voice_status(&mut self, target: VoiceTarget, response: &Value) {
+        let update = response
+            .get("status")
+            .filter(|status| status.is_object())
+            .unwrap_or(response);
+        let Some(fields) = update.as_object() else {
+            return;
+        };
+        let voice = self.ui.voice_status.get_or_insert_with(|| {
+            json!({
+                "stt": {},
+                "tts": {},
+            })
+        });
+        let Some(model) = voice.get_mut(target.id()).and_then(Value::as_object_mut) else {
+            return;
+        };
+        for (key, value) in fields {
+            if key != "freed" {
+                model.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    fn apply_voice_status(&mut self, generation: u64, result: Result<Done, String>) {
+        use crate::dictation::{DownloadProgress, Phase, Transition};
+        if generation != self.ui.dictation.generation || self.ui.dictation.phase != Phase::Checking
+        {
+            return;
+        }
+        let status = match result {
+            Ok(done) => done.voice.unwrap_or(Value::Null)["stt"].clone(),
+            Err(error) => {
+                self.ui.dictation.phase = Phase::Idle;
+                self.toast(Level::Error, format!("Voice status failed: {error}"));
+                return;
+            }
+        };
+        match status["state"].as_str().unwrap_or("error") {
+            "ready" | "loaded" => self.start_capture(),
+            "absent" => {
+                if let Some(phase) = self.ui.dictation.phase.transition(Transition::StatusAbsent) {
+                    self.ui.dictation.phase = phase;
+                    self.ask_voice_download(&status);
+                }
+            }
+            "downloading" => {
+                if let Some(phase) = self
+                    .ui
+                    .dictation
+                    .phase
+                    .transition(Transition::StatusDownloading)
+                {
+                    self.ui.dictation.phase = phase;
+                    self.ui.dictation.download = Some(DownloadProgress {
+                        state: "downloading".into(),
+                        bytes_done: status["bytes_done"].as_u64().unwrap_or(0),
+                        bytes_total: status["size"].as_u64().unwrap_or(0),
+                        error: None,
+                    });
+                    self.toast(Level::Info, "Speech model download is already in progress");
+                }
+            }
+            "runtime_missing" | "unsupported" | "error" => {
+                self.ui.dictation.phase = Phase::Idle;
+                self.toast(
+                    Level::Warning,
+                    status["error"]
+                        .as_str()
+                        .unwrap_or("Speech recognition is not available on this platform"),
+                );
+            }
+            other => {
+                self.ui.dictation.phase = Phase::Idle;
+                self.toast(Level::Warning, status["error"].as_str().unwrap_or(other));
+            }
+        }
+    }
+
+    fn apply_voice_download(&mut self, generation: u64, result: Result<Done, String>) {
+        use crate::dictation::Phase;
+        if generation != self.ui.dictation.generation
+            || self.ui.dictation.phase != Phase::Downloading
+        {
+            return;
+        }
+        match result {
+            Ok(done) => {
+                let info = done.voice.unwrap_or(Value::Null);
+                if info["state"].as_str() == Some("error") {
+                    let error = info["error"]
+                        .as_str()
+                        .unwrap_or("STT model download failed");
+                    self.ui.dictation.phase = Phase::Idle;
+                    self.ui.dictation.download = None;
+                    self.toast(Level::Error, error);
+                } else {
+                    self.toast(
+                        Level::Info,
+                        "Downloading speech model; progress is shown above the composer",
+                    );
+                }
+            }
+            Err(error) => {
+                self.ui.dictation.phase = Phase::Idle;
+                self.ui.dictation.download = None;
+                self.toast(
+                    Level::Error,
+                    format!("Voice model download failed: {error}"),
+                );
+            }
+        }
+    }
+
+    fn apply_transcription(
+        &mut self,
+        generation: u64,
+        partial: bool,
+        result: Result<Done, String>,
+    ) {
+        use crate::dictation::{Phase, Transition};
+        if generation != self.ui.dictation.generation {
+            return;
+        }
+        if partial {
+            self.ui.dictation.pacer.finish();
+            match result {
+                Ok(done) => {
+                    if let Some(text) = done.transcript.filter(|text| !text.trim().is_empty()) {
+                        self.ui.dictation.preview = text;
+                    }
+                }
+                Err(error) if error == "voice_busy" => {}
+                Err(error) => {
+                    self.toast(Level::Warning, format!("Dictation preview failed: {error}"))
+                }
+            }
+            if self.ui.dictation.final_wav.is_some() {
+                self.send_final_if_ready();
+            } else {
+                self.maybe_preview();
+            }
+            return;
+        }
+        if self.ui.dictation.phase != Phase::Transcribing {
+            return;
+        }
+        match result {
+            Ok(done) => {
+                if let Some(text) = done.transcript.filter(|text| !text.trim().is_empty()) {
+                    insert_transcript(&mut self.ui.drafts, &self.ui.dictation.draft_key, &text);
+                    self.toast(Level::Success, "Dictation added to the composer");
+                } else {
+                    self.toast(Level::Info, "No speech was recognized");
+                }
+            }
+            Err(error) => self.toast(Level::Error, format!("Dictation failed: {error}")),
+        }
+        if let Some(phase) = self.ui.dictation.phase.transition(Transition::Finished) {
+            self.ui.dictation.phase = phase;
+        }
+        self.ui.dictation.preview.clear();
+        self.ui.dictation.final_wav = None;
+        self.ui.dictation.pacer.finish();
     }
 
     fn apply_learn_preview(
@@ -4334,6 +5120,24 @@ impl App {
 
     fn handle_key_inner(&mut self, ev: KeyEvent) {
         let Some(name) = keys::name(&ev) else { return };
+        if self.ui.dialog.is_none() && self.ui.dictation.phase != crate::dictation::Phase::Idle {
+            match name.as_str() {
+                "enter" => {
+                    if matches!(
+                        self.ui.dictation.phase,
+                        crate::dictation::Phase::Starting | crate::dictation::Phase::Recording
+                    ) {
+                        self.stop_dictation();
+                    }
+                    return;
+                }
+                "esc" if self.ui.dictation.phase != crate::dictation::Phase::Consent => {
+                    self.cancel_dictation();
+                    return;
+                }
+                _ => {}
+            }
+        }
         if self.ui.focus == Focus::Composer
             && self.ui.overlay.is_none()
             && self.ui.dialog.is_none()
@@ -4498,6 +5302,7 @@ impl App {
                         "o" | "b" => Some("session.switch"),
                         "g" => Some("agent.change"),
                         "s" => Some("app.settings"),
+                        "v" => Some("voice.dictate"),
                         "l" => Some("sidebar.right.toggle"),
                         "r" => Some("app.reconnect"),
                         "?" => Some("app.help_keys"),
@@ -5714,6 +6519,12 @@ impl App {
                 | "models.catalog"
                 | "models.refresh"
                 | "agents.list"
+                | "dictation.stt_model"
+                | "dictation.stt_download"
+                | "dictation.stt_remove"
+                | "dictation.tts_model"
+                | "dictation.tts_download"
+                | "dictation.tts_remove"
                 | "about.versions"
                 | "about.daemon"
                 | "keybindings.list"
@@ -5731,20 +6542,57 @@ impl App {
         else {
             return None;
         };
-        if let Some(why) = row
-            .unavailable_reason
-            .clone()
-            .or(section_reason)
-            .filter(|_| !matches!(row.id.as_str(), "providers.sign_in" | "providers.sign_out"))
-        {
+        if let Some(why) = self.settings_reason(&row, section_reason.as_deref()) {
             self.toast(Level::Warning, format!("{}: {why}", row.label));
             return None;
         }
-        if !Self::settings_wired(&row.id) {
-            self.toast(Level::Warning, format!("{}: {NOT_WIRED}", row.label));
-            return None;
-        }
         Some(*row)
+    }
+
+    /// Disabled reason shared by the Settings renderer and its key handlers.
+    pub fn settings_reason(
+        &self,
+        row: &crate::manifest::Row,
+        section_reason: Option<&str>,
+    ) -> Option<String> {
+        if let Some(reason) = row
+            .unavailable_reason
+            .as_deref()
+            .or(section_reason)
+            .filter(|_| !matches!(row.id.as_str(), "providers.sign_in" | "providers.sign_out"))
+        {
+            return Some(reason.to_owned());
+        }
+        if !Self::settings_wired(&row.id) {
+            return Some(NOT_WIRED.into());
+        }
+        self.voice_action_reason(&row.id)
+    }
+
+    /// Supporting detail for the selected Settings row. Voice status fields
+    /// come from Core, not local cache inspection.
+    pub fn settings_details(
+        &self,
+        row: &crate::manifest::Row,
+        section_reason: Option<&str>,
+    ) -> Vec<String> {
+        if let Some(reason) = self.settings_reason(row, section_reason) {
+            return vec![reason];
+        }
+        match row.id.as_str() {
+            "dictation.stt_model" => self.voice_info_details(VoiceTarget::Stt),
+            "dictation.tts_model" => self.voice_info_details(VoiceTarget::Tts),
+            "dictation.stt_download" => {
+                vec!["Review the repository and size before downloading from Hugging Face.".into()]
+            }
+            "dictation.tts_download" => {
+                vec!["Review the repository and size before downloading from Hugging Face.".into()]
+            }
+            "dictation.stt_remove" | "dictation.tts_remove" => {
+                vec!["Confirms removal of only this repository from the Hugging Face cache.".into()]
+            }
+            _ => vec![row.note.clone()],
+        }
     }
 
     /// Left/right: step a choice or flip a toggle.
@@ -5863,6 +6711,10 @@ impl App {
                     self.toast(Level::Warning, "Configuration is not loaded");
                 }
             }
+            "dictation.stt_download"
+            | "dictation.stt_remove"
+            | "dictation.tts_download"
+            | "dictation.tts_remove" => {}
             "appearance.timeline_detail" => self.set_detail(self.ui.detail.step(step)),
             "appearance.sidebar" => {
                 let modes = [(true, false), (true, true), (false, false)];
@@ -5904,6 +6756,10 @@ impl App {
             | "notifications.terminal"
             | "appearance.timeline_detail" => self.settings_change(index, 1),
             "mcp.full_definitions" | "mcp.max_listed_tools" => self.settings_change(index, 1),
+            "dictation.stt_download" => self.run_command("voice.download_stt"),
+            "dictation.stt_remove" => self.run_command("voice.remove_stt"),
+            "dictation.tts_download" => self.run_command("voice.download_tts"),
+            "dictation.tts_remove" => self.run_command("voice.remove_tts"),
             "appearance.details" => {
                 self.ui.right_open = !self.ui.right_open;
                 self.ui.right_chosen = true;
@@ -6685,6 +7541,16 @@ impl ActionDone {
             ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. } => "Send failed",
             ApiCall::NewSession { .. } => "New session failed",
             ApiCall::Continue { .. } => "Continue failed",
+            ApiCall::Speak { .. } => "Speak failed",
+            ApiCall::SpeakStop => "Stop failed",
+            ApiCall::VoiceStatus { .. } => "Voice status failed",
+            ApiCall::VoiceSettingsStatus { .. } => "Voice status failed",
+            ApiCall::VoiceDownload { .. } => "Voice model download failed",
+            ApiCall::VoiceModel { operation, .. } => match operation {
+                VoiceOperation::Download => "Voice model download failed",
+                VoiceOperation::Remove => "Voice model removal failed",
+            },
+            ApiCall::VoiceTranscribe { .. } => "Dictation failed",
             ApiCall::Interrupt { .. } => "Interrupt failed",
             ApiCall::Archive { .. } => "Archive failed",
             ApiCall::Rename { .. } => "Rename failed",
@@ -6709,6 +7575,62 @@ pub fn now_secs() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
+}
+
+pub(crate) fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.1} GB", bytes as f64 / 1_000_000_000.0)
+    } else if bytes >= 1_000_000 {
+        format!("{:.0} MB", bytes as f64 / 1_000_000.0)
+    } else if bytes >= 1_000 {
+        format!("{:.0} KB", bytes as f64 / 1_000.0)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+fn voice_action_spec(id: &str) -> Option<(VoiceTarget, VoiceOperation)> {
+    match id {
+        "dictation.stt_download" | "voice.download_stt" => {
+            Some((VoiceTarget::Stt, VoiceOperation::Download))
+        }
+        "dictation.stt_remove" | "voice.remove_stt" => {
+            Some((VoiceTarget::Stt, VoiceOperation::Remove))
+        }
+        "dictation.tts_download" | "voice.download_tts" => {
+            Some((VoiceTarget::Tts, VoiceOperation::Download))
+        }
+        "dictation.tts_remove" | "voice.remove_tts" => {
+            Some((VoiceTarget::Tts, VoiceOperation::Remove))
+        }
+        _ => None,
+    }
+}
+
+fn voice_defaults(target: VoiceTarget) -> (&'static str, u64) {
+    match target {
+        VoiceTarget::Stt => ("ConwayResearch/Underdog-Bark-3.0-Clean", 181_000_000),
+        VoiceTarget::Tts => ("gradium/phonon-31m-en", 65_000_000),
+    }
+}
+
+fn insert_transcript(drafts: &mut HashMap<String, Composer>, key: &str, transcript: &str) {
+    let composer = drafts.entry(key.to_owned()).or_default();
+    let text = composer.text();
+    let before = composer.before_cursor().to_owned();
+    let after = text.get(before.len()..).unwrap_or_default();
+    let prefix = if !before.is_empty() && !before.chars().last().is_some_and(char::is_whitespace) {
+        " "
+    } else {
+        ""
+    };
+    let suffix = if !after.is_empty() && !transcript.chars().last().is_some_and(char::is_whitespace)
+    {
+        " "
+    } else {
+        ""
+    };
+    composer.insert_str(&format!("{prefix}{}{suffix}", transcript.trim()));
 }
 
 /// The plain text of a message (user or assistant), for copying.

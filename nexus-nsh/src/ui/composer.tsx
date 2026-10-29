@@ -5,7 +5,7 @@ import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, fo
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
-  agentCatalog, contextBudget, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model, modelCatalog, tick,
+  agentCatalog, contextBudget, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model, modelCatalog, tick,
   projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
@@ -17,6 +17,9 @@ import type { ToolDetailLine } from "./timeline";
 import { DiffView, diffItems } from "./diff";
 
 import { imageDrafts, readImage } from "../images";
+import { cancelDictation, stopDictation } from "../dictation";
+import { formatBytes } from "../dictation-logic";
+import { dictationLevel, dictationPhase, dictationPreview, voiceDownloadProgress } from "../voice-state";
 
 // Composer (DESIGN_PLAN D11, I5): a card on the panel surface, pill selectors, the context meter,
 // a Working row above it while busy, the completion block on its top edge and the project strip below.
@@ -98,7 +101,8 @@ export function Composer() {
     if (ses()?.archived) return "This session is archived: unarchive it to continue";
     return null;
   };
-  const canSend = () => !reason() && !pasting() && (text().trim().length > 0 || images().length > 0);
+  const canSend = () => dictationPhase() === "idle" && !reason() && !pasting() && (text().trim().length > 0 || images().length > 0);
+  const canDictate = () => live() && !ses()?.archived;
   const send = async (mode: "send" | "steer" | "queue" = busy() ? "steer" : "send") => {
     const t = text().trim();
     if (t && !images().length && runSlashCommand(t)) { draft.update((d) => ({ ...d, [key()]: "" })); return; }
@@ -276,15 +280,24 @@ export function Composer() {
             </View>
           </If>
           <If when={pasting()}><Text class={T.meta}>Preparing image…</Text></If>
+          <DictationStatus />
           <Input
             onPaste={(e) => void pasteImages((e.files ?? []).filter((f) => f.type.startsWith("image/")))}
             ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
             placeholder={reason() ?? (centre() === "new_session" ? "Message to start a new session" : "Type a message…")}
             readonly={!live() || !!ses()?.archived}
-            submitBehavior="submit" onSubmit={() => void send()}
+            submitBehavior="submit" onSubmit={() => {
+              if (dictationPhase() === "recording") { void stopDictation(); return; }
+              if (dictationPhase() !== "idle") return;
+              void send();
+            }}
             onChange={({ value: t }) => { selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); }}
             onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
-            onKeyPress={(e: { key: string }) => { if (String(e.key).toLowerCase() === "escape" && open()) dismissed.set(text()); }}
+            onKeyPress={(e: { key: string }) => {
+              if (String(e.key).toLowerCase() !== "escape") return;
+              if (dictationPhase() !== "idle") { cancelDictation(); return; }
+              if (open()) dismissed.set(text());
+            }}
             onContentSizeChange={(s) => h.set(Math.min(220, Math.max(44, Math.ceil(s.size?.height ?? (s as any).height ?? 28) + 16)))}
             style={{ height: h() }}
             class="px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
@@ -312,6 +325,19 @@ export function Composer() {
                   <Text style={{ numberOfLines: 1 }} class={T.meta} testID="composer-usage">{usageLabel()}</Text>
                 </View>
               </If>
+              <If when={dictationPhase() === "recording" || dictationPhase() === "stopping"}>
+                <IconButton icon="stop" label={dictationPhase() === "recording" ? "Stop and insert transcript" : "Finishing transcription"}
+                  testID="dictation-stop" disabled={dictationPhase() !== "recording"} onPress={() => void run("voice.dictate")}
+                  class="bg-primary hover:bg-primary" tint="tint-on-accent" />
+                <Btn label="Cancel" kind="ghost" onPress={cancelDictation} testID="dictation-cancel" />
+              </If>
+              <If when={dictationPhase() === "idle"}>
+                <IconButton icon="mic" label="Dictate into composer" testID="dictation-start" disabled={!canDictate()}
+                  onPress={() => void run("voice.dictate")} reason={!canDictate() ? (ses()?.archived ? "Unarchive this session first" : "Core is not connected") : undefined} />
+              </If>
+              <If when={dictationPhase() !== "idle" && dictationPhase() !== "recording" && dictationPhase() !== "stopping"}>
+                <Btn label="Cancel dictation" kind="ghost" onPress={cancelDictation} testID="dictation-cancel-pending" />
+              </If>
               <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={canSend() ? "bg-primary hover:bg-primary" : "bg-raised"} tint={canSend() ? "tint-on-accent" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
             </View>
           </View>
@@ -319,6 +345,61 @@ export function Composer() {
         <LocationStrip />
       </View>
     </View>
+  );
+}
+
+/** Live transcript previews stay visibly pending; only a final result is inserted into the draft. */
+function DictationStatus() {
+  const phase = () => dictationPhase();
+  const progress = () => voiceDownloadProgress();
+  const downloading = () => phase() === "downloading" || progress()?.state === "downloading";
+  const reducedMotion = () => !!config()?.values?.ui?.reduced_motion;
+  const percent = () => {
+    const p = progress();
+    if (reducedMotion()) return 32;
+    if (!p?.bytes_total) return 14;
+    return Math.max(4, Math.min(100, ((p.bytes_done ?? 0) / p.bytes_total) * 100));
+  };
+  const level = () => reducedMotion() ? 32 : Math.max(5, Math.min(100, dictationLevel() * 100));
+  const visible = () => phase() !== "idle" || downloading();
+  return (
+    <If when={visible()}>
+      <View class="gap-2 pb-3" testID="dictation-status" accessibilityLabel="Dictation status">
+        <If when={downloading()}>
+          <View class="gap-1.5 rounded-(--radius) bg-muted px-3 py-2" testID="dictation-download-progress">
+            <View class="flex-row items-center gap-2">
+              <Status kind="running" />
+              <Text class="flex-1 text-[13px] leading-5 text-foreground">Downloading speech recognition model…</Text>
+              <If when={!!progress()?.bytes_total}>
+                <Text class={T.meta}>{`${formatBytes(progress()?.bytes_done ?? 0)} / ${formatBytes(progress()!.bytes_total!)}`}</Text>
+              </If>
+            </View>
+            <View class="h-1 overflow-hidden rounded-full bg-border">
+              <View class="h-full rounded-full bg-primary" style={{ width: `${percent()}%` }} />
+            </View>
+          </View>
+        </If>
+        <If when={phase() === "checking"}><Text class={T.meta}>Checking speech recognition availability…</Text></If>
+        <If when={phase() === "requesting"}><Text class={T.meta}>Requesting microphone access…</Text></If>
+        <If when={phase() === "consent"}><Text class={T.meta}>Speech model download consent is required.</Text></If>
+        <If when={phase() === "recording" || phase() === "stopping"}>
+          <View class="flex-row items-center gap-2" testID="dictation-recording-indicator" accessibilityLabel={reducedMotion() ? "Recording audio" : "Recording audio; level meter"}>
+            <View class="size-2 rounded-full bg-error" />
+            <Text class="text-[13px] leading-5 font-medium text-foreground">{phase() === "stopping" ? "Finalizing transcript…" : "Listening…"}</Text>
+            <View class="h-1.5 w-20 overflow-hidden rounded-full bg-border" testID="dictation-level-meter">
+              <View class="h-full rounded-full bg-primary" style={{ width: `${level()}%` }} />
+            </View>
+            <Text class={T.meta}>{reducedMotion() ? "Reduced motion" : "Mic level"}</Text>
+          </View>
+          <If when={!!dictationPreview().trim()}>
+            <Text testID="dictation-preview" style={{ userSelect: "text" }} class="rounded-(--radius) bg-muted px-3 py-2 text-[13px] leading-5 text-foreground-secondary italic">
+              {`Pending transcript · ${dictationPreview()}`}
+            </Text>
+          </If>
+          <Text class={T.meta}>Enter or Stop inserts editable text · Esc cancels</Text>
+        </If>
+      </View>
+    </If>
   );
 }
 

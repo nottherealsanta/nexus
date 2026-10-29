@@ -708,9 +708,56 @@ export const manifest = {
    },
    {
     "id": "dictation",
-    "label": "Dictation",
-    "unavailable_reason": "Dictation is not available yet.",
+    "label": "Voice and speech",
     "row": [
+     {
+      "id": "dictation.stt_model",
+      "label": "Speech-to-text model",
+      "kind": "info",
+      "scope": "core",
+      "clients": "both",
+      "note": "State, repo, size and cache path from GET /api/voice (stt)."
+     },
+     {
+      "id": "dictation.stt_download",
+      "label": "Download speech-to-text model",
+      "kind": "action",
+      "scope": "core",
+      "clients": "both",
+      "command": "voice.download_stt"
+     },
+     {
+      "id": "dictation.stt_remove",
+      "label": "Remove speech-to-text model",
+      "kind": "action",
+      "scope": "core",
+      "clients": "both",
+      "command": "voice.remove_stt"
+     },
+     {
+      "id": "dictation.tts_model",
+      "label": "Text-to-speech model",
+      "kind": "info",
+      "scope": "core",
+      "clients": "both",
+      "note": "State, repo, size and cache path from GET /api/voice (tts)."
+     },
+     {
+      "id": "dictation.tts_download",
+      "label": "Download text-to-speech model",
+      "kind": "action",
+      "scope": "core",
+      "clients": "both",
+      "command": "voice.download_tts"
+     },
+     {
+      "id": "dictation.tts_remove",
+      "label": "Remove text-to-speech model",
+      "kind": "action",
+      "scope": "core",
+      "clients": "both",
+      "command": "voice.remove_tts"
+     },
      {
       "id": "dictation.engine",
       "label": "Engine",
@@ -733,8 +780,7 @@ export const manifest = {
       "kind": "keymap",
       "scope": "client",
       "clients": "tui",
-      "command": "composer.dictate",
-      "unavailable_reason": "Dictation engine is undecided."
+      "command": "voice.dictate"
      }
     ]
    },
@@ -1593,6 +1639,34 @@ export const manifest = {
     "palette",
     "composer",
     "timeline"
+   ]
+  },
+  {
+   "id": "session.speak",
+   "title": "Speak the latest answer",
+   "category": "session",
+   "slash": "speak",
+   "when": [
+    "has_session",
+    "session.idle"
+   ],
+   "unavailable_reason": "Speaking needs an idle session with a completed answer.",
+   "placement": [
+    "palette",
+    "composer"
+   ],
+   "note": "Core synthesizes the final answer with the cached TTS model and streams a WAV; the client plays it (PLAN.md I2)."
+  },
+  {
+   "id": "session.speak_stop",
+   "title": "Stop speaking",
+   "category": "session",
+   "when": [
+    "has_session"
+   ],
+   "unavailable_reason": "Nothing is being spoken.",
+   "placement": [
+    "palette"
    ]
   },
   {
@@ -2517,9 +2591,62 @@ export const manifest = {
    ]
   },
   {
-   "id": "composer.dictate",
-   "title": "Dictate (push to talk)",
+   "id": "voice.download_stt",
+   "title": "Download speech-to-text model",
+   "category": "tools",
+   "when": [
+    "always"
+   ],
+   "unavailable_reason": "Voice models are managed by Core.",
+   "placement": [
+    "palette"
+   ],
+   "note": "Asks for consent (repo and size), then POST /api/voice/stt/download."
+  },
+  {
+   "id": "voice.remove_stt",
+   "title": "Remove speech-to-text model",
+   "category": "tools",
+   "when": [
+    "always"
+   ],
+   "unavailable_reason": "Voice models are managed by Core.",
+   "placement": [
+    "palette"
+   ],
+   "note": "Confirms, then DELETE /api/voice/stt; removes only that repo from the HF cache."
+  },
+  {
+   "id": "voice.download_tts",
+   "title": "Download text-to-speech model",
+   "category": "tools",
+   "when": [
+    "always"
+   ],
+   "unavailable_reason": "Voice models are managed by Core.",
+   "placement": [
+    "palette"
+   ],
+   "note": "Asks for consent (repo and size), then POST /api/voice/tts/download."
+  },
+  {
+   "id": "voice.remove_tts",
+   "title": "Remove text-to-speech model",
+   "category": "tools",
+   "when": [
+    "always"
+   ],
+   "unavailable_reason": "Voice models are managed by Core.",
+   "placement": [
+    "palette"
+   ],
+   "note": "Confirms, then DELETE /api/voice/tts; removes only that repo from the HF cache."
+  },
+  {
+   "id": "voice.dictate",
+   "title": "Dictate into composer",
    "category": "dictation",
+   "slash": "voice",
    "keys": {
     "tui": "ctrl+d",
     "nsh": "cmd+shift+d"
@@ -2528,13 +2655,11 @@ export const manifest = {
    "when": [
     "always"
    ],
-   "unavailable_reason": "Dictation engine is undecided; it never sends by itself.",
    "placement": [
     "composer",
     "palette"
    ],
-   "status": "deferred",
-   "note": "Transcribes into the composer as editable text."
+   "note": "Ctrl+X V is also available in the TUI. Transcribes into editable composer text and never sends by itself."
   },
   {
    "id": "composer.slash_menu",

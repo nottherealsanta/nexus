@@ -21,6 +21,11 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/mcp/{name} | one server: the same, plus its tool names once connected; never connects |
 | POST | /api/mcp/{name}/restart | close and reconnect one server |
 | GET | /api/extension | user tools for `?project=` or `?directory=` (global and project) and file problems |
+| GET | /api/voice | offline voice model status |
+| POST | /api/voice/transcribe | mono 16 kHz PCM16 WAV → `{text}`; `?partial=1` never queues |
+| POST | /api/voice/stt/download | consented, pinned STT model download |
+| POST | /api/voice/speak | `{session_id}` → streamed WAV; final answer only |
+| POST | /api/voice/speak/stop | stop the active speech stream |
 | GET | /api/project | all projects |
 | POST | /api/project | `{path, name?}` → the project at that path (created if new) |
 | GET/PATCH/DELETE | /api/project/{id} | one project; PATCH `{name}` |
@@ -97,6 +102,10 @@ from .runtime import Busy, Conflict, NotFound, Runtime, message_json, project_js
 from .skills import install as skills_install
 from .store import TURN_PAGE, TURN_PAGE_MAX, Store
 from .tools import ToolError
+from .voice.audio import MAX_WAV_BYTES, VoiceAudioError, parse_wav
+from .voice.manager import VoiceManager
+from .voice.model import VoiceError
+from .voice.speech import SpeechError, SpeechService, final_answer
 
 VERSION = "0.10.0.dev0"
 # The HTTP API contract clients check before sending anything else. A change
@@ -110,6 +119,8 @@ MAX_PROMPT_BYTES = 12 * 1024 * 1024
 
 
 def _body_limit(request: Request) -> int:
+    if request.url.path == "/api/voice/transcribe":
+        return MAX_WAV_BYTES
     return MAX_PROMPT_BYTES if request.url.path.endswith("/prompt") else MAX_BODY_BYTES
 
 IDEMPOTENCY_MAX = 128
@@ -268,7 +279,7 @@ def sse(event: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
+def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceManager | None = None) -> Starlette:
     config = ConfigFile()
     config_lock = asyncio.Lock()
     config_revision = config.read()["revision"]
@@ -605,6 +616,115 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         return JSONResponse(skill_json(skill) | {
             "body": parsed.body, "extra": parsed.extra,
             "files": skills_module.resources.listing(skill.directory)})
+
+    async def voice_status(request: Request) -> Response:
+        from .voice import status as voice_status_module
+        result = voice_status_module.status()
+        stt = result["stt"]
+        if voice.downloading:
+            stt.update(state="downloading", error=None)
+        elif voice.error is not None:
+            stt.update(state="error", error=voice.error)
+        elif voice.loaded and stt["state"] != "unsupported":
+            stt.update(state="loaded", error=None)
+        tts = result["tts"]
+        job = tts_job["task"]
+        if job is not None and not job.done():
+            tts.update(state="downloading", error=None)
+        elif tts_job["error"] is not None and tts["state"] == "absent":
+            tts.update(state="error", error=tts_job["error"])
+        return JSONResponse(result)
+
+    def voice_error(exc: VoiceError) -> JSONResponse:
+        status = 409 if exc.code in {"voice_busy", "voice_model_not_cached"} else 422
+        return JSONResponse({"error": str(exc), "code": exc.code}, status_code=status)
+
+    async def voice_transcribe(request: Request) -> Response:
+        raw = await request.body()
+        if len(raw) > MAX_WAV_BYTES:
+            return JSONResponse({"error": "audio exceeds the 120 second limit", "code": "voice_too_long"}, status_code=413)
+        partial_value = request.query_params.get("partial")
+        if partial_value not in (None, "0", "1"):
+            return _error(400, "partial must be 0 or 1")
+        try:
+            parse_wav(raw)
+            result = await voice.transcribe(raw, partial=partial_value == "1")
+        except VoiceAudioError as exc:
+            status = 413 if exc.code == "voice_too_long" else 400
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=status)
+        except VoiceError as exc:
+            return voice_error(exc)
+        return JSONResponse({"text": result.text})
+
+    async def voice_stt_download(request: Request) -> Response:
+        try:
+            state = await voice.start_download(lambda data: runtime.bus.publish("voice.progress", data))
+        except VoiceError as exc:
+            return voice_error(exc)
+        return JSONResponse(state, status_code=202)
+
+    speech = SpeechService()
+    voice = voice_manager or VoiceManager(lambda: config.read()["values"]["voice"]["stt_model"])
+
+    async def voice_speak(request: Request) -> Response:
+        body = await _body(request)
+        sid = str(body.get("session_id", ""))
+        runtime.session(sid)
+        try:
+            text = final_answer(runtime.store, sid)
+            repo = config.read()["values"]["speech"]["tts_model"]
+            stream = await speech.speak(text, repo)
+        except SpeechError as exc:
+            status = 409 if exc.code in ("speech_busy", "speech_turn_active") else 404 if exc.code == "speech_no_answer" else 422
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=status)
+        return StreamingResponse(stream, media_type="audio/wav", headers={"cache-control": "no-store"})
+
+    async def voice_speak_stop(request: Request) -> Response:
+        return JSONResponse({"stopped": speech.stop()})
+
+    tts_job: dict[str, Any] = {"task": None, "error": None}
+
+    async def voice_tts_download(request: Request) -> Response:
+        from .voice import download as voice_download
+        from .voice import status as voice_status_module
+        task = tts_job["task"]
+        if task is not None and not task.done():
+            return JSONResponse({"state": "downloading"}, status_code=202)
+        repo = config.read()["values"]["speech"]["tts_model"]
+        spec = voice_status_module._chosen(voice_status_module.TTS, repo)["repos"][0]
+
+        async def run() -> None:
+            runtime.bus.publish("voice.progress", {"target": "tts", "state": "downloading", "repo": repo})
+            try:
+                await asyncio.to_thread(voice_download.download_tts, spec[0], spec[1], spec[2])
+                tts_job["error"] = None
+                runtime.bus.publish("voice.progress", {"target": "tts", "state": "ready", "repo": repo})
+            except Exception as exc:  # noqa: BLE001
+                tts_job["error"] = f"{type(exc).__name__}: {exc}"[:300]
+                runtime.bus.publish("voice.progress", {"target": "tts", "state": "error", "repo": repo, "error": tts_job["error"]})
+
+        tts_job["task"] = asyncio.create_task(run())
+        return JSONResponse({"state": "downloading"}, status_code=202)
+
+    async def voice_remove(request: Request) -> Response:
+        from .voice import download as voice_download
+        from .voice import status as voice_status_module
+        target = p(request, "target")
+        if target not in ("stt", "tts"):
+            raise NotFound(f"no voice model {target}")
+        task = tts_job["task"]
+        if voice.downloading or (target == "tts" and task is not None and not task.done()):
+            raise Busy("a download is running")
+        if target == "tts":
+            if speech.busy:
+                raise Busy("speech is playing")
+            speech.unload()
+            repo = config.read()["values"]["speech"]["tts_model"]
+        else:
+            await voice.unload()
+            repo = config.read()["values"]["voice"]["stt_model"]
+        freed = voice_download.remove(repo)
+        return JSONResponse({"repo": repo, "freed": freed, **voice_status_module.status()[target]})
 
     async def mcp_list(request: Request) -> Response:
         return JSONResponse({"servers": runtime.mcp.status()})
@@ -1053,6 +1173,13 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/agent", route(agent_list)),
         Route("/api/agent/{name}", route(agent_one)),
         Route("/api/extension", route(extension_list)),
+        Route("/api/voice", route(voice_status)),
+        Route("/api/voice/transcribe", route(voice_transcribe), methods=["POST"]),
+        Route("/api/voice/stt/download", route(voice_stt_download), methods=["POST"]),
+        Route("/api/voice/tts/download", route(voice_tts_download), methods=["POST"]),
+        Route("/api/voice/{target}", route(voice_remove), methods=["DELETE"]),
+        Route("/api/voice/speak", route(voice_speak), methods=["POST"]),
+        Route("/api/voice/speak/stop", route(voice_speak_stop), methods=["POST"]),
         Route("/api/mcp", route(mcp_list)),
         Route("/api/mcp/{name}", route(mcp_one)),
         Route("/api/mcp/{name}/restart", route(mcp_restart), methods=["POST"]),
@@ -1114,6 +1241,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
             watcher.cancel()
             with suppress(asyncio.CancelledError):
                 await watcher
+            await voice.close()
             await runtime.shutdown()
 
     return Starlette(routes=routes, lifespan=lifespan)

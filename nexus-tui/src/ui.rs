@@ -227,6 +227,12 @@ pub struct Overlay {
 pub enum Confirmed {
     DeleteSession(String),
     RemoveProject(String),
+    DownloadStt,
+    DownloadVoice(crate::actions::VoiceTarget),
+    RemoveVoice {
+        target: crate::actions::VoiceTarget,
+        repo: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

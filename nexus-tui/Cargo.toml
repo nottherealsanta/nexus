@@ -28,3 +28,5 @@ pulldown-cmark = { version = "=0.13.4", default-features = false }
 libc = "=0.2.191"
 base64 = "=0.22.1"
 png = "=0.17.16"
+rodio = { version = "=0.23.0", default-features = false, features = ["playback"] }
+cpal = "=0.18.2"

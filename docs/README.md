@@ -16,6 +16,7 @@ doc and the code disagree, the code wins: fix the doc.
 | [tools.md](tools.md) | read, bash (background jobs too), edit, write, ask (questions), code and kernels; workspace controls (expose, directory moves, worktrees); parameters, bounds, confinement, approval, read freshness |
 | [hooks.md](hooks.md) | Command hooks in `config.toml`: events, decisions, limits, what reaches the context |
 | [mcp.md](mcp.md) | MCP servers in `config.toml`, entry dialects, `mcp_tool_search` and `mcp_call`, fencing, lifecycle, API |
+| [voice.md](voice.md) | HF-cache model status, speech-to-text downloads and transcription, text-to-speech API and clients |
 | [loop.md](loop.md) | The agent loop: steps, tool execution, errors, approval |
 | [development.md](development.md) | uv, tests, ruff, repo layout, docs rules |
 | [agents.md](agents.md) | Agent files: frontmatter, where they load from, session snapshots and `AGENTS.md` |
@@ -40,6 +41,7 @@ doc and the code disagree, the code wins: fix the doc.
 | Skills (`SKILL.md`, the `skill` tool, notices) | [tools.md](tools.md#skills-and-the-skill-tool) |
 | Command hooks (`[[hooks.<Event>]]`) | [hooks.md](hooks.md) |
 | MCP servers, `mcp_tool_search`/`mcp_call`, untrusted-data fencing | [mcp.md](mcp.md) |
+| Voice models, dictation, speech downloads or TTS playback | [voice.md](voice.md), [api.md](api.md) |
 | The patch format | [tools.md](tools.md) |
 | Read-before-edit observations, stale or partial reads, edit/overwrite coverage | [tools.md](tools.md#read-observations-and-freshness) |
 | On-demand workspace tools, moving a session's directory, Git worktrees | [tools.md](tools.md#workspace-control-tools-on-demand), [api.md](api.md#workspace-controls) |

@@ -6,6 +6,7 @@ import { Banner, ConnectionState, Sync, SyncHost } from "./core/sync";
 import { Compat, Info, Session } from "./core/api";
 import { ApiError, request } from "./core/transport";
 import { emptyGlobalToastState, globalEventToast } from "./skills-mcp";
+import { receiveVoiceProgress } from "./voice-state";
 
 export type CentreView = "session" | "new_session" | "settings" | "editor" | "file";
 export type Toast = { id: number; level: "success" | "info" | "warning" | "error"; text: string; at: number };
@@ -295,7 +296,10 @@ const host: SyncHost = {
   configChanged() { void loadConfig().catch(() => {}); },
   contextChanged(id) { void loadContext(id).catch(() => {}); },
   inputsChanged(id) { void loadInputs(id).catch(() => {}); },
-  globalEvent(e) { handleGlobalEvent(e); },
+  globalEvent(e) {
+    if (e.type === "voice.progress") receiveVoiceProgress(e.data);
+    else handleGlobalEvent(e);
+  },
 };
 export const sync = new Sync(host);
 

@@ -55,6 +55,29 @@ pub enum ApiCall {
     Continue {
         session: String,
     },
+    Speak {
+        session: String,
+    },
+    SpeakStop,
+    VoiceStatus {
+        generation: u64,
+    },
+    /// Settings refresh, separate from the generation-guarded dictation check.
+    VoiceSettingsStatus {
+        generation: u64,
+    },
+    VoiceDownload {
+        generation: u64,
+    },
+    VoiceModel {
+        target: VoiceTarget,
+        operation: VoiceOperation,
+    },
+    VoiceTranscribe {
+        wav: Vec<u8>,
+        partial: bool,
+        generation: u64,
+    },
     Interrupt {
         session: String,
     },
@@ -144,6 +167,34 @@ pub enum ApiCall {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VoiceTarget {
+    Stt,
+    Tts,
+}
+
+impl VoiceTarget {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Stt => "stt",
+            Self::Tts => "tts",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Stt => "speech-to-text",
+            Self::Tts => "text-to-speech",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoiceOperation {
+    Download,
+    Remove,
+}
+
 impl ApiCall {
     /// Past-tense label for the success toast.
     pub fn done_label(&self) -> &'static str {
@@ -154,6 +205,20 @@ impl ApiCall {
             ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. } => "Sent",
             ApiCall::NewSession { .. } => "Session created",
             ApiCall::Continue { .. } => "Continuing",
+            ApiCall::Speak { .. } => "Finished speaking",
+            ApiCall::SpeakStop => "Stopped speaking",
+            ApiCall::VoiceStatus { .. }
+            | ApiCall::VoiceSettingsStatus { .. }
+            | ApiCall::VoiceTranscribe { .. } => "",
+            ApiCall::VoiceDownload { .. } => "Voice model download started",
+            ApiCall::VoiceModel {
+                operation: VoiceOperation::Download,
+                ..
+            } => "Voice model download started",
+            ApiCall::VoiceModel {
+                operation: VoiceOperation::Remove,
+                ..
+            } => "Voice model removed from cache",
             ApiCall::Interrupt { .. } => "Interrupt sent",
             ApiCall::Archive { archived: true, .. } => "Archived",
             ApiCall::Archive { .. } => "Unarchived",
@@ -209,6 +274,10 @@ pub struct Done {
     pub prompts: Option<Vec<String>>,
     /// `/api/skill/preview` result, shown by the app as a checklist or install.
     pub learn_preview: Option<Value>,
+    /// A Core voice status/download response.
+    pub voice: Option<Value>,
+    /// A transcription result. It remains a response until the app inserts it.
+    pub transcript: Option<String>,
 }
 
 /// An authenticated API for the daemon in `home`, from `daemon.json`.
@@ -377,6 +446,84 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         }
         ApiCall::Continue { session } => {
             conflict(api.continue_turn(session, &key).await.map_err(e)?)?;
+        }
+        ApiCall::Speak { session } => {
+            crate::speech::speak(&api.http, session).await?;
+        }
+        ApiCall::SpeakStop => {
+            if !crate::speech::stop_local() {
+                api.http
+                    .call(
+                        reqwest::Method::POST,
+                        "/api/voice/speak/stop",
+                        &[],
+                        Some(&serde_json::json!({})),
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_err(e)?;
+            }
+        }
+        ApiCall::VoiceStatus { .. } => {
+            done.voice = Some(api.http.get("/api/voice", &[]).await.map_err(e)?);
+        }
+        ApiCall::VoiceSettingsStatus { .. } => {
+            done.voice = Some(api.http.get("/api/voice", &[]).await.map_err(e)?);
+        }
+        ApiCall::VoiceDownload { .. } => {
+            done.voice = Some(
+                api.http
+                    .call(
+                        reqwest::Method::POST,
+                        "/api/voice/stt/download",
+                        &[],
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_err(e)?
+                    .body,
+            );
+        }
+        ApiCall::VoiceModel { target, operation } => {
+            let path = match operation {
+                VoiceOperation::Download => format!("/api/voice/{}/download", target.id()),
+                VoiceOperation::Remove => format!("/api/voice/{}", target.id()),
+            };
+            let method = match operation {
+                VoiceOperation::Download => reqwest::Method::POST,
+                VoiceOperation::Remove => reqwest::Method::DELETE,
+            };
+            done.voice = Some(
+                api.http
+                    .call(method, &path, &[], None, None, None)
+                    .await
+                    .map_err(e)?
+                    .body,
+            );
+        }
+        ApiCall::VoiceTranscribe { wav, partial, .. } => {
+            let query = if *partial {
+                vec![("partial", "1".to_owned())]
+            } else {
+                Vec::new()
+            };
+            let reply =
+                api.http
+                    .post_bytes("/api/voice/transcribe", &query, "audio/wav", wav.clone())
+                    .await
+                    .map_err(|error| {
+                        if error.api().is_some_and(|api_error| {
+                            api_error.code.as_deref() == Some("voice_busy")
+                        }) {
+                            "voice_busy".to_owned()
+                        } else {
+                            e(error)
+                        }
+                    })?;
+            done.transcript = reply.body["text"].as_str().map(str::to_owned);
         }
         ApiCall::Interrupt { session } => {
             conflict(api.interrupt(session, &key).await.map_err(e)?)?;
@@ -815,6 +962,227 @@ mod tests {
             serde_json::from_str::<Value>(requests[2].split_once("\r\n\r\n").unwrap().1).unwrap(),
             json!({"disabled_tools":["bash", "skill:alpha", "mcp:docs"]})
         );
+    }
+
+    #[tokio::test]
+    async fn voice_actions_use_status_download_and_raw_wav_contracts() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for _ in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let n = socket.read(&mut chunk).await.unwrap();
+                    request.extend_from_slice(&chunk[..n]);
+                    let Some(split) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let headers = String::from_utf8_lossy(&request[..split]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (key, value) = line.split_once(':')?;
+                            key.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= split + 4 + length {
+                        break;
+                    }
+                }
+                let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+                let headers = String::from_utf8_lossy(&request[..split]);
+                let path = headers
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap();
+                let (status, body) = match path {
+                    "/api/voice" => (
+                        "200 OK",
+                        json!({"stt":{"state":"ready","repo":"org/stt","size":181_000_000}}),
+                    ),
+                    "/api/voice/stt/download" => ("202 Accepted", json!({"state":"downloading"})),
+                    "/api/voice/transcribe?partial=1" => ("200 OK", json!({"text":"hello there"})),
+                    other => panic!("unexpected request {other}"),
+                };
+                let body = body.to_string();
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                requests.push(request);
+            }
+            requests
+        });
+        let api = Http::new(&url, "token").ok().map(CoreApi::new);
+
+        let status = run(api.clone(), ApiCall::VoiceStatus { generation: 7 }).await;
+        assert_eq!(
+            status.result.unwrap().voice.unwrap()["stt"]["state"],
+            "ready"
+        );
+        let downloaded = run(api.clone(), ApiCall::VoiceDownload { generation: 7 }).await;
+        assert_eq!(
+            downloaded.result.unwrap().voice.unwrap()["state"],
+            "downloading"
+        );
+        let wav = b"RIFFsample".to_vec();
+        let transcript = run(
+            api,
+            ApiCall::VoiceTranscribe {
+                wav: wav.clone(),
+                partial: true,
+                generation: 7,
+            },
+        )
+        .await;
+        assert_eq!(
+            transcript.result.unwrap().transcript.as_deref(),
+            Some("hello there")
+        );
+
+        let requests = server.await.unwrap();
+        assert!(String::from_utf8_lossy(&requests[0]).starts_with("GET /api/voice "));
+        assert!(String::from_utf8_lossy(&requests[1]).starts_with("POST /api/voice/stt/download "));
+        let request = &requests[2];
+        let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        let headers = String::from_utf8_lossy(&request[..split]).to_ascii_lowercase();
+        assert!(headers.starts_with("post /api/voice/transcribe?partial=1 "));
+        assert!(headers
+            .lines()
+            .any(|line| line == "content-type: audio/wav"));
+        assert_eq!(&request[split + 4..], wav.as_slice());
+    }
+
+    #[tokio::test]
+    async fn settings_voice_actions_use_tts_download_and_cache_delete_routes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for _ in 0..4 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let n = socket.read(&mut chunk).await.unwrap();
+                    request.extend_from_slice(&chunk[..n]);
+                    let Some(split) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let headers = String::from_utf8_lossy(&request[..split]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (key, value) = line.split_once(':')?;
+                            key.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= split + 4 + length {
+                        break;
+                    }
+                }
+                let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+                let headers = String::from_utf8_lossy(&request[..split]);
+                let path = headers
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap();
+                let (status, body) = match path {
+                    "/api/voice" => (
+                        "200 OK",
+                        json!({
+                            "stt":{"state":"absent","repo":"org/stt"},
+                            "tts":{"state":"absent","repo":"org/tts"}
+                        }),
+                    ),
+                    "/api/voice/tts/download" => ("202 Accepted", json!({"state":"downloading"})),
+                    "/api/voice/stt" => (
+                        "200 OK",
+                        json!({"repo":"org/stt","state":"absent","freed":1234}),
+                    ),
+                    "/api/voice/tts" => (
+                        "200 OK",
+                        json!({"repo":"org/tts","state":"absent","freed":5678}),
+                    ),
+                    other => panic!("unexpected request {other}"),
+                };
+                let body = body.to_string();
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                requests.push(request);
+            }
+            requests
+        });
+        let api = Http::new(&url, "token").ok().map(CoreApi::new);
+
+        let status = run(api.clone(), ApiCall::VoiceSettingsStatus { generation: 1 }).await;
+        assert_eq!(
+            status.result.unwrap().voice.unwrap()["tts"]["repo"],
+            "org/tts"
+        );
+        let downloaded = run(
+            api.clone(),
+            ApiCall::VoiceModel {
+                target: VoiceTarget::Tts,
+                operation: VoiceOperation::Download,
+            },
+        )
+        .await;
+        assert_eq!(
+            downloaded.result.unwrap().voice.unwrap()["state"],
+            "downloading"
+        );
+        for target in [VoiceTarget::Stt, VoiceTarget::Tts] {
+            let removed = run(
+                api.clone(),
+                ApiCall::VoiceModel {
+                    target,
+                    operation: VoiceOperation::Remove,
+                },
+            )
+            .await;
+            assert_eq!(
+                removed.result.unwrap().voice.unwrap()["freed"],
+                if target == VoiceTarget::Stt {
+                    1234
+                } else {
+                    5678
+                }
+            );
+        }
+
+        let requests = server.await.unwrap();
+        let starts: Vec<_> = requests
+            .iter()
+            .map(|request| {
+                String::from_utf8_lossy(request)
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert!(starts[0].starts_with("GET /api/voice "));
+        assert!(starts[1].starts_with("POST /api/voice/tts/download "));
+        assert!(starts[2].starts_with("DELETE /api/voice/stt "));
+        assert!(starts[3].starts_with("DELETE /api/voice/tts "));
     }
 
     #[tokio::test]

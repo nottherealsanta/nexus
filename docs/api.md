@@ -44,6 +44,13 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/mcp/{name}` | | one server plus `tool_names`, `log` |
 | POST | `/api/mcp/{name}/restart` | | close and reconnect; returns the row |
 | GET | `/api/extension` | `?project=` or `?directory=` | `{tools: [{name, description, scope, path, sha256, timeout}], problems: [{path, error}]}`: user tools ([tools.md](tools.md#user-tools)) |
+| GET | `/api/voice` | | `{stt, tts}` status; never loads or downloads a model ([voice.md](voice.md#status)) |
+| POST | `/api/voice/transcribe` | raw mono 16 kHz PCM16 WAV; `?partial=1` | `{text}`; 409 `voice_busy` for an overlapping preview; transcript is not sent to a model ([voice.md](voice.md#speech-to-text)) |
+| POST | `/api/voice/stt/download` | empty | 202 `{state: "downloading", bytes_done, bytes_total, error}`; explicit consent to download pinned weights ([voice.md](voice.md#speech-to-text)) |
+| POST | `/api/voice/tts/download` | empty | 202 `{state: "downloading"}`; consented download of `[speech] tts_model`; progress is `voice.progress` with `target: "tts"` and the state shows in `GET /api/voice` |
+| DELETE | `/api/voice/{stt or tts}` | | removes the configured model repo from the HF cache; 409 while downloading or playing; `{repo, freed, ...status}` |
+| POST | `/api/voice/speak` | `{session_id}` | streams the latest completed answer as `audio/wav` ([voice.md](voice.md#speech)) |
+| POST | `/api/voice/speak/stop` | empty | `{stopped}` |
 | GET | `/api/agent/{name}` | `?project=` or `?directory=` | `Agent` with `prompt` |
 | GET | `/api/project` | | `[Project]`, most recently used first |
 | POST | `/api/project` | `{path, name?}` | the project at `path`, created if new |
@@ -706,6 +713,10 @@ fields of every event; each event carries `id`, `cursor`, `seq`, `time`, `type`,
 Events are committed before subscribers receive them; a storage failure raises
 instead of publishing an event that could not be replayed. A session event whose
 session row is already gone is not published (the deletion tombstone covers it).
+
+STT download progress is a global `voice.progress` event. Its `data` contains
+`model: "stt"`, `state` (`downloading`, `ready` or `error`), `bytes_done`,
+`bytes_total` and `error`; progress measures growth in the pinned HF cache blobs.
 
 ### Resume, replay and cursors
 

@@ -1,0 +1,21 @@
+Underdog Bark 3.0 Clean
+https://huggingface.co/ConwayResearch/Underdog-Bark-3.0-Clean
+Revision: 6d34ed8639b2b9a33e764acf06748519bbb950cf
+
+The model weights (model.bark) are distributed under Creative Commons
+Attribution 4.0 International (CC-BY-4.0): https://creativecommons.org/licenses/by/4.0/
+Bark 3.0 Clean is a low-bit, disfluency-removing fine-tune by Conway Research of
+NVIDIA's parakeet-tdt-0.6b-v3 speech recognition model, through Moondream's
+parakeet-ultra and Underdog Bark 3.0 Plus. Nexus did not modify the weights.
+
+NVIDIA parakeet-tdt-0.6b-v3 (tokenizer and feature-extractor configuration only)
+https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+Revision: 541d1f99c6b0c3cd0b11a95167540bb8edefd82b
+Licensed CC-BY-4.0. No NVIDIA weights are downloaded.
+
+The files are downloaded separately after user confirmation, each checked against
+a pinned size and SHA-256; they are not included in the Nexus distribution. The
+.bark container is read as data by nexus/voice/bark.py (the method follows the
+upstream bark_loader.py, CC-BY-4.0); no upstream code is downloaded or executed.
+Nexus performs local inference with the separately installed Transformers, Torch
+and constriction packages, under their own license terms.

@@ -363,11 +363,13 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
     }
     let inner = composer_inner(g.composer, !app.composer_ref().images.is_empty());
     let (rows, (cr, cc)) = app.composer_ref().layout(inner.width as usize);
+    let preview_row = !app.ui.dictation.preview.is_empty();
+    let input_height = inner.height.saturating_sub(u16::from(preview_row)) as usize;
     let first = app.ui.composer_drag.map_or_else(
-        || visible_first(rows.len(), cr, inner.height as usize),
+        || visible_first(rows.len(), cr, input_height),
         |(_, top)| top,
     );
-    if cr < first || cr - first >= inner.height as usize {
+    if cr < first || cr - first >= input_height {
         return None;
     }
     Some(Position::new(
@@ -429,6 +431,11 @@ fn heights(app: &App, w: u16) -> Heights {
                 0
             } else {
                 2
+            }
+            + if app.ui.dictation.preview.is_empty() {
+                0
+            } else {
+                1
             },
     );
     Heights {
@@ -4602,6 +4609,8 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     hits.add(panel, Target::Composer);
     card_edge(cx, buf, panel, panel.bottom() - 1, "\u{2580}");
     let inner = composer_inner(full_r, !comp.images.is_empty());
+    let preview_row = !a.ui.dictation.preview.is_empty();
+    let input_height = inner.height.saturating_sub(u16::from(preview_row)) as usize;
     let cy = r.bottom() - 3;
     // The focus bar at the card's left edge, only where colour cannot carry
     // focus (ANSI-16 and mono; DESIGN_PLAN D11).
@@ -4663,15 +4672,10 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     } else {
         let (rows, (cr, _)) = comp.display_rows(inner.width as usize);
         let first = a.ui.composer_drag.map_or_else(
-            || visible_first(rows.len(), cr, inner.height as usize),
+            || visible_first(rows.len(), cr, input_height),
             |(_, top)| top,
         );
-        for (i, row) in rows
-            .iter()
-            .skip(first)
-            .take(inner.height as usize)
-            .enumerate()
-        {
+        for (i, row) in rows.iter().skip(first).take(input_height).enumerate() {
             let mut x = inner.x;
             for (text, selected) in row {
                 let style = if *selected {
@@ -4689,7 +4693,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 );
             }
         }
-        if rows.len() > inner.height as usize {
+        if rows.len() > input_height {
             let more = format!("{}/{}", cr + 1, rows.len());
             put(
                 buf,
@@ -4700,6 +4704,17 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 8,
             );
         }
+    }
+    if preview_row && input_height < inner.height as usize {
+        let label = format!("… {}", a.ui.dictation.preview.replace('\n', " "));
+        put(
+            buf,
+            inner.x,
+            inner.y + input_height as u16,
+            &truncate(&label, inner.width as usize, cx.ell()),
+            cx.st(MUTED, PANEL),
+            inner.width,
+        );
     }
 
     // Selectors and the meter share the control row; each has its own hit
@@ -4954,6 +4969,88 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
 fn draw_activity_line(cx: &Cx, buf: &mut Buffer, r: Rect) {
     let start = r.x + 2;
     let width = r.width.saturating_sub(4);
+    let phase = cx.app.ui.dictation.phase;
+    let y = r.bottom() - 1;
+    if matches!(
+        phase,
+        crate::dictation::Phase::Recording | crate::dictation::Phase::Stopping
+    ) {
+        let label = if phase == crate::dictation::Phase::Recording {
+            "REC "
+        } else {
+            "END "
+        };
+        put(buf, start, y, label, cx.st(ACCENT, CANVAS), width.min(4));
+        let help = if width >= 28 {
+            " enter stop · esc cancel"
+        } else {
+            " enter · esc"
+        };
+        let help_width = width.min(text::width(help) as u16);
+        let bar_start = start + 4;
+        let bar_width = width.saturating_sub(4 + help_width);
+        let glyphs = if cx.t.opts.ascii {
+            ['_', '.', ':', '-', '=', '+', '*', '#']
+        } else {
+            ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
+        };
+        let levels: Vec<f32> = cx.app.ui.dictation.levels.iter().copied().collect();
+        for i in 0..bar_width as usize {
+            let level = if levels.is_empty() {
+                cx.app.ui.dictation.level
+            } else {
+                let at = i.saturating_mul(levels.len()) / usize::from(bar_width.max(1));
+                levels[at.min(levels.len() - 1)]
+            };
+            let glyph = glyphs[(level.clamp(0.0, 1.0) * 7.0).round() as usize];
+            put(
+                buf,
+                bar_start + i as u16,
+                y,
+                &glyph.to_string(),
+                cx.st(if level > 0.06 { ACCENT } else { MUTED }, CANVAS),
+                1,
+            );
+        }
+        put(
+            buf,
+            r.right().saturating_sub(help_width),
+            y,
+            help,
+            cx.st(MUTED, CANVAS),
+            help_width,
+        );
+        return;
+    }
+    if let Some(progress) = &cx.app.ui.dictation.download {
+        let percent = progress
+            .bytes_done
+            .saturating_mul(100)
+            .checked_div(progress.bytes_total)
+            .map(|value| format!("{}%", value.min(100)));
+        let line = match percent {
+            Some(percent) => format!(
+                "Downloading speech model · {percent} · {} / {}",
+                human_bytes(progress.bytes_done),
+                human_bytes(progress.bytes_total)
+            ),
+            None => "Downloading speech model …".into(),
+        };
+        put(buf, start, y, &line, cx.st(ACCENT, CANVAS), width);
+        return;
+    }
+    let activity = match phase {
+        crate::dictation::Phase::Checking => Some("Checking speech model…"),
+        crate::dictation::Phase::Starting => Some("Opening microphone…"),
+        crate::dictation::Phase::Transcribing => {
+            Some("Transcribing; transcript will be inserted into the composer…")
+        }
+        _ => None,
+    };
+    if let Some(text) = activity {
+        put(buf, start, y, text, cx.st(MUTED, CANVAS), width);
+        return;
+    }
     let busy = cx.app.viewed_id().is_some_and(|id| cx.app.is_busy(id));
     let usage = cx
         .app
@@ -5011,7 +5108,7 @@ fn draw_activity_line(cx: &Cx, buf: &mut Buffer, r: Rect) {
         put(
             buf,
             start + i as u16,
-            r.bottom() - 1,
+            y,
             glyph,
             match (rest.fg, accent.fg) {
                 (Some(Color::Rgb(r0, g0, b0)), Some(Color::Rgb(r1, g1, b1))) if busy => {
@@ -5025,6 +5122,16 @@ fn draw_activity_line(cx: &Cx, buf: &mut Buffer, r: Rect) {
             },
             1,
         );
+    }
+}
+
+fn human_bytes(bytes: u64) -> String {
+    if bytes >= 1_000_000 {
+        format!("{:.0} MB", bytes as f64 / 1_000_000.0)
+    } else if bytes >= 1_000 {
+        format!("{:.0} KB", bytes as f64 / 1_000.0)
+    } else {
+        format!("{bytes} B")
     }
 }
 
@@ -5364,6 +5471,12 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
                 .join(", "),
         ),
         "models.refresh" | "providers.sign_in" | "providers.sign_out" => Some("enter".into()),
+        "dictation.stt_model" => Some(a.voice_info_value(crate::actions::VoiceTarget::Stt)),
+        "dictation.tts_model" => Some(a.voice_info_value(crate::actions::VoiceTarget::Tts)),
+        "dictation.stt_download"
+        | "dictation.stt_remove"
+        | "dictation.tts_download"
+        | "dictation.tts_remove" => Some("enter".into()),
         _ => None,
     };
     match live {
@@ -5425,9 +5538,22 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
     let rows = a.settings_rows();
     let sel = a.ui.settings_row.min(rows.len().saturating_sub(1));
     let sel_item = rows.get(sel).copied();
-    // the note or reason sits on the blank row above the hints
-    let note_y = m.hint_y.saturating_sub(1);
-    let list = Rect::new(r.x, sy + 2, r.width, note_y.saturating_sub(sy + 2));
+    let details = sel_item
+        .and_then(|index| items.get(index))
+        .and_then(|item| match item {
+            crate::app::SettingsItem::Row {
+                row,
+                section_reason,
+            } => Some(a.settings_details(row, section_reason.as_deref())),
+            crate::app::SettingsItem::Heading(_) => None,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|line| text::wrap(&line, w as usize))
+        .collect::<Vec<_>>();
+    let detail_count = details.len().max(1).min(m.body.height as usize);
+    let detail_start = m.hint_y.saturating_sub(detail_count as u16);
+    let list = Rect::new(r.x, sy + 2, r.width, detail_start.saturating_sub(sy + 2));
     if items.is_empty() {
         put(
             buf,
@@ -5463,8 +5589,7 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
             } => {
                 let position = rows.iter().position(|p| p == i).unwrap_or(0);
                 let selected = Some(*i) == sel_item;
-                let disabled = (row.unavailable_reason.is_some() || section_reason.is_some())
-                    && !matches!(row.id.as_str(), "providers.sign_in" | "providers.sign_out");
+                let disabled = a.settings_reason(row, section_reason.as_deref()).is_some();
                 let (value, wired) = settings_value(cx, row);
                 let rr = Rect::new(r.x + 1, y, r.width.saturating_sub(2), 1);
                 let mut style = cx.st(if disabled || !wired { MUTED } else { PRIMARY }, RAISED);
@@ -5510,23 +5635,12 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
             }
         }
     }
-    if let Some(crate::app::SettingsItem::Row {
-        row,
-        section_reason,
-    }) = sel_item.and_then(|i| items.get(i))
-    {
-        let note = row
-            .unavailable_reason
-            .clone()
-            .or(section_reason.clone())
-            .filter(|_| !matches!(row.id.as_str(), "providers.sign_in" | "providers.sign_out"))
-            .or_else(|| (!App::settings_wired(&row.id)).then(|| "Not available yet.".to_owned()))
-            .unwrap_or_else(|| row.note.clone());
+    for (offset, line) in details.iter().take(detail_count).enumerate() {
         put(
             buf,
             x,
-            note_y,
-            &truncate(&note, w as usize, cx.ell()),
+            detail_start + offset as u16,
+            &truncate(line, w as usize, cx.ell()),
             cx.st(MUTED, RAISED),
             w,
         );

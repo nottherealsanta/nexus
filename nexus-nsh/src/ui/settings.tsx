@@ -5,9 +5,12 @@ import { Btn, T, FOCUS } from "./kit";
 import { Heading, Modal, ModalFooter, ModalTitle, SelectBar } from "./modal";
 import { manifest } from "../gen/manifest";
 import { byId, commands, escape, keyLabel, loadProviders, run } from "../commands";
-import { catalogSource, info, compat, isNarrow, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker } from "../store";
+import { catalogSource, info, compat, isNarrow, live, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker } from "../store";
 import { CLIENT_API, CLIENT_VERSION } from "../core/api";
 import { request } from "../core/transport";
+import { voiceInfoLines, voiceActionReason } from "../voice-settings";
+import { voiceStatus } from "../voice-state";
+import type { VoiceTarget } from "../voice-state";
 
 interface Row { id: string; label: string; kind: string; scope: string; clients?: string; default?: unknown; options?: string[]; command?: string; note?: string; unavailable_reason?: string }
 interface Section { id: string; label: string; unavailable_reason?: string; row?: Row[] }
@@ -88,7 +91,24 @@ async function refreshCatalog() {
 }
 
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["providers.sign_in", "providers.sign_out", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.default_permission", "models.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "keybindings.list", "about.versions", "about.daemon"]);
+const WIRED = new Set(["providers.sign_in", "providers.sign_out", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.default_permission", "models.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove"]);
+
+function voiceTarget(id: string): VoiceTarget | null {
+  if (id.startsWith("dictation.stt_")) return "stt";
+  if (id.startsWith("dictation.tts_")) return "tts";
+  return null;
+}
+function voiceAction(id: string): "download" | "remove" | null {
+  if (id.endsWith("_download")) return "download";
+  if (id.endsWith("_remove")) return "remove";
+  return null;
+}
+function voiceSettingReason(id: string): string | undefined {
+  const target = voiceTarget(id), action = voiceAction(id);
+  if (!target || !action) return undefined;
+  if (!live()) return "Core is not connected: the view is read-only.";
+  return voiceActionReason(target, action, voiceStatus()?.[target]);
+}
 
 function McpToolsLimit() {
   const initial = Number(config()?.values?.mcp?.max_listed_tools ?? 25);
@@ -120,6 +140,19 @@ function McpToolsLimit() {
 }
 
 function control(r: Row): JSX.Element {
+  const target = voiceTarget(r.id);
+  if (target && (r.id.endsWith("_model"))) {
+    return (
+      <View testID={`voice-status-${target}`} class={`gap-1 ${isNarrow() ? "items-start" : "items-end"}`}>
+        <Each of={voiceInfoLines(target)} key={(line) => line}>{(line) => <Text style={{ userSelect: "text", numberOfLines: 2 }} class="text-[12px] leading-4 text-foreground-secondary">{line()}</Text>}</Each>
+      </View>
+    );
+  }
+  const action = voiceAction(r.id);
+  if (target && action && r.command) {
+    const reason = voiceSettingReason(r.id);
+    return <Btn label={r.label} onPress={() => void run(r.command!)} disabled={!!reason} reason={reason} testID={`setting-${r.id}-action`} />;
+  }
   if (r.id === "appearance.theme") {
     return <Seg label="Theme" options={["system", "light", "dark", "named"]} value={themeChoice()} disabled={false}
       onPick={(v) => { if (v === "named") { toast("info", "Named themes: shared theme tokens arrive with Step 12.2."); return; } themeChoice.set(v as any); setColorScheme(v as "light" | "dark" | "system"); savePrefs(); }} />;
@@ -187,8 +220,9 @@ function SettingRow(p: { r: Row; sec: Section }) {
   const r = p.r;
   const reason = ["providers.sign_in", "providers.sign_out"].includes(r.id) ? undefined : r.unavailable_reason ?? p.sec.unavailable_reason;
   const wired = WIRED.has(r.id);
-  const disabled = !!reason || !wired;
-  const why = reason ?? (wired ? "" : "Not editable in this NSH increment yet.");
+  const modelReason = voiceSettingReason(r.id);
+  const disabled = !!reason || !wired || !!modelReason;
+  const why = reason ?? modelReason ?? (wired ? "" : "Not editable in this NSH increment yet.");
   const tag = r.clients === "nsh" ? "NSH only" : r.clients === "tui" && r.id !== "appearance.timeline_detail" ? "TUI only" : "";
   return (
     <View class={`${isNarrow() ? "gap-2" : "flex-row gap-6 items-start"} px-3 py-2 rounded-(--radius) hover:bg-accent`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>

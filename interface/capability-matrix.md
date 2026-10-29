@@ -288,7 +288,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | K10 | Attachments: durable storage, size limits, chips, drag-drop, paste image | Core work | 12a Attachments and images | |
 | K11 | `@path` mentions with project-file completion | Core work | 12a Files and git | |
 | K12 | Large paste becomes a collapsed chip | Client only | | Old `editor.rs` has this |
-| K13 | Voice dictation into the composer | Client only | 12a "Transcription (maybe)" | Platform recognizer needs no Core. A provider endpoint would need Core |
+| K13 | Voice dictation into the composer | API ready | `POST /api/voice/transcribe` (I3); TUI capture and composer flow (I4) | TUI captures locally with `cpal`; transcript stays editable and is never sent by itself |
 | K14 | Interrupt (Esc / stop button) | API ready | `POST …/interrupt` | |
 | K15 | Drafts per session | Client only | | |
 | K16 | `/` command completion | Client only | 12.1 item 3 manifest | |
@@ -397,7 +397,7 @@ Dictation, Keybindings, Notifications, About.
 | ST14 | Skills: discovered, sources, diagnostics, defaults | Core work | 11a Skills | |
 | ST15 | MCP: servers, enabled defaults, status, tools, connect/disconnect/retry; browser-use default | Core work | 11a MCP, `nexus-browser/` | |
 | ST16 | Context: handoff threshold percentage | Core work | 12a Compaction as handoff | |
-| ST17 | Dictation: engine, language, push-to-talk key | Client only | | |
+| ST17 | Dictation: engine, language, push-to-talk key | Client only | | Capture exists in both clients (`voice.dictate`); engine, language and key settings are still deferred |
 | ST18 | Keybindings: command list with editable keys | Client only | | |
 | ST19 | Notifications: when, sound, OS | Client only | | |
 | ST20 | About: client version, Core version, daemon pid, home | API ready | `GET /api/info` (`version`, `pid`, `home`) | |
@@ -456,4 +456,4 @@ Counts are by feature ID (one row each) in the tables above, regenerated with:
 awk -F'|' '/^\| [A-Z]+[0-9]+b? \|/ {gsub(/^ +| +$/,"",$4); n[$4]++} END {for (k in n) print n[k], k}' interface/capability-matrix.md
 ```
 
-Totals at the time of writing (rows with an ID): API ready 133, Client only 54, Core work 64, Deferred 8; 259 in all.
+Totals at the time of writing (rows with an ID): API ready 134, Client only 53, Core work 64, Deferred 8; 259 in all.

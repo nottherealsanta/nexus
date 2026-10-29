@@ -10,6 +10,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "ui": {"detail": "medium", "reduced_motion": False},
     "web": {"search_url": "http://127.0.0.1:18765/search", "fetch_timeout_s": 15},
     "mcp": {"full_definitions": False, "max_listed_tools": 25},
+    "voice": {"stt_model": "ConwayResearch/Underdog-Bark-3.0-Clean"},
+    "speech": {"tts_model": "gradium/phonon-31m-en"},
 }
 
 
@@ -46,6 +49,8 @@ SCHEMA: dict[str, dict[str, Any]] = {
                              "off lists names and descriptions (or only servers past max_listed_tools) and the model uses mcp_tool_search"},
     "mcp.max_listed_tools": {"type": "integer", "minimum": 1, "maximum": 1000,
                              "description": "with full_definitions off: at most this many tools (all servers together) are listed by name"},
+    "voice.stt_model": {"type": "string", "description": "Hugging Face repo for speech to text, read from the HF cache"},
+    "speech.tts_model": {"type": "string", "description": "Hugging Face repo for text to speech, read from the HF cache"},
     "mcp.servers": {"type": "object", "masked_fields": ["env", "headers", "credential fields"]},
 }
 
@@ -70,6 +75,8 @@ def _valid(section: str, key: str, value: Any) -> bool:
             except ValueError:
                 return False
         return True
+    if section in ("voice", "speech"):
+        return isinstance(value, str) and bool(re.fullmatch(r"[\w.-]+/[\w.-]+", value))
     if section == "mcp":
         if key == "full_definitions":
             return isinstance(value, bool)

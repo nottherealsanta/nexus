@@ -891,6 +891,8 @@ def main(argv: list[str] | None = None) -> int:
 
     serve = sub.add_parser("serve", help="run the daemon in the foreground")
     serve.add_argument("--port", type=int)
+    voice = sub.add_parser("voice", help="speech to text and text to speech")
+    voice.add_argument("action", choices=["init", "status"], help="init installs the voice runtime; status shows the models")
     dmn = sub.add_parser("daemon", help="start, stop or check the background daemon")
     dmn.add_argument("action", choices=["start", "stop", "status"])
 
@@ -957,6 +959,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{pid:<9} {info.label:<17} {info.dialect:<9} {state}")
         elif args.command == "models":
             asyncio.run(_models(args))
+        elif args.command == "voice":
+            from .voice import install
+            from .voice import status as voice_status
+            if args.action == "init":
+                return install.init()
+            for name, entry in voice_status.status().items():
+                print(f"{name}: {entry['state']} ({entry['repo']})" + (f" - {entry['error']}" if entry["error"] else ""))
         elif args.command == "serve":
             daemon.serve(args.port)
         elif args.command == "daemon":

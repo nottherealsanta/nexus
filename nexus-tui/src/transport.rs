@@ -292,6 +292,45 @@ impl Http {
         Ok((text, name))
     }
 
+    /// A POST whose reply is a stream of bytes (spoken audio). A failure status is read as the usual JSON error.
+    pub async fn post_stream(&self, path: &str, body: &Value) -> Result<reqwest::Response, Error> {
+        let resp = self
+            .streams
+            .post(format!("{}{}", self.base, path))
+            .bearer_auth(&self.token)
+            .json(body)
+            .send()
+            .await?;
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(Error::Api(ApiError::from_body(status, &text)));
+        }
+        Ok(resp)
+    }
+
+    /// POST a raw audio body and decode the JSON response.
+    pub async fn post_bytes(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<Reply, Error> {
+        let resp = self
+            // Inference can include the first local model load; unlike ordinary
+            // JSON mutations, this request has no client-side total deadline.
+            .streams
+            .post(format!("{}{}", self.base, path))
+            .bearer_auth(&self.token)
+            .query(query)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(body)
+            .send()
+            .await?;
+        read_reply(resp).await
+    }
+
     /// Open `GET /api/event`. The cursor is sent as `Last-Event-ID` like the
     /// Python client. A cursor failure arrives as an `Error::Api` with
     /// `is_resync()`; no stream is returned.

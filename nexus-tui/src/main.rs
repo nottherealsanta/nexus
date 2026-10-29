@@ -209,6 +209,9 @@ async fn run(
     let mut handle = sync::spawn(cfg);
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<ActionDone>();
     let (image_tx, mut image_rx) = mpsc::unbounded_channel();
+    let (capture_tx, mut capture_rx) =
+        mpsc::unbounded_channel::<nexus_tui::dictation::CaptureEvent>();
+    let mut capture: Option<nexus_tui::dictation::CaptureHandle> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(125));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -233,6 +236,28 @@ async fn run(
             },
             Some((key, image)) = image_rx.recv() => app.apply_image_paste(key, image),
             Some(done) = done_rx.recv() => app.apply_done(done),
+            Some(event) = capture_rx.recv() => {
+                let finished = matches!(
+                    &event,
+                    nexus_tui::dictation::CaptureEvent::Stopped { .. }
+                        | nexus_tui::dictation::CaptureEvent::Cancelled { .. }
+                        | nexus_tui::dictation::CaptureEvent::Failed { .. }
+                );
+                let generation = match &event {
+                    nexus_tui::dictation::CaptureEvent::Started { generation }
+                    | nexus_tui::dictation::CaptureEvent::Level { generation, .. }
+                    | nexus_tui::dictation::CaptureEvent::Preview { generation, .. }
+                    | nexus_tui::dictation::CaptureEvent::Stopped { generation, .. }
+                    | nexus_tui::dictation::CaptureEvent::Cancelled { generation }
+                    | nexus_tui::dictation::CaptureEvent::Failed { generation, .. } => *generation,
+                };
+                app.apply_capture_event(event);
+                if finished && capture.as_ref().is_some_and(|handle| handle.generation() == generation) {
+                    if let Some(handle) = capture.take() {
+                        handle.join();
+                    }
+                }
+            }
             _ = tick.tick() => dirty = app.tick(Instant::now()),
         }
         app.persist_prefs();
@@ -266,6 +291,25 @@ async fn run(
                         let _ = tx.send(actions::run(api, call).await);
                     });
                 }
+                Effect::Dictation(command) => match command {
+                    nexus_tui::dictation::CaptureCommand::Start { generation } => {
+                        if let Some(old) = capture.take() {
+                            old.send(nexus_tui::dictation::CaptureCommand::Cancel {
+                                generation: old.generation(),
+                            });
+                            old.join();
+                        }
+                        capture = Some(nexus_tui::dictation::CaptureHandle::start(
+                            generation,
+                            capture_tx.clone(),
+                        ));
+                    }
+                    command => {
+                        if let Some(handle) = capture.as_ref() {
+                            handle.send(command);
+                        }
+                    }
+                },
                 Effect::PasteImage(key) => {
                     let tx = image_tx.clone();
                     tokio::spawn(async move {
@@ -292,6 +336,12 @@ async fn run(
                 }
             }
         }
+    }
+    if let Some(handle) = capture.take() {
+        handle.send(nexus_tui::dictation::CaptureCommand::Cancel {
+            generation: handle.generation(),
+        });
+        handle.join();
     }
     let _ = handle.commands.send(sync::Command::Shutdown);
     Ok(())

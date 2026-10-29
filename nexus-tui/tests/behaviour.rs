@@ -5,6 +5,8 @@ use common::*;
 use nexus_tui::actions::{ActionDone, ApiCall, Done};
 use nexus_tui::api::Frame;
 use nexus_tui::app::{App, Effect, Notify, SettingsItem, WIRED};
+use nexus_tui::dictation::{CaptureCommand, Phase};
+use nexus_tui::sync::SyncMsg;
 use nexus_tui::theme::{Mode, Tier};
 use nexus_tui::ui::{Focus, OverlayKind, PaletteKind, Tab, Target, View};
 
@@ -484,6 +486,185 @@ fn mcp_settings_patch_core_values_with_a_bounded_number() {
 }
 
 #[test]
+fn voice_settings_refresh_consent_remove_and_track_progress() {
+    let mut a = app();
+    a.execute("app.settings");
+    let status_call = a
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Api(call @ ApiCall::VoiceSettingsStatus { .. }) => Some(call.clone()),
+            _ => None,
+        })
+        .expect("opening Settings refreshes voice status");
+    a.apply_done(ActionDone {
+        call: status_call,
+        result: Ok(Done {
+            voice: Some(serde_json::json!({
+                "stt": {
+                    "state": "absent", "repo": "ConwayResearch/Underdog-Bark-3.0-Clean",
+                    "revision": "main", "size": 181_000_000, "cache_path": null, "error": null
+                },
+                "tts": {
+                    "state": "absent", "repo": "gradium/phonon-31m-en",
+                    "revision": "main", "size": 65_000_000, "cache_path": null, "error": null
+                }
+            })),
+            ..Done::default()
+        }),
+    });
+    a.effects.clear();
+
+    let position = |a: &App, id: &str| {
+        let rows = a.settings_rows();
+        let items = a.settings_items();
+        rows.iter()
+            .position(|at| matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == id))
+            .unwrap_or_else(|| panic!("missing Settings row {id}"))
+    };
+    a.ui.settings_row = position(&a, "dictation.stt_model");
+    let (_, rows) = draw(&mut a, 120, 36);
+    let frame = rows.join("\n");
+    assert!(frame.contains("State: absent"), "{frame}");
+    assert!(
+        frame.contains("ConwayResearch/Underdog-Bark-3.0-Clean"),
+        "{frame}"
+    );
+    assert!(frame.contains("181 MB"), "{frame}");
+
+    let remove_row = a
+        .settings_items()
+        .into_iter()
+        .find_map(|item| match item {
+            SettingsItem::Row { row, .. } if row.id == "dictation.stt_remove" => Some(*row),
+            _ => None,
+        })
+        .unwrap();
+    assert!(a.settings_reason(&remove_row, None).is_some());
+
+    a.ui.settings_row = position(&a, "dictation.stt_download");
+    press(&mut a, &["enter"]);
+    let dialog = a.ui.dialog.as_ref().expect("download asks before consent");
+    assert_eq!(dialog.button, 0, "Cancel is the default selection");
+    let consent = dialog.body.join(" ");
+    assert!(consent.contains("181 MB"));
+    assert!(consent.contains("from Hugging Face into the standard cache"));
+    press(&mut a, &["enter"]);
+    assert!(a.ui.dialog.is_none());
+    assert!(!a
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::Api(ApiCall::VoiceModel { .. }))));
+
+    a.ui.settings_row = position(&a, "dictation.stt_download");
+    press(&mut a, &["enter", "right", "enter"]);
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Api(ApiCall::VoiceModel {
+            target: nexus_tui::actions::VoiceTarget::Stt,
+            operation: nexus_tui::actions::VoiceOperation::Download
+        }))
+    ));
+    let action = a.effects.pop().unwrap();
+    let Effect::Api(action) = action else {
+        panic!("expected API call")
+    };
+    a.apply_done(ActionDone {
+        call: action,
+        result: Ok(Done {
+            voice: Some(serde_json::json!({"state":"downloading"})),
+            ..Done::default()
+        }),
+    });
+    assert!(a
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::Api(ApiCall::VoiceSettingsStatus { .. }))));
+    let refresh = a
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Api(call @ ApiCall::VoiceSettingsStatus { .. }) => Some(call.clone()),
+            _ => None,
+        })
+        .unwrap();
+    a.effects.clear();
+    a.apply_done(ActionDone {
+        call: refresh,
+        result: Ok(Done {
+            voice: Some(serde_json::json!({
+                "stt": {"state":"downloading","repo":"ConwayResearch/Underdog-Bark-3.0-Clean","size":181_000_000},
+                "tts": {
+                    "state":"runtime_missing", "repo":"gradium/phonon-31m-en",
+                    "size":65_000_000, "cache_path":"/cache/models--gradium--phonon-31m-en",
+                    "error":"Install the voice runtime with nexus voice init"
+                }
+            })),
+            ..Done::default()
+        }),
+    });
+
+    a.ui.settings_row = position(&a, "dictation.tts_model");
+    let (_, rows) = draw(&mut a, 120, 36);
+    let frame = rows.join("\n");
+    assert!(frame.contains("65 MB"), "{frame}");
+    assert!(
+        frame.contains("/cache/models--gradium--phonon-31m-en"),
+        "{frame}"
+    );
+    assert!(frame.contains("nexus voice init"), "{frame}");
+
+    a.ui.voice_status.as_mut().unwrap()["tts"]["state"] = "ready".into();
+    a.ui.voice_status.as_mut().unwrap()["tts"]["error"] = serde_json::Value::Null;
+    a.ui.settings_row = position(&a, "dictation.tts_remove");
+    press(&mut a, &["enter"]);
+    let dialog = a.ui.dialog.as_ref().expect("remove requires confirmation");
+    assert_eq!(dialog.button, 0, "Cancel is the default selection");
+    let removal = dialog.body.join(" ");
+    assert_eq!(
+        removal,
+        "Only gradium/phonon-31m-en is removed from the Hugging Face cache."
+    );
+    press(&mut a, &["right", "enter"]);
+    assert!(matches!(
+        a.effects.first(),
+        Some(Effect::Api(ApiCall::VoiceModel {
+            target: nexus_tui::actions::VoiceTarget::Tts,
+            operation: nexus_tui::actions::VoiceOperation::Remove
+        }))
+    ));
+
+    a.effects.clear();
+    a.ui.voice_status.as_mut().unwrap()["tts"]["state"] = "downloading".into();
+    a.apply_sync(SyncMsg::Event(global_event(
+        &a,
+        80_001,
+        "voice.progress",
+        serde_json::json!({
+            "target": "tts", "state": "downloading", "bytes_done": 32_500_000,
+            "bytes_total": 65_000_000, "error": null
+        }),
+    )));
+    assert!(a
+        .voice_info_value(nexus_tui::actions::VoiceTarget::Tts)
+        .contains("50%"));
+    a.effects.clear();
+    a.apply_sync(SyncMsg::Event(global_event(
+        &a,
+        80_002,
+        "voice.progress",
+        serde_json::json!({
+            "target": "tts", "state": "ready", "bytes_done": 65_000_000,
+            "bytes_total": 65_000_000, "error": null
+        }),
+    )));
+    assert!(a
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::Api(ApiCall::VoiceSettingsStatus { .. }))));
+}
+
+#[test]
 fn escape_chain_follows_the_manifest_order() {
     let mut a = app();
     draw(&mut a, 120, 36);
@@ -724,12 +905,164 @@ fn wired_commands_exist_and_blocked_ones_are_never_wired_open() {
         .filter(|c| matches!(c.status.as_deref(), Some("blocked_core" | "deferred")))
         .cloned()
         .collect();
-    assert!(blocked.len() > 8);
+    assert!(blocked.len() >= 8);
     for c in &blocked {
         assert!(a.availability(c).is_err(), "{}", c.id);
         a.run_command(&c.id);
     }
     assert!(a.effects.is_empty(), "disabled commands do nothing");
+}
+
+#[test]
+fn dictation_shortcuts_check_status_before_starting_capture() {
+    let mut a = app();
+    press(&mut a, &["ctrl+d"]);
+    assert_eq!(a.ui.dictation.phase, Phase::Checking);
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Api(ApiCall::VoiceStatus { generation }))
+            if *generation == a.ui.dictation.generation
+    ));
+
+    a.ui.dictation.cancel();
+    a.effects.clear();
+    press(&mut a, &["ctrl+x", "v"]);
+    assert_eq!(a.ui.dictation.phase, Phase::Checking);
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Api(ApiCall::VoiceStatus { .. }))
+    ));
+}
+
+#[test]
+fn enter_stops_dictation_without_sending_and_escape_keeps_typed_text() {
+    let mut stopped = app();
+    stopped.composer().set_text("typed already");
+    let generation = stopped.ui.dictation.begin(SESSION.to_owned());
+    stopped.ui.dictation.phase = Phase::Recording;
+    stopped.ui.dictation.preview = "pending words".into();
+    stopped.effects.clear();
+    press(&mut stopped, &["enter"]);
+    assert_eq!(stopped.ui.dictation.phase, Phase::Stopping);
+    assert!(stopped
+        .effects
+        .contains(&Effect::Dictation(CaptureCommand::Stop { generation })));
+    assert_eq!(stopped.composer_ref().text(), "typed already");
+    assert!(!stopped
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::Api(ApiCall::Prompt { .. }))));
+
+    let mut cancelled = app();
+    cancelled.composer().set_text("keep this draft");
+    let generation = cancelled.ui.dictation.begin(SESSION.to_owned());
+    cancelled.ui.dictation.phase = Phase::Recording;
+    cancelled.ui.dictation.preview = "throw this preview away".into();
+    cancelled.effects.clear();
+    press(&mut cancelled, &["esc"]);
+    assert_eq!(cancelled.ui.dictation.phase, Phase::Idle);
+    assert!(cancelled.ui.dictation.preview.is_empty());
+    assert_eq!(cancelled.composer_ref().text(), "keep this draft");
+    assert!(cancelled
+        .effects
+        .contains(&Effect::Dictation(CaptureCommand::Cancel { generation })));
+}
+
+#[test]
+fn absent_stt_status_requires_repository_and_size_consent() {
+    let mut a = app();
+    let generation = a.ui.dictation.begin(SESSION.to_owned());
+    a.apply_done(ActionDone {
+        call: ApiCall::VoiceStatus { generation },
+        result: Ok(Done {
+            voice: Some(serde_json::json!({
+                "stt": {
+                    "state": "absent",
+                    "repo": "ConwayResearch/Underdog-Bark-3.0-Clean",
+                    "size": 181_000_000
+                }
+            })),
+            ..Done::default()
+        }),
+    });
+    assert_eq!(a.ui.dictation.phase, Phase::Consent);
+    let dialog = a.ui.dialog.as_ref().unwrap();
+    let body = dialog.body.join(" ");
+    assert!(body.contains("ConwayResearch/Underdog-Bark-3.0-Clean"));
+    assert!(body.contains("181 MB"));
+    assert!(a.effects.is_empty(), "the model download waits for consent");
+
+    press(&mut a, &["right", "enter"]);
+    assert_eq!(a.ui.dictation.phase, Phase::Downloading);
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Api(ApiCall::VoiceDownload { generation: got })) if *got == generation
+    ));
+}
+
+#[test]
+fn stt_ready_progress_wins_a_race_with_the_status_request() {
+    let mut a = app();
+    press(&mut a, &["ctrl+d"]);
+    let generation = a.ui.dictation.generation;
+    let log_generation = a.state.model.generation.as_deref().unwrap();
+    let event = serde_json::json!({
+        "id": 100_000,
+        "cursor": format!("{log_generation}:100000"),
+        "type": "voice.progress",
+        "time": 1.0,
+        "data": {"model":"stt", "state":"ready", "bytes_done":181_000_000, "bytes_total":181_000_000}
+    });
+    let Frame::Event(event) = Frame::from_value("voice.progress", None, &event).unwrap() else {
+        panic!("expected a durable voice progress event");
+    };
+    a.apply_sync(SyncMsg::Event(event));
+    assert_eq!(a.ui.dictation.generation, generation);
+    assert_eq!(a.ui.dictation.phase, Phase::Starting);
+    assert!(a
+        .effects
+        .contains(&Effect::Dictation(CaptureCommand::Start { generation })));
+}
+
+#[test]
+fn recording_strip_keeps_preview_out_of_the_editable_draft() {
+    let mut a = app();
+    a.composer().set_text("typed text");
+    a.ui.dictation.begin(SESSION.to_owned());
+    a.ui.dictation.phase = Phase::Recording;
+    a.ui.dictation.levels.extend([0.0, 0.1, 0.8, 0.35]);
+    a.ui.dictation.preview = "pending words".into();
+    let (_, rows) = draw(&mut a, 120, 36);
+    let frame = rows.join("\n");
+    assert!(frame.contains("REC"), "{frame}");
+    assert!(frame.contains("pending words"), "{frame}");
+    assert!(frame.contains("typed text"), "{frame}");
+    assert_eq!(a.composer_ref().text(), "typed text");
+}
+
+/// Writes an SVG snapshot of a simulated recording state when `I4_SHOTS` is set.
+/// It exercises the real Ratatui renderer without requiring a microphone.
+#[test]
+#[ignore]
+fn dictation_strip_shot() {
+    let Ok(dir) = std::env::var("I4_SHOTS") else {
+        return;
+    };
+    let mut a = app();
+    a.composer().set_text("typed draft stays editable");
+    a.ui.dictation.begin(SESSION.to_owned());
+    a.ui.dictation.phase = Phase::Recording;
+    a.ui.dictation.levels.extend([
+        0.02, 0.06, 0.18, 0.48, 0.83, 0.5, 0.21, 0.08, 0.28, 0.72, 0.4, 0.12,
+    ]);
+    a.ui.dictation.preview = "A pending transcript preview".into();
+    let (buf, _) = draw(&mut a, 120, 36);
+    let (fg, bg) = nexus_tui::svg::page_colors(false);
+    std::fs::write(
+        format!("{dir}/dictation-strip-120x36.svg"),
+        nexus_tui::svg::to_svg(&buf, fg, bg),
+    )
+    .unwrap();
 }
 
 #[test]

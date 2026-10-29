@@ -234,9 +234,10 @@ field) and removal asks first. Settings shows the default model, catalog size
 and source and the loaded agents, and says why rows that need a Core setting
 cannot change.
 
-Still Step 12.4: the built-in editor, worktree
-management in the UI, `path:line` links, settings editing beyond
-theme/monochrome, and steering/queueing (blocked on Core, Step 12a). Unavailable commands are listed disabled with their reason.
+Still Step 12.4: the built-in editor, worktree management in the UI, `path:line`
+links, settings editing beyond the wired sections, and steering/queueing
+(blocked on Core, Step 12a). Unavailable commands are listed disabled with their
+reason.
 
 ## Build, run, test
 
@@ -314,13 +315,41 @@ chmod 700 $NEXUS10_HOME          # Core requires a private home
 NEXUS_TUI_CORE_CMD="uv run --project ../nexus-core nexus" cargo run
 ```
 
+## Voice dictation
+
+`/voice`, `ctrl+d`, or the TUI's `ctrl+x v` shortcut starts dictation. The TUI
+checks `GET /api/voice` first. If the STT model is absent, a confirmation names
+its Hugging Face repository and approximate download size before the client
+starts `POST /api/voice/stt/download`; Core's `voice.progress` events update the
+download strip above the composer. Missing runtimes and unsupported platforms
+show Core's status error instead of opening the microphone.
+
+Capture uses the default input device through `cpal` on a dedicated thread.
+Interleaved channels are downmixed and resampled to mono 16 kHz PCM16 WAV. The
+start cue plays before capture opens and the stop cue after it closes. While
+recording, the composer strip shows a live waveform and partial transcripts;
+previews are requested only after at least 0.4 seconds of new audio, with one
+transcription request in flight. Press Enter to stop and insert the final
+transcript at the draft cursor. It remains editable and is never sent
+automatically. Esc cancels and leaves the text that was already typed
+untouched. Capture is capped at 120 seconds.
+
+Settings → **Voice and speech** reads both model statuses from Core, including
+the state, Hugging Face repository, human-readable size, cache path and any
+error. Downloads require an explicit confirmation showing the repository and
+approximate size; it says the files come from Hugging Face and go into the
+standard cache. `voice.progress` updates the relevant row while downloading.
+Remove confirms that only that repository will be removed from the Hugging Face
+cache. The modal refreshes its status when opened and after each download/remove
+action; it never reads the cache directly.
+
 ## Module layout
 
 Lower layers know nothing of higher ones.
 
 | Module | Role |
 | --- | --- |
-| `transport` | HTTP (bearer auth, `Idempotency-Key`, `If-Match`, error classification, keyed transport retries) and SSE (incremental parser, `Last-Event-ID`, `EventStream`), `Backoff`. No Nexus types. |
+| `transport` | HTTP (bearer auth, `Idempotency-Key`, `If-Match`, raw audio bodies, error classification, keyed transport retries) and SSE (incremental parser, `Last-Event-ID`, `EventStream`), `Backoff`. No Nexus types. |
 | `api` | Typed responses and the endpoints the TUI needs; `/api/info` and the API-version check (`check_compat`); cursors; SSE `Frame` decoding; `RequestId`, `PendingMutation`, `Outcome` (done vs revision conflict). |
 | `reduce` | Pure `Model` (projects, sessions, running turns, waits, streaming text, selected session's messages, turn summaries, spend ledger and the running turn's live events): `apply_snapshot`, `apply_history`, `apply_turns`, `apply_event` (`turn.summary` replaces the scratch), dedup by durable id, generation check. |
 | `prefs` | `<home>/tui.json`: the TUI's own client preferences, load, atomic 0600 save, merge of changed fields. |
@@ -329,11 +358,12 @@ Lower layers know nothing of higher ones.
 | `state` | `ConnectionState`, `Banner`, `AppState` (model + connection + banners; `apply(SyncMsg)`). |
 | `manifest`, `theme` | `interface/manifest.toml` and `interface/theme.toml` embedded with `include_str!` and parsed into typed structs: commands, keys, Esc chain, navigation, settings; colour tokens per mode and tier (truecolor, 256, ANSI-16, monochrome), glyph tables (Unicode/ASCII). No command list, key, reason, colour or glyph is copied by hand. |
 | `completion` | Ranking (`rank_menu`, typo distance), acceptance text and the per-token reply cache for the composer's completion popup, copied from old Nexus. |
+| `dictation` | Local `cpal` capture on its own thread, mono conversion, streaming resampling, PCM16 WAV encoding, cue tones, waveform levels and preview pacing. No device handle crosses threads. |
 | `text`, `keys`, `composer`, `editor` | Display-width helpers, key names, and the multi-line composer. The grapheme editor and visual layout are adapted from old Nexus; composer movement and deletion respect grapheme boundaries. The composer uses the editor
 for selection, undo/redo and collapsed large pastes; sent text expands every paste. |
 | `ui`, `layout` | View-state types (focus, overlays, dialogs, alerts, mouse targets). `Regions::compute` is the one geometry function; the renderer registers every clickable rect in a `HitMap` as it draws it and the map is rebuilt each frame. |
-| `app` | Focus model, `when`-term evaluation, command availability, the palette, the Esc chain, keyboard/mouse/paste handling. Produces `Effect`s (API call, supervisor command, clipboard, quit, suspend). |
-| `actions` | The mutations the shell makes (prompt, new session, continue, interrupt, archive, rename, delete, allow/deny), each with its own `RequestId`; a failed send hands the draft back. |
+| `app` | Focus model, `when`-term evaluation, command availability, the palette, the Esc chain, keyboard/mouse/paste handling. Produces `Effect`s (API call, microphone capture, supervisor command, clipboard, quit, suspend). |
+| `actions` | Core actions (prompt, session changes, voice status/download/transcription, and others), each with its own `RequestId` where applicable; failed sends restore their draft. |
 | `timeline` | The session timeline: blocks in model order (starting context, turns, user/assistant text, reasoning, tools and their diffs, notices, diagnostics, child cards) with fold state and the list of selectable blocks. Folding is view state only. |
 | `paint` | Buffer-level drawing helpers: `scrim` (dim a buffer under a modal), `modal_rect` (the modal block's geometry), `meter`. |
 | `render` | Ratatui drawing from the model, theme and manifest. Timeline blocks become hit targets as they are drawn. `render_text` renders to a text grid for tests and frame dumps. |
