@@ -1003,9 +1003,22 @@ memory, for the tool (bash: the exact command), and a deny rule still wins. K8 `
 table, `GET /api/artifact/{id}` served inert, MCP image/audio saved with the text saying the model cannot see them.
 K9 `GET …/switch-cost`. K10 `PUT …/file` with `expected_revision` and `files.changed`. K11 `GET /api/usage`
 (codex, copilot windows; `nexus/provider_usage.py`) and `GET …/usage`. Tests: `test_prompt_history.py`, `test_server.py`,
-`test_artifacts.py`, `test_provider_usage.py`. **Not done:** every client part (search UI, load-older-turns, the two
-approval choices, the cache confirm, the built-in editor, limits in Settings/status), the timeline showing tool
-images inline, an Anthropic-format tool result (J4), persistence of session grants, a real-account run of `/api/usage`. TUI and NSH only had their API version bumped.
+`test_artifacts.py`. **Not done (Core):** an Anthropic-format tool result (J4, scheduled for later), persistence of session grants,
+a real-account run of `/api/usage`. (`test_provider_usage.py` does not exist; the old Nexus has none either, so it is left until needed.)
+**Landed 2026-10-29: the client parts of K5–K11, in the TUI and NSH.** K5 the session switcher / sidebar search asks `/api/search` and lists
+message matches under the title matches with the snippet. K6 a session opens with its newest 200 messages; `turn.load_older` (Enter on the
+`older messages are not loaded` row, the palette, a button in NSH) reads the page before the oldest. K7 the card offers allow once, allow for
+the session and deny, and deny with a note (the composer's text is the note; empty, the client says so). K8 a tool row names its images
+(TUI: `▣ image name · mime · artifact`, a terminal cannot show pixels) and NSH shows them from `/api/artifact/{id}` inside the open tool row.
+K9 model and agent picks for an existing session ask `…/switch-cost` and confirm only when `cache_lost` (a failed check never blocks). K10 the
+built-in editor (TUI `e` in the file view, NSH Edit button / `cmd+e`): save is `PUT` with the read revision, `stale_file` keeps the text and
+marks the file, reload asks when dirty, `files.changed` reloads a clean editor and warns a dirty one, Esc asks before dropping changes; verified
+against a real Core (NSH web build saved to disk). K11 `/usage` (`app.usage`, palette) shows `/api/usage`; it is a command and a dialog, not
+a Settings section. Manifest: `editor.edit` and the `editor.readonly` term were added; `turn.load_older` and the usage command are in the
+palette. Tests: `shell.rs`, `alerts.rs`, `timeline.rs` (TUI); `search.test.tsx`, `older.test.tsx`, `editor.test.tsx`, `toolmedia.test.tsx`
+(NSH). **Not done (clients):** editor find (`editor.find`) and syntax highlighting; the NSH save and stale paths run only against a real Core
+(the mock harness stays disconnected, so mutating commands are disabled there); session grants are not listed or cleared in a client
+(`GET`/`DELETE …/grant`); no Settings section for limits; NSH tool images are not zoomable.
 **Tool-result images (K8, later the same day):** `ToolResult.media` (`Media` refs, never bytes in JSON), `ToolOutput(str)`
 for tools, `Agent.request()` -> `Runtime.render_media` fills `data_url`, `turn_tool.media` for recovery, Responses
 `function_call_output` as an `input_text`/`input_image` array, Chat as one user message after the tool group, Copilot
@@ -1307,7 +1320,7 @@ when each item lands.
 
 ## 11. Known gaps
 
-- **NSH browser tests: 11 of 64 fail; fixing them is deferred (decision 2026-10-29).**
+- **NSH browser tests: 13 of 84 fail in the full run; fixing them is deferred (decision 2026-10-29).** (A clean-checkout run at 3a03a00 showed `i6` (agent line) and `handoff` (summary card) failing there too, so those are not from the K5-K11 client work.)
   `nsh test --target web` finds no browser by itself; pass Playwright's Chromium:
   `nsh test --target web --browser "$HOME/Library/Caches/ms-playwright/chromium-1200/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"`.
   Every failure shows "Disconnected from Core · reconnecting" on screen: the mock

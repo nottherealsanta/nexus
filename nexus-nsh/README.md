@@ -57,8 +57,8 @@ The waiting card (D14) is docked above the composer in its 760 px column: a 3 px
 rail, `◆ Allow bash?` (`Nexus asks` for a question), `waiting on you · 0:42` counted from
 when the client first saw the request, the parameter table (at most six rows), for edit,
 write and patch the unified diff capped at 12 rows with `N more rows`, and a key-chip
-choice list. Choices Core does not offer (allow for session, deny with a note) are muted
-with their reason beside them. Questions show radios or checkboxes and a free-text field;
+choice list: allow once, allow for session (`scope: "session"`), deny, and deny with a note
+(the note is the composer's text; empty, it says so). Questions show radios or checkboxes and a free-text field;
 `⌘↵` submits. Alerts (D15): toasts are 360 px, top-right under the header (and the banner),
 oldest first, three at most and then `+N more`, with no lifetime hairline. A toast keeps its
 full text on the record; clicking it, or pressing Enter on it, or clicking an entry of the
@@ -209,3 +209,26 @@ Settings reads and edits shared defaults, timeline detail, reduced-motion choice
 errors are shown in Settings, and `config.changed` refreshes the view after an
 external edit. The session context meter uses Core's budget; `~` marks an
 estimate.
+
+## K5-K11 client parts (2026-10-29)
+
+- **Search (K5).** The sessions list asks `GET /api/search` after 150 ms (two characters or
+  more) and lists the sessions whose user messages match, under their title matches, with the
+  matching snippet on the row's agent line.
+- **Older messages (K6).** A session opens with its newest 200 messages (`message?limit=200`);
+  when more exist the timeline starts with `Older messages are not loaded` and a Load older
+  messages button (`turn.load_older`, also in the palette) that reads the page before the oldest
+  loaded message.
+- **Approvals (K7).** See the waiting card above.
+- **Cache warning (K9).** Choosing a model or agent for an existing session asks
+  `…/switch-cost` first; when `cache_lost` it confirms with the reasons and the cached token count.
+  A failed check never blocks the switch.
+- **Editor (K10).** A project file opens read-only; Edit (`cmd+e`) makes it an editor over the
+  text with the `revision` it was read at. Save (`cmd+s`) is `PUT …/file`; a stale write
+  (`stale_file`) keeps the text and marks the file `changed on disk · reload`; Reload re-reads
+  (asking first when dirty); `files.changed` reloads a clean editor and warns a dirty one. Esc
+  asks before dropping changes. Not built: find (`editor.find`), syntax highlighting.
+- **Plan limits (K11).** `/usage` (palette: Show plan limits) shows `GET /api/usage` in the
+  notification detail dialog.
+- **Tool images (K8).** A tool row whose result has `media` opens with its images
+  (`/api/artifact/{id}`, same origin) under the output.

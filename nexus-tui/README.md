@@ -165,6 +165,23 @@ previous one, and the first Esc ends the search while the next closes the file. 
 whole files up to 1 MiB and has no offsets, so the header gives the exact range shown. The
 file view has no syntax highlighting yet.
 
+**Editor (K10).** `e` in the file view starts the editor over a `Composer` buffer (cursor at
+the top, `ctrl+s` saves, `ctrl+z`/`ctrl+y` undo and redo, Tab inserts four spaces); the header
+says `editing`, `● modified` or `changed on disk · reload`. Save is `PUT …/file` with the
+revision the file was read at; a stale write keeps the text. `editor.reload` (palette) re-reads,
+asking first when dirty; Esc leaves a clean editor and asks before dropping changes;
+`files.changed` reloads a clean editor and warns a dirty one. Opening another session or a Git
+diff is refused while the text is unsaved.
+
+**K5-K11 client parts.** The session switcher (`ctrl+k`) also lists sessions whose user messages
+match (Core's `/api/search`) after the title matches, with the snippet in the hint column. A
+session opens with its newest 200 messages; Enter on `older messages are not loaded` (or the
+palette's Load older turns) reads the page before the oldest. The approval card offers `y` allow
+once, `a` allow for the session, `n` deny, `d` deny with the composer's text as the note.
+Choosing a model or agent for an existing session first asks `…/switch-cost` and confirms when
+the cache would be lost. `/usage` shows plan limits (`GET /api/usage`). A tool result's images
+are named under its output (`▣ image name · mime · artifact id`); a terminal cannot show them.
+
 Responsive layout (D17, `layout::Breakpoint`): from 160 columns both sidebars are docked at 34
 and 36 cells; at 120-159 they are 28 and 30; at 100-119 the left stays docked and the right is
 closed until opened (the toggle docks it; a saved preference wins); below 100 both are drawers
