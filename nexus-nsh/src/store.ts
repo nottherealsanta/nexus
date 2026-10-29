@@ -27,6 +27,13 @@ export async function loadInputs(id: string) {
   const data = await request<{inputs: PendingInput[]; held: boolean}>("GET", `/api/session/${id}/input`);
   if (inputSeq.get(id) === seq) pendingInputs.update((all) => ({ ...all, [id]: data }));
 }
+// Prompt history: this project's sent prompts from Core, newest first (Up in the composer).
+export const promptHistory = signal<{ project: string; entries: string[] }>({ project: "", entries: [] });
+export async function loadPromptHistory(project: string) {
+  const data = await request<{ prompts: { text: string; image_count: number }[] }>("GET", `/api/project/${project}/prompts`, { query: { limit: 200 } });
+  const entries = data.prompts.map((p) => p.image_count ? `${p.text}${p.text ? "\n" : ""}[${p.image_count} image${p.image_count === 1 ? "" : "s"}]` : p.text).filter(Boolean);
+  promptHistory.set({ project, entries });
+}
 export const contextBudget = signal<Record<string, { used: number; window: number | null; exact: boolean }>>({});
 export async function loadContext(id: string) { const data = await request<any>("GET", `/api/session/${id}/context`); contextBudget.update((all) => ({ ...all, [id]: data })); }
 function applyConfig(c: any) {

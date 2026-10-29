@@ -969,6 +969,17 @@ cached for 3 seconds. Invalid input returns 400: `q` must be at most 256
 characters, contain no NUL or backslash, and not start with `/` or contain a `..`
 segment; `limit` must be a non-negative integer.
 
+`GET /api/project/{id}/prompts?q=&limit=&before=` is the prompt history for Up-arrow
+recall: `{"prompts": [{"id", "text", "image_count", "session_id", "created"}]}`,
+newest first, from every session of the project. Only what the user sent counts
+(a prompt, a steer or a queued input once delivered); notices, child results and
+sessions' own child prompts do not. A text sent several times appears once, at its
+newest use; `image_count` mentions attached images, which are not stored here.
+`q` is a case-insensitive substring, `limit` defaults to 50 (1-200) and `before`
+is an `id` to page past. Rows live in `prompt_history`, which sessions from before
+it existed get once from their stored user messages (notices excluded), and which
+goes with the session when it is deleted.
+
 `GET /api/session/{id}/git` returns branch, ahead/behind counts and changed
 paths. Each change has `staged` (index column set), `unstaged` (worktree
 column set, also true for untracked files), the porcelain v1 `status` code

@@ -464,6 +464,19 @@ on "now write the changelog" starts a new turn when the first one finishes.
 
 ### C. Prompt history
 
+**Landed 2026-10-29 (Core, TUI, NSH), pending the real-app check:** Core table
+`prompt_history` and `GET /api/project/{id}/prompts` (`q`, `limit`, `before`;
+per project, duplicates collapsed, notices excluded, one-time backfill for old
+sessions, docs/api.md). The TUI refills `editor.history` from it on session open,
+after a send and on `turn.summary`; Up recalls on the first line and Down on the
+last, so Up inside a multi-line draft or recalled entry moves the cursor; images
+show as `[N images]`. NSH recalls with Up/Down only while the draft is empty or
+exactly the recalled entry (the caret is not readable there). Core 419 tests,
+TUI tests, Clippy and `nsh check` pass. **Open:** Ctrl+R search list (both
+clients; `q` is a plain substring until K5's FTS5), NSH browser tests (no Chrome
+here), and the "done when" run with both real clients. The text below is the
+original spec.
+
 nexus10 has history in the TUI only (`nexus-tui/src/editor.rs`
 `history: Vec<String>`, 500 entries, Up/Down at `app.rs` ~4104). It is kept in
 memory, so it is lost when the TUI restarts, and it holds only what this client
@@ -1091,6 +1104,7 @@ when each item lands.
 | Layered old config and read-only defaults | One `config.toml`, editable HTTP-backed Settings, revision conflicts and forward defaults for new sessions (A1, 2026-10-29) | Shared settings without rewriting existing context |
 | Old scripted provider coupled to the old model protocol | Dev-gated `mock` llmhub provider and eleven offline scenarios (A2, 2026-10-29) | Exercise the real loop without network |
 | Client-only context estimate | Core context budget uses newest matching-model request usage, with explicit estimated fallback and nullable window (A3, 2026-10-29) | Consistent meters across clients |
+| Client composer history in memory (TUI only) or one global file for all projects (old) | Core stores what the user sent and serves it per project; both clients recall from it; Up recalls on the first line only (2026-10-29, C) | History survives restarts and is shared across clients |
 
 ## 11. Known gaps
 

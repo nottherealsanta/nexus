@@ -5,7 +5,7 @@ import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, fo
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
-  agentCatalog, contextBudget, pendingInputs, loadInputs, centre, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model, modelCatalog, tick,
+  agentCatalog, contextBudget, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model, modelCatalog, tick,
   projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
@@ -107,6 +107,7 @@ export function Composer() {
     const sent = images();
     const ok = await sendPrompt(t, sent, mode);
     if (ok && ses()) void loadInputs(ses()!.id).catch(() => {});
+    if (ok) { const p = currentProject(); if (p) void loadPromptHistory(p).catch(() => {}); }
     if (ok) {
       draft.update((d) => ({ ...d, [target]: (d[target] ?? "").trim() === t ? "" : d[target] ?? "" }));
       imageDrafts.update((d) => ({ ...d, [target]: (d[target] ?? []).filter((i) => !sent.includes(i)) }));
@@ -172,6 +173,37 @@ export function Composer() {
       down: () => { const n = completion()?.rows.length ?? 0; selected.set(Math.min(Math.max(0, n - 1), selected() + 1)); },
       up: () => selected.set(Math.max(0, selected() - 1)),
       tab: () => { const c = completion(); const row = c?.rows[Math.min(selected(), (c?.rows.length ?? 1) - 1)]; if (row) accept(row); },
+    });
+  });
+  // Prompt history: Up in an empty composer recalls older prompts, Down returns toward the draft.
+  // The caret position is not readable here, so Up and Down are taken only while the draft is empty or
+  // is exactly the recalled entry.
+  const recall = signal<{ at: number; scratch: string } | null>(null);
+  const recalled = () => { const r = recall(); const e = promptHistory().entries; return r && e[r.at] === text() ? r : null; };
+  effect(() => {
+    const project = currentProject();
+    viewed()?.id;
+    if (project) void loadPromptHistory(project).catch(() => {});
+  });
+  effect(() => {
+    if (!focused() || open()) return;
+    const entries = promptHistory().entries;
+    const set = (v: string) => draft.update((d) => ({ ...d, [key()]: v }));
+    if (!entries.length || (text() !== "" && !recalled())) return;
+    return bindOpenKeys({
+      up: () => {
+        const r = recalled();
+        const at = r ? Math.min(entries.length - 1, r.at + 1) : 0;
+        recall.set({ at, scratch: r ? r.scratch : text() });
+        set(entries[at]);
+      },
+      down: () => {
+        const r = recalled();
+        if (!r) return;
+        if (r.at === 0) { recall.set(null); set(r.scratch); return; }
+        recall.set({ at: r.at - 1, scratch: r.scratch });
+        set(entries[r.at - 1]);
+      },
     });
   });
   effect(() => {

@@ -533,6 +533,16 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
             file_root(request), query, limit, include_directories=directories)
         return JSONResponse({"query": query, "paths": paths})
 
+    async def project_prompts(request: Request) -> Response:
+        project = runtime.project(p(request, "id"))
+        try:
+            limit = max(1, min(200, int(request.query_params.get("limit", "50"))))
+            before = int(request.query_params["before"]) if request.query_params.get("before") else None
+        except ValueError:
+            raise ValueError("limit and before must be integers") from None
+        prompts = runtime.store.prompt_history(project.id, q=request.query_params.get("q", ""), limit=limit, before=before)
+        return JSONResponse({"prompts": prompts})
+
     async def session_git(request: Request) -> Response:
         from nexus import files
         session = runtime.session(p(request, "id"))
@@ -682,7 +692,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     async def prompt(request: Request) -> Response:
         body = await _body(request)
         mutation = getattr(request.state, "mutation", None)
-        result = runtime.prompt(p(request, "id"), str(body.get("text", "")), images=body.get("images"), mutation=mutation, mode=body.get("mode", "send"))
+        result = runtime.prompt(p(request, "id"), str(body.get("text", "")), images=body.get("images"), mutation=mutation, mode=body.get("mode", "send"), typed=True)
         if mutation is not None:
             result = {**result, "idempotency_key": mutation["key"]}
         return JSONResponse(result, status_code=202)
@@ -898,6 +908,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/project/{id}/files", route(project_files)),
         Route("/api/project/{id}/file", route(project_file)),
         Route("/api/project/{id}/files/search", route(project_file_search)),
+        Route("/api/project/{id}/prompts", route(project_prompts)),
         Route("/api/session", route(sessions), methods=["GET", "POST"]),
         Route("/api/session/{id}", route(session), methods=["GET", "PATCH", "DELETE"]),
         Route("/api/session/{id}/model", route(session_model), methods=["POST"]),

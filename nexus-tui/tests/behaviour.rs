@@ -821,3 +821,36 @@ fn pending_input_is_selected_and_removed_for_restoration() {
     press(&mut a, &["up", "backspace"]);
     assert!(a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Input { id, action, .. }) if id == "in_1" && action == "remove")));
 }
+
+#[test]
+fn core_history_recalls_multiline_entries_whole_and_keeps_the_draft() {
+    let mut a = app();
+    a.composer()
+        .set_history(vec!["older".into(), "line one\nline two".into()]);
+    typing(&mut a, "mine");
+    press(&mut a, &["up"]);
+    assert_eq!(a.composer_ref().text(), "line one\nline two");
+    // Up inside a recalled multi-line entry moves the cursor first.
+    press(&mut a, &["up"]);
+    assert_eq!(a.composer_ref().text(), "line one\nline two");
+    assert_eq!(a.composer_ref().cursor().0, 0);
+    press(&mut a, &["up"]);
+    assert_eq!(a.composer_ref().text(), "older");
+    press(&mut a, &["down"]);
+    assert_eq!(a.composer_ref().text(), "line one\nline two");
+    press(&mut a, &["down"]);
+    press(&mut a, &["down"]);
+    assert_eq!(a.composer_ref().text(), "mine");
+}
+
+#[test]
+fn up_in_the_middle_of_a_multiline_draft_moves_the_cursor() {
+    let mut a = app();
+    a.composer().set_history(vec!["older".into()]);
+    typing(&mut a, "a");
+    press(&mut a, &["ctrl+j"]);
+    typing(&mut a, "b");
+    press(&mut a, &["up"]);
+    assert_eq!(a.composer_ref().text(), "a\nb");
+    assert!(!a.composer_ref().in_history());
+}

@@ -117,6 +117,10 @@ pub enum ApiCall {
     DeleteProject {
         project: String,
     },
+    /// Read the project's prompt history (Up in the composer); never toasts.
+    Prompts {
+        project: String,
+    },
 }
 
 impl ApiCall {
@@ -144,6 +148,7 @@ impl ApiCall {
             ApiCall::ChangeDirectory { .. } => "Directory change requested",
             ApiCall::AddProject { .. } => "Project added",
             ApiCall::DeleteProject { .. } => "Project removed",
+            ApiCall::Prompts { .. } => "",
         }
     }
 
@@ -174,6 +179,8 @@ pub struct Done {
     /// A project the app should make current (added projects).
     pub project: Option<String>,
     pub input_parts: Option<Vec<Value>>,
+    /// The project's prompts, oldest first (history recall).
+    pub prompts: Option<Vec<String>>,
 }
 
 /// An authenticated API for the daemon in `home`, from `daemon.json`.
@@ -197,6 +204,17 @@ pub async fn run(api: Option<CoreApi>, call: ApiCall) -> ActionDone {
         Some(api) => execute(&api, &call).await,
     };
     ActionDone { call, result }
+}
+
+/// A history entry as the composer shows it: images are mentioned, not re-attached.
+fn prompt_entry(text: &str, images: u64) -> String {
+    match (text.is_empty(), images) {
+        (_, 0) => text.to_owned(),
+        (true, 1) => "[1 image]".to_owned(),
+        (true, n) => format!("[{n} images]"),
+        (false, 1) => format!("{text}\n[1 image]"),
+        (false, n) => format!("{text}\n[{n} images]"),
+    }
 }
 
 async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
@@ -226,6 +244,32 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                 )
                 .await
                 .map_err(e)?;
+        }
+        ApiCall::Prompts { project } => {
+            let value = api
+                .http
+                .get(
+                    &format!("/api/project/{project}/prompts"),
+                    &[("limit", "200".to_owned())],
+                )
+                .await
+                .map_err(e)?;
+            let mut prompts: Vec<String> = value["prompts"]
+                .as_array()
+                .map(|list| {
+                    list.iter()
+                        .map(|p| {
+                            prompt_entry(
+                                p["text"].as_str().unwrap_or(""),
+                                p["image_count"].as_u64().unwrap_or(0),
+                            )
+                        })
+                        .filter(|text| !text.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            prompts.reverse();
+            done.prompts = Some(prompts);
         }
         ApiCall::Prompt {
             session,

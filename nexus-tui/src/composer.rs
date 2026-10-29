@@ -197,6 +197,10 @@ impl Composer {
     pub fn has_history(&self) -> bool {
         !self.editor.history.is_empty()
     }
+    /// Replace the recall list (oldest first) with the project's history from Core.
+    pub fn set_history(&mut self, entries: Vec<String>) {
+        self.editor.set_history(entries);
+    }
     pub fn in_history(&self) -> bool {
         self.editor.history_index < self.editor.history.len()
     }

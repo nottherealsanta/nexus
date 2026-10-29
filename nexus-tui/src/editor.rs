@@ -610,6 +610,13 @@ impl Editor {
         self.history_scratch = None;
         text
     }
+    pub fn set_history(&mut self, mut entries: Vec<String>) {
+        let excess = entries.len().saturating_sub(500);
+        entries.drain(..excess);
+        self.history = entries;
+        self.history_index = self.history.len();
+        self.history_scratch = None;
+    }
     pub fn history(&mut self, older: bool) {
         if older && self.history_index == self.history.len() && self.history_scratch.is_none() {
             self.history_scratch = Some((self.text.clone(), self.cursor, self.pastes.clone()));

@@ -1492,7 +1492,7 @@ class Runtime:
             self._run(session_id, user_text, turn["id"], origin=origin, continuation=continuation, input_id=input_id))
         return turn
 
-    def prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None, mode: str = "send") -> dict[str, Any]:
+    def prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None, mode: str = "send", typed: bool = False) -> dict[str, Any]:
         session = self.session(session_id)
         if mode not in ("send", "steer", "queue"):
             raise ValueError("mode must be send, steer or queue")
@@ -1523,6 +1523,8 @@ class Runtime:
             Text(f"[Image {chr(ord('A') + index)}]"), image,
         ))
         turn = self._begin_turn(session, user_text=Message("user", (Text(text), *labelled_parts)) if parts else text, origin="prompt", mutation=mutation)
+        if typed:
+            self.store.record_prompt(session_id, Message("user", (Text(text), *labelled_parts)))
         return {"status": "busy", "turn_id": turn["id"], "origin": "prompt"}
 
     def _start_input(self, session_id: str, item: dict[str, Any]) -> dict[str, Any]:

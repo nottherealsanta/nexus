@@ -127,6 +127,10 @@ class Inputs:
         item = self.get(sid, iid)
         with self.store.db:
             message = self.store._insert_message(sid, self.message(item), time.time())
+            text, images = self.store._prompt_text(message.message)
+            if text.strip() or images:
+                self.store.db.execute("insert into prompt_history (session_id, text, image_count, created) values (?, ?, ?, ?)",
+                                      (sid, text, images, time.time()))
             self.store.db.execute("update message set delivery = ? where id = ?", ("steer" if item["mode"] == "steer" else "queued", message.id))
             self.store.db.execute("update pending_input set state = 'delivered', message_id = ?, turn_id = ? where id = ?", (message.id, turn_id, iid))
         from dataclasses import replace

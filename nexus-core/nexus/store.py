@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from .codec import message_from_json, message_to_json, part_from_json
-from .llmhub.types import Message, ToolCall, ToolResult, Usage
+from .llmhub.types import Image, Message, Text, ToolCall, ToolResult, Usage
 from .paths import home
 
 SCHEMA = """
@@ -150,6 +150,14 @@ create table if not exists message (
   event_id integer,
   unique (session_id, seq)
 );
+create table if not exists prompt_history (
+  id integer primary key autoincrement,
+  session_id text not null references session(id) on delete cascade,
+  text text not null,
+  image_count integer not null default 0,
+  created real not null
+);
+create index if not exists prompt_history_session on prompt_history(session_id, id);
 create table if not exists file_observation (
   session_id text not null references session(id) on delete cascade,
   path text not null,
@@ -346,6 +354,9 @@ class Store:
             if applied.rowcount:
                 self.db.execute("update session set permission = 'allow', revision = revision + 1 "
                                 "where permission = 'ask'")
+        with self.db:  # one-time: sessions from before prompt history keep what the user typed
+            if self.db.execute("insert or ignore into migration (name) values ('prompt_history_v1')").rowcount:
+                self._backfill_prompt_history()
         project_columns = {r["name"] for r in self.db.execute("pragma table_info(project)")}
         if "revision" not in project_columns:
             self.db.execute("alter table project add column revision integer not null default 1")
@@ -983,6 +994,51 @@ class Store:
         )
         self.db.execute("update session set updated = ? where id = ?", (now, session_id))
         return stored
+
+    NOTICE_PREFIXES = ("[Nexus notice", "[Notification", "→ Background Shell")
+
+    def _backfill_prompt_history(self) -> None:
+        """Old user messages that are not notices; child sessions are prompted by their parent."""
+        rows = self.db.execute(
+            "select m.session_id, m.parts, m.created from message m join session s on s.id = m.session_id"
+            " where m.role = 'user' and s.parent_id is null order by m.created, m.seq").fetchall()
+        for r in rows:
+            text, images = self._prompt_text(message_from_json({"role": "user", "parts": json.loads(r["parts"])}))
+            if (text or images) and not text.startswith(self.NOTICE_PREFIXES):
+                self.db.execute("insert into prompt_history (session_id, text, image_count, created) values (?, ?, ?, ?)",
+                                (r["session_id"], text, images, r["created"]))
+
+    @staticmethod
+    def _prompt_text(message: Message) -> tuple[str, int]:
+        import re
+        text = "".join(p.text for p in message.parts
+                       if isinstance(p, Text) and not re.fullmatch(r"\[Image [A-Z]\]", p.text))
+        return text, sum(isinstance(p, Image) for p in message.parts)
+
+    def record_prompt(self, session_id: str, message: Message) -> None:
+        """Remember what the user sent, for Up-arrow recall in every client."""
+        text, images = self._prompt_text(message)
+        if text.strip() or images:
+            with self.db:
+                self.db.execute("insert into prompt_history (session_id, text, image_count, created) values (?, ?, ?, ?)",
+                                (session_id, text, images, time.time()))
+
+    def prompt_history(self, project_id: str, *, q: str = "", limit: int = 50, before: int | None = None) -> list[dict[str, Any]]:
+        """The project's prompts, newest first, each distinct text once (at its newest use)."""
+        sql = ("select max(h.id) id, h.text, h.image_count, h.session_id, h.created from prompt_history h"
+               " join session s on s.id = h.session_id where s.project_id = ?")
+        params: list[Any] = [project_id]
+        if q:
+            sql += " and h.text like ? escape '\\'"
+            params.append("%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+        sql += " group by h.text, h.image_count"
+        if before is not None:
+            sql += " having max(h.id) < ?"
+            params.append(before)
+        sql += " order by id desc limit ?"
+        params.append(limit)
+        return [{"id": r["id"], "text": r["text"], "image_count": r["image_count"],
+                 "session_id": r["session_id"], "created": r["created"]} for r in self.db.execute(sql, params)]
 
     def append_message(self, session_id: str, message: Message) -> StoredMessage:
         now = time.time()

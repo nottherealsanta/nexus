@@ -2477,6 +2477,7 @@ impl App {
         self.reset_files();
         self.effects
             .push(Effect::Sync(SyncCommand::Select(Some(id.to_owned()))));
+        self.refresh_history();
         self.ui.view = View::Session;
         self.effects
             .push(Effect::Sync(SyncCommand::Worktrees(id.to_owned())));
@@ -3229,6 +3230,13 @@ impl App {
         }
     }
 
+    /// Ask Core for the current project's prompt history; the reply refills the composer's recall list.
+    pub fn refresh_history(&mut self) {
+        if let Some(project) = self.current_project() {
+            self.api(ApiCall::Prompts { project });
+        }
+    }
+
     // ---- sync & results ------------------------------------------------------------------
 
     pub fn apply_sync(&mut self, msg: SyncMsg) {
@@ -3308,7 +3316,11 @@ impl App {
             }
             _ => None,
         };
+        let turn_closed = matches!(&msg, SyncMsg::Event(e) if e.kind == "turn.summary");
         self.state.apply(msg);
+        if turn_closed || snapshot {
+            self.refresh_history();
+        }
         // Model names and the default model come with the catalog; ask once
         // the workspace is known so the composer never says "default".
         if snapshot && self.state.models.is_empty() && self.state.default_model.is_empty() {
@@ -3383,8 +3395,21 @@ impl App {
 
     pub fn apply_done(&mut self, done: ActionDone) {
         let name = done.call_name();
+        if let ApiCall::Prompts { project } = &done.call {
+            // Quiet: history is a convenience. Never replace it while a recalled entry is open.
+            if let (Ok(r), false) = (&done.result, self.composer_ref().in_history()) {
+                if self.current_project().as_deref() == Some(project.as_str()) {
+                    self.composer()
+                        .set_history(r.prompts.clone().unwrap_or_default());
+                }
+            }
+            return;
+        }
         match done.result {
             Ok(r) => {
+                if matches!(done.call, ApiCall::Prompt { .. }) {
+                    self.refresh_history();
+                }
                 if let ApiCall::Input {
                     session,
                     action,
@@ -4349,16 +4374,15 @@ impl App {
         match name {
             "ctrl+j" => self.composer().newline(),
             "up" | "down" => {
-                let width = crate::render::composer_inner(
-                    self.regions.composer,
-                    !self.composer_ref().images.is_empty(),
-                )
-                .width
-                .max(1) as usize;
-                let single = self.composer_ref().layout(width).0.len() == 1;
                 let down = name == "down";
-                if (single || self.composer_ref().in_history()) && self.composer_ref().has_history()
-                {
+                let (row, _) = self.composer_ref().cursor();
+                let last = self.composer_ref().expanded_text().matches('\n').count();
+                let recall = if down {
+                    self.composer_ref().in_history() && row >= last
+                } else {
+                    row == 0
+                };
+                if recall && self.composer_ref().has_history() {
                     self.composer().history(!down);
                 } else {
                     self.composer().select_move(false);
@@ -5850,6 +5874,7 @@ impl ActionDone {
             ApiCall::ChangeDirectory { .. } => "Directory change failed",
             ApiCall::AddProject { .. } => "Add project failed",
             ApiCall::DeleteProject { .. } => "Remove project failed",
+            ApiCall::Prompts { .. } => "",
         }
     }
 }
