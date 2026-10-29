@@ -270,8 +270,8 @@ describe("shell", () => {
     await app.waitFor("id:palette");
     expect(app.shows("id:palette")).toBe(true);
     // blocked_core command: present, disabled, with its reason once its row is the selected one (D13)
-    await app.type("id:palette-input", "Hand off");
-    await app.waitFor("text:Hand off to a new session");
+    await app.type("id:palette-input", "Attach file");
+    await app.waitFor("text:Attach file or image");
     expect(app.texts().some((t) => t.includes("Needs a Core increment"))).toBe(true);
     await app.keyboard.press("escape");           // rule 1: overlay closes
     expect(app.shows("id:palette")).toBe(false);

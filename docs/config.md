@@ -42,6 +42,14 @@ starts asynchronous device sign-in; `GET` on that path reports status and
 `{api_key}`. `DELETE` cancels a pending flow and signs out. Credentials never
 appear in login events.
 
+## `[context]` settings
+
+`handoff_percent` (integer 0 to 100, default 80): after a completed turn leaves a root session at least this full,
+Core continues in a new session from a handoff summary (docs/api.md, "Handoff, titles and `/btw`"). 0 turns it off.
+
+`title_models` (list of `provider/model`, default `copilot/gpt-6-luna`, then `codex/gpt-6-luna`): tried in order to
+write a session title. If none answers (each gets 20 s) the first words of the first message stay as the title.
+
 ## `[mcp]` settings
 
 `full_definitions` (boolean, default false) and `max_listed_tools` (integer 1 to 1000, default

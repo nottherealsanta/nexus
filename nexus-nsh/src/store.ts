@@ -296,6 +296,14 @@ const host: SyncHost = {
   configChanged() { void loadConfig().catch(() => {}); },
   contextChanged(id) { void loadContext(id).catch(() => {}); },
   inputsChanged(id) { void loadInputs(id).catch(() => {}); },
+  handoffEvent(e) {
+    if (e.type === "session.handoff_failed") { toast("warning", `Automatic handoff failed: ${(e.data as any)?.error ?? "unknown error"}`); return; }
+    const d = e.data as { reason?: string; to?: string };
+    if (d?.reason === "auto" && d.to && e.session_id === viewed()?.id) {
+      toast("info", "Context was nearly full: continued in a new session");
+      void selectSession(d.to);
+    }
+  },
   globalEvent(e) {
     if (e.type === "voice.progress") receiveVoiceProgress(e.data);
     else handleGlobalEvent(e);

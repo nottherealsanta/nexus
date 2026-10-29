@@ -75,6 +75,8 @@ function evalTerm(t: string): boolean {
     case "session.interrupted": return inSession && ses!.status !== "busy" && lastTurnIncomplete(model.selected?.messages ?? []);
     case "session.archived": return inSession && !!ses!.archived;
     case "session.child": return inSession && !!ses!.parent_id;
+    case "session.continued": return inSession && !!ses!.continued_from;
+    case "session.continued_on": return inSession && !!ses!.continued_to;
     case "session.in_worktree": return currentWorktree()?.main === false;
     case "has_waiting": return model.approvals.size + model.questions.size > 0;
     case "waiting.approval": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "approval"; }
@@ -214,6 +216,7 @@ export function runSlashCommand(text: string): boolean {
   const arg = tail.join(" ").trim();
   if (command.id === "session.rename" && arg) void patchSession(arg);
   else if (command.id === "skills.learn") learn(arg);
+  else if (command.id === "session.btw") { if (arg) void sideQuestion(arg); else toast("info", "Usage: /btw your question"); }
   else void run(command.id);
   return true;
 }
@@ -389,6 +392,24 @@ export async function continueSession() {
   catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
 }
 
+export async function handoff() {
+  const s = viewed(); if (!s) return;
+  toast("info", "Writing the handoff…");
+  try {
+    const r = await request<{ to: string }>("POST", `/api/session/${s.id}/handoff`, { body: {}, key: newKey() });
+    await selectSession(r.to);
+  } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+}
+/** `/btw question`: answered from the context so far in a modal; nothing is added to the session. */
+export async function sideQuestion(question: string) {
+  const s = viewed(); if (!s) return;
+  toast("info", "Asking…");
+  try {
+    const r = await request<{ answer: string }>("POST", `/api/session/${s.id}/btw`, { body: { question } });
+    contextDetail.set({ title: `Side question · ${question.slice(0, 40)}`, detail: `${r.answer}\n\nNot added to the session's context.` });
+  } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+}
+
 export const focusComposer = { fn: (() => {}) as () => void };
 export const rightWidthHint = { w: 1280 };
 
@@ -430,6 +451,16 @@ on("session.unarchive", () => archive(undefined, true), true);
 on("session.delete", () => askDelete(), true);
 on("session.interrupt", interrupt, true);
 on("session.continue", continueSession, true);
+on("session.handoff", handoff, true);
+export function openLinked(which: "continued_from" | "continued_to") {
+  const id = viewed()?.[which];
+  if (!id) return;
+  if (!model.sessions.has(id)) { toast("warning", "That session is no longer in the list (deleted or archived)"); return; }
+  void selectSession(id);
+}
+on("session.open_origin", () => openLinked("continued_from"));
+on("session.open_continuation", () => openLinked("continued_to"));
+on("session.btw", () => toast("info", "Usage: /btw your question"), true);
 on("session.speak", async () => {
   const session = viewed();
   if (!session) return;

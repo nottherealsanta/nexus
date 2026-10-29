@@ -49,6 +49,8 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/session/{id}/turn | turn summaries (usage, model, timings, retries) and the spend ledger: `?after=` or `?before=<turn id>&limit=` |
 | GET | /api/session/{id}/children | direct children |
 | GET | /api/session/{id}/tree | the whole tree containing it, from its root, nested |
+| POST | /api/session/{id}/btw | answer a side question from the context so far; nothing is stored |
+| POST | /api/session/{id}/handoff | summarise, then start a continued root session → 201 |
 | GET | /api/session/{id}/context | the request body the next turn would send |
 | GET | /api/session/{id}/snapshot | the full frozen session snapshot |
 | GET | /api/session/{id}/export | `?format=markdown or json&scope=session or tree`: a read-only export of one session or its descendants |
@@ -89,14 +91,15 @@ from . import skills as skills_module
 from .bus import Bus
 from .codec import to_json
 from .config import ConfigConflict, ConfigFile
-from .counting import budget
 from .eventlog import CursorError, Stream, format_cursor, parse_cursor
 from .inputs import InputBusy, InputNotFound
 from .llmhub import catalog
-from .llmhub.auth import SIGN_INS, AuthError
-from .llmhub.hub import connected, split_ref
+from .llmhub.auth import SIGN_INS, AuthError, CredentialError
+from .llmhub.hub import connected
 from .llmhub.providers import PROVIDERS
+from .llmhub.types import ProviderError
 from .mcp import manager as mcp_manager
+from .oneshot import OneshotError
 from .paths import home
 from .runtime import Busy, Conflict, NotFound, Runtime, message_json, project_json
 from .skills import install as skills_install
@@ -433,6 +436,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                                     headers={"x-nexus-log-generation": payload["generation"]})
             except ToolError as exc:
                 return _error(400, str(exc))
+            except (ProviderError, AuthError, CredentialError, OneshotError) as exc:
+                return _error(502, str(exc))
             except (ValueError, KeyError, TypeError) as exc:
                 return _error(400, str(exc))
 
@@ -1025,21 +1030,17 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         return JSONResponse([message_json(m) for m in runtime.store.messages(p(request, "id"))])
 
     async def context(request: Request) -> Response:
-        sid = p(request, "id")
-        body = runtime.context(sid)
-        model = runtime.session_json(runtime.session(sid))["model"]
-        try:
-            provider, model_id = split_ref(model)
-            data, _ = await catalog.load()
-            window = next((item.context for item in catalog.models_for(data, provider) if item.id == model_id), None)
-        except (OSError, ValueError, TypeError, KeyError):
-            window = None
-        row = runtime.store.db.execute(
-            "select model, input_tokens from turn_request where session_id = ? order by started desc, rowid desc limit 1",
-            (sid,),
-        ).fetchone()
-        measured = row["input_tokens"] if row and row["model"] == model else None
-        return JSONResponse(body | budget(body, window, measured))
+        return JSONResponse(await runtime.context_usage(p(request, "id")))
+
+    async def btw(request: Request) -> Response:
+        body = await _body(request)
+        question = body.get("question", "")
+        if not isinstance(question, str):
+            raise TypeError("question must be a string")
+        return JSONResponse(await runtime.btw(p(request, "id"), question))
+
+    async def handoff(request: Request) -> Response:
+        return JSONResponse(await runtime.handoff(p(request, "id")), status_code=201)
 
     async def session_snapshot_json(request: Request) -> Response:
         return JSONResponse(runtime.snapshot_json(p(request, "id")))
@@ -1218,6 +1219,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/session/{id}/children", route(children)),
         Route("/api/session/{id}/tree", route(tree)),
         Route("/api/session/{id}/context", route(context)),
+        Route("/api/session/{id}/btw", route(btw), methods=["POST"]),
+        Route("/api/session/{id}/handoff", route(handoff), methods=["POST"]),
         Route("/api/session/{id}/snapshot", route(session_snapshot_json)),
         Route("/api/session/{id}/export", route(session_export)),
         Route("/api/session/{id}/permission", route(permissions)),

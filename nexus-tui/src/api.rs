@@ -219,6 +219,12 @@ pub struct Session {
     pub archived: bool,
     #[serde(default)]
     pub revision: i64,
+    /// The session whose handoff summary this one starts from.
+    #[serde(default)]
+    pub continued_from: Option<String>,
+    /// The newest session started from this one's handoff.
+    #[serde(default)]
+    pub continued_to: Option<String>,
     #[serde(default)]
     pub created: f64,
     #[serde(default)]

@@ -796,7 +796,6 @@ async def test_turn_summary_event_equals_the_turn_entry_for_every_close(setup):
 
 
 async def test_context_budget_uses_latest_matching_model(setup, monkeypatch):
-    from nexus import server
     from nexus.llmhub import catalog
     from nexus.llmhub.types import Usage
 
@@ -804,7 +803,7 @@ async def test_context_budget_uses_latest_matching_model(setup, monkeypatch):
     async def load():
         return {}, "test"
     monkeypatch.setattr(catalog, "load", load)
-    monkeypatch.setattr(server, "split_ref", lambda ref: ("scripted", ref.partition("/")[2]))
+    monkeypatch.setattr(runtime_module, "split_ref", lambda ref: ("scripted", ref.partition("/")[2]))
     monkeypatch.setattr(catalog, "models_for", lambda data, provider: [type("Model", (), {"id": "m", "context": 1000})()])
     sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
     endpoint = f"/api/session/{sid}/context"

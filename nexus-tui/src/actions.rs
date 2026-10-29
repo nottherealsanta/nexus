@@ -58,6 +58,15 @@ pub enum ApiCall {
     Speak {
         session: String,
     },
+    /// Summarise the session and start a continued one (`/handoff`).
+    Handoff {
+        session: String,
+    },
+    /// A side question answered from the context so far (`/btw`).
+    Btw {
+        session: String,
+        question: String,
+    },
     SpeakStop,
     VoiceStatus {
         generation: u64,
@@ -206,6 +215,8 @@ impl ApiCall {
             ApiCall::NewSession { .. } => "Session created",
             ApiCall::Continue { .. } => "Continuing",
             ApiCall::Speak { .. } => "Finished speaking",
+            ApiCall::Handoff { .. } => "Handed off to a new session",
+            ApiCall::Btw { .. } => "",
             ApiCall::SpeakStop => "Stopped speaking",
             ApiCall::VoiceStatus { .. }
             | ApiCall::VoiceSettingsStatus { .. }
@@ -278,6 +289,8 @@ pub struct Done {
     pub voice: Option<Value>,
     /// A transcription result. It remains a response until the app inserts it.
     pub transcript: Option<String>,
+    /// The answer to a `/btw` question.
+    pub answer: Option<String>,
 }
 
 /// An authenticated API for the daemon in `home`, from `daemon.json`.
@@ -449,6 +462,38 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         }
         ApiCall::Speak { session } => {
             crate::speech::speak(&api.http, session).await?;
+        }
+        ApiCall::Handoff { session } => {
+            let body = api
+                .http
+                .call(
+                    reqwest::Method::POST,
+                    &format!("/api/session/{session}/handoff"),
+                    &[],
+                    Some(&json!({})),
+                    None,
+                    None,
+                )
+                .await
+                .map_err(e)?
+                .body;
+            done.open = body["to"].as_str().map(str::to_owned);
+        }
+        ApiCall::Btw { session, question } => {
+            let body = api
+                .http
+                .call(
+                    reqwest::Method::POST,
+                    &format!("/api/session/{session}/btw"),
+                    &[],
+                    Some(&json!({ "question": question })),
+                    None,
+                    None,
+                )
+                .await
+                .map_err(e)?
+                .body;
+            done.answer = body["answer"].as_str().map(str::to_owned);
         }
         ApiCall::SpeakStop => {
             if !crate::speech::stop_local() {

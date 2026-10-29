@@ -25,6 +25,7 @@ from .paths import home
 DEFAULTS: dict[str, dict[str, Any]] = {
     "defaults": {"model": "", "effort": "", "agent": "", "permission": "allow"},
     "tools": {"disabled": [], "permission": {}},
+    "context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]},
     "ui": {"detail": "medium", "reduced_motion": False},
     "web": {"search_url": "http://127.0.0.1:18765/search", "fetch_timeout_s": 15},
     "mcp": {"full_definitions": False, "max_listed_tools": 25},
@@ -43,6 +44,12 @@ SCHEMA: dict[str, dict[str, Any]] = {
     "tools.disabled": {"type": "array", "items": {"type": "string"}},
     "tools.permission": {"type": "object", "description": "rule = allow | ask | deny, e.g. \"bash(git push*)\" = \"deny\"; "
                          "deny always wins, otherwise the last matching rule decides"},
+    "context.handoff_percent": {"type": "integer", "minimum": 0, "maximum": 100,
+                                "description": "after a turn that leaves a root session at least this full, continue in a new session "
+                                "from a handoff summary; 0 turns the automatic handoff off"},
+    "context.title_models": {"type": "array", "items": {"type": "string"},
+                             "description": "provider/model refs tried in order to write a session title; if none works the first words "
+                             "of the first message stay as the title"},
     "web.search_url": {"type": "string", "description": "SearXNG /search endpoint for web_search (nexus-search/)"},
     "web.fetch_timeout_s": {"type": "number", "minimum": 1, "maximum": 60},
     "mcp.full_definitions": {"type": "boolean", "description": "new sessions put every MCP tool's full definition in the context; "
@@ -59,6 +66,18 @@ def _valid(section: str, key: str, value: Any) -> bool:
     if section == "ui":
         return (isinstance(value, bool) if key == "reduced_motion"
                 else isinstance(value, str) and value in ("low", "medium", "high"))
+    if section == "context" and key == "title_models":
+        from .llmhub.hub import split_ref
+        if not isinstance(value, list) or len(value) > 20 or not all(isinstance(v, str) for v in value):
+            return False
+        try:
+            for ref in value:
+                split_ref(ref)
+        except ValueError:
+            return False
+        return True
+    if section == "context":
+        return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100
     if section == "web":
         if key == "search_url":
             return isinstance(value, str) and value.startswith(("http://", "https://")) and len(value) <= 2048

@@ -7,7 +7,7 @@ import { FOCUS, Icon, IconButton, Status, T } from "./kit";
 import { DiffView } from "./diff";
 import { ContextSections, disabledOf, foldedMeta, startingSections } from "./newsession";
 import type { CtxSection } from "./newsession";
-import { byId, copyText, jump, keyLabel, run, toggleSessionInventory } from "../commands";
+import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
 import { contextDetail, agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
 import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
@@ -29,6 +29,7 @@ type Row =
       sections: CtxSection[]; total: number; window?: number;
     }
   | { key: string; kind: "notice"; text: string; label: string; tone: Tone }
+  | { key: string; kind: "handoff"; from: string; summary: string; time: string }
   | { key: string; kind: "assistant"; text: string; streaming?: boolean }
   | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean; running?: boolean }
   | {
@@ -200,7 +201,7 @@ type TurnMeta = {
  */
 function turnMeta(msgs: Message[], turns: TurnSummary[], scratch: CoreEvent[], busy: boolean): TurnMeta[] {
   const starts: number[] = [];
-  msgs.forEach((m, i) => { if (m.role === "user" && !NOTICE.test(text(m)) && !(m.delivery === "steer" && starts.length)) starts.push(i); });
+  msgs.forEach((m, i) => { if (m.role === "user" && !NOTICE.test(text(m)) && !(m.delivery === "steer" && starts.length) && m.delivery !== "handoff") starts.push(i); });
   return starts.map((start, n) => {
     const end = n + 1 < starts.length ? starts[n + 1] : msgs.length;
     const window = msgs.slice(start, end);
@@ -341,7 +342,10 @@ export function buildRows(): Row[] {
     const out: Row[] = [];
     if (msg.role === "user") {
       const body = text(msg);
-      if (NOTICE.test(body)) {
+      if (msg.delivery === "handoff") {
+        const { from, summary } = handoffParts(body);
+        out.push({ key: msg.id, kind: "handoff", from, summary, time: clock(msg.created) });
+      } else if (NOTICE.test(body)) {
         out.push({
           key: msg.id, kind: "notice", text: body,
           label: body.startsWith("[Nexus recovery") ? roles.diagnostic.label : roles.context_notice.label,
@@ -596,6 +600,9 @@ function RowView(p: { r: () => Row }) {
             );
           }}
         </If>
+        <If when={r().kind === "handoff"}>
+          <View class="py-1"><HandoffCard r={r as any} /></View>
+        </If>
         <If when={r().kind === "notice" && (r() as any).text.startsWith("→ Background Shell Done:")}>
           <Text style={{ userSelect: "text" }} class="text-[13px] leading-5 text-muted-foreground py-2" testID="background-shell-done">{(r() as any).text}</Text>
         </If>
@@ -681,6 +688,36 @@ function CodeFence(p: { block: TextViewCodeBlock }) {
           {code().split("\n").map((line) => <Text style={{ userSelect: "text" }} class="font-mono text-[13px] leading-5 text-foreground">{line || " "}</Text>)}
         </View>
       </Scroll>
+    </View>
+  );
+}
+
+/** `[Handoff from session ses_x]` and the summary after it. */
+export function handoffParts(body: string): { from: string; summary: string } {
+  const m = /^\[Handoff from session ([^\]]*)\]\s*/.exec(body);
+  return m ? { from: m[1].slice(0, 12), summary: body.slice(m[0].length) } : { from: "an earlier session", summary: body };
+}
+
+/** The summary a continued session starts from: a user-message-like card of three lines; a click shows all of it. */
+function HandoffCard(p: { r: () => Extract<Row, { kind: "handoff" }> }) {
+  const r = p.r;
+  const lines = () => r().summary.split("\n").map((l) => l.replace(/^#+\s*/, "").trim()).filter(Boolean);
+  const origin = () => { m(); const id = viewed()?.continued_from; return id ? model.sessions.get(id) ?? null : null; };
+  const name = () => origin()?.title ? `“${origin()!.title}”` : r().from;
+  const open = () => contextDetail.set({ title: `Handoff from ${name()}`, detail: r().summary });
+  return (
+    <View class="w-full rounded-(--radius-card) bg-raised px-4 py-3 gap-1">
+      <Button onPress={open} accessibilityLabel="Show the whole handoff summary" testID="msg-handoff" class={`w-full flex-col items-stretch gap-1 ${FOCUS}`}>
+        <View class="flex-row items-center gap-3">
+          <Text class="flex-1 min-w-0 text-[14px] leading-5 font-semibold text-foreground">{`Continued from ${name()}`}</Text>
+          <Text class={T.meta}>{`handoff · ${r().time}`}</Text>
+        </View>
+        <Text style={{ numberOfLines: 3 }} testID="handoff-preview" class="text-[14px] leading-5 text-foreground">{lines().join("\n")}</Text>
+      </Button>
+      <View class="flex-row gap-3">
+        <Button onPress={open} class={`${FOCUS}`}><Text class={T.meta}>Show all</Text></Button>
+        <If when={!!origin()}>{() => <Button onPress={() => openLinked("continued_from")} testID="handoff-open-original" class={`${FOCUS}`}><Text class={`${T.meta} underline`}>Open the original session</Text></Button>}</If>
+      </View>
     </View>
   );
 }

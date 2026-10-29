@@ -79,6 +79,8 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/session/{id}/turn` | `?after=<turn id>` or `?before=<turn id>`, `&limit=` (default 50, ≤ 200) | `{turns, more_before, more_after, floor, usage}`: turn summaries, oldest first, and the spend ledger; see [Turn summaries](#turn-summaries) |
 | GET | `/api/session/{id}/children` | | `[Session]`, direct children |
 | GET | `/api/session/{id}/tree` | | the whole tree containing it, from its root: `Session` + nested `children` |
+| POST | `/api/session/{id}/btw` | `{question}` | 200 `{answer, usage}`. One request with the session's context up to its last completed tool call plus the question; no tool runs and nothing is stored (the request and reply are a `oneshot` event, kind `btw`). 400 empty, 502 provider failure |
+| POST | `/api/session/{id}/handoff` | `{}` | 201 `{from, to, reason, session, summary}`. Writes a summary with one tool-free request, then starts a new root session of the same agent, model, directory and switches whose first message (`delivery: "handoff"`) is that summary; `continued_from` links back. The old session is not changed. 409 busy/archived, 400 child or empty session |
 | GET | `/api/session/{id}/context` | | the provider request body plus `used`, `window`, `exact` context budget |
 | GET | `/api/session/{id}/snapshot` | | the full frozen session snapshot (agent, prompt, tools, instruction file, child catalog) |
 | GET | `/api/session/{id}/export` | `?format=markdown\|json&scope=session\|tree` | a read-only Markdown transcript or JSON document; see [Session export](#session-export) |
@@ -1069,3 +1071,19 @@ Archive and deletion refuse pending inputs unless `drop_inputs: true` is given.
 `input.held` events update client activity. Delivery includes the stored
 `message_id` and `turn_id`; the corresponding user message has `delivery:
 "steer"` or `"queued"`. Pending items themselves are not timeline messages.
+
+
+## Handoff, titles and `/btw`
+
+Three features make one tool-free model request (`nexus/oneshot.py`); tool specs ride along so the prefix matches
+the session's cache, and a tool call in the reply is ignored. Each request and reply is stored as a `oneshot` event
+(`kind` `handoff`, `title`, `btw`), never as model context.
+
+- **Handoff.** `POST …/handoff` or, after a completed turn of a root session whose newest measured request used at
+  least `[context] handoff_percent` (default 80, 0 = off) of the model's window, automatically. The new session's
+  first message is `[Handoff from session <id>]` plus the summary and has `delivery: "handoff"`. Events:
+  `session.handoff {from, to, reason}` on the old session (reason `user` or `auto`), `session.created` and the
+  message on the new one, and `session.handoff_failed {error}` when an automatic attempt failed (the session is
+  unchanged and the next completed turn tries again). Session JSON carries `continued_from` (the session whose summary this one starts from; stored on the session row and cleared if that session is deleted) and `continued_to` (the newest session started from this one). Both clients use them: the handoff card names the original and `/origin` (`/continuation` the other way) opens it.
+- **Titles.** The first words of the first prompt are the title at once; a model-written title (Title Case, a few
+  words, from the first message only) replaces it unless the user renamed the session meanwhile. The model comes from `[context] title_models`, tried in order; if all fail the first words stay. The `mock/` provider is skipped.

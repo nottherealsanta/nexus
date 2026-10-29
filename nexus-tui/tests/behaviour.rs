@@ -873,8 +873,10 @@ fn disabled_commands_are_listed_with_their_reason_and_never_run() {
         .iter()
         .any(|t| t.text.contains("Steering needs")));
     assert!(a.effects.is_empty());
-    // a core-blocked command with no condition of its own: handoff while idle
+    // handoff needs an idle session; a running one is refused with the manifest's reason
     let handoff = a.manifest.command("session.handoff").unwrap().clone();
+    assert!(a.availability(&handoff).is_ok());
+    busy(&mut a);
     assert!(a.availability(&handoff).is_err());
     // commands that exist in the manifest but are not built yet say so
     let unbuilt = a.manifest.command("session.worktrees").unwrap().clone();
@@ -905,7 +907,7 @@ fn wired_commands_exist_and_blocked_ones_are_never_wired_open() {
         .filter(|c| matches!(c.status.as_deref(), Some("blocked_core" | "deferred")))
         .cloned()
         .collect();
-    assert!(blocked.len() >= 8);
+    assert!(blocked.len() >= 4);
     for c in &blocked {
         assert!(a.availability(c).is_err(), "{}", c.id);
         a.run_command(&c.id);
@@ -1619,4 +1621,148 @@ fn up_in_the_middle_of_a_multiline_draft_moves_the_cursor() {
     press(&mut a, &["up"]);
     assert_eq!(a.composer_ref().text(), "a\nb");
     assert!(!a.composer_ref().in_history());
+}
+
+fn message_event(a: &mut App, id: i64, seq: i64, role: &str, delivery: Option<&str>, text: &str) {
+    let mut data = serde_json::json!({"id": format!("m_h{id}"), "session_id": SESSION, "seq": seq, "created": 1793113300.0,
+        "role": role, "parts": [{"type": "text", "text": text}]});
+    if let Some(d) = delivery {
+        data["delivery"] = d.into();
+    }
+    let v = serde_json::json!({"id": id, "type": "message.added", "session_id": SESSION,
+        "cursor": format!("log_c915bfc9b6d826c4:{id}"), "data": data});
+    if let Ok(Frame::Event(e)) = Frame::from_value("message.added", None, &v) {
+        a.apply_sync(SyncMsg::Event(e));
+    }
+}
+
+#[test]
+fn handoff_summary_is_a_three_line_box_that_opens_whole() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (110, 34));
+    a.open_session(SESSION);
+    a.effects.clear();
+    let summary = "[Handoff from session ses_abcdef123456]\n\n## Goal\nFix the login bug.\n## State\nHalf done.\n## Decisions\nNone.\n## Next steps\nRun the tests.";
+    message_event(&mut a, 900, 1, "user", Some("handoff"), summary);
+    let (_, rows) = draw(&mut a, 110, 34);
+    let text = rows.join("\n");
+    assert!(text.contains("Continued from ses_abcdef12"), "{text}");
+    assert!(text.contains("Fix the login bug."));
+    assert!(text.contains("more lines · enter show all"));
+    assert!(!text.contains("Run the tests."), "only the first rows show");
+    let y = rows
+        .iter()
+        .position(|r| r.contains("Continued from"))
+        .unwrap() as u16;
+    click(&mut a, 40, y);
+    match &a.ui.overlay {
+        Some(nexus_tui::ui::Overlay {
+            kind: OverlayKind::ContextDetail { title, text, .. },
+            ..
+        }) => {
+            assert!(title.starts_with("Handoff from"));
+            assert!(text.contains("Run the tests."));
+        }
+        other => panic!("expected the full summary, got {other:?}"),
+    }
+}
+
+#[test]
+fn handoff_and_btw_commands_call_core() {
+    let mut a = app();
+    a.run_command("session.handoff");
+    assert!(a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::Handoff { .. }))));
+    a.effects.clear();
+    typing(&mut a, "/btw what is the port?");
+    press(&mut a, &["enter"]);
+    assert!(a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Btw { question, .. }) if question == "what is the port?")));
+}
+
+#[test]
+fn handoff_threshold_setting_steps_by_five_and_zero_is_off() {
+    let mut a = app();
+    a.state.config = Some(
+        serde_json::json!({"revision": "cfg-1", "values": {"context": {"handoff_percent": 5}}}),
+    );
+    a.execute("app.settings");
+    let rows = a.settings_rows();
+    let items = a.settings_items();
+    a.ui.settings_row = rows
+        .iter()
+        .position(|at| matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == "context.handoff_percent"))
+        .unwrap();
+    press(&mut a, &["left"]);
+    assert!(
+        matches!(a.effects.last(), Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }))
+        if path == "context.handoff_percent" && value == &serde_json::json!(0))
+    );
+}
+
+#[test]
+fn btw_answer_opens_in_an_overlay_without_touching_the_timeline() {
+    let mut a = app();
+    let before = draw(&mut a, 110, 34).1.join("\n");
+    a.apply_done(ActionDone {
+        call: ApiCall::Btw {
+            session: SESSION.into(),
+            question: "what is the port?".into(),
+        },
+        result: Ok(Done {
+            answer: Some("It is 4747.".into()),
+            ..Done::default()
+        }),
+    });
+    let (_, rows) = draw(&mut a, 110, 34);
+    let text = rows.join("\n");
+    assert!(text.contains("Side question"), "{text}");
+    assert!(text.contains("It is 4747."));
+    assert!(text.contains("Not added to the session's context."));
+    press(&mut a, &["esc"]);
+    assert!(a.ui.overlay.is_none());
+    assert_eq!(draw(&mut a, 110, 34).1.join("\n"), before);
+}
+
+#[test]
+fn continued_sessions_link_back_and_title_models_are_editable() {
+    let mut a = app();
+    a.run_command("session.open_origin");
+    assert!(a.effects.is_empty(), "no link, nothing to open");
+    let origin = a.manifest.command("session.open_origin").unwrap().clone();
+    assert!(a.availability(&origin).is_err());
+    let id = a.viewed_id().unwrap().to_owned();
+    // the viewed session continued from another one the list knows
+    let mut other = a.state.model.sessions.get(&id).unwrap().clone();
+    other.id = "ses_original".into();
+    other.title = "Original work".into();
+    a.state.model.sessions.insert(other.id.clone(), other);
+    a.state.model.sessions.get_mut(&id).unwrap().continued_from = Some("ses_original".into());
+    assert!(a.availability(&origin).is_ok());
+    a.run_command("session.open_origin");
+    assert_eq!(a.viewed_id(), Some("ses_original"));
+
+    a.state.config = Some(serde_json::json!({"revision": "cfg-1",
+        "values": {"context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]}}}));
+    a.execute("app.settings");
+    let rows = a.settings_rows();
+    let items = a.settings_items();
+    a.ui.settings_row = rows
+        .iter()
+        .position(|at| matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == "context.title_models"))
+        .unwrap();
+    press(&mut a, &["enter"]);
+    let edit = a.ui.edit.as_ref().expect("an inline editor opens");
+    assert_eq!(edit.buf.text(), "copilot/gpt-6-luna, codex/gpt-6-luna");
+    a.ui.edit
+        .as_mut()
+        .unwrap()
+        .buf
+        .set_text("copilot/gpt-6-luna");
+    a.effects.clear();
+    press(&mut a, &["enter"]);
+    assert!(
+        matches!(a.effects.last(), Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }))
+        if path == "context.title_models" && value == &serde_json::json!(["copilot/gpt-6-luna"]))
+    );
 }

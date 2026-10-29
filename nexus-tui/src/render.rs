@@ -5411,6 +5411,29 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
             .as_ref()
             .and_then(|c| c["values"]["mcp"]["full_definitions"].as_bool())
             .map(on_off),
+        "context.title_models" => a.state.config.as_ref().map(|c| {
+            let list: Vec<&str> = c["values"]["context"]["title_models"]
+                .as_array()
+                .map(|l| l.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            if list.is_empty() {
+                "none · first words".to_owned()
+            } else {
+                list.join(", ")
+            }
+        }),
+        "context.handoff_percent" => a
+            .state
+            .config
+            .as_ref()
+            .and_then(|c| c["values"]["context"]["handoff_percent"].as_u64())
+            .map(|value| {
+                if value == 0 {
+                    "off".to_owned()
+                } else {
+                    format!("{value}%")
+                }
+            }),
         "mcp.max_listed_tools" => a
             .state
             .config

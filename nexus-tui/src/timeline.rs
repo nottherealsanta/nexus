@@ -57,6 +57,8 @@ pub enum BlockKind {
     Group,
     Tool,
     Notice,
+    /// The handoff summary a continued session starts from; Enter shows it whole.
+    Handoff,
     Diagnostic,
     Child,
     Older,
@@ -360,7 +362,23 @@ fn band_meta(tags: &[&str], n: usize, clock: Option<&str>, sep: &str) -> String 
 
 /// A real user prompt opens a turn. Notices and delivered steers belong to the running one.
 pub(crate) fn is_turn_start(m: &crate::api::Message) -> bool {
-    m.role == "user" && m.delivery.as_deref() != Some("steer") && !is_notice(&parts_text(m))
+    m.role == "user"
+        && !matches!(m.delivery.as_deref(), Some("steer" | "handoff"))
+        && !is_notice(&parts_text(m))
+}
+
+/// `[Handoff from session ses_x]` and the summary after it.
+pub(crate) fn handoff_parts(text: &str) -> (String, String) {
+    match text
+        .strip_prefix("[Handoff from session ")
+        .and_then(|r| r.split_once(']'))
+    {
+        Some((from, rest)) => (
+            from.chars().take(12).collect::<String>(),
+            rest.trim_start().to_owned(),
+        ),
+        None => ("an earlier session".to_owned(), text.to_owned()),
+    }
 }
 
 /// Delivery labels distinguish steering from the start of a queued turn.
@@ -845,6 +863,10 @@ impl Builder<'_> {
                             false,
                         );
                         let text = parts_text(m);
+                        if m.delivery.as_deref() == Some("handoff") {
+                            self.handoff_block(m, &text);
+                            continue;
+                        }
                         if is_notice(&text) {
                             if !folded {
                                 if background {
@@ -1739,6 +1761,107 @@ impl Builder<'_> {
             }
         });
         notices.clear();
+    }
+
+    /// The first rows of a handoff summary in a user-message band, with the rest behind Enter.
+    fn handoff_block(&mut self, m: &crate::api::Message, text: &str) {
+        let (from_id, summary) = handoff_parts(text);
+        let from = self
+            .app
+            .viewed()
+            .and_then(|s| s.continued_from.as_ref())
+            .and_then(|id| self.app.state.model.sessions.get(id))
+            .map_or(from_id, |s| format!("“{}”", s.title));
+        let raised = "surface.raised";
+        let bg = self.t.role_style("user_text");
+        let gutter = self.st(MUTED, raised);
+        let rail = if self.selected() {
+            self.st("interactive.focus", raised)
+        } else {
+            self.st(MUTED, raised)
+        };
+        let sep = self.sep();
+        let meta = [
+            "handoff".to_owned(),
+            local_clock(m.created).unwrap_or_default(),
+        ]
+        .iter()
+        .filter(|p| !p.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(&sep);
+        let lines: Vec<&str> = summary
+            .lines()
+            .map(|l| l.trim_start_matches('#').trim())
+            .filter(|l| !l.is_empty())
+            .collect();
+        self.block(
+            format!("handoff:{}", m.id),
+            BlockKind::Handoff,
+            None,
+            false,
+            |b| {
+                let (muted, fold, ell, bw) = (
+                    b.st(MUTED, raised),
+                    b.t.fold(false).to_owned(),
+                    b.ell().to_owned(),
+                    b.bw,
+                );
+                let mut push = |spans: Vec<Span<'static>>| {
+                    b.out.push(TLine {
+                        spans,
+                        bg: Some(bg),
+                        rail: Some(rail),
+                        focus: false,
+                        context_section: None,
+                        context_item: None,
+                    });
+                };
+                let width_in = bw.saturating_sub(3);
+                let head = format!("Continued from {}", from);
+                let head = truncate(
+                    &head,
+                    width_in.saturating_sub(width(&meta) + 2).max(1),
+                    &ell,
+                );
+                let padding = width_in.saturating_sub(width(&head) + width(&meta)).max(1);
+                push(vec![Span::styled(" ", bg)]);
+                push(vec![
+                    Span::styled(" ", bg),
+                    Span::styled(fold.clone(), gutter),
+                    Span::styled(format!(" {head}"), bg.add_modifier(Modifier::BOLD)),
+                    Span::styled(" ".repeat(padding), bg),
+                    Span::styled(meta.clone(), muted),
+                ]);
+                let rows: Vec<String> = lines
+                    .iter()
+                    .flat_map(|l| text::wrap(l, width_in.saturating_sub(2).max(1)))
+                    .collect();
+                let shown = if rows.len() > 3 { 2 } else { rows.len() };
+                for row in rows.iter().take(shown) {
+                    push(vec![Span::styled("   ", bg), Span::styled(row.clone(), bg)]);
+                }
+                let hint = if rows.len() > 3 {
+                    format!(
+                        "… {} more lines · enter show all · /origin opens the original",
+                        rows.len() - shown
+                    )
+                } else {
+                    "/origin opens the original".to_owned()
+                };
+                push(vec![
+                    Span::styled("   ", bg),
+                    Span::styled(
+                        truncate(&hint, width_in.saturating_sub(2).max(1), &ell),
+                        muted,
+                    ),
+                ]);
+                push(vec![Span::styled(" ", bg)]);
+            },
+        );
+        if let Some(block) = self.blocks.last_mut() {
+            block.target = Some(m.id.clone());
+        }
     }
 
     fn notice(&mut self, m: &crate::api::Message, text: &str) {

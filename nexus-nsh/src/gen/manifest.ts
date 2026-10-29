@@ -14,6 +14,8 @@ export const manifest = {
    "session.archived",
    "session.child",
    "session.in_worktree",
+   "session.continued",
+   "session.continued_on",
    "has_waiting",
    "waiting.approval",
    "waiting.question",
@@ -702,7 +704,15 @@ export const manifest = {
       "scope": "core",
       "clients": "both",
       "default": 80,
-      "unavailable_reason": "Automatic handoff is not available yet."
+      "note": "0 turns the automatic handoff off. Core key [context] handoff_percent."
+     },
+     {
+      "id": "context.title_models",
+      "label": "Title models",
+      "kind": "text",
+      "scope": "core",
+      "clients": "both",
+      "note": "provider/model refs separated by commas, tried in order to write a session title. Empty keeps the first words of the first message. Core key [context] title_models."
      }
     ]
    },
@@ -1564,8 +1574,37 @@ export const manifest = {
     "palette",
     "header"
    ],
-   "status": "blocked_core",
-   "note": "Compaction is a handoff to a new root session of the same agent (PLAN.md Step 12a)."
+   "note": "POST /api/session/{id}/handoff: Core writes a summary, starts a new root session of the same agent that begins with it and the client opens it. Core also does this by itself after a turn that fills [context] handoff_percent (event session.handoff, reason auto). The continued session shows the summary as a 3-line box; Enter or a click opens all of it."
+  },
+  {
+   "id": "session.open_origin",
+   "title": "Open the session this one continued from",
+   "category": "session",
+   "slash": "origin",
+   "when": [
+    "session.continued"
+   ],
+   "unavailable_reason": "This session was not started by a handoff.",
+   "placement": [
+    "palette",
+    "composer"
+   ],
+   "note": "Session JSON `continued_from` (cleared when the original is deleted); the handoff card names it."
+  },
+  {
+   "id": "session.open_continuation",
+   "title": "Open the session continued from this one",
+   "category": "session",
+   "slash": "continuation",
+   "when": [
+    "session.continued_on"
+   ],
+   "unavailable_reason": "No handoff was made from this session.",
+   "placement": [
+    "palette",
+    "composer"
+   ],
+   "note": "Session JSON `continued_to`: the newest session whose handoff started from this one."
   },
   {
    "id": "session.change_directory",
@@ -1814,8 +1853,7 @@ export const manifest = {
     "palette",
     "composer"
    ],
-   "status": "blocked_core",
-   "note": "Answer appears in an overlay tied to the parent, not in its timeline."
+   "note": "`/btw question`: one request with the session's context up to its last completed tool call, no tools. POST /api/session/{id}/btw. The answer is an overlay; nothing enters the session's context."
   },
   {
    "id": "session.jump_latest",

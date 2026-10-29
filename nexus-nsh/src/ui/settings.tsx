@@ -91,7 +91,7 @@ async function refreshCatalog() {
 }
 
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["providers.sign_in", "providers.sign_out", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.default_permission", "models.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove"]);
+const WIRED = new Set(["providers.sign_in", "providers.sign_out", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.default_permission", "models.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove"]);
 
 function voiceTarget(id: string): VoiceTarget | null {
   if (id.startsWith("dictation.stt_")) return "stt";
@@ -108,6 +108,52 @@ function voiceSettingReason(id: string): string | undefined {
   if (!target || !action) return undefined;
   if (!live()) return "Core is not connected: the view is read-only.";
   return voiceActionReason(target, action, voiceStatus()?.[target]);
+}
+
+function HandoffPercent() {
+  const value = signal(String(config()?.values?.context?.handoff_percent ?? 80));
+  const revision = signal<any>(config()?.revision);
+  effect(() => {
+    const current = config();
+    if (current && current.revision !== revision()) { revision.set(current.revision); value.set(String(current.values?.context?.handoff_percent ?? 80)); }
+  });
+  const save = () => {
+    const parsed = Number(value());
+    if (!value().trim() || !Number.isFinite(parsed)) { toast("warning", "Enter a number from 0 to 100 (0 turns it off)."); return; }
+    const bounded = Math.max(0, Math.min(100, Math.round(parsed)));
+    value.set(String(bounded));
+    void patchConfig("context.handoff_percent", bounded);
+  };
+  return (
+    <View class="flex-row items-center gap-2">
+      <Input value={value()} placeholder="0–100" accessibilityLabel="Automatic handoff threshold (percent, 0 is off)" testID="handoff-percent"
+        onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
+        class="h-8 w-24 rounded-(--radius) border border-border bg-background px-2 text-right font-mono text-[13px] text-foreground" />
+      <Btn label="Save" onPress={save} testID="handoff-percent-save" />
+    </View>
+  );
+}
+
+function TitleModels() {
+  const joined = () => ((config()?.values?.context?.title_models ?? []) as string[]).join(", ");
+  const value = signal(joined());
+  const revision = signal<any>(config()?.revision);
+  effect(() => {
+    const current = config();
+    if (current && current.revision !== revision()) { revision.set(current.revision); value.set(joined()); }
+  });
+  const save = () => {
+    const refs = value().split(",").map((x) => x.trim()).filter(Boolean);
+    void patchConfig("context.title_models", refs);
+  };
+  return (
+    <View class="flex-row items-center gap-2">
+      <Input value={value()} placeholder="copilot/gpt-6-luna, codex/gpt-6-luna" accessibilityLabel="Title models, provider/model separated by commas" testID="title-models"
+        onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
+        class="h-8 min-w-0 flex-1 rounded-(--radius) border border-border bg-background px-2 font-mono text-[13px] text-foreground" />
+      <Btn label="Save" onPress={save} testID="title-models-save" />
+    </View>
+  );
 }
 
 function McpToolsLimit() {
@@ -160,6 +206,8 @@ function control(r: Row): JSX.Element {
   if (r.id === "appearance.animations") return <Seg label={r.label} options={["on", "off"]} value={config()?.values?.ui?.reduced_motion ? "off" : "on"} onPick={(v) => void patchConfig("ui.reduced_motion", v === "off")} />;
   if (r.id === "mcp.full_definitions") return <Seg label={r.label} options={["off", "on"]} value={config()?.values?.mcp?.full_definitions ? "on" : "off"} onPick={(v) => void patchConfig("mcp.full_definitions", v === "on")} />;
   if (r.id === "mcp.max_listed_tools") return <McpToolsLimit />;
+  if (r.id === "context.handoff_percent") return <HandoffPercent />;
+  if (r.id === "context.title_models") return <TitleModels />;
   if (r.id === "appearance.timeline_detail") {
     return <Seg label="Timeline detail" options={r.options ?? ["low", "medium", "high"]} value={timelineDetail()} disabled={false}
       onPick={(v) => setTimelineDetail(v as "low" | "medium" | "high")} />;

@@ -972,7 +972,30 @@ for things that support openai format, like ollama and nvidia and groq, we can g
 
 ### K. Context and sessions
 
-The old Step 12a items, with sources.
+**Landed 2026-10-29: K1–K3 (Core, TUI, NSH).** `nexus/oneshot.py` (one tool-free request, the three instructions,
+`settled` cut for `/btw`); `POST /api/session/{id}/handoff` and the automatic handoff after a completed root turn
+at `[context] handoff_percent`; `continued_from` on sessions and a `delivery: "handoff"` first message (which
+`/turn` does not count as a lost turn); model-written titles from `[context] title_models` (default
+`copilot/gpt-6-luna`, then `codex/gpt-6-luna`; the first 60 characters stay until one answers, and a renamed
+session is kept); `POST /api/session/{id}/btw`; `oneshot` events; `Runtime.context_usage`.
+Both clients: `/handoff` (alias `/compact`) opens the new session, an automatic handoff moves the viewer when it
+was watching the old one (`session.handoff` reason `auto`; `session.handoff_failed` toasts), the summary is a
+3-line card at the top of the continued session that opens whole on Enter or a click, `/btw question` shows the
+answer in a modal that says it is not added to the context, and Settings has the threshold (0 = off).
+Verified with the real model: an isolated daemon with `copilot/gpt-6-luna` fixed a bug in a scratch file,
+generated the title "Fixing The add() Bug In calc.py" mid-turn, answered `/btw` correctly, wrote a usable
+handoff, and the continued session answered "what were we doing?" from the summary alone. The TUI was rendered
+against that daemon (`--dump-frame`, PNG). Tests: `tests/test_context_sessions.py` (Core), `behaviour.rs` (TUI),
+`handoff.test.tsx` (NSH; it passes alone and is among the tests that fail in the full run, see Known gaps).
+Decisions: titles and handoff skip `mock/` models; `Runtime.background_requests` lets tests with scripted
+providers turn them off; a failed automatic handoff publishes `session.handoff_failed` and retries after the next
+turn; K2's "hidden one-turn session" became an event. **Added after review:** the link back. `continued_from` (stored, indexed, cleared on delete) and `continued_to`
+are on the session JSON; the card shows the original's title and `/origin` / `/continuation` (palette too) open
+the other session; NSH's card has an "Open the original session" button. Settings → Context → Title models edits
+`[context] title_models` in both clients (comma-separated refs; empty keeps the first words). **Not done:**
+`/btw` while a turn runs in the clients (Core allows it), an NSH browser test for the link click (the mock event
+stream drops the selection in two-session tests; the TUI test covers it).
+K4–K11 are untouched.
 
 | Item | Old | New |
 | --- | --- | --- |
@@ -1272,7 +1295,7 @@ when each item lands.
   `nsh test --target web --browser "$HOME/Library/Caches/ms-playwright/chromium-1200/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"`.
   Every failure shows "Disconnected from Core · reconnecting" on screen: the mock
   server's event stream ends, so the app drops into its reconnecting state.
-  Failing: `App.test.tsx` (session tabs, pre-session picker, daemon restart,
+  Failing: `handoff.test.tsx` (full run only; passes alone), `App.test.tsx` (session tabs, pre-session picker, daemon restart,
   daemon start once per outage, footer pricing, composer meter, detail cap,
   session info totals), `i6.test.tsx` (sessions sidebar), `i8.test.tsx` (two
   toast and notification tests). No clean-checkout baseline was run, so none is

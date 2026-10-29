@@ -115,6 +115,9 @@ pub const WIRED: &[&str] = &[
     "session.continue",
     "session.speak",
     "session.speak_stop",
+    "session.handoff",
+    "session.open_origin",
+    "session.open_continuation",
     "voice.dictate",
     "voice.download_stt",
     "voice.remove_stt",
@@ -175,6 +178,8 @@ const MUTATING: &[&str] = &[
     "session.continue",
     "session.speak",
     "session.speak_stop",
+    "session.handoff",
+    "session.btw",
     "voice.dictate",
     "voice.download_stt",
     "voice.remove_stt",
@@ -1442,6 +1447,8 @@ impl App {
             "session.interrupted" => has_session && !busy && self.last_turn_interrupted(),
             "session.archived" => self.viewed().is_some_and(|s| s.archived),
             "session.child" => self.viewed().is_some_and(|s| s.parent_id.is_some()),
+            "session.continued" => self.viewed().is_some_and(|s| s.continued_from.is_some()),
+            "session.continued_on" => self.viewed().is_some_and(|s| s.continued_to.is_some()),
             "session.in_worktree" => false,
             "has_waiting" => {
                 !self.state.model.approvals.is_empty() || !self.state.model.questions.is_empty()
@@ -1520,7 +1527,9 @@ impl App {
                         .ui
                         .timeline_sel
                         .and_then(|i| self.ui.timeline_blocks.get(i))
-                        .is_some_and(|b| b.kind == want)
+                        .is_some_and(|b| {
+                            b.kind == want || (name == "focus.child_card" && b.kind == K::Handoff)
+                        })
             }
             "view.editor" | "editor.dirty" => false,
             "view.settings" => self.ui.view == View::Settings,
@@ -3542,6 +3551,30 @@ impl App {
                 }
             }
             "session.speak_stop" => self.api(ApiCall::SpeakStop),
+            "session.handoff" => {
+                if let Some(id) = self.viewed_id().map(str::to_owned) {
+                    self.toast(Level::Info, "Writing the handoff…");
+                    self.api(ApiCall::Handoff { session: id });
+                }
+            }
+            "session.btw" => self.toast(Level::Info, "Usage: /btw your question"),
+            "session.open_origin" | "session.open_continuation" => {
+                let target = self.viewed().and_then(|s| {
+                    if id == "session.open_origin" {
+                        s.continued_from.clone()
+                    } else {
+                        s.continued_to.clone()
+                    }
+                });
+                match target {
+                    Some(t) if self.state.model.sessions.contains_key(&t) => self.open_session(&t),
+                    Some(_) => self.toast(
+                        Level::Warning,
+                        "That session is no longer in the list (deleted or archived)",
+                    ),
+                    None => {}
+                }
+            }
             "voice.dictate" => self.begin_dictation(),
             "voice.download_stt" => self.ask_voice_model_download(VoiceTarget::Stt),
             "voice.download_tts" => self.ask_voice_model_download(VoiceTarget::Tts),
@@ -3984,6 +4017,20 @@ impl App {
                             return;
                         }
                     }
+                    if c.id == "session.btw" && !arg.is_empty() {
+                        if let Some(id) = self.viewed_id().map(str::to_owned) {
+                            if self.writable() {
+                                self.toast(Level::Info, "Asking…");
+                                self.api(ApiCall::Btw {
+                                    session: id,
+                                    question: arg.to_owned(),
+                                });
+                            } else {
+                                self.toast(Level::Warning, READ_ONLY);
+                            }
+                            return;
+                        }
+                    }
                     if c.id == "skills.learn" {
                         if self.availability(&c).is_err() {
                             return self.run_command(&c.id);
@@ -4125,6 +4172,21 @@ impl App {
             }
         }
         if let SyncMsg::Event(event) = &msg {
+            if event.kind == "session.handoff" && event.data["reason"].as_str() == Some("auto") {
+                if let Some(to) = event.data["to"].as_str() {
+                    if event.session_id.as_deref() == self.viewed_id() {
+                        self.toast(
+                            Level::Info,
+                            "Context was nearly full: continued in a new session",
+                        );
+                        self.open_session(to);
+                    }
+                }
+            }
+            if event.kind == "session.handoff_failed" {
+                let error = event.data["error"].as_str().unwrap_or("unknown error");
+                self.toast(Level::Warning, format!("Automatic handoff failed: {error}"));
+            }
             if event.kind == "provider.login" {
                 if let Some(message) = event.data["message"].as_str() {
                     self.toast(Level::Info, message.to_owned());
@@ -4357,6 +4419,23 @@ impl App {
             if done.result.is_ok() {
                 self.ui.learn_suppress_until = Some(self.clock + std::time::Duration::from_secs(5));
             }
+        }
+        if let ApiCall::Btw { question, .. } = &done.call {
+            match done.result {
+                Ok(r) => self.open_overlay(OverlayKind::ContextDetail {
+                    title: format!(
+                        "Side question · {}",
+                        question.chars().take(40).collect::<String>()
+                    ),
+                    text: format!(
+                        "{}\n\nNot added to the session's context.",
+                        r.answer.unwrap_or_else(|| "(no answer)".into())
+                    ),
+                    top: 0,
+                }),
+                Err(error) => self.toast(Level::Error, format!("Side question failed: {error}")),
+            }
+            return;
         }
         if let ApiCall::Prompts { project } = &done.call {
             // Quiet: history is a convenience. Never replace it while a recalled entry is open.
@@ -5447,6 +5526,23 @@ impl App {
                 let restore = e.restore;
                 self.ui.edit = None;
                 self.apply_restore(restore);
+                if let EditTarget::TitleModels { revision } = &target {
+                    let refs: Vec<&str> = title
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|r| !r.is_empty())
+                        .collect();
+                    if !self.writable() {
+                        self.toast(Level::Warning, READ_ONLY);
+                    } else {
+                        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+                            revision: revision.clone(),
+                            path: "context.title_models".into(),
+                            value: json!(refs),
+                        }));
+                    }
+                    return;
+                }
                 if title.is_empty() {
                     return;
                 }
@@ -5469,6 +5565,7 @@ impl App {
                         sign_out: false,
                         key: Some(crate::actions::Secret(title)),
                     }),
+                    EditTarget::TitleModels { .. } => {}
                     EditTarget::AddProject => {
                         let path = match title.strip_prefix('~') {
                             Some(rest) if rest.is_empty() || rest.starts_with('/') => {
@@ -5835,7 +5932,9 @@ impl App {
         match b.kind {
             Turn | User | Assistant => true,
             Context => true,
-            Notice | Diagnostic | Reasoning | Group | Tool | Child | Older | Code => false,
+            Notice | Handoff | Diagnostic | Reasoning | Group | Tool | Child | Older | Code => {
+                false
+            }
         }
     }
 
@@ -5894,6 +5993,17 @@ impl App {
         else {
             return;
         };
+        if b.kind == crate::timeline::BlockKind::Handoff {
+            if let Some(m) = self.message_by_prefix(b.target.as_deref().unwrap_or_default()) {
+                let (from, summary) = crate::timeline::handoff_parts(&message_text(&m));
+                self.open_overlay(OverlayKind::ContextDetail {
+                    title: format!("Handoff from {from}"),
+                    text: summary,
+                    top: 0,
+                });
+            }
+            return;
+        }
         if b.kind == crate::timeline::BlockKind::Child {
             if let Some(id) = b.target.clone() {
                 self.open_session(&id);
@@ -6516,6 +6626,8 @@ impl App {
                 | "appearance.show_archived"
                 | "mcp.full_definitions"
                 | "mcp.max_listed_tools"
+                | "context.handoff_percent"
+                | "context.title_models"
                 | "models.catalog"
                 | "models.refresh"
                 | "agents.list"
@@ -6694,6 +6806,23 @@ impl App {
                     self.toast(Level::Warning, "Configuration is not loaded");
                 }
             }
+            "context.handoff_percent" => {
+                if let Some(config) = &self.state.config {
+                    if let Some(revision) = config["revision"].as_str() {
+                        let current = config["values"]["context"]["handoff_percent"]
+                            .as_i64()
+                            .unwrap_or(80);
+                        let value = (current + 5 * step.signum() as i64).clamp(0, 100);
+                        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+                            revision: revision.to_owned(),
+                            path: "context.handoff_percent".into(),
+                            value: json!(value),
+                        }));
+                    }
+                } else {
+                    self.toast(Level::Warning, "Configuration is not loaded");
+                }
+            }
             "mcp.max_listed_tools" => {
                 if let Some(config) = &self.state.config {
                     if let Some(revision) = config["revision"].as_str() {
@@ -6732,6 +6861,35 @@ impl App {
         }
     }
 
+    /// The title-model list as one editable, comma-separated line.
+    fn edit_title_models(&mut self) {
+        let Some(config) = &self.state.config else {
+            self.toast(Level::Warning, "Configuration is not loaded");
+            return;
+        };
+        let Some(revision) = config["revision"].as_str().map(str::to_owned) else {
+            return;
+        };
+        let current = config["values"]["context"]["title_models"]
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let mut buf = Composer::new();
+        buf.set_text(&current);
+        let restore = self.restore_point();
+        self.ui.edit = Some(TextEdit {
+            label: "title models (provider/model, …)".into(),
+            target: EditTarget::TitleModels { revision },
+            buf,
+            restore,
+        });
+    }
+
     fn settings_activate(&mut self, index: usize) {
         let Some(row) = self.settings_row_at(index) else {
             return;
@@ -6755,7 +6913,10 @@ impl App {
             | "appearance.sidebar"
             | "notifications.terminal"
             | "appearance.timeline_detail" => self.settings_change(index, 1),
-            "mcp.full_definitions" | "mcp.max_listed_tools" => self.settings_change(index, 1),
+            "mcp.full_definitions" | "mcp.max_listed_tools" | "context.handoff_percent" => {
+                self.settings_change(index, 1)
+            }
+            "context.title_models" => self.edit_title_models(),
             "dictation.stt_download" => self.run_command("voice.download_stt"),
             "dictation.stt_remove" => self.run_command("voice.remove_stt"),
             "dictation.tts_download" => self.run_command("voice.download_tts"),
@@ -7542,6 +7703,8 @@ impl ActionDone {
             ApiCall::NewSession { .. } => "New session failed",
             ApiCall::Continue { .. } => "Continue failed",
             ApiCall::Speak { .. } => "Speak failed",
+            ApiCall::Handoff { .. } => "Handoff failed",
+            ApiCall::Btw { .. } => "Side question failed",
             ApiCall::SpeakStop => "Stop failed",
             ApiCall::VoiceStatus { .. } => "Voice status failed",
             ApiCall::VoiceSettingsStatus { .. } => "Voice status failed",

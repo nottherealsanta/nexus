@@ -80,7 +80,8 @@ create table if not exists session (
   launched_by text not null default 'user',
   disabled_tools text not null default '[]',
   archived integer not null default 0,
-  revision integer not null default 1
+  revision integer not null default 1,
+  continued_from text
 );
 create table if not exists event (
   id integer primary key autoincrement,
@@ -301,6 +302,7 @@ class Session:
     disabled_tools: str = "[]"  # JSON list of tool names turned off for this session
     archived: int = 0  # 0/1; archive/unarchive applies to the whole tree
     revision: int = 1  # monotonic configuration revision (expected-revision preconditions)
+    continued_from: str | None = None  # the session whose handoff summary this one starts from
 
     def disabled(self) -> set[str]:
         return set(json.loads(self.disabled_tools or "[]"))
@@ -345,6 +347,9 @@ class Store:
             self.db.execute("alter table session add column archived integer not null default 0")
         if "revision" not in columns:  # databases from before expected-revision preconditions
             self.db.execute("alter table session add column revision integer not null default 1")
+        if "continued_from" not in columns:  # databases from before handoff (PLAN K1)
+            self.db.execute("alter table session add column continued_from text")
+        self.db.execute("create index if not exists session_continued on session(continued_from)")
         # Older sessions defaulted to asking for tool approval. Apply the new
         # default once, including descendants; later explicit choices survive.
         with self.db:
@@ -569,18 +574,20 @@ class Store:
     def create_session(self, project: Project, *, title: str, agent: str, model: str = "", permission: str = "allow",
                        effort: str | None = None, parent: Session | None = None, parent_call_id: str | None = None,
                        launched_by: str = "user", disabled_tools: list[str] | None = None,
-                       snapshot: dict[str, Any] | None = None) -> Session:
+                       snapshot: dict[str, Any] | None = None, directory: str | None = None,
+                       continued_from: str | None = None) -> Session:
         now = time.time()
-        directory = parent.directory if parent else project.path
+        directory = parent.directory if parent else (directory or project.path)
         disabled = json.dumps(sorted(set(disabled_tools or [])))
         session = Session(new_id("ses"), project.id, directory, title, model, permission, now, now, effort, agent,
-                          parent.id if parent else None, parent_call_id, launched_by, disabled)
+                          parent.id if parent else None, parent_call_id, launched_by, disabled, 0, 1, continued_from)
         with self.db:
             self.db.execute(
                 "insert into session (id, project_id, directory, title, model, permission, created, updated, effort, agent,"
-                " parent_id, parent_call_id, launched_by, disabled_tools) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " parent_id, parent_call_id, launched_by, disabled_tools, continued_from)"
+                " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (session.id, session.project_id, directory, session.title, model, permission, now, now, effort, agent,
-                 session.parent_id, parent_call_id, launched_by, disabled),
+                 session.parent_id, parent_call_id, launched_by, disabled, continued_from),
             )
             if snapshot is not None:
                 self.db.execute("insert into session_snapshot (session_id, data, created) values (?, ?, ?)",
@@ -713,7 +720,15 @@ class Store:
 
     def delete_session(self, session_id: str) -> bool:
         with self.db:
+            self.db.execute("update session set continued_from = null where continued_from = ?", (session_id,))
             return self.db.execute("delete from session where id = ?", (session_id,)).rowcount > 0
+
+    def continuation_of(self, session_id: str) -> str | None:
+        """The newest session that started from this one's handoff."""
+        row = self.db.execute(
+            "select id from session where continued_from = ? order by created desc, rowid desc limit 1",
+            (session_id,)).fetchone()
+        return row["id"] if row else None
 
     # -- preferences ---------------------------------------------------------
 
@@ -1044,6 +1059,14 @@ class Store:
         now = time.time()
         with self.db:
             return self._insert_message(session_id, message, now)
+
+    def append_handoff(self, session_id: str, message: Message) -> StoredMessage:
+        """The first message of a continued session: the summary, tagged `handoff`."""
+        from dataclasses import replace
+        with self.db:
+            stored = self._insert_message(session_id, message, time.time())
+            self.db.execute("update message set delivery = 'handoff' where id = ?", (stored.id,))
+        return replace(stored, delivery="handoff")
 
     def messages(self, session_id: str) -> list[StoredMessage]:
         rows = self.db.execute("select * from message where session_id = ? order by seq", (session_id,))
@@ -1805,6 +1828,10 @@ class Store:
             if covered is None:  # no turn rows: no message has a summary
                 covered = self.db.execute(
                     "select coalesce(max(seq), 0) from message where session_id = ?", (session_id,)).fetchone()[0]
+            if covered > 0 and not self.db.execute(
+                    "select 1 from message where session_id = ? and seq <= ? and coalesce(delivery, '') != 'handoff' limit 1",
+                    (session_id, covered)).fetchone():
+                covered = 0  # only the handoff summary precedes the first turn: it never had one
             return {"turns": turns, "more_before": more_before, "more_after": more_after,
                     "floor": {"seq": covered + 1} if covered > 0 else None,
                     "usage": self.session_usage(session_id)}

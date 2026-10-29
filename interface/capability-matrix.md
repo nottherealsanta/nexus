@@ -53,7 +53,7 @@ Durations come from event `time`; Core sends no duration fields.
 | L8 | Row: relative time of last activity | API ready | `Session.updated` (bumped on every saved message) | |
 | L9 | Row: number of child sessions; children not listed as rows | API ready | `Session.children`, `parent_id` (filter `parent_id == null` for rows) | |
 | L10 | Handoff chain ("continued from") | Core work | 12a Compaction as handoff | No `continued_from` field exists |
-| L11 | One-turn sessions hidden from the list | Core work | 12a One-turn sessions | No session kind exists |
+| L11 | One-turn sessions hidden from the list | Dropped | K2/K3 | Titles and `/btw` are `oneshot` events on the session, not sessions, so nothing needs hiding |
 | L12 | Archived filter ("Archived" view) | API ready | `GET /api/session?archived=only\|include` | |
 | L13 | Search over titles and user messages (indexed) | Core work | 12a Archive, search (FTS5) | No search endpoint |
 | L14 | Row action: open | Client only | | |
@@ -63,7 +63,7 @@ Durations come from event `time`; Core sends no duration fields.
 | L18 | Row action: copy id | Client only | | |
 | L19 | Row action: open in inspector | API ready | `/inspector#token=…&session=…&level=…` ([inspector.md](../docs/inspector.md)) | Token travels in the fragment |
 | L20 | Attention marks on rows and projects (waiting, unread finish, error) | Client only | | Derived from L6/L7 plus a local "seen" cursor |
-| L21 | Auto title (cheap model, from first message) | Core work | 12a One-turn sessions | Until then the title is the truncated first prompt |
+| L21 | Auto title (from first message) | API ready | `[context] title_models` tried in order, one `oneshot` event (kind `title`) | The truncated first prompt stays until a model answers, and if none does |
 
 ### Session actions (palette and row menu)
 
@@ -73,7 +73,7 @@ Durations come from event `time`; Core sends no duration fields.
 | A2 | Archive / unarchive | API ready | see L16 | |
 | A3 | Delete | API ready | see L17 | |
 | A4 | Export (Markdown transcript or JSON) | API ready | `GET /api/session/{id}/export?format=markdown\|json&scope=session\|tree` | Download via the API; headers carry boundary and filename. Markdown omits wire events; JSON includes them |
-| A5 | Handoff / `/compact` | Core work | 12a Compaction as handoff | |
+| A5 | Handoff / `/compact` | API ready | `POST /api/session/{id}/handoff`; automatic at `[context] handoff_percent`; `session.handoff` | Both clients open the new session and show the summary as a 3-line card that opens whole |
 | A6 | Change session directory | API ready | `POST …/directory {directory}` (200 applied/unchanged, 202 pending while busy); E: `session.directory_changed` | A pending move shows in `Session.directory_change` |
 | A7 | Worktrees: list, create, delete | API ready | `GET/POST …/worktrees {action,path?,branch?,base?}`; E: `worktree.listed/created/deleted` | Create does not move the session. An ambiguous crash outcome must be inspected, not repeated |
 | A8 | Activate workspace controls (prerequisite for the model to use them) | API ready | `POST …/workspace-tools` | UI commands A6/A7 do not need activation |
@@ -131,7 +131,7 @@ Durations come from event `time`; Core sends no duration fields.
 | R10 | Child sessions: count, running, failed | API ready | `GET …/children`, `GET …/tree`, child `status` | "Failed" derives from child `session.error`/result |
 | R11 | Enabled and disabled tools | API ready | `Session.tools`, `Session.disabled_tools` | |
 | R12 | Kernels this tree uses | API ready | `GET /api/kernel` (creator, users) | Match by session/tree |
-| R13 | btw list in session info | Core work | 12a One-turn sessions | |
+| R13 | btw list in session info | Deferred | `oneshot` events (kind `btw`) | Answers are not stored as context; the list is only in the event log |
 | R14 | Changes, Jobs, Logs, cross-session Cost | Deferred | INTERFACE_PLAN "Not in the right sidebar for now" | Background bash jobs are available (`GET /api/bash`) when revisited |
 
 ### Git status
@@ -302,8 +302,8 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | O1 | `/continue` after interrupted or failed turn | API ready | `POST …/continue`; E: `session.status` (`origin: continuation`, `continuation.predecessor`, `reconciled`) | Client enables it when idle, messages exist, last turn interrupted/failed. Errors: 409 busy/archived/unreconciled, 400 empty |
 | O2 | Link continuation to the interrupted attempt; label unknown outcomes | API ready | `continuation.predecessor`, `reconciled`; `[Nexus recovery: …]` notice | |
 | O3 | Do not repeat an ambiguous POST | API ready | api.md | Use an `Idempotency-Key`; inspect before retrying without one |
-| O4 | One-turn: title | Core work | 12a One-turn sessions | |
-| O5 | `/btw` overlay and list | Core work | 12a One-turn sessions | |
+| O4 | One-turn: title | API ready | see L21 | |
+| O5 | `/btw` overlay and list | API ready | `POST /api/session/{id}/btw` | The overlay is built in both clients; the list is R13 |
 | O6 | Handoff at threshold (default 80%) or on request | Core work | 12a Compaction as handoff | No context limit exists (Known gaps) |
 | O7 | New root session starts from the summary; "continued from" item; chain in sidebar | Core work | 12a Compaction as handoff | |
 | O8 | Directory change: old/new paths and branch, `AGENTS.md` loaded as forward context, Files/git/header update, group move | API ready | `POST …/directory`; E: `session.directory_changed` (`from`, `to`, `branch`, `instructions`); `Session.directory` | Files/git refresh depends on F1/G1 |
@@ -326,7 +326,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | Q7 | Open settings, theme, notifications, copy actions | Client only | | |
 | Q8 | Sign in | API ready | `POST /api/provider/{id}/login` | Device instructions arrive through `provider.login` |
 | Q9 | Open inspector | API ready | L19 | |
-| Q10 | `btw`, compact/handoff | Core work | 12a | A5, O5 |
+| Q10 | `btw`, compact/handoff | API ready | K1, K3 | A5, O5 |
 | Q11 | Interrupt | API ready | K14 | |
 | Q12 | Rebind keys | Client only | | Settings Keybindings |
 

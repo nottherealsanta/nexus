@@ -261,6 +261,10 @@ pub enum EditTarget {
     /// Add a project by directory path.
     AddProject,
     ProviderKey,
+    /// `[context] title_models`, comma separated; empty clears the list.
+    TitleModels {
+        revision: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

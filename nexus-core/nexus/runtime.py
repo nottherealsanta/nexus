@@ -55,7 +55,7 @@ from typing import Any
 from . import agents as agent_files
 from . import extensions as extension_files
 from . import mcp as mcp_files
-from . import permissions, worktrees
+from . import oneshot, permissions, worktrees
 from . import questions as question_contract
 from . import skills as skill_files
 from . import snapshot as snapshots
@@ -65,10 +65,12 @@ from .bus import Bus
 from .codec import message_to_json, to_json
 from .config import ConfigFile
 from .continuation import ContextInvalid, Reconciliation, predecessor, reconcile
+from .counting import budget
 from .hooks import HookRunner, config_hooks
 from .kernels import Kernels
+from .llmhub import catalog
 from .llmhub.auth import AuthError, CredentialError
-from .llmhub.hub import provider_for
+from .llmhub.hub import provider_for, split_ref
 from .llmhub.types import (
     Done,
     Message,
@@ -76,6 +78,7 @@ from .llmhub.types import (
     ProviderError,
     Reasoning,
     ReasoningDelta,
+    Request,
     Text,
     TextDelta,
     ToolCall,
@@ -115,6 +118,7 @@ CHILD_RESULT_CHARS = 30_000
 MAX_ESCALATIONS = 5  # blocks one child can report before its parent reads them
 MAX_ESCALATION_FIELD = 600
 TITLE_CHARS = 60
+TITLE_TIMEOUT_S = 20
 MAX_RESOLVED_QUESTIONS = 256  # tombstones so a late or duplicate reply gets 409, not a second event
 
 
@@ -187,6 +191,9 @@ def _config_stamp() -> tuple[int, int] | None:
 
 
 class Runtime:
+    # Titles and automatic handoffs make their own model requests; tests with scripted providers turn this off.
+    background_requests = True
+
     def __init__(self, store: Store, bus: Bus, default_model: str) -> None:
         self.kernels = Kernels()
         self.jobs = Jobs()
@@ -209,6 +216,9 @@ class Runtime:
         self.pending_reads: dict[str, list[FileObservation]] = {}
         self.removing_worktrees: set[Path] = set()
         self.closing_sessions: set[str] = set()
+        self.handoffs: set[str] = set()  # sessions whose handoff summary is being written
+        self.background: set[asyncio.Future[None]] = set()  # titles and automatic handoffs
+        self.window_for = self._catalog_window  # model ref -> context window; replaceable in tests
         self.pending_directories: dict[str, dict[str, Any]] = {}  # session id -> a validated, not-yet-applied move
         self.file_lock = asyncio.Lock()  # serializes Nexus file mutations for this daemon
         self.worktree_lock = asyncio.Lock()  # serializes create/delete so they cannot conflict
@@ -399,7 +409,8 @@ class Runtime:
             "directory_change": ({"from": pending["from"], "to": pending["to"], "status": "pending",
                                   "source": pending["source"]} if pending else None),
             "permission": s.permission, "status": "busy" if s.id in self.turns else "idle",
-            "archived": bool(s.archived), "revision": s.revision,
+            "archived": bool(s.archived), "revision": s.revision, "continued_from": s.continued_from,
+            "continued_to": self.store.continuation_of(s.id),
             "created": s.created, "updated": s.updated,
         }
 
@@ -778,7 +789,8 @@ class Runtime:
     def create_session(self, project: Project, *, title: str | None, model: str | None, permission: str | None,
                        effort: str | None = None, agent: str | None = None, parent: Session | None = None,
                        parent_call_id: str | None = None, launched_by: str = "user",
-                       disabled_tools: list[str] | None = None) -> Session:
+                       disabled_tools: list[str] | None = None, directory: str | None = None,
+                       continued_from: str | None = None) -> Session:
         if permission not in (None, "ask", "allow"):
             raise ValueError("permission must be 'ask' or 'allow'")
         if parent is not None:
@@ -825,7 +837,7 @@ class Runtime:
             fitting = [a.name for a in found.allowed(child=parent is not None)]
             agent = agent_files.DEFAULT_AGENT if agent_files.DEFAULT_AGENT in fitting else (fitting or [""])[0]
         spec = found.get(agent, child=parent is not None)  # the agent's mode must fit
-        directory = parent.directory if parent else project.path
+        directory = parent.directory if parent else (directory or project.path)
         self._check_removing_worktree(directory)
         carry = None
         if parent is not None:
@@ -842,7 +854,8 @@ class Runtime:
         session = self.store.create_session(project, title=title or "New session", agent=agent, model=model or "",
                                             permission=permission or "allow", effort=effort or None, parent=parent,
                                             parent_call_id=parent_call_id, launched_by=launched_by,
-                                            disabled_tools=disabled_tools, snapshot=snapshot)
+                                            disabled_tools=disabled_tools, snapshot=snapshot,
+                                            directory=directory, continued_from=continued_from)
         self.bus.publish("session.created", self.session_json(session), session_id=session.id)
         return session
 
@@ -1373,6 +1386,130 @@ class Runtime:
         agent = self._agent(self.session(session_id))
         return agent.provider.body(agent.request())
 
+    async def _catalog_window(self, model: str) -> int | None:
+        try:
+            provider, model_id = split_ref(model)
+            data, _ = await catalog.load()
+            return next((item.context for item in catalog.models_for(data, provider) if item.id == model_id), None)
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
+    def measured_input(self, session_id: str, model: str) -> int | None:
+        """Input tokens of the newest request, when it ran on `model`."""
+        row = self.store.db.execute(
+            "select model, input_tokens from turn_request where session_id = ? order by started desc, rowid desc limit 1",
+            (session_id,),
+        ).fetchone()
+        return row["input_tokens"] if row and row["model"] == model else None
+
+    async def context_usage(self, session_id: str) -> dict[str, Any]:
+        """`context()` plus `used`, `window` and `exact` (PLAN A3)."""
+        body = self.context(session_id)
+        model = self.session_json(self.session(session_id))["model"]
+        window = await self.window_for(model)
+        return body | budget(body, window, self.measured_input(session_id, model))
+
+    # -- one-request helpers: titles, /btw, handoff (PLAN K1-K3) ----------------
+
+    def _oneshot_request(self, session: Session, instruction: str, *, messages: list[Message] | None = None,
+                         system: str | None = None) -> tuple[Any, Any]:
+        agent = self._agent(session, refresh=False)
+        base = agent.request()
+        history = oneshot.settled(messages if messages is not None else base.messages)
+        request = oneshot.with_instruction(base, instruction, messages=history)
+        if system is not None:
+            from dataclasses import replace
+            request = replace(request, instructions=system, tools=(), reasoning_effort=None)
+        return agent.provider, request
+
+    def _record_oneshot(self, session_id: str, kind: str, result: dict[str, Any]) -> None:
+        """The request and reply, in the event log but never in the model's context."""
+        self.bus.publish("oneshot", {"kind": kind, "request": result["body"], "text": result["text"],
+                                     "usage": result["usage"],
+                                     **({"model": result["model"]} if "model" in result else {})}, session_id=session_id)
+
+    async def btw(self, session_id: str, question: str) -> dict[str, Any]:
+        """Answer a side question from the session's context so far; nothing is stored."""
+        session = self.session(session_id)
+        question = question.strip()
+        if not question:
+            raise ValueError("question must not be empty")
+        provider, request = self._oneshot_request(session, oneshot.BTW_INSTRUCTION + question)
+        result = await oneshot.ask(provider, request)
+        self._record_oneshot(session_id, "btw", result)
+        return {"answer": result["text"], "usage": result["usage"]}
+
+    def _titled(self, session: Session) -> bool:
+        return not self.resolve_model(session, self.snapshot_for(session)["agent"])[0].startswith("mock/")
+
+    async def _retitle(self, session_id: str, first: str, placeholder: str) -> None:
+        """Try each `[context] title_models` ref in turn; with none working the first words stay."""
+        session = self.store.session(session_id)
+        if session is None or session.title != placeholder or not self._titled(session):
+            return
+        prompt = Message("user", (Text(oneshot.TITLE_INSTRUCTION + "\n\nMessage:\n" + first[:2000]),))
+        for ref in ConfigFile().read()["values"]["context"]["title_models"]:
+            try:
+                provider, model = provider_for(ref)
+                result = await asyncio.wait_for(oneshot.ask(provider, Request(
+                    model=model, instructions="You write short titles.", messages=(prompt,))), TITLE_TIMEOUT_S)
+                title = oneshot.clean_title(result["text"])
+            except (TimeoutError, ProviderError, AuthError, CredentialError, oneshot.OneshotError, ValueError, KeyError, OSError):
+                continue
+            if not title:
+                continue
+            self._record_oneshot(session_id, "title", result | {"model": ref})
+            current = self.store.session(session_id)
+            if current is not None and current.title == placeholder:  # the user did not rename it meanwhile
+                self.update_session(session_id, title=title)
+            return
+
+    async def handoff(self, session_id: str, *, reason: str = "user") -> dict[str, Any]:
+        """Write the summary, then start a new root session of the same agent that begins with it."""
+        session = self.session(session_id)
+        if session.parent_id is not None:
+            raise ValueError("only a root session can be handed off")
+        self._check_turn_start(session)
+        if not self.store.messages(session_id):
+            raise ValueError("this session has no context to hand off")
+        if session_id in self.handoffs:
+            raise Busy(f"session {session_id} is already being handed off")
+        self.handoffs.add(session_id)
+        try:
+            provider, request = self._oneshot_request(session, oneshot.HANDOFF_INSTRUCTION)
+            result = await oneshot.ask(provider, request)
+            self._record_oneshot(session_id, "handoff", result)
+            self._check_turn_start(self.session(session_id))  # a turn may have started while the model wrote
+            project = self.project(session.project_id)
+            created = self.create_session(
+                project, title=session.title, model=session.model or None, permission=session.permission,
+                effort=session.effort, agent=session.agent, disabled_tools=sorted(session.disabled()),
+                directory=session.directory, continued_from=session_id)
+            text = f"[Handoff from session {session_id}]\n\n{result['text']}"
+            stored = self.store.append_handoff(created.id, Message("user", (Text(text),)))
+            self._publish_message(created.id, stored)
+            data = {"from": session_id, "to": created.id, "reason": reason, "usage": result["usage"]}
+            self.bus.publish("session.handoff", data, session_id=session_id)
+            return {**data, "session": self.session_json(created), "summary": result["text"]}
+        finally:
+            self.handoffs.discard(session_id)
+
+    async def _auto_handoff(self, session_id: str) -> None:
+        try:
+            percent = ConfigFile().read()["values"]["context"]["handoff_percent"]
+            session = self.store.session(session_id)
+            if not percent or session is None or session.parent_id is not None or session.archived:
+                return
+            model = self.session_json(session)["model"]
+            used, window = self.measured_input(session_id, model), await self.window_for(model)
+            if used is None or not window or used * 100 < percent * window:
+                return
+            await self.handoff(session_id, reason="auto")
+        except (Busy, Conflict, NotFound):
+            pass  # a turn started or the session went away: the next completed turn checks again
+        except (ProviderError, AuthError, CredentialError, oneshot.OneshotError, ValueError) as exc:
+            self.bus.publish("session.handoff_failed", {"session_id": session_id, "error": str(exc)}, session_id=session_id)
+
     # -- turns ---------------------------------------------------------------
 
     @staticmethod
@@ -1901,7 +2038,11 @@ class Runtime:
                 self._start_input(session_id, item)
             return {"input_id": item["id"], "mode": mode, "state": "pending"}
         if session.title == "New session":
-            self.update_session(session_id, title=" ".join(text.split())[:TITLE_CHARS] or "Image")
+            quick = " ".join(text.split())[:TITLE_CHARS] or "Image"
+            self.update_session(session_id, title=quick)
+            if text.strip() and self.background_requests:
+                self.background.add(task := asyncio.ensure_future(self._retitle(session_id, text, quick)))
+                task.add_done_callback(self.background.discard)
         labelled_parts = tuple(part for index, image in enumerate(parts) for part in (
             Text(f"[Image {chr(ord('A') + index)}]"), image,
         ))
@@ -1977,6 +2118,7 @@ class Runtime:
         clock = ReasoningClock()
         step = 0
         closed = False
+        completed = False
         interrupted = False
         try:
             agent = self._agent(self.session(session_id))
@@ -2063,6 +2205,7 @@ class Runtime:
                     data = to_json(event)
                     self.bus.publish(data["type"], data, session_id=session_id)
             self.store.finish_turn(turn_id, "completed", steps=step)
+            completed = True
             closed = True
         except asyncio.CancelledError:
             interrupted = True
@@ -2157,6 +2300,10 @@ class Runtime:
                     if continuation.get("reconciliation"):
                         idle["reconciled"] = continuation["reconciliation"]
                 self.bus.publish("session.status", idle, session_id=session_id)
+                if completed and self.background_requests and self.store.session(session_id) is not None \
+                        and not (self._model_ref(session_id) or "mock/").startswith("mock/"):
+                    self.background.add(task := asyncio.ensure_future(self._auto_handoff(session_id)))
+                    task.add_done_callback(self.background.discard)
             if closed:
                 self.store.set_turn_recovery(turn_id, "none")
             self.store.resolve_mutations_for_turn(turn_id, lifetime=self.mutation_lifetime)
@@ -2422,6 +2569,8 @@ class Runtime:
             self.resolved_questions.pop(next(iter(self.resolved_questions)))
 
     async def shutdown(self) -> None:
+        for task in list(self.background):
+            task.cancel()
         for session_id in list(self.turns):
             await self.interrupt(session_id, reason="the daemon is shutting down")
         self.close_questions(None, "the daemon is shutting down")
