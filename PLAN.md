@@ -953,6 +953,11 @@ if the model is already cached).
 Each provider lands with `docs/llm-providers.md` and `docs/auth.md`, a
 recorded wire fixture test, and a verified real call.
 
+for antigravity lets do it like : https://github.com/NoeFabris/opencode-antigravity-auth instead of ZMX 
+for claude: lets used AGENT SDK
+
+for things that support openai format, like ollama and nvidia and groq, we can group them 
+
 ### K. Context and sessions
 
 The old Step 12a items, with sources.
@@ -970,6 +975,12 @@ The old Step 12a items, with sources.
 | K9 cache warning | old `docs/context.md` "Prompt-cache boundaries" | Warn before an agent or model switch (Principle 8) |
 | K10 file writes | — | `PUT` file with `expected_revision`, `files.changed`, then the built-in editor |
 | K11 usage totals | `host_support/provider_usage.py`, `usage_snapshot.py`, `ui_support/usage.py` | Per-session totals come from `session_usage` (turn summaries). Provider quota windows (codex and copilot limits) where the provider reports them |
+
+K1 "/handoff" or "/compact" the same things. session that start from previous session's compaction / handoff, should show that in the beginning - there should be a user message like box (up to 3 lines) (click to show to more in a modal) that shows the full compaction. 
+there should be good instruction for the compaction. 
+compaction is done by two methods - either automatic after reaching the percent (80) but only after the turn is over OR by user by "/handoff" or "/compact" 
+
+K2 and K3 - technically these are grouped in one - where we only make one request to the model. for K2 is with custom instruction that send the first user message, asking for a Title - Camel Case - only few words. K3 we instruct not to call tools - we don't run the tools even if model call by mistake, we ask to only reply given all the context it has. 
 
 ### L. Worktree review and integration
 
