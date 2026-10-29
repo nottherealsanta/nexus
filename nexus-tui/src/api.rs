@@ -1483,7 +1483,7 @@ mod tests {
     fn version_parsing() {
         assert_eq!(
             ApiVersion::parse("1.3"),
-            Some(ApiVersion { major: 1, minor: 4 })
+            Some(ApiVersion { major: 1, minor: 3 })
         );
         assert_eq!(
             ApiVersion::parse("2"),

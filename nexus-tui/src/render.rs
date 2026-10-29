@@ -3524,7 +3524,12 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
     // The same box as the header after the first message: panel surface, one
     // padding row above and below the rows.
     let boxed = r;
-    let r = Rect::new(r.x + 2, r.y + 1, r.width.saturating_sub(2), r.height.saturating_sub(2));
+    let r = Rect::new(
+        r.x + 2,
+        r.y + 1,
+        r.width.saturating_sub(2),
+        r.height.saturating_sub(2),
+    );
     let end = r.right();
 
     let window = a
@@ -3557,7 +3562,11 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
     let rows = paint::context_rows(&sections, total, &layout);
     let total_rows = rows.len();
     let box_rows = (total_rows + 2).min(boxed.height as usize) as u16;
-    clear(buf, Rect::new(boxed.x, boxed.y, boxed.width, box_rows), cx.st(MUTED, PANEL));
+    clear(
+        buf,
+        Rect::new(boxed.x, boxed.y, boxed.width, box_rows),
+        cx.st(MUTED, PANEL),
+    );
     let top =
         a.ui.scroll
             .top

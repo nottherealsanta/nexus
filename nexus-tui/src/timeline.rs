@@ -1228,7 +1228,9 @@ impl Builder<'_> {
                         }
                         CtxRole::Tokens => b.st(SECONDARY, PANEL),
                         CtxRole::ToggleOn(_) => b.st(SECONDARY, PANEL),
-                        CtxRole::ToggleOff(_) => b.st(MUTED, PANEL).add_modifier(Modifier::CROSSED_OUT),
+                        CtxRole::ToggleOff(_) => {
+                            b.st(MUTED, PANEL).add_modifier(Modifier::CROSSED_OUT)
+                        }
                         CtxRole::ToggleLocked(_) => b.st(MUTED, PANEL),
                         CtxRole::TotalFigure => b.st(SECONDARY, PANEL),
                     };
