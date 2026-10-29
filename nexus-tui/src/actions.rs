@@ -178,6 +178,11 @@ pub enum ApiCall {
     Prompts {
         project: String,
     },
+    /// Core's session search (`GET /api/search`, titles and user messages); never toasts.
+    Search {
+        query: String,
+        project: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -257,7 +262,7 @@ impl ApiCall {
             ApiCall::ChangeDirectory { .. } => "Directory change requested",
             ApiCall::AddProject { .. } => "Project added",
             ApiCall::DeleteProject { .. } => "Project removed",
-            ApiCall::Prompts { .. } => "",
+            ApiCall::Prompts { .. } | ApiCall::Search { .. } => "",
         }
     }
 
@@ -292,6 +297,8 @@ pub struct Done {
     pub input_parts: Option<Vec<Value>>,
     /// The project's prompts, oldest first (history recall).
     pub prompts: Option<Vec<String>>,
+    /// Core's search hits (`/api/search`).
+    pub search: Option<Value>,
     /// `/api/skill/preview` result, shown by the app as a checklist or install.
     pub learn_preview: Option<Value>,
     /// A Core voice status/download response.
@@ -363,6 +370,13 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                 )
                 .await
                 .map_err(e)?;
+        }
+        ApiCall::Search { query, project } => {
+            let mut params = vec![("q", query.clone()), ("limit", "30".to_owned())];
+            if let Some(project) = project {
+                params.push(("project", project.clone()));
+            }
+            done.search = Some(api.http.get("/api/search", &params).await.map_err(e)?);
         }
         ApiCall::Prompts { project } => {
             let value = api

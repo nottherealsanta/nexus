@@ -3194,6 +3194,41 @@ fn session_search_toggles_project_scope_without_losing_query() {
 }
 
 #[test]
+fn session_search_adds_core_message_hits_after_the_title_matches() {
+    use nexus_tui::actions::{ActionDone, ApiCall, Done};
+    use nexus_tui::app::Effect;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let mut other = app.state.model.sessions[SESSION].clone();
+    other.id = "other".into();
+    other.title = "Unrelated title".into();
+    app.state.model.sessions.insert(other.id.clone(), other);
+    app.run_command("session.switch");
+    app.effects.clear();
+    press(&mut app, &["l", "o", "g", "i", "n"]);
+    let asked = app.effects.iter().rev().find_map(|e| match e {
+        Effect::Api(ApiCall::Search { query, .. }) => Some(query.clone()),
+        _ => None,
+    });
+    assert_eq!(asked.as_deref(), Some("login"));
+    assert!(app.palette_items().is_empty());
+    app.apply_done(ActionDone {
+        call: ApiCall::Search { query: "login".into(), project: None },
+        result: Ok(Done {
+            search: Some(serde_json::json!({"hits": [
+                {"session_id": "other", "kind": "message", "snippet": "fix the [login] bug"}]})),
+            ..Done::default()
+        }),
+    });
+    let items = app.palette_items();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label, "Unrelated title");
+    assert!(items[0].hint.contains("login"), "{:?}", items[0].hint);
+    // an answer to an older query is ignored
+    press(&mut app, &["x"]);
+    assert!(app.palette_items().is_empty());
+}
+
+#[test]
 fn bottom_rule_shows_context_and_activity() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
     with_usage(&mut app, 82_000);

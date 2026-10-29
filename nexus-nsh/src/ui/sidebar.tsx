@@ -6,6 +6,7 @@ import { manifest } from "../gen/manifest";
 import { availability, byId, commands, keyLabel, newSession, run, toggleLeft } from "../commands";
 import { archivedFilter, centre, connection, currentProject, focusedSidebarRow, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, viewed, savePrefs, SidebarRowTarget } from "../store";
 import { Project, Session } from "../core/api";
+import { request } from "../core/transport";
 import { fileListing, loadFiles, showFile } from "../store";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
@@ -99,12 +100,34 @@ function Empty(p: { title: string; body?: string; action?: JSX.Element }) {
 function projectName(id: string) { return model.projects.get(id)?.name ?? "project"; }
 
 const sessionQuery = signal("");
+/** Core's search (titles and user messages) for the query typed, when it has answered: the query and the best snippet per session. */
+const searchHits = signal<{ q: string; snippets: Map<string, string> } | null>(null);
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+let searchSeq = 0;
+function setSessionQuery(value: string) {
+  sessionQuery.set(value);
+  clearTimeout(searchTimer);
+  const q = value.trim();
+  if (q.length < 2) { searchSeq++; searchHits.set(null); return; }
+  const seq = ++searchSeq;
+  searchTimer = setTimeout(async () => {
+    try {
+      const r = await request<{ hits: { session_id: string; snippet: string }[] }>("GET", `/api/search?q=${encodeURIComponent(q)}&limit=30`);
+      if (seq === searchSeq) searchHits.set({ q, snippets: new Map(r.hits.map((h) => [h.session_id, h.snippet.replace(/[\[\]]/g, "")])) });
+    } catch { /* quiet: the title matches are already on screen */ }
+  }, 150);
+}
+/** The message text that made a session match, when its title did not. */
+const snippetOf = (id: string) => { const h = searchHits(); const q = sessionQuery().trim(); return h && h.q === q && !titleMatches(model.sessions.get(id)?.title ?? "") ? h.snippets.get(id) : undefined; };
+const titleMatches = (title: string) => title.toLowerCase().includes(sessionQuery().trim().toLowerCase());
 
 type Item = { key: string; kind: "header"; title: string; n: number } | { key: string; kind: "session"; s: Session };
 /** All-projects scope groups sessions under their project; one project is a flat list. */
 function rowItems(): Item[] {
   const query = sessionQuery().trim().toLowerCase();
-  const ses = rowSessions().filter((s) => !query || s.title.toLowerCase().includes(query));
+  const hits = searchHits();
+  const byMessage = hits && hits.q === sessionQuery().trim() ? hits.snippets : null;
+  const ses = rowSessions().filter((s) => !query || s.title.toLowerCase().includes(query) || byMessage?.has(s.id));
   if (!scopeAll()) return ses.map((s) => ({ key: s.id, kind: "session" as const, s }));
   const out: Item[] = [];
   for (const pr of model.projectsRecent()) {
@@ -133,7 +156,7 @@ function SessionsTab() {
   return (
     <View class="flex-1 min-h-0">
       <View class="gap-2 p-2">
-        <Input placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => sessionQuery.set(value)} class="h-8 rounded-(--radius) bg-background px-2 text-[13px] text-foreground placeholder:text-muted-foreground" />
+        <Input placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class="h-8 rounded-(--radius) bg-background px-2 text-[13px] text-foreground placeholder:text-muted-foreground" />
         <View class="flex-row items-center gap-2">
           <Button onPress={() => run("project.switch")} accessibilityLabel="Current project" class={`flex-1 min-w-0 flex-row items-center gap-1.5 rounded-(--radius) px-2 hover:bg-accent ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}>
             <Text style={{ numberOfLines: 1 }} class="flex-1 text-[13px] leading-5 font-medium text-foreground">{scopeAll() ? "All projects" : currentProject() ? projectName(currentProject()!) : "No project"}</Text>
@@ -211,6 +234,7 @@ function SessionRow(p: { s: () => Session }) {
           </View>
           <View class="flex-row items-center gap-1 pl-[22px] h-4">
             <Text style={{ numberOfLines: 1 }} class={`text-xs leading-4 ${agentColor(s().agent)}`}>{s().agent}</Text>
+            <If when={snippetOf(s().id)}>{(t) => <Text style={{ numberOfLines: 1 }} testID={`session-snippet-${s().id}`} class={`${T.meta} flex-1 min-w-0`}>{`· ${t()}`}</Text>}</If>
             <View class="flex-1" />
             <If when={n() > 0}><Text class={T.meta}>{`${n()} ↳`}</Text></If>
           </View>

@@ -497,6 +497,8 @@ pub struct Ui {
     pub image_pasting: HashSet<String>,
     /// The `/learn` source waiting for its project-or-global answer.
     pub learn_source: Option<String>,
+    /// Core's search hits for the session switcher: the query they answer and the hits.
+    pub search: Option<(String, Vec<Value>)>,
     pub wait_idx: usize,
     /// The highlighted choice of the focused approval card (0 allow once, 1 allow for session, 2 deny, 3 deny with a note).
     pub wait_choice: usize,
@@ -672,6 +674,7 @@ impl App {
                 learn_source: None,
                 wait_idx: 0,
                 wait_choice: 0,
+                search: None,
                 wait_seen: HashMap::new(),
                 wait_shown: None,
                 ask: AskDraft::default(),
@@ -2207,6 +2210,38 @@ impl App {
                         },
                     ));
                 }
+                // Sessions whose user messages match, after the title matches.
+                if let Some((asked, hits)) = self.ui.search.as_ref().filter(|(a, _)| a == q.trim())
+                {
+                    let _ = asked;
+                    for (i, hit) in hits.iter().enumerate() {
+                        let Some(id) = hit["session_id"].as_str() else {
+                            continue;
+                        };
+                        let Some(s) = self.state.model.sessions.get(id) else {
+                            continue;
+                        };
+                        if s.parent_id.is_some()
+                            || scored
+                                .iter()
+                                .any(|(_, _, it)| it.kind == PaletteKind::Session(id.to_owned()))
+                        {
+                            continue;
+                        }
+                        let snippet = hit["snippet"].as_str().unwrap_or("").replace(['[', ']'], "");
+                        scored.push((
+                            i32::MIN / 2,
+                            1000 + i,
+                            PaletteItem {
+                                kind: PaletteKind::Session(id.to_owned()),
+                                label: s.title.clone(),
+                                hint: crate::text::truncate(&snippet, 32, "…"),
+                                category: "message".into(),
+                                reason: None,
+                            },
+                        ));
+                    }
+                }
             }
             PaletteMode::Projects => {
                 for (i, id) in self.project_ids().into_iter().enumerate() {
@@ -2432,6 +2467,32 @@ impl App {
             scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         }
         scored.into_iter().map(|(_, _, it)| it).collect()
+    }
+
+    /// Ask Core which sessions' user messages match the switcher's query, for
+    /// the rows the title filter cannot find.
+    fn ask_search(&mut self) {
+        let Some(Overlay {
+            kind: OverlayKind::Palette(p),
+            ..
+        }) = &self.ui.overlay
+        else {
+            return;
+        };
+        if p.mode != PaletteMode::Sessions {
+            return;
+        }
+        let query = p.query.text().trim().to_owned();
+        if query.chars().count() < 2 {
+            self.ui.search = None;
+            return;
+        }
+        let project = if self.ui.scope_all {
+            None
+        } else {
+            self.current_project()
+        };
+        self.api(ApiCall::Search { query, project });
     }
 
     fn palette_move(&mut self, delta: isize) {
@@ -4460,6 +4521,14 @@ impl App {
             }
             return;
         }
+        if let ApiCall::Search { query, .. } = &done.call {
+            // Quiet: the title matches are already on screen.
+            if let Ok(r) = done.result {
+                let hits = r.search.and_then(|v| v["hits"].as_array().cloned());
+                self.ui.search = Some((query.clone(), hits.unwrap_or_default()));
+            }
+            return;
+        }
         if let ApiCall::Prompts { project } = &done.call {
             // Quiet: history is a convenience. Never replace it while a recalled entry is open.
             if let (Ok(r), false) = (&done.result, self.composer_ref().in_history()) {
@@ -5671,6 +5740,7 @@ impl App {
                     p.selected = 0;
                     p.top = 0;
                 }
+                self.ask_search();
             }
             "m" if matches!(
                 self.ui.overlay,
@@ -5751,7 +5821,9 @@ impl App {
                     p.selected = 0;
                     p.top = 0;
                 }
-                let _ = changed;
+                if changed {
+                    self.ask_search();
+                }
             }
             _ => return self.lookup("global", name).is_none(),
         }
@@ -7781,7 +7853,7 @@ impl ActionDone {
             ApiCall::ChangeDirectory { .. } => "Directory change failed",
             ApiCall::AddProject { .. } => "Add project failed",
             ApiCall::DeleteProject { .. } => "Remove project failed",
-            ApiCall::Prompts { .. } => "",
+            ApiCall::Prompts { .. } | ApiCall::Search { .. } => "",
         }
     }
 }
