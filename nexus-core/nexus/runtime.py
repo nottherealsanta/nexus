@@ -65,6 +65,7 @@ from .bus import Bus
 from .codec import message_to_json, to_json
 from .config import ConfigFile
 from .continuation import ContextInvalid, Reconciliation, predecessor, reconcile
+from .hooks import HookRunner, config_hooks
 from .kernels import Kernels
 from .llmhub.auth import AuthError, CredentialError
 from .llmhub.hub import provider_for
@@ -1304,6 +1305,10 @@ class Runtime:
                 removed = self.inputs.remove(item["session_id"], item["id"])
                 self.bus.publish("input.removed", removed, session_id=item["session_id"])
             self.close_questions(ids, "the session was deleted")
+            root = self.session(session_id)
+            runner = self._hook_runner(root, Path(root.directory))
+            if runner is not None and runner.has("SessionEnd"):
+                await runner.fire("SessionEnd")  # side effects only: the session's log is about to go
             for sid in ids:
                 self.pending_directories.pop(sid, None)  # a queued move must not apply to a deleted session
             await self.jobs.cancel_for(ids)  # a background command must not outlive the session that started it
@@ -1564,7 +1569,12 @@ class Runtime:
             files=files,
             cwd_changed=cwd_changed,
             retry_policy=self.retry_policy,
+            hooks=self._hook_runner(session, workspace),
         )
+
+    def _hook_runner(self, session: Session, workspace: Path) -> HookRunner | None:
+        hooks, _ = config_hooks()
+        return HookRunner(hooks, workspace, session_id=session.id) if hooks else None
 
     # -- MCP -------------------------------------------------------------------
 
@@ -1970,6 +1980,7 @@ class Runtime:
         interrupted = False
         try:
             agent = self._agent(self.session(session_id))
+            agent.turn_id = turn_id
             async for event in agent.turn(user_text):
                 if isinstance(event, MessageAdded):
                     if event.message.role == "assistant":

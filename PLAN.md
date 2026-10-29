@@ -123,7 +123,7 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
     inputs.py       (planned, B) steer and queue: pending inputs per session
     skills/         (planned, F) discovery, frontmatter, index, invocation, resources
     mcp/            (planned, G) client, manager, bridge, search
-    hooks/          (planned, H) command hooks
+    hooks.py        command hooks (H)
     extensions.py   user tools loaded from disk, run in a child process
     voice/          (planned, I) HF cache lookup, STT engine, TTS worker, audio checks
     workspace.py, worktrees.py, kernels.py, bash_jobs.py, snapshot.py,
@@ -770,6 +770,24 @@ process shows `mcp.failed` while the turn continues.
 
 ### H. Hooks
 
+**Landed 2026-10-29 (Core), pending a real-session check and client UI:**
+`nexus/hooks.py` (parse, runner, limits), the loop firing `UserPromptSubmit`,
+`PreToolUse`, `PostToolUse`, `TurnEnd` and (first turn) `SessionStart`,
+`SessionEnd` fired on session delete, `hook_fired` events, hooks listed in
+`GET /api/config` with their errors, `tests/test_hooks.py`, docs/hooks.md.
+Decisions made while porting: one module instead of a package; `on_nonzero`
+defaults to `warn`; a blocked prompt stays in the context and ends the turn
+with stop `blocked` and a visible hook message; a `modify` keeps the assistant's
+original call in the context and adds a notice with the new input (Principle 8),
+and the tool's own validation and approval then run on the new input; hook
+messages and context are delivered as a user message at the next model call
+(a `TurnEnd` hook's goes in at once, before `TurnEnd`). Open: editing hooks in
+Settings (`PATCH` takes no `hooks` key; edit the file), the hook rows in the
+timeline renderers of both clients, `SessionEnd` on archive, `bash(...)` matcher
+tests against compound commands, running `PostToolUse` after a denied approval
+(it fires for every known tool call, including declined ones), and the
+"done when" run with a real model.
+
 **Old:** `nexus/hooks/manager.py` (1663 lines), `hooks/model.py` (611),
 `examples/hooks.toml`, test `test_hooks_manager.py`. Old doc:
 `docs/extensions.md` "Hooks".
@@ -1215,6 +1233,7 @@ when each item lands.
 | Old MCP: a 2500-line hand-written client, `mcp.json` in two scopes, per-server `tool_loading` (direct `mcp__server__tool` tools or `McpSearch`/`McpCall`) | `nexus/mcp/` on the `mcp` SDK, servers in `config.toml`, two global modes (`[mcp] full_definitions`, `max_listed_tools`) applied when a session starts, `mcp_tool_search` and `mcp_call` only (a search returns the definition JSON), a session waits for its servers to be online, results fenced as untrusted, `mcp:<server>` switches with JSON notices, pinned browser-use offered disabled; resources and prompts not yet (G, 2026-10-29) | One config file (P1); no cache-breaking tool changes (Principle 8); a small client we do not have to maintain |
 | Old `escalate` was a registered task tool whose escalations the old runtime folded into a `SubagentOutcome.attention` | `escalate` is a control tool added to every child snapshot (`escalation: true`), recorded in memory, announced by `session.escalated`, and appended as an `Attention:` block to the parent's `session` result or notification; it grants nothing and does not wait (D8, 2026-10-29) | Principle 3: it acts on Nexus state, so it is control; the parent's timeline shows it |
 | Old `ext/manager.py` (3000 lines): loaded tool modules in the host, a `[[ext]]` config table, trash and templates | `nexus/extensions.py`: tools are `*.py` files in `tools/` folders, read as literals and run in a child process per call; the session snapshot stores their source; no config table (E, 2026-10-29) | The daemon never executes user code; a running session keeps its code (P6, Principle 8) |
+| Old hooks: Python and command hooks from layered `hooks.toml`, a 1600-line manager, `ContextAssembled`/`PreCompact` events | `nexus/hooks.py`: command hooks only, `[[hooks.<Event>]]` in `config.toml`, six events, the old limits and scrubbed environment, `hook_fired` events; only what a hook adds to context is a message, labelled `[hook name]` (H, 2026-10-29) | One config file (P1); no user Python in the daemon; the timeline shows what the model got |
 | Client composer history in memory (TUI only) or one global file for all projects (old) | Core stores what the user sent and serves it per project; both clients recall from it; Up recalls on the first line only (2026-10-29, C) | History survives restarts and is shared across clients |
 
 ## 11. Known gaps
@@ -1283,8 +1302,7 @@ when each item lands.
 - Nothing checks that a running daemon runs the current code: `nexus daemon stop` after changes.
 - No cross-provider message conversion beyond text and tool calls; switching
   provider mid-session works (`/model`), but foreign reasoning is dropped.
-- Copilot GPT models are sent over Chat Completions; whether some of them
-  require Responses is not checked.
+- Copilot GPT models (catalog `@ai-sdk/openai`) are sent over Responses and the rest over Chat Completions; verified live with `gpt-6-luna` (2026-10-29). Responses replay for Copilot has no encrypted reasoning yet.
 - User images replay in both dialects; tool/MCP image results and general artifact storage are not implemented.
 - Tool paths are confined to the workspace, but `bash` is not sandboxed, so
   "read-only" (`scout`) and "Markdown only" (`plan`) rest on their prompts.

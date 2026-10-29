@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .hooks import HookOutcome, HookRunner
 from .llmhub import Provider
 from .llmhub.types import (
     Done,
@@ -119,7 +120,22 @@ class RetryExhausted:
     max_attempts: int = 3
 
 
-LoopEvent = Event | StepStart | ToolStart | ToolEnd | MessageAdded | TurnEnd | RetryScheduled | RetryStarted | RetryExhausted
+@dataclass(frozen=True, slots=True)
+class HookFired:
+    """A command hook ran. An execution detail; only what it adds to context becomes a message."""
+
+    hook: str
+    event: str
+    decision: str
+    message: str = ""
+    error: str = ""
+    seconds: float = 0.0
+    tool: str | None = None
+    call_id: str | None = None
+
+
+LoopEvent = (Event | StepStart | ToolStart | ToolEnd | MessageAdded | TurnEnd | RetryScheduled | RetryStarted
+             | RetryExhausted | HookFired)
 TurnInput = str | Message | NoUserMessage
 Approve = Callable[[ToolCall, dict[str, Any]], Awaitable[bool]]
 Inbox = Callable[[], list[str]]  # notices to add (as a user message) before the next model call
@@ -159,7 +175,12 @@ class Agent:
         retry_clock: Callable[[], float] = time.monotonic,
         retry_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         retry_random: Callable[[], float] | None = None,
+        hooks: HookRunner | None = None,
+        turn_id: str | None = None,
     ) -> None:
+        self.hooks = hooks
+        self.turn_id = turn_id
+        self._hook_notes: list[str] = []
         self.provider = provider
         self.model = model
         self.workspace = workspace
@@ -194,13 +215,47 @@ class Agent:
         self.messages.append(message)
         return MessageAdded(message)
 
+    async def _fire(self, event: str, *, tool: str | None = None, args: dict[str, Any] | None = None,
+                    call_id: str | None = None, **extra: Any) -> tuple[list[HookOutcome], list[HookFired]]:
+        if self.hooks is None or not self.hooks.has(event):
+            return [], []
+        if call_id is not None:
+            extra["call_id"] = call_id
+        outcomes = await self.hooks.fire(event, tool=tool, args=args, turn_id=self.turn_id, **extra)
+        fired = [HookFired(o.hook, o.event, o.decision, o.message, o.error, o.seconds, tool, call_id) for o in outcomes]
+        for o in outcomes:
+            if o.decision != "block":  # a block is reported where it acts (tool result, ended turn)
+                for text in (o.message if o.decision == "warn" else "", o.context):
+                    if text:
+                        self._hook_notes.append(f"[hook {o.hook}] {text}")
+        return outcomes, fired
+
+    def _flush_notes(self) -> list[str]:
+        notes, self._hook_notes = self._hook_notes, []
+        return notes
+
     async def turn(self, user_text: TurnInput) -> AsyncIterator[LoopEvent]:
+        if not self.messages:
+            _, fired = await self._fire("SessionStart")
+            for event in fired:
+                yield event
         if not isinstance(user_text, NoUserMessage):
-            yield self._add(user_text if isinstance(user_text, Message) else Message("user", (Text(user_text),)))
+            message = user_text if isinstance(user_text, Message) else Message("user", (Text(user_text),))
+            yield self._add(message)
+            prompt = "\n".join(p.text for p in message.parts if isinstance(p, Text))
+            outcomes, fired = await self._fire("UserPromptSubmit", prompt=prompt)
+            for event in fired:
+                yield event
+            blocked = next((o for o in outcomes if o.decision == "block"), None)
+            if blocked is not None:
+                # The prompt stays in the context; the model is not called for it.
+                yield self._add(Message("user", (Text(f"[hook {blocked.hook}] blocked this prompt: {blocked.message}"),)))
+                yield TurnEnd("blocked", 0)
+                return
         for step in range(1, self.max_steps + 1):
             if self.refresh is not None:
                 self.refresh(self)
-            notices = self.inbox() if self.inbox is not None else []
+            notices = [*(self.inbox() if self.inbox is not None else []), *self._flush_notes()]
             if notices:
                 yield self._add(Message("user", tuple(Text(n) for n in notices)))
             for input_id, message in self.steering() if self.steering else []:
@@ -220,6 +275,11 @@ class Agent:
             if not calls:
                 if self.steering and self.steering():
                     continue
+                _, fired = await self._fire("TurnEnd", stop=stop, steps=step)
+                for event in fired:
+                    yield event
+                if self._hook_notes:
+                    yield self._add(Message("user", tuple(Text(n) for n in self._flush_notes())))
                 yield TurnEnd(stop, step)
                 return
             results: list[ToolResult] = []
@@ -228,7 +288,26 @@ class Agent:
                     self.refresh(self)
                 args = _parse_args(call.arguments)
                 yield ToolStart(call, args)
-                result = await self._run(call, args)
+                result = None
+                if args is not None and call.name in self.tools:
+                    outcomes, fired = await self._fire("PreToolUse", tool=call.name, args=args, call_id=call.id)
+                    for event in fired:
+                        yield event
+                    for o in outcomes:
+                        if o.decision == "block":
+                            result = ToolResult(call.id, f"blocked by hook {o.hook}: {o.message or 'no reason given'}", is_error=True)
+                        elif o.decision == "modify" and o.tool_input is not None:
+                            args = o.tool_input
+                            self._hook_notes.append(
+                                f"[hook {o.hook}] changed the input of the {call.name} call {call.id} to "
+                                f"{json.dumps(args, ensure_ascii=False)}")
+                if result is None:
+                    result = await self._run(call, args)
+                if args is not None and call.name in self.tools:
+                    _, fired = await self._fire("PostToolUse", tool=call.name, args=args, call_id=call.id,
+                                                tool_result=result.output, is_error=result.is_error)
+                    for event in fired:
+                        yield event
                 results.append(result)
                 yield ToolEnd(call, result)
             yield self._add(Message("tool", tuple(results)))

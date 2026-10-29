@@ -172,6 +172,14 @@ class ConfigFile:
             values["mcp"]["servers"] = _mask(with_defaults(_plain(mcp.get("servers", {}))))
         else:
             errors.append("mcp.servers: expected a table")
+        hooks_table = doc.get("hooks", {})
+        if isinstance(hooks_table, dict):
+            from .hooks import parse_hooks
+            plain_hooks = _plain(hooks_table)
+            values["hooks"] = plain_hooks
+            errors.extend(parse_hooks(plain_hooks)[1])
+        else:
+            errors.append("hooks: expected a table")
         return {"revision": hashlib.sha256(raw).hexdigest(), "values": values,
                 "defaults": copy.deepcopy(DEFAULTS), "schema": copy.deepcopy(SCHEMA), "errors": errors}
 

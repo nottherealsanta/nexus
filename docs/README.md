@@ -14,6 +14,7 @@ doc and the code disagree, the code wins: fix the doc.
 | [models.md](models.md) | models.dev catalog, cache, filters, `provider/model` refs, default model |
 | [stream-events.md](stream-events.md) | Conversation types, provider stream events, loop events, JSON codec |
 | [tools.md](tools.md) | read, bash (background jobs too), edit, write, ask (questions), code and kernels; workspace controls (expose, directory moves, worktrees); parameters, bounds, confinement, approval, read freshness |
+| [hooks.md](hooks.md) | Command hooks in `config.toml`: events, decisions, limits, what reaches the context |
 | [mcp.md](mcp.md) | MCP servers in `config.toml`, entry dialects, `mcp_tool_search` and `mcp_call`, fencing, lifecycle, API |
 | [loop.md](loop.md) | The agent loop: steps, tool execution, errors, approval |
 | [development.md](development.md) | uv, tests, ruff, repo layout, docs rules |
@@ -37,6 +38,7 @@ doc and the code disagree, the code wins: fix the doc.
 | JSON encoding of messages and events | [stream-events.md](stream-events.md) |
 | A tool's parameters, limits or path rules | [tools.md](tools.md) |
 | Skills (`SKILL.md`, the `skill` tool, notices) | [tools.md](tools.md#skills-and-the-skill-tool) |
+| Command hooks (`[[hooks.<Event>]]`) | [hooks.md](hooks.md) |
 | MCP servers, `mcp_tool_search`/`mcp_call`, untrusted-data fencing | [mcp.md](mcp.md) |
 | The patch format | [tools.md](tools.md) |
 | Read-before-edit observations, stale or partial reads, edit/overwrite coverage | [tools.md](tools.md#read-observations-and-freshness) |
