@@ -358,9 +358,9 @@ recorded as green.
 inputs, recovery and hold-after-interrupt, both client composers and pending
 stacks, independent mock integration tests (Core 416 tests, TUI tests, Clippy
 and format pass). The TUI tags a delivered steer and no longer treats it as a
-turn start. Open: NSH browser tests for Enter/Tab/stack could not run (no
-Chrome here; `nsh check` passes), and the "done when" run in the real TUI
-during a long bash call. Section A was committed as `eb7168f`.
+turn start. Open: NSH browser tests for Enter/Tab/stack (see Known gaps: the suite
+runs only with `--browser`, and 11 tests fail), and the "done when" run was
+done in both clients on 2026-10-29 with `copilot/gpt-6-luna`. Section A was committed as `eb7168f`.
 
 Today a prompt while a turn runs gets 409 (`server.py` route table, `runtime.py`
 `self.turns`). The TUI already renders `steer` and `queued` message tags, but
@@ -473,8 +473,7 @@ last, so Up inside a multi-line draft or recalled entry moves the cursor; images
 show as `[N images]`. NSH recalls with Up/Down only while the draft is empty or
 exactly the recalled entry (the caret is not readable there). Core 419 tests,
 TUI tests, Clippy and `nsh check` pass. **Open:** Ctrl+R search list (both
-clients; `q` is a plain substring until K5's FTS5), NSH browser tests (no Chrome
-here), and the "done when" run with both real clients. The text below is the
+clients; `q` is a plain substring until K5's FTS5), NSH browser tests (see Known gaps), and the "done when" run with both real clients. The text below is the
 original spec.
 
 nexus10 has history in the TUI only (`nexus-tui/src/editor.rs`
@@ -1238,6 +1237,18 @@ when each item lands.
 
 ## 11. Known gaps
 
+- **NSH browser tests: 11 of 64 fail; fixing them is deferred (decision 2026-10-29).**
+  `nsh test --target web` finds no browser by itself; pass Playwright's Chromium:
+  `nsh test --target web --browser "$HOME/Library/Caches/ms-playwright/chromium-1200/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"`.
+  Every failure shows "Disconnected from Core · reconnecting" on screen: the mock
+  server's event stream ends, so the app drops into its reconnecting state.
+  Failing: `App.test.tsx` (session tabs, pre-session picker, daemon restart,
+  daemon start once per outage, footer pricing, composer meter, detail cap,
+  session info totals), `i6.test.tsx` (sessions sidebar), `i8.test.tsx` (two
+  toast and notification tests). No clean-checkout baseline was run, so none is
+  proven to be unrelated to the 2026-10-29 NSH edits. Until fixed, NSH is checked
+  by `nsh check` and by driving the real app. Later work: keep the mock stream
+  open, then add tests for steer numbering and the new-session skills/MCP rows.
 - Kernels have no checkpoint recovery; a timeout, interrupt, crash or resource
   limit discards the kernel. Startup recovery reports the loss for a reconciled
   turn and preserves nested evidence, but restores no variables or cells. Monty
