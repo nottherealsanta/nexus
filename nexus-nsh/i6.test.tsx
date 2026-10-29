@@ -34,12 +34,32 @@ function network(sessions: object[], extra: Record<string, unknown> = {}) {
 }
 
 describe("sessions sidebar (I6)", () => {
+  test("search follows the current-project and all-projects scope", async () => {
+    const local = session("ses_1", "Find local");
+    const remote = session("ses_2", "Find remote", { project_id: "prj_2" });
+    const data = snapshot([local, remote]);
+    data.projects.push({ id: "prj_2", path: "/work/other", name: "other", created: 1, updated: 2, revision: 1 });
+    const app = await open("./App.tsx", { network: { ...network([local, remote]), "GET */api/snapshot*": { body: data } }, width: 1440, height: 900, platform: "web" });
+    await app.waitFor("id:session-ses_1");
+    await app.type("id:session-search", "remote");
+    expect(app.shows("id:session-ses_2")).toBe(false);
+    await app.press("id:chip-project");
+    expect(app.shows("id:session-ses_2")).toBe(false);
+    await app.press("id:chip-global");
+    await app.waitFor("id:session-ses_2");
+    await app.press("id:chip-global");
+    expect(app.shows("id:session-ses_2")).toBe(true);
+    expect(app.shows("id:session-ses_1")).toBe(false);
+    await app.press("id:chip-project");
+    expect(app.shows("id:session-ses_2")).toBe(false);
+  });
+
   test("groups sessions under an uppercase project header and shows the agent line", async () => {
     const parent = session("ses_1", "Refactor loader", { agent: "orchestrate" });
     const child = session("ses_2", "Child task", { parent_id: "ses_1" });
     const app = await open("./App.tsx", { network: network([parent, child]), width: 1440, height: 900, platform: "web" });
     await app.waitFor("text:Refactor loader");
-    await app.press("id:chip-all");
+    await app.press("id:chip-global");
     await app.waitFor("id:session-group");
     expect(app.texts().includes("demo")).toBe(true);
     // line 2 of the row: the agent in its colour, and the child count

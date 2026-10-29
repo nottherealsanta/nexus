@@ -2,9 +2,9 @@
 # Nexus 0.10 development launcher.
 #
 #   nexus                     launch the TUI
-#   nexus tui [flags]         launch the TUI (flags: --dark, --light, --256,
-#                             --release for a release binary, ...)
-#   nexus build [--release]   sync Core, build the TUI and the NSH web app
+#   nexus tui [flags]         launch the TUI, release build (flags: --dark, --light,
+#                             --256, --debug for a debug binary, ...)
+#   nexus build [--debug]     sync Core, build the TUI (release) and the NSH web app
 #   nexus web [flags]         serve the NSH web app and open it
 #   nexus restart             restart the Core daemon
 #   nexus stop                stop the Core daemon
@@ -77,19 +77,20 @@ tui() {
   ensure_home
   ensure_uv
   ensure_cargo
-  local profile=()
-  if [ "${1:-}" = "--release" ]; then
-    profile=(--release)
-    shift
-  fi
+  local profile=(--release)
+  case "${1:-}" in
+    --debug) profile=(); shift ;;
+    --release) shift ;;
+  esac
   (cd "$TUI" && NEXUS_TUI_CORE_CMD="$(core_cmd)" cargo run --quiet ${profile[@]+"${profile[@]}"} -- "$@")
 }
 
 build_all() {
-  local release=0
+  local release=1
   for arg in "$@"; do
     case "$arg" in
       --release) release=1 ;;
+      --debug) release=0 ;;
       *) die "build: unknown argument $arg" ;;
     esac
   done

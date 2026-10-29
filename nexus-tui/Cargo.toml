@@ -26,3 +26,5 @@ unicode-width = "=0.2.0"
 unicode-segmentation = "=1.13.3"
 pulldown-cmark = { version = "=0.13.4", default-features = false }
 libc = "=0.2.191"
+base64 = "=0.22.1"
+png = "=0.17.16"

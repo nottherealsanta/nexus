@@ -50,7 +50,15 @@ class ToolResult:
     is_error: bool = False
 
 
-Part = Text | Reasoning | ToolCall | ToolResult
+@dataclass(frozen=True, slots=True)
+class Image:
+    """User image, stored with its bytes for durable replay and preview."""
+
+    data_url: str
+    name: str = "image.png"
+
+
+Part = Text | Reasoning | ToolCall | ToolResult | Image
 
 
 @dataclass(frozen=True, slots=True)

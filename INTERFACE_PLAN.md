@@ -341,13 +341,35 @@ project checkout listing, so rows in a project load together.
 The list ends with a muted `+ New session` row. Scope and archived filters
 are palette commands and Settings rows, not sidebar chrome.
 
+#### Screenshot refinements (2026-10-28)
+
+Context interaction correction: heading text opens details, including the top-level
+Context overview. Only its fold chevron expands/collapses the section. Section
+click targets follow row metadata, not the rendered text or span positions.
+
+Follow-up screenshot revision (2026-10-28): the bottom strip shows the directory
+and branch, without a project-name prefix or checkout/worktree text. A linked
+worktree alone gets a muted, normal-weight icon. Collapsed sidebar search and
+session rows align with the expanded sidebar's content origin. Starting Context
+omits the separate Child agents section; each remaining section heading opens a
+scrollable detail modal showing stored content and metadata. Prompts and instructions
+come from the frozen snapshot; tool definitions are labelled as stored definitions,
+since they may change during a session.
+
+
+Selection keeps the surrounding surface and uses a rail/marker and stronger text.
+This supersedes selection-fill directions in this spec, including monochrome
+reverse-video row selection. Composer input has extra top padding; the visible
+`ctrl+p commands` hint is removed. Context has top spacing and the timeline has
+consistent horizontal gutters. Session search has a Project/Global scope toggle.
+
 #### Session rail
 
 The left sidebar sits on `surface.sidebar`. Its inner edge is a drag handle
 (20–60 columns); dragging below 14 columns collapses it to a 6-column rail:
 `⌕` (session switcher), one letter per session (the title's first letter, or
-the attention glyph or spinner), and `+`. Each item is three rows with the
-glyph in the middle; the open session's band is filled. Hovering a letter
+the attention glyph or spinner), and `+`. Session initials use compact rows; the open session has a marker and
+stronger text. Sessions/Files/Projects tab buttons are hidden in rail mode. Hovering a letter
 shows a popover beside the rail with the title (bold) and `project ⌥ branch`.
 Settings › Sidebar cycles full, rail and hidden. Children are reached
 from their parent rather than listed as separate root rows.
@@ -375,15 +397,15 @@ shows the same sections as its content, under a header block (DESIGN_PLAN D10).
 ```
 
 Header: fold marker, title (secondary, bold), `·`-separated meta in muted. Each
-section: a muted `◆`, the title bold primary, the count secondary and the meta
+section: a muted `◆`, the title bold secondary, the count secondary and the meta
 muted, then one preview line (muted) for text sections or a column grid for
 inventories (up to four columns and three rows, then `+N more`). A blank row
 separates sections; a `Context total` row closes the list: text only, no bar,
 with the share of the model's window when the catalog reports one. Estimates are
 characters ÷ 4 and carry `~`; the provider's own counts appear in the turn
 footer. Instructions are part of the system prompt, so the total counts only the
-system prompt and the tool schemas. Folded after the first turn to one line:
-`▸ Context · 4 items · ~2.9k tokens`. Focused: focus bar on the header. Hovered:
+system prompt and the tool schemas. In the TUI the context remains expanded after
+the first turn. Focused: focus bar on the header. Hovered:
 header background. Loading: `loading context…`. Error: `✕ failed to load context`
 with retry key hint. Empty: `No context yet`. Clipping is announced: a preview or
 meta that does not fit ends in `…`, a grid in `+N more`. In the new-session view
@@ -431,23 +453,24 @@ expand into a breakdown tooltip (NSH) or a `i` key (TUI).
 #### Tool activity
 
 In the TUI, consecutive tool calls and reasoning form a foldable group. A live
-group shows `▾ Working` (the old soft shimmer; reduced motion keeps it static)
-with its elapsed time, and under it the newest five members in a `├─`/`╰─` tree
+group shows `▾ Working` (a grey shimmer; reduced motion keeps it static)
+and under it the newest five members in a `├─`/`╰─` tree
 with `… N earlier` above them. A finished group folds to verbs in first-seen
-order with counts (`Read 2 files, ran 1 command`), `+N −M` for edits, and
-elapsed time at the right; its glyph flashes the accent for six frames when it
+order with counts (`Read 2 files, ran 1 command`) and `+N −M` for edits; its glyph flashes the accent for six frames when it
 finishes (never with reduced motion). Denials and failures are counted
 separately (`⊘ 1 denied`, `✕ 1 failed`) and stay visible when folded, even on a
 narrow row. Pending approvals and questions keep their group and turn open.
 
 An expanded group lists its members as `{tree} {glyph} {Verb}  {key argument}  {summary}`
-with the duration at the right. The glyph is the verb's (`→` read, `←` edit and
+with elapsed time only for shell tools. Shell command and error previews show at most
+80 characters followed by `...` when clipped; full details remain expandable.
+Error text is neutral, with a coloured error glyph. The glyph is the verb's (`→` read, `←` edit and
 write, `$` shell, `*` search, `λ` code, `?` ask, `↳` session, `↗` web; ASCII
 `> < $ * L ? ^ ^`), replaced by the status glyph while the member runs
 (spinner), fails (`✕`), is denied (`⊘`) or waits (`◆`). Reasoning members read
-`▸ Thought for 2.1s · preview`; open, the summary is italic behind a `│` rail;
+`▸ Thought · preview`; open, the summary is italic behind a `│` rail;
 encrypted reasoning says `encrypted, replayed to the provider` and has no
-expansion; running reasoning is `▾ Thinking… 2.4s` with its last five rows
+expansion; running reasoning shows its text without a duration
 behind `┃`. Opening a member shows the old box: `┌ Shell cmd  raw  3.4s`, the body behind `│ `
 (`border.strong`) and `╰` on the last row. The command shows its first two rows,
 the output its last eight behind `↑ N earlier lines · enter show all`; diffs and the raw
@@ -488,7 +511,8 @@ provider muted; effort is secondary. A change requested during a turn reads
 `old → new (next call)`. On the right sit the old Nexus meter (ten `╱` cells,
 filled in the agent colour over `border.default`) and `82.0K · 41%`. Narrow rows
 shed effort, then the provider, then the meter. While busy, a live row above the
-card reads `◐ Working · 12s · ↓4.1k` (Working shimmers) and the control row's
+strip reads `Working · 12s` aligned with the control row's right edge; Working
+shimmers in grey. The control row's
 right side reads `esc stop`; an interrupted turn offers `continue` there.
 Completion (`/` and `@`) is a borderless `surface.raised` block exactly as wide
 as the card and flush with its top edge: ten rows at most, the selection band

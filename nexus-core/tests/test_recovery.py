@@ -926,7 +926,7 @@ async def test_normal_turn_lifecycle_and_clean_interrupt_need_no_recovery(tmp_pa
                                headers={"authorization": f"Bearer {TOKEN}"})
     try:
         provider.replies = [[ToolCall("w1", "write", json.dumps({"path": "x.txt", "content": "hi"}))], [Text("done")]]
-        session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+        session = (await client.post("/api/session", json={"directory": str(workspace), "permission": "ask"})).json()
         await client.post(f"/api/session/{session['id']}/prompt", json={"text": "make it"})
         await _idle(rt, session["id"])
         [turn] = store.turns_for_session(session["id"])

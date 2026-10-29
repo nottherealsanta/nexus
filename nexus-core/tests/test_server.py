@@ -70,7 +70,7 @@ async def test_projects_are_unique_by_path_and_own_sessions(setup):
     assert first["id"] == again["id"] and first["name"] == "proj"
     session = (await client.post("/api/session", json={"project": first["id"]})).json()
     assert (session["directory"], session["agent"], session["model"], session["model_source"], session["status"], session["permission"]) == (
-        str(workspace.resolve()), "build", "scripted/m", "default", "idle", "ask")
+        str(workspace.resolve()), "build", "scripted/m", "default", "idle", "allow")
     listed = (await client.get("/api/session", params={"directory": str(workspace)})).json()
     assert [s["id"] for s in listed] == [session["id"]]
     assert (await client.post("/api/project", json={"path": str(workspace / "missing")})).status_code == 400
@@ -111,7 +111,7 @@ async def test_write_in_workspace_needs_no_permission_and_saves_messages(setup):
 async def test_interrupt_closes_a_waiting_tool_call(setup):
     rt, client, provider, workspace = setup
     provider.replies = [[ToolCall("c1", "bash", '{"command": "true"}')]]
-    session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    session = (await client.post("/api/session", json={"directory": str(workspace), "permission": "ask"})).json()
     await client.post(f"/api/session/{session['id']}/prompt", json={"text": "go"})
     for _ in range(100):
         if rt.pending_approvals(session["id"]):
@@ -189,7 +189,7 @@ async def test_code_nested_write_needs_no_approval_and_kernel_api(setup):
     rt, client, provider, workspace = setup
     code = 'await write(path="x.txt", content="hi")\nawait bash(command="sleep 0.5")\nx = 41\nx'
     provider.replies = [[ToolCall("code1", "code", json.dumps({"code": code}))], [Text("done")]]
-    session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    session = (await client.post("/api/session", json={"directory": str(workspace), "permission": "ask"})).json()
     sid = session["id"]
     await client.post(f"/api/session/{sid}/prompt", json={"text": "go"})
     for _ in range(100):
@@ -236,8 +236,8 @@ async def test_code_child_shares_tree_kernel(setup):
 
 async def test_code_in_a_child_uses_the_child_approval_and_events(setup):
     rt, client, provider, workspace = setup
-    parent = (await client.post("/api/session", json={"directory": str(workspace)})).json()
-    child = (await client.post("/api/session", json={"parent": parent["id"], "agent": "build"})).json()
+    parent = (await client.post("/api/session", json={"directory": str(workspace), "permission": "ask"})).json()
+    child = (await client.post("/api/session", json={"parent": parent["id"], "agent": "build", "permission": "ask"})).json()
     provider.replies = [[ToolCall("cc1", "code", json.dumps({"code": 'await bash(command="printf kid > child.txt")'}))],
                         [Text("done")]]
     await client.post(f"/api/session/{child['id']}/prompt", json={"text": "go"})
@@ -366,12 +366,12 @@ async def test_background_bash_notice_output_api_and_session_delete(setup):
     # The finish notice is context, and wakes an idle session.
     for _ in range(200):
         messages = (await client.get(f'/api/session/{sid}/message')).json()
-        if any('background bash' in (p.get('text') or '') for m in messages for p in m['parts']):
+        if any('→ Background Shell Done:' in (p.get('text') or '') for m in messages for p in m['parts']):
             break
         await asyncio.sleep(0.02)
     await _wait_idle(rt, sid)
     messages = (await client.get(f'/api/session/{sid}/message')).json()
-    notice = next(p['text'] for m in messages for p in m['parts'] if 'background bash' in (p.get('text') or ''))
+    notice = next(p['text'] for m in messages for p in m['parts'] if '→ Background Shell Done:' in (p.get('text') or ''))
     assert jid in notice and 'helloworld' in notice
 
     # bash_output is a task tool and reads the retained output.
@@ -408,7 +408,7 @@ async def test_bash_kill_tool_stops_a_job(setup):
     assert current['status'] == 'killed'
     for _ in range(100):
         messages = (await client.get(f'/api/session/{sid}/message')).json()
-        if any('background bash killed' in (p.get('text') or '') for m in messages for p in m['parts']):
+        if any('→ Background Shell Done:' in (p.get('text') or '') and 'killed' in (p.get('text') or '') for m in messages for p in m['parts']):
             break
         await asyncio.sleep(0.02)
     await _wait_idle(rt, sid)
@@ -632,3 +632,74 @@ async def test_session_git_status_and_diff(setup):
     diff = (await client.get(base + "/diff", params={"path": "a.txt"})).json()
     assert "+after" in diff["unstaged"] and diff["staged"] == ""
     assert (await client.get(base + "/diff", params={"path": "../a.txt"})).status_code == 400
+
+
+async def test_default_permission_runs_bash_without_a_wait(setup):
+    rt, client, provider, workspace = setup
+    provider.replies = [[ToolCall("b1", "bash", '{"command": "printf allowed"}')], [Text("done")]]
+    session = (await client.post('/api/session', json={'directory': str(workspace)})).json()
+    await client.post(f"/api/session/{session['id']}/prompt", json={'text': 'go'})
+    await _wait_idle(rt, session['id'])
+    assert session['permission'] == 'allow'
+    events = rt.store.events(session['id'])
+    assert not any(e['type'] == 'permission.asked' for e in events)
+    assert any(e['type'] == 'tool_end' and 'allowed' in e['data']['result']['output'] for e in events)
+
+
+async def test_image_only_prompt_is_durable_and_replayed(setup):
+    from test_images import URL
+
+    rt, client, provider, workspace = setup
+    provider.replies = [[Text('a gradient')]]
+    session = (await client.post('/api/session', json={'directory': str(workspace)})).json()
+    sid = session['id']
+    invalid = await client.post(f'/api/session/{sid}/prompt', json={'images': [{'data_url': 'bad'}]})
+    assert invalid.status_code == 400 and not rt.store.messages(sid)
+    response = await client.post(f'/api/session/{sid}/prompt', json={'images': [{'name': 'shot.png', 'data_url': URL}]})
+    assert response.status_code == 202
+    await _wait_idle(rt, sid)
+    messages = (await client.get(f'/api/session/{sid}/message')).json()
+    assert messages[0]['parts'][1]['text'] == '[Image A]'
+    assert messages[0]['parts'][2] == {'type': 'image', 'name': 'shot.png', 'data_url': URL}
+    assert rt.store.messages(sid)[0].message.parts[2].data_url == URL
+    assert (await client.get(f'/api/session/{sid}')).json()['title'] == 'Image'
+
+
+async def test_image_labels_are_stored_in_attachment_order(setup):
+    from test_images import URL
+
+    rt, client, provider, workspace = setup
+    provider.replies = [[Text('done')]]
+    sid = (await client.post('/api/session', json={'directory': str(workspace)})).json()['id']
+    result = await client.post(f'/api/session/{sid}/prompt', json={
+        'text': 'Compare [Image A] and [Image B]',
+        'images': [{'name': 'first.png', 'data_url': URL}, {'name': 'second.png', 'data_url': URL}],
+    })
+    assert result.status_code == 202
+    await _wait_idle(rt, sid)
+    parts = rt.store.messages(sid)[0].message.parts
+    assert [(parts[1].text, parts[2].name), (parts[3].text, parts[4].name)] == [
+        ('[Image A]', 'first.png'), ('[Image B]', 'second.png')]
+
+
+def test_existing_permissions_migrate_once_and_explicit_ask_survives(tmp_path):
+    db = tmp_path / 'permissions.db'
+    store = Store(db)
+    project, _ = store.project_for_path(str(tmp_path))
+    parent = store.create_session(project, title='parent', agent='build', permission='ask')
+    child = store.create_session(project, title='child', agent='build', permission='ask', parent=parent)
+    with store.db:
+        store.db.execute("delete from migration where name = 'default_tool_allow_v1'")
+    store.close()
+
+    store = Store(db)
+    assert store.session(parent.id).permission == 'allow'
+    assert store.session(child.id).permission == 'allow'
+    assert store.session(parent.id).revision == parent.revision + 1
+    store.update_session(parent.id, permission='ask')
+    store.close()
+
+    store = Store(db)
+    assert store.session(parent.id).permission == 'ask'
+    assert store.session(child.id).permission == 'allow'
+    store.close()

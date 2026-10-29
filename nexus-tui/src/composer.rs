@@ -5,6 +5,7 @@ pub type DisplayRows = Vec<Vec<(String, bool)>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Composer {
+    pub images: Vec<crate::images::Image>,
     editor: Box<Editor>,
     lines: Vec<String>,
 }
@@ -12,6 +13,7 @@ pub struct Composer {
 impl Default for Composer {
     fn default() -> Self {
         Self {
+            images: Vec::new(),
             editor: Box::new(Editor::default()),
             lines: vec![String::new()],
         }
@@ -106,6 +108,18 @@ impl Composer {
         self.refresh();
     }
     pub fn backspace(&mut self) {
+        if self.editor.selection().is_none() {
+            let before = &self.editor.text[..self.editor.cursor];
+            if let Some(marker) = self
+                .images
+                .iter()
+                .map(|image| format!("[{}]", image.name))
+                .find(|marker| before.ends_with(marker))
+            {
+                self.editor
+                    .select_range(self.editor.cursor - marker.len(), self.editor.cursor);
+            }
+        }
         self.editor.backspace();
         self.refresh();
     }
@@ -124,6 +138,12 @@ impl Composer {
         self.editor.home();
         self.editor.backspace();
         self.refresh();
+    }
+    pub fn word(&mut self, forward: bool) {
+        self.editor.word(forward);
+    }
+    pub fn document_edge(&mut self, end: bool) {
+        self.editor.cursor = if end { self.editor.text.len() } else { 0 };
     }
     pub fn left(&mut self) {
         self.editor.left();

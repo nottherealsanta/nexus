@@ -119,7 +119,7 @@ class RetryExhausted:
 
 
 LoopEvent = Event | StepStart | ToolStart | ToolEnd | MessageAdded | TurnEnd | RetryScheduled | RetryStarted | RetryExhausted
-TurnInput = str | NoUserMessage
+TurnInput = str | Message | NoUserMessage
 Approve = Callable[[ToolCall, dict[str, Any]], Awaitable[bool]]
 Inbox = Callable[[], list[str]]  # notices to add (as a user message) before the next model call
 
@@ -193,7 +193,7 @@ class Agent:
 
     async def turn(self, user_text: TurnInput) -> AsyncIterator[LoopEvent]:
         if not isinstance(user_text, NoUserMessage):
-            yield self._add(Message("user", (Text(user_text),)))
+            yield self._add(user_text if isinstance(user_text, Message) else Message("user", (Text(user_text),)))
         for step in range(1, self.max_steps + 1):
             if self.refresh is not None:
                 self.refresh(self)

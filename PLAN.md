@@ -148,6 +148,37 @@ checked in the real app (TUI screenshots through `nexus-tui/tools/webterm`).
 
 ### Step 12 — TUI polish (current)
 
+The startup draft uses the same Context heading and indentation as an opened session (2026-10-28).
+
+Model picker (2026-10-28): names appear on the left and providers on the right; `m` toggles selected model details below the picker.
+
+Header simplification (2026-10-28): remove the busy spinner, working label and
+elapsed time from the top header in both clients. Waiting and connection status
+remain; turn activity is shown with the conversation.
+
+
+Context interaction correction: heading text opens details, including the top-level
+Context overview. Only its fold chevron expands/collapses the section. Section
+click targets follow row metadata, not the rendered text or span positions.
+
+Follow-up screenshot revision (2026-10-28): the bottom strip shows the directory
+and branch, without a project-name prefix or checkout/worktree text. A linked
+worktree alone gets a muted, normal-weight icon. Collapsed sidebar search and
+session rows align with the expanded sidebar's content origin. Starting Context
+omits the separate Child agents section; each remaining section heading opens a
+scrollable detail modal showing stored content and metadata. Prompts and instructions
+come from the frozen snapshot; tool definitions are labelled as stored definitions,
+since they may change during a session.
+
+
+Screenshot refinements (2026-10-28): both clients retain the normal background
+for selected items and show selection with a rail/marker and stronger text.
+Composer input has more top padding, the command hint is removed, the collapsed
+sidebar shows compact session initials without the three tab buttons, and Context
+and timeline gutters have more breathing room. Session search offers Project and
+Global scope; it filters loaded session titles (Core FTS remains Step 12a).
+
+
 **Design pass (2026-10-28):** [DESIGN_PLAN.md](DESIGN_PLAN.md) holds the decided look for
 both clients (the user's picks from the `nexus-design-mockup/` chooser). The TUI side
 (I0–I10) has landed: chrome band, header tabs, timeline rhythm, Markdown and diffs, composer,
@@ -209,8 +240,8 @@ says why the rest cannot change. Still open:
 - **File writes:** `PUT` file with `expected_revision`, a `files.changed`
   event, then the built-in editor. Bash enforcement of read-before-edit stays
   open (Known gaps).
-- **Attachments, images and durable artifacts:** artifact storage comes
-  before web/MCP image results.
+- **Durable artifacts:** user image paste now uses inline stored message parts;
+  separate artifact storage still comes before web/MCP image results.
 - **Settings over the API:** sign-in and sign-out, defaults, usage totals
   per session.
 - **Agents:** a `mode` field in `/api/agent/{name}` and an optional `color`
@@ -263,6 +294,10 @@ says why the rest cannot change. Still open:
 
 | Old | New | Why |
 | --- | --- | --- |
+| Clipboard images uploaded through the old host's attachment store | Local TUI clipboard reads and NSH paste events feed inline `Image` parts, with draft/timeline previews; bytes are durable in SQLite and replay in both dialects (2026-10-28) | Deliver image paste on the current API while keeping all model-visible image context available after reload |
+| Background bash completions began `[Notification: background bash …]` | Completion context begins `→ Background Shell Done: …` and renders as a plain notice in both clients (2026-10-28) | Distinguish shell completion context from user-message cards |
+| New sessions defaulted to asking for tool approval | Sessions default to `allow`; existing `ask` sessions migrate once, and later explicit `ask` choices are retained (2026-10-28) | User preference: always allow tools by default |
+| Selected items used a brown band; the rail included three tab buttons and widely spaced initials | Selection uses the normal surface with a marker and stronger text in both clients; compact session-only rails, roomier composer/context/timeline spacing, no command hint, and Project/Global title search (2026-10-28) | User screenshot feedback: remove patchy fills and give the conversation room while keeping session navigation compact |
 | Old Markdown replaces supported Mermaid source with a rendered diagram | Adapted diagram renderers show the diagram followed by its original fenced source; each fence has its own copy action | Preserve every model-visible item while retaining the old diagram presentation |
 | Old Settings builds a modal from its host snapshot and widget kit | Settings is the old centred modal over the dimmed session: one searchable list with section headings, values right-aligned, ←/→ to change, rows from Nexus 0.10's manifest (2026-10-28) | Familiar layout on the new Core and client contracts |
 | Old vertical tabs: a session rail with initials and hover details | The left sidebar resizes by its edge and collapses to that rail; Sessions/Files/Projects are icons inside the sidebar (a column on the rail) with labels on hover (2026-10-28) | Old look, without a second tab model beside the sidebar tabs |
@@ -328,15 +363,16 @@ says why the rest cannot change. Still open:
 | Projects were added with the CLI only | `+ Add project` and a confirmed remove in the Projects tab; right-click or `m` opens a row menu of the manifest's `row_menu` commands (2026-10-28) | Core already serves `POST`/`DELETE /api/project` |
 | Turn footer was a rule plus a left-aligned row; context items were a rail list | Footer is right-aligned `▪ Build · model · …` with no rule; context items are chip headings with indented details, as in old Nexus (2026-10-28). The footer carries no end-status word or glyph: an interrupted turn adds `/continue` (`enter continue` with an empty composer), a failed turn puts its first error line on the row above (DESIGN_PLAN D05) | The user asked for the old look, then for no end status |
 | Old user card: padding rows and a left gutter; old sticky user card | The user message is a full-page-width band on the raised surface (rail `▌` at the edge, fold marker inside, `#n · time` at the right); the sticky header from old Nexus `sticky.rs` is kept: at most 3 rows, a `░` shade row with `↑ N lines of this turn above`, pushed up by the next band, click to scroll back (DESIGN_PLAN D04) | The user chose the band; the pin keeps the question in view |
-| Activity groups: `<1 s`, `Ran 1 command, Read 1 file`, groups without verb glyphs | Durations `0.4s 4.2s 1m 05s 1h 02m`; summaries in first-seen order (`Read 2 files, ran 1 command`) with `+N −M` and `✕ N failed`; live `Working` with the newest 5 members and `… N earlier`; verb glyphs `→ ← $ * λ ? ↳ ↗` (`[glyphs.verb]` in theme.toml); Thought rows `▸ Thought for 2.1s · preview` (DESIGN_PLAN D06, D07) | Old Nexus's groups, polished |
-| Header showed the title and breadcrumbs | Session tabs as in old Nexus: opened sessions with status glyph, `×`, `+`, `alt+x`/`alt+[`/`alt+]`; clicking the viewed tab renames (2026-10-28) | The user asked for tabs |
+| Activity groups: `<1 s`, `Ran 1 command, Read 1 file`, groups without verb glyphs | Summaries in first-seen order (`Read 2 files, ran 1 command`) with `+N −M` and `✕ N failed`; live `Working` with the newest 5 members and `… N earlier`; verb glyphs `→ ← $ * λ ? ↳ ↗` (`[glyphs.verb]` in theme.toml); only shell tool rows show individual durations, while group and Thought rows omit them (DESIGN_PLAN D06, D07) | Old Nexus's groups, polished |
+| Header showed the title and breadcrumbs | Session tabs as in old Nexus: opened sessions with status glyph, `×`, `+`, `alt+x`/`alt+[`/`alt+]`; clicking the viewed tab opens a rename modal, with Enter to save and Esc to cancel (2026-10-28) | The user asked for tabs |
 | Composer had a half-row edge and `used · tier% · window%` on the control row | Soft card with half-row edges, no rail or status band, the old `╱` meter and `82.0K · 41%` on the control row, `ctrl+p commands` on the project strip, completion as wide as the card (2026-10-28, DESIGN_PLAN D11, user choice; replaces the rail and status band of `5409281`) | The user chose the soft card over the rail |
 | Activity groups were collapsed or live-open only | Three detail levels (low/medium/high, `alt+d`, Settings, persisted), medium by default (2026-10-28) | Spec: scan, then drill down |
+| Background shell completion context appeared as full multiline notices; Working used an agent-colour shimmer and showed output tokens | TUI groups consecutive completions into a compact expandable notice, retains the full context on expansion, and uses a grey Working shimmer with an aligned elapsed-time row and no output-token count | Keep the timeline scannable without losing model context |
 | Agent/model/effort pickers did nothing before a session existed | They set a draft sent with the session's creation request (2026-10-28) | `/model` and `/agent` must work on the new-session screen |
 | Composer completion was host-driven (the host ranked `/` commands and searched `@` files) | The TUI ranks the manifest's slash commands locally (prefix, subsequence, typo, then the rest; always ten rows) and asks Core's `GET /api/project/{id}/files/search` for `@` paths, padded from an empty-query listing; replies are cached per token and a reply for an old token is dropped | Completion needs only the Core HTTP API, and the popup keeps its height while typing |
 | Old modal backdrop: cells under a modal repainted in muted text; boxed panels with titles in the border | The TUI blends every cell of the frame 50% toward `surface.canvas` (`paint::scrim`; `DIM` where colours cannot be blended) and draws one borderless `surface.raised` block (2 cells of padding left and right, 1 row top and bottom, title and `esc` on the first row, key hints on the last, within 2 cells of the frame edge and at most 70% of its height) for the palette, pickers, Settings, confirms, help and notifications; Settings has UPPERCASE muted headings and the selection band instead of the accent fill, and `[ Cancel ]` is the selected default (DESIGN_PLAN D13, I7) | One modal recipe in both clients; the surface step and the scrim separate the modal from the session |
 | Waiting card was a bracketed button row (`[ allow once ] [ deny ]`) with a 6-row card; toasts were bottom-right, one line, the oldest dropped past three; a toast kept only its text and a click dismissed it; the jump pill drew on the timeline's last row | The card has a heavy accent rail, `Allow bash?`, `waiting on you · 0:42`, the parameter table, the diff capped at 12 rows, and a key-chip choice list (`▸` on the selection band, Up/Down and Enter act on the offered choices; unoffered choices show their reason) or the question rows; it sheds diff, blanks, pads and table rows when the screen is short. Toasts are top-right under the header (36-48 cells, level `▌`, glyph, bold title, `×`, an optional body line, no hairline), three drawn with `+N more` for a queue of up to nine; a click or Enter opens the full text in the modal (`c` copies; the notifications drawer opens it too, Enter there no longer jumps to the session, the detail's Enter does). The jump pill is on the composer's live row, right-aligned with the card, `↓ N new · end` where N counts the blocks below the viewport; banner leads in the level colour (DESIGN_PLAN D14, D15, I8) | The prompt keeps the context visible and the card shows what will run; alerts stop covering the composer area and the timeline's last row |
-| The starting context was a list of name chips (`System prompt`, `Tools [n]`, `Instructions`, `Agent`) with detail rows and a `total` row; the new-session view was centred text over a `Context · preview` table | `◆` sections with an estimated `~N tok` per header, one preview line or a tools grid (off tools struck through), a text `Context total` and no bar, rendered by one function (`paint::context_rows`) for the timeline and the new-session view, which has a header block and no centred text; the context folds to `▸ Context · 4 items · ~2.9k tokens` after the first turn; the Agent item is gone (its name is in the System prompt meta) and the new-session preview is client-side and estimated until Core session drafts land; every preview line is text the model receives (the first line of the agent's prompt body, fetched with `GET /api/agent/{name}`; never the description), and the timeline's comes from Core's `system_prompt` (DESIGN_PLAN D10, I9) | One timeline that shows what the model gets, with the same look before and after the first turn |
+| The starting context was a list of name chips (`System prompt`, `Tools [n]`, `Instructions`, `Agent`) with detail rows and a `total` row; the new-session view was centred text over a `Context · preview` table | `◆` sections with an estimated `~N tok` per header, one preview line or a tools grid (off tools struck through), a text `Context total` and no bar, rendered by one function (`paint::context_rows`) for the timeline and the new-session view, which has a header block and no centred text; in the TUI the context stays expanded after the first turn; the Agent item is gone (its name is in the System prompt meta) and the new-session preview is client-side and estimated until Core session drafts land; every preview line is text the model receives (the first line of the agent's prompt body, fetched with `GET /api/agent/{name}`; never the description), and the timeline's comes from Core's `system_prompt` (DESIGN_PLAN D10, I9) | One timeline that shows what the model gets, with the same look before and after the first turn |
 | Files tree: an optional `▾ name ⌥ branch` row only with several checkouts, plain indent, no guides; file view: a bold `~` path, `NNNN  text` rows, a notice `lines 1-40 of 300 · scroll` at the bottom, search as `/query  2 matches`, all on the sidebar surface; narrow layouts (< 100 columns) kept the tab strip with 28 / 30-cell drawers and no scrim; the right sidebar was open from 100 columns; the empty and connecting screens were centred text; offline read `reconnecting in 4 s` and `Disconnected · read-only` | Always a root header (`SIDE-PROJECT` bold, `⌥ main` muted at the right; it switches checkouts when there are several), `│` guides in `border.default` per level, Git letters coloured by status on the row's own surface; the file view is on the page surface with the path in secondary and the basename bold, `lines 1-38 of 38` right-aligned in the header, a blank row, right-aligned numbers and a `│` gutter, and a reserved bottom row for search (`/ query  3 of 12   n next · N prev · esc end`, matches on the selection band, the current one reversed); `layout::Breakpoint` gives the D17 table (160+ 34 / 36, 120-159 28 / 30, 100-119 the left docked and the right closed until opened, < 100 drawers of 34 / 36 cells over `paint::scrim`), where the header keeps the toggles, the status and a crumb cut from the left; `paint::LOGO` (the `_/` N, accent, bold in mono) over the title on the empty workspace (`No projects yet`, `alt+3 add a project · ctrl+p commands`; `ctrl+o` has no command yet) and the connecting screen; a lost stream shows `✕ offline` in the header, the banner `Disconnected from Core · retrying in 4s · retry` and the composer placeholder `Reconnecting to Core… your draft is kept`; with nothing loaded the page says `Not connected to Core` instead of `No projects yet` (DESIGN_PLAN D16, D17, D18, I10) | Files read as a document with its place and range; narrow terminals keep the page readable; a missing Core is said in words and never looks like an empty workspace |
 
 ## Known gaps
@@ -384,8 +420,8 @@ says why the rest cannot change. Still open:
 - A session export holds one SQLite read snapshot (WAL) while streaming, so a
   very large export delays checkpointing until it finishes; writers are not
   blocked. Markdown omits wire events, and the JSON document (with every event)
-  can be much larger than the messages alone. Export has no attachments or
-  artifacts to include yet and does not re-clip output.
+  can be much larger than the messages alone. Export includes inline user images,
+  but has no general artifacts and does not re-clip output.
 - Sessions from before snapshots existed are reconstructed once and marked
   `reconstructed`; the note is visible, but the original prompt is unknowable.
 - Reconnect resumes the event stream; startup recovery reconciles unfinished
@@ -407,7 +443,7 @@ says why the rest cannot change. Still open:
   provider mid-session works (`/model`), but foreign reasoning is dropped.
 - Copilot GPT models are sent over Chat Completions; whether some of them
   require Responses is not checked.
-- No images in either dialect yet.
+- User images replay in both dialects; tool/MCP image results and general artifact storage are not implemented.
 - Tool paths are confined to the workspace, but `bash` is not sandboxed, so
   "read-only" (`scout`) and "Markdown only" (`plan`) rest on their prompts.
   Read-before-edit is enforced only for the `edit`/`write` tools: unrestricted
@@ -430,3 +466,63 @@ says why the rest cannot change. Still open:
 - Worktree cleanup on archive/delete, and leaving a worktree.
 - Whether a user can steer a child session from the parent's card.
 - Output caps (lines vs bytes) and whether they are a setting.
+
+
+Image paste / permission / background-shell delivery check (2026-10-28): Core
+369 tests pass (including isolated daemon restart), TUI suite passes with its
+one existing ignored test, Ruff and Clippy pass, NSH type check/build and four
+host tests pass. Focused web tests exercise native image paste, preview/removal,
+image-only send and the plain background-shell notice. Real TUI PTY and web
+screenshots were reviewed from isolated fixtures; no live vision provider call
+was made. Fixed the web timeline's layout event shape while checking previews.
+
+Context and composer follow-up (2026-10-28): both clients list Skills and MCP
+as unavailable until Core implements them, and omit the inline system prompt
+preview while retaining its detail view. The TUI composer supports word movement
+and selection with Alt/Control arrows, as in old Nexus; existing mouse selection
+and local clipboard image paste remain in place.
+
+User message bands and sticky headers now sit within the timeline gutters,
+adding space on both sides of the raised surface (2026-10-28).
+
+Composer spacing (2026-10-28): the input has one full row of top padding
+and the card keeps its half-height bottom edge, matching the requested reference.
+
+Context presentation (2026-10-28): the TUI uses the reference's spaced
+label-and-count rows and compact total; section details remain clickable.
+Unavailable features and disabled tool counts remain explicit.
+
+Composer context status (2026-10-28): the TUI shows latest input tokens and
+known pricing-tier and window percentages as text, following the old status
+line; the existing path and branch strip is retained.
+
+Shortcut parity (2026-10-28): the TUI adopts old Nexus direct shortcuts and
+Ctrl+X leader sequences for actions available in 0.10; Ctrl+N now creates a
+session, Ctrl+G opens agents, and Ctrl+T cycles effort. Notifications remain
+accessible via Ctrl+X Shift+N and the palette; Go to turn remains in the palette.
+
+Image paste layout (2026-10-28): TUI draft thumbnails sit above the composer
+card; clipboard reads, removal and durable inline image parts remain unchanged.
+
+Bottom activity line (2026-10-28): restore the old Nexus rule below the
+location strip, showing context occupancy while idle and a moving activity
+segment while busy, with reduced-motion and monochrome fallbacks.
+
+Image references (2026-10-28): TUI image paste inserts lettered markers in the
+composer; Core stores an adjacent lettered text part before each user image so
+both provider dialects receive the same reference-to-image mapping.
+
+Timeline spacing (2026-10-28): agent output starts at the same horizontal
+position as user-message text, with Markdown wrapping adjusted to fit.
+
+Image preview (2026-10-28, removed same day): TUI draft thumbnails, timeline
+thumbnails and the full-view modal are gone for now; the draft shows one row of
+attached image names and the timeline an `Image: name` line.
+
+Permission upgrade (2026-10-28): existing stored `ask` sessions, including
+children, migrate once to `allow` at daemon startup, with revision bumps.
+Explicit `ask` selected after migration remains available and persists.
+
+Context figure colour (2026-10-28): context section titles, the total label and
+its figure use the secondary grey instead of primary white, so the context block
+recedes from the conversation. Counts and metadata keep their existing greys.

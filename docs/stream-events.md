@@ -48,13 +48,14 @@ A conversation is a list of `Message`s made of ordered parts.
 
 | Type | Fields | Meaning |
 | --- | --- | --- |
+| `Image` | `data_url`, `name="image.png"` | User image bytes as a base64 data URL; durable and previewable |
 | `Text` | `text`, `origin=None`, `raw=None` | Plain text |
 | `Reasoning` | `summary`, `origin=None`, `raw=None` | Visible reasoning summary; `raw` carries the opaque state to send back |
 | `ToolCall` | `id`, `name`, `arguments` (JSON text exactly as the model produced it), `origin=None`, `raw=None` | A tool call |
 | `ToolResult` | `call_id`, `output`, `is_error=False` | The result of a call; no `origin` or `raw` |
 | `Message` | `role` (`"user"`, `"assistant"` or `"tool"`), `parts` (tuple) | |
 
-`Part = Text | Reasoning | ToolCall | ToolResult`.
+`Part = Text | Reasoning | ToolCall | ToolResult | Image`.
 
 `origin` is the provider that produced the part (`"codex"`, ...). `raw` is the
 exact wire item: the Responses output item for codex and grok, and for chat
@@ -62,7 +63,7 @@ providers `{"field": "<reasoning field name>"}` on `Reasoning` (other chat parts
 have `raw=None`). User text and tool results have `origin=None`. Replay rules are
 in [llm-providers.md](llm-providers.md).
 
-Roles in practice: the user message holds one `Text`; the assistant message holds
+Roles in practice: the user message holds a `Text` followed by any `Image` parts; the assistant message holds
 the parts of one model step in the order they finished; the `tool` message holds
 one `ToolResult` per call of that step.
 
@@ -219,6 +220,10 @@ loss.
 `session.workspace_tools` records that the on-demand workspace tools were
 activated: `{active: true, entry, tools}`. It is stored in the session's event
 log; the tool result (or the API notice) holds the definitions and guidance.
+
+`session.message_tool` records that `message_session` was exposed by a session's
+first `session` call: `{active: true, tools}`. It happens once per session; the
+call's tool result holds the description and guidance.
 
 `session.directory_changed` records an applied move: `from`, `to`, `branch`,
 `repository`, `worktree`, `source` (`tool` or `api`), `project_id`, the

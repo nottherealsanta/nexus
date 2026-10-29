@@ -270,7 +270,7 @@ async def test_continuation_after_a_provider_failure(env):
 
 async def test_continuation_after_clean_interruption_keeps_the_closed_result(env):
     rt, client, provider, workspace = env
-    session = await _create(client, workspace)
+    session = await _create(client, workspace, permission="ask")
     provider.script = [[ToolCall("c1", "bash", json.dumps({"command": "touch after_interrupt.txt"}))]]
     await client.post(f"/api/session/{session['id']}/prompt", json={"text": "go"})
     for _ in range(100):

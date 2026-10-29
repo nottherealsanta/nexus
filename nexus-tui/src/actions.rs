@@ -17,11 +17,13 @@ pub enum ApiCall {
     Prompt {
         session: String,
         text: String,
+        images: Vec<crate::images::Image>,
     },
     /// Create a session in a project, then prompt it.
     NewAndPrompt {
         project: String,
         text: String,
+        images: Vec<crate::images::Image>,
         /// Agent, model and effort chosen before the session existed.
         fields: serde_json::Value,
     },
@@ -124,7 +126,7 @@ impl ApiCall {
     /// Text to put back in the composer if the call fails.
     pub fn draft(&self) -> Option<(Option<&str>, &str)> {
         match self {
-            ApiCall::Prompt { session, text } => Some((Some(session), text)),
+            ApiCall::Prompt { session, text, .. } => Some((Some(session), text)),
             ApiCall::NewAndPrompt { text, .. } => Some((None, text)),
             _ => None,
         }
@@ -177,12 +179,21 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
     let key = RequestId::new();
     let mut done = Done::default();
     match call {
-        ApiCall::Prompt { session, text } => {
-            conflict(api.prompt(session, text, &key).await.map_err(e)?)?;
+        ApiCall::Prompt {
+            session,
+            text,
+            images,
+        } => {
+            conflict(
+                api.prompt_images(session, text, images, &key)
+                    .await
+                    .map_err(e)?,
+            )?;
         }
         ApiCall::NewAndPrompt {
             project,
             text,
+            images,
             fields,
         } => {
             let s = conflict(
@@ -193,7 +204,11 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             .ok_or("no session returned")?;
             done.open = Some(s.id.clone());
             let key2 = RequestId::new();
-            conflict(api.prompt(&s.id, text, &key2).await.map_err(e)?)?;
+            conflict(
+                api.prompt_images(&s.id, text, images, &key2)
+                    .await
+                    .map_err(e)?,
+            )?;
         }
         ApiCall::NewSession { project, fields } => {
             let s = conflict(
@@ -334,6 +349,7 @@ mod tests {
     #[test]
     fn failed_sends_hand_the_draft_back() {
         let c = ApiCall::Prompt {
+            images: Vec::new(),
             session: "ses_1".into(),
             text: "hello".into(),
         };

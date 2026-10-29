@@ -4,8 +4,8 @@ import { Button, Input } from "nsh/base";
 import { Heading, Modal, ModalFooter, ModalTitle, SelectBar } from "./modal";
 import type { JSX } from "nsh";
 import { Btn, IconButton, T, FOCUS } from "./kit";
-import { availability, commands, escape, keyLabel, run, Cmd } from "../commands";
-import { addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, notifications, paletteOpen, picker, selectProject, toast, unread } from "../store";
+import { availability, commands, escape, keyLabel, renameSession, run, Cmd } from "../commands";
+import { addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, notifications, paletteOpen, picker, selectProject, toast, unread, renaming, viewed } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { LeftSidebar } from "./sidebar";
 import { RightSidebar } from "./right";
@@ -48,7 +48,7 @@ function PaletteBody() {
                 const dis = () => !it().a.ok;
                 return (
                   <Button onPress={() => pick(c())} selected={idx() === i()} accessibilityLabel={`${c().title}${dis() ? `, unavailable: ${it().a.reason}` : ""}`} testID={`cmd-${c().id}`}
-                    class={`group/row relative rounded-(--radius) px-3 py-1 min-h-8 justify-center selected:bg-selection hover:bg-accent ${FOCUS}`}>
+                    class={`group/row relative rounded-(--radius) px-3 py-1 min-h-8 justify-center hover:bg-accent ${FOCUS}`}>
                     <SelectBar on={idx() === i()} hover />
                     <View class="flex-row items-center gap-3">
                       <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-6 ${dis() ? "text-muted-foreground" : "text-popover-foreground"}`}>{c().title}</Text>
@@ -83,7 +83,7 @@ function PickerBody() {
             <Each of={p().items} key={(x) => x.id}>
               {(it, i) => (
                 <Button onPress={() => runItem(it())} accessibilityLabel={it().label} testID={`pick-${i()}`}
-                  class={`group/row relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-selection ${FOCUS}`}>
+                  class={`group/row relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent ${FOCUS}`}>
                   <SelectBar hover />
                   <View class="flex-row items-center gap-3">
                     <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-6 ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{it().label}</Text>
@@ -239,3 +239,32 @@ function NotificationList() {
   );
 }
 void compat; void currentProject; void unread;
+
+export function RenameSession() {
+  return <If when={renaming()}><RenameSessionBody /></If>;
+}
+function RenameSessionBody() {
+  const initial = viewed()?.title || "";
+  const text = signal(initial);
+  const cancel = () => renaming.set(false);
+  const save = () => {
+    const title = text().trim();
+    if (!title) return;
+    cancel();
+    if (title !== initial) void renameSession(title);
+  };
+  return (
+    <Modal width={440} label="Rename session" testID="rename-dialog" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}>
+      <View class="gap-4">
+        <ModalTitle title="Rename session" />
+        <Input autoFocus defaultValue={initial} onChange={({ value }) => text.set(value)} onSubmit={save} submitBehavior="submit"
+          accessibilityLabel="Session title" testID="rename-input" class="rounded-(--radius) border border-border bg-card px-3 h-10 text-foreground" />
+        <View class="flex-row justify-end gap-2">
+          <Btn label="Cancel" onPress={cancel} />
+          <Btn label="Save" kind="primary" onPress={save} disabled={!text().trim()} testID="rename-save" />
+        </View>
+        <ModalFooter hints="enter save · esc cancel" />
+      </View>
+    </Modal>
+  );
+}

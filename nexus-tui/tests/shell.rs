@@ -113,7 +113,7 @@ fn dark_frames_use_the_theme_file_surfaces() {
     assert_eq!(buf[(3, 20)].bg, Color::Rgb(0x14, 0x14, 0x14));
     let composer = app.regions.composer;
     let panel = Color::Rgb(0x1e, 0x1e, 0x1e);
-    for y in [composer.y + 2, composer.bottom() - 3] {
+    for y in [composer.y + 2, composer.bottom() - 4] {
         assert_eq!(buf[(composer.x + 6, y)].bg, panel, "input and control rows");
     }
     // No status band: nothing in the card is a darker surface (D11).
@@ -124,11 +124,8 @@ fn dark_frames_use_the_theme_file_surfaces() {
     );
     // Half-row edges: the panel colour as the glyph over the canvas.
     let top = &buf[(composer.x + 6, composer.y + 1)];
-    assert_eq!(
-        (top.symbol(), top.fg, top.bg),
-        ("\u{2584}", panel, Color::Rgb(0x0b, 0x0b, 0x0b))
-    );
-    let bottom = &buf[(composer.x + 6, composer.bottom() - 2)];
+    assert_eq!((top.symbol(), top.bg), (" ", panel));
+    let bottom = &buf[(composer.x + 6, composer.bottom() - 3)];
     assert_eq!((bottom.symbol(), bottom.fg), ("\u{2580}", panel));
     assert!(
         buf.content
@@ -432,7 +429,7 @@ fn composer_uses_latest_usage_and_catalog_window() {
     let (_, rows) = draw(&mut app, 160, 48);
     let all = joined(&rows);
     assert!(all.contains("Example Model codex"), "{all}");
-    assert!(all.contains("10.0K \u{b7} 5%"), "{all}");
+    assert!(all.contains("10.0K \u{b7} 5.0%"), "{all}");
     app.state.models.clear();
     let (_, rows) = draw(&mut app, 160, 48);
     let all = joined(&rows);
@@ -477,8 +474,11 @@ fn composer_capitalises_the_agent_and_shows_price_tier_occupancy() {
     assert!(row.contains("Orchestrate"), "{row}");
     assert!(!row.contains("orchestrate"), "{row}");
     // Used and its share of the window; the palette hint is on the project strip.
-    assert!(all_contains(&rows, "52.0K \u{b7} 5%"), "{row}");
-    assert!(all_contains(&rows, "ctrl+p commands"));
+    assert!(
+        all_contains(&rows, "52.0K \u{b7} 26.0% \u{b7} 5.2%"),
+        "{row}"
+    );
+    assert!(!all_contains(&rows, "ctrl+p commands"));
 
     let context = app
         .hits
@@ -564,7 +564,7 @@ fn project_worktrees_supply_sidebar_and_location_branches_without_a_session_list
     let all = joined(&rows);
     assert!(all.contains("build \u{b7} \u{2325} project-"), "{all}");
     assert!(
-        all.contains("/work/nexus-home/ws  \u{2325} project-branch  worktree"),
+        all.contains("/work/nexus-home/ws  \u{2325} project-branch  ⑂"),
         "{all}"
     );
 }
@@ -758,7 +758,7 @@ fn location_shows_only_the_current_worktree_and_invalidates_on_move() {
         }),
     );
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("/work/nexus-home/ws  \u{2325} feature  worktree"));
+    assert!(joined(&rows).contains("/work/nexus-home/ws  \u{2325} feature  ⑂"));
     assert!(app.hits.rect_of(&Target::ComposerWorktree).is_some());
     app.effects.clear();
     app.apply_sync(SyncMsg::Event(Event {
@@ -776,7 +776,7 @@ fn location_shows_only_the_current_worktree_and_invalidates_on_move() {
         .iter()
         .any(|e| matches!(e, Effect::Sync(Command::Worktrees(id)) if id == SESSION)));
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(!joined(&rows).contains("/work/nexus-home/ws  \u{2325} feature  worktree"));
+    assert!(!joined(&rows).contains("/work/nexus-home/ws  \u{2325} feature  ⑂"));
 }
 
 #[test]
@@ -922,9 +922,11 @@ fn file_view_highlights_matches_and_announces_the_line_range() {
         .position(|row| row.contains("target here"))
         .unwrap() as u16;
     let x = col_of(&rows[y as usize], "target") as u16;
-    let highlighted = buf.cell((x, y)).unwrap().bg;
-    let plain = buf.cell((x + 20, y)).unwrap().bg;
-    assert_ne!(highlighted, plain, "matches use interactive.selection");
+    assert!(buf
+        .cell((x, y))
+        .unwrap()
+        .modifier
+        .contains(ratatui::style::Modifier::UNDERLINED));
 }
 
 #[test]
@@ -2027,102 +2029,55 @@ fn composer_rows_are_edge_input_blank_control_edge_strip_at_every_width() {
         let r = app.regions.composer;
         let card = |y: u16| row_text(&buf, y);
         let x = r.x as usize + 2;
-        // Live row, then the half-row edges at the card's width (inset 2).
+        // Live row, then a full top padding row at the card's width (inset 2).
         assert!(card(r.y).trim().is_empty(), "{w}: idle live row is blank");
         let top = &buf[(r.x + 2, r.y + 1)];
-        assert_eq!(top.symbol(), "\u{2584}", "{w}");
+        assert_eq!(top.symbol(), " ", "{w}");
+        assert_ne!(
+            top.bg,
+            buf[(r.x + 1, r.y + 1)].bg,
+            "{w}: top padding surface"
+        );
         assert_eq!(buf[(r.x + 1, r.y + 1)].symbol(), " ", "{w}: inset");
-        assert_eq!(buf[(r.right() - 3, r.y + 1)].symbol(), "\u{2584}", "{w}");
+        assert_eq!(buf[(r.right() - 3, r.y + 1)].bg, top.bg, "{w}");
         assert_eq!(buf[(r.right() - 2, r.y + 1)].symbol(), " ", "{w}");
         // Input at x+3 inside the card, a blank row, the control row.
         let input = card(r.y + 2);
         assert!(input[input.char_indices().nth(x + 3).unwrap().0..].starts_with("Type a message"));
-        assert!(card(r.y + 3).trim().is_empty(), "{w}: blank row");
-        let control = card(r.bottom() - 3);
+        assert!(
+            card(r.y + 3).replace('\u{2502}', "").trim().is_empty(),
+            "{w}: blank row"
+        );
+        let control = card(r.bottom() - 4);
         assert!(control
             .chars()
             .skip(x + 3)
             .collect::<String>()
             .starts_with("Build"));
-        assert_eq!(buf[(r.x + 2, r.bottom() - 2)].symbol(), "\u{2580}", "{w}");
+        assert_eq!(buf[(r.x + 2, r.bottom() - 3)].symbol(), "\u{2580}", "{w}");
         // Project strip on the canvas, flush with the bottom.
-        assert!(card(r.bottom() - 1).contains("ctrl+p commands"), "{w}");
+        assert!(!card(r.bottom() - 2).contains("ctrl+p commands"), "{w}");
         assert_eq!(
-            buf[(r.x + 6, r.bottom() - 1)].bg,
+            buf[(r.x + 6, r.bottom() - 2)].bg,
             Color::Rgb(0x0b, 0x0b, 0x0b)
         );
         assert_eq!(r.bottom(), h, "{w}: the composer ends at the bottom");
     }
 }
 
-/// Which of effort, provider, meter and `41%` the control row shows.
-fn control_state(rows: &[String], row: usize) -> (bool, bool, bool, bool) {
-    let line = &rows[row];
-    (
-        line.contains("default"),
-        line.contains("Example Model codex"),
-        line.contains('\u{2571}'),
-        line.contains('%'),
-    )
-}
-
 #[test]
-fn narrow_control_rows_shed_effort_then_provider_then_meter() {
-    let mut seen = std::collections::BTreeSet::new();
-    for w in (50..=200).rev().step_by(2) {
+fn context_status_stays_visible_on_narrow_composers() {
+    for w in (50..=200).step_by(2) {
         let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (w, 36));
         with_usage(&mut app, 82_000);
         let (_, rows) = draw(&mut app, w, 36);
-        let cy = app.regions.composer.bottom() as usize - 3;
-        let (effort, provider, meter, figure) = control_state(&rows, cy);
-        assert!(figure, "{w}: the context figure stays: {:?}", rows[cy]);
+        let line = &rows[app.regions.composer.bottom() as usize - 4];
         assert!(
-            meter || !provider,
-            "{w}: the meter goes after the provider: {:?}",
-            rows[cy]
+            line.contains("82.0K") && line.contains("41.0%"),
+            "{w}: {line}"
         );
-        assert!(
-            !effort || provider,
-            "{w}: effort before provider: {:?}",
-            rows[cy]
-        );
-        assert!(rows[cy].contains("Build"), "{w}: {:?}", rows[cy]);
-        seen.insert((effort, provider, meter));
+        assert!(!line.contains('╱'), "{line}");
     }
-    for state in [
-        (true, true, true),
-        (false, true, true),
-        (false, false, true),
-        (false, false, false),
-    ] {
-        assert!(seen.contains(&state), "never shown: {state:?} in {seen:?}");
-    }
-}
-
-#[test]
-fn the_meter_has_ten_cells_filled_in_the_agent_colour() {
-    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (200, 50));
-    with_usage(&mut app, 82_000); // 41% of 200k
-    let (buf, rows) = draw(&mut app, 200, 50);
-    let cy = app.regions.composer.bottom() - 3;
-    let cells: Vec<u16> = (0..buf.area.width)
-        .filter(|&x| buf[(x, cy)].symbol() == "\u{2571}")
-        .collect();
-    assert_eq!(cells.len(), 10, "{:?}", rows[cy as usize]);
-    assert!(cells.windows(2).all(|p| p[1] == p[0] + 1), "contiguous");
-    let agent = app.theme.agent_style("build").fg;
-    let filled = cells
-        .iter()
-        .filter(|&&x| buf[(x, cy)].fg == agent.unwrap())
-        .count();
-    assert_eq!(filled, 5, "ceil(10 * 0.41)");
-    let empty = app.theme.fg("border.default").fg.unwrap();
-    assert!(cells[5..].iter().all(|&x| buf[(x, cy)].fg == empty));
-    assert!(
-        rows[cy as usize].contains("82.0K \u{b7} 41%"),
-        "{:?}",
-        rows[cy as usize]
-    );
 }
 
 #[test]
@@ -2133,11 +2088,12 @@ fn mono_and_ascii_cards_use_rules_and_only_they_keep_the_focus_bar() {
         let r = app.regions.composer;
         let focused = app.ui.focus == nexus_tui::ui::Focus::Composer;
         let rule = app.theme.structure("rule");
-        let (top, bottom) = (&buf[(r.x + 6, r.y + 1)], &buf[(r.x + 6, r.bottom() - 2)]);
+        let (top, bottom) = (&buf[(r.x + 6, r.y + 1)], &buf[(r.x + 6, r.bottom() - 3)]);
         if tier == Tier::Mono {
-            assert_eq!((top.symbol(), bottom.symbol()), (rule, rule));
+            assert_eq!(top.symbol(), " ");
+            assert_eq!(bottom.symbol(), rule);
         }
-        let bar = buf[(r.x + 2, r.y + 2)].symbol() == app.theme.structure("focus_bar");
+        let bar = buf[(r.x + 2, r.y + 3)].symbol() == app.theme.structure("focus_bar");
         assert_eq!(
             bar, focused,
             "{tier:?}: the focus bar is drawn when focused"
@@ -2155,11 +2111,35 @@ fn mono_and_ascii_cards_use_rules_and_only_they_keep_the_focus_bar() {
     let mut app = with_turn(ascii, (120, 36));
     let (buf, _) = draw(&mut app, 120, 36);
     let r = app.regions.composer;
-    assert_eq!(
-        buf[(r.x + 6, r.y + 1)].symbol(),
-        app.theme.structure("rule")
-    );
+    assert_eq!(buf[(r.x + 6, r.y + 1)].symbol(), " ");
     assert!(buf[(r.x + 6, r.y + 1)].symbol().is_ascii());
+}
+
+#[test]
+fn working_strip_aligns_with_usage_and_omits_output_tokens() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
+    with_usage(&mut app, 82_000);
+    let event = app
+        .state
+        .model
+        .selected
+        .as_mut()
+        .unwrap()
+        .events
+        .last_mut()
+        .unwrap();
+    event.time = nexus_tui::app::now_secs();
+    event.data["output_tokens"] = serde_json::json!(284);
+    busy(&mut app);
+    let (_, rows) = draw(&mut app, 160, 48);
+    let control = rows.iter().find(|row| row.contains("82.0K")).unwrap();
+    let strip = rows.iter().find(|row| row.contains("Working ·")).unwrap();
+    assert!(strip.contains("Working"), "{strip}");
+    assert!(!strip.contains('↓'), "{strip}");
+    assert_eq!(
+        control.trim_end().chars().count(),
+        strip.trim_end().chars().count()
+    );
 }
 
 #[test]
@@ -2171,7 +2151,7 @@ fn busy_shows_the_working_row_and_esc_stop_not_the_meter() {
     let r = app.regions.composer;
     let live = &rows[r.y as usize];
     assert!(live.contains("\u{25d0} Working"), "{live:?}");
-    let control = &rows[r.bottom() as usize - 3];
+    let control = &rows[r.bottom() as usize - 4];
     assert!(control.trim_end().ends_with("esc stop"), "{control:?}");
     assert!(!control.contains('\u{2571}'), "{control:?}");
     assert!(!rows[r.bottom() as usize - 1].contains("ctrl+p commands"));
@@ -2181,7 +2161,7 @@ fn busy_shows_the_working_row_and_esc_stop_not_the_meter() {
 }
 
 #[test]
-fn the_strip_marks_a_linked_worktree_in_bold_violet() {
+fn the_strip_marks_a_linked_worktree_with_a_muted_icon() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
     app.state.worktrees.insert(
         SESSION.into(),
@@ -2191,39 +2171,30 @@ fn the_strip_marks_a_linked_worktree_in_bold_violet() {
         }),
     );
     let (buf, rows) = draw(&mut app, 160, 48);
-    let y = app.regions.composer.bottom() - 1;
-    let x = rows[y as usize].find("worktree").unwrap() as u16;
+    let y = app.regions.composer.bottom() - 2;
+    let x = col_of(&rows[y as usize], "⑂") as u16;
     let cell = &buf[(x, y)];
-    assert_eq!(cell.fg, app.theme.fg("agent.violet").fg.unwrap());
-    assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_eq!(cell.fg, app.theme.fg("text.muted").fg.unwrap());
+    assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert!(!rows[y as usize].contains("worktree"));
     assert!(!rows[y as usize].contains("checkout"));
 }
 
 #[test]
-fn completion_is_a_borderless_block_as_wide_as_the_card_with_key_hints() {
+fn completion_is_a_block_as_wide_as_the_card_with_a_left_rail() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     typing(&mut app, "/");
     let (buf, rows) = draw(&mut app, 120, 36);
     let r = app.regions.composer;
-    let raised = Color::Rgb(0x24, 0x24, 0x24);
-    let hint = rows
-        .iter()
-        .position(|row| row.contains("move") && row.contains("tab complete"))
-        .expect("key hints row");
-    assert!(rows[hint].contains("esc close"), "{:?}", rows[hint]);
-    assert_eq!(
-        hint as u16 + 1,
-        r.y + 1,
-        "the hint row is last, on the card's top edge"
+    assert!(
+        !rows.iter().any(|row| row.contains("tab complete")),
+        "no key hint row"
     );
-    // As wide as the card, no border glyphs, flush with its edge.
-    assert_eq!(buf[(r.x + 2, hint as u16)].bg, raised);
-    assert_eq!(buf[(r.right() - 3, hint as u16)].bg, raised);
-    assert_ne!(buf[(r.x + 1, hint as u16)].bg, raised);
-    assert_ne!(buf[(r.right() - 2, hint as u16)].bg, raised);
-    assert!(rows[hint]
-        .chars()
-        .all(|c| !"\u{2502}\u{250c}\u{2514}\u{256d}".contains(c)));
+    // The last row sits on the card's top edge, with the rail in the card's column.
+    let last = r.y;
+    assert_eq!(buf[(r.x + 2, last)].symbol(), "\u{2502}");
+    assert_eq!(buf[(r.x + 2, last - 1)].symbol(), "\u{2502}");
+    assert_ne!(buf[(r.x + 1, last)].symbol(), "\u{2502}");
 }
 
 /// The left sidebar's text, cut at its width (the centre column starts after it).
@@ -2239,6 +2210,12 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
         let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
         app.ui.left_width = w;
         app.state.model.sessions.get_mut(SESSION).unwrap().title = "Refactor the loader".into();
+        // Keep the fixture's age in the hour range regardless of the day this runs.
+        app.state.model.sessions.get_mut(SESSION).unwrap().updated = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+            - 3600.0;
         app.ui.unread_sessions.insert(SESSION.into());
         let parent = app.state.model.sessions[SESSION].clone();
         let mut child = parent.clone();
@@ -2301,7 +2278,7 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
         // The open session carries the selection band on both lines.
         let band = buf[(w / 2, (first + 3) as u16)].bg;
         assert_eq!(band, buf[(w / 2, (first + 4) as u16)].bg, "{w}");
-        assert_ne!(
+        assert_eq!(
             band,
             buf[(w / 2, (first + 2) as u16)].bg,
             "{w}: band vs header"
@@ -2476,8 +2453,10 @@ fn the_rail_marks_the_open_session_with_the_selection_band() {
         .hits
         .rect_of(&Target::SideRow(0))
         .expect("rail item for the open session");
-    let selection = app.theme.bg("interactive.selection").bg;
-    assert_eq!(Some(buf[(band.x + 1, band.y)].bg), selection);
+    assert_eq!(
+        Some(buf[(band.x + 1, band.y)].bg),
+        app.theme.bg("surface.sidebar").bg
+    );
 }
 
 // ---- DESIGN_PLAN I7: one modal recipe ----------------------------------
@@ -2621,7 +2600,7 @@ fn settings_headings_are_muted_uppercase_and_the_selected_row_is_on_the_band() {
         .hits
         .rect_of(&Target::SettingsRow(app.ui.settings_row))
         .unwrap();
-    let selection = app.theme.color("interactive.selection").unwrap();
+    let selection = app.theme.color("surface.raised").unwrap();
     for x in [sel.x, sel.x + 5, sel.right() - 1] {
         assert_eq!(buf[(x, sel.y)].bg, selection, "band at {x}");
     }
@@ -2650,14 +2629,14 @@ fn confirm_defaults_to_cancel_and_marks_delete_as_an_error() {
     let y = rows.iter().position(|l| l.contains("[ Cancel ]")).unwrap();
     let cx = col_of(&rows[y], "[ Cancel ]") as u16;
     let dx = col_of(&rows[y], "[ Delete ]") as u16;
-    let selection = app.theme.color("interactive.selection").unwrap();
-    assert_eq!(buf[(cx + 2, y as u16)].bg, selection, "Cancel is selected");
+    let selection = app.theme.color("surface.raised").unwrap();
+    assert_eq!(buf[(cx + 2, y as u16)].bg, selection, "Cancel has no fill");
     assert_eq!(buf[(cx - 1, y as u16)].symbol(), "▌", "focus bar");
     assert_eq!(
         buf[(dx + 2, y as u16)].fg,
         app.theme.color("status.error").unwrap()
     );
-    assert_ne!(buf[(dx + 2, y as u16)].bg, selection);
+    assert_eq!(buf[(dx + 2, y as u16)].bg, selection);
     // right/left moves the default onto Delete
     press(&mut app, &["right"]);
     let (buf, _) = draw(&mut app, 120, 36);
@@ -2696,29 +2675,47 @@ fn the_new_session_view_shows_the_header_block_and_d10_sections_with_agents_md()
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     for needle in [
-        "New session in",
-        "Build",
-        "Tab agent \u{b7} ctrl+m model \u{b7} ctrl+e effort \u{b7} ctrl+d directory",
-        "\u{25c6} System prompt",
-        "You are an AI agent running in Nexus.",
-        "\u{25c6} AGENTS.md",
-        "Read PLAN.md first: principles, layout.",
-        "in the system prompt",
-        "\u{25c6} Tools",
-        "5 tools \u{b7} 5 on",
-        "Context total \u{b7} ~",
+        "System prompt",
+        "Skills",
+        "MCP",
+        "AGENTS.md",
+        "Tools [5]",
+        "total  ~",
     ] {
         assert!(all.contains(needle), "missing {needle:?}:\n{all}");
     }
+    // No folded context line: the sections are the preview.
+    assert!(!all.contains("Context ·"), "{all}");
+    assert!(!all.contains("You are an AI agent running in Nexus."));
     // The description is for the pickers; the model never receives it.
     assert!(!all.contains("Does the actual work."), "{all}");
     // Estimated until Core drafts land: every count carries `~`.
     assert!(all.contains("~") && all.contains(" tok"), "{all}");
     // The centred placeholder is gone, and there is no bar in the total row.
     assert!(!all.contains("Type a message below"), "{all}");
-    let total = rows.iter().find(|l| l.contains("Context total")).unwrap();
+    let total = rows.iter().find(|l| l.contains("total  ~")).unwrap();
     assert!(!total.contains('\u{2571}'), "{total}");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn preview_context_headings_open_details_on_mouse_click() {
+    use nexus_tui::ui::OverlayKind;
+    let path = std::env::temp_dir();
+    for heading in ["System prompt", "AGENTS.md", "Tools"] {
+        let mut app = new_session_app(&path, (120, 36));
+        let (_, rows) = draw(&mut app, 120, 36);
+        let y = rows.iter().position(|row| row.contains(heading)).unwrap();
+        let x = col_of(&rows[y], heading);
+        click(&mut app, x as u16, y as u16);
+        assert!(
+            matches!(
+                &app.ui.overlay.as_ref().map(|o| &o.kind),
+                Some(OverlayKind::ContextDetail { .. })
+            ),
+            "{heading} must open a preview modal"
+        );
+    }
 }
 
 #[test]
@@ -2731,7 +2728,7 @@ fn the_new_session_view_without_agents_md_says_none_and_counts_less() {
         let all = joined(&draw(&mut app, 120, 36).1);
         let line = all
             .lines()
-            .find(|l| l.contains("Context total"))
+            .find(|l| l.contains("total  ~"))
             .unwrap()
             .to_owned();
         let digits: String = line
@@ -2746,8 +2743,8 @@ fn the_new_session_view_without_agents_md_says_none_and_counts_less() {
     };
     let mut app = new_session_app(&without, (120, 36));
     let all = joined(&draw(&mut app, 120, 36).1);
-    assert!(all.contains("\u{25c6} AGENTS.md"), "{all}");
-    assert!(all.contains("none in this project"), "{all}");
+    assert!(all.contains("AGENTS.md"), "{all}");
+    assert!(all.contains("unavailable or not read"), "{all}");
     assert!(
         total(&with) >= total(&without) + 1000,
         "AGENTS.md adds its estimate"
@@ -3027,7 +3024,6 @@ fn the_file_view_has_a_header_a_gutter_and_a_search_row() {
         "{bottom:?}"
     );
     // every match is on the selection band; the current one is reversed
-    let sel = app.theme.color("interactive.selection").unwrap();
     let line = |n: usize| {
         rows.iter()
             .position(|r| r.contains(&format!("line {n} needle")))
@@ -3036,7 +3032,9 @@ fn the_file_view_has_a_header_a_gutter_and_a_search_row() {
     let x = |n: usize| col_of(&rows[line(n) as usize], "needle") as u16;
     // (`n` scrolled the second match to the top)
     assert!(
-        buf[(x(3), line(3))].bg == sel
+        buf[(x(3), line(3))]
+            .modifier
+            .contains(ratatui::style::Modifier::UNDERLINED)
             && !buf[(x(3), line(3))]
                 .modifier
                 .contains(ratatui::style::Modifier::REVERSED)
@@ -3063,7 +3061,7 @@ fn from_100_to_119_columns_the_right_sidebar_starts_closed_and_still_opens() {
     assert!(app.regions.left.is_some(), "the left stays docked");
     assert!(!app.regions.narrow);
     assert!(!joined(&rows).contains("SESSION"));
-    press(&mut app, &["alt+b"]);
+    press(&mut app, &["ctrl+l"]);
     let (_, rows) = draw(&mut app, 110, 30);
     assert!(app.regions.right.is_some(), "the toggle docks it");
     assert!(joined(&rows).contains("SESSION"));
@@ -3106,7 +3104,8 @@ fn a_narrow_drawer_sits_over_the_scrim_and_hit_tests_inside_and_out() {
         "a click on the scrim closes the drawer"
     );
     // the right drawer is 36 cells and sits at the right edge
-    press(&mut app, &["alt+b"]);
+    // alt+b is word-back while the composer has focus, which a click leaves it with
+    app.run_command("sidebar.right.toggle");
     draw(&mut app, 80, 24);
     let (side, rect) = app.regions.drawer.unwrap();
     assert_eq!((side, rect.width, rect.right()), (Side::Right, 36, 80));
@@ -3156,4 +3155,83 @@ fn the_palette_groups_commands_under_uppercase_muted_headings() {
     typing(&mut app, "tgl left");
     let (_, text) = draw(&mut app, 120, 36);
     assert!(!text.iter().any(|r| r.contains("MODEL AND AGENT")));
+}
+
+#[test]
+fn session_search_toggles_project_scope_without_losing_query() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let mut other = app.state.model.sessions[SESSION].clone();
+    other.id = "other".into();
+    other.project_id = "another-project".into();
+    other.title = "Find this other session".into();
+    app.state.model.sessions.insert(other.id.clone(), other);
+    app.run_command("session.switch");
+    press(&mut app, &["f", "i", "n", "d"]);
+    assert!(app.palette_items().is_empty());
+    press(&mut app, &["tab"]);
+    assert_eq!(app.palette_items()[0].label, "Find this other session");
+    press(&mut app, &["tab"]);
+    assert!(app.palette_items().is_empty());
+}
+
+#[test]
+fn bottom_rule_shows_context_and_activity() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
+    with_usage(&mut app, 82_000);
+    let (buf, _) = draw(&mut app, 160, 48);
+    let r = app.regions.composer;
+    let y = r.bottom() - 1;
+    let accent = app.theme.agent_style("build").fg.unwrap();
+    let active = (r.x + 2..r.right() - 2)
+        .filter(|&x| buf[(x, y)].fg == accent)
+        .count();
+    let width = (r.width - 4) as usize;
+    assert!((active as f64 / width as f64 - 0.41).abs() < 0.02);
+    busy(&mut app);
+    let (buf, _) = draw(&mut app, 160, 48);
+    let active = (r.x + 2..r.right() - 2)
+        .filter(|&x| buf[(x, y)].fg == accent)
+        .count();
+    // The pulse has soft edges: a bright core plus cells fading to the rule colour.
+    let rule = app.theme.fg("border.default").fg.unwrap();
+    let lit = (r.x + 2..r.right() - 2)
+        .filter(|&x| buf[(x, y)].fg != rule)
+        .count();
+    assert!(active > 0 && active <= width / 5, "{active}");
+    assert!(lit > active && lit <= width / 5 + 4, "{lit}");
+}
+
+#[test]
+fn clicking_the_timeline_focuses_the_composer_unless_a_modal_is_open() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use nexus_tui::ui::Focus;
+    let click = |app: &mut nexus_tui::app::App, x: u16, y: u16| {
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    };
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    draw(&mut app, 120, 36);
+    let t = app.regions.timeline;
+    app.run_command("timeline.focus");
+    assert_eq!(app.ui.focus, Focus::Timeline);
+    click(&mut app, t.x + 10, t.y + 3);
+    assert_eq!(app.ui.focus, Focus::Composer);
+
+    app.run_command("palette.open");
+    app.ui.focus = Focus::Timeline;
+    click(&mut app, t.x + 10, t.y + 3);
+    assert_ne!(app.ui.focus, Focus::Composer, "a modal keeps its own focus");
+}
+
+#[test]
+fn slash_sessions_opens_the_session_switcher() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.composer().set_text("/sessions");
+    press(&mut app, &["enter"]);
+    assert!(app.ui.overlay.is_some(), "the switcher is open");
+    assert!(app.composer_ref().text().is_empty());
 }

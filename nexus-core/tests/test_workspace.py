@@ -130,7 +130,7 @@ def test_workspace_control_names_are_consistent_everywhere():
     from nexus import agents as agents_module
     from nexus import workspace as workspace_module
 
-    assert set(agents_module.NEXUS_CONTROL_TOOLS) == {"session", *workspace_module.CONTROL_NAMES}
+    assert set(agents_module.NEXUS_CONTROL_TOOLS) == {"session", "message_session", *workspace_module.CONTROL_NAMES}
     assert workspace_module.WORKSPACE_TOOLS == ("change_session_directory", "worktree")
     assert workspace_module.EXPOSE == "expose_workspace_tools"
 

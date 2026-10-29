@@ -25,6 +25,7 @@ from .sse import parse_sse
 from .types import (
     Done,
     Event,
+    Image,
     Message,
     PartDone,
     ProviderError,
@@ -68,6 +69,7 @@ def input_items(messages: tuple[Message, ...] | list[Message], *, origin: str, q
     """Translate the conversation into a Responses `input` item list, in order."""
     items: list[dict[str, Any]] = []
     for message in messages:
+        start = len(items)
         for part in message.parts:
             own = getattr(part, "origin", None) == origin and getattr(part, "raw", None) is not None
             if isinstance(part, Text):
@@ -77,6 +79,12 @@ def input_items(messages: tuple[Message, ...] | list[Message], *, origin: str, q
                     items.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": part.text}]})
                 else:
                     items.append({"type": "message", "role": "user", "content": [{"type": "input_text", "text": part.text}]})
+            elif isinstance(part, Image):
+                content = {"type": "input_image", "image_url": part.data_url}
+                if len(items) > start and items[-1].get("role") == "user":
+                    items[-1]["content"].append(content)
+                else:
+                    items.append({"type": "message", "role": "user", "content": [content]})
             elif isinstance(part, Reasoning):
                 if own and quirks.encrypted_reasoning and part.raw.get("encrypted_content"):  # type: ignore[union-attr]
                     items.append(part.raw)  # type: ignore[arg-type]

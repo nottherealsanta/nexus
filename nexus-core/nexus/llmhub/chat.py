@@ -25,6 +25,7 @@ from .sse import parse_sse
 from .types import (
     Done,
     Event,
+    Image,
     PartDone,
     ProviderError,
     Reasoning,
@@ -62,7 +63,10 @@ def chat_messages(req: Request, *, origin: str) -> list[dict[str, Any]]:
             continue
         text = "".join(p.text for p in message.parts if isinstance(p, Text))
         if message.role == "user":
-            wire.append({"role": "user", "content": text})
+            content = [{"type": "text", "text": p.text} if isinstance(p, Text) else
+                       {"type": "image_url", "image_url": {"url": p.data_url}}
+                       for p in message.parts if isinstance(p, (Text, Image))]
+            wire.append({"role": "user", "content": content if any(isinstance(p, Image) for p in message.parts) else text})
             continue
         entry: dict[str, Any] = {"role": "assistant", "content": text or None}
         calls = [p for p in message.parts if isinstance(p, ToolCall)]

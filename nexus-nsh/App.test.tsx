@@ -72,9 +72,8 @@ describe("shell", () => {
   test("session tabs open, switch and close without deleting their sessions", async () => {
     const second = { ...snapshot.sessions[0], id: "ses_2", title: "Second task", created: 3, updated: 4 };
     const app = await open("./App.tsx", {
+      // Specific stubs first: the first matching key answers, and core() ends with a broad `session/*`.
       network: {
-        ...core(),
-        "GET */api/snapshot*": { body: { ...snapshot, sessions: [snapshot.sessions[0], second] } },
         "GET */api/session/ses_2": { body: second },
         "GET */api/session/ses_1/message": { body: [] },
         "GET */api/session/ses_1/snapshot": { body: null },
@@ -83,6 +82,8 @@ describe("shell", () => {
         "GET */api/session/ses_2/snapshot": { body: null },
         "GET */api/session/ses_2/event*": { body: { events: [], more: false, floor: 0, history_truncated: false } },
         "GET */api/session/*/worktrees": { body: { worktrees: [] } },
+        ...core(),
+        "GET */api/snapshot*": { body: { ...snapshot, sessions: [snapshot.sessions[0], second] } },
       },
       width: 1024, height: 768, platform: "web",
     });
@@ -91,13 +92,11 @@ describe("shell", () => {
     await app.press("id:session-ses_2");
     await app.waitFor("id:session-tab-ses_1");
     await app.waitFor("id:session-tab-ses_2");
-    await app.press("id:session-tab-ses_1");
-    await app.keyboard.press("alt+]");
-    await app.waitUntil(() => app.requests().some((r) => r.url.includes("/api/session/ses_2/message")));
-    await app.keyboard.press("alt+x");
+    await app.press("id:session-tab-ses_2");
+    await app.press("id:tab-close-ses_2");
     expect(app.shows("id:session-tab-ses_2")).toBe(false);
     expect(app.shows("id:session-ses_2")).toBe(true);
-    await app.keyboard.press("alt+x");
+    await app.press("id:tab-close-ses_1");
     await app.waitFor("id:new-session-tab");
     expect(app.shows("id:session-ses_1")).toBe(true);
   });
@@ -106,10 +105,6 @@ describe("shell", () => {
     const created = { ...snapshot.sessions[0], id: "ses_new", title: "Drafted session", agent: "plan", model: "codex/gpt-5", effort: "high" };
     const app = await open("./App.tsx", {
       network: {
-        ...core(),
-        "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000, efforts: ["low", "medium", "high"] }] } },
-        "GET */api/model/default": { body: { model: "codex/gpt-5" } },
-        "GET */api/agent*": { body: { agents: [{ name: "build", source: "builtin" }, { name: "plan", source: "builtin" }] } },
         "POST */api/session": { body: created },
         "GET */api/session/ses_new": { body: created },
         "GET */api/session/ses_new/message": { body: [] },
@@ -117,15 +112,17 @@ describe("shell", () => {
         "GET */api/session/ses_new/event*": { body: { events: [], more: false, floor: 0, history_truncated: false } },
         "GET */api/session/ses_new/worktrees": { body: { worktrees: [] } },
         "POST */api/session/ses_new/prompt": { status: 204, body: null },
+        ...core(),
+        "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000, efforts: ["low", "medium", "high"] }] } },
+        "GET */api/model/default": { body: { model: "codex/gpt-5" } },
+        "GET */api/agent*": { body: { agents: [{ name: "build", source: "builtin" }, { name: "plan", source: "builtin" }] } },
       },
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("text:demo");
     await app.waitFor("id:composer-agent");
-    const type = async (value: string) => { for (const key of value) await app.keyboard.press(key); };
     const slash = async (value: string) => {
-      await app.press("id:composer-input");
-      await type(value);
+      await app.type("id:composer-input", value);
       await app.press("id:send");
     };
     await slash("/agent");
@@ -138,8 +135,7 @@ describe("shell", () => {
     await slash("/effort");
     await app.waitFor("id:picker");
     await app.press("id:pick-2");
-    await app.press("id:composer-input");
-    await type("hello");
+    await app.type("id:composer-input", "hello");
     await app.press("id:send");
     await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/api/session")));
     const request = app.requests().find((r) => r.method === "POST" && r.url.endsWith("/api/session")) as any;
@@ -163,8 +159,9 @@ describe("shell", () => {
     await app.keyboard.press(`${mod}+p`);
     await app.waitFor("id:palette");
     expect(app.shows("id:palette")).toBe(true);
-    // blocked_core command: present, disabled, with its reason
-    expect(app.shows("text:Hand off to a new session")).toBe(true);
+    // blocked_core command: present, disabled, with its reason once its row is the selected one (D13)
+    await app.type("id:palette-input", "Hand off");
+    await app.waitFor("text:Hand off to a new session");
     expect(app.texts().some((t) => t.includes("Needs a Core increment"))).toBe(true);
     await app.keyboard.press("escape");           // rule 1: overlay closes
     expect(app.shows("id:palette")).toBe(false);
@@ -309,7 +306,7 @@ describe("context, composer and footer parity", () => {
     system_prompt: `# Agent prompt\nYou are coding in Nexus.\n${"x".repeat(4000)}`,
     tools: ["read", "bash", "edit"],
     tool_definitions: { read: { name: "read" } },
-    instruction_file: { path: "/work/demo/AGENTS.md", status: "loaded", bytes: 800 },
+    instruction_file: { path: "/work/demo/AGENTS.md", status: "loaded", bytes: 800, content: "Frozen instructions" },
     agent: { name: "build", source: "builtin", description: "Does the work." },
     child_agents: [{ name: "scout" }, { name: "plan" }],
     workspace: { active: true },
@@ -330,11 +327,25 @@ describe("context, composer and footer parity", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:context-section");
     const shown = app.texts().join("\n");
-    for (const text of [
-      "Context", "6 items", "~1.0K tokens", "1.0% of window", "System prompt", "You are coding in Nexus.",
-      "Tools", "[3]", "read  bash  edit", "~6", "Instructions", "AGENTS.md loaded", "800 B, part of the system prompt",
-      "Agent", "build", "builtin · Does the work.", "Child agents", "scout  plan", "Workspace tools", "active", "total", "of the window",
-    ]) expect(shown.includes(text)).toBe(true);
+    expect(shown.includes("Child agents")).toBe(false);
+    await app.press("id:context-fold");
+    expect(app.shows("id:ctx-system-open")).toBe(false);
+    await app.press("id:context-overview");
+    await app.waitFor("id:context-detail-text");
+    expect(app.shows("id:context-detail")).toBe(true);
+    expect(app.texts().join("\n").includes("You are coding in Nexus.")).toBe(true);
+    await app.keyboard.press("escape");
+    await app.press("id:context-fold");
+    await app.press("id:ctx-system-open");
+    await app.waitFor("id:context-detail-text");
+    expect(app.shows("id:context-detail")).toBe(true);
+    expect(app.texts().join("\n").includes("You are coding in Nexus.")).toBe(true);
+    await app.keyboard.press("escape");
+    await app.press("id:ctx-instructions-open");
+    await app.waitFor("id:context-detail-text");
+    expect(app.shows("id:context-detail")).toBe(true);
+    expect(app.texts().join("\n").includes("Frozen instructions")).toBe(true);
+
   });
 
   test("turn footer prices cached and uncached input using the catalog", async () => {
@@ -378,7 +389,7 @@ describe("context, composer and footer parity", () => {
     expect(shown.includes("11k · 1.1%")).toBe(true);
     expect(app.shows("id:composer-meter")).toBe(true);
     expect(app.shows("id:location-strip")).toBe(true);
-    expect(shown.includes("commands")).toBe(true);
+    expect(shown.includes("ctrl+p commands")).toBe(false);
   });
 
   test("location strip uses the longest matching linked worktree and shows disabled action reasons", async () => {
@@ -416,7 +427,7 @@ describe("context, composer and footer parity", () => {
     expect(shown.includes("demo")).toBe(true);
     expect(shown.includes("nested")).toBe(true);
     expect(shown.includes("/work/demo/ws/nested")).toBe(true);
-    expect(shown.includes("worktree")).toBe(true);
+    expect(shown.includes("worktree")).toBe(false);
     expect(worktreeReads >= 2).toBe(true);
     expect(app.shows("id:location-directory")).toBe(true);
     expect(app.shows("id:location-project")).toBe(false);
@@ -431,7 +442,7 @@ describe("context, composer and footer parity", () => {
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("text:New session");
-    await app.waitFor("text:trunk");
+    await app.waitFor("text:⌥ trunk");
     expect(app.requests().some((r) => r.url.includes("/api/project/prj_1/worktrees"))).toBe(true);
     expect(app.shows("id:location-worktree")).toBe(false);
   });
@@ -583,8 +594,6 @@ describe("tool output detail cap", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:tool-row-call_bash");
     expect(app.texts().join("\n").includes("Ran 2 commands")).toBe(true);
-    await app.press("id:activity-group-tool-call_bash");
-    expect(app.shows("id:tool-row-call_bash")).toBe(false);
     await app.keyboard.press("alt+d");
     await app.waitFor("text:Detail: high");
     await app.waitFor("text:high line 1");
@@ -649,7 +658,7 @@ describe("session info totals", () => {
     for (const expected of [
       "Turns", "1 · 3 calls", "Used", "bash 12 · edit 4 · +2", "Tools", "9 on · 1 off",
       "Input", "61.0K", "Cached", "20.0K", "Output", "3.0K", "Reasoning", "500",
-      "Context", "25%", "Cost", "$0.07+", "Children", "2 (1 running, 1 failed)",
+      "CONTEXT", "25%", "Cost", "$0.07+", "Children", "2 (1 running, 1 failed)",
       "Kernel state is not reported by Core yet.",
     ]) expect(shown.includes(expected)).toBe(true);
   });
@@ -731,6 +740,7 @@ describe("Core-backed settings values", () => {
     const before = app.requests().filter((r) => r.method === "GET" && r.url.endsWith("/api/model")).length;
     await app.press("id:setting-model-refresh");
     await app.waitUntil(() => app.requests().filter((r) => r.method === "GET" && r.url.endsWith("/api/model")).length > before);
+    await app.waitFor("text:Model catalog refreshed"); // the list re-renders with the new catalog; press after it settles
     await app.press("id:setting-model-catalog");
     await app.waitFor("id:picker");
     expect(app.texts().join("\n").includes("GPT-5")).toBe(true);
@@ -740,5 +750,46 @@ describe("Core-backed settings values", () => {
     await app.press("id:setting-agents-list");
     await app.waitFor("id:picker");
     expect(app.texts().join("\n").includes("Change agent")).toBe(true);
+  });
+});
+
+describe("image paste and background shell context", () => {
+  test("pasted images preview, remove, and send without text", async () => {
+    const app = await open("./ComposerFixture.tsx", {
+      network: selectedSessionNetwork({ "POST */api/session/ses_1/prompt": { status: 202, body: { status: "busy" } } }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("text:Refactor loader");
+    await app.waitFor("id:msg-user");
+    await app.screenshot("/private/tmp/nexus-before-paste.png");
+    await app.paste("id:composer-input", { files: ["./fixtures/clipboard.png"] });
+    await app.waitFor("id:image-previews");
+    await app.screenshot("/private/tmp/nexus-image-preview.png");
+    await app.press("text:Remove image");
+    expect(app.shows("id:image-previews")).toBe(false);
+    await app.paste("id:composer-input", { files: ["./fixtures/clipboard.png"] });
+    await app.waitFor("id:image-previews");
+    await app.submit("id:composer-input");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/prompt")));
+    const req = app.requests().find((r) => r.method === "POST" && r.url.endsWith("/prompt"))!;
+    const body = JSON.parse(req.body!);
+    expect(body.text).toBe("");
+    expect(body.images.length).toBe(1);
+    expect(body.images[0].data_url.startsWith("data:image/png;base64,")).toBe(true);
+    await app.waitUntil(() => !app.shows("id:image-previews"));
+  });
+
+  test("a background shell completion has no user-message card", async () => {
+    const notice = { ...userMessage, id: "background", seq: 3, parts: [{ type: "text", text: "→ Background Shell Done: 'make test'\nexit code 0" }] };
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message": { body: [notice] } }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("text:Refactor loader");
+    await app.waitFor("id:background-shell-done");
+    expect(app.shows("id:msg-user")).toBe(false);
+    await app.screenshot("/private/tmp/nexus-background-shell.png");
   });
 });

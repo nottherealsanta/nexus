@@ -347,6 +347,7 @@ fn session_actions_are_wired_to_the_api() {
     // failed send puts the draft back
     a.apply_done(nexus_tui::actions::ActionDone {
         call: ApiCall::Prompt {
+            images: Vec::new(),
             session: SESSION.into(),
             text: "hello there".into(),
         },
@@ -424,6 +425,16 @@ fn composer_paste_selection_undo_and_send_preserve_full_text() {
 }
 
 #[test]
+fn composer_moves_and_selects_by_word() {
+    let mut a = app();
+    a.composer().set_text("one two three");
+    press(&mut a, &["alt+left", "alt+shift+left"]);
+    assert_eq!(a.composer_ref().selected_text().as_deref(), Some("two "));
+    typing(&mut a, "new ");
+    assert_eq!(a.composer_ref().text(), "one new three");
+}
+
+#[test]
 fn failed_send_restores_expanded_pending_paste() {
     use nexus_tui::actions::{ActionDone, ApiCall};
     let mut a = app();
@@ -433,6 +444,7 @@ fn failed_send_restores_expanded_pending_paste() {
     a.handle_paste(pending);
     a.apply_done(ActionDone {
         call: ApiCall::Prompt {
+            images: Vec::new(),
             session: SESSION.into(),
             text: "sent".into(),
         },
@@ -683,4 +695,84 @@ fn agent_and_model_chosen_before_a_session_exists_go_into_its_creation() {
             if fields["agent"] == "plan" && fields["model"] == "codex/gpt-5"
     )));
     assert_eq!(a.ui.draft, Default::default(), "the draft is spent");
+}
+
+#[test]
+fn image_paste_sends_an_image_only_prompt_and_restores_it_on_failure() {
+    use nexus_tui::actions::ApiCall;
+    let mut a = app();
+    let mut image = nexus_tui::images::Image::from_png(
+        "clipboard.png".into(),
+        include_bytes!("../fixtures/clipboard.png"),
+    )
+    .unwrap();
+    a.apply_image_paste(SESSION.into(), Ok(Some(image.clone())));
+    let (_, rows) = draw(&mut a, 120, 36);
+    let preview_row = rows
+        .iter()
+        .position(|row| row.contains("1 attached"))
+        .unwrap();
+    let input_row = rows
+        .iter()
+        .position(|row| row.contains("[Image A]"))
+        .unwrap();
+    assert!(
+        preview_row < input_row,
+        "attachments appear above the composer"
+    );
+    image.name = "Image A".into();
+    press(&mut a, &["enter"]);
+    let call = a
+        .effects
+        .iter()
+        .find_map(|e| {
+            if let Effect::Api(c @ ApiCall::Prompt { images, text, .. }) = e {
+                assert_eq!(images, std::slice::from_ref(&image));
+                assert_eq!(text, "[Image A]");
+                Some(c.clone())
+            } else {
+                None
+            }
+        })
+        .expect("image-only send");
+    assert!(a.composer_ref().images.is_empty());
+    a.apply_done(nexus_tui::actions::ActionDone {
+        call,
+        result: Err("offline".into()),
+    });
+    assert_eq!(a.composer_ref().images, vec![image]);
+    press(&mut a, &["backspace"]);
+    assert!(a.composer_ref().images.is_empty());
+}
+
+#[test]
+fn old_nexus_shortcuts_open_available_actions() {
+    let mut a = app();
+    press(&mut a, &["ctrl+g"]);
+    assert!(matches!(
+        a.ui.overlay.as_ref().map(|o| &o.kind),
+        Some(nexus_tui::ui::OverlayKind::Palette(_))
+    ));
+    press(&mut a, &["esc", "ctrl+x", "s"]);
+    assert_eq!(a.ui.view, View::Settings);
+    press(&mut a, &["esc", "ctrl+o"]);
+    assert!(a.ui.overlay.is_some());
+}
+
+#[test]
+fn pasted_images_get_distinct_markers_and_removal_clears_the_last() {
+    let mut a = app();
+    let image = nexus_tui::images::Image::from_png(
+        "clipboard.png".into(),
+        include_bytes!("../fixtures/clipboard.png"),
+    )
+    .unwrap();
+    a.apply_image_paste(SESSION.into(), Ok(Some(image.clone())));
+    a.composer().insert_str(" compare with ");
+    a.apply_image_paste(SESSION.into(), Ok(Some(image)));
+    assert_eq!(a.composer_ref().text(), "[Image A] compare with [Image B]");
+    assert_eq!(a.composer_ref().images[1].name, "Image B");
+    press(&mut a, &["backspace"]);
+    assert_eq!(a.composer_ref().text(), "[Image A] compare with ");
+    assert_eq!(a.composer_ref().images.len(), 1);
 }

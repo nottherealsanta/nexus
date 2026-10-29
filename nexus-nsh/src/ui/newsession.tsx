@@ -1,55 +1,303 @@
-import { Text, View } from "nsh";
-import { Btn, T, midTruncate } from "./kit";
-import { run } from "../commands";
-import { currentProject, m, model, info } from "../store";
-import { signal } from "nsh";
+// The new-session view and the starting-context sections (DESIGN_PLAN D10, I9). The sections are one
+// renderer for both places: the new-session view (a client-side preview) and the timeline's context
+// row (the frozen snapshot). Every preview line comes from text the model receives (the system
+// prompt); an agent's description is never sent, so it is never shown here.
+import { Scroll, Text, View, effect, signal, windowSize } from "nsh";
+import { Button } from "nsh/base";
+import { Btn, FOCUS, T, midTruncate } from "./kit";
+import { run, byId, keyLabel } from "../commands";
+import {
+  contextDetail, agentCatalog, currentProject, defaultModel, info, loadComposerData, m, model, modelCatalog, projectWorktrees, sessionDraft, userHome, worktreeForDirectory,
+} from "../store";
+import { agentColor } from "../agent-color";
 import { request } from "../core/transport";
+import { Modal, ModalTitle } from "./modal";
 
-const defaults = signal<{ model?: string; agents?: any[] } | null>(null);
-let asked = false;
+// --- the shared section model -----------------------------------------------------------------
+export type CtxBody =
+  | { kind: "preview"; text: string }
+  | { kind: "grid"; items: { name: string; on: boolean }[] }
+  | { kind: "none" };
+export interface CtxSection { key: string; title: string; tokens?: number; meta: string; body: CtxBody; detail: string }
 
-export function NewSessionView() {
-  if (!asked) {
-    asked = true;
-    request<any>("GET", "/api/model/default").then((r) => defaults.update((d) => ({ ...d, model: r.model }))).catch(() => {});
-    request<any>("GET", "/api/agent").then((r) => defaults.update((d) => ({ ...d, agents: r.agents }))).catch(() => {});
-  }
-  const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
+/** `17580` reads `17,580`. */
+export function thousands(n: number): string {
+  const d = String(Math.max(0, Math.round(n)));
+  let out = "";
+  for (let i = 0; i < d.length; i++) { if (i > 0 && (d.length - i) % 3 === 0) out += ","; out += d[i]; }
+  return out;
+}
+/** `17.6k` for the folded line; plain digits below a thousand. */
+export const compactTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
+/** The folded line after its fold marker: `Context · 4 items · ~17.6k tokens`. */
+export function foldedMeta(items: number, total: number, estimated: boolean): string {
+  return `· ${items} items · ${estimated ? "~" : ""}${compactTokens(total)} tokens`;
+}
+/** The first meaningful line of a system prompt: not blank, not a heading and not an HTML comment. */
+export function firstPromptLine(prompt: string): string {
+  return prompt.split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#") && !l.startsWith("<!--")) ?? "";
+}
+export function share(total: number, window?: number): string | undefined {
+  if (!window || window <= 0) return undefined;
+  const pct = (total / window) * 100;
+  return pct > 0 && pct < 0.1 ? "<0.1%" : `${pct.toFixed(1)}%`;
+}
+/** A grid of four columns and three rows; a longer inventory ends in `+N more`. */
+export const GRID_CAP = 12;
+export function gridCells(items: { name: string; on: boolean }[]): { name: string; on: boolean; more?: boolean }[] {
+  if (items.length <= GRID_CAP) return items;
+  return [...items.slice(0, GRID_CAP - 1), { name: `+${items.length - (GRID_CAP - 1)} more`, on: true, more: true }];
+}
+const utf8 = (s: string) => { let n = 0; for (const c of s) { const p = c.codePointAt(0)!; n += p < 0x80 ? 1 : p < 0x800 ? 2 : p < 0x10000 ? 3 : 4; } return n; };
+
+/** Tokens the generated system prompt costs before the agent body and the instruction file; every figure is an estimate until Core drafts land (PLAN.md Step 12a). */
+export const PROMPT_BASE_TOKENS = 900;
+export const TOOL_SCHEMA_TOKENS = 450;
+export const DEFAULT_TOOLS = ["read", "bash", "edit", "write", "ask", "code", "expose_workspace_tools"];
+
+/** The sections the next session will start with, estimated on the client. */
+export function previewSections(i: { agent: string; prompt: string; tools?: string[]; off?: string[]; file?: { path: string; bytes: number; line: string } | null }): { sections: CtxSection[]; total: number } {
+  const tools = [...(i.tools ?? DEFAULT_TOOLS)];
+  if (!tools.includes("expose_workspace_tools")) tools.push("expose_workspace_tools");
+  const off = i.off ?? [];
+  const fileTokens = i.file ? Math.ceil(i.file.bytes / 4) : 0;
+  const promptTokens = PROMPT_BASE_TOKENS + Math.ceil(Array.from(i.prompt).length / 4) + fileTokens;
+  const toolTokens = tools.length * TOOL_SCHEMA_TOKENS;
+  const sections: CtxSection[] = [
+    { key: "system", title: "System prompt", tokens: promptTokens, meta: i.agent, body: { kind: "none" }, detail: `Agent prompt preview (the full starting context is available after the session starts):\n\n${i.prompt}` },
+    i.file
+      ? { key: "instructions", title: "AGENTS.md", tokens: fileTokens, meta: `in the system prompt · ${i.file.path}`, body: { kind: "preview", text: i.file.line }, detail: `Project instruction preview: ${i.file.path}\n\n${i.file.line}` }
+      : { key: "instructions", title: "AGENTS.md", meta: "not available in this preview", body: { kind: "none" }, detail: "The project instruction file is not available in this preview; the starting context will be known when the session starts." },
+    {
+      key: "tools", title: "Tools", tokens: toolTokens, meta: `${tools.length} tools · ${tools.filter((t) => !off.includes(t)).length} on`,
+      body: { kind: "grid", items: tools.map((t) => ({ name: t, on: !off.includes(t) })) }, detail: `Estimated tool inventory; schemas are available after the session starts.\n\n${tools.map((t) => `${t}${off.includes(t) ? " (off)" : ""}`).join("\n")}`,
+    },
+  ];
+  sections.push(...unavailableSections());
+  // The instruction file is part of the system prompt: the total counts the prompt and the tool schemas.
+  return { sections, total: promptTokens + toolTokens };
+}
+
+function unavailableSections(): CtxSection[] {
+  return ["Skills", "MCP"].map((title) => ({ key: title.toLowerCase(), title, meta: "not available yet", body: { kind: "none" }, detail: `${title} are not available yet.` }));
+}
+
+/** A session's `disabled_tools` (Core sends an array or a JSON string). */
+export function disabledOf(session: { disabled_tools?: unknown } | null | undefined): string[] {
+  const v = session?.disabled_tools;
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
+  if (typeof v === "string") { try { const p = JSON.parse(v); return Array.isArray(p) ? p.filter((x): x is string => typeof x === "string") : []; } catch { return []; } }
+  return [];
+}
+
+/** The sections of a frozen starting context (`GET …/snapshot`), as the timeline shows them. */
+export function startingSections(s: any, off: string[]): { sections: CtxSection[]; total: number } {
+  const sys = String(s.system_prompt ?? "");
+  const file = s.instruction_file ?? {};
+  const names: string[] = Array.isArray(s.tools) ? s.tools.filter((x: unknown): x is string => typeof x === "string") : [];
+  const schemas = s.tool_definitions && typeof s.tool_definitions === "object" ? s.tool_definitions : {};
+  const schemaText = Object.keys(schemas).length ? JSON.stringify(schemas) : "";
+  const sysTokens = Math.ceil(Array.from(sys).length / 4);
+  const toolTokens = schemaText ? Math.ceil(Array.from(schemaText).length / 4) : 0;
+  const fileBytes = typeof file.bytes === "number" ? file.bytes : undefined;
+  const lines = sys ? sys.split("\n").length : 0;
+  const status = file.status === "loaded" ? "loaded" : file.status === "missing" ? "not found" : String(file.status ?? "not read").replaceAll("_", " ");
+  const path = String(file.path ?? "");
+  const base = path.split("/").filter(Boolean).at(-1) ?? "AGENTS.md";
+  const sections: CtxSection[] = [
+    { key: "system", title: "System prompt", tokens: sysTokens, meta: `${s.agent?.name ?? "?"} · ${lines} line${lines === 1 ? "" : "s"}`, body: { kind: "none" }, detail: sys || "No system prompt was recorded." },
+    {
+      key: "instructions", title: base, tokens: fileBytes === undefined ? undefined : Math.ceil(fileBytes / 4),
+      meta: [status, fileBytes ? "in the system prompt" : "", path].filter(Boolean).join(" · "), body: { kind: "none" }, detail: typeof file.content === "string" ? file.content : JSON.stringify(file, null, 2),
+    },
+    {
+      key: "tools", title: "Tools", tokens: toolTokens || undefined, meta: `${names.length} tools · ${names.filter((n) => !off.includes(n)).length} on`,
+      body: { kind: "grid", items: names.map((n) => ({ name: n, on: !off.includes(n) })) }, detail: schemaText ? `Stored tool definitions (including guidance; definitions may change during a session):\n\n${JSON.stringify(schemas, null, 2)}` : names.join("\n") || "No tool definitions were recorded.",
+    },
+  ];
+  sections.push(...unavailableSections());
+  if (s.workspace?.active) sections.push({ key: "workspace", title: "Workspace tools", meta: "active", body: { kind: "none" }, detail: JSON.stringify(s.workspace, null, 2) });
+  return { sections, total: sysTokens + toolTokens };
+}
+
+// --- the renderer -----------------------------------------------------------------------------
+const ESTIMATED = "estimated: Core counts when the session starts";
+
+/** A count that is an estimate reads `~N tok` and says so on hover. */
+function Count(p: { text: string; estimated: boolean; class: string }) {
   return (
-    <View class="flex-1 min-h-0 items-center justify-center p-6" testID="new-session">
-      <View class="w-full max-w-[560px] gap-4">
-        <If when={project()} else={
-          <View class="gap-2">
-            <Text class="text-[18px] leading-7 font-semibold text-foreground">Welcome to Nexus</Text>
-            <Text class={T.sec}>Add a project directory to begin. Sessions run inside a project and keep everything the model sees in one timeline.</Text>
-            <View class="flex-row pt-1"><Btn label="Add project" icon="plus" kind="primary" onPress={() => run("project.add")} testID="welcome-add-project" /></View>
-          </View>
-        }>
-          {(p) => (
-            <View class="gap-4">
-              <View class="gap-1">
-                <Text class="text-[18px] leading-7 font-semibold text-foreground">New session</Text>
-                <Text class={T.sec}>{`Starts in ${p().name}. Send a message to begin.`}</Text>
-              </View>
-              <View class="rounded-(--radius-card) border border-border bg-card px-4 py-1">
-                <Line k="Directory" v={midTruncate(p().path, 38)} mono />
-                <Line k="Agent" v="build (project default)" />
-                <Line k="Model" v={defaults()?.model ?? "default"} mono />
-                <View class="py-2"><Text class={T.meta}>Starting-context inspection (system prompt, AGENTS.md, tools, token count) arrives with Core's session draft endpoint (Step 12a).</Text></View>
-              </View>
-            </View>
-          )}
+    <If when={p.estimated} else={<Text class={p.class}>{p.text}</Text>}>
+      <Button accessibilityLabel={`${p.text}, ${ESTIMATED}`} testID="ctx-estimate"
+        tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{ESTIMATED}</Text>}
+        class="rounded-(--radius)"><Text class={p.class}>{p.text}</Text></Button>
+    </If>
+  );
+}
+
+function Switch(p: { on: boolean }) {
+  return (
+    <View class={`w-[18px] h-[10px] shrink-0 rounded-full justify-center ${p.on ? "bg-primary" : "bg-border-strong"}`}>
+      <View class={`size-[6px] rounded-full bg-background ${p.on ? "ml-[10px]" : "ml-[2px]"}`} />
+    </View>
+  );
+}
+
+function Section(p: { s: CtxSection; estimated: boolean; onOpen: () => void }) {
+  const s = p.s;
+  return (
+    <View class="rounded-(--radius-card) bg-card px-3.5 py-2.5 gap-1.5" testID={`ctx-${s.key}`}>
+      <View class="flex-row items-center gap-2 min-h-5 rounded-(--radius) hover:bg-accent">
+        <Text class={`${T.meta} text-muted-foreground`}>◆</Text>
+        <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`} class={`rounded-(--radius) ${FOCUS}`}><Text class="text-[13px] leading-5 font-semibold text-foreground">{s.title}</Text></Button>
+        <If when={s.tokens !== undefined}>
+          <Count text={`${p.estimated ? "~" : ""}${thousands(s.tokens ?? 0)} tok`} estimated={p.estimated} class={`${T.sec} tabular-nums`} />
         </If>
+        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.meta}`}>{`· ${s.meta}`}</Text>
+      </View>
+      <If when={s.body.kind === "preview" && (s.body as { text: string }).text !== ""}>
+        <Text style={{ numberOfLines: 1 }} class={`${T.meta} pl-5`} testID={`ctx-${s.key}-preview`}>{(s.body as { text: string }).text}</Text>
+      </If>
+      <If when={s.body.kind === "grid"}>
+        <View class="flex-row flex-wrap pl-5" testID={`ctx-${s.key}-grid`}>
+          <Each of={gridCells((s.body as { items: { name: string; on: boolean }[] }).items)} key={(c) => c.name}>
+            {(c) => (
+              <View class="w-1/4 pr-1.5 pb-1.5">
+                <If when={!c().more} else={<View class="h-6 justify-center px-2"><Text class={T.meta}>{c().name}</Text></View>}>
+                  <View class={`h-6 flex-row items-center gap-1.5 rounded-(--radius) bg-background px-2 ${c().on ? "" : "opacity-60"}`} testID={`ctx-chip-${c().name}`} accessibilityLabel={`${c().name} ${c().on ? "on" : "off"}`}>
+                    <Switch on={c().on} />
+                    <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-xs leading-4 ${c().on ? "text-foreground-secondary" : "text-muted-foreground line-through"}`}>{c().name}</Text>
+                  </View>
+                </If>
+              </View>
+            )}
+          </Each>
+        </View>
+      </If>
+    </View>
+  );
+}
+
+/** A single detail dialog remains mounted even when the context section is folded. */
+export function ContextDetailModal() {
+  const detail = contextDetail;
+  return <If when={detail()}>{() => <Modal width={760} label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}><ModalTitle title={detail()!.title} /><Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }} contentClass="pt-3"><Text testID="context-detail-text" style={{ userSelect: "text" }} class="text-[13px] leading-5 text-foreground">{detail()!.detail}</Text></Scroll></Modal>}</If>;
+}
+
+/** The sections and the total as text (no bar). */
+export function ContextSections(p: { sections: CtxSection[]; total: number; estimated: boolean; window?: number }) {
+  const pct = () => share(p.total, p.window);
+  const detail = contextDetail;
+  return (
+    <View class="gap-2" testID="context-sections">
+      <Each of={p.sections} key={(s) => s.key}>{(s) => <Section s={s()} estimated={p.estimated} onOpen={() => detail.set(s())} />}</Each>
+      <View class="flex-row items-center gap-2 px-3.5 pt-1" testID="context-total">
+        <Text class="text-[13px] leading-5 font-semibold text-foreground">Context total</Text>
+        <Count text={`${p.estimated ? "~" : ""}${thousands(p.total)} tokens`} estimated={p.estimated} class="text-[13px] leading-5 text-foreground tabular-nums" />
+        <If when={!!pct()}><Text class={T.meta}>{`· ${pct()} of the window`}</Text></If>
       </View>
     </View>
   );
 }
-function Line(p: { k: string; v: string; mono?: boolean }) {
+
+// --- the view ---------------------------------------------------------------------------------
+const prompts = signal<Record<string, string>>({});
+const files = signal<Record<string, { bytes: number; line: string } | null>>({});
+const asked = new Set<string>();
+
+function ensure(project: string, agent: string) {
+  const pk = `p|${project}|${agent}`;
+  if (!asked.has(pk)) {
+    asked.add(pk);
+    request<any>("GET", `/api/agent/${agent}`, { query: { project } })
+      .then((a) => prompts.update((all) => ({ ...all, [`${project}|${agent}`]: String(a?.prompt ?? "") })))
+      .catch(() => asked.delete(pk));
+  }
+  const fk = `f|${project}`;
+  if (!asked.has(fk)) {
+    asked.add(fk);
+    request<any>("GET", `/api/project/${project}/file`, { query: { path: "AGENTS.md" } })
+      .then((r) => { const text = String(r?.content ?? ""); files.update((all) => ({ ...all, [project]: { bytes: utf8(text), line: firstPromptLine(text) } })); })
+      .catch(() => files.update((all) => ({ ...all, [project]: null }))); // unavailable in the preview
+  }
+}
+
+export function NewSessionView() {
+  const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
+  const agentName = () => sessionDraft().agent ?? "build";
+  const agent = () => agentCatalog().agents.find((a) => a.name === agentName());
+  effect(() => {
+    const p = project();
+    if (!p) return;
+    loadComposerData(p.id);
+    ensure(p.id, agentName());
+  });
+  const modelRef = () => sessionDraft().model || agent()?.model || defaultModel();
+  const modelEntry = () => modelCatalog().find((e) => e.ref === modelRef());
+  const modelName = () => { const r = modelRef(); return r ? (modelEntry()?.name || r.split("/").at(-1) || r) : "default"; };
+  const provider = () => { const r = modelRef(); return r ? (modelEntry()?.provider || r.split("/")[0]) : ""; };
+  const window = () => { const c = Number(modelEntry()?.context); return Number.isFinite(c) && c > 0 ? c : undefined; };
+  const fullPath = () => {
+    const p = project(); if (!p) return "";
+    const home = (userHome() || ((info()?.home ?? "").endsWith("/.nexus10") ? (info()!.home as string).slice(0, -9) : "")).replace(/\/$/, "");
+    return home && (p.path === home || p.path.startsWith(`${home}/`)) ? `~${p.path.slice(home.length)}` : p.path;
+  };
+  const path = () => midTruncate(fullPath(), 48);
+  const branch = () => { const p = project(); return p ? (worktreeForDirectory(p.path, projectWorktrees()[p.id])?.branch as string | undefined) : undefined; };
+  const preview = () => {
+    const p = project()!;
+    const a = agent();
+    return previewSections({
+      agent: agentName(), prompt: prompts()[`${p.id}|${agentName()}`] ?? "",
+      tools: Array.isArray(a?.tools) ? a.tools.filter((t: unknown): t is string => typeof t === "string") : undefined,
+      file: files()[p.id] ? { path: `${fullPath().replace(/\/$/, "")}/AGENTS.md`, ...files()[p.id]! } : null,
+    });
+  };
+  const hints = () => {
+    const out: { k: string; label: string }[] = [];
+    for (const [id, label] of [["agent.change", "agent"], ["model.change", "model"], ["model.effort", "effort"]]) {
+      const c = byId.get(id); const k = c ? keyLabel(c) : null;
+      if (k) out.push({ k, label });
+    }
+    return out;
+  };
   return (
-    <View class="flex-row gap-3 py-2 border-b border-border">
-      <Text class={`w-[88px] ${T.meta} pt-0.5`}>{p.k}</Text>
-      <Text style={{ userSelect: "text" }} class={`flex-1 min-w-0 ${p.mono ? "font-mono text-xs leading-5" : "text-[13px] leading-5"} text-foreground`}>{p.v}</Text>
+    <View class="flex-1 min-h-0" testID="new-session">
+      <If when={project()} else={
+        <View class="flex-1 items-center justify-center p-6">
+          <View class="w-full max-w-[560px] gap-2">
+            <Text class="text-[18px] leading-7 font-semibold text-foreground">Welcome to Nexus</Text>
+            <Text class={T.sec}>Add a project directory to begin. Sessions run inside a project and keep everything the model sees in one timeline.</Text>
+            <View class="flex-row pt-1"><Btn label="Add project" icon="plus" kind="primary" onPress={() => run("project.add")} testID="welcome-add-project" /></View>
+          </View>
+        </View>
+      }>
+        {(p) => (
+          <Scroll class="flex-1 min-h-0" contentClass="items-center px-4 py-6">
+            <View class="w-full max-w-[760px] gap-5">
+              <View class="gap-1" testID="new-session-header">
+                <Text class="text-[18px] leading-7 font-semibold text-foreground">{`New session in ${p().name}`}</Text>
+                <View class="flex-row flex-wrap items-center gap-x-1.5" testID="new-session-line">
+                  <Text class={`text-[13px] leading-5 font-semibold ${agentColor(agentName())}`}>{agentName()}</Text>
+                  <Text class={T.meta}>·</Text>
+                  <Text class="text-[13px] leading-5 text-foreground">{modelName()}</Text>
+                  <If when={!!provider()}><Text class={T.meta}>{provider()}</Text></If>
+                  <Text class={T.meta}>·</Text>
+                  <Text class={T.sec}>{sessionDraft().effort || "default"}</Text>
+                  <Text class={T.meta}>·</Text>
+                  <Text class={T.meta}>{path()}</Text>
+                  <If when={!!branch()}><Text class={T.sec}>{`⌥ ${branch()}`}</Text></If>
+                </View>
+                <View class="flex-row flex-wrap items-center gap-x-1.5" testID="new-session-keys">
+                  <Each of={hints()} key={(h) => h.label}>
+                    {(h) => <Text class={T.meta}><Text class="font-semibold text-foreground-secondary">{h().k}</Text>{` ${h().label}`}</Text>}
+                  </Each>
+                </View>
+              </View>
+              <ContextSections sections={preview().sections} total={preview().total} estimated window={window()} />
+            </View>
+          </Scroll>
+        )}
+      </If>
     </View>
   );
 }
-void info;

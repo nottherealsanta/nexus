@@ -22,6 +22,13 @@ const PRIMARY: &str = "text.primary";
 const SECONDARY: &str = "text.secondary";
 const MUTED: &str = "text.muted";
 const ACCENT: &str = "interactive.accent";
+/// Assistant prose starts 3 cells in, aligned with the user text after the
+/// fold marker and its space (DESIGN_PLAN.md D04).
+const ASSISTANT_INDENT: usize = 3;
+/// Activity rows (groups, thoughts, tool calls) start 2 cells in; the two cells
+/// the tool rows already spent on their box or tree glyph stay, so a group's
+/// chevron sits above its members' glyphs (user choice, 2026-10-29).
+const ACTIVITY_INDENT: usize = 2;
 
 pub struct TLine {
     pub spans: Vec<Span<'static>>,
@@ -30,6 +37,11 @@ pub struct TLine {
     /// background spans the whole page width and the rail `▌` is drawn at its
     /// left edge in this style.
     pub rail: Option<Style>,
+    /// The line belongs to the focused block: the `▌` focus bar is drawn in
+    /// the gutter (there is no selection fill).
+    pub focus: bool,
+    /// Section heading identity, independent of its displayed text.
+    pub context_section: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +129,8 @@ struct Done {
 
 enum Activity<'a> {
     Thought(&'a crate::api::Message, usize, &'a Value),
+    /// Reasoning still streaming, owned by the model until its message arrives.
+    StreamingThought(&'a str),
     Tool {
         id: String,
         name: String,
@@ -132,13 +146,6 @@ struct ToolTrace {
 }
 
 pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
-    let thoughts = app
-        .state
-        .model
-        .selected
-        .as_ref()
-        .map(|view| reasoning_times(&view.events))
-        .unwrap_or_default();
     let mut b = Builder {
         app,
         t,
@@ -148,7 +155,6 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
         blocks: Vec::new(),
         turn: None,
         denied: HashSet::new(),
-        thoughts,
         live_groups: Vec::new(),
     };
     b.run();
@@ -163,6 +169,7 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
 /// Wall time per reasoning part, keyed by its summary text. Deltas are paired
 /// with the `part_done` that carries the same summary; a part whose summary
 /// arrived without deltas has no duration rather than an invented one.
+#[cfg(test)]
 fn reasoning_times(events: &[crate::api::Event]) -> HashMap<String, f64> {
     let mut out = HashMap::new();
     let mut start: Option<f64> = None;
@@ -208,8 +215,6 @@ struct Builder<'a> {
     blocks: Vec<Block>,
     turn: Option<usize>,
     denied: HashSet<String>,
-    /// Reasoning duration per summary text.
-    thoughts: HashMap<String, f64>,
     live_groups: Vec<String>,
 }
 
@@ -227,7 +232,8 @@ fn arg_json(args: &str) -> Option<Value> {
 
 pub(crate) fn is_notice(text: &str) -> bool {
     let t = text.trim_start();
-    t.starts_with("[Nexus notice:")
+    t.starts_with("→ Background Shell Done:")
+        || t.starts_with("[Nexus notice:")
         || t.starts_with("[Nexus recovery:")
         || t.starts_with("[Notification:")
 }
@@ -360,6 +366,7 @@ enum End {
 
 /// Seconds the model has been reasoning in the current step: from its first
 /// reasoning delta since the last boundary (text, tool, step or part end).
+#[cfg(test)]
 fn live_reasoning_secs(events: &[crate::api::Event], now: f64) -> Option<f64> {
     let mut start = None;
     for event in events {
@@ -402,6 +409,8 @@ impl Builder<'_> {
             spans,
             bg: None,
             rail: None,
+            focus: false,
+            context_section: None,
         });
     }
     fn blank(&mut self) {
@@ -426,10 +435,14 @@ impl Builder<'_> {
         }
         let end = self.out.len();
         if selected {
-            let sel = self.t.bg("interactive.selection");
-            for l in &mut self.out[start..end] {
-                if l.bg.is_none() {
-                    l.bg = Some(sel);
+            // No fill (the user's call, 2026-10-28): the focus bar in the
+            // gutter on every row, and the header row in bold.
+            for (k, l) in self.out[start..end].iter_mut().enumerate() {
+                l.focus = true;
+                if k == 0 && l.rail.is_none() {
+                    for sp in &mut l.spans {
+                        sp.style = sp.style.add_modifier(Modifier::BOLD);
+                    }
                 }
             }
         }
@@ -507,6 +520,7 @@ impl Builder<'_> {
         else {
             return;
         };
+        self.blank();
         let busy = self.app.is_busy(&view.session_id);
 
         // Tool results, by call id.
@@ -586,7 +600,7 @@ impl Builder<'_> {
         }
 
         let turns = self.turn_meta(view, busy);
-        self.context_section(view, turns.is_empty());
+        self.context_section(view);
         if view.messages_more {
             self.block("older-messages", BlockKind::Older, None, false, |b| {
                 b.line(vec![Span::styled(
@@ -651,15 +665,36 @@ impl Builder<'_> {
         let mut turn_no = 0usize;
         let mut folded = false;
         let mut activity = Vec::new();
+        let mut background_notices = Vec::new();
         for (_, _, item) in &items {
+            let background = match item {
+                Item::Msg(m) if m.role == "user" => parts_text(m)
+                    .trim_start()
+                    .starts_with("→ Background Shell Done:"),
+                _ => false,
+            };
+            if !background && !matches!(item, Item::Ev(e) if !is_diagnostic(e)) {
+                self.background_notices(&mut background_notices);
+            }
             match item {
                 Item::Msg(m) => {
                     if m.role == "user" {
-                        self.activity_group(&mut activity, &results, &traces, &waiting, busy);
+                        self.activity_group(
+                            &mut activity,
+                            &results,
+                            &traces,
+                            &waiting,
+                            busy,
+                            false,
+                        );
                         let text = parts_text(m);
                         if is_notice(&text) {
                             if !folded {
-                                self.notice(m, &text);
+                                if background {
+                                    background_notices.push((m.id.clone(), text));
+                                } else {
+                                    self.notice(m, &text);
+                                }
                             }
                             continue;
                         }
@@ -705,11 +740,24 @@ impl Builder<'_> {
                                         &traces,
                                         &waiting,
                                         busy,
+                                        false,
                                     );
                                     self.assistant_block(&format!("{}-{pi}", m.id), &text, false);
                                 }
                             }
-                            "reasoning" => activity.push(Activity::Thought(m, pi, p)),
+                            "reasoning" => {
+                                if ends_with_edit(&activity) {
+                                    self.activity_group(
+                                        &mut activity,
+                                        &results,
+                                        &traces,
+                                        &waiting,
+                                        busy,
+                                        false,
+                                    );
+                                }
+                                activity.push(Activity::Thought(m, pi, p));
+                            }
                             "tool_call" => {
                                 let call_id = json_str(&p["id"]);
                                 let name = json_str(&p["name"]);
@@ -720,9 +768,23 @@ impl Builder<'_> {
                                         &traces,
                                         &waiting,
                                         busy,
+                                        false,
                                     );
                                     self.child_card(&call_id, &json_str(&p["arguments"]), &results);
                                 } else {
+                                    // File changes are their own group, apart from reads and commands.
+                                    if !activity.is_empty()
+                                        && ends_with_edit(&activity) != is_edit_tool(&name)
+                                    {
+                                        self.activity_group(
+                                            &mut activity,
+                                            &results,
+                                            &traces,
+                                            &waiting,
+                                            busy,
+                                            false,
+                                        );
+                                    }
                                     activity.push(Activity::Tool {
                                         id: call_id,
                                         name,
@@ -736,7 +798,14 @@ impl Builder<'_> {
                 }
                 Item::Ev(e) => {
                     if !folded && is_diagnostic(e) {
-                        self.activity_group(&mut activity, &results, &traces, &waiting, busy);
+                        self.activity_group(
+                            &mut activity,
+                            &results,
+                            &traces,
+                            &waiting,
+                            busy,
+                            false,
+                        );
                     }
                     if !folded {
                         self.diagnostic(e);
@@ -744,56 +813,26 @@ impl Builder<'_> {
                 }
             }
         }
-        self.activity_group(&mut activity, &results, &traces, &waiting, busy);
+        self.background_notices(&mut background_notices);
+        // Reasoning that is still streaming belongs to the live activity group:
+        // it is the newest member until its message arrives (D06/D07).
+        let streaming = self.app.state.model.streaming.get(&view.session_id);
+        if let Some(reasoning) = streaming
+            .map(|s| s.reasoning.as_str())
+            .filter(|text| !text.trim().is_empty())
+        {
+            if ends_with_edit(&activity) {
+                self.activity_group(&mut activity, &results, &traces, &waiting, busy, false);
+            }
+            activity.push(Activity::StreamingThought(reasoning));
+        }
+        self.activity_group(&mut activity, &results, &traces, &waiting, busy, true);
         if turn_open && !folded {
             self.turn_footer(turn_no, &turns);
         }
 
         // Live stream of the current step.
         if let Some(s) = self.app.state.model.streaming.get(&view.session_id) {
-            if !s.reasoning.is_empty() {
-                self.block(
-                    "streaming-reasoning",
-                    BlockKind::Reasoning,
-                    self.turn,
-                    false,
-                    |b| {
-                        // `▾ Thinking… 2.4s`, the last 5 rows behind `┃`, and
-                        // `│ … N earlier lines` above them (D07).
-                        let muted = b.meta();
-                        let italic = muted.add_modifier(Modifier::ITALIC);
-                        let strong = b.st("border.strong", CANVAS);
-                        let weak = b.st("border.default", CANVAS);
-                        let mut head = vec![
-                            Span::styled(format!("{} ", b.t.fold(true)), muted),
-                            Span::styled(
-                                format!("Thinking{}", b.ell()),
-                                muted.add_modifier(Modifier::BOLD),
-                            ),
-                        ];
-                        if let Some(secs) =
-                            live_reasoning_secs(&view.events, crate::app::now_secs())
-                        {
-                            head.push(Span::styled(format!(" {}", fmt_duration(secs)), muted));
-                        }
-                        b.line(head);
-                        let rows = text::wrap(&s.reasoning, b.bw.saturating_sub(4).max(1));
-                        let hidden = rows.len().saturating_sub(5);
-                        if hidden > 0 {
-                            b.line(vec![
-                                Span::styled(format!("  {} ", b.t.structure("rail")), weak),
-                                Span::styled(format!("{} {hidden} earlier lines", b.ell()), muted),
-                            ]);
-                        }
-                        for row in rows.into_iter().skip(hidden) {
-                            b.line(vec![
-                                Span::styled(format!("  {} ", b.t.structure("rail_heavy")), strong),
-                                Span::styled(row, italic),
-                            ]);
-                        }
-                    },
-                );
-            }
             if !s.text.is_empty() {
                 self.block(
                     "streaming-text",
@@ -801,33 +840,40 @@ impl Builder<'_> {
                     self.turn,
                     false,
                     |b| {
+                        let full = b.bw;
+                        b.bw = full.saturating_sub(ASSISTANT_INDENT).max(1);
                         for row in text::wrap(&s.text, b.bw) {
-                            b.line(vec![Span::styled(row, b.primary())]);
+                            if row.is_empty() {
+                                b.line(Vec::new());
+                            } else {
+                                b.line(vec![
+                                    Span::raw(" ".repeat(ASSISTANT_INDENT)),
+                                    Span::styled(row, b.primary()),
+                                ]);
+                            }
                         }
+                        b.bw = full;
                     },
                 );
-            }
-            if busy {
-                self.line(vec![Span::styled(
-                    format!("{} working{}", self.t.spinner(self.frame / 2), self.ell()),
-                    self.meta(),
-                )]);
             }
         }
         // Trim trailing blanks.
         while self.out.last().is_some_and(|l| l.spans.is_empty()) {
             self.out.pop();
         }
+        if busy && !self.out.is_empty() {
+            for _ in 0..3 {
+                self.blank();
+            }
+        }
     }
 
     // -- context ---------------------------------------------------------------
 
-    fn context_section(&mut self, view: &crate::reduce::SelectedView, no_turns: bool) {
+    fn context_section(&mut self, view: &crate::reduce::SelectedView) {
         use crate::paint::{CtxBody, CtxLayout, CtxRole, CtxSection};
         let Some(s) = &view.starting else { return };
         let key = format!("context:{}", view.session_id);
-        // Expanded before the first turn; folded to one line once the session has content.
-        let open = self.is_open(&key, no_turns);
         let sys = s["system_prompt"].as_str().unwrap_or("");
         let names: Vec<&str> = s["tools"]
             .as_array()
@@ -851,7 +897,6 @@ impl Builder<'_> {
         let total = sys_tokens + tool_tokens;
         let window = self.context_window();
         let sep = self.sep();
-        let first_prompt_line = crate::paint::first_prompt_line(sys);
         let agent_name = agent["name"].as_str().unwrap_or("?");
         let file_path = file["path"].as_str().unwrap_or("");
         let file_title = std::path::Path::new(file_path).file_name().map_or_else(
@@ -872,7 +917,7 @@ impl Builder<'_> {
                 sys.lines().count(),
                 if sys.lines().count() == 1 { "" } else { "s" }
             ),
-            body: CtxBody::Preview(first_prompt_line),
+            body: CtxBody::None,
         }];
         // Status and the one-line fact first, so a narrow page clips the path.
         let mut meta = file_status;
@@ -906,21 +951,12 @@ impl Builder<'_> {
                     .collect(),
             ),
         });
-        let children: Vec<(String, bool)> = s["child_agents"]
-            .as_array()
-            .map(|v| {
-                v.iter()
-                    .filter_map(|c| c["name"].as_str())
-                    .map(|n| (n.to_owned(), true))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !children.is_empty() {
+        for title in ["Skills", "MCP"] {
             sections.push(CtxSection {
-                title: "Child agents".into(),
+                title: title.into(),
                 tokens: None,
-                meta: format!("{} agents", children.len()),
-                body: CtxBody::Grid(children),
+                meta: "not available yet".into(),
+                body: CtxBody::None,
             });
         }
         if s["workspace"]["active"].as_bool().unwrap_or(false) {
@@ -931,25 +967,14 @@ impl Builder<'_> {
                 body: CtxBody::None,
             });
         }
-        let (title, folded) = crate::paint::context_folded(sections.len(), total, true, &sep);
-        let mut header = vec![
-            Span::styled(format!("{} ", self.t.fold(open)), self.st(MUTED, CANVAS)),
-            Span::styled(
-                title,
-                self.st(SECONDARY, CANVAS).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(folded, self.meta()),
-        ];
-        if s["origin"].as_str() == Some("reconstructed") {
-            header.push(Span::styled(
-                sep.clone() + "reconstructed",
-                self.st("status.warning", CANVAS),
-            ));
-        }
-        self.block(key.clone(), BlockKind::Context, None, true, |b| {
-            b.row(header, Vec::new());
-            if !open {
-                return;
+        let reconstructed = s["origin"].as_str() == Some("reconstructed");
+        let warn = self.st("status.warning", CANVAS);
+        self.block(key.clone(), BlockKind::Context, None, false, |b| {
+            if reconstructed {
+                b.row(
+                    vec![Span::styled("reconstructed", warn)],
+                    Vec::new(),
+                );
             }
             let layout = CtxLayout {
                 width: b.bw.min(100).saturating_sub(2),
@@ -961,20 +986,24 @@ impl Builder<'_> {
             };
             let rows = crate::paint::context_rows(&sections, total, &layout);
             for row in rows {
+                let section = row.iter().find_map(|(text, role)| {
+                    (*role == CtxRole::Title).then(|| text.trim().to_owned())
+                });
                 let mut spans = vec![Span::raw("  ".to_owned())];
                 for (text, role) in row {
                     let style = match role {
                         CtxRole::Mark | CtxRole::Meta | CtxRole::Preview => b.meta(),
                         CtxRole::Title | CtxRole::TotalLabel => {
-                            b.primary().add_modifier(Modifier::BOLD)
+                            b.secondary().add_modifier(Modifier::BOLD)
                         }
                         CtxRole::Tokens | CtxRole::Item => b.secondary(),
                         CtxRole::ItemOff => b.meta().add_modifier(Modifier::CROSSED_OUT),
-                        CtxRole::TotalFigure => b.primary(),
+                        CtxRole::TotalFigure => b.secondary(),
                     };
                     spans.push(Span::styled(text, style));
                 }
                 b.line(if spans.len() == 1 { Vec::new() } else { spans });
+                b.out.last_mut().unwrap().context_section = section;
             }
         });
     }
@@ -1138,6 +1167,8 @@ impl Builder<'_> {
                 spans: vec![Span::styled(" ", bg)],
                 bg: Some(bg),
                 rail: Some(rail),
+                focus: false,
+                context_section: None,
             };
             if !folded {
                 b.out.push(pad());
@@ -1173,9 +1204,27 @@ impl Builder<'_> {
                     spans,
                     bg: Some(bg),
                     rail: Some(rail),
+                    focus: false,
+                    context_section: None,
                 });
             }
             if !folded {
+                for image in message.parts.iter().filter(|p| p["type"] == "image") {
+                    let name = image["name"].as_str().unwrap_or("image");
+                    b.out.push(TLine {
+                        spans: vec![
+                            Span::styled("   ", bg),
+                            Span::styled(
+                                format!("Image | {name} "),
+                                b.st(PRIMARY, "surface.panel"),
+                            ),
+                        ],
+                        bg: Some(bg),
+                        rail: Some(rail),
+                        focus: false,
+                        context_section: None,
+                    });
+                }
                 b.out.push(pad());
             }
         });
@@ -1246,23 +1295,8 @@ impl Builder<'_> {
         }
     }
 
-    /// The turn's price from the catalog (USD per million tokens), when the
-    /// model is listed with prices: uncached input, cached input and output
-    /// (reasoning tokens are billed as output and already counted there).
-    fn turn_cost(&self, meta: &TurnMeta) -> Option<String> {
-        let used = meta.models.last()?;
-        let entry = crate::stats::catalog_entry(&self.app.state.models, used)?;
-        let price = crate::stats::price_of(entry)?;
-        Some(crate::stats::money(crate::stats::cost(
-            price,
-            meta.input,
-            meta.cached,
-            meta.output,
-        )))
-    }
-
     /// The turn footer (DESIGN_PLAN.md D05): right-aligned
-    /// `▪ Agent · models · effort · tools · duration · tokens · cost`, with no
+    /// `Agent · models · effort · tools · duration · tokens`, with no
     /// end status. An interrupted turn adds the `/continue` hint after it, a
     /// failed turn puts the first line of its error on the row above.
     fn turn_footer(&mut self, n: usize, turns: &[TurnMeta]) {
@@ -1314,16 +1348,14 @@ impl Builder<'_> {
         }
         bits.push(fmt_duration(meta.duration()));
         if meta.has_usage() {
-            bits.push(format!("{} in", fmt_count(meta.input)));
-            if meta.cached > 0 {
-                bits.push(format!("{} cached", fmt_count(meta.cached)));
-            }
-            bits.push(format!("{} out", fmt_count(meta.output)));
-            if meta.reasoning > 0 {
-                bits.push(format!("{} reasoning", fmt_count(meta.reasoning)));
-            }
-            if let Some(cost) = self.turn_cost(meta) {
-                bits.push(cost);
+            bits.push(format!("{} i", fmt_count(meta.input)));
+            bits.push(format!("{} o", fmt_count(meta.output)));
+            bits.push(format!("{} r", fmt_count(meta.reasoning)));
+            if meta.input > 0 {
+                bits.push(format!(
+                    "{:.0}% c",
+                    100.0 * meta.cached as f64 / meta.input as f64
+                ));
             }
         }
         if matches!(end, End::Interrupted | End::StepLimit) {
@@ -1339,7 +1371,6 @@ impl Builder<'_> {
             .next()
             .map(|c| c.to_uppercase().collect::<String>() + &agent[c.len_utf8()..])
             .unwrap_or_default();
-        let glyph = if self.t.opts.ascii { "*" } else { "\u{25aa}" };
         let sep = self.sep();
         let sep_w = width(&sep);
 
@@ -1348,14 +1379,10 @@ impl Builder<'_> {
         let mut used = 0usize;
         if !label.is_empty() {
             rows[0].push(Span::styled(
-                format!("{glyph} "),
-                self.st(MUTED, CANVAS).patch(self.t.agent_style(&agent)),
-            ));
-            rows[0].push(Span::styled(
                 label.clone(),
-                self.primary().add_modifier(Modifier::BOLD),
+                self.t.agent_style(&agent).add_modifier(Modifier::BOLD),
             ));
-            used = width(glyph) + 1 + width(&label);
+            used = width(&label);
         }
         for bit in bits {
             let w = width(&bit);
@@ -1402,6 +1429,39 @@ impl Builder<'_> {
 
     // -- items -----------------------------------------------------------------
 
+    fn background_notices(&mut self, notices: &mut Vec<(String, String)>) {
+        if notices.is_empty() {
+            return;
+        }
+        let key = format!("notice:{}", notices[0].0);
+        let open = self.is_open(&key, false);
+        let label = if notices.len() == 1 {
+            format!("{} · show full output", first_line(&notices[0].1))
+        } else {
+            format!(
+                "→ {} background shells done · show full output",
+                notices.len()
+            )
+        };
+        let st = self.t.role_style("context_notice");
+        self.block(key, BlockKind::Notice, self.turn, true, |b| {
+            let marker = format!("{} ", b.t.fold(open));
+            let label = truncate(&label, b.bw.saturating_sub(width(&marker)), b.ell());
+            b.line(vec![
+                Span::styled(marker, b.meta()),
+                Span::styled(label, b.meta()),
+            ]);
+            if open {
+                for (_, text) in notices.iter() {
+                    for row in text::wrap(text, b.bw.saturating_sub(2)) {
+                        b.line(vec![Span::raw("  "), Span::styled(row, st)]);
+                    }
+                }
+            }
+        });
+        notices.clear();
+    }
+
     fn notice(&mut self, m: &crate::api::Message, text: &str) {
         let key = format!("notice:{}", m.id);
         let kind = if text.contains("recovery") {
@@ -1425,6 +1485,8 @@ impl Builder<'_> {
                 ],
                 bg: Some(bgst),
                 rail: None,
+                focus: false,
+                context_section: None,
             });
             for row in text::wrap(text, b.bw.saturating_sub(2)) {
                 b.out.push(TLine {
@@ -1434,6 +1496,8 @@ impl Builder<'_> {
                     ],
                     bg: Some(bgst),
                     rail: None,
+                    focus: false,
+                    context_section: None,
                 });
             }
         });
@@ -1452,12 +1516,22 @@ impl Builder<'_> {
         let _ = streaming;
         let block_start = self.blocks.len();
         self.block(k.clone(), BlockKind::Assistant, self.turn, true, |b| {
+            let start = b.out.len();
+            let width = b.bw;
+            b.bw = width.saturating_sub(ASSISTANT_INDENT).max(1);
             b.markdown(&body, &k, text);
             if !open {
                 b.line(vec![Span::styled(
                     format!("  show all ({} lines)", text.lines().count()),
                     b.meta(),
                 )]);
+            }
+            b.bw = width;
+            for line in &mut b.out[start..] {
+                if !line.spans.is_empty() {
+                    line.spans
+                        .insert(0, Span::raw(" ".repeat(ASSISTANT_INDENT)));
+                }
             }
         });
         if self.blocks.len() > block_start {
@@ -1474,19 +1548,31 @@ impl Builder<'_> {
         traces: &HashMap<String, ToolTrace>,
         waiting: &HashMap<String, String>,
         busy: bool,
+        trailing: bool,
     ) {
         if activity.is_empty() {
             return;
         }
-        // A lone thought is its own `▸ Thought for 2.1s · preview` row (D07).
-        if let [Activity::Thought(m, i, p)] = activity.as_slice() {
-            let secs = self.thoughts.get(&json_str(&p["summary"])).copied();
-            self.reasoning_block(m, *i, p, None, secs);
+        // A run of thoughts alone is not a group: each is its own row (D07).
+        let has_tool = activity.iter().any(|a| matches!(a, Activity::Tool { .. }));
+        if !has_tool {
+            let last = activity.len() - 1;
+            for (index, item) in activity.iter().enumerate() {
+                match item {
+                    Activity::Thought(m, i, p) => self.reasoning_block(m, *i, p, None),
+                    Activity::StreamingThought(text) => self.streaming_reasoning_block(None, text),
+                    Activity::Tool { .. } => unreachable!(),
+                }
+                if index < last {
+                    self.out.pop();
+                }
+            }
             activity.clear();
             return;
         }
         let first = match &activity[0] {
             Activity::Thought(m, i, _) => format!("reason:{}:{i}", m.id),
+            Activity::StreamingThought(_) => "reason:streaming".to_owned(),
             Activity::Tool { id, .. } => format!("tool:{id}"),
         };
         let key = format!("group:{first}");
@@ -1500,74 +1586,66 @@ impl Builder<'_> {
         let has_wait = activity
             .iter()
             .any(|a| matches!(a, Activity::Tool { id, .. } if waiting.contains_key(id)));
-        let running = has_wait || (busy && activity.iter().any(|a| matches!(a, Activity::Tool { id, .. } if !results.contains_key(id) && !traces.get(id).is_some_and(|t| t.end.is_some()))));
+        let streaming = activity
+            .iter()
+            .any(|a| matches!(a, Activity::StreamingThought(_)));
+        let running = streaming
+            || has_wait
+            || (busy && trailing)
+            || (busy
+                && activity.iter().any(|a| matches!(a, Activity::Tool { id, .. } if !results.contains_key(id) && !traces.get(id).is_some_and(|t| t.end.is_some()))));
         if running {
             self.live_groups.push(key.clone());
         }
-        let default_open = running || has_wait || self.app.ui.detail != crate::ui::Detail::Low;
+        // A finished group folds to its verb summary. While it runs, medium
+        // detail keeps the newest five members visible (D06); high detail opens
+        // every member, and low keeps a single `Working` row.
+        let detail = self.app.ui.detail;
+        let explicit = self
+            .app
+            .ui
+            .timeline_open
+            .get(&key)
+            .copied()
+            .unwrap_or(false);
+        let default_open = has_wait
+            || detail == crate::ui::Detail::High
+            || (running && detail != crate::ui::Detail::Low);
         let open = has_wait || self.is_open(&key, default_open);
-        let tree_mode = running
-            && !self
-                .app
-                .ui
-                .timeline_open
-                .get(&key)
-                .copied()
-                .unwrap_or(false);
-        let clip_live = running
-            && !has_wait
-            && !self
-                .app
-                .ui
-                .timeline_open
-                .get(&key)
-                .copied()
-                .unwrap_or(false);
-        let mut starts = Vec::new();
-        let mut ends = Vec::new();
+        let clip_live = running && !has_wait && detail != crate::ui::Detail::High && !explicit;
         // Verb labels in first-seen order, with their counts.
         let mut order: Vec<&str> = Vec::new();
         let mut counts = std::collections::BTreeMap::<&str, usize>::new();
         let mut unknown = std::collections::BTreeSet::<&str>::new();
-        let mut thought_secs = 0.0_f64;
-        let mut failed = 0;
         let mut denied_count = 0;
+        let mut edit_files = std::collections::BTreeSet::<String>::new();
         let (mut added, mut removed, mut edits) = (0usize, 0usize, false);
         for item in activity.iter() {
             let label = match item {
-                Activity::Thought(_, _, p) => {
-                    if let Some(secs) = self.thoughts.get(&json_str(&p["summary"])) {
-                        thought_secs += *secs;
-                    }
-                    "Thought"
-                }
+                Activity::Thought(_, _, _) => "Thought",
+                Activity::StreamingThought(_) => "Thought",
                 Activity::Tool { id, name, args } => {
-                    if let Some(trace) = traces.get(id) {
-                        if let Some(start) = trace.start {
-                            starts.push(start);
-                        }
-                        if let Some(end) = trace.end {
-                            ends.push(end);
-                        }
-                    }
                     let failure = results.get(id).is_some_and(|d| d.is_error)
                         || traces.get(id).is_some_and(|t| t.error.is_some());
                     if self.denied.contains(id) {
                         denied_count += 1;
-                    } else if failure {
-                        failed += 1;
-                    } else if matches!(name.as_str(), "edit" | "patch") {
+                    } else if !failure && is_edit_tool(name) {
                         if let Some((a, r)) = diff_counts(args) {
                             added += a;
                             removed += r;
                             edits = true;
                         }
                     }
+                    if is_edit_tool(name) {
+                        let path = arg_json(args)
+                            .and_then(|a| a["path"].as_str().map(str::to_owned))
+                            .unwrap_or_else(|| id.clone());
+                        edit_files.insert(path);
+                    }
                     match name.as_str() {
                         "bash" => "Ran command",
                         "read" => "Read file",
-                        "edit" => "Edited file",
-                        "write" => "Wrote file",
+                        "edit" | "patch" | "write" => "Edited file",
                         "code" => "Ran cell",
                         "ask" => "Asked question",
                         "web_search" => "Searched time",
@@ -1591,13 +1669,13 @@ impl Builder<'_> {
             order
                 .iter()
                 .map(|label| {
-                    let count = counts[label];
+                    let count = if *label == "Edited file" {
+                        edit_files.len().max(1)
+                    } else {
+                        counts[label]
+                    };
                     if *label == "Thought" {
-                        return if thought_secs > 0.0 {
-                            format!("Thought for {}", fmt_duration(thought_secs))
-                        } else {
-                            "Thought".to_owned()
-                        };
+                        return "Thought".to_owned();
                     }
                     if *label == "Used tool" && unknown.len() == 1 {
                         return format!("Used {}", unknown.iter().next().unwrap());
@@ -1617,35 +1695,17 @@ impl Builder<'_> {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let duration = if running {
-            starts
-                .iter()
-                .copied()
-                .reduce(f64::min)
-                .map(|start| (crate::app::now_secs() - start).max(0.0))
-        } else if !starts.is_empty() && !ends.is_empty() {
-            let start = starts.into_iter().fold(f64::INFINITY, f64::min);
-            let end = ends.into_iter().fold(f64::NEG_INFINITY, f64::max);
-            (end >= start).then_some(end - start)
-        } else {
-            None
-        };
-        let agent = self
-            .app
-            .viewed()
-            .map(|s| s.agent.clone())
-            .unwrap_or_default();
         self.block(key, BlockKind::Group, self.turn, !has_wait, |b| {
             let marker = Span::styled(
-                format!("{} ", b.t.fold(open)),
+                format!("{}{} ", " ".repeat(ACTIVITY_INDENT), b.t.fold(open)),
                 if flash {
                     b.st(ACCENT, CANVAS).add_modifier(Modifier::BOLD)
                 } else {
                     b.meta()
                 },
             );
-            // Edit counts and failures stay whole: a narrow row shortens the
-            // summary, never the `✕ 1 failed` that must be visible when folded.
+            // Edit counts stay whole: a narrow row shortens the
+            // summary, never the +/- counts.
             let mut tail: Vec<Span<'static>> = Vec::new();
             if edits {
                 tail.push(Span::styled(
@@ -1666,19 +1726,9 @@ impl Builder<'_> {
                     b.meta(),
                 ));
             }
-            if failed > 0 {
-                tail.push(Span::styled(
-                    format!("{}{} {failed} failed", b.sep(), b.t.status("error").0),
-                    b.st("status.error", CANVAS),
-                ));
-            }
-            let right = duration
-                .map(|d| vec![Span::styled(fmt_duration(d), b.meta())])
-                .unwrap_or_default();
             let fixed: usize = [&marker]
                 .into_iter()
                 .chain(tail.iter())
-                .chain(right.iter())
                 .map(|s| width(s.content.as_ref()))
                 .sum();
             let room = b.bw.saturating_sub(fixed + 1);
@@ -1694,7 +1744,16 @@ impl Builder<'_> {
                     b.frame,
                     true,
                     b.meta(),
-                    b.t.agent_style(&agent),
+                    b.secondary(),
+                ));
+            } else if !running && order == ["Edited file"] {
+                // `Edited 7 files`: the count in white.
+                let n = edit_files.len().max(1);
+                left.push(Span::styled("Edited ", b.meta()));
+                left.push(Span::styled(n.to_string(), b.primary()));
+                left.push(Span::styled(
+                    if n == 1 { " file" } else { " files" },
+                    b.meta(),
                 ));
             } else {
                 left.push(Span::styled(
@@ -1703,7 +1762,7 @@ impl Builder<'_> {
                 ));
             }
             left.extend(tail);
-            b.row(left, right);
+            b.row(left, Vec::new());
         });
         if let Some(block) = self.blocks.last_mut() {
             block.default_open = Some(default_open);
@@ -1718,18 +1777,19 @@ impl Builder<'_> {
             };
             if skipped > 0 {
                 self.line(vec![Span::styled(
-                    format!("  {} {skipped} earlier", self.ell()),
+                    format!(
+                        "{}{} {skipped} earlier",
+                        " ".repeat(ACTIVITY_INDENT + 2),
+                        self.ell()
+                    ),
                     self.meta(),
                 )]);
             }
-            let _ = tree_mode;
             for (index, item) in activity.iter().enumerate().skip(skipped) {
                 let tree = Some(index + 1 == activity.len());
                 match item {
-                    Activity::Thought(m, i, p) => {
-                        let secs = self.thoughts.get(&json_str(&p["summary"])).copied();
-                        self.reasoning_block(m, *i, p, tree, secs)
-                    }
+                    Activity::Thought(m, i, p) => self.reasoning_block(m, *i, p, tree),
+                    Activity::StreamingThought(text) => self.streaming_reasoning_block(tree, text),
                     Activity::Tool { id, name, args } => self.tool_block(
                         &format!("tool:{id}"),
                         self.turn,
@@ -1749,7 +1809,7 @@ impl Builder<'_> {
         activity.clear();
     }
 
-    /// `▸ Thought for 2.1s · preview` (D07). Open: the summary in italics
+    /// `▸ Thought · preview` (D07). Open: the summary in italics
     /// behind a `│` rail. Encrypted: labelled, with no expansion.
     fn reasoning_block(
         &mut self,
@@ -1757,7 +1817,6 @@ impl Builder<'_> {
         pi: usize,
         p: &Value,
         tree: Option<bool>,
-        seconds: Option<f64>,
     ) {
         let key = format!("reason:{}:{pi}", m.id);
         let summary = json_str(&p["summary"]);
@@ -1770,10 +1829,11 @@ impl Builder<'_> {
         let rail = self.st("border.default", CANVAS);
         let vbar = self.t.structure("rail").to_owned();
         self.block(key, BlockKind::Reasoning, self.turn, !encrypted, |b| {
+            let pad = " ".repeat(ACTIVITY_INDENT);
             let prefix = match tree {
-                Some(true) => format!("  {} ", b.t.structure("tree_end")),
-                Some(false) => format!("  {} ", b.t.structure("tree_mid")),
-                None => format!("{} ", b.t.fold(open)),
+                Some(true) => format!("{pad}  {} ", b.t.structure("tree_end")),
+                Some(false) => format!("{pad}  {} ", b.t.structure("tree_mid")),
+                None => format!("{pad}{} ", b.t.fold(open)),
             };
             let mut head = vec![
                 Span::styled(
@@ -1782,12 +1842,6 @@ impl Builder<'_> {
                 ),
                 Span::styled(label.clone(), muted.add_modifier(Modifier::BOLD)),
             ];
-            if let Some(seconds) = seconds {
-                head.push(Span::styled(
-                    format!(" for {}", fmt_duration(seconds)),
-                    muted,
-                ));
-            }
             if !open {
                 let preview = if encrypted {
                     "encrypted, replayed to the provider".to_owned()
@@ -1806,9 +1860,59 @@ impl Builder<'_> {
             }
             b.line(head);
             if open {
-                let indent = if tree.is_some() { "    " } else { "  " };
+                let indent =
+                    " ".repeat(ACTIVITY_INDENT + if tree.is_some() { 4 } else { 2 });
                 let room = b.bw.saturating_sub(indent.len() + 2).max(1);
                 for row in text::wrap(&summary, room) {
+                    b.line(vec![
+                        Span::styled(format!("{indent}{vbar} "), rail),
+                        Span::styled(row, italic),
+                    ]);
+                }
+            }
+        });
+    }
+
+    /// The thought still arriving: the reasoning row of `reasoning_block`,
+    /// open by default so the live text shows.
+    fn streaming_reasoning_block(&mut self, tree: Option<bool>, text: &str) {
+        let key = "reason:streaming".to_owned();
+        let open = self.is_open(&key, true);
+        let label = self.t.role("reasoning").label.clone();
+        let muted = self.meta();
+        let italic = muted.add_modifier(Modifier::ITALIC);
+        let tree_style = self.st("border.default", CANVAS);
+        let rail = self.st("border.default", CANVAS);
+        let vbar = self.t.structure("rail").to_owned();
+        self.block(key, BlockKind::Reasoning, self.turn, true, |b| {
+            let pad = " ".repeat(ACTIVITY_INDENT);
+            let prefix = match tree {
+                Some(true) => format!("{pad}  {} ", b.t.structure("tree_end")),
+                Some(false) => format!("{pad}  {} ", b.t.structure("tree_mid")),
+                None => format!("{pad}{} ", b.t.fold(open)),
+            };
+            let mut head = vec![
+                Span::styled(prefix, if tree.is_some() { tree_style } else { muted }),
+                Span::styled(label, muted.add_modifier(Modifier::BOLD)),
+            ];
+            if !open {
+                let preview = first_line(text);
+                if !preview.is_empty() {
+                    let used: usize = head.iter().map(|s| width(s.content.as_ref())).sum();
+                    let sep = b.sep();
+                    let room = b.bw.saturating_sub(used + width(&sep));
+                    if room > 3 {
+                        head.push(Span::styled(sep, muted));
+                        head.push(Span::styled(truncate(&preview, room, b.ell()), italic));
+                    }
+                }
+            }
+            b.line(head);
+            if open {
+                let indent =
+                    " ".repeat(ACTIVITY_INDENT + if tree.is_some() { 4 } else { 2 });
+                let room = b.bw.saturating_sub(indent.len() + 2).max(1);
+                for row in text::wrap(text, room) {
                     b.line(vec![
                         Span::styled(format!("{indent}{vbar} "), rail),
                         Span::styled(row, italic),
@@ -1843,12 +1947,17 @@ impl Builder<'_> {
             && (done.is_some_and(|d| d.is_error) || trace.is_some_and(|t| t.error.is_some()));
         let busy = self.app.viewed_id().is_some_and(|id| self.app.is_busy(id));
         let running = busy && done.is_none() && !trace.is_some_and(|t| t.end.is_some());
-        let duration = trace.and_then(|t| {
-            let start = t.start?;
-            let end = t.end.or_else(|| busy.then(crate::app::now_secs))?;
-            Some((end - start).max(0.0))
-        });
-        let (arg, summary) = tool_summary(name, args, done);
+        let duration = trace
+            .and_then(|t| {
+                let start = t.start?;
+                let end = t.end.or_else(|| busy.then(crate::app::now_secs))?;
+                Some((end - start).max(0.0))
+            })
+            .filter(|seconds| name == "bash" && *seconds >= 1.0);
+        let (mut arg, summary) = tool_summary(name, args, done);
+        if name == "bash" {
+            arg = preview_80(&arg);
+        }
         let exit_code = (name == "bash")
             .then(|| done.and_then(|d| bash_exit_code(&d.output)))
             .flatten()
@@ -1965,8 +2074,8 @@ impl Builder<'_> {
                     .filter(|l| !l.is_empty())
                 {
                     left.push(Span::styled(
-                        format!("  {line}"),
-                        b.st("status.error", CANVAS),
+                        format!("  {}", preview_80(&line)),
+                        b.secondary(),
                     ));
                 }
             } else if let Some(parts) = summary.filter(|_| !is_waiting && !denied && name != "bash")
@@ -2268,6 +2377,8 @@ impl Builder<'_> {
                     },
                     bg: Some(bgst),
                     rail: None,
+                    focus: false,
+                    context_section: None,
                 });
                 let body = if let Some(d) = done {
                     let lines: Vec<&str> =
@@ -2296,6 +2407,8 @@ impl Builder<'_> {
                             ],
                             bg: Some(bgst),
                             rail: None,
+                            focus: false,
+                            context_section: None,
                         });
                     }
                 }
@@ -2631,8 +2744,25 @@ fn msg_index(view: &crate::reduce::SelectedView, id: &str) -> usize {
 fn parts_text(m: &crate::api::Message) -> String {
     m.parts
         .iter()
-        .filter(|p| p["type"] == "text")
-        .map(|p| p["text"].as_str().unwrap_or(""))
+        .enumerate()
+        .filter(|(i, p)| {
+            if p["type"] != "text" {
+                return false;
+            }
+            let image_index = m.parts[..*i]
+                .iter()
+                .filter(|part| part["type"] == "image")
+                .count();
+            let marker = format!(
+                "[Image {}]",
+                char::from(b'A'.saturating_add(image_index as u8))
+            );
+            !(m.parts
+                .get(i + 1)
+                .is_some_and(|next| next["type"] == "image")
+                && p["text"].as_str() == Some(marker.as_str()))
+        })
+        .map(|(_, p)| p["text"].as_str().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -2643,6 +2773,15 @@ fn first_line(s: &str) -> String {
         .find(|l| !l.is_empty())
         .unwrap_or("")
         .to_owned()
+}
+
+fn preview_80(s: &str) -> String {
+    let mut chars = s.chars();
+    let mut preview: String = chars.by_ref().take(80).collect();
+    if chars.next().is_some() {
+        preview.push_str("...");
+    }
+    preview
 }
 
 fn numbered(s: &str) -> Option<(String, &str)> {
@@ -2719,6 +2858,14 @@ fn strip_inline(s: &str) -> String {
     out
 }
 
+fn is_edit_tool(name: &str) -> bool {
+    matches!(name, "edit" | "patch" | "write")
+}
+
+fn ends_with_edit(activity: &[Activity<'_>]) -> bool {
+    matches!(activity.last(), Some(Activity::Tool { name, .. }) if is_edit_tool(name))
+}
+
 fn diff_counts(args: &str) -> Option<(usize, usize)> {
     let a = arg_json(args)?;
     if let Some(patch) = a["patch"].as_str() {
@@ -2732,6 +2879,9 @@ fn diff_counts(args: &str) -> Option<(usize, usize)> {
             }
         }
         return Some((add, del));
+    }
+    if let Some(content) = a["content"].as_str() {
+        return Some((content.lines().count(), 0));
     }
     let old = a["old_string"]
         .as_str()

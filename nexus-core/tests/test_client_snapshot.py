@@ -85,7 +85,7 @@ async def test_snapshot_has_a_watermark_state_and_a_bounded_session_view(daemon)
 async def test_snapshot_reports_a_running_turn_and_a_pending_approval(daemon):
     rt, client, provider, workspace = daemon
     provider.replies = [[ToolCall("c1", "bash", '{"command": "true"}')], [Text("done")]]
-    session = await client.call("POST", "/api/session", {"directory": str(workspace)})
+    session = await client.call("POST", "/api/session", {"directory": str(workspace), "permission": "ask"})
     await client.call("POST", f"/api/session/{session['id']}/prompt", {"text": "go"})
     for _ in range(200):
         if rt.pending_approvals(session["id"]):

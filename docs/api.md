@@ -12,7 +12,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 - **Auth.** `Authorization: Bearer <token>`, with the token read from
   `~/.nexus10/daemon.json` (mode 0600). `GET /api/event` also accepts
   `?token=` for browser `EventSource`. A missing or wrong token gets 401.
-- **Bodies.** JSON objects, at most 1 MiB.
+- **Bodies.** JSON objects, at most 1 MiB; prompt requests allow 12 MiB for inline image data.
 - **Errors.** `{"error": "..."}` with 400 (bad input), 401, 404 (unknown id),
   409 (a turn is already running) or 410 (history no longer retained; see
   [Event stream](#event-stream)).
@@ -137,7 +137,7 @@ cancellation. Shapes and limits: [tools.md](tools.md#ask).
 
 `permission` is `ask` (bash waits for a reply; read, `bash_output`, `bash_kill`,
 `ask`, `edit`, `write`, the outer `code` call and workspace controls never ask)
-or `allow` (nothing asks). Session-directory edits are approval-free by fixed
+or `allow` (the default for new sessions; nothing asks). Session-directory edits are approval-free by fixed
 policy; see [tools.md](tools.md#read-observations-and-freshness). `status` is
 `busy` while a turn runs.
 
@@ -732,6 +732,7 @@ Deleting a project publishes one tombstone per deleted session, then
 | `log.retention` | a global retention pass: `{at, events: {removed, floor, head, protected, pinned}, turns, mutations, settings}` |
 | `session.notified` | `{from, text}`: a `wait: false` child finished, and its answer goes to this (parent) session |
 | `session.workspace_tools` | `{active, entry, tools}`: the on-demand workspace controls were activated |
+| `session.message_tool` | `{active, tools}`: `message_session` was exposed by the session's first `session` call (once) |
 | `session.directory_changed` | `{from, to, branch, repository, worktree, source, project_id, frozen_directory, instructions}` |
 | `worktree.listed` | `{repository, main, session_directory, worktrees: [...]}` |
 | `worktree.created` / `worktree.deleted` | `{path, branch, head, repository, main, session_directory}` |
@@ -858,8 +859,8 @@ frozen system prompt is not rewritten. An agent switch rebuilds the snapshot
 from the current files and appends `[Nexus notice: agent changed]`. An already-running call keeps its configuration; explicit changes apply to
 subsequent model/tool calls, including within the same turn.
 
-`disabled_tools` accepts task tools, `session`, and the three workspace control
-names. New sessions offer `expose_workspace_tools`; activating it adds
+`disabled_tools` accepts task tools, `session`, `message_session` and the three
+workspace control names. New sessions offer `expose_workspace_tools`; activating it adds
 `change_session_directory` and `worktree` to later request schemas and to the
 model-visible tool result, never to the frozen prompt. Activation persists with
 the snapshot, and a pending directory move is visible in `directory_change`.
@@ -905,3 +906,19 @@ column set, also true for untracked files), the porcelain v1 `status` code
 tracked line counts. Clients treat `"??"` as untracked.
 `GET /api/session/{id}/git/diff?path=` returns separate staged and unstaged
 diffs for a relative path. Untracked file contents are not included in diffs.
+
+
+### Image prompts
+
+`POST /api/session/{id}/prompt` accepts `{text?: string, images?: [{name?: string, data_url: string}]}`.
+At least text or one image is required. Up to eight PNG, JPEG, GIF or WebP
+images are allowed, at most 8 MiB of decoded bytes combined. Data URLs must use
+base64; remote URLs and SVG are rejected. Validation runs before creating the
+turn. Images become ordered `image` parts alongside the user text, stored in
+SQLite with their bytes for reload, continuation, export and provider replay.
+They are not workspace files or ephemeral browser URLs.
+
+On the first startup after the allow-by-default upgrade, previously stored
+`ask` permissions are changed to `allow` for existing sessions and children.
+This one-time migration increments their revisions; an explicit `ask` set after
+the migration remains in effect across restarts.

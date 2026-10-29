@@ -16,6 +16,7 @@ pub mod composer;
 pub mod diff;
 pub mod discovery;
 pub mod editor;
+pub mod images;
 pub mod keys;
 pub mod layout;
 pub mod manifest;

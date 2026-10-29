@@ -1,11 +1,14 @@
 import { agentColor } from "../agent-color";
 import { List, Scroll, signal, Text, View } from "nsh";
+import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
 import { FOCUS, Icon, IconButton, Status, T } from "./kit";
 import { DiffView } from "./diff";
+import { ContextSections, disabledOf, foldedMeta, startingSections } from "./newsession";
+import type { CtxSection } from "./newsession";
 import { byId, copyText, jump, keyLabel, run } from "../commands";
-import { agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
+import { contextDetail, agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
 import type { CoreEvent, Message, Part } from "../core/api";
 import type { IconName } from "../icons";
 import { roles, statusGlyphs } from "../gen/theme";
@@ -17,13 +20,12 @@ type Diff = { add: number; del: number };
 type Row =
   | { key: string; kind: "footer"; agent: string; segments: { text: string; tip?: string }[]; error?: string; interrupted: boolean }
   | {
-      key: string; kind: "user"; n: number; time: string; text: string; turnKey: string; folded: boolean;
+      key: string; kind: "user"; images?: { name: string; data_url: string }[]; n: number; time: string; text: string; turnKey: string; folded: boolean;
       tools: number; duration: string; status: TurnStatus;
     }
   | {
       key: string; kind: "context"; meta: string; reconstructed?: boolean; open: boolean;
-      items: { key: string; name: string; chip?: string; tokens?: string; details: string[] }[];
-      total: string; share?: string;
+      sections: CtxSection[]; total: number; window?: number;
     }
   | { key: string; kind: "notice"; text: string; label: string; tone: Tone }
   | { key: string; kind: "assistant"; text: string; streaming?: boolean }
@@ -61,7 +63,7 @@ export function capToolDetail(lines: ToolDetailLine[], showAll: boolean, head = 
   ];
 }
 
-const NOTICE = /^\[(Nexus notice|Nexus recovery|Notification)/;
+const NOTICE = /^(?:\[(Nexus notice|Nexus recovery|Notification)|→ Background Shell Done:)/;
 const closedTurns = signal<Record<string, boolean>>({});
 // Sticky user bar: the bands' geometry (content coordinates) and the list's scroll offset.
 type Band = { key: string; top: number; height: number; n: number; text: string; turnKey: string };
@@ -104,11 +106,6 @@ function fmtCount(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
   return String(n);
 }
-function estimate(chars: string): number { return Math.ceil(Array.from(chars).length / 4); }
-function shareOf(tokens: number, window: number): string {
-  const percent = tokens / window * 100;
-  return percent > 0 && percent < 0.1 ? "<0.1%" : `${percent.toFixed(1)}%`;
-}
 function bareModel(ref: string): string { return ref.split("/").at(-1) ?? ref; }
 function effectiveModelRef(): string {
   const s = viewed();
@@ -120,42 +117,6 @@ function catalogModel(ref: string, matchBareId = false): any | undefined {
   const models = modelCatalog();
   return models.find((entry) => entry.ref === ref)
     ?? (matchBareId ? models.find((entry) => bareModel(String(entry.ref ?? "")) === bareModel(ref)) : undefined);
-}
-function turnCost(t: TurnMeta): string | undefined {
-  const used = t.models.at(-1);
-  if (!used) return undefined;
-  const entry = catalogModel(used, true);
-  if (!entry) return undefined;
-  const input = entry.input_cost, output = entry.output_cost;
-  if (typeof input !== "number" || !Number.isFinite(input) || typeof output !== "number" || !Number.isFinite(output)) return undefined;
-  const cache = typeof entry.cache_read_cost === "number" && Number.isFinite(entry.cache_read_cost) ? entry.cache_read_cost : input;
-  const fresh = Math.max(0, t.input - t.cached);
-  const usd = (fresh * input + t.cached * cache + t.output * output) / 1_000_000;
-  return usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`;
-}
-function toolNameLines(names: string[], maxChars: number): string[] {
-  const rows = [""];
-  let shown = 0;
-  for (const raw of names) {
-    const name = raw.length > maxChars ? `${raw.slice(0, Math.max(1, maxChars - 1))}…` : raw;
-    const last = rows.length - 1;
-    const addition = `${rows[last] ? "  " : ""}${name}`;
-    if (rows[last].length + addition.length > maxChars) {
-      if (rows.length === 2) break;
-      rows.push(name);
-    } else rows[last] += addition;
-    shown++;
-  }
-  if (shown < names.length) {
-    const more = `+${names.length - shown} more`;
-    const last = rows.length - 1;
-    const suffix = `${rows[last] ? "  " : ""}${more}`;
-    if (rows[last].length + suffix.length > maxChars) {
-      const keep = Math.max(0, maxChars - more.length - 2);
-      rows[last] = `${rows[last].slice(0, keep).trimEnd()}  ${more}`;
-    } else rows[last] += suffix;
-  }
-  return rows.filter(Boolean);
 }
 /** Durations: `0.4s`, `4.2s`, `12s`, `1m 05s`, `1h 02m`. Never `<1 s`. */
 export function fmtDuration(s: number): string {
@@ -327,52 +288,17 @@ export function buildRows(): Row[] {
   // Starting context, before the first turn.
   if (sel.starting) {
     const s = sel.starting;
-    const sys = String(s.system_prompt ?? "");
-    const file = s.instruction_file ?? {};
-    const agent = s.agent ?? {};
-    const names: string[] = Array.isArray(s.tools) ? s.tools.filter((x: unknown): x is string => typeof x === "string") : [];
-    const schemas = s.tool_definitions && typeof s.tool_definitions === "object" ? s.tool_definitions : {};
-    const schemaText = Object.keys(schemas).length ? JSON.stringify(schemas) : "";
-    const systemTokens = estimate(sys);
-    const toolTokens = schemaText ? estimate(schemaText) : 0;
-    const fileBytes = typeof file.bytes === "number" ? file.bytes : undefined;
-    const fileTokens = fileBytes === undefined ? undefined : Math.ceil(fileBytes / 4);
-    const total = systemTokens + toolTokens;
+    const { sections, total } = startingSections(s, disabledOf(viewed()));
     const ref = effectiveModelRef();
     const rawWindow = Number(catalogModel(ref)?.context);
     const window = Number.isFinite(rawWindow) && rawWindow > 0 ? rawWindow : undefined;
-    const promptDetail = sys.split("\n").map((line: string) => line.trim()).find((line: string) => line && !line.startsWith("#")) ?? "";
-    const fileStatus = file.status === "loaded" ? "loaded" : file.status === "missing" ? "not found" : String(file.status ?? "not read").replaceAll("_", " ");
-    const children: any[] = Array.isArray(s.child_agents) ? s.child_agents : [];
-    const childNames = children.map((c) => c?.name).filter((x): x is string => typeof x === "string");
-    const items: Extract<Row, { kind: "context" }>["items"] = [
-      { key: "system", name: "System prompt", tokens: `~${fmtCount(systemTokens)}`, details: promptDetail ? [promptDetail] : [] },
-      {
-        key: "tools", name: "Tools", chip: `[${names.length}]`, tokens: toolTokens ? `~${fmtCount(toolTokens)}` : undefined,
-        details: toolNameLines(names, isNarrow() ? 38 : 92),
-      },
-      {
-        key: "instructions", name: "Instructions", chip: `AGENTS.md ${fileStatus}`,
-        tokens: fileTokens === undefined ? undefined : `~${fmtCount(fileTokens)}`,
-        details: [
-          `${file.path ?? ""}${fileBytes === undefined ? "" : `${file.path ? " · " : ""}${fileBytes} B, part of the system prompt`}`,
-        ].filter(Boolean),
-      },
-      {
-        key: "agent", name: "Agent", chip: String(agent.name ?? "?"),
-        details: [`${agent.source ?? "?"}${agent.description ? ` · ${agent.description}` : ""}`],
-      },
-    ];
-    if (children.length) items.push({ key: "children", name: "Child agents", chip: `[${children.length}]`, details: childNames.length ? [childNames.join("  ")] : [] });
-    if (s.workspace?.active) items.push({ key: "workspace", name: "Workspace tools", chip: "active", details: [] });
-    const share = window ? shareOf(total, window) : undefined;
     rows.push({
       t: -1,
       r: [{
         key: `context-${sid}`, kind: "context",
-        meta: `· ${items.length} items · ~${fmtCount(total)} tokens${share ? ` · ${share} of window` : ""}`,
+        meta: foldedMeta(sections.length, total, true),
         reconstructed: s.origin === "reconstructed", open: open(`context:${sid}`, metas.length === 0),
-        items, total: `~${fmtCount(total)}`, share,
+        sections, total, window,
       }],
     });
   }
@@ -397,7 +323,7 @@ export function buildRows(): Row[] {
         const folded = closedTurns()[key] ?? false;
         foldedTurn = folded;
         out.push({
-          key: msg.id, kind: "user", n: n + 1, time: clock(msg.created), text: body, turnKey: key, folded,
+          key: msg.id, kind: "user", images: msg.parts.filter((p) => p.type === "image") as any, n: n + 1, time: clock(msg.created), text: body, turnKey: key, folded,
           tools: meta?.tools ?? 0, duration: meta ? fmtDuration(meta.endTime - meta.startTime) : "",
           status: meta ? statusOf(meta) : "running",
         });
@@ -452,7 +378,7 @@ export function buildRows(): Row[] {
             out.push({
               key, kind: "tool", id, name: p.name ?? "tool", arg: toolArg(p.arguments), summary,
               tone: counts ? (counts.add >= 0 ? "accent" : "info") : "info",
-              state, duration: seconds !== undefined ? fmtDuration(seconds) : undefined, seconds,
+              state, duration: p.name === "bash" && seconds !== undefined && seconds >= 1 ? fmtDuration(seconds) : undefined, seconds,
               diff: counts ?? undefined, output: res?.output,
               detail,
               raw: rawOpen ? JSON.stringify({ arguments: p.arguments ?? "", output: res?.output ?? "" }, null, 2) : "",
@@ -475,14 +401,10 @@ export function buildRows(): Row[] {
         if (meta.tools) segments.push({ text: `${meta.tools} tool${meta.tools === 1 ? "" : "s"}` });
         segments.push({ text: fmtDuration(meta.endTime - meta.startTime) });
         if (meta.input + meta.cached + meta.output + meta.reasoning > 0) {
-          let tok = `${fmtCount(meta.input)} in`;
-          if (meta.cached) tok += ` ${fmtCount(meta.cached)} cached`;
-          tok += ` ${fmtCount(meta.output)} out`;
-          if (meta.reasoning) tok += ` ${fmtCount(meta.reasoning)} reasoning`;
+          let tok = `${fmtCount(meta.input)} i ${fmtCount(meta.output)} o ${fmtCount(meta.reasoning)} r`;
+          if (meta.input > 0) tok += ` ${Math.round(100 * meta.cached / meta.input)}% c`;
           const tip = `input ${meta.input.toLocaleString()} · cached ${meta.cached.toLocaleString()} · output ${meta.output.toLocaleString()} · reasoning ${meta.reasoning.toLocaleString()}`;
           segments.push({ text: tok, tip });
-          const cost = turnCost(meta);
-          if (cost) segments.push({ text: cost });
         }
         const status = statusOf(meta);
         const error = status === "error" ? (firstLine(meta.error?.message ?? "") || meta.error?.kind) : undefined;
@@ -578,34 +500,21 @@ function reportHeight(row: Row, h: number) {
 function RowView(p: { r: () => Row }) {
   const r = p.r;
   return (
-    <View class="w-full items-center px-4" onLayout={(b: any) => reportHeight(r(), b.size.height)}>
+    <View class="w-full items-center px-6" onLayout={(b: any) => reportHeight(r(), b.bounds?.size?.height ?? b.size?.height ?? 72)}>
       <View class="w-full max-w-[760px]">
         <If when={r().kind === "context"}>
           {() => {
             const c = r() as Extract<Row, { kind: "context" }>;
+            const expanded = () => open(`context:${model.selected?.sessionId}`, c.open);
             return (
-              <View class="py-2" testID="context-section">
-                <Button onPress={() => toggle(`context:${model.selected?.sessionId}`, model.selected?.messages.length === 0)}
-                  class={`w-full flex-row items-center gap-2 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`} testID="context-header">
-                  <Text class={T.meta}>{c.open ? "▾" : "▸"}</Text>
-                  <Text class="text-[13px] leading-5 font-medium text-foreground-secondary">Context</Text>
-                  <Text class={`flex-1 ${T.meta}`}>{c.meta}</Text>
+              <View class="pt-5 pb-2" testID="context-section">
+                <View class="w-full flex-row items-center gap-2 px-1 min-h-7" testID="context-header">
+                  <Button onPress={() => toggle(`context:${model.selected?.sessionId}`, c.open)} accessibilityLabel={expanded() ? "Collapse context" : "Expand context"} testID="context-fold" class={`rounded-(--radius) ${FOCUS}`}><Text class={T.meta}>{expanded() ? "▾" : "▸"}</Text></Button>
+                  <Button onPress={() => contextDetail.set({ title: "Context", detail: c.sections.map((s) => `${s.title}\n${s.detail}`).join("\n\n") })} accessibilityLabel="View context details" testID="context-overview" class={`flex-1 flex-row items-center gap-2 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">Context</Text><Text class={`flex-1 ${T.meta}`}>{c.meta}</Text></Button>
                   <If when={!!c.reconstructed}><Text class="text-xs text-warning">reconstructed</Text></If>
-                </Button>
-                <If when={c.open}>
-                  <View class="flex-row gap-3 pl-3 pt-2">
-                    <View class="w-px self-stretch bg-border" />
-                    <View class="flex-1 min-w-0 gap-2">
-                      <Each of={c.items} key={(x) => x.key}>
-                        {(x) => <ContextItem item={x} />}
-                      </Each>
-                      <View class="flex-row items-center gap-2">
-                        <Text class="text-[13px] leading-5 text-muted-foreground">total</Text>
-                        <Text class={`font-medium ${T.sec}`}>{`${c.total} tokens`}</Text>
-                        <If when={!!c.share}><Text class={`ml-auto ${T.meta}`}>{`${c.share} of the window`}</Text></If>
-                      </View>
-                    </View>
-                  </View>
+                </View>
+                <If when={expanded()}>
+                  <View class="pt-2 pl-3"><ContextSections sections={c.sections} total={c.total} estimated window={c.window} /></View>
                 </If>
               </View>
             );
@@ -621,7 +530,7 @@ function RowView(p: { r: () => Row }) {
               <View class="w-full items-end gap-0.5 pt-3 pb-1" testID="turn-footer">
                 <If when={!!f.error}><Text style={{ userSelect: "text" }} class="text-xs leading-4 text-error">{`✕ ${f.error}`}</Text></If>
                 <View class="flex-row flex-wrap justify-end items-center">
-                  <If when={!!f.agent}><Text class={`text-xs leading-4 font-semibold ${agentColor(f.agent)}`}>{`▪ ${titleCase(f.agent)}`}</Text></If>
+                  <If when={!!f.agent}><Text class={`text-xs leading-4 font-semibold ${agentColor(f.agent)}`}>{titleCase(f.agent)}</Text></If>
                   <Each of={f.segments} key={(s, i) => `${i}`}>
                     {(s) => (
                       <Text class={T.meta} tooltip={s().tip ? <Text class="text-xs leading-4 text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{s().tip!}</Text> : undefined}>
@@ -635,7 +544,10 @@ function RowView(p: { r: () => Row }) {
             );
           }}
         </If>
-        <If when={r().kind === "notice"}>
+        <If when={r().kind === "notice" && (r() as any).text.startsWith("→ Background Shell Done:")}>
+          <Text style={{ userSelect: "text" }} class="text-[13px] leading-5 text-muted-foreground py-2" testID="background-shell-done">{(r() as any).text}</Text>
+        </If>
+        <If when={r().kind === "notice" && !(r() as any).text.startsWith("→ Background Shell Done:")}>
           <View class="flex-row gap-3 rounded-(--radius-card) bg-card border border-border px-3.5 py-2.5 my-1">
             <Rail color={RAIL[(r() as any).tone] ?? "bg-info"} />
             <View class="flex-1 min-w-0 gap-0.5">
@@ -735,6 +647,13 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
         <If when={focusedBand() === r().key}>
           {() => <View class="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-primary" />}
         </If>
+        <If when={!!r().images?.length}>
+          <View class="flex-row flex-wrap gap-2 pb-2">
+            <Each of={r().images ?? []} key={(i) => i.data_url}>
+              {(i) => <View class="gap-1"><Image src={i().data_url} style={{ width: 240, height: 180, objectFit: "contain" }} accessibilityLabel={i().name} /><Text class={T.meta}>{i().name}</Text></View>}
+            </Each>
+          </View>
+        </If>
         <View class="flex-row items-start gap-3">
           <Text style={{ userSelect: "text" }} class="flex-1 min-w-0 text-[15px] leading-6 text-foreground">{r().text}</Text>
           <View class="flex-row items-center gap-1 pt-0.5">
@@ -802,23 +721,6 @@ function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void })
         );
       }}
     </If>
-  );
-}
-
-function ContextItem(p: { item: () => Extract<Row, { kind: "context" }>["items"][number] }) {
-  const item = p.item;
-  return (
-    <View class="min-w-0 gap-0.5">
-      <View class="flex-row items-center gap-1.5">
-        <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{item().name}</Text>
-        <If when={!!item().chip}><Text class={T.meta}>{item().chip!}</Text></If>
-        <View class="flex-1" />
-        <If when={!!item().tokens}><Text class={T.meta}>{item().tokens!}</Text></If>
-      </View>
-      <Each of={item().details} key={(x, i) => `${item().key}-${i}`}>
-        {(detail) => <Text class={T.meta} style={{ numberOfLines: 2 }}>{detail()}</Text>}
-      </Each>
-    </View>
   );
 }
 

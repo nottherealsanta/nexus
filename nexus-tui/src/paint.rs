@@ -251,7 +251,7 @@ mod tests {
 pub enum CtxRole {
     /// The `◆` before a section title (muted).
     Mark,
-    /// The section title (bold primary).
+    /// The section title (bold secondary).
     Title,
     /// The token count (secondary); estimated counts read `~N tok`.
     Tokens,
@@ -263,9 +263,9 @@ pub enum CtxRole {
     Item,
     /// An inventory name that is switched off (muted, struck through).
     ItemOff,
-    /// The `Context total` label (bold primary).
+    /// The `Context total` label (bold secondary).
     TotalLabel,
-    /// The total's figure (primary).
+    /// The total's figure (secondary).
     TotalFigure,
 }
 
@@ -316,23 +316,13 @@ pub fn thousands(n: u64) -> String {
     out
 }
 
-/// `17.6k` for the folded line; plain digits below a thousand.
+/// `17.6k` for a context figure; plain digits below a thousand.
 pub fn compact(n: u64) -> String {
     if n >= 1000 {
         format!("{:.1}k", n as f64 / 1000.0)
     } else {
         n.to_string()
     }
-}
-
-/// The folded context line (`▸ Context · 4 items · ~17.6k tokens`) without the
-/// fold marker, as `(title, meta)`.
-pub fn context_folded(items: usize, total: u64, estimated: bool, sep: &str) -> (String, String) {
-    let tilde = if estimated { "~" } else { "" };
-    (
-        "Context".to_owned(),
-        format!("{sep}{items} items{sep}{tilde}{} tokens", compact(total)),
-    )
 }
 
 /// Rows of file text in a file view `height` rows high: the view has a header
@@ -407,87 +397,44 @@ pub fn first_prompt_line(prompt: &str) -> String {
 /// terminal cells; every row fits in `layout.width`. Clipping is announced:
 /// a clipped preview ends in the ellipsis and a clipped grid in `+N more`.
 pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> Vec<CtxRow> {
-    use crate::text::{truncate, width};
     let mut rows: Vec<CtxRow> = Vec::new();
-    let mark = if layout.ascii { "*" } else { "\u{25c6}" };
     let tilde = if layout.estimated { "~" } else { "" };
-    let title_w = sections
-        .iter()
-        .map(|s| width(&s.title))
-        .max()
-        .unwrap_or(0)
-        .max(6)
-        + 2;
-    let counts: Vec<String> = sections
-        .iter()
-        .map(|s| {
-            s.tokens
-                .map_or_else(String::new, |t| format!("{tilde}{} tok", thousands(t)))
-        })
-        .collect();
-    let count_w = counts.iter().map(|c| width(c)).max().unwrap_or(0);
-    let indent = "  ";
-    for (i, s) in sections.iter().enumerate() {
+    for (i, section) in sections.iter().enumerate() {
         if i > 0 {
             rows.push(Vec::new());
         }
-        let pad =
-            |text: &str, to: usize| format!("{text}{}", " ".repeat(to.saturating_sub(width(text))));
-        let mut head: CtxRow = vec![
-            (format!("{mark} "), CtxRole::Mark),
-            (pad(&s.title, title_w), CtxRole::Title),
-            (pad(&counts[i], count_w), CtxRole::Tokens),
-        ];
-        if !s.meta.is_empty() {
-            head.push((format!("{}{}", layout.sep, s.meta), CtxRole::Meta));
+        let mut head = vec![(section.title.clone(), CtxRole::Title)];
+        if let CtxBody::Grid(items) = &section.body {
+            head.push((format!(" [{}]", items.len()), CtxRole::Meta));
+            let off = items.iter().filter(|(_, on)| !on).count();
+            if off > 0 {
+                head.push((format!(" ({off} off)"), CtxRole::Meta));
+            }
+        }
+        if let Some(tokens) = section.tokens {
+            head.push((
+                format!(" {tilde}{}", compact(tokens).replace('k', "K")),
+                CtxRole::Tokens,
+            ));
+        } else if section.title == "Skills" || section.title == "MCP" {
+            head.push(("  not available yet".into(), CtxRole::Meta));
+        }
+        if section.tokens.is_none()
+            && section.title != "Skills"
+            && section.title != "MCP"
+            && section.title != "Workspace tools"
+        {
+            head.push((format!("  {}", section.meta), CtxRole::Meta));
         }
         rows.push(clip_row(head, layout));
-        let room = layout.width.saturating_sub(indent.len());
-        match &s.body {
-            CtxBody::Preview(text) if !text.is_empty() => {
-                rows.push(vec![
-                    (indent.to_owned(), CtxRole::Meta),
-                    (truncate(text, room, layout.ell), CtxRole::Preview),
-                ]);
-            }
-            CtxBody::Grid(names) if !names.is_empty() => {
-                let widest = names.iter().map(|(n, _)| width(n)).max().unwrap_or(1);
-                // Four columns when they fit; a long name is clipped with the ellipsis
-                // rather than costing the whole grid a column.
-                let col = (room / 4).clamp(widest.min(14) + 2, 24);
-                let cols = (room / col).clamp(1, 4);
-                let max_rows = 3;
-                let cap = cols * max_rows;
-                let (shown, hidden) = if names.len() > cap {
-                    (cap - 1, names.len() - (cap - 1))
-                } else {
-                    (names.len(), 0)
-                };
-                for chunk in names[..shown].chunks(cols) {
-                    let mut row: CtxRow = vec![(indent.to_owned(), CtxRole::Meta)];
-                    for (n, on) in chunk {
-                        let role = if *on { CtxRole::Item } else { CtxRole::ItemOff };
-                        row.push((pad(&truncate(n, col - 1, layout.ell), col), role));
-                    }
-                    rows.push(row);
-                }
-                if hidden > 0 {
-                    rows.push(vec![
-                        (indent.to_owned(), CtxRole::Meta),
-                        (format!("+{hidden} more"), CtxRole::Meta),
-                    ]);
-                }
-            }
-            _ => {}
-        }
     }
     if !sections.is_empty() {
         rows.push(Vec::new());
     }
     let mut totals: CtxRow = vec![
-        ("Context total".to_owned(), CtxRole::TotalLabel),
+        ("total".to_owned(), CtxRole::TotalLabel),
         (
-            format!("{}{tilde}{} tokens", layout.sep, thousands(total)),
+            format!("  {tilde}{} tok", thousands(total)),
             CtxRole::TotalFigure,
         ),
     ];
@@ -629,23 +576,17 @@ mod ctx_tests {
     }
 
     #[test]
-    fn a_grid_clips_with_a_more_row() {
-        let names: Vec<(String, bool)> =
-            (0..20).map(|i| (format!("tool{i}"), i % 2 == 0)).collect();
+    fn context_rows_show_tool_count_without_the_grid() {
         let s = CtxSection {
             title: "Tools".into(),
             tokens: Some(100),
-            meta: "20 tools".into(),
-            body: CtxBody::Grid(names),
+            meta: String::new(),
+            body: CtxBody::Grid(vec![("read".into(), true)]),
         };
         let rows = context_rows(&[s], 100, &layout(60));
         let t = text(&rows);
-        assert!(
-            t.iter().any(|l| l.contains("+") && l.contains("more")),
-            "{t:?}"
-        );
-        assert!(t.iter().all(|l| crate::text::width(l) <= 60), "{t:?}");
-        assert!(rows.iter().flatten().any(|(_, r)| *r == CtxRole::ItemOff));
+        assert!(t.iter().any(|l| l.contains("Tools [1] ~100")), "{t:?}");
+        assert!(!t.iter().any(|l| l.contains("read")));
     }
 }
 

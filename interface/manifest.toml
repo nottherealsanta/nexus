@@ -757,7 +757,7 @@ id = "notifications.open"
 title = "Notifications"
 category = "notifications"
 slash = "notifications"
-keys = { tui = "ctrl+n", nsh = "cmd+shift+n" }
+keys = { nsh = "cmd+shift+n" }
 key_context = "global"
 when = ["always"]
 placement = ["palette", "header"]
@@ -912,7 +912,7 @@ id = "session.new"
 title = "New session"
 category = "session"
 slash = "new"
-keys = { tui = "ctrl+t", nsh = "cmd+n" }
+keys = { tui = "ctrl+n", nsh = "cmd+n" }
 key_context = "global"
 when = ["has_project"]
 unavailable_reason = "Add or choose a project first."
@@ -932,6 +932,7 @@ placement = ["sidebar"]
 id = "session.switch"
 title = "Switch session"
 category = "session"
+slash = "sessions"
 keys = { tui = "ctrl+k", nsh = "cmd+k" }
 key_context = "global"
 when = ["has_project"]
@@ -1256,6 +1257,8 @@ placement = ["palette", "composer"]
 
 [[command]]
 id = "agent.change"
+keys = { tui = "ctrl+g" }
+key_context = "global"
 title = "Change agent"
 category = "agent"
 slash = "agent"
@@ -1326,7 +1329,7 @@ id = "turn.go_to"
 title = "Go to turn"
 category = "timeline"
 slash = "turn"
-keys = { tui = "ctrl+g", nsh = "cmd+g" }
+keys = { nsh = "cmd+g" }
 key_context = "global"
 when = ["has_turns"]
 unavailable_reason = "No turns yet."

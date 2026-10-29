@@ -10,9 +10,9 @@ import dataclasses
 import re
 from typing import Any
 
-from .llmhub.types import Message, Part, Reasoning, Text, ToolCall, ToolResult
+from .llmhub.types import Image, Message, Part, Reasoning, Text, ToolCall, ToolResult
 
-_PARTS: dict[str, type] = {"text": Text, "reasoning": Reasoning, "tool_call": ToolCall, "tool_result": ToolResult}
+_PARTS: dict[str, type] = {"image": Image, "text": Text, "reasoning": Reasoning, "tool_call": ToolCall, "tool_result": ToolResult}
 _NAMES = {cls: name for name, cls in _PARTS.items()}
 
 

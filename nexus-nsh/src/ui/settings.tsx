@@ -30,7 +30,7 @@ function Seg(p: { options: string[]; value: string; onPick?: (v: string) => void
       <Each of={p.options} key={(o) => o}>
         {(o) => (
           <Button role="radio" selected={p.value === o()} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${o()}`}
-            class={`rounded-[4px] px-3 ${isNarrow() ? "min-h-10" : "min-h-7"} items-center justify-center selected:bg-selection hover:bg-accent disabled:opacity-50 ${FOCUS}`}>
+            class={`rounded-[4px] px-3 ${isNarrow() ? "min-h-10" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${FOCUS}`}>
             <Text class={`text-[13px] leading-5 ${p.value === o() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{o()}</Text>
           </Button>
         )}
@@ -144,7 +144,7 @@ export function SettingsView() {
               <Each of={sections} key={(s) => s.id}>
                 {(s) => (
                   <Button onPress={() => settingsSection.set(s().id)} selected={cur().id === s().id} testID={`section-${s().id}`} accessibilityLabel={s().label + (s().unavailable_reason ? " (unavailable)" : "")}
-                    class={`relative flex-row items-center rounded-(--radius) px-3 hover:bg-accent selected:bg-selection ${isNarrow() ? "min-h-10" : "min-h-8"} ${FOCUS}`}>
+                    class={`relative flex-row items-center rounded-(--radius) px-3 hover:bg-accent ${isNarrow() ? "min-h-10" : "min-h-8"} ${FOCUS}`}>
                     <SelectBar on={cur().id === s().id} />
                     <Text class={`text-[13px] leading-5 ${cur().id === s().id ? "text-foreground font-medium" : s().unavailable_reason ? "text-muted-foreground" : "text-foreground-secondary"}`}>{s().label}</Text>
                   </Button>

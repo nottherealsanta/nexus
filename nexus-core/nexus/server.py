@@ -87,6 +87,12 @@ API_VERSION = {"major": 1, "minor": 1}
 INSPECTOR = Path(__file__).parent / "inspector" / "index.html"
 INSPECTOR_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
 MAX_BODY_BYTES = 1024 * 1024
+MAX_PROMPT_BYTES = 12 * 1024 * 1024
+
+
+def _body_limit(request: Request) -> int:
+    return MAX_PROMPT_BYTES if request.url.path.endswith("/prompt") else MAX_BODY_BYTES
+
 IDEMPOTENCY_MAX = 128
 _IDEMPOTENCY_KEY = re.compile(r"\A[A-Za-z0-9._:-]{1,128}\Z")
 _MUTATING = frozenset({"POST", "PATCH", "DELETE"})
@@ -101,7 +107,7 @@ def _error(status: int, message: str) -> JSONResponse:
 
 async def _body(request: Request) -> dict[str, Any]:
     raw = await request.body()
-    if len(raw) > MAX_BODY_BYTES:
+    if len(raw) > _body_limit(request):
         raise ValueError("request body too large")
     if not raw:
         return {}
@@ -283,8 +289,8 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                 if key is None or request.method not in _MUTATING:
                     return await inner(request)
                 raw = await request.body()
-                if len(raw) > MAX_BODY_BYTES:
-                    raise ValueError("request body exceeds 1 MiB")
+                if len(raw) > _body_limit(request):
+                    raise ValueError("request body too large")
                 fingerprint = _fingerprint(request, raw)
                 async with runtime.mutation_lock(key):
                     entry = runtime.replay_mutation(key, fingerprint)
@@ -564,7 +570,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     async def prompt(request: Request) -> Response:
         body = await _body(request)
         mutation = getattr(request.state, "mutation", None)
-        result = runtime.prompt(p(request, "id"), str(body["text"]), mutation=mutation)
+        result = runtime.prompt(p(request, "id"), str(body.get("text", "")), images=body.get("images"), mutation=mutation)
         if mutation is not None:
             result = {**result, "idempotency_key": mutation["key"]}
         return JSONResponse(result, status_code=202)

@@ -27,7 +27,7 @@ fn a_turn_has_a_header_content_and_a_footer() {
     assert!(text.contains("#1"), "turn header: {text}");
     assert!(text.contains("hi"), "user text: {text}");
     assert!(text.contains("Hello"), "assistant text: {text}");
-    assert!(text.contains("\u{25aa} Build"), "turn footer: {text}");
+    assert!(text.contains("Build"), "turn footer: {text}");
     // D05: the footer never states how the turn ended.
     for word in ["done", "interrupted", "error", "<1 s", "call"] {
         assert!(!text.contains(word), "no end status {word:?}: {text}");
@@ -391,7 +391,7 @@ fn activity_groups_respect_text_and_child_boundaries_and_preserve_details() {
         text.contains("Read 1 file")
             && text.contains("ran 1 command")
             && text.contains("thought")
-            && text.contains("\u{2715} 1 failed"),
+            && !text.contains("failed"),
         "{text}"
     );
     assert!(timeline.blocks.iter().any(|b| b.kind == BlockKind::Child));
@@ -727,7 +727,7 @@ fn assistant_and_individual_fence_copy_keep_full_source() {
 }
 
 #[test]
-fn bracketed_user_prompt_counts_as_a_turn_for_context_folding() {
+fn bracketed_user_prompt_keeps_context_open() {
     let mut a = app();
     let selected = a.state.model.selected.as_mut().unwrap();
     selected.messages.retain(|message| message.role == "user");
@@ -744,11 +744,11 @@ fn bracketed_user_prompt_counts_as_a_turn_for_context_folding() {
         .unwrap();
     let key = a.blocks()[index].key.clone();
     a.click(nexus_tui::ui::Target::Block(index));
-    assert_eq!(a.ui.timeline_open.get(&key), Some(&true));
+    assert_eq!(a.ui.timeline_open.get(&key), None);
 }
 
 #[test]
-fn reasoning_reports_its_measured_duration() {
+fn reasoning_does_not_show_a_duration() {
     use nexus_tui::api::Event;
     use nexus_tui::sync::SyncMsg;
     let mut a = app();
@@ -784,7 +784,8 @@ fn reasoning_reports_its_measured_duration() {
         serde_json::json!({"part": {"type": "reasoning", "summary": "Let me think."}}),
     )));
     let text = rows(&mut a).join("\n");
-    assert!(text.contains("Thought for 3.5s"), "{text}");
+    assert!(text.contains("Thought"), "{text}");
+    assert!(!text.contains("Thought for 3.5s"), "{text}");
 }
 
 #[test]
@@ -884,7 +885,7 @@ fn verb_groups_cover_every_tool_family_and_name_unknown_tools() {
 }
 
 #[test]
-fn working_shimmer_peaks_in_the_agent_colour() {
+fn working_shimmer_peaks_in_secondary_grey() {
     use nexus_tui::timeline::{build, BlockKind};
     let mut a = app();
     calls(&mut a, &[("bash", None)]);
@@ -892,9 +893,7 @@ fn working_shimmer_peaks_in_the_agent_colour() {
     let mut options = a.theme.opts;
     options.reduced_motion = false;
     a.theme = a.theme.with(options);
-    let agent = a.viewed().map(|s| s.agent.clone()).unwrap_or_default();
-    let peak = a.theme.agent_style(&agent).fg;
-    assert_ne!(peak, a.theme.fg("text.primary").fg, "distinct peak colour");
+    let peak = a.theme.fg("text.secondary").fg;
     let seen = (0..54).any(|frame| {
         let t = build(&a, &a.theme, frame, 100);
         let group = t
@@ -907,7 +906,7 @@ fn working_shimmer_peaks_in_the_agent_colour() {
             .iter()
             .any(|s| s.style.fg == peak)
     });
-    assert!(seen, "the highlight reaches the agent colour");
+    assert!(seen, "the highlight reaches secondary grey");
     // Reduced motion stays static.
     options.reduced_motion = true;
     a.theme = a.theme.with(options);
@@ -956,6 +955,27 @@ fn starting_context() -> serde_json::Value {
 }
 
 #[test]
+fn context_headings_open_frozen_snapshot_details() {
+    use nexus_tui::ui::OverlayKind;
+    for heading in ["System prompt", "AGENTS.md", "Tools"] {
+        let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+        a.open_session(SESSION);
+        a.state.model.selected.as_mut().unwrap().starting = Some(starting_context());
+        let (_, rows) = draw(&mut a, 120, 36);
+        let y = rows.iter().position(|row| row.contains(heading)).unwrap();
+        let x = nexus_tui::text::width(&rows[y][..rows[y].find(heading).unwrap()]);
+        click(&mut a, x as u16, y as u16);
+        assert!(
+            matches!(
+                &a.ui.overlay.as_ref().map(|o| &o.kind),
+                Some(OverlayKind::ContextDetail { .. })
+            ),
+            "{heading} must open a modal"
+        );
+    }
+}
+
+#[test]
 fn the_context_section_lists_d10_sections_with_estimates_and_the_window_share() {
     let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     a.open_session(SESSION);
@@ -966,30 +986,21 @@ fn the_context_section_lists_d10_sections_with_estimates_and_the_window_share() 
     // D10: `◆` sections with a count and meta, a preview line, a tools grid,
     // and a text total with no bar.
     for needle in [
-        "\u{25be} Context \u{b7} 4 items",
-        "\u{25c6} System prompt",
-        "~1,006 tok",
-        "build \u{b7} 2 lines",
-        "You are a coding agent.",
-        "\u{25c6} AGENTS.md",
-        "/work/AGENTS.md",
-        "in the system prompt",
-        "\u{25c6} Tools",
-        "3 tools \u{b7} 3 on",
-        "read",
-        "bash",
-        "edit",
-        "\u{25c6} Child agents",
-        "2 agents",
-        "scout",
-        "plan",
-        "Context total \u{b7} ~1,020 tokens",
+        "System prompt ~1.0K",
+        "System prompt ~1.0K",
+        "AGENTS.md ~200",
+        "Tools [3] ~14",
+        "Skills  not available yet",
+        "MCP  not available yet",
+        "total  ~1,020 tok",
         "of the window",
     ] {
         assert!(text.contains(needle), "missing {needle:?}:\n{text}");
     }
+    assert!(!text.contains("You are a coding agent."));
+    assert!(!text.contains("Child agents"));
     // The total is text: no meter cells.
-    let total_row = text.lines().find(|l| l.contains("Context total")).unwrap();
+    let total_row = text.lines().find(|l| l.contains("total  ~")).unwrap();
     assert!(
         !total_row.contains('\u{2571}') && !total_row.contains('/'),
         "no context bar: {total_row}"
@@ -1005,10 +1016,10 @@ fn the_context_section_without_an_instruction_file_says_so() {
         serde_json::json!({"path": "/work/AGENTS.md", "status": "missing"});
     a.state.model.selected.as_mut().unwrap().starting = Some(starting);
     let text = rows(&mut a).join("\n");
-    assert!(text.contains("\u{25c6} AGENTS.md"), "{text}");
+    assert!(text.contains("AGENTS.md"), "{text}");
     assert!(text.contains("not found"), "{text}");
     assert!(!text.contains("in the system prompt"), "{text}");
-    assert!(text.contains("\u{25c6} Tools"), "{text}");
+    assert!(text.contains("Tools [3]"), "{text}");
 }
 
 #[test]
@@ -1023,46 +1034,27 @@ fn a_disabled_tool_is_struck_through_in_the_tools_grid() {
         .unwrap()
         .extra
         .insert("disabled_tools".into(), serde_json::json!(["bash"]));
-    let (buf, rows) = draw(&mut a, 120, 36);
+    let (_, rows) = draw(&mut a, 120, 36);
     let text = rows.join("\n");
-    assert!(text.contains("3 tools \u{b7} 2 on"), "{text}");
-    let y = rows
-        .iter()
-        .position(|l| l.contains("bash") && l.contains("read"))
-        .expect("grid row");
-    let x = rows[y].find("bash").unwrap();
-    let col = rows[y][..x]
-        .chars()
-        .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0))
-        .sum::<usize>();
-    let cell = &buf[(col as u16, y as u16)];
-    assert!(
-        cell.modifier
-            .contains(ratatui::style::Modifier::CROSSED_OUT),
-        "bash is struck through"
-    );
+    assert!(text.contains("Tools [3] (1 off)"), "{text}");
 }
 
 #[test]
-fn the_context_folds_to_one_line_after_the_first_turn() {
+fn the_context_sections_stay_open_without_a_header_row() {
     let mut a = app();
     a.state.model.selected.as_mut().unwrap().starting = Some(starting_context());
     let drawn = rows(&mut a);
     let text = drawn.join("\n");
-    let line = drawn
-        .iter()
-        .find(|l| l.contains("Context"))
-        .expect("the folded context line");
-    assert!(
-        line.contains("\u{25b8} Context \u{b7} 4 items \u{b7} ~1.0k tokens"),
-        "{line}"
-    );
-    assert!(!text.contains("\u{25c6} System prompt"), "folded: {text}");
-    assert!(!text.contains("Context total"), "folded: {text}");
+    // The folded `Context · N items · ~X tokens` row is gone; the sections start
+    // the block and stay expanded after the first turn.
+    assert!(!text.contains("\u{25be} Context"), "{text}");
+    assert!(!text.contains("Context \u{b7}"), "{text}");
+    assert!(text.contains("System prompt"), "{text}");
+    assert!(text.contains("total  ~"), "{text}");
 }
 
 #[test]
-fn the_turn_footer_prices_a_turn_from_the_catalog() {
+fn the_turn_footer_shows_usage_without_cost() {
     use nexus_tui::api::Event;
     let mut a = app();
     a.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/gpt-5".into());
@@ -1093,16 +1085,14 @@ fn the_turn_footer_prices_a_turn_from_the_catalog() {
         }),
     });
     let text = rows(&mut a).join("\n");
-    // 50K fresh input at $1, 50K cached at $0.20, 10K output at $10 per million.
     assert!(
-        text.contains("100K in") && text.contains("10.0K out"),
+        text.contains("100K i") && text.contains("10.0K o") && text.contains("50% c"),
         "{text}"
     );
-    assert!(
-        text.contains("\u{25aa} Build"),
-        "right-aligned agent lead: {text}"
-    );
-    assert!(text.contains("$0.16"), "{text}");
+    assert!(text.contains("Build"), "right-aligned agent lead: {text}");
+    let footer = text.lines().find(|line| line.contains("100K i")).unwrap();
+    assert!(!footer.contains('$'), "{footer}");
+    assert!(!footer.contains('▪'), "{footer}");
 }
 
 #[test]
@@ -1360,12 +1350,12 @@ fn the_footer_is_right_aligned_and_wraps_from_the_left_at_every_width() {
     use unicode_width::UnicodeWidthStr;
     let mut a = app();
     rich_footer(&mut a);
-    for (page, wraps) in [(80usize, true), (120, false), (200, false)] {
+    for (page, wraps) in [(60usize, true), (120, false), (200, false)] {
         let t = nexus_tui::timeline::build(&a, &a.theme, 0, page);
         let at = t
             .lines
             .iter()
-            .position(|l| line_text(l).trim_start().starts_with("\u{25aa} Build"))
+            .position(|l| line_text(l).trim_start().starts_with("Build"))
             .unwrap_or_else(|| panic!("{page}: no footer"));
         // The footer is the last row of the turn: after it only the end of the lines.
         let tail = &t.lines[at..];
@@ -1379,11 +1369,10 @@ fn the_footer_is_right_aligned_and_wraps_from_the_left_at_every_width() {
         for part in [
             "GPT-5 Terra",
             "3 tools",
-            "12.0K in",
-            "4.0K cached",
-            "2.0K out",
-            "500 reasoning",
-            "$0.",
+            "12.0K i",
+            "33% c",
+            "2.0K o",
+            "500 r",
         ] {
             if part == "3 tools" {
                 continue; // the fixture turn has no tools
@@ -1416,7 +1405,7 @@ fn an_interrupted_turn_hints_continue_and_a_failed_turn_puts_its_error_above_the
     let text: Vec<String> = t.lines.iter().map(line_text).collect();
     let footer = text
         .iter()
-        .find(|r| r.contains('\u{25aa}'))
+        .find(|r| r.trim_start().starts_with("Build"))
         .expect("footer");
     assert!(
         footer.trim_end().ends_with("enter continue"),
@@ -1438,7 +1427,10 @@ fn an_interrupted_turn_hints_continue_and_a_failed_turn_puts_its_error_above_the
     });
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 100);
     let text: Vec<String> = t.lines.iter().map(line_text).collect();
-    let at = text.iter().position(|r| r.contains('\u{25aa}')).unwrap();
+    let at = text
+        .iter()
+        .position(|r| r.trim_start().starts_with("Build"))
+        .unwrap();
     assert!(
         text[at - 1].trim() == "\u{2715} rate limited",
         "error row above: {:?}",
@@ -1475,17 +1467,16 @@ fn a_folded_group_still_shows_edits_and_failures() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        text.contains("Read 1 file, edited 2 files, ran 1 command"),
-        "{text}"
+        text.contains("Read 1 file")
+            && text.contains("Edited 2 files")
+            && text.contains("Ran 1 command"),
+        "file changes are their own group: {text}"
     );
     assert!(
         text.contains("+1 \u{2212}2"),
         "edit counts of the successful edit: {text}"
     );
-    assert!(
-        text.contains("\u{2715} 2 failed"),
-        "failures stay visible: {text}"
-    );
+    assert!(!text.contains("failed"), "failures are not counted: {text}");
     assert!(
         !text.contains("old text not found"),
         "members stay folded: {text}"
@@ -1827,4 +1818,232 @@ fn a_finished_group_flashes_its_glyph_for_six_frames_unless_motion_is_reduced() 
             assert!(a.ui.group_flash.is_empty(), "expired entries are dropped");
         }
     }
+}
+
+#[test]
+fn background_shell_completion_is_a_notice_without_a_user_turn() {
+    let mut a = app();
+    let mut message = a.state.model.selected.as_ref().unwrap().messages[0].clone();
+    message.id = "background_done".into();
+    message.role = "user".into();
+    message.seq = 999;
+    message.parts = vec![
+        serde_json::json!({"type":"text", "text":"→ Background Shell Done: 'make test'\nexit code 0"}),
+    ];
+    a.state
+        .model
+        .selected
+        .as_mut()
+        .unwrap()
+        .messages
+        .push(message);
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("→ Background Shell Done:"));
+    assert!(!text.contains("exit code 0"));
+    let index = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == nexus_tui::timeline::BlockKind::Notice)
+        .unwrap();
+    a.click(nexus_tui::ui::Target::Block(index));
+    assert!(rows(&mut a).join("\n").contains("exit code 0"));
+    assert_eq!(
+        a.blocks()
+            .iter()
+            .filter(|b| b.kind == nexus_tui::timeline::BlockKind::Turn)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn consecutive_background_completions_are_grouped_and_expand_in_order() {
+    use nexus_tui::timeline::{build, BlockKind};
+    let mut a = app();
+    let template = a.state.model.selected.as_ref().unwrap().messages[0].clone();
+    for (id, command) in [("one", "first"), ("two", "second")] {
+        let mut message = template.clone();
+        message.id = id.into();
+        message.role = "user".into();
+        message.parts = vec![
+            serde_json::json!({"type":"text", "text":format!("→ Background Shell Done: {command}\noutput {command}")}),
+        ];
+        a.state
+            .model
+            .selected
+            .as_mut()
+            .unwrap()
+            .messages
+            .push(message);
+    }
+    let timeline = build(&a, &a.theme, 0, 100);
+    let notices: Vec<_> = timeline
+        .blocks
+        .iter()
+        .filter(|b| b.kind == BlockKind::Notice)
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].end - notices[0].start, 1);
+    let key = notices[0].key.clone();
+    a.ui.timeline_open.insert(key, true);
+    let timeline = build(&a, &a.theme, 0, 100);
+    let text = timeline
+        .lines
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect::<String>();
+    assert!(text.find("output first").unwrap() < text.find("output second").unwrap());
+}
+
+#[test]
+fn assistant_text_aligns_with_the_user_message() {
+    let mut a = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let (_, rows) = draw(&mut a, 120, 36);
+    let user = rows.iter().find(|line| line.contains("▾ hi")).unwrap();
+    let assistant = rows.iter().find(|line| line.contains("Hello")).unwrap();
+    let user_col = nexus_tui::text::width(&user[..user.find("hi").unwrap()]);
+    let assistant_col = nexus_tui::text::width(&assistant[..assistant.find("Hello").unwrap()]);
+    assert_eq!(user_col, assistant_col);
+}
+
+#[test]
+fn image_labels_align_with_user_text() {
+    let mut a = app();
+    a.state.model.selected.as_mut().unwrap().messages[0].parts.push(
+        serde_json::json!({"type":"image", "name":"Image A", "data_url":"data:image/png;base64,AA=="}),
+    );
+    let (_, rows) = draw(&mut a, 120, 36);
+    let text = rows.iter().find(|row| row.contains("▾ hi")).unwrap();
+    let image = rows
+        .iter()
+        .find(|row| row.contains("Image | Image A"))
+        .unwrap();
+    assert_eq!(
+        nexus_tui::text::width(&text[..text.find("hi").unwrap()]),
+        nexus_tui::text::width(&image[..image.find("Image |").unwrap()])
+    );
+}
+
+#[test]
+fn busy_timeline_has_three_trailing_blank_rows() {
+    use nexus_tui::timeline::build;
+    let mut a = app();
+    let idle = build(&a, &a.theme, 0, 100);
+    assert!(!idle.lines.last().unwrap().spans.is_empty());
+    busy(&mut a);
+    let live = build(&a, &a.theme, 0, 100);
+    assert!(live.lines[live.lines.len() - 3..]
+        .iter()
+        .all(|line| line.spans.is_empty()));
+    assert!(!live.lines[live.lines.len() - 4].spans.is_empty());
+}
+
+#[test]
+fn shell_and_error_previews_are_limited_and_error_text_is_neutral() {
+    use nexus_tui::timeline::{build, BlockKind};
+    let mut a = app();
+    calls(&mut a, &[("bash", Some("ok")), ("edit", Some("failed"))]);
+    let command = "x".repeat(100);
+    let error = "z".repeat(100);
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.messages[1].parts[0]["arguments"] =
+        serde_json::json!(serde_json::json!({"command":command}).to_string());
+    view.messages[2].parts[1]["output"] = serde_json::json!(error);
+    view.messages[2].parts[1]["is_error"] = serde_json::json!(true);
+    a.ui.timeline_open.insert("group:tool:c0".into(), true);
+    a.ui.timeline_open.insert("group:tool:c1".into(), true);
+    let timeline = build(&a, &a.theme, 0, 250);
+    let shell = timeline.blocks.iter().find(|b| b.key == "tool:c0").unwrap();
+    let shell_text: String = timeline.lines[shell.start]
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        shell_text.contains(&format!("{}...", "x".repeat(80))),
+        "{shell_text}"
+    );
+    let edit = timeline
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Tool && b.key == "tool:c1")
+        .unwrap();
+    let error_span = timeline.lines[edit.start]
+        .spans
+        .iter()
+        .find(|s| s.content.contains(&"z".repeat(80)))
+        .unwrap();
+    assert!(error_span
+        .content
+        .contains(&format!("{}...", "z".repeat(80))));
+    assert_eq!(error_span.style.fg, a.theme.fg("text.secondary").fg);
+}
+
+#[test]
+fn only_shell_tool_rows_show_tool_duration() {
+    use nexus_tui::api::Event;
+    use nexus_tui::timeline::{build, BlockKind};
+    let mut a = app();
+    calls(&mut a, &[("bash", Some("ok")), ("read", Some("ok"))]);
+    let events = &mut a.state.model.selected.as_mut().unwrap().events;
+    for (id, time, kind, call) in [
+        (10, 10.0, "tool_start", "c0"),
+        (11, 12.0, "tool_end", "c0"),
+        (12, 13.0, "tool_start", "c1"),
+        (13, 16.0, "tool_end", "c1"),
+    ] {
+        events.push(Event {
+            id,
+            cursor: None,
+            seq: None,
+            time,
+            kind: kind.into(),
+            session_id: Some(SESSION.into()),
+            data: serde_json::json!({"call":{"id":call}}),
+        });
+    }
+    a.ui.timeline_open.insert("group:tool:c0".into(), true);
+    let timeline = build(&a, &a.theme, 0, 120);
+    let line = |key: &str| {
+        let block = timeline.blocks.iter().find(|b| b.key == key).unwrap();
+        timeline.lines[block.start]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>()
+    };
+    assert!(line("tool:c0").contains("2.0s"));
+    assert!(!line("tool:c1").contains("3.0s"));
+    let group = timeline
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Group)
+        .unwrap();
+    assert!(!line(&group.key).contains("6.0s"));
+}
+
+#[test]
+fn streaming_text_aligns_with_the_finished_assistant_message() {
+    let mut a = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    for (id, text) in [(20, "Streaming "), (21, "reply\n\nsecond line")] {
+        let v = serde_json::json!({"id": id, "type": "text_delta", "session_id": SESSION,
+            "cursor": "log_c915bfc9b6d826c4:20",
+            "data": {"type": "text_delta", "text": text}});
+        if let Ok(nexus_tui::api::Frame::Event(e)) =
+            nexus_tui::api::Frame::from_value("text_delta", None, &v)
+        {
+            a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+        }
+    }
+    let (_, rows) = draw(&mut a, 120, 36);
+    let col = |needle: &str| {
+        let row = rows
+            .iter()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} in {rows:#?}"));
+        nexus_tui::text::width(&row[..row.find(needle).unwrap()])
+    };
+    assert_eq!(col("Streaming"), col("Hello"));
+    assert_eq!(col("second line"), col("Hello"));
 }

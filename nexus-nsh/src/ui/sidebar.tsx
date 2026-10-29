@@ -1,5 +1,5 @@
 import type { JSX } from "nsh";
-import { List, Scroll, Text, View } from "nsh";
+import { List, Scroll, Text, View, signal } from "nsh";
 import { Button, ContextMenu, MenuItem, Tab, Tabs, Input } from "nsh/base";
 import { Btn, Icon, IconButton, Status, AttentionMark, T, FOCUS, relTime, abbrev, midTruncate } from "./kit";
 import { manifest } from "../gen/manifest";
@@ -30,7 +30,7 @@ export function SidebarTabs(p: { labels?: boolean }) {
             selected={leftTab() === t().id} accessibilityLabel={t().label} testID={`tab-${t().id}`} disabled={false}
             onPress={() => { leftTab.set(t().id); if (t().id === "files") void loadFiles(); savePrefs(); }}
             tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{t().label}{hint(t().command) ? `  ${hint(t().command)}` : ""}</Text>}
-            class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) hover:bg-accent selected:bg-selection ${p.labels ? "px-2.5 min-h-11" : isNarrow() ? "size-11" : "size-8"} ${FOCUS}`}
+            class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) hover:bg-accent ${p.labels ? "px-2.5 min-h-11" : isNarrow() ? "size-11" : "size-8"} ${FOCUS}`}
           >
             <Icon name={TAB_ICON[t().id]} class={leftTab() === t().id ? "tint-foreground" : "tint-muted-foreground"} />
             <If when={p.labels && leftTab() === t().id}><Text class="text-[13px] leading-5 text-foreground font-medium">{t().label}</Text></If>
@@ -55,7 +55,7 @@ export function LeftSidebar(p: { drawer?: boolean }) {
       <View class="border-t border-border p-2">
         <Button
           onPress={() => run("app.settings")} testID="open-settings" accessibilityLabel="Settings" selected={centre() === "settings"}
-          class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 hover:bg-accent selected:bg-selection ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}
+          class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 hover:bg-accent ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}
         >
           <Icon name="settings" />
           <Text class="flex-1 text-[13px] leading-5 text-foreground">Settings</Text>
@@ -65,6 +65,27 @@ export function LeftSidebar(p: { drawer?: boolean }) {
     </View>
   );
 }
+/** Compact session rail shown when the docked sidebar is collapsed. */
+export function SessionRail() {
+  return (
+    <View class="w-12 bg-sidebar items-center pt-2" testID="session-rail" accessibilityLabel="Session rail">
+      <IconButton icon="search" label="Search sessions" testID="rail-search" onPress={() => { leftTab.set("sessions"); toggleLeft(); }} />
+      <View class="h-[112px] justify-start"><IconButton icon="plus" label="New session" testID="rail-new-session" onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} /></View>
+      <Scroll class="flex-1" contentClass="items-center gap-1 pb-2">
+        <Each of={rowSessions()} key={(s) => s.id}>
+          {(s) => <Button onPress={() => void selectSession(s().id)} accessibilityLabel={`Open ${s().title || "Untitled"}`}
+            selected={(m(), model.selected?.sessionId === s().id && centre() === "session")} testID={`rail-session-${s().id}`}
+            tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{s().title || "Untitled"}</Text>}
+            class={`relative size-9 items-center justify-center rounded-(--radius) hover:bg-accent ${FOCUS}`}>
+            <If when={(m(), model.selected?.sessionId === s().id && centre() === "session")}><View class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary" /></If>
+            <Text class={`text-[13px] ${(m(), model.selected?.sessionId === s().id) ? "font-semibold text-foreground" : "text-muted-foreground"}`}>{(s().title || "Untitled").trim().charAt(0).toUpperCase()}</Text>
+          </Button>}
+        </Each>
+      </Scroll>
+    </View>
+  );
+}
+
 function Empty(p: { title: string; body?: string; action?: JSX.Element }) {
   return (
     <View class="items-start gap-2 p-4">
@@ -77,10 +98,13 @@ function Empty(p: { title: string; body?: string; action?: JSX.Element }) {
 
 function projectName(id: string) { return model.projects.get(id)?.name ?? "project"; }
 
+const sessionQuery = signal("");
+
 type Item = { key: string; kind: "header"; title: string; n: number } | { key: string; kind: "session"; s: Session };
 /** All-projects scope groups sessions under their project; one project is a flat list. */
 function rowItems(): Item[] {
-  const ses = rowSessions();
+  const query = sessionQuery().trim().toLowerCase();
+  const ses = rowSessions().filter((s) => !query || s.title.toLowerCase().includes(query));
   if (!scopeAll()) return ses.map((s) => ({ key: s.id, kind: "session" as const, s }));
   const out: Item[] = [];
   for (const pr of model.projectsRecent()) {
@@ -109,6 +133,7 @@ function SessionsTab() {
   return (
     <View class="flex-1 min-h-0">
       <View class="gap-2 p-2">
+        <Input placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => sessionQuery.set(value)} class="h-8 rounded-(--radius) bg-background px-2 text-[13px] text-foreground placeholder:text-muted-foreground" />
         <View class="flex-row items-center gap-2">
           <Button onPress={() => run("project.switch")} accessibilityLabel="Current project" class={`flex-1 min-w-0 flex-row items-center gap-1.5 rounded-(--radius) px-2 hover:bg-accent ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}>
             <Text style={{ numberOfLines: 1 }} class="flex-1 text-[13px] leading-5 font-medium text-foreground">{scopeAll() ? "All projects" : currentProject() ? projectName(currentProject()!) : "No project"}</Text>
@@ -117,14 +142,14 @@ function SessionsTab() {
           <IconButton icon="plus" label="New session" testID="new-session" onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} reason={availability(byId.get("session.new")!).ok ? hint("session.new") ?? undefined : availability(byId.get("session.new")!).reason} />
         </View>
         <View class="flex-row items-center gap-1">
-          <Chip label="Current project" on={!scopeAll()} onPress={() => run("sessions.scope_toggle")} />
-          <Chip label="All" on={scopeAll()} onPress={() => run("sessions.scope_toggle")} />
+          <Chip label="Project" on={!scopeAll()} onPress={() => scopeAll.set(false)} />
+          <Chip label="Global" on={scopeAll()} onPress={() => scopeAll.set(true)} />
           <View class="flex-1" />
           <Chip label="Archived" on={archivedFilter()} onPress={() => run("sessions.archived_filter")} />
         </View>
       </View>
       <If when={rowItems().length > 0} else={
-        <If when={(m(), model.projects.size === 0)} else={<Empty title={archivedFilter() ? "No archived sessions" : "No sessions yet"} body={archivedFilter() ? "Archive a session to find it here." : "Start one with the + button or the New session command."} />}>
+        <If when={(m(), model.projects.size === 0)} else={<Empty title={sessionQuery().trim() ? "No matching sessions" : archivedFilter() ? "No archived sessions" : "No sessions yet"} body={archivedFilter() ? "Archive a session to find it here." : "Start one with the + button or the New session command."} />}>
           <Empty title="No projects yet" body="Add a project directory to start a session." action={<Btn label="Add project" icon="plus" onPress={() => run("project.add")} kind="primary" />} />
         </If>
       }>
@@ -144,8 +169,8 @@ function SessionsTab() {
 
 function Chip(p: { label: string; on: boolean; onPress: () => void }) {
   return (
-    <Button onPress={p.onPress} selected={p.on} accessibilityLabel={p.label} testID={`chip-${p.label.toLowerCase().replace(/ /g, "-")}`} class={`rounded-(--radius) px-2 min-h-6 justify-center hover:bg-accent selected:bg-selection ${FOCUS}`}>
-      <Text class={`text-xs leading-4 ${p.on ? "text-foreground font-medium" : "text-muted-foreground"}`}>{p.label}</Text>
+    <Button onPress={p.onPress} selected={p.on} accessibilityLabel={p.label} testID={`chip-${p.label.toLowerCase().replace(/ /g, "-")}`} class={`rounded-(--radius) px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}>
+      <Text class={`text-xs leading-4 ${p.on ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{p.on ? "✓ " : ""}{p.label}</Text>
     </Button>
   );
 }
@@ -172,9 +197,9 @@ function SessionRow(p: { s: () => Session }) {
           onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== s().id && focusedSidebarRow()?.id === s().id) focusedSidebarRow.set(null); }}
           onPress={() => { focusedSidebarRow.set(ref()); void selectSession(s().id); }} accessibilityState={{ selected: sel() }} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${s().status === "busy" ? "running" : "idle"}`}
-          class={`group/row relative rounded-(--radius) px-2 py-2 hover:bg-accent selected:bg-selection ${isNarrow() ? "min-h-[56px]" : "h-[52px]"} ${FOCUS}`}
+          class={`group/row relative rounded-(--radius) px-2 py-2 hover:bg-accent ${isNarrow() ? "min-h-[56px]" : "h-[48px]"} ${FOCUS}`}
         >
-          <If when={focusedSidebarRow()?.id === s().id}>
+          <If when={focusedSidebarRow()?.id === s().id || sel()}>
             {() => <View class="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-primary" testID="row-focus-bar" />}
           </If>
           <View class="flex-row items-center gap-2 h-5">
@@ -289,7 +314,7 @@ function ProjectRow(p: { project: () => Project; count: (id: string) => number }
         <View role="button" onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== project().id && focusedSidebarRow()?.id === project().id) focusedSidebarRow.set(null); }}
           onPress={() => { focusedSidebarRow.set(ref()); selectProject(project().id); }} accessibilityState={{ selected: selected() }} testID={`project-${project().id}`} accessibilityLabel={`Project ${project().name}`}
-          class={`gap-0.5 rounded-(--radius) px-2.5 py-1.5 hover:bg-accent selected:bg-selection ${FOCUS}`}>
+          class={`gap-0.5 rounded-(--radius) px-2.5 py-1.5 hover:bg-accent ${FOCUS}`}>
           <View class="flex-row items-center gap-2">
             <Text style={{ numberOfLines: 1 }} class={`flex-1 text-[13px] leading-5 ${selected() ? "text-foreground font-medium" : "text-foreground"}`}>{project().name}</Text>
             <Text class={T.meta}>{`${p.count(project().id)} · ${relTime(project().updated)}`}</Text>

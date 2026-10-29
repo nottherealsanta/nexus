@@ -179,6 +179,9 @@ class Renderer:
         elif kind == "session.workspace_tools":
             self._break()
             self._print(f"{CYAN}⌂ workspace control tools activated{RESET}")
+        elif kind == "session.message_tool":
+            self._break()
+            self._print(f"{CYAN}✉ message_session exposed{RESET}")
         elif kind == "session.directory_changed":
             self._break()
             branch = f" · branch {data['branch']}" if data.get("branch") else ""

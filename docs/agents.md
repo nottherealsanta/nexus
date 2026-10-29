@@ -189,6 +189,12 @@ says none are available. Keep agent bodies tool-agnostic: naming tools elsewhere
 would leave stale advice when those tools are disabled. Custom bodies are not
 rewritten beyond the placeholder.
 
+The `session` tool is how subagents are launched. Its first successful call also
+exposes `message_session` to that session (once, kept in the snapshot's
+`messaging` state), to steer a working child or send a follow-up to a finished
+one ([daemon.md](daemon.md#session-trees-who-launched-whom)). The `session` tool's
+description says so.
+
 The `session` tool's guidance and `agent` enum are part of the snapshot: they
 come from the child-capable agents loaded when that parent session was created.
 A new parent picks up added agents, description changes and mode changes; an

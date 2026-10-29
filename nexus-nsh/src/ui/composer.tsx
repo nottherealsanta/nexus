@@ -1,4 +1,4 @@
-import { Text, View, effect, signal, untracked } from "nsh";
+import { Image, Text, View, effect, signal, untracked } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Status, T, midTruncate } from "./kit";
 import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
@@ -14,6 +14,8 @@ import { agentColor, agentRailColor } from "../agent-color";
 import { detailOf, fmtDuration } from "./timeline";
 import type { ToolDetailLine } from "./timeline";
 import { DiffView, diffItems } from "./diff";
+
+import { imageDrafts, readImage } from "../images";
 
 // Composer (DESIGN_PLAN D11, I5): a card on the panel surface, pill selectors, the context meter,
 // a Working row above it while busy, the completion block on its top edge and the project strip below.
@@ -67,6 +69,25 @@ export function Composer() {
   const h = signal(44);
   const key = () => draftKey();
   const text = () => draft()[key()] ?? "";
+  const images = () => imageDrafts()[key()] ?? [];
+  const pasting = signal(false);
+  const appendImages = (target: string, added: import("../images").DraftImage[]) => {
+    const all = [...(imageDrafts()[target] ?? []), ...added];
+    const bytes = all.reduce((n, i) => n + (i.data_url.length - i.data_url.indexOf(",") - 1) * 3 / 4, 0);
+    if (all.length > 8 || bytes > 8 * 1024 * 1024) throw new Error("At most eight images and 8 MiB per message");
+    imageDrafts.update((d) => ({ ...d, [target]: all }));
+  };
+  const pasteImages = async (files: File[]) => {
+    if (!files.length || reason() || pasting()) return;
+    const target = key();
+    if ((imageDrafts()[target]?.length ?? 0) + files.length > 8) { toast("error", "At most eight images per message"); return; }
+    pasting.set(true);
+    try {
+      const added = await Promise.all(files.map(readImage));
+      appendImages(target, added);
+    } catch (e) { toast("error", String(e)); }
+    finally { pasting.set(false); }
+  };
   const ses = () => viewed();
   const busy = () => { m(); return ses()?.status === "busy"; };
   const reason = (): string | null => {
@@ -77,13 +98,18 @@ export function Composer() {
     if (busy()) return "Steering and queueing need Core (PLAN.md Step 12a); a prompt while busy is refused";
     return null;
   };
-  const canSend = () => !reason() && text().trim().length > 0;
+  const canSend = () => !reason() && !pasting() && (text().trim().length > 0 || images().length > 0);
   const send = async () => {
     const t = text().trim();
-    if (t && runSlashCommand(t)) { draft.update((d) => ({ ...d, [key()]: "" })); return; }
+    if (t && !images().length && runSlashCommand(t)) { draft.update((d) => ({ ...d, [key()]: "" })); return; }
     if (!canSend()) { const r = reason(); if (r) toast("info", r); return; }
-    const ok = await sendPrompt(t);
-    if (ok) draft.update((d) => ({ ...d, [key()]: "" }));
+    const target = key();
+    const sent = images();
+    const ok = await sendPrompt(t, sent);
+    if (ok) {
+      draft.update((d) => ({ ...d, [target]: (d[target] ?? "").trim() === t ? "" : d[target] ?? "" }));
+      imageDrafts.update((d) => ({ ...d, [target]: (d[target] ?? []).filter((i) => !sent.includes(i)) }));
+    }
   };
   const interrupted = () => term("session.interrupted");
   const agent = () => { m(); return ses()?.agent ?? sessionDraft().agent ?? "build"; };
@@ -164,7 +190,7 @@ export function Composer() {
 
   const agentName = () => capitalize(agent());
   return (
-    <View class="px-4 pb-2 pt-1 items-center" testID="composer-area">
+    <View class="px-4 pb-2 pt-3 items-center" testID="composer-area">
       <View class="w-full max-w-[760px]">
         <If when={busy()}><WorkingRow /></If>
         <If when={open()}>
@@ -178,7 +204,7 @@ export function Composer() {
                     const sel = () => i() === Math.min(selected(), rows().length - 1);
                     return (
                       <Button onPress={() => accept(r())} selected={sel()} testID={`completion-${r().key}`}
-                        class={`flex-row items-center gap-3 h-8 px-3 hover:bg-accent selected:bg-selection ${FOCUS}`}>
+                        class={`flex-row items-center gap-3 h-8 px-3 hover:bg-accent ${FOCUS}`}>
                         <If when={sel()}>{() => <View class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary" />}</If>
                         <Text style={{ numberOfLines: 1 }} class={`font-mono text-[12.5px] leading-5 font-medium ${r().muted ? "text-muted-foreground" : "text-foreground"}`}>{r().value}</Text>
                         <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[12px] leading-4 text-muted-foreground">{r().muted ? `${r().help} · ${r().muted}` : r().help}</Text>
@@ -199,10 +225,23 @@ export function Composer() {
           }}
         </If>
         <View
-          class={`w-full rounded-(--radius-card) border bg-card px-4 py-3 ${focused() ? "border-ring" : "border-border"}`}
+          class={`w-full rounded-(--radius-card) border bg-card px-4 pt-5 pb-3 ${focused() ? "border-ring" : "border-border"}`}
           accessibilityLabel="Composer" testID="composer-panel"
         >
+          <If when={images().length > 0}>
+            <View class="flex-row flex-wrap gap-2 pb-3" testID="image-previews">
+              <Each of={images()} key={(image) => image.id}>
+                {(image) => <View class="gap-1 w-28">
+                  <Image src={image().data_url} style={{ width: 112, height: 84, objectFit: "contain" }} accessibilityLabel={image().name} />
+                  <Text style={{ numberOfLines: 1 }} class={T.meta}>{image().name}</Text>
+                  <Btn label="Remove image" onPress={() => imageDrafts.update((d) => ({ ...d, [key()]: images().filter((i) => i !== image()) }))} />
+                </View>}
+              </Each>
+            </View>
+          </If>
+          <If when={pasting()}><Text class={T.meta}>Preparing image…</Text></If>
           <Input
+            onPaste={(e) => void pasteImages((e.files ?? []).filter((f) => f.type.startsWith("image/")))}
             ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
             placeholder={reason() ?? (centre() === "new_session" ? "Message to start a new session" : "Type a message…")}
             readonly={!live() || !!ses()?.archived}
@@ -210,7 +249,7 @@ export function Composer() {
             onChange={({ value: t }) => { selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); }}
             onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
             onKeyPress={(e: { key: string }) => { if (String(e.key).toLowerCase() === "escape" && open()) dismissed.set(text()); }}
-            onContentSizeChange={(s) => h.set(Math.min(220, Math.max(44, Math.ceil(s.size.height) + 16)))}
+            onContentSizeChange={(s) => h.set(Math.min(220, Math.max(44, Math.ceil(s.size?.height ?? (s as any).height ?? 28) + 16)))}
             style={{ height: h() }}
             class="px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
           />
@@ -312,11 +351,10 @@ function WorkingRow() {
   );
 }
 
-/** The project strip under the card: project, home-shortened path, branch, checkout or worktree; palette hint when idle. */
+/** The location strip shows the path, branch and linked-worktree icon. */
 function LocationStrip() {
   const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
   const session = () => { m(); return viewed(); };
-  const busy = () => { m(); return session()?.status === "busy"; };
   const directory = () => session()?.directory ?? project()?.path ?? "";
   const selectedTree = () => {
     const s = session(), p = currentProject();
@@ -340,15 +378,10 @@ function LocationStrip() {
     const c = byId.get("session.worktrees");
     return c ? availability(c) : { ok: false, reason: "Worktree controls are not available in NSH." };
   };
-  const paletteHint = () => {
-    const c = byId.get("palette.open");
-    return `${c ? keyLabel(c) ?? "cmd+p" : "cmd+p"} commands`;
-  };
   const tooltip = (text: string) => <Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{text}</Text>;
   return (
     <If when={project() && directory()}>
       <View class="w-full flex-row items-center gap-2 min-h-7 pt-1.5 px-1 min-w-0" testID="location-strip">
-        <Text style={{ numberOfLines: 1 }} class="shrink-0 max-w-[30%] text-[13px] leading-5 font-semibold text-foreground">{project()?.name ?? ""}</Text>
         <If when={!!session()}>
           <Button
             disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
@@ -368,11 +401,8 @@ function LocationStrip() {
             ><Text style={{ numberOfLines: 1 }} class={T.sec}>{`⌥ ${branch()!}`}</Text></Button>
           </If>
         </If>
-        <If when={linked()} else={<Text testID="location-checkout" class={`shrink-0 ${T.meta}`}>checkout</Text>}>
-          <Text testID="location-worktree" class="shrink-0 text-[12px] leading-4 font-bold text-agent-violet">worktree</Text>
-        </If>
+        <If when={linked()}><View testID="location-worktree" accessibilityLabel="Linked worktree"><Icon name="branch" size={14} class="tint-muted-foreground" /></View></If>
         <View class="flex-1" />
-        <If when={!busy()}><Text class={T.meta}>{paletteHint()}</Text></If>
       </View>
     </If>
   );
@@ -548,7 +578,7 @@ function ApprovalBody(p: { a: Approval }) {
               return (
                 <Button onPress={() => r().run?.()} disabled={off()} testID={r().id}
                   accessibilityLabel={off() ? `${r().title}, unavailable: ${reason()}` : r().title}
-                  class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-8"} ${i() === choice() && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-selection"} ${FOCUS}`}>
+                  class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-8"} ${off() ? "" : "hover:bg-accent"} ${FOCUS}`}>
                   <Text class={`w-3 text-[13px] leading-5 ${off() ? "text-transparent" : "text-primary"}`}>{i() === choice() && !off() ? "▸" : " "}</Text>
                   <Text style={{ numberOfLines: 1 }} class={`w-16 shrink-0 text-center text-xs leading-5 font-bold rounded-(--radius) px-1.5 ${off() ? "bg-muted text-muted-foreground" : "bg-raised text-foreground"}`}>{keyLabel(byId.get(r().cmd)!) ?? ""}</Text>
                   <Text class={`text-[13px] leading-5 ${off() ? "text-muted-foreground" : r().id === "allow-once" ? "font-semibold text-foreground" : "text-foreground"}`}>{r().title}</Text>
@@ -580,7 +610,7 @@ function QuestionBody(p: { q: Question }) {
                 {(o) => (
                   <Button role={qq().multiple ? "checkbox" : "radio"} selected={sel(o().id)} accessibilityLabel={o().label}
                     onPress={() => upd(id(), (a) => ({ ...a, selected: qq().multiple ? (a.selected.includes(o().id) ? a.selected.filter((x) => x !== o().id) : [...a.selected, o().id]) : [o().id] }))}
-                    class={`flex-row items-center gap-2 rounded-(--radius) border border-border px-2.5 min-h-8 hover:bg-accent selected:bg-selection selected:border-ring ${FOCUS}`}>
+                    class={`flex-row items-center gap-2 rounded-(--radius) border border-border px-2.5 min-h-8 hover:bg-accent selected:border-ring ${FOCUS}`}>
                     <Text class="text-[13px] text-foreground-secondary w-4">{qq().multiple ? (sel(o().id) ? "[x]" : "[ ]") : sel(o().id) ? "(•)" : "( )"}</Text>
                     <Text class="flex-1 text-[13px] leading-5 text-foreground">{o().label}</Text>
                   </Button>

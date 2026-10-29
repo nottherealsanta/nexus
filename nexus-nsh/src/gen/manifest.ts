@@ -948,7 +948,6 @@ export const manifest = {
    "category": "notifications",
    "slash": "notifications",
    "keys": {
-    "tui": "ctrl+n",
     "nsh": "cmd+shift+n"
    },
    "key_context": "global",
@@ -1225,7 +1224,7 @@ export const manifest = {
    "category": "session",
    "slash": "new",
    "keys": {
-    "tui": "ctrl+t",
+    "tui": "ctrl+n",
     "nsh": "cmd+n"
    },
    "key_context": "global",
@@ -1260,6 +1259,7 @@ export const manifest = {
    "id": "session.switch",
    "title": "Switch session",
    "category": "session",
+   "slash": "sessions",
    "keys": {
     "tui": "ctrl+k",
     "nsh": "cmd+k"
@@ -1800,6 +1800,10 @@ export const manifest = {
   },
   {
    "id": "agent.change",
+   "keys": {
+    "tui": "ctrl+g"
+   },
+   "key_context": "global",
    "title": "Change agent",
    "category": "agent",
    "slash": "agent",
@@ -1909,7 +1913,6 @@ export const manifest = {
    "category": "timeline",
    "slash": "turn",
    "keys": {
-    "tui": "ctrl+g",
     "nsh": "cmd+g"
    },
    "key_context": "global",

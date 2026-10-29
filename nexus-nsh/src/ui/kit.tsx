@@ -25,7 +25,7 @@ export function IconButton(p: { icon: IconName; label: string; onPress?: () => v
     <Button
       onPress={p.onPress} disabled={p.disabled} selected={p.selected} accessibilityLabel={p.label} testID={p.testID}
       tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{p.reason ? `${p.label}: ${p.reason}` : p.label}</Text>}
-      class={`items-center justify-center rounded-(--radius) hover:bg-accent selected:bg-selection active:bg-selection disabled:opacity-50 ${isNarrow() ? "size-11" : "size-8"} ${FOCUS} ${p.class ?? ""}`}
+      class={`items-center justify-center rounded-(--radius) hover:bg-accent disabled:opacity-50 ${isNarrow() ? "size-11" : "size-8"} ${FOCUS} ${p.class ?? ""}`}
     >
       <Icon name={p.icon} class={p.tint ?? "tint-foreground-secondary"} />
     </Button>

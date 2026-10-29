@@ -81,7 +81,7 @@ async def test_blocking_child_answers_the_parent_tool_call(env):
         parent["id"], "c1", "agent", "helper", "Find it")
     assert (child["directory"], child["permission"]) == (parent["directory"], "allow")
     tool_output = next(t for role, t in await _texts(client, parent["id"]) if role == "tool")
-    assert tool_output.startswith(f"Child session {child['id']} (agent helper) finished.") and tool_output.endswith("42")
+    assert tool_output.startswith(f"Child session {child['id']} (agent helper) finished.\n\n42\n\n[Nexus notice: `message_session` is now available]")
     # A child never gets the session tool, even when its agent lists it.
     assert [t.name for t in providers["child"].requests[0].tools] == ["read", "bash", "bash_output", "bash_kill", "edit", "write", "ask", "code", "expose_workspace_tools"]
     tree = (await client.get(f"/api/session/{child['id']}/tree")).json()
@@ -184,3 +184,98 @@ async def test_children_inherit_disabled_tools(env):
     assert len(children) == 2
     assert all(c['disabled_tools'] == ['bash', 'write'] for c in children)
     assert all('bash' not in c['tools'] and 'write' not in c['tools'] for c in children)
+
+
+def _message(call_id, **args):
+    return ToolCall(call_id, "message_session", json.dumps(args))
+
+
+async def _start_parent(client, workspace):
+    return (await client.post("/api/session", json={"directory": str(workspace), "agent": "orchestrate"})).json()
+
+
+async def _prompt_and_wait(rt, client, session_id, text="go"):
+    await client.post(f"/api/session/{session_id}/prompt", json={"text": text})
+    await _idle(rt)
+
+
+async def test_first_session_call_exposes_message_session_once(env):
+    rt, client, providers, workspace = env
+    providers["parent"].replies = [
+        [_call("c1", agent="helper", prompt="one")], [_call("c2", agent="helper", prompt="two")], [Text("done")]]
+    providers["child"].replies = [[Text("1")], [Text("2")]]
+    parent = await _start_parent(client, workspace)
+    assert "message_session" not in parent["tools"]
+    session_tool = rt._agent(rt.session(parent["id"])).tools["session"]
+    assert "message_session" in session_tool.spec.description and "Launch a subagent" in session_tool.spec.description
+    await _prompt_and_wait(rt, client, parent["id"])
+
+    requests = providers["parent"].requests
+    assert "message_session" not in [t.name for t in requests[0].tools]
+    assert [t.name for t in requests[1].tools][-1] == "message_session"
+    assert "message_session" in [t.name for t in requests[2].tools]
+    tool_outputs = [t for role, t in await _texts(client, parent["id"]) if role == "tool"]
+    assert "[Nexus notice: `message_session` is now available]" in tool_outputs[0]
+    assert "message_session" not in tool_outputs[1]
+    events = (await client.get(f"/api/session/{parent['id']}/event", params={"limit": 5000})).json()["events"]
+    assert len([e for e in events if e["type"] == "session.message_tool"]) == 1
+    snapshot = (await client.get(f"/api/session/{parent['id']}/snapshot")).json()
+    assert snapshot["messaging"] == {"activated": True} and "message_session" in snapshot["tool_definitions"]
+    # Children never get it, and it can be switched off on its own.
+    child = (await client.get(f"/api/session/{parent['id']}/children")).json()[0]
+    assert "message_session" not in child["tools"]
+    patched = (await client.patch(f"/api/session/{parent['id']}", json={"disabled_tools": ["message_session"]})).json()
+    assert "message_session" not in patched["tools"] and "session" in patched["tools"]
+
+
+async def test_message_session_follows_up_an_idle_child_and_rejects_others(env):
+    rt, client, providers, workspace = env
+    parent = await _start_parent(client, workspace)
+    stranger = await _start_parent(client, workspace)
+    providers["parent"].replies = [[_call("c1", agent="helper", prompt="first")], [Text("first done")]]
+    providers["child"].replies = [[Text("answer one")], [Text("answer two")]]
+    await _prompt_and_wait(rt, client, parent["id"])
+    [child] = (await client.get(f"/api/session/{parent['id']}/children")).json()
+
+    providers["parent"].replies = [
+        [_message("m1", session="ses_nope", message="x"), _message("m2", session=stranger["id"], message="x"),
+         _message("m3", session=child["id"], message="now the second thing")],
+        [Text("waiting")], [Text("got it")]]
+    await _prompt_and_wait(rt, client, parent["id"], "follow up")
+
+    parent_texts = await _texts(client, parent["id"])
+    tool_outputs = [t for role, t in parent_texts if role == "tool"][1:]
+    assert tool_outputs[0].startswith("ses_nope is not a child session of this session")
+    assert tool_outputs[1].startswith(f"{stranger['id']} is not a child session of this session")
+    assert "was idle; started a new turn" in tool_outputs[2]
+    assert any(role == "user" and t.startswith("[Notification: child session finished]") and t.endswith("answer two")
+               for role, t in parent_texts)
+    child_texts = await _texts(client, child["id"])
+    assert ("user", "now the second thing") in child_texts and child_texts[-1] == ("assistant", "answer two")
+
+
+async def test_message_session_steers_a_working_child(env):
+    rt, client, providers, workspace = env
+    gate = asyncio.Event()
+    providers["child"] = Scripted([[Text("first")], [Text("after steer")]], gate=gate)
+    parent = await _start_parent(client, workspace)
+    providers["parent"].replies = [[_call("c1", agent="helper", prompt="work", wait=False)], [Text("started")]]
+    await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
+    for _ in range(300):
+        if parent["id"] not in rt.turns and rt.turns:
+            break
+        await asyncio.sleep(0.01)
+    [child] = (await client.get(f"/api/session/{parent['id']}/children")).json()
+    assert child["status"] == "busy"
+
+    result = rt._message_child(parent["id"], {"session": child["id"], "message": "change course"})
+    assert "which is working" in result
+    providers["parent"].replies = [[Text("noted 1")], [Text("noted 2")]]
+    gate.set()
+    await _idle(rt)
+
+    child_texts = await _texts(client, child["id"])
+    assert ("user", "change course") in child_texts
+    assert child_texts[-1] == ("assistant", "after steer")
+    notices = [t for role, t in await _texts(client, parent["id"]) if role == "user" and t.startswith("[Notification")]
+    assert notices and notices[-1].endswith("after steer")

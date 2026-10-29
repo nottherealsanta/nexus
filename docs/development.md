@@ -70,8 +70,8 @@ Then, from any directory:
 
 | Command | Does |
 | --- | --- |
-| `nexus` / `nexus tui` | Launch the TUI (starts Core with the repo's `uv run nexus`); `--release` builds/runs the release binary |
-| `nexus build` | `uv sync`, debug TUI build, NSH web build (`--release` for the TUI) |
+| `nexus` / `nexus tui` | Launch the TUI (starts Core with the repo's `uv run nexus`); runs the release binary (`--debug` for a debug build; debug redraws are about 10x slower) |
+| `nexus build` | `uv sync`, release TUI build (`--debug` for a debug build), NSH web build |
 | `nexus web` | Build the web app if needed, start Core, serve it on 4820 and open it (`--no-open`, `--port N`) |
 | `nexus restart` | Stop and start the Core daemon |
 | `nexus stop` | Stop the Core daemon |

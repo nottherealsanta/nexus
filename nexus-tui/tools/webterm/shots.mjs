@@ -178,6 +178,34 @@ for (const theme of ["dark", "light"]) {
     await h.waitFor("Release notes for 0.10"); await h.waitFor("total"); await h.idle(500);
   } });
 }
+for (const [cols, rows] of [[80, 24], [120, 36]]) {
+  await shot({ name: `context-detail-${cols}x${rows}-dark`, cols, rows, steps: async (h) => {
+    await h.key("Control+k", 400); await h.type("Release notes", 300); await h.key("Enter", 600);
+    await h.waitFor("System prompt");
+    const lines = (await h.text()).split("\n");
+    const y = lines.findIndex((line) => line.includes("System prompt"));
+    const x = lines[y].indexOf("System prompt");
+    await h.page.mouse.click(...(await h.cell(x, y))); await h.idle(500);
+  } });
+}
+for (const heading of ["Context", "System prompt", "AGENTS.md", "Tools"]) {
+  await shot({ name: `context-click-${heading.replaceAll(" ", "-")}-120x36-dark`, cols: 120, rows: 36, steps: async (h) => {
+    await h.key("Control+k", 400); await h.type("Release notes", 300); await h.key("Enter", 600);
+    await h.waitFor("System prompt");
+    const lines = (await h.text()).split("\n");
+    const y = lines.findIndex((line) => line.includes(heading));
+    const x = lines[y].indexOf(heading);
+    await h.page.mouse.click(...(await h.cell(x, y))); await h.idle(500);
+    if (!(await h.text()).includes("scroll · esc close")) throw new Error(`${heading} did not open details`);
+  } });
+}
+await shot({ name: "context-preview-click-120x36-dark", cols: 120, rows: 36, steps: async (h) => {
+  await h.waitFor("System prompt");
+  const lines = (await h.text()).split("\n");
+  const y = lines.findIndex((line) => line.includes("System prompt"));
+  await h.page.mouse.click(...(await h.cell(lines[y].indexOf("System prompt"), y))); await h.waitFor("preview");
+} });
+await shot({ name: "rail-aligned-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.sidebar(); } });
 await shot({ name: "row-menu-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.hover(8, 4, 100); await h.page.mouse.click(...(await h.cell(8, 4)), { button: "right" }); await h.idle(500); } });
 await shot({ name: "slash-model-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.type("/model", 400); await h.key("Enter", 900); } });
 await shot({ name: "slash-agent-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.type("/agent", 400); await h.key("Enter", 900); } });

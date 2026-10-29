@@ -1,10 +1,10 @@
-import { Scroll, Text, View, signal } from "nsh";
-import { Button, Input } from "nsh/base";
+import { Scroll, Text, View } from "nsh";
+import { Button } from "nsh/base";
 import { IconButton, Status, FOCUS, TONE } from "./kit";
 import { SidebarTabs, attention } from "./sidebar";
-import { byId, closeTab, keyLabel, renameSession, run, rightIsOpen, rightWidthHint, tabIds } from "../commands";
+import { byId, closeTab, keyLabel, run, rightIsOpen, rightWidthHint, tabIds } from "../commands";
 import { attention as attentionGlyph, statusGlyphs, structure } from "../gen/theme";
-import { centre, connection, drawer, isNarrow, leftOpen, m, model, renaming, unread, viewed, selectSession, width } from "../store";
+import { centre, connection, drawer, isNarrow, leftOpen, m, model, unread, viewed, selectSession, width } from "../store";
 
 function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
 
@@ -39,28 +39,12 @@ function SessionTab(p: { id: string }) {
         testID={`session-tab-${p.id}`} class={`flex-row min-w-0 flex-1 items-center gap-1.5 rounded-l-(--radius) px-2.5 h-7 ${FOCUS}`}
       >
         <Text class={`shrink-0 text-[13px] leading-5 ${status().tone}`} accessibilityLabel={status().label}>{status().glyph}</Text>
-        <If when={active() && renaming()} else={
-          <Text testID={`tab-title-${p.id}`} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 text-[13px] leading-5 ${active() ? "font-semibold text-foreground" : "text-muted-foreground"}`}>{title()}</Text>
-        }>
-          <RenameField initial={title()} />
-        </If>
+        <Text testID={`tab-title-${p.id}`} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 text-[13px] leading-5 ${active() ? "font-semibold text-foreground" : "text-muted-foreground"}`}>{title()}</Text>
       </Button>
       <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`shrink-0 items-center justify-center rounded-r-(--radius) px-1.5 h-7 text-muted-foreground hover:text-foreground ${active() ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100 focus:opacity-100"} ${FOCUS}`}>
         <Text class="text-[15px] leading-5">×</Text>
       </Button>
     </View>
-  );
-}
-
-function RenameField(p: { initial: string }) {
-  let text = p.initial;
-  const done = (commit: boolean) => { renaming.set(false); if (commit && text.trim() && text.trim() !== p.initial) void renameSession(text.trim()); };
-  return (
-    <Input
-      autoFocus defaultValue={p.initial} onChange={({ value: t }) => (text = t)} onSubmit={() => done(true)} submitBehavior="submit"
-      accessibilityLabel="Session title" testID="rename-input" onBlur={() => done(true)}
-      class="min-w-[100px] max-w-[170px] rounded-(--radius) border border-ring bg-card px-1 h-7 text-[13px] text-foreground"
-    />
   );
 }
 
@@ -104,7 +88,6 @@ export function Header() {
         <View class="flex-1 min-w-0 max-w-[760px] flex-row items-center gap-2">
           <WorkspaceTabs />
           <View class="flex-row items-center gap-2 shrink-0">
-            <If when={viewed()?.status === "busy"}><Status kind="running" word /></If>
             <If when={conn().kind !== "live" && conn().kind !== "connecting"}>
               <View class="flex-row items-center gap-1 pr-1"><Status kind="error" word={false} /><Text class="text-xs leading-4 text-error">{conn().kind === "reconnecting" ? "reconnecting" : conn().kind === "starting" ? "starting" : "offline"}</Text></View>
             </If>

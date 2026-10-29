@@ -56,7 +56,8 @@ MODES = ("primary", "subagent", "all")
 CONTROL_TOOLS = ("session",)  # the control tools an agent file may grant
 # Every control tool, whether granted by an agent or always available: none of these
 # is ever bound inside a `code` cell.
-NEXUS_CONTROL_TOOLS = ("session", "expose_workspace_tools", "change_session_directory", "worktree")
+MESSAGE_TOOL = "message_session"  # exposed to a session by its first `session` call, never granted by an agent file
+NEXUS_CONTROL_TOOLS = ("session", MESSAGE_TOOL, "expose_workspace_tools", "change_session_directory", "worktree")
 
 
 @dataclass(frozen=True, slots=True)

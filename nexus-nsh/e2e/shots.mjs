@@ -37,10 +37,12 @@ for (const scheme of ["dark", "light"]) for (const [label, w, h] of sizes) {
   { const { ctx, p } = await open(browser, REAL, w, h, scheme); await shot(p, "01-empty-workspace", tag); if (w < 820) { await openDrawerLeft(p, w); await shot(p, "01b-empty-drawer", tag); } await ctx.close(); }
   const { ctx, p } = await open(browser, SCRIPTED, w, h, scheme);
   await openDrawerLeft(p, w);
-  await tid(p, "chip-all").click(); await settle(p, 400);
+  await tid(p, "chip-global").click(); await settle(p, 400);
   await shot(p, "02-sessions-list", tag);
   await tid(p, `session-${ids.refactor}`).click(); await settle(p, 1200);
   await shot(p, "03-session-messages", tag);
+  await tid(p, "context-fold").click(); await settle(p, 300); await tid(p, "ctx-system-open").click(); await settle(p, 400); await shot(p, "03c-context-detail", tag); await closeAll(p);
+  if (w >= 820) { await tid(p, "toggle-left").click(); await settle(p, 400); await shot(p, "03a-session-rail", tag); await tid(p, "toggle-left").click(); await settle(p, 300); }
   if (w >= 820) { await tid(p, "toggle-right").click(); await settle(p, 500); await shot(p, "03b-session-info", tag); await tid(p, "toggle-right").click(); await settle(p, 300); }
   else { await tid(p, "toggle-right").click(); await settle(p, 700); await shot(p, "08-drawer-right", tag); await closeAll(p); }
   // waiting approval

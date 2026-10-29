@@ -62,7 +62,7 @@ create table if not exists session (
   directory text not null,
   title text not null,
   model text not null,
-  permission text not null default 'ask',
+  permission text not null default 'allow',
   created real not null,
   updated real not null,
   effort text,
@@ -89,6 +89,10 @@ create table if not exists log (
   created real not null,
   floor integer not null default 0,
   head_high integer not null default 0
+);
+create table if not exists preference (
+  name text primary key,
+  value text
 );
 create table if not exists mutation (
   key text primary key,
@@ -283,6 +287,15 @@ class Store:
             self.db.execute("alter table session add column archived integer not null default 0")
         if "revision" not in columns:  # databases from before expected-revision preconditions
             self.db.execute("alter table session add column revision integer not null default 1")
+        # Older sessions defaulted to asking for tool approval. Apply the new
+        # default once, including descendants; later explicit choices survive.
+        with self.db:
+            self.db.execute("create table if not exists migration (name text primary key)")
+            applied = self.db.execute(
+                "insert or ignore into migration (name) values (?)", ("default_tool_allow_v1",))
+            if applied.rowcount:
+                self.db.execute("update session set permission = 'allow', revision = revision + 1 "
+                                "where permission = 'ask'")
         project_columns = {r["name"] for r in self.db.execute("pragma table_info(project)")}
         if "revision" not in project_columns:
             self.db.execute("alter table project add column revision integer not null default 1")
@@ -413,7 +426,7 @@ class Store:
 
     # -- sessions ------------------------------------------------------------
 
-    def create_session(self, project: Project, *, title: str, agent: str, model: str = "", permission: str = "ask",
+    def create_session(self, project: Project, *, title: str, agent: str, model: str = "", permission: str = "allow",
                        effort: str | None = None, parent: Session | None = None, parent_call_id: str | None = None,
                        launched_by: str = "user", disabled_tools: list[str] | None = None,
                        snapshot: dict[str, Any] | None = None) -> Session:
@@ -561,6 +574,25 @@ class Store:
     def delete_session(self, session_id: str) -> bool:
         with self.db:
             return self.db.execute("delete from session where id = ?", (session_id,)).rowcount > 0
+
+    # -- preferences ---------------------------------------------------------
+
+    def preference(self, name: str) -> str | None:
+        """A machine-wide value, or `None` when it was never set."""
+        row = self.db.execute("select value from preference where name = ?", (name,)).fetchone()
+        return row["value"] if row else None
+
+    def set_preference(self, name: str, value: str | None) -> None:
+        """Set a value, or remove it when `value` is `None`."""
+        with self.db:
+            if value is None:
+                self.db.execute("delete from preference where name = ?", (name,))
+            else:
+                self.db.execute(
+                    "insert into preference (name, value) values (?, ?)"
+                    " on conflict(name) do update set value = excluded.value",
+                    (name, value),
+                )
 
     # -- file observations ---------------------------------------------------
 

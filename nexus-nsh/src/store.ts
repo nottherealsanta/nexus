@@ -10,6 +10,7 @@ export type CentreView = "session" | "new_session" | "settings" | "editor" | "fi
 export type Toast = { id: number; level: "success" | "info" | "warning" | "error"; text: string; at: number };
 
 export const model = new Model();
+export const contextDetail = signal<{ title: string; detail: string } | null>(null);
 export const rev = signal(0);
 export const connection = signal<ConnectionState>({ kind: "connecting" });
 export const info = signal<Info | null>(null);

@@ -5,12 +5,13 @@ import { loadFiles } from "./store";
 import { Clipboard, keymap, openUrl } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
-  addProjectOpen, alertDetail, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
+  contextDetail, addProjectOpen, alertDetail, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, currentWorktree, defaultModel, draft, isNarrow, leftOpen, leftTab, live, loadComposerData, loadProjectWorktrees, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
 import { Message } from "./core/api";
+import { imageDrafts } from "./images";
 
 export interface Cmd {
   id: string; title: string; category: string; slash?: string; keys?: { tui?: string; nsh?: string };
@@ -73,8 +74,8 @@ function evalTerm(t: string): boolean {
     case "waiting.approval": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "approval"; }
     case "waiting.question": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "question"; }
     case "waiting.multiple": return waitItems().length > 1;
-    case "composer.has_text": return (draft()[draftKey()] ?? "").trim().length > 0;
-    case "composer.empty": return (draft()[draftKey()] ?? "").trim().length === 0;
+    case "composer.has_text": return (draft()[draftKey()] ?? "").trim().length > 0 || (imageDrafts()[draftKey()]?.length ?? 0) > 0;
+    case "composer.empty": return (draft()[draftKey()] ?? "").trim().length === 0 && !(imageDrafts()[draftKey()]?.length);
     case "has_queued": return false;
     case "timeline.scrolled_up": return scrolledUp();
     case "timeline.has_older": return !!model.selected?.messagesMore;
@@ -158,9 +159,11 @@ export function stepTab(step: number) {
   if (next !== ids[at]) void selectSession(next);
 }
 
-export async function sendPrompt(text: string): Promise<boolean> {
+export async function sendPrompt(text: string, images: import("./images").DraftImage[] = []): Promise<boolean> {
   text = text.trim();
-  if (!text) return false;
+  if (!text && !images.length) return false;
+  const source = draftKey();
+  let createdId: string | null = null;
   try {
     let ses = viewed();
     if (centre() === "new_session" || !ses) {
@@ -172,13 +175,19 @@ export async function sendPrompt(text: string): Promise<boolean> {
       if (selected.model) fields.model = selected.model;
       if (selected.effort) fields.effort = selected.effort;
       const created = await request<any>("POST", "/api/session", { body: { project, ...fields }, key: newKey() });
+      createdId = created.id;
       sessionDraft.set({});
       await selectSession(created.id);
       ses = created;
     }
-    await request("POST", `/api/session/${ses!.id}/prompt`, { body: { text }, key: newKey() });
+    await request("POST", `/api/session/${ses!.id}/prompt`, { body: { text, images }, key: newKey() });
     return true;
   } catch (e) {
+    if (createdId) {
+      const target = createdId;
+      imageDrafts.update((d) => ({ ...d, [source]: (d[source] ?? []).filter((i) => !images.includes(i)), [target]: [...images, ...(d[target] ?? [])] }));
+      draft.update((d) => ({ ...d, [source]: (d[source] ?? "").trim() === text ? "" : d[source] ?? "", [target]: [text, d[target] ?? ""].filter(Boolean).join("\n") }));
+    }
     toast("error", e instanceof ApiError ? e.message : String(e));
     return false;
   }
@@ -455,6 +464,7 @@ const GLOBAL_CONTEXTS = new Set(["global"]);
 const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d+$/.test(k);
 /** Esc is not a per-command lookup: the manifest's ordered rules decide (interface/README.md "Esc precedence"). */
 export function escape() {
+  if (contextDetail()) { contextDetail.set(null); return "context_detail"; }
   for (const rule of manifest.keymap.escape as readonly { id: string; when: readonly string[]; action: string }[]) {
     if (rule.when.every(term)) {
       if (rule.id === "text_edit") { renaming.set(false); return rule.id; }

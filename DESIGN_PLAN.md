@@ -76,6 +76,30 @@ to `nexus-design-mockup/shots/` (`tui/<id>-<mode>.png`, `nsh/<id>-<theme>.png`).
 
 ### D01 — Tokens and surfaces
 
+Context interaction correction: heading text opens details, including the top-level
+Context overview. Only its fold chevron expands/collapses the section. Section
+click targets follow row metadata, not the rendered text or span positions.
+
+Follow-up screenshot revision (2026-10-28): the bottom strip shows the directory
+and branch, without a project-name prefix or checkout/worktree text. A linked
+worktree alone gets a muted, normal-weight icon. Collapsed sidebar search and
+session rows align with the expanded sidebar's content origin. Starting Context
+omits the separate Child agents section; each remaining section heading opens a
+scrollable detail modal showing stored content and metadata. Prompts and instructions
+come from the frozen snapshot; tool definitions are labelled as stored definitions,
+since they may change during a session.
+
+
+**User revision (2026-10-28, screenshot feedback):** this revision supersedes the
+selection-band and spacing directions below. Selected items retain their normal
+surface; a rail/marker and stronger text show selection, including in monochrome.
+There is no brown selection fill. The composer has additional space above its
+input, and no visible `ctrl+p commands` label. The collapsed sidebar contains
+only the session search, compact session initials and new-session action, without
+Sessions/Files/Projects tabs. Session search offers Project and Global scopes.
+The timeline has breathing room above Context and consistent horizontal gutters.
+
+
 - `interface/theme.toml` values stay. Two additions:
   - `border.strong`: dark `#4a4a50`, light `#c2c3c0` (256: 239 / 250; 16:
     `bright_black` / `white`; mono: `[]`). It is decorative and used only for the
@@ -202,17 +226,16 @@ sessions (see below).
 ### D05 — Turn footer
 
 ```
-                                  ▪ Build · gpt-6.1-terra · medium · 3 tools · 4.2s · 12k in · 2k out · $0.04
+                                  Build · gpt-6.1-terra · medium · 3 tools · 4.2s · 12k i · 2k o · 500 r · 33% c
 ```
 
 - The footer is right-aligned at the end of the turn, with one blank row before it and no hairline.
   It is the last row of the turn, so it no longer reads as a header for the next one.
 - Segments, in order:
-  - `▪` and the agent (title case, bold, in its colour);
+  - the agent (title case, bold, in its colour), without a dot;
   - the models used (`a → b` when the model changed);
   - effort, tool count and duration;
-  - tokens: `in`, then `cached` if any, then `out`;
-  - cost when known.
+  - tokens: input `i`, output `o`, reasoning `r`, and cached input as a percentage `c` when input is nonzero. Cost is not shown.
 - **No end status** (user choice): the footer never says `done`, `interrupted` or `error`.
   How a turn ended shows elsewhere: an interrupted turn adds the `/continue` hint
   (`enter continue` when the composer is empty) after the footer; a failed turn has the first
@@ -333,7 +356,7 @@ Old Nexus `transcript/groups.rs` and `transcript/tools.rs`, polished:
   ```
   - **No bar** (user choice): the total is text only. Each section header keeps its token
     count.
-  - `◆` is muted, the title bold primary and the tokens secondary; the meta is muted.
+  - `◆` is muted, the title bold secondary and the tokens secondary; the meta is muted.
   - One preview line per text section, and a column grid for the inventories.
 - After the first turn the whole section folds to
   `▸ Context · 4 items · 17.6k tokens` at the top of the timeline.

@@ -33,6 +33,7 @@ pub enum Effect {
     Sync(SyncCommand),
     Api(ApiCall),
     Copy(String),
+    PasteImage(String),
     /// Suspend the TUI, open this path in `$VISUAL`/`$EDITOR`, and resume.
     OpenEditor(String),
     /// Open a URL in the platform browser (the inspector, documentation).
@@ -428,6 +429,7 @@ pub struct Ui {
     pub scroll: Scroll,
     pub scrolls: HashMap<String, Scroll>,
     pub drafts: HashMap<String, Composer>,
+    pub image_pasting: HashSet<String>,
     pub wait_idx: usize,
     /// The highlighted choice of the focused approval card (0 allow once, 2 deny).
     pub wait_choice: usize,
@@ -473,6 +475,7 @@ pub struct App {
     pub frame: usize,
     pub mouse: Option<(u16, u16)>,
     bindings: HashMap<(String, String), String>,
+    shortcut_leader: Option<Instant>,
 }
 
 /// Subsequence match of `query` in `text`, preferring the tightest window,
@@ -580,6 +583,7 @@ impl App {
                 scrolls: HashMap::new(),
                 completion: CompletionState::default(),
                 drafts: HashMap::new(),
+                image_pasting: HashSet::new(),
                 wait_idx: 0,
                 wait_choice: 0,
                 wait_seen: HashMap::new(),
@@ -605,6 +609,7 @@ impl App {
             frame: 0,
             mouse: None,
             bindings,
+            shortcut_leader: None,
         }
     }
 
@@ -1170,8 +1175,12 @@ impl App {
                 .as_ref()
                 .is_some_and(|w| w.kind == WaitKind::Question),
             "waiting.multiple" => self.wait_items().len() > 1,
-            "composer.has_text" => self.composer_ref().has_text(),
-            "composer.empty" => self.composer_ref().is_empty(),
+            "composer.has_text" => {
+                self.composer_ref().has_text() || !self.composer_ref().images.is_empty()
+            }
+            "composer.empty" => {
+                self.composer_ref().is_empty() && self.composer_ref().images.is_empty()
+            }
             "has_queued" => false,
             "timeline.scrolled_up" => !self.ui.scroll.follow,
             "timeline.has_older" => self
@@ -1494,6 +1503,7 @@ impl App {
             query: Composer::new(),
             selected: 0,
             top: 0,
+            model_info: false,
         }));
     }
 
@@ -1861,7 +1871,10 @@ impl App {
             }
             PaletteMode::Sessions => {
                 for (i, s) in self.state.model.sessions_recent().into_iter().enumerate() {
-                    if s.parent_id.is_some() {
+                    if s.parent_id.is_some()
+                        || (!self.ui.scope_all
+                            && self.current_project().as_deref() != Some(s.project_id.as_str()))
+                    {
                         continue;
                     }
                     let Some(score) = fuzzy(&q, &s.title) else {
@@ -1906,30 +1919,22 @@ impl App {
                 );
                 for (i, m) in self.state.models.iter().enumerate() {
                     let r = m["ref"].as_str().unwrap_or_default();
-                    let label = format!("{} · {}", r, m["name"].as_str().unwrap_or(""));
+                    let label = m["name"]
+                        .as_str()
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or_else(|| r.split_once('/').map_or(r, |(_, name)| name))
+                        .to_owned();
                     let Some(score) = fuzzy(&q, &label).or_else(|| fuzzy(&q, r)) else {
                         continue;
                     };
-                    let mut bits: Vec<String> = Vec::new();
-                    if let Some(c) = m["context"].as_u64() {
-                        bits.push(format!("{}k context", c / 1000));
-                    }
-                    if m["reasoning"].as_bool().unwrap_or(false) {
-                        let efforts: Vec<&str> = m["efforts"]
-                            .as_array()
-                            .map(|a| a.iter().filter_map(Value::as_str).collect())
-                            .unwrap_or_default();
-                        if !efforts.is_empty() {
-                            bits.push(efforts.join("/"));
-                        }
-                    }
+                    let provider = r.split_once('/').map_or("", |(provider, _)| provider);
                     scored.push((
                         score,
                         i,
                         PaletteItem {
                             kind: PaletteKind::Model(r.to_owned()),
                             label,
-                            hint: bits.join(" · "),
+                            hint: provider.to_owned(),
                             category: if r == current { "current" } else { "model" }.into(),
                             reason: None,
                         },
@@ -3077,8 +3082,12 @@ impl App {
     }
 
     fn send(&mut self) {
+        if self.ui.image_pasting.contains(&self.draft_key()) {
+            self.toast(Level::Info, "Preparing clipboard image…");
+            return;
+        }
         let text = self.composer_ref().expanded_text();
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && self.composer_ref().images.is_empty() {
             return;
         }
         // `/name args` runs the command with that slash name.
@@ -3119,14 +3128,21 @@ impl App {
             Some(id) if self.is_busy(&id) => self.run_command("session.steer"),
             Some(id) => {
                 self.composer().take();
-                self.api(ApiCall::Prompt { session: id, text });
+                let images = std::mem::take(&mut self.composer().images);
+                self.api(ApiCall::Prompt {
+                    session: id,
+                    text,
+                    images,
+                });
             }
             None => match self.current_project() {
                 Some(project) => {
                     self.composer().take();
                     let fields = self.ui.draft.fields();
                     self.ui.draft = Draft::default();
+                    let images = std::mem::take(&mut self.composer().images);
                     self.api(ApiCall::NewAndPrompt {
+                        images,
                         project,
                         text,
                         fields,
@@ -3287,6 +3303,27 @@ impl App {
                 if let Some((session, text)) = done.call.draft() {
                     let (session, text) = (session.map(str::to_owned), text.to_owned());
                     self.restore_draft(session.as_deref(), &text);
+                }
+                match &done.call {
+                    ApiCall::Prompt {
+                        session, images, ..
+                    } => self
+                        .ui
+                        .drafts
+                        .entry(session.clone())
+                        .or_default()
+                        .images
+                        .splice(0..0, images.clone())
+                        .for_each(drop),
+                    ApiCall::NewAndPrompt { images, .. } => self
+                        .ui
+                        .drafts
+                        .entry(String::new())
+                        .or_default()
+                        .images
+                        .splice(0..0, images.clone())
+                        .for_each(drop),
+                    _ => {}
                 }
                 self.toast(Level::Error, format!("{name}: {e}"));
             }
@@ -3513,11 +3550,29 @@ impl App {
 
     pub fn handle_key(&mut self, ev: KeyEvent) {
         self.handle_key_inner(ev);
+        let draft = self.composer();
+        let text = draft.text();
+        draft
+            .images
+            .retain(|image| text.contains(&format!("[{}]", image.name)));
         self.completion_sync();
     }
 
     fn handle_key_inner(&mut self, ev: KeyEvent) {
         let Some(name) = keys::name(&ev) else { return };
+        if self.ui.focus == Focus::Composer
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
+        {
+            if name == "ctrl+v" {
+                let key = self.draft_key();
+                if self.ui.image_pasting.insert(key.clone()) {
+                    self.effects.push(Effect::PasteImage(key));
+                }
+                return;
+            }
+        }
         match name.as_str() {
             "ctrl+z"
                 if self.ui.focus == Focus::Composer
@@ -3645,6 +3700,61 @@ impl App {
             return self.edit_key(&ev, &name);
         }
         if self.ui.overlay.is_some() && self.overlay_key(&ev, &name) {
+            return;
+        }
+        // Old Nexus's Ctrl+X leader and direct aliases, only outside modal input.
+        if self.ui.overlay.is_none() && self.ui.dialog.is_none() && self.ui.edit.is_none() {
+            if name == "ctrl+x" {
+                self.shortcut_leader = Some(Instant::now());
+                return;
+            }
+            if let Some(started) = self.shortcut_leader.take() {
+                if started.elapsed().as_secs() < 3 {
+                    let command = match name.as_str() {
+                        "n" if matches!(ev.code, KeyCode::Char('N')) => Some("notifications.open"),
+                        "m" => Some("model.change"),
+                        "n" => Some("session.new"),
+                        "o" | "b" => Some("session.switch"),
+                        "g" => Some("agent.change"),
+                        "s" => Some("app.settings"),
+                        "l" => Some("sidebar.right.toggle"),
+                        "r" => Some("app.reconnect"),
+                        "?" => Some("app.help_keys"),
+                        "t" => {
+                            self.cycle_effort();
+                            return;
+                        }
+                        _ if matches!(ev.code, KeyCode::Char('N')) => Some("notifications.open"),
+                        _ => None,
+                    };
+                    if let Some(command) = command {
+                        self.run_command(command);
+                    }
+                    return;
+                }
+            }
+            match name.as_str() {
+                "ctrl+o" | "ctrl+s" => {
+                    self.run_command("session.switch");
+                    return;
+                }
+                "ctrl+l" => {
+                    self.run_command("sidebar.right.toggle");
+                    return;
+                }
+                "ctrl+r" => {
+                    self.run_command("app.reconnect");
+                    return;
+                }
+                "ctrl+t" => {
+                    self.cycle_effort();
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if self.ui.focus == Focus::Composer && matches!(name.as_str(), "alt+b" | "alt+f") {
+            edit_buffer(self.composer(), &ev, &name, false);
             return;
         }
         if let Some(cmd) = self.lookup("global", &name) {
@@ -3793,6 +3903,47 @@ impl App {
             })
         );
         match name {
+            "tab"
+                if matches!(
+                    self.ui.overlay,
+                    Some(Overlay {
+                        kind: OverlayKind::Palette(Palette {
+                            mode: PaletteMode::Sessions,
+                            ..
+                        }),
+                        ..
+                    })
+                ) =>
+            {
+                self.ui.scope_all = !self.ui.scope_all;
+                if let Some(Overlay {
+                    kind: OverlayKind::Palette(p),
+                    ..
+                }) = self.ui.overlay.as_mut()
+                {
+                    p.selected = 0;
+                    p.top = 0;
+                }
+            }
+            "m" if matches!(
+                self.ui.overlay,
+                Some(Overlay {
+                    kind: OverlayKind::Palette(Palette {
+                        mode: PaletteMode::Models,
+                        ..
+                    }),
+                    ..
+                })
+            ) =>
+            {
+                if let Some(Overlay {
+                    kind: OverlayKind::Palette(p),
+                    ..
+                }) = self.ui.overlay.as_mut()
+                {
+                    p.model_info = !p.model_info;
+                }
+            }
             "up" => self.overlay_move(-1),
             "down" => self.overlay_move(1),
             "pageup" => self.overlay_move(-8),
@@ -3862,6 +4013,7 @@ impl App {
 
     fn overlay_move(&mut self, delta: isize) {
         let n_notices = self.ui.alerts.history.len();
+        let area = self.regions.area;
         match self.ui.overlay.as_mut().map(|o| &mut o.kind) {
             Some(OverlayKind::Palette(_)) => self.palette_move(delta),
             Some(OverlayKind::Notifications { selected }) => {
@@ -3871,6 +4023,10 @@ impl App {
             }
             Some(OverlayKind::Help { top } | OverlayKind::AlertDetail { top, .. }) => {
                 *top = (*top as isize + delta).max(0) as usize;
+            }
+            Some(OverlayKind::ContextDetail { text, top, .. }) => {
+                let max = crate::render::context_detail_max(area, text);
+                *top = (*top as isize + delta).clamp(0, max as isize) as usize;
             }
             None => {}
         }
@@ -3905,6 +4061,21 @@ impl App {
         }
     }
 
+    fn cycle_effort(&mut self) {
+        if !self.term("has_project").unwrap_or(false) {
+            return;
+        }
+        self.open_picker(PaletteMode::Efforts);
+        let items = self.palette_items();
+        if !items.is_empty() {
+            let current = items
+                .iter()
+                .position(|item| item.category == "current")
+                .unwrap_or(items.len() - 1);
+            self.palette_activate(Some((current + 1) % items.len()));
+        }
+    }
+
     fn composer_key(&mut self, ev: &KeyEvent, name: &str) {
         if let Some(cmd) = self
             .focus_contexts()
@@ -3923,9 +4094,12 @@ impl App {
         match name {
             "ctrl+j" => self.composer().newline(),
             "up" | "down" => {
-                let width = crate::render::composer_inner(self.regions.composer)
-                    .width
-                    .max(1) as usize;
+                let width = crate::render::composer_inner(
+                    self.regions.composer,
+                    !self.composer_ref().images.is_empty(),
+                )
+                .width
+                .max(1) as usize;
                 let single = self.composer_ref().layout(width).0.len() == 1;
                 let down = name == "down";
                 if (single || self.composer_ref().in_history()) && self.composer_ref().has_history()
@@ -3951,16 +4125,6 @@ impl App {
         &self.ui.timeline_blocks
     }
 
-    fn has_turns(&self) -> bool {
-        self.messages().iter().any(|m| {
-            m.role == "user"
-                && m.parts.iter().any(|p| {
-                    p["type"] == "text"
-                        && !crate::timeline::is_notice(p["text"].as_str().unwrap_or(""))
-                })
-        })
-    }
-
     fn block_default_open(&self, b: &crate::timeline::Block) -> bool {
         use crate::timeline::BlockKind::*;
         if let Some(open) = b.default_open {
@@ -3968,7 +4132,7 @@ impl App {
         }
         match b.kind {
             Turn | User | Assistant => true,
-            Context => !self.has_turns(),
+            Context => true,
             Notice | Diagnostic | Reasoning | Group | Tool | Child | Older | Code => false,
         }
     }
@@ -4094,14 +4258,6 @@ impl App {
             let key = blocks[*i].key.clone();
             let open = !all_but_last || n + 1 == turns.len();
             self.ui.timeline_open.insert(key, open);
-        }
-        if all_but_last {
-            if let Some(b) = blocks
-                .iter()
-                .find(|b| b.kind == crate::timeline::BlockKind::Context)
-            {
-                self.ui.timeline_open.insert(b.key.clone(), false);
-            }
         }
     }
 
@@ -4710,7 +4866,10 @@ impl App {
         self.mouse = Some((ev.column, ev.row));
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let inner = crate::render::composer_inner(self.regions.composer);
+                let inner = crate::render::composer_inner(
+                    self.regions.composer,
+                    !self.composer_ref().images.is_empty(),
+                );
                 if self.ui.overlay.is_none()
                     && self.ui.dialog.is_none()
                     && self.ui.view == View::Session
@@ -4731,6 +4890,23 @@ impl App {
                 }
                 if let Some(t) = self.hits.at(ev.column, ev.row).cloned() {
                     self.click(t);
+                }
+                // Typing always lands in the composer unless a modal is up; a
+                // click leaves it there (a waiting card or alert keeps its keys).
+                if self.ui.overlay.is_none()
+                    && self.ui.dialog.is_none()
+                    && self.blocking().is_none()
+                    && self.ui.view == View::Session
+                    && matches!(
+                        self.ui.focus,
+                        Focus::Timeline
+                            | Focus::Sidebar
+                            | Focus::Right
+                            | Focus::ToggleLeft
+                            | Focus::ToggleRight
+                    )
+                {
+                    self.ui.focus = Focus::Composer;
                 }
             }
             MouseEventKind::Down(MouseButton::Right) => {
@@ -4759,7 +4935,10 @@ impl App {
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some((start, top)) = self.ui.composer_drag {
-                    let inner = crate::render::composer_inner(self.regions.composer);
+                    let inner = crate::render::composer_inner(
+                        self.regions.composer,
+                        !self.composer_ref().images.is_empty(),
+                    );
                     let row = ev
                         .row
                         .saturating_sub(inner.y)
@@ -4884,6 +5063,57 @@ impl App {
                 self.open_git_diff(i);
             }
             Target::Timeline => self.ui.focus = Focus::Timeline,
+            Target::ContextPreview { title, text } => {
+                self.open_overlay(OverlayKind::ContextDetail {
+                    title: format!("{title} · preview"),
+                    text,
+                    top: 0,
+                })
+            }
+            Target::ContextSection(section) => {
+                if let Some(starting) = self
+                    .state
+                    .model
+                    .selected
+                    .as_ref()
+                    .and_then(|view| view.starting.as_ref())
+                {
+                    let value = match section.as_str() {
+                        "System prompt" => &starting["system_prompt"],
+                        "Tools" => &starting["tool_definitions"],
+                        "Workspace tools" => &starting["workspace"],
+                        _ => &starting["instruction_file"],
+                    };
+                    let text = if section == "Skills" || section == "MCP" {
+                        format!("{section} are not available yet.")
+                    } else if section != "System prompt"
+                        && section != "Tools"
+                        && section != "Workspace tools"
+                    {
+                        let path = value["path"].as_str().unwrap_or("unknown path");
+                        let status = value["status"].as_str().unwrap_or("unknown");
+                        let detail = value["content"]
+                            .as_str()
+                            .or_else(|| value["error"].as_str())
+                            .unwrap_or("No content recorded.");
+                        format!("{path} · {status}\n\n{detail}")
+                    } else {
+                        value.as_str().map(str::to_owned).unwrap_or_else(|| {
+                            serde_json::to_string_pretty(value).unwrap_or_default()
+                        })
+                    };
+                    let title = if section == "Tools" {
+                        "Stored tool definitions".to_owned()
+                    } else {
+                        section
+                    };
+                    self.open_overlay(OverlayKind::ContextDetail {
+                        title,
+                        text,
+                        top: 0,
+                    });
+                }
+            }
             Target::Block(i) => {
                 self.select_block(i);
                 self.activate_block();
@@ -4945,6 +5175,44 @@ impl App {
                 self.ui.settings_row = i;
                 self.settings_activate(i);
             }
+        }
+    }
+
+    pub fn apply_image_paste(
+        &mut self,
+        key: String,
+        result: Result<Option<crate::images::Image>, String>,
+    ) {
+        self.ui.image_pasting.remove(&key);
+        match result {
+            Ok(Some(mut image)) => {
+                let draft = self.ui.drafts.entry(key).or_default();
+                let total: usize = draft.images.iter().map(|i| i.data_url.len()).sum();
+                if draft.images.len() >= 8
+                    || total + image.data_url.len() > 8 * 1024 * 1024 * 4 / 3 + 256
+                {
+                    self.toast(Level::Warning, "At most eight images and 8 MiB per message");
+                } else {
+                    let letter = (b'A'..=b'Z')
+                        .map(char::from)
+                        .find(|letter| {
+                            !draft
+                                .images
+                                .iter()
+                                .any(|i| i.name == format!("Image {letter}"))
+                        })
+                        .unwrap();
+                    image.name = format!("Image {letter}");
+                    let marker = format!("[{}]", image.name);
+                    draft.insert_str(&marker);
+                    draft.images.push(image);
+                }
+            }
+            Ok(None) => self.toast(
+                Level::Info,
+                "No image on the clipboard; use your terminal's paste shortcut for text",
+            ),
+            Err(e) => self.toast(Level::Error, e),
         }
     }
 
@@ -5254,6 +5522,18 @@ fn edit_buffer(buf: &mut Composer, ev: &KeyEvent, name: &str, single_line: bool)
         return buf.insert_char(c);
     }
     match name {
+        "alt+left" | "ctrl+left" | "alt+shift+left" | "ctrl+shift+left" | "alt+b" => {
+            buf.select_move(ev.modifiers.contains(KeyModifiers::SHIFT));
+            buf.word(false);
+        }
+        "alt+right" | "ctrl+right" | "alt+shift+right" | "ctrl+shift+right" | "alt+f" => {
+            buf.select_move(ev.modifiers.contains(KeyModifiers::SHIFT));
+            buf.word(true);
+        }
+        "ctrl+home" | "ctrl+shift+home" | "ctrl+end" | "ctrl+shift+end" => {
+            buf.select_move(ev.modifiers.contains(KeyModifiers::SHIFT));
+            buf.document_edge(matches!(ev.code, KeyCode::End));
+        }
         "shift+left" => {
             buf.select_move(true);
             buf.left();

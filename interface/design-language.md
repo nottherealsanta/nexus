@@ -75,9 +75,16 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   lifetime hairline), three at a time with `+N more`; clicking one opens its full text in
   the modal. The banner is one row at the top of the page and pushes the timeline down;
   the jump-to-latest pill is raised, right-aligned on the row above the composer card.
-- The location strip under the composer names the project in bold, then its path (muted),
-  `⌥ branch` and `checkout` (muted) or `worktree` (bold violet), with
-  `ctrl+p commands` muted at the right; there is no accent underline. Counts abbreviate as `1.2K` and `3.4M`.
+- The location strip under the composer shows the path and branch in muted text.
+  A linked worktree alone gets a muted, normal-weight worktree icon; there is no
+  project-name prefix, checkout/worktree text, command hint or accent underline.
+  Counts abbreviate as `1.2K` and `3.4M`.
+- Collapsed sidebar content starts at the same vertical origin as the expanded
+  sidebar. Context omits a separate Child agents section. Each section heading
+  opens a scrollable modal with stored content and metadata. The top Context label
+  and count open the overview; only its chevron folds the section. Prompt and instruction
+  bodies come from the frozen snapshot; tool definitions are labelled as stored
+  definitions because they may change during a session.
 - Breakpoints (D17): both sidebars docked from 120 columns (34 / 36 from 160, else 28 / 30),
   the left only at 100-119, and below 100 drawers of 34 / 36 cells over the scrim with a header
   of toggles, status and a left-truncated breadcrumb. The empty and connecting screens carry the

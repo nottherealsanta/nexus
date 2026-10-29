@@ -192,6 +192,7 @@ def summary(snapshot: dict[str, Any]) -> dict[str, Any]:
             "active": bool(workspace.get("activated")),
         },
         "directory_changes": len(snapshot.get("directory_changes") or []),
+        "messaging": {"active": bool((snapshot.get("messaging") or {}).get("activated"))},
         "granted_tools": list(snapshot["granted_tools"]),
         "child_agents": snapshot["child_agents"],
     }

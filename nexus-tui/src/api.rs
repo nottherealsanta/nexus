@@ -772,6 +772,23 @@ impl CoreApi {
         .await
     }
 
+    pub async fn prompt_images(
+        &self,
+        id: &str,
+        text: &str,
+        images: &[crate::images::Image],
+        key: &RequestId,
+    ) -> Result<Outcome<Value>, Error> {
+        self.mutate(
+            Method::POST,
+            &format!("/api/session/{id}/prompt"),
+            Some(json!({ "text": text, "images": images })),
+            key,
+            None,
+        )
+        .await
+    }
+
     pub async fn continue_turn(&self, id: &str, key: &RequestId) -> Result<Outcome<Value>, Error> {
         self.mutate(
             Method::POST,

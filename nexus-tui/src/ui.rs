@@ -160,6 +160,7 @@ pub struct Palette {
     pub query: Composer,
     pub selected: usize,
     pub top: usize,
+    pub model_info: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,6 +170,11 @@ pub enum OverlayKind {
         selected: usize,
     },
     Help {
+        top: usize,
+    },
+    ContextDetail {
+        title: String,
+        text: String,
         top: usize,
     },
     /// The full text of one alert (a toast or a past notification), wrapped
@@ -413,6 +419,11 @@ pub enum Target {
     /// One changed file in the right sidebar's Git status, by row index.
     GitRow(usize),
     Timeline,
+    ContextSection(String),
+    ContextPreview {
+        title: String,
+        text: String,
+    },
     /// One timeline block, by index in the last built timeline.
     Block(usize),
     CopyBlock(usize),

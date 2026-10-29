@@ -193,6 +193,7 @@ async fn run(
     });
     let mut handle = sync::spawn(cfg);
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<ActionDone>();
+    let (image_tx, mut image_rx) = mpsc::unbounded_channel();
     let mut tick = tokio::time::interval(Duration::from_millis(125));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -215,6 +216,7 @@ async fn run(
                 Some(m) => app.apply_sync(m),
                 None => break 'main,
             },
+            Some((key, image)) = image_rx.recv() => app.apply_image_paste(key, image),
             Some(done) = done_rx.recv() => app.apply_done(done),
             _ = tick.tick() => dirty = app.tick(Instant::now()),
         }
@@ -247,6 +249,12 @@ async fn run(
                     let tx = done_tx.clone();
                     tokio::spawn(async move {
                         let _ = tx.send(actions::run(api, call).await);
+                    });
+                }
+                Effect::PasteImage(key) => {
+                    let tx = image_tx.clone();
+                    tokio::spawn(async move {
+                        let _ = tx.send((key, nexus_tui::images::clipboard().await));
                     });
                 }
                 Effect::Copy(text) => {

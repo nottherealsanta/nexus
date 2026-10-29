@@ -12,6 +12,7 @@ is published on the bus:
 | `permission.asked` / `permission.replied` | a tool call waits for approval |
 | `question.asked` / `question.replied` | the `ask` tool waits for user answers; `replied` also carries cancellation |
 | `session.workspace_tools` | the workspace control tools were activated for a session |
+| `session.message_tool` | `message_session` was exposed to a session by its first `session` call |
 | `session.directory_changed` | a session's working directory moved (with the destination instructions) |
 | `worktree.listed` / `worktree.created` / `worktree.deleted` | worktree control operations |
 | `session.error` | a turn failed (provider, auth or tool-loop error) |
@@ -35,7 +36,11 @@ with `launched_by: "agent"`, `parent_id` and `parent_call_id` set. With
 `wait: true` the tool returns the child's answer. With `wait: false` it returns
 at once, and the answer is delivered to the parent when the child finishes: it
 is added before the parent's next model call if the parent is busy, or starts a
-new parent turn if it is idle (`session.notified`).
+new parent turn if it is idle (`session.notified`). The first `session` call
+also exposes `message_session` (once per session, persisted in the snapshot): it
+sends a message to a child the caller launched. A working child receives it
+before its next model call (a steer); an idle child starts a new turn on its
+existing conversation. Either way its answer comes back as a notification.
 """
 from __future__ import annotations
 
@@ -82,7 +87,7 @@ from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError
 from .tools import bash as bash_tool
 from .tools.base import clip
 
-AUTO_APPROVED = {"read", "bash_output", "bash_kill", "session", "code", "ask", "edit", "write",
+AUTO_APPROVED = {"read", "bash_output", "bash_kill", "session", agent_files.MESSAGE_TOOL, "code", "ask", "edit", "write",
                  *workspace_control.CONTROL_NAMES}
 CHILD_RESULT_CHARS = 30_000
 TITLE_CHARS = 60
@@ -341,7 +346,7 @@ class Runtime:
 
     @staticmethod
     def enabled_names(granted: list[str], control: list[str], disabled: set[str], child: bool,
-                      workspace: dict[str, Any] | None) -> list[str]:
+                      workspace: dict[str, Any] | None, messaging: dict[str, Any] | None = None) -> list[str]:
         """Every tool the next request offers: task tools, granted control tools and workspace controls."""
         names = Runtime.enabled_tool_names(granted, control, disabled, child)
         state = workspace or {}
@@ -351,6 +356,9 @@ class Runtime:
             for name in workspace_control.WORKSPACE_TOOLS:
                 if name not in disabled and name not in names:
                     names.append(name)
+        # Exposed by the first `session` call; it needs `session` itself to be available.
+        if (messaging or {}).get("activated") and "session" in names and agent_files.MESSAGE_TOOL not in disabled:
+            names.append(agent_files.MESSAGE_TOOL)
         return names
 
     @staticmethod
@@ -358,15 +366,17 @@ class Runtime:
         """Enabled tools in request order, from the snapshot's grants and the session's switches."""
         return Runtime.enabled_names(
             snapshot["granted_tools"], snapshot["control"], session.disabled(), session.parent_id is not None,
-            snapshot.get("workspace"))
+            snapshot.get("workspace"), snapshot.get("messaging"))
 
     def _session_spec(self, child_agents: list[dict[str, Any]]) -> ToolSpec:
         return ToolSpec(
             name="session",
             description=(
-                "Start a child session running one of the agents listed in the system prompt's tools section, on a "
-                "complete prompt. wait=true (default) returns its answer; wait=false returns at once and the answer "
-                "arrives as a message when it finishes."
+                "Launch a subagent: start a child session that runs one of the agents listed in the system prompt's "
+                "tools section on a complete prompt. wait=true (default) returns its answer; wait=false returns at "
+                "once and the answer arrives as a message when it finishes. The first successful call also exposes "
+                "the `message_session` tool, which sends a further message to a child you launched: a steer while it "
+                "works, or a follow-up after it has answered."
             ),
             parameters={
                 "type": "object",
@@ -382,11 +392,38 @@ class Runtime:
 
     def _session_guidance(self, child_agents: list[dict[str, Any]]) -> str:
         return (
-            "Start a child session: another agent works on a prompt in this directory, in a session the user can open. "
-            "It does not see this conversation, so give it a complete prompt. `wait=true` returns its answer; "
-            "`wait=false` lets you continue, and the answer arrives as a message when it finishes. Child agents:\n"
+            "This is how subagents are launched: another agent works on a prompt in this directory, in a child session "
+            "the user can open. It does not see this conversation, so give it a complete prompt. `wait=true` returns "
+            "its answer; `wait=false` lets you continue, and the answer arrives as a message when it finishes. Your "
+            "first call also exposes `message_session`, to steer a working child or send a follow-up to a finished "
+            "one. Child agents:\n"
             + "\n".join(f"  - `{a['name']}`: {a['description']}" for a in child_agents)
         )
+
+    @staticmethod
+    def _message_definition() -> dict[str, Any]:
+        return {
+            "name": agent_files.MESSAGE_TOOL,
+            "description": (
+                "Send a message to a child session you launched with `session`. If the child is working, the message "
+                "reaches it before its next model call (a steer). If it is idle, the message starts a new turn on its "
+                "existing conversation. Returns at once; the child's answer arrives as a message when it finishes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session": {"type": "string", "description": "Id of a child session this session launched"},
+                    "message": {"type": "string", "description": "What to tell the child"},
+                },
+                "required": ["session", "message"],
+                "additionalProperties": False,
+            },
+            "guidance": (
+                "Send a message to a child you launched. While it works, it is a steer the child sees before its next "
+                "model call; once it has answered, it starts a new turn on the same conversation. The reply arrives "
+                "as a message; the call itself returns at once."
+            ),
+        }
 
     def _definition(self, name: str, registry: dict[str, Tool], child_agents: list[dict[str, Any]]) -> dict[str, Any]:
         if name == "session":
@@ -396,6 +433,8 @@ class Runtime:
                 "parameters": self._session_spec(child_agents).parameters,
                 "guidance": self._session_guidance(child_agents),
             }
+        if name == agent_files.MESSAGE_TOOL:
+            return self._message_definition()
         if name in workspace_control.CONTROL_NAMES:
             return workspace_control.definition(name)
         tool = registry[name]
@@ -406,7 +445,8 @@ class Runtime:
                         instruction_file: dict[str, Any] | None = None,
                         current_instruction_file: dict[str, Any] | None = None,
                         notice: str | None = None, workspace: dict[str, Any] | None = None,
-                        directory_changes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                        directory_changes: list[dict[str, Any]] | None = None,
+                        messaging: dict[str, Any] | None = None) -> dict[str, Any]:
         """Freeze one session's agent, prompt, tool schemas and child catalog."""
         registry = self._registry()
         granted = self.granted_tool_names(spec)
@@ -417,7 +457,7 @@ class Runtime:
             )
         child_agents = [snapshots.agent_summary(a) for a in found.allowed(child=True)]
         state = dict(workspace) if workspace is not None else {"entry": True, "activated": False}
-        names = self.enabled_names(granted, list(spec.control), disabled, child, state)
+        names = self.enabled_names(granted, list(spec.control), disabled, child, state, messaging)
         definitions = {n: self._definition(n, registry, child_agents) for n in names}
         if instruction_file is None:
             instruction_file = snapshots.read_instruction_file(directory)
@@ -435,6 +475,7 @@ class Runtime:
             "tools": names,
             "tool_definitions": definitions,
             "workspace": state,
+            "messaging": {"activated": bool((messaging or {}).get("activated"))},
             "directory_changes": list(directory_changes or []),
             "child_agents": child_agents,
             "instruction_file": instruction_file,
@@ -545,7 +586,7 @@ class Runtime:
             child=parent is not None,
         )
         session = self.store.create_session(project, title=title or "New session", agent=agent, model=model or "",
-                                            permission=permission or "ask", effort=effort or None, parent=parent,
+                                            permission=permission or "allow", effort=effort or None, parent=parent,
                                             parent_call_id=parent_call_id, launched_by=launched_by,
                                             disabled_tools=disabled_tools, snapshot=snapshot)
         self.bus.publish("session.created", self.session_json(session), session_id=session.id)
@@ -609,7 +650,7 @@ class Runtime:
         if before_snapshot is not None and new_disabled is not None:
             target = self.enabled_names(
                 before_snapshot["granted_tools"], before_snapshot["control"], set(new_disabled),
-                current.parent_id is not None, before_snapshot.get("workspace"))
+                current.parent_id is not None, before_snapshot.get("workspace"), before_snapshot.get("messaging"))
             registry = self._registry()
             unknown_exec = [n for n in target if n not in registry and n not in agent_files.NEXUS_CONTROL_TOOLS
                             and n != "code"]
@@ -633,6 +674,7 @@ class Runtime:
                 workspace=previous_workspace if previous_workspace is not None
                 else {"entry": False, "activated": False},
                 directory_changes=(previous.get("directory_changes") if previous else None),
+                messaging=previous.get("messaging") if previous else None,
             )
         session = self.store.update_session(session_id, expected_revision=expected_revision, **fields)
         if session is None:
@@ -1008,7 +1050,7 @@ class Runtime:
         if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
             raise ValueError("disabled_tools must be a list of tool names")
         known = ([t.spec.name for t in DEFAULT_TOOLS + BASH_JOB_TOOLS] + list(agent_files.CONTROL_TOOLS)
-                 + list(workspace_control.CONTROL_NAMES))
+                 + [agent_files.MESSAGE_TOOL] + list(workspace_control.CONTROL_NAMES))
         unknown = [n for n in names if n not in known]
         if unknown:
             raise ValueError(f"unknown tools: {', '.join(unknown)}; known: {', '.join(known)}")
@@ -1039,7 +1081,7 @@ class Runtime:
 
     @staticmethod
     def _job_notice(job: Job) -> str:
-        head = f"[Notification: background bash {job.status}]\njob {job.id} · {clip(repr(job.command), 500)}"
+        head = f"→ Background Shell Done: {clip(repr(job.command), 500)}\njob {job.id} · {job.status}"
         if job.exit_code is not None:
             head += f" · exit code {job.exit_code}"
         if job.dropped:
@@ -1106,6 +1148,9 @@ class Runtime:
         async def run_session(args: dict[str, Any], ctx: ToolContext) -> str:
             return await self._launch(session.id, args, ctx.call_id)
 
+        async def run_message(args: dict[str, Any], ctx: ToolContext) -> str:
+            return self._message_child(session.id, args)
+
         async def run_ask(args: dict[str, Any], ctx: ToolContext) -> str:
             try:
                 questions = question_contract.normalize_request(args)
@@ -1133,7 +1178,7 @@ class Runtime:
                 raise ToolError(str(exc)) from exc
 
         bound = {"bash": run_bash, "bash_output": run_bash_output, "bash_kill": run_bash_kill,
-                 "session": run_session, "ask": run_ask,
+                 "session": run_session, agent_files.MESSAGE_TOOL: run_message, "ask": run_ask,
                  workspace_control.EXPOSE: run_expose,
                  workspace_control.CHANGE_DIRECTORY: run_change_directory,
                  workspace_control.WORKTREE: run_worktree}
@@ -1203,20 +1248,71 @@ class Runtime:
             )
         except (ValueError, Conflict) as exc:
             raise ToolError(str(exc)) from exc
+        exposed = self._expose_messaging(parent.id)
         wait = args.get("wait", True) is not False
         if not wait:
             self.notify[child.id] = parent.id
         self.prompt(child.id, prompt)
         if not wait:
             return (f"Started child session {child.id} (agent {child.agent}). Its answer will arrive as a message when it "
-                    "finishes; continue with other work meanwhile.")
+                    "finishes; continue with other work meanwhile." + exposed)
         task = self.turns[child.id]
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError:
             await self.interrupt(child.id)
             raise
-        return self._child_report(child.id)
+        return self._child_report(child.id) + exposed
+
+    def _expose_messaging(self, session_id: str) -> str:
+        """Expose `message_session` on the first `session` call; once per session, persisted in the snapshot.
+
+        Returns text for that call's result (empty when already exposed or switched off). The
+        tool's schema reaches the next request through the snapshot, so a tool result is the
+        only forward guidance needed.
+        """
+        session = self.session(session_id)
+        snapshot = self.snapshot_for(session)
+        if (snapshot.get("messaging") or {}).get("activated"):
+            return ""
+        snapshot["messaging"] = {"activated": True}
+        self._sync_tool_definitions(snapshot, session)
+        self.store.set_snapshot(session_id, snapshot)
+        self.bus.publish("session.message_tool", {"active": True, "tools": [agent_files.MESSAGE_TOOL]},
+                         session_id=session_id)
+        self.bus.publish("session.updated", self.session_json(self.session(session_id)), session_id=session_id)
+        if agent_files.MESSAGE_TOOL not in snapshot["tools"]:
+            return ""  # switched off: nothing to announce, and enabling it later gets the usual notice
+        definition = snapshot["tool_definitions"][agent_files.MESSAGE_TOOL]
+        return (
+            "\n\n[Nexus notice: `message_session` is now available]\n"
+            f"{definition['description']}\nGuidance: {definition['guidance']}"
+        )
+
+    def _message_child(self, parent_id: str, args: dict[str, Any]) -> str:
+        message = args.get("message")
+        if not isinstance(message, str) or not message.strip():
+            raise ToolError("message must be a non-empty string")
+        child_id = args.get("session")
+        if not isinstance(child_id, str) or not child_id:
+            raise ToolError("session must be the id of a child session you launched")
+        child = self.store.session(child_id)
+        if child is None or child.parent_id != parent_id:
+            raise ToolError(f"{child_id} is not a child session of this session; message only children you launched")
+        # The answer comes back as a notification, as for `wait: false`.
+        if child_id in self.turns:
+            self.notify[child_id] = parent_id
+            self.inboxes.setdefault(child_id, []).append(message)
+            return (f"Message queued for child session {child_id} (agent {child.agent}), which is working; it sees it "
+                    "before its next model call. Its answer will arrive as a message when it finishes.")
+        try:
+            self._check_turn_start(child)
+        except (Conflict, Busy) as exc:
+            raise ToolError(str(exc)) from exc
+        self.notify[child_id] = parent_id
+        self.prompt(child_id, message)
+        return (f"Child session {child_id} (agent {child.agent}) was idle; started a new turn with your message. Its "
+                "answer will arrive as a message when it finishes.")
 
     def _child_report(self, child_id: str) -> str:
         child = self.session(child_id)
@@ -1251,7 +1347,7 @@ class Runtime:
         if session.id in self.turns:
             raise Busy(f"session {session.id} is already running a turn")
 
-    def _begin_turn(self, session: Session, *, user_text: str | NoUserMessage, origin: str,
+    def _begin_turn(self, session: Session, *, user_text: str | Message | NoUserMessage, origin: str,
                     continuation: dict[str, Any] | None = None,
                     mutation: dict[str, Any] | None = None) -> dict[str, Any]:
         """Record one turn durably, announce it, and start its task.
@@ -1278,14 +1374,20 @@ class Runtime:
             self._run(session_id, user_text, turn["id"], origin=origin, continuation=continuation))
         return turn
 
-    def prompt(self, session_id: str, text: str, *, mutation: dict[str, Any] | None = None) -> dict[str, Any]:
+    def prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None) -> dict[str, Any]:
         session = self.session(session_id)
         self._check_turn_start(session)
-        if not text.strip():
-            raise ValueError("text must not be empty")
+        from .images import image_parts
+
+        parts = image_parts(images)
+        if not text.strip() and not parts:
+            raise ValueError("text or images must not be empty")
         if session.title == "New session":
-            self.update_session(session_id, title=" ".join(text.split())[:TITLE_CHARS])
-        turn = self._begin_turn(session, user_text=text, origin="prompt", mutation=mutation)
+            self.update_session(session_id, title=" ".join(text.split())[:TITLE_CHARS] or "Image")
+        labelled_parts = tuple(part for index, image in enumerate(parts) for part in (
+            Text(f"[Image {chr(ord('A') + index)}]"), image,
+        ))
+        turn = self._begin_turn(session, user_text=Message("user", (Text(text), *labelled_parts)) if parts else text, origin="prompt", mutation=mutation)
         return {"status": "busy", "turn_id": turn["id"], "origin": "prompt"}
 
     def continue_session(self, session_id: str, *, mutation: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1329,7 +1431,7 @@ class Runtime:
                                 continuation=link, mutation=mutation)
         return {**response, "turn_id": turn["id"]}
 
-    async def _run(self, session_id: str, user_text: str | NoUserMessage, turn_id: str, *,
+    async def _run(self, session_id: str, user_text: str | Message | NoUserMessage, turn_id: str, *,
                    origin: str = "prompt", continuation: dict[str, Any] | None = None) -> None:
         started: set[str] = set()
         finished: dict[str, ToolResult] = {}
@@ -1453,8 +1555,11 @@ class Runtime:
                     }, session_id=session_id)
             self.close_questions({session_id}, "the turn ended without an answer")
             leftover = self.inboxes.pop(session_id, [])
+            watcher = self.notify.get(session_id)  # a message sent as the turn ended starts another turn
             self._deliver(session_id)  # before idle, so the tree is never all idle while a parent is about to wake
             if leftover and self.store.session(session_id) is not None:
+                if watcher is not None:
+                    self.notify[session_id] = watcher
                 self.prompt(session_id, "\n\n".join(leftover))  # notices that arrived as the turn ended
             else:
                 idle: dict[str, Any] = {"status": "idle", "turn_id": turn_id, "origin": origin}

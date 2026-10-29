@@ -53,7 +53,7 @@ EVENT_PAGE = 1000
 MEDIA_TYPES = {"markdown": "text/markdown; charset=utf-8", "json": "application/json; charset=utf-8"}
 EXTENSIONS = {"markdown": "md", "json": "json"}
 
-NOTICE_PREFIXES = ("[Nexus notice:", "[Nexus recovery:", "[Notification:")
+NOTICE_PREFIXES = ("[Nexus notice:", "[Nexus recovery:", "[Notification:", "→ Background Shell Done:")
 
 
 class ExportOptions(ValueError):
@@ -442,6 +442,10 @@ def _markdown_part(part: dict[str, Any]) -> Iterator[str]:
         flag = " (error)" if part.get("is_error") else ""
         yield f"Call id: `{_inline(part.get('call_id'))}`{flag}\n\n"
         yield _fence(str(part.get("output") or ""), "text") + "\n\n"
+        return
+    if kind == "image":
+        yield f"Image: {_inline(part.get('name'))}\n\n"
+        yield f"![Image]({part.get('data_url', '')})\n\n"
         return
     if kind == "text":
         yield _fence(str(part.get("text") or ""), "text") + "\n\n"

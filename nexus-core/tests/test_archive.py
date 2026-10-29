@@ -258,7 +258,7 @@ async def test_archive_and_unarchive_are_idempotent_and_publish_one_transition(e
 
 async def test_busy_root_waiting_for_approval_refuses_archive(env):
     rt, client, provider, workspace = env
-    root = await _create(client, workspace)
+    root = await _create(client, workspace, permission="ask")
     provider.replies = [[ToolCall("b1", "bash", '{"command": "true"}')]]
     await client.post(f"/api/session/{root['id']}/prompt", json={"text": "run"})
     for _ in range(200):
@@ -402,7 +402,7 @@ async def test_background_completion_retains_notice_without_waking(env):
     assert (await client.get(f"/api/session/{root['id']}")).json()["archived"] is True
 
     messages = (await client.get(f"/api/session/{root['id']}/message")).json()
-    notice = next(text for text in _texts(messages) if "background bash" in text)
+    notice = next(text for text in _texts(messages) if "→ Background Shell Done:" in text)
     assert "late" in notice and "bash_output" in notice
 
     assert (await client.post(f"/api/session/{root['id']}/unarchive")).status_code == 200
@@ -410,7 +410,7 @@ async def test_background_completion_retains_notice_without_waking(env):
     provider.replies = [[Text("resumed")]]
     await client.post(f"/api/session/{root['id']}/prompt", json={"text": "continue"})
     await _idle(rt, root["id"])
-    assert any("background bash" in p.text for m in provider.requests[-1].messages for p in m.parts if isinstance(p, Text))
+    assert any("→ Background Shell Done:" in p.text for m in provider.requests[-1].messages for p in m.parts if isinstance(p, Text))
 
 
 async def test_api_authentication_and_error_responses(env):
