@@ -241,6 +241,8 @@ pub struct Message {
     /// Parts exactly as sent (including `raw` wire items); never reshaped.
     #[serde(default)]
     pub parts: Vec<Value>,
+    #[serde(default)]
+    pub delivery: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -977,12 +979,13 @@ impl CoreApi {
         id: &str,
         text: &str,
         images: &[crate::images::Image],
+        mode: &str,
         key: &RequestId,
     ) -> Result<Outcome<Value>, Error> {
         self.mutate(
             Method::POST,
             &format!("/api/session/{id}/prompt"),
-            Some(json!({ "text": text, "images": images })),
+            Some(json!({ "text": text, "images": images, "mode": mode })),
             key,
             None,
         )

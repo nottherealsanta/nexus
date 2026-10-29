@@ -420,6 +420,11 @@ fn heights(app: &App, w: u16) -> Heights {
     let (waiting, composer) = (
         waiting_height(app, w),
         rows + 7
+            + if app.pending_inputs().is_empty() {
+                0
+            } else {
+                app.pending_inputs().len().min(4) as u16 + 1
+            }
             + if app.composer_ref().images.is_empty() {
                 0
             } else {
@@ -4465,6 +4470,82 @@ fn draw_working(cx: &Cx, buf: &mut Buffer, start: u16, y: u16, end: u16) {
 }
 
 fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
+    let inputs = cx.app.pending_inputs();
+    let count = inputs.len().min(4);
+    let extra = if count == 0 { 0 } else { (count + 1) as u16 }.min(r.height.saturating_sub(8));
+    if extra > 0 {
+        let visible = (extra - 1) as usize;
+        let selected = cx
+            .app
+            .ui
+            .pending_selected
+            .unwrap_or(inputs.len() - 1)
+            .min(inputs.len() - 1);
+        let start = selected
+            .saturating_add(1)
+            .saturating_sub(visible)
+            .min(inputs.len().saturating_sub(visible));
+        let held = cx
+            .app
+            .viewed_id()
+            .and_then(|id| cx.app.state.inputs.get(id))
+            .is_some_and(|v| v["held"] == true);
+        let heading = if held {
+            "Queue held · enter steer · tab queue · n send next"
+        } else {
+            "Pending · enter steer · tab queue"
+        };
+        put(
+            buf,
+            r.x + 2,
+            r.y,
+            heading,
+            cx.st(MUTED, PANEL),
+            r.width.saturating_sub(4),
+        );
+        for (line, (idx, item)) in inputs
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(visible)
+            .enumerate()
+        {
+            let text = item["parts"]
+                .as_array()
+                .and_then(|parts| parts.iter().find(|p| p["type"] == "text"))
+                .and_then(|p| p["text"].as_str())
+                .unwrap_or("[image]")
+                .lines()
+                .next()
+                .unwrap_or("");
+            let mode = if item["mode"] == "steer" {
+                "steer"
+            } else {
+                "queued"
+            };
+            let selected = cx.app.ui.pending_selected == Some(idx);
+            let label = format!(
+                "{} {} · {}{}",
+                if selected { "▸" } else { " " },
+                mode,
+                text,
+                if selected {
+                    "  enter edit · backspace remove · s steer · shift+↑/↓ move"
+                } else {
+                    ""
+                }
+            );
+            put(
+                buf,
+                r.x + 2,
+                r.y + 1 + line as u16,
+                &label,
+                cx.st(if selected { PRIMARY } else { MUTED }, PANEL),
+                r.width.saturating_sub(4),
+            );
+        }
+    }
+    let r = Rect::new(r.x, r.y + extra, r.width, r.height.saturating_sub(extra));
     if r.height < 8 || r.width < 8 {
         return;
     }

@@ -305,6 +305,7 @@ class StoredMessage:
     seq: int
     message: Message
     created: float
+    delivery: str | None = None
 
 
 class Store:
@@ -349,6 +350,8 @@ class Store:
         if "revision" not in project_columns:
             self.db.execute("alter table project add column revision integer not null default 1")
         message_columns = {r["name"] for r in self.db.execute("pragma table_info(message)")}
+        if "delivery" not in message_columns:
+            self.db.execute("alter table message add column delivery text")
         if "event_id" not in message_columns:  # databases from before recovery: old messages have no link
             with self.db:
                 self.db.execute("begin immediate")  # the column and legacy marker must land together
@@ -989,7 +992,7 @@ class Store:
     def messages(self, session_id: str) -> list[StoredMessage]:
         rows = self.db.execute("select * from message where session_id = ? order by seq", (session_id,))
         return [
-            StoredMessage(r["id"], r["session_id"], r["seq"], message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"])
+            StoredMessage(r["id"], r["session_id"], r["seq"], message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"])
             for r in rows
         ]
 
@@ -998,7 +1001,7 @@ class Store:
         rows = self.db.execute(
             "select * from message where session_id = ? and seq > ? order by seq", (session_id, seq))
         return [
-            StoredMessage(r["id"], r["session_id"], r["seq"], message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"])
+            StoredMessage(r["id"], r["session_id"], r["seq"], message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"])
             for r in rows
         ]
 
@@ -1015,7 +1018,7 @@ class Store:
             "select * from message where event_id is null order by created, session_id, seq")
         return [
             StoredMessage(r["id"], r["session_id"], r["seq"],
-                          message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"])
+                          message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"])
             for r in rows
         ]
 
@@ -1192,7 +1195,8 @@ class Store:
     # -- turn execution lifecycle ---------------------------------------------
 
     def start_turn(self, session_id: str, *, start_seq: int | None = None, started: float | None = None,
-                   data: dict[str, Any] | None = None, mutation: dict[str, Any] | None = None) -> dict[str, Any]:
+                   data: dict[str, Any] | None = None, mutation: dict[str, Any] | None = None,
+                   input_id: str | None = None) -> dict[str, Any]:
         """Record an accepted turn. The row is durable before the task starts.
 
         `start_seq` is the last message sequence before the turn; recovery uses it
@@ -1216,6 +1220,10 @@ class Store:
                 " values (?, ?, 'running', ?, 0, ?, 'none', ?)",
                 (turn["id"], session_id, turn["started"], start_seq, json.dumps(turn["data"])),
             )
+            if input_id is not None:
+                claimed = self.db.execute("update pending_input set turn_id = ? where id = ? and session_id = ? and state = 'pending' and turn_id is null", (turn["id"], input_id, session_id))
+                if claimed.rowcount != 1:
+                    raise ValueError("input is no longer available")
             if mutation is not None:
                 mutation = dict(mutation)
                 body = mutation.get("body")
@@ -1681,7 +1689,8 @@ class Store:
                     "messages": [
                         {"id": row["id"], "session_id": row["session_id"], "seq": row["seq"],
                          "created": row["created"], "role": row["role"],
-                         "parts": json.loads(row["parts"])}
+                         "parts": json.loads(row["parts"]),
+                         **({"delivery": row["delivery"]} if row["delivery"] else {})}
                         for row in rows
                     ],
                     "messages_limit": message_limit,

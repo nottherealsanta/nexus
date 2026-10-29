@@ -21,7 +21,7 @@ type Diff = { add: number; del: number };
 type Row =
   | { key: string; kind: "footer"; agent: string; segments: { text: string; tip?: string }[]; error?: string; interrupted: boolean }
   | {
-      key: string; kind: "user"; images?: { name: string; data_url: string }[]; n: number; time: string; text: string; turnKey: string; folded: boolean;
+      key: string; kind: "user"; delivery?: string | null; images?: { name: string; data_url: string }[]; n: number; time: string; text: string; turnKey: string; folded: boolean;
       tools: number; duration: string; status: TurnStatus;
     }
   | {
@@ -354,7 +354,7 @@ export function buildRows(): Row[] {
         const folded = closedTurns()[key] ?? false;
         foldedTurn = folded;
         out.push({
-          key: msg.id, kind: "user", images: msg.parts.filter((p) => p.type === "image") as any, n: n + 1, time: clock(msg.created), text: body, turnKey: key, folded,
+          key: msg.id, kind: "user", delivery: msg.delivery, images: msg.parts.filter((p) => p.type === "image") as any, n: n + 1, time: clock(msg.created), text: body, turnKey: key, folded,
           tools: meta?.tools ?? 0, duration: meta ? fmtDuration(meta.endTime - meta.startTime) : "",
           status: meta ? statusOf(meta) : "running",
         });
@@ -688,7 +688,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   const fold = () => toggleFold(r().turnKey);
   const copy = () => copyText(r().text, "Copied message");
   const glyph = () => turnGlyph(r().status);
-  const meta = () => `#${r().n} · ${r().time}`;
+  const meta = () => `${r().delivery ? `${r().delivery} · ` : ""}#${r().n} · ${r().time}`;
   return (
     <If when={r().folded} else={
       <View class="group/band w-full rounded-(--radius-card) bg-raised px-4 py-3 relative" testID="msg-user"

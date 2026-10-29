@@ -5,7 +5,7 @@ import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, fo
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
-  agentCatalog, contextBudget, centre, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model, modelCatalog, tick,
+  agentCatalog, contextBudget, pendingInputs, loadInputs, centre, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model, modelCatalog, tick,
   projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
@@ -96,17 +96,17 @@ export function Composer() {
     if (c.kind !== "live") return c.kind === "reconnecting" ? "Reconnecting to Core: read-only" : c.kind === "offline" ? "Core is offline: read-only" : c.kind === "auth_failed" ? "Authentication failed: read-only" : c.kind === "incompatible" ? "Incompatible API: blocked" : "Connecting to Core…";
     if (!currentProject() && centre() === "new_session") return "Add or choose a project first";
     if (ses()?.archived) return "This session is archived: unarchive it to continue";
-    if (busy()) return "Steering and queueing need Core (PLAN.md Step 12a); a prompt while busy is refused";
     return null;
   };
   const canSend = () => !reason() && !pasting() && (text().trim().length > 0 || images().length > 0);
-  const send = async () => {
+  const send = async (mode: "send" | "steer" | "queue" = busy() ? "steer" : "send") => {
     const t = text().trim();
     if (t && !images().length && runSlashCommand(t)) { draft.update((d) => ({ ...d, [key()]: "" })); return; }
     if (!canSend()) { const r = reason(); if (r) toast("info", r); return; }
     const target = key();
     const sent = images();
-    const ok = await sendPrompt(t, sent);
+    const ok = await sendPrompt(t, sent, mode);
+    if (ok && ses()) void loadInputs(ses()!.id).catch(() => {});
     if (ok) {
       draft.update((d) => ({ ...d, [target]: (d[target] ?? "").trim() === t ? "" : d[target] ?? "" }));
       imageDrafts.update((d) => ({ ...d, [target]: (d[target] ?? []).filter((i) => !sent.includes(i)) }));
@@ -175,6 +175,10 @@ export function Composer() {
     });
   });
   effect(() => {
+    if (!focused() || !busy() || !canSend() || open()) return;
+    return bindOpenKeys({ tab: () => { void send("queue"); } });
+  });
+  effect(() => {
     const c = completion();
     const project = currentProject();
     if (!c || c.kind !== "file" || !project) return;
@@ -192,6 +196,7 @@ export function Composer() {
     <View class="px-4 pb-2 pt-3 items-center" testID="composer-area">
       <View class="w-full max-w-[760px]">
         <If when={busy()}><WorkingRow /></If>
+        <PendingStack />
         <If when={open()}>
           {() => {
             const c = () => completion()!;
@@ -343,10 +348,46 @@ function WorkingRow() {
       <Text class={T.sec}>{`· ${fmtDuration(elapsed())}`}</Text>
       <Text class={T.sec} testID="working-output">{`· ↓${compact(output())}`}</Text>
       <View class="flex-1" />
-      <Text class={T.meta}>steering needs Core (Step 12a)</Text>
-      <Btn label="Stop" icon="stop" onPress={() => run("session.interrupt")} disabled={!availability(byId.get("session.interrupt")!).ok} reason={availability(byId.get("session.interrupt")!).reason} testID="interrupt" />
+
     </View>
   );
+}
+
+function PendingStack() {
+  const session = () => viewed();
+  const stack = () => pendingInputs()[session()?.id ?? ""];
+  const perform = async (id: string, action: "remove" | "steer" | "up" | "down") => {
+    const s = session(); if (!s) return;
+    try {
+      if (action === "remove") {
+        const k = draftKey();
+        if ((draft()[k] ?? "").trim() || (imageDrafts()[k] ?? []).length) { toast("warning", "Clear the draft before restoring a pending input"); return; }
+        const result = await request<any>("DELETE", `/api/session/${s.id}/input/${id}`);
+        const parts = result.parts ?? result.input?.parts ?? [];
+        const text = parts.filter((p: any) => p.type === "text" && !/^\[Image [A-Z]\]$/.test(p.text ?? "")).map((p: any) => p.text).join("\n");
+        const images = parts.filter((p: any) => p.type === "image").map((p: any, i: number) => ({ id: `restored-${id}-${i}`, name: p.name ?? "image.png", data_url: p.data_url }));
+        draft.update((d) => ({ ...d, [k]: [text, d[k] ?? ""].filter(Boolean).join("\n") })); imageDrafts.update((d) => ({ ...d, [k]: [...images, ...(d[k] ?? [])] })); focusComposer.fn?.();
+      } else if (action === "steer") await request("PATCH", `/api/session/${s.id}/input/${id}`, { body: { mode: "steer" } });
+      else {
+        const inputs = stack()?.inputs ?? []; const at = inputs.findIndex((i) => i.id === id);
+        const before = action === "up" ? inputs[at - 1]?.id : id;
+        if (action === "up" && at <= 0 || action === "down" && at >= inputs.length - 1) return;
+        const moving = action === "down" ? inputs[at + 1].id : id;
+        await request("POST", `/api/session/${s.id}/input/${moving}/move`, { body: { before } });
+      }
+      await loadInputs(s.id);
+    } catch (e) { toast("error", e instanceof Error ? e.message : String(e)); }
+  };
+  return <If when={(stack()?.inputs.length ?? 0) > 0}><View class="mb-2 gap-1" testID="pending-inputs">
+    <Text class={T.meta}>{stack()?.held ? "Queue held · enter steer · tab queue" : "Pending · enter steer · tab queue"}</Text>
+    <Each of={stack()?.inputs ?? []} key={(i) => i.id}>{(i) => <View class="flex-row items-center gap-1" testID={`pending-${i().id}`}>
+      <Text class={`flex-1 ${T.sec}`}>{`${i().mode === "steer" ? "steer" : "queued"} · ${i().parts.find((p: any) => p.type === "text")?.text?.split("\n")[0] ?? "[image]"}`}</Text>
+      <Btn label="Edit" onPress={() => void perform(i().id, "remove")} /><Btn label="Remove" onPress={() => void perform(i().id, "remove")} />
+      <If when={i().mode === "queue"}><Btn label="Steer" onPress={() => void perform(i().id, "steer")} /></If>
+      <Btn label="↑" onPress={() => void perform(i().id, "up")} /><Btn label="↓" onPress={() => void perform(i().id, "down")} />
+    </View>}</Each>
+    <If when={stack()?.held}><Btn label="Send next" onPress={() => { const s = session(); if (s) void request("POST", `/api/session/${s.id}/input/next`, { body: {} }).then(() => loadInputs(s.id)).catch((e) => toast("error", String(e))); }} /></If>
+  </View></If>;
 }
 
 /** The location strip shows the path, branch and linked-worktree icon. */

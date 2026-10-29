@@ -9,7 +9,7 @@ export interface Session {
   [k: string]: unknown;
 }
 export interface Part { type: string; text?: string; summary?: string; id?: string; name?: string; arguments?: string; call_id?: string; output?: string; is_error?: boolean; [k: string]: unknown }
-export interface Message { id: string; session_id: string; seq: number; created: number; role: "user" | "assistant" | "tool"; parts: Part[] }
+export interface Message { id: string; session_id: string; seq: number; created: number; role: "user" | "assistant" | "tool"; delivery?: "steer" | "queued" | null; parts: Part[] }
 export interface Approval { id: string; session_id: string; tool: string; call_id: string; args: Record<string, unknown> }
 export interface QuestionOption { id: string; label: string; preview?: string }
 export interface QuestionItem { id: string; question: string; options: QuestionOption[]; multiple: boolean; allow_free_text: boolean }

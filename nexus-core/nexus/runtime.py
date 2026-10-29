@@ -140,7 +140,7 @@ def project_json(p: Project) -> dict[str, Any]:
 
 
 def message_json(m: StoredMessage) -> dict[str, Any]:
-    return {"id": m.id, "session_id": m.session_id, "seq": m.seq, "created": m.created, **message_to_json(m.message)}
+    return {"id": m.id, "session_id": m.session_id, "seq": m.seq, "created": m.created, **message_to_json(m.message), **({"delivery": m.delivery} if m.delivery else {})}
 
 
 class ReasoningClock:
@@ -174,6 +174,8 @@ class Runtime:
         self.kernels = Kernels()
         self.jobs = Jobs()
         self.store = store
+        from .inputs import Inputs
+        self.inputs = Inputs(store)
         self.bus = bus
         self.default_model = default_model
         self.turns: dict[str, asyncio.Task[None]] = {}
@@ -186,6 +188,7 @@ class Runtime:
         self._parents: dict[str, str | None] = {}  # session id -> parent id (never changes)
         self.pending_reads: dict[str, list[FileObservation]] = {}
         self.removing_worktrees: set[Path] = set()
+        self.closing_sessions: set[str] = set()
         self.pending_directories: dict[str, dict[str, Any]] = {}  # session id -> a validated, not-yet-applied move
         self.file_lock = asyncio.Lock()  # serializes Nexus file mutations for this daemon
         self.worktree_lock = asyncio.Lock()  # serializes create/delete so they cannot conflict
@@ -198,7 +201,25 @@ class Runtime:
 
     def recover(self) -> list[dict[str, Any]]:
         """Reconcile turns a crash left unfinished. Runs before the daemon serves requests."""
+        # Never resume queued work during startup; any orphaned steer is held.
+        pending = self.inputs.list()
+        with self.store.db:
+            for item in pending:
+                self.store.db.execute("update pending_input set turn_id = null where id = ?", (item["id"],))
+                if item["mode"] == "steer":
+                    self.store.db.execute("update pending_input set mode = 'queue' where id = ?", (item["id"],))
+                self.store.db.execute("insert or ignore into input_hold values (?)", (item["session_id"],))
         self.recovered = Recovery(self).run()
+        for row in self.store.db.execute("select * from pending_input where state = 'delivered' and event_id is null").fetchall():
+            sid, iid = row["session_id"], row["id"]
+            if not self.store.has_event("input.delivered", {"id": iid}, session_id=sid):
+                item = self.inputs._json(row)
+                event = self.bus.publish("input.delivered", {**item, "message_id": row["message_id"], "turn_id": row["turn_id"]}, session_id=sid)
+                event_id = event.get("id", -1)
+            else:
+                event_id = -1
+            with self.store.db:
+                self.store.db.execute("update pending_input set event_id = ? where id = ?", (event_id, iid))
         self.store.resolve_pending_mutations(lifetime=self.mutation_lifetime)
         return self.recovered
 
@@ -297,18 +318,27 @@ class Runtime:
 
     async def delete_project(self, project_id: str) -> None:
         sessions = self.store.sessions(project_id)
-        for session in sessions:
-            await self.interrupt(session.id, reason="the session's project was deleted")
-        ids = {session.id for session in sessions}
-        self.close_questions(ids, "the session's project was deleted")
-        for sid in ids:
-            self.pending_directories.pop(sid, None)
-        await self.jobs.cancel_for(ids)
-        sessions = self.store.sessions(project_id)  # anything created while awaiting is deleted too
-        if not self.store.delete_project(project_id):
-            raise NotFound(f"no project {project_id}")
-        self._publish_tombstones(sessions)
-        self.bus.publish("project.deleted", {"id": project_id})
+        if any(self.inputs.list(session.id) for session in sessions):
+            raise Conflict("project has pending inputs; remove them before deleting it")
+        closing_ids = {session.id for session in sessions}
+        self.closing_sessions.update(closing_ids)
+        try:
+            for session in sessions:
+                await self.interrupt(session.id, reason="the session's project was deleted")
+            ids = {session.id for session in sessions}
+            self.close_questions(ids, "the session's project was deleted")
+            for sid in ids:
+                self.pending_directories.pop(sid, None)
+            await self.jobs.cancel_for(ids)
+            sessions = self.store.sessions(project_id)  # anything created while awaiting is deleted too
+            if any(self.inputs.list(session.id) for session in sessions):
+                raise Conflict("project has pending inputs; remove them before deleting it")
+            if not self.store.delete_project(project_id):
+                raise NotFound(f"no project {project_id}")
+            self._publish_tombstones(sessions)
+            self.bus.publish("project.deleted", {"id": project_id})
+        finally:
+            self.closing_sessions.difference_update(closing_ids)
 
     # -- sessions ------------------------------------------------------------
 
@@ -1047,17 +1077,31 @@ class Runtime:
             raise ToolError("action must be one of: list, create, delete")
         return clip(workspace_control.worktree_text(action, data))
 
-    async def delete_session(self, session_id: str) -> None:
-        await self.interrupt(session_id, reason="the session was deleted")  # also interrupts descendants
-        descendants = self.store.descendants(session_id)
-        ids = {session_id, *(child.id for child in descendants)}
-        self.close_questions(ids, "the session was deleted")
-        for sid in ids:
-            self.pending_directories.pop(sid, None)  # a queued move must not apply to a deleted session
-        await self.jobs.cancel_for(ids)  # a background command must not outlive the session that started it
-        if not self.store.delete_session(session_id):
-            raise NotFound(f"no session {session_id}")
-        self._publish_tombstones(descendants, session_id)
+    async def delete_session(self, session_id: str, *, drop_inputs: bool = False) -> None:
+        ids = [session_id, *(child.id for child in self.store.descendants(session_id))]
+        pending = [item for sid in ids for item in self.inputs.list(sid)]
+        if pending and not drop_inputs:
+            raise Conflict("session tree has pending inputs; remove them or set drop_inputs")
+        self.closing_sessions.update(ids)
+        try:
+            await self.interrupt(session_id, reason="the session was deleted")  # also interrupts descendants
+            descendants = self.store.descendants(session_id)
+            ids = {session_id, *(child.id for child in descendants)}
+            pending = [item for sid in ids for item in self.inputs.list(sid)]
+            if pending and not drop_inputs:
+                raise Conflict("session tree has pending inputs; remove them or set drop_inputs")
+            for item in pending:
+                removed = self.inputs.remove(item["session_id"], item["id"])
+                self.bus.publish("input.removed", removed, session_id=item["session_id"])
+            self.close_questions(ids, "the session was deleted")
+            for sid in ids:
+                self.pending_directories.pop(sid, None)  # a queued move must not apply to a deleted session
+            await self.jobs.cancel_for(ids)  # a background command must not outlive the session that started it
+            if not self.store.delete_session(session_id):
+                raise NotFound(f"no session {session_id}")
+            self._publish_tombstones(descendants, session_id)
+        finally:
+            self.closing_sessions.difference_update(ids)
 
     def _publish_tombstones(self, sessions: list[Session], root_id: str | None = None) -> None:
         """Publish one minimal, global deletion record per deleted session.
@@ -1072,7 +1116,7 @@ class Runtime:
         for sid in ids:
             self.bus.publish("session.deleted", {"id": sid})
 
-    def archive_session(self, session_id: str, *, archived: bool) -> Session:
+    def archive_session(self, session_id: str, *, archived: bool, drop_inputs: bool = False) -> Session:
         """Archive or unarchive one whole root tree, atomically and idempotently.
 
         Nothing is interrupted: a running turn (or a pending question/approval)
@@ -1094,6 +1138,12 @@ class Runtime:
                 f"cannot {'archive' if archived else 'unarchive'} session tree {session_id}: session {busy} "
                 "is running a turn or waiting for the user; interrupt it first"
             )
+        pending = [item for sid in ids for item in self.inputs.list(sid)] if archived else []
+        if pending and not drop_inputs:
+            raise Conflict("session tree has pending inputs; remove them or set drop_inputs")
+        for item in pending:
+            removed = self.inputs.remove(item["session_id"], item["id"])
+            self.bus.publish("input.removed", removed, session_id=item["session_id"])
         ids, changed = self.store.set_tree_archived(session_id, archived)
         if changed:
             self.bus.publish(
@@ -1277,6 +1327,7 @@ class Runtime:
             messages=[m.message for m in self.store.messages(session.id)],
             conversation_id=session.id, approve=lambda call, args: self._approve(session.id, call, args),
             inbox=lambda: self.inboxes.pop(session.id, []),
+            steering=lambda: [(item["id"], self.inputs.message(item)) for item in self.inputs.list(session.id, "steer")],
             refresh=(lambda active: self._refresh_call(active, session.id)) if refresh else None,
             files=files,
             cwd_changed=cwd_changed,
@@ -1403,6 +1454,8 @@ class Runtime:
         self._notify(parent_id, notice)
 
     def _check_turn_start(self, session: Session) -> None:
+        if session.id in self.closing_sessions:
+            raise Conflict("session is being deleted")
         if session.archived:
             root = self._root(session)
             raise Conflict(
@@ -1414,7 +1467,7 @@ class Runtime:
 
     def _begin_turn(self, session: Session, *, user_text: str | Message | NoUserMessage, origin: str,
                     continuation: dict[str, Any] | None = None,
-                    mutation: dict[str, Any] | None = None) -> dict[str, Any]:
+                    mutation: dict[str, Any] | None = None, input_id: str | None = None) -> dict[str, Any]:
         """Record one turn durably, announce it, and start its task.
 
         Prompting and manual continuation share this path; the only difference is
@@ -1427,7 +1480,7 @@ class Runtime:
         data: dict[str, Any] = {"origin": origin}
         if continuation is not None:
             data["continuation"] = continuation
-        turn = self.store.start_turn(session_id, data=data, mutation=mutation)  # durable before the task exists
+        turn = self.store.start_turn(session_id, data=data, mutation=mutation, input_id=input_id)  # durable before the task exists
         status: dict[str, Any] = {"status": "busy", "turn_id": turn["id"], "origin": origin}
         if continuation is not None:
             status["continuation"] = continuation
@@ -1436,17 +1489,34 @@ class Runtime:
         # Published here, not in the task, so a session is never seen idle between being prompted and running.
         self.bus.publish("session.status", status, session_id=session_id)
         self.turns[session_id] = asyncio.create_task(
-            self._run(session_id, user_text, turn["id"], origin=origin, continuation=continuation))
+            self._run(session_id, user_text, turn["id"], origin=origin, continuation=continuation, input_id=input_id))
         return turn
 
-    def prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None) -> dict[str, Any]:
+    def prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None, mode: str = "send") -> dict[str, Any]:
         session = self.session(session_id)
-        self._check_turn_start(session)
+        if mode not in ("send", "steer", "queue"):
+            raise ValueError("mode must be send, steer or queue")
+        if session_id in self.closing_sessions:
+            raise Conflict("session is being deleted")
+        busy = session_id in self.turns
+        if mode == "send" or not busy:
+            self._check_turn_start(session)
+        elif session.archived:
+            raise Conflict("cannot add input to an archived session")
         from .images import image_parts
 
         parts = image_parts(images)
         if not text.strip() and not parts:
             raise ValueError("text or images must not be empty")
+        if busy or mode != "send":
+            labelled = tuple(part for index, image in enumerate(parts) for part in (Text(f"[Image {chr(ord('A') + index)}]"), image))
+            message = Message("user", ((Text(text),) if text else ()) + labelled)
+            item = self.inputs.add(session_id, mode, message_to_json(message)["parts"], mutation)
+            self.bus.publish("input.added", item, session_id=session_id)
+            if not busy:
+                self.inputs.hold(session_id, False)
+                self._start_input(session_id, item)
+            return {"input_id": item["id"], "mode": mode, "state": "pending"}
         if session.title == "New session":
             self.update_session(session_id, title=" ".join(text.split())[:TITLE_CHARS] or "Image")
         labelled_parts = tuple(part for index, image in enumerate(parts) for part in (
@@ -1454,6 +1524,22 @@ class Runtime:
         ))
         turn = self._begin_turn(session, user_text=Message("user", (Text(text), *labelled_parts)) if parts else text, origin="prompt", mutation=mutation)
         return {"status": "busy", "turn_id": turn["id"], "origin": "prompt"}
+
+    def _start_input(self, session_id: str, item: dict[str, Any]) -> dict[str, Any]:
+        session = self.session(session_id)
+        self._check_turn_start(session)
+        turn = self._begin_turn(session, user_text=self.inputs.message(item), origin="prompt", input_id=item["id"])
+        return {"status": "busy", "turn_id": turn["id"], "input_id": item["id"], "mode": item["mode"], "state": "pending"}
+
+    def release_input(self, session_id: str) -> dict[str, Any]:
+        session = self.session(session_id)
+        self._check_turn_start(session)
+        items = self.inputs.list(session_id)
+        if not items:
+            raise ValueError("no queued input")
+        self.inputs.hold(session_id, False)
+        self.bus.publish("input.held", {"session_id": session_id, "held": False}, session_id=session_id)
+        return self._start_input(session_id, items[0])
 
     def continue_session(self, session_id: str, *, mutation: dict[str, Any] | None = None) -> dict[str, Any]:
         """Start a normal turn from the stored context, with no new user message.
@@ -1497,7 +1583,7 @@ class Runtime:
         return {**response, "turn_id": turn["id"]}
 
     async def _run(self, session_id: str, user_text: str | Message | NoUserMessage, turn_id: str, *,
-                   origin: str = "prompt", continuation: dict[str, Any] | None = None) -> None:
+                   origin: str = "prompt", continuation: dict[str, Any] | None = None, input_id: str | None = None) -> None:
         started: set[str] = set()
         finished: dict[str, ToolResult] = {}
         active_request: str | None = None
@@ -1506,6 +1592,7 @@ class Runtime:
         clock = ReasoningClock()
         step = 0
         closed = False
+        interrupted = False
         try:
             agent = self._agent(self.session(session_id))
             async for event in agent.turn(user_text):
@@ -1521,6 +1608,15 @@ class Runtime:
                         clock = ReasoningClock()
                     elif event.message.role == "tool":
                         stored = self.store.save_tool_message(session_id, event.message, turn_id=turn_id)
+                    elif event.input_id or input_id:
+                        iid = event.input_id or input_id
+                        item = self.inputs.get(session_id, iid)
+                        stored = self.inputs.deliver(session_id, iid, turn_id)
+                        agent.messages[-1] = stored.message
+                        published = self.bus.publish("input.delivered", {**item, "state": "delivered", "message_id": stored.id, "turn_id": turn_id}, session_id=session_id)
+                        with self.store.db:
+                            self.store.db.execute("update pending_input set event_id = ? where id = ?", (published.get("id", -1), iid))
+                        input_id = None
                     else:
                         stored = self.store.append_message(session_id, event.message)
                     self._commit_file_reads(session_id, event.message)
@@ -1583,6 +1679,7 @@ class Runtime:
             self.store.finish_turn(turn_id, "completed", steps=step)
             closed = True
         except asyncio.CancelledError:
+            interrupted = True
             if active_request is not None:
                 self.store.interrupt_request(active_request, reason="interrupted by the user",
                                              reasoning_seconds=clock.seconds())
@@ -1629,6 +1726,19 @@ class Runtime:
             self.publish_turn_summary(session_id, turn_id, recovery="none" if closed else None)
             self.pending_reads.pop(session_id, None)
             self.turns.pop(session_id, None)
+            # A reserved input whose first message did not commit remains pending.
+            if input_id:
+                with self.store.db:
+                    self.store.db.execute("update pending_input set turn_id = null where id = ? and state = 'pending'", (input_id,))
+            # Steers that arrived at the terminal boundary did not reach the model.
+            for item in self.inputs.list(session_id, "steer"):
+                with self.store.db:
+                    self.store.db.execute("update pending_input set mode = 'queue' where id = ?", (item["id"],))
+                self.bus.publish("input.updated", self.inputs.get(session_id, item["id"]), session_id=session_id)
+            if (interrupted or not closed) and self.inputs.list(session_id):
+                self.inputs.hold(session_id, True)
+                if self.inputs.list(session_id):
+                    self.bus.publish("input.held", {"session_id": session_id, "held": True}, session_id=session_id)
             # A move queued during the turn lands here if no later call boundary did.
             self._apply_pending_directory(session_id)
             for approval_id, (sid, future, _) in list(self.approvals.items()):
@@ -1645,7 +1755,12 @@ class Runtime:
             leftover = self.inboxes.pop(session_id, [])
             watcher = self.notify.get(session_id)  # a message sent as the turn ended starts another turn
             self._deliver(session_id)  # before idle, so the tree is never all idle while a parent is about to wake
-            if leftover and self.store.session(session_id) is not None:
+            queued = self.inputs.list(session_id, "queue") if not self.inputs.held(session_id) else []
+            if queued and self.store.session(session_id) is not None:
+                if leftover:
+                    self.inboxes.setdefault(session_id, []).extend(leftover)
+                self._start_input(session_id, queued[0])
+            elif leftover and self.store.session(session_id) is not None:
                 if watcher is not None:
                     self.notify[session_id] = watcher
                 self.prompt(session_id, "\n\n".join(leftover))  # notices that arrived as the turn ended
@@ -1758,6 +1873,12 @@ class Runtime:
         task = self.turns.get(session_id)
         if task is None:
             return False
+        # A newly created task must enter its try/finally before cancellation;
+        # otherwise a reserved queued input and durable turn would be stranded.
+        await asyncio.sleep(0)
+        task = self.turns.get(session_id, task)
+        if task.done():
+            return True
         task.cancel()
         try:
             await task

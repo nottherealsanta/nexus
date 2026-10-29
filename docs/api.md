@@ -1006,3 +1006,27 @@ its model matches the current model; otherwise `used` is a character-based
 estimate and `exact` is false. A missing catalog window is null. Measured usage
 refers to that request, rather than tokenizing newly appended context. Clients
 label estimates with `~`.
+
+## Pending inputs: steer and queue
+
+`POST /api/session/{id}/prompt` accepts `mode: "send" | "steer" | "queue"`.
+The default `send` retains its busy-session 409 behavior. During a running turn,
+`steer` and `queue` return an `input_id` and remain outside model context until
+delivery. Steers are inserted before the next model request, after all results
+from the current tool step. A steer arriving during a final answer causes
+another model step. Queued inputs start subsequent turns in order.
+
+`GET /api/session/{id}/input` returns `{inputs, held}`. `PATCH
+/api/session/{id}/input/{iid}` edits `text` or promotes `mode` from queue to
+steer; `DELETE` removes the input and returns its parts for draft restoration.
+`POST .../input/{iid}/move` with `{before: iid}` reorders pending input.
+`POST /api/session/{id}/input/next` releases a held queue and sends its next item.
+Pending inputs and held sessions are included in `/api/snapshot`.
+
+Interruption holds the queue. Restart preserves pending inputs, converts
+undelivered steers into queued inputs, and holds them until explicit release.
+Archive and deletion refuse pending inputs unless `drop_inputs: true` is given.
+`input.added`, `input.updated`, `input.removed`, `input.delivered` and
+`input.held` events update client activity. Delivery includes the stored
+`message_id` and `turn_id`; the corresponding user message has `delivery:
+"steer"` or `"queued"`. Pending items themselves are not timeline messages.

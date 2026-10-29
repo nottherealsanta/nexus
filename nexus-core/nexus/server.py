@@ -74,6 +74,7 @@ from .codec import to_json
 from .config import ConfigConflict, ConfigFile
 from .counting import budget
 from .eventlog import CursorError, Stream, format_cursor, parse_cursor
+from .inputs import InputBusy, InputNotFound
 from .llmhub import catalog
 from .llmhub.auth import SIGN_INS, AuthError
 from .llmhub.hub import connected, split_ref
@@ -347,9 +348,9 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         async def inner(request: Request) -> Response:
             try:
                 return await handler(request)
-            except NotFound as exc:
+            except (NotFound, InputNotFound) as exc:
                 return _error(404, str(exc))
-            except Busy as exc:
+            except (Busy, InputBusy) as exc:
                 return _error(409, str(exc))
             except Conflict as exc:
                 payload: dict[str, Any] = {"error": str(exc)}
@@ -574,7 +575,8 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                 fields["expected_revision"] = expected
             return JSONResponse(runtime.session_json(runtime.update_session(sid, **fields)))
         if request.method == "DELETE":
-            await runtime.delete_session(sid)
+            body = await _body(request)
+            await runtime.delete_session(sid, drop_inputs=body.get("drop_inputs") is True)
             return Response(status_code=204)
         return JSONResponse(runtime.session_json(runtime.session(sid)))
 
@@ -613,6 +615,8 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         data["running"] = runtime.store.running_turns()
         data["approvals"] = [request_ for sid_, _, request_ in runtime.approvals.values()]
         data["questions"] = runtime.pending_questions()
+        data["inputs"] = runtime.inputs.list()
+        data["held_sessions"] = [r["session_id"] for r in runtime.store.db.execute("select session_id from input_hold")]
         return JSONResponse(data, headers={"x-nexus-log-generation": data["watermark"]["generation"],
                                            "cache-control": "no-store"})
 
@@ -646,7 +650,8 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
 
     async def session_archive(request: Request) -> Response:
         sid = p(request, "id")
-        return JSONResponse(runtime.session_json(runtime.archive_session(sid, archived=True)))
+        body = await _body(request)
+        return JSONResponse(runtime.session_json(runtime.archive_session(sid, archived=True, drop_inputs=body.get("drop_inputs") is True)))
 
     async def session_unarchive(request: Request) -> Response:
         sid = p(request, "id")
@@ -677,10 +682,51 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     async def prompt(request: Request) -> Response:
         body = await _body(request)
         mutation = getattr(request.state, "mutation", None)
-        result = runtime.prompt(p(request, "id"), str(body.get("text", "")), images=body.get("images"), mutation=mutation)
+        result = runtime.prompt(p(request, "id"), str(body.get("text", "")), images=body.get("images"), mutation=mutation, mode=body.get("mode", "send"))
         if mutation is not None:
             result = {**result, "idempotency_key": mutation["key"]}
         return JSONResponse(result, status_code=202)
+
+    async def session_inputs(request: Request) -> Response:
+        sid = p(request, "id")
+        runtime.session(sid)
+        return JSONResponse({"inputs": runtime.inputs.list(sid), "held": runtime.inputs.held(sid)})
+
+    async def session_input(request: Request) -> Response:
+        sid, iid = p(request, "id"), p(request, "iid")
+        runtime.session(sid)
+        if request.method == "DELETE":
+            item = runtime.inputs.remove(sid, iid)
+            runtime.bus.publish("input.removed", item, session_id=sid)
+            return JSONResponse(item)
+        body = await _body(request)
+        item = runtime.inputs.get(sid, iid)
+        parts = None
+        if "text" in body:
+            text = body["text"]
+            if not isinstance(text, str):
+                raise TypeError("text must be a string")
+            parts = [part for part in item["parts"] if part.get("type") != "text" or str(part.get("text", "")).startswith("[Image ")]
+            if text:
+                parts.insert(0, {"type": "text", "text": text})
+            if not parts:
+                raise ValueError("input cannot be empty")
+        item = runtime.inputs.update(sid, iid, mode=body.get("mode"), parts=parts)
+        runtime.bus.publish("input.updated", item, session_id=sid)
+        return JSONResponse(item)
+
+    async def move_input(request: Request) -> Response:
+        sid = p(request, "id")
+        runtime.session(sid)
+        body = await _body(request)
+        if not isinstance(body.get("before"), str):
+            raise TypeError("before must be an input id")
+        item = runtime.inputs.move(sid, p(request, "iid"), body["before"])
+        runtime.bus.publish("input.updated", item, session_id=sid)
+        return JSONResponse({"input": item, "inputs": runtime.inputs.list(sid)})
+
+    async def next_input(request: Request) -> Response:
+        return JSONResponse(runtime.release_input(p(request, "id")), status_code=202)
 
     async def session_continue(request: Request) -> Response:
         mutation = getattr(request.state, "mutation", None)
@@ -864,6 +910,10 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/session/{id}/git", route(session_git)),
         Route("/api/session/{id}/git/diff", route(session_git_diff)),
         Route("/api/session/{id}/prompt", route(prompt), methods=["POST"]),
+        Route("/api/session/{id}/input", route(session_inputs)),
+        Route("/api/session/{id}/input/next", route(next_input), methods=["POST"]),
+        Route("/api/session/{id}/input/{iid}", route(session_input), methods=["PATCH", "DELETE"]),
+        Route("/api/session/{id}/input/{iid}/move", route(move_input), methods=["POST"]),
         Route("/api/session/{id}/continue", route(session_continue), methods=["POST"]),
         Route("/api/session/{id}/interrupt", route(interrupt), methods=["POST"]),
         Route("/api/session/{id}/message", route(messages)),

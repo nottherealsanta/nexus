@@ -2305,3 +2305,20 @@ fn turns_re_read_after_a_reconnect_replace_the_held_ones_and_their_ledger() {
     assert_eq!(view.usage.models["codex/gpt-5"].usage.input, 9000);
     assert_eq!(view.turns.len(), 1);
 }
+
+#[test]
+fn a_delivered_steer_is_tagged_and_does_not_open_a_turn() {
+    let mut a = app();
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.messages = serde_json::from_value(serde_json::json!([
+        {"id":"u", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"go"}]},
+        {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":[{"type":"text","text":"working"}]},
+        {"id":"s", "session_id":SESSION, "seq":3, "created":3.0, "role":"user", "delivery":"steer", "parts":[{"type":"text","text":"also run the linter"}]}
+    ]))
+    .unwrap();
+    view.scratch.clear();
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("also run the linter"), "{text}");
+    assert!(text.contains("steer"), "{text}");
+    assert!(!text.contains("#2"), "{text}");
+}

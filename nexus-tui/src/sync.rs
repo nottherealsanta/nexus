@@ -57,6 +57,10 @@ pub enum SyncMsg {
         session: String,
         data: Value,
     },
+    Inputs {
+        session: String,
+        data: Value,
+    },
     Handshake {
         info: Info,
         compat: Compat,
@@ -205,6 +209,7 @@ struct Ctx {
     catalog: Option<Option<String>>,
     config: bool,
     context: Option<String>,
+    inputs: Option<String>,
     config_patch: Option<(String, String, Value)>,
     worktrees: Option<String>,
     project_worktrees: Vec<String>,
@@ -229,6 +234,7 @@ impl Ctx {
         match cmd {
             Command::Select(s) => {
                 self.context = s.clone();
+                self.inputs = s.clone();
                 self.selected = s;
                 self.newest_turn = None;
                 self.resync = Some(ResyncCause::Requested);
@@ -312,6 +318,7 @@ pub async fn run(
         catalog: None,
         config: true,
         context: None,
+        inputs: None,
         config_patch: None,
         worktrees: None,
         project_worktrees: Vec::new(),
@@ -397,6 +404,7 @@ pub async fn run(
                     // nothing published meanwhile is lost: the snapshot's head
                     // is the resume cursor.
                     if let Some(sid) = cx.selected.clone() {
+                        cx.inputs = Some(sid.clone());
                         if let Some(h) = load_history(&api, &sid).await {
                             cx.newest_turn = h
                                 .turns
@@ -451,6 +459,7 @@ pub async fn run(
 
         load_config(&mut cx, &api).await;
         load_context(&mut cx, &api).await;
+        load_inputs(&mut cx, &api).await;
         // A request received while reconnecting must not be stranded until a
         // later command arrives on the live stream.
         if let Some(project) = cx.catalog.take() {
@@ -565,6 +574,18 @@ async fn load_completion(cx: &mut Ctx, api: &CoreApi) {
 
 /// Picker data: the connected providers' models and the agents that can run in
 /// this project. Read-only; a failure just leaves the picker empty.
+async fn load_inputs(cx: &mut Ctx, api: &CoreApi) {
+    if let Some(session) = cx.inputs.take() {
+        if let Ok(data) = api
+            .http
+            .get(&format!("/api/session/{session}/input"), &[])
+            .await
+        {
+            cx.send(SyncMsg::Inputs { session, data });
+        }
+    }
+}
+
 async fn load_context(cx: &mut Ctx, api: &CoreApi) {
     if let Some(session) = cx.context.take() {
         if let Ok(data) = api
@@ -928,6 +949,7 @@ async fn stream(
                     }
                     Ok(Frame::Overflow(_)) => return StreamEnd::Resync { cause: ResyncCause::Overflow, progressed },
                     Ok(Frame::Event(e)) => {
+                        if e.kind.starts_with("input.") { if let Some(id) = e.session_id.as_ref() { cx.inputs = Some(id.clone()); load_inputs(cx, api).await; } }
                         if e.kind == "config.changed" { cx.config = true; load_config(cx, api).await; }
                         if matches!(e.kind.as_str(), "turn.summary" | "message.added" | "session.updated") {
                             if let Some(id) = e.session_id.as_ref().filter(|id| cx.selected.as_ref() == Some(*id)) {

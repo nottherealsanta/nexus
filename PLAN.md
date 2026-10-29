@@ -354,6 +354,14 @@ recorded as green.
 
 ### B. Steer and queue
 
+**Landed in code (2026-10-29), pending review and real-app check:** durable Core
+inputs, recovery and hold-after-interrupt, both client composers and pending
+stacks, independent mock integration tests (Core 416 tests, TUI tests, Clippy
+and format pass). The TUI tags a delivered steer and no longer treats it as a
+turn start. Open: NSH browser tests for Enter/Tab/stack could not run (no
+Chrome here; `nsh check` passes), and the "done when" run in the real TUI
+during a long bash call. Section A was committed as `eb7168f`.
+
 Today a prompt while a turn runs gets 409 (`server.py` route table, `runtime.py`
 `self.turns`). The TUI already renders `steer` and `queued` message tags, but
 Core sends none (archived DESIGN_PLAN "Known gaps").

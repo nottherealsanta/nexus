@@ -647,3 +647,14 @@ through their request's message link; an unlinked record is treated as unknown
 rather than borrowing an earlier result. Approval and question evidence used to
 classify a call is restricted to records since its assistant message. A repeated
 call id in a later model step starts a fresh execution state.
+
+## Durable composer inputs
+
+`nexus/inputs.py` stores pending text and image input and per-session queue
+holds in SQLite. Inputs are delivered at model-call boundaries as user messages;
+the delivered state and message are committed together. Queue acceptance with
+an idempotency key is journaled with the input, so a lost response can be retried
+without duplicating work. Interruption holds automatic dispatch. Startup holds
+all pending work, converts undelivered steers into queued inputs, and never
+starts a queued turn by itself. Pending inputs block session archive/deletion
+unless explicitly dropped. See [Pending inputs](api.md#pending-inputs-steer-and-queue).

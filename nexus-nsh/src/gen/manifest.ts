@@ -1561,7 +1561,7 @@ export const manifest = {
     "palette",
     "composer"
    ],
-   "note": "Esc (see keymap.escape) or the stop button."
+   "note": "Esc interrupts the turn; queued inputs are held."
   },
   {
    "id": "session.continue",
@@ -1597,7 +1597,7 @@ export const manifest = {
    ]
   },
   {
-   "id": "session.steer",
+   "id": "composer.steer",
    "title": "Send as steering message",
    "category": "composer",
    "keys": {
@@ -1611,18 +1611,18 @@ export const manifest = {
    ],
    "unavailable_reason": "Steering needs a running turn.",
    "placement": [
+    "palette",
     "composer"
    ],
-   "status": "blocked_core",
-   "note": "Default while busy. Core: steer endpoint (Step 12a)."
+   "note": "Enter steers at the next model step."
   },
   {
-   "id": "session.queue",
+   "id": "composer.queue",
    "title": "Queue message for next turn",
    "category": "composer",
    "keys": {
-    "tui": "alt+enter",
-    "nsh": "alt+enter"
+    "tui": "tab",
+    "nsh": "tab"
    },
    "key_context": "composer_busy",
    "when": [
@@ -1631,10 +1631,10 @@ export const manifest = {
    ],
    "unavailable_reason": "Queueing needs a running turn.",
    "placement": [
+    "palette",
     "composer"
    ],
-   "status": "blocked_core",
-   "note": "Open question: final steer/queue keys."
+   "note": "Tab queues the next turn while busy."
   },
   {
    "id": "composer.newline",

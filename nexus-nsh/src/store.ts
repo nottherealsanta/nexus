@@ -19,6 +19,14 @@ export const modelCatalog = signal<any[]>([]);
 export const catalogSource = signal("");
 export const defaultModel = signal("");
 export const config = signal<any | null>(null);
+export type PendingInput = { id: string; session_id: string; mode: "steer" | "queue"; parts: any[]; held?: boolean };
+export const pendingInputs = signal<Record<string, { inputs: PendingInput[]; held: boolean }>>({});
+const inputSeq = new Map<string, number>();
+export async function loadInputs(id: string) {
+  const seq = (inputSeq.get(id) ?? 0) + 1; inputSeq.set(id, seq);
+  const data = await request<{inputs: PendingInput[]; held: boolean}>("GET", `/api/session/${id}/input`);
+  if (inputSeq.get(id) === seq) pendingInputs.update((all) => ({ ...all, [id]: data }));
+}
 export const contextBudget = signal<Record<string, { used: number; window: number | null; exact: boolean }>>({});
 export async function loadContext(id: string) { const data = await request<any>("GET", `/api/session/${id}/context`); contextBudget.update((all) => ({ ...all, [id]: data })); }
 function applyConfig(c: any) {
@@ -258,6 +266,7 @@ const host: SyncHost = {
   snapshotApplied() { reconcileSelection(); void loadConfig().catch(() => {}); },
   configChanged() { void loadConfig().catch(() => {}); },
   contextChanged(id) { void loadContext(id).catch(() => {}); },
+  inputsChanged(id) { void loadInputs(id).catch(() => {}); },
 };
 export const sync = new Sync(host);
 

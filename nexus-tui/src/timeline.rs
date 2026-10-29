@@ -356,10 +356,18 @@ fn band_meta(tags: &[&str], n: usize, clock: Option<&str>, sep: &str) -> String 
     parts.join(sep)
 }
 
-/// Tags a user message carries. Core records none yet (steer and queue wait on
-/// Step 12a), so this is empty until it does.
-fn user_tags(_message: &crate::api::Message) -> Vec<&'static str> {
-    Vec::new()
+/// A real user prompt opens a turn. Notices and delivered steers belong to the running one.
+pub(crate) fn is_turn_start(m: &crate::api::Message) -> bool {
+    m.role == "user" && m.delivery.as_deref() != Some("steer") && !is_notice(&parts_text(m))
+}
+
+/// Delivery labels distinguish steering from the start of a queued turn.
+fn user_tags(message: &crate::api::Message) -> Vec<&'static str> {
+    match message.delivery.as_deref() {
+        Some("steer") => vec!["steer"],
+        Some("queued") => vec!["queued"],
+        _ => vec![],
+    }
 }
 
 /// How a turn ended.
@@ -483,8 +491,7 @@ fn floor_at(view: &crate::reduce::SelectedView) -> Option<usize> {
     if first == 0 {
         return None;
     }
-    let start = (first..view.messages.len())
-        .find(|&i| view.messages[i].role == "user" && !is_notice(&parts_text(&view.messages[i])));
+    let start = (first..view.messages.len()).find(|&i| is_turn_start(&view.messages[i]));
     match start {
         Some(i) => Some(i),
         None => Some(view.messages.len()),
@@ -845,6 +852,12 @@ impl Builder<'_> {
                             }
                             continue;
                         }
+                        if m.delivery.as_deref() == Some("steer") && turn_open {
+                            if !folded {
+                                self.turn_block(turn_no, m, &text, &turns, false);
+                            }
+                            continue;
+                        }
                         if turn_open && !folded {
                             self.turn_footer(turn_no, &turns);
                             self.blank();
@@ -1201,7 +1214,7 @@ impl Builder<'_> {
     fn turn_meta(&self, view: &crate::reduce::SelectedView, busy: bool) -> Vec<TurnMeta> {
         let mut starts: Vec<(usize, &crate::api::Message)> = Vec::new();
         for (i, m) in view.messages.iter().enumerate() {
-            if m.role == "user" && !is_notice(&parts_text(m)) {
+            if is_turn_start(m) {
                 starts.push((i, m));
             }
         }

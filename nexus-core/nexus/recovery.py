@@ -391,6 +391,9 @@ class Recovery:
               f"(started {_time(turn['started'])}). Nothing was retried or resumed automatically; recovery made "
               "no provider request and ran no tool.")),
         ]
+        pending = self.runtime.inputs.list(turn["session_id"])
+        if pending:
+            lines.append("Pending input is held after restart; undelivered steering was moved to the queue.")
         if legacy:
             lines.append(
                 "This session was saved before this Nexus version recorded durable turn, request and tool "

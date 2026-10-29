@@ -243,8 +243,8 @@ fn disabled_commands_are_listed_with_their_reason_and_never_run() {
     let items = a.palette_items();
     let steer = items
         .iter()
-        .find(|i| i.kind == PaletteKind::Command("session.steer".into()))
-        .expect("blocked_core commands are shown, not hidden");
+        .find(|i| i.kind == PaletteKind::Command("composer.steer".into()))
+        .expect("steering command is shown");
     assert_eq!(
         steer.reason.as_deref(),
         Some("Steering needs a running turn.")
@@ -350,6 +350,7 @@ fn session_actions_are_wired_to_the_api() {
     // failed send puts the draft back
     a.apply_done(nexus_tui::actions::ActionDone {
         call: ApiCall::Prompt {
+            mode: "send".into(),
             images: Vec::new(),
             session: SESSION.into(),
             text: "hello there".into(),
@@ -447,6 +448,7 @@ fn failed_send_restores_expanded_pending_paste() {
     a.handle_paste(pending);
     a.apply_done(ActionDone {
         call: ApiCall::Prompt {
+            mode: "send".into(),
             images: Vec::new(),
             session: SESSION.into(),
             text: "sent".into(),
@@ -778,4 +780,44 @@ fn pasted_images_get_distinct_markers_and_removal_clears_the_last() {
     press(&mut a, &["backspace"]);
     assert_eq!(a.composer_ref().text(), "[Image A] compare with ");
     assert_eq!(a.composer_ref().images.len(), 1);
+}
+
+#[test]
+fn busy_composer_steers_queues_and_completion_wins_tab() {
+    use nexus_tui::actions::ApiCall;
+    let mut a = app();
+    busy(&mut a);
+    typing(&mut a, "run linter");
+    press(&mut a, &["enter"]);
+    assert!(a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Prompt { mode, text, .. }) if mode == "steer" && text == "run linter")));
+    a.effects.clear();
+    typing(&mut a, "write changelog");
+    press(&mut a, &["tab"]);
+    assert!(a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Prompt { mode, text, .. }) if mode == "queue" && text == "write changelog")));
+    a.effects.clear();
+    press(&mut a, &["tab"]);
+    assert!(!a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::Prompt { .. }))));
+    typing(&mut a, "/mod");
+    press(&mut a, &["tab"]);
+    assert!(!a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::Prompt { .. }))));
+}
+
+#[test]
+fn pending_input_is_selected_and_removed_for_restoration() {
+    use nexus_tui::actions::ApiCall;
+    let mut a = app();
+    a.state.inputs.insert(
+        SESSION.into(),
+        serde_json::json!({"held": true, "inputs": [
+            {"id": "in_1", "mode": "queue", "parts": [{"type": "text", "text": "follow up"}]}
+        ]}),
+    );
+    press(&mut a, &["up", "backspace"]);
+    assert!(a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Input { id, action, .. }) if id == "in_1" && action == "remove")));
 }

@@ -31,6 +31,14 @@ pub enum ApiCall {
         session: String,
         text: String,
         images: Vec<crate::images::Image>,
+        mode: String,
+    },
+    Input {
+        session: String,
+        id: String,
+        action: String,
+        before: Option<String>,
+        parts: Vec<Value>,
     },
     /// Create a session in a project, then prompt it.
     NewAndPrompt {
@@ -115,6 +123,7 @@ impl ApiCall {
     /// Past-tense label for the success toast.
     pub fn done_label(&self) -> &'static str {
         match self {
+            ApiCall::Input { .. } => "Pending input updated",
             ApiCall::Provider { sign_out: true, .. } => "Signed out",
             ApiCall::Provider { .. } => "Sign-in started",
             ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. } => "Sent",
@@ -164,6 +173,7 @@ pub struct Done {
     pub path: Option<String>,
     /// A project the app should make current (added projects).
     pub project: Option<String>,
+    pub input_parts: Option<Vec<Value>>,
 }
 
 /// An authenticated API for the daemon in `home`, from `daemon.json`.
@@ -221,12 +231,48 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             session,
             text,
             images,
+            mode,
         } => {
             conflict(
-                api.prompt_images(session, text, images, &key)
+                api.prompt_images(session, text, images, mode, &key)
                     .await
                     .map_err(e)?,
             )?;
+        }
+        ApiCall::Input {
+            session,
+            id,
+            action,
+            before,
+            ..
+        } => {
+            let base = format!("/api/session/{session}/input");
+            let (method, path, body) = match action.as_str() {
+                "remove" => (reqwest::Method::DELETE, format!("{base}/{id}"), None),
+                "steer" => (
+                    reqwest::Method::PATCH,
+                    format!("{base}/{id}"),
+                    Some(json!({"mode":"steer"})),
+                ),
+                "move" => (
+                    reqwest::Method::POST,
+                    format!("{base}/{id}/move"),
+                    Some(json!({"before":before})),
+                ),
+                _ => (
+                    reqwest::Method::POST,
+                    format!("{base}/next"),
+                    Some(json!({})),
+                ),
+            };
+            let reply = api
+                .http
+                .call(method, &path, &[], body.as_ref(), None, None)
+                .await
+                .map_err(e)?;
+            if action == "remove" {
+                done.input_parts = reply.body["parts"].as_array().cloned();
+            }
         }
         ApiCall::NewAndPrompt {
             project,
@@ -243,7 +289,7 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             done.open = Some(s.id.clone());
             let key2 = RequestId::new();
             conflict(
-                api.prompt_images(&s.id, text, images, &key2)
+                api.prompt_images(&s.id, text, images, "send", &key2)
                     .await
                     .map_err(e)?,
             )?;
@@ -387,6 +433,7 @@ mod tests {
     #[test]
     fn failed_sends_hand_the_draft_back() {
         let c = ApiCall::Prompt {
+            mode: "send".into(),
             images: Vec::new(),
             session: "ses_1".into(),
             text: "hello".into(),

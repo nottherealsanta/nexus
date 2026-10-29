@@ -113,6 +113,8 @@ pub const WIRED: &[&str] = &[
     "session.interrupt",
     "session.continue",
     "session.send",
+    "composer.steer",
+    "composer.queue",
     "session.export",
     "session.change_directory",
     "turn.go_to",
@@ -420,6 +422,7 @@ pub struct Ui {
     pub failed_sessions: HashSet<String>,
     pub notify: Notify,
     pub view: View,
+    pub pending_selected: Option<usize>,
     pub settings_row: usize,
     pub settings_search: Composer,
     pub overlay: Option<Overlay>,
@@ -573,6 +576,7 @@ impl App {
                 failed_sessions: HashSet::new(),
                 notify: Notify::default(),
                 view: View::Session,
+                pending_selected: None,
                 settings_row: 0,
                 settings_search: Composer::new(),
                 overlay: None,
@@ -1190,7 +1194,7 @@ impl App {
             "composer.empty" => {
                 self.composer_ref().is_empty() && self.composer_ref().images.is_empty()
             }
-            "has_queued" => false,
+            "has_queued" => !self.pending_inputs().is_empty(),
             "timeline.scrolled_up" => !self.ui.scroll.follow,
             "timeline.has_older" => self
                 .state
@@ -2770,7 +2774,8 @@ impl App {
                     self.api(ApiCall::Continue { session: id });
                 }
             }
-            "session.send" => self.send(),
+            "session.send" | "composer.steer" => self.send(),
+            "composer.queue" => self.send_mode(Some("queue")),
             "composer.newline" => self.composer().newline(),
             "composer.undo" => self.composer().undo(),
             "composer.redo" => self.composer().redo(),
@@ -3143,6 +3148,10 @@ impl App {
     }
 
     fn send(&mut self) {
+        self.send_mode(None);
+    }
+
+    fn send_mode(&mut self, requested: Option<&str>) {
         if self.ui.image_pasting.contains(&self.draft_key()) {
             self.toast(Level::Info, "Preparing clipboard image…");
             return;
@@ -3186,14 +3195,17 @@ impl App {
             return;
         }
         match self.viewed_id().map(str::to_owned) {
-            Some(id) if self.is_busy(&id) => self.run_command("session.steer"),
             Some(id) => {
+                let mode = requested
+                    .unwrap_or(if self.is_busy(&id) { "steer" } else { "send" })
+                    .to_owned();
                 self.composer().take();
                 let images = std::mem::take(&mut self.composer().images);
                 self.api(ApiCall::Prompt {
                     session: id,
                     text,
                     images,
+                    mode,
                 });
             }
             None => match self.current_project() {
@@ -3373,6 +3385,41 @@ impl App {
         let name = done.call_name();
         match done.result {
             Ok(r) => {
+                if let ApiCall::Input {
+                    session,
+                    action,
+                    parts,
+                    ..
+                } = &done.call
+                {
+                    if action == "remove" {
+                        let mut text = Vec::new();
+                        let mut images = Vec::new();
+                        for part in r.input_parts.as_ref().unwrap_or(parts) {
+                            if part["type"] == "text" {
+                                if let Some(t) = part["text"].as_str() {
+                                    if !t.starts_with("[Image ") {
+                                        text.push(t.to_owned());
+                                    }
+                                }
+                            } else if part["type"] == "image" {
+                                if let Ok(image) =
+                                    serde_json::from_value::<crate::images::Image>(part.clone())
+                                {
+                                    images.push(image);
+                                }
+                            }
+                        }
+                        text.extend(images.iter().map(|image| format!("[{}]", image.name)));
+                        self.restore_draft(Some(session), &text.join("\n"));
+                        self.ui
+                            .drafts
+                            .entry(session.clone())
+                            .or_default()
+                            .images
+                            .extend(images);
+                    }
+                }
                 if let Some(c) = r.conflict {
                     self.toast(
                         Level::Warning,
@@ -3723,6 +3770,14 @@ impl App {
         }
         // The popup owns Esc, Tab, Enter and the arrows while it is visible.
         if self.completion_key(&name) {
+            return;
+        }
+        if self.ui.focus == Focus::Composer
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
+            && self.pending_key(&name)
+        {
             return;
         }
         if name == "esc" {
@@ -4179,6 +4234,97 @@ impl App {
         }
     }
 
+    pub fn pending_inputs(&self) -> Vec<serde_json::Value> {
+        self.viewed_id()
+            .and_then(|id| self.state.inputs.get(id))
+            .and_then(|v| v["inputs"].as_array())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn pending_key(&mut self, name: &str) -> bool {
+        let inputs = self.pending_inputs();
+        if inputs.is_empty() {
+            self.ui.pending_selected = None;
+            return false;
+        }
+        let empty = self.composer_ref().text().is_empty() && self.composer_ref().images.is_empty();
+        if self.ui.pending_selected.is_none() && name == "up" && empty {
+            self.ui.pending_selected = Some(inputs.len() - 1);
+            return true;
+        }
+        let Some(selected) = self.ui.pending_selected else {
+            return false;
+        };
+        let at = selected.min(inputs.len() - 1);
+        match name {
+            "up" => self.ui.pending_selected = Some(at.saturating_sub(1)),
+            "down" if at + 1 < inputs.len() => self.ui.pending_selected = Some(at + 1),
+            "down" | "esc" => self.ui.pending_selected = None,
+            "enter" | "backspace" | "s" | "shift+up" | "shift+down" => {
+                let item = &inputs[at];
+                if (name == "enter" || name == "backspace") && !empty {
+                    self.toast(
+                        Level::Warning,
+                        "Clear the draft before restoring a pending input",
+                    );
+                    return true;
+                }
+                let Some(session) = self.viewed_id().map(str::to_owned) else {
+                    return true;
+                };
+                let mut id = item["id"].as_str().unwrap_or("").to_owned();
+                let action = match name {
+                    "s" if item["mode"] == "queue" => "steer",
+                    "shift+up" | "shift+down" => "move",
+                    "enter" | "backspace" => "remove",
+                    _ => return true,
+                };
+                let before = match name {
+                    "shift+up" if at > 0 => inputs[at - 1]["id"].as_str().map(str::to_owned),
+                    "shift+down" if at + 1 < inputs.len() => {
+                        let before = Some(id.clone());
+                        id = inputs[at + 1]["id"].as_str().unwrap_or("").to_owned();
+                        before
+                    }
+                    "shift+up" | "shift+down" => return true,
+                    _ => None,
+                };
+                let parts = item["parts"].as_array().cloned().unwrap_or_default();
+                self.api(ApiCall::Input {
+                    session,
+                    id,
+                    action: action.into(),
+                    before,
+                    parts,
+                });
+                if action == "remove" {
+                    self.ui.pending_selected = None;
+                }
+            }
+            "n" => {
+                if self
+                    .state
+                    .inputs
+                    .get(self.viewed_id().unwrap_or(""))
+                    .is_some_and(|v| v["held"] == true)
+                {
+                    if let Some(session) = self.viewed_id().map(str::to_owned) {
+                        self.api(ApiCall::Input {
+                            session,
+                            id: String::new(),
+                            action: "next".into(),
+                            before: None,
+                            parts: vec![],
+                        });
+                    }
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
     fn composer_key(&mut self, ev: &KeyEvent, name: &str) {
         if let Some(cmd) = self
             .focus_contexts()
@@ -4188,8 +4334,14 @@ impl App {
             // Printable keys (`@`, `/`) are text unless their command is wired.
             let printable = keys::printable(ev).is_some();
             if !(printable && !WIRED.contains(&cmd.as_str())) {
-                if cmd == "session.send" || cmd == "session.steer" {
+                if cmd == "session.send" || cmd == "composer.steer" {
                     return self.send();
+                }
+                if cmd == "composer.queue" {
+                    if self.composer_ref().has_text() || !self.composer_ref().images.is_empty() {
+                        return self.send_mode(Some("queue"));
+                    }
+                    return;
                 }
                 return self.run_command(&cmd);
             }
@@ -5680,6 +5832,7 @@ impl App {
 impl ActionDone {
     fn call_name(&self) -> &'static str {
         match self.call {
+            ApiCall::Input { .. } => "Pending input failed",
             ApiCall::Provider { .. } => "Provider sign-in failed",
             ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. } => "Send failed",
             ApiCall::NewSession { .. } => "New session failed",

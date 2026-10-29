@@ -63,6 +63,7 @@ class ToolEnd:
 @dataclass(frozen=True, slots=True)
 class MessageAdded:
     message: Message
+    input_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +151,7 @@ class Agent:
         messages: list[Message] | None = None,
         conversation_id: str | None = None,
         inbox: Inbox | None = None,
+        steering: Callable[[], list[tuple[str, Message]]] | None = None,
         refresh: Callable[[Any], None] | None = None,
         files: FileGuard | None = None,
         cwd_changed: bool = False,
@@ -169,6 +171,7 @@ class Agent:
         self.conversation_id = conversation_id or uuid.uuid4().hex
         self.messages: list[Message] = list(messages or [])
         self.inbox = inbox
+        self.steering = steering
         self.refresh = refresh
         self.files = files
         self.cwd_changed = cwd_changed
@@ -200,6 +203,9 @@ class Agent:
             notices = self.inbox() if self.inbox is not None else []
             if notices:
                 yield self._add(Message("user", tuple(Text(n) for n in notices)))
+            for input_id, message in self.steering() if self.steering else []:
+                self.messages.append(message)
+                yield MessageAdded(message, input_id)
             yield StepStart(step)
             parts: list[Part] = []
             stop = "other"
@@ -212,6 +218,8 @@ class Agent:
             yield self._add(Message("assistant", tuple(parts)))
             calls = [p for p in parts if isinstance(p, ToolCall)]
             if not calls:
+                if self.steering and self.steering():
+                    continue
                 yield TurnEnd(stop, step)
                 return
             results: list[ToolResult] = []

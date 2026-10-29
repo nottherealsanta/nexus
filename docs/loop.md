@@ -149,3 +149,17 @@ and effort at `StepStart`, token counts from `Usage`, and `{stop, steps}` from
 Manual continuation reuses the same loop with `NO_USER_MESSAGE`; the daemon
 validates and reconciles the stored context before calling it
 ([api.md](api.md#manual-continuation)).
+
+## Steered and queued input
+
+The runtime's durable input queue is separate from the loop's message history.
+Before a model request, the loop takes pending steers after preceding tool
+results. Each delivered input becomes one user message. Storage commits the
+message and delivery state together; clients show it at that point in the
+context line. If a steer arrives while a final answer streams, the loop takes
+another step before ending the turn.
+
+Queued inputs start separate turns after completion or failure. Interruption
+holds the queue; sending the next item explicitly releases it. Recovery keeps
+pending input, converts undelivered steers to queued input and holds it, without
+starting model work automatically. See [Pending inputs](api.md#pending-inputs-steer-and-queue).

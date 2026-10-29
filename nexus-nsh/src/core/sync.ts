@@ -56,6 +56,7 @@ export interface SyncHost {
   snapshotApplied?(): void;
   configChanged?(): void;
   contextChanged?(id: string): void;
+  inputsChanged?(id: string): void;
   canStart: boolean;
 }
 
@@ -167,6 +168,7 @@ export class Sync {
       let resync: string | null = null;
       let closed: string | null = null;
       for (const ev of buf) {
+        if (ev.type.startsWith("input.") && ev.session_id) h.inputsChanged?.(ev.session_id);
         if (ev.type === "config.changed") h.configChanged?.();
         const r = m.applyEvent(ev);
         if (typeof r === "object") { resync = r.resync; break; }
@@ -210,6 +212,7 @@ export class Sync {
     if (!id) return;
     const wanted = () => m.selected?.sessionId === id;
     this.host.contextChanged?.(id);
+    this.host.inputsChanged?.(id);
     const [msgs, starting, turns] = await Promise.all([
       request<any[]>("GET", `/api/session/${id}/message`),
       request<any>("GET", `/api/session/${id}/snapshot`).catch(() => null),

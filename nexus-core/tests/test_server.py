@@ -816,3 +816,12 @@ async def test_context_budget_uses_latest_matching_model(setup, monkeypatch):
     await client.patch(f"/api/session/{sid}", json={"model": "scripted/other"})
     result = (await client.get(endpoint)).json()
     assert result["exact"] is False and result["window"] is None
+
+
+async def test_missing_pending_input_is_404(setup):
+    _, client, _, workspace = setup
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    path = f"/api/session/{sid}/input/inp_missing"
+    assert (await client.delete(path)).status_code == 404
+    assert (await client.patch(path, json={"text": "new"})).status_code == 404
+    assert (await client.post(path + "/move", json={"before": "inp_other"})).status_code == 404

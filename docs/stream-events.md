@@ -328,3 +328,14 @@ partial text, arguments or reasoning as a complete answer, and recovery never
 completes or re-executes a tool call. Completed parts are restored only when the
 provider's `Done` was durable. An interrupted request's `turn_request` row is
 marked `interrupted`, which is distinct from a `completed` response.
+
+## Pending-input activity
+
+Durable `input.added`, `input.updated` and `input.removed` events describe
+pending composer input; `input.held` updates queue hold state. These are activity
+records, not model context. `input.delivered` links an input to `message_id` and
+`turn_id` when it becomes a user message. Stored message JSON adds the optional
+`delivery` field (`steer` or `queued`), which clients use for timeline labels.
+The provider receives the user message's parts in their stored order.
+Reconnecting clients rebuild pending activity from `/api/snapshot` or the
+session input endpoint, independently of diagnostic event retention.

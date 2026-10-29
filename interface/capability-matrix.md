@@ -193,7 +193,7 @@ Durations come from event `time`; Core sends no duration fields.
 | U2 | Attachments as chips | Core work | 12a Attachments and images | Prompt body is `{text}` only |
 | U3 | Large text collapsed with "N more lines", sent whole | Client only | | Composer paste collapse is also client |
 | U4 | Images as thumbnails (NSH inline; TUI kitty/iTerm2/sixel, else chip) | Core work | 12a Attachments and images | Rendering fallback is client |
-| U5 | Queued and steering messages marked | Core work | 12a Steer and queue | |
+| U5 | Queued and steering messages marked | API ready | Stored message `delivery` | Pending activity stays outside the timeline until delivery |
 
 ### Markdown and copy
 
@@ -278,8 +278,8 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | --- | --- | --- | --- | --- |
 | K1 | Multi-line Markdown input, Enter sends, Shift+Enter newline | Client only | | |
 | K2 | Send a prompt | API ready | `POST …/prompt {text}` with `Idempotency-Key` | 202 `{turn_id, origin}` |
-| K3 | Steer while busy | Core work | 12a Steer and queue | A busy prompt is 409 |
-| K4 | Queue for next turn; list, edit, remove queued | Core work | 12a Steer and queue | |
+| K3 | Steer while busy | API ready | `POST …/prompt {mode: "steer"}` | Default `send` while busy remains 409 |
+| K4 | Queue for next turn; list, edit, remove queued | API ready | `POST …/prompt {mode: "queue"}`, `/input` CRUD/move/next | Interrupt holds dispatch |
 | K5 | Agent selector, mid-turn | API ready | `POST …/agent {agent}`; E: `session.updated`; notice message | Applies to the next model call. Rebuilds the snapshot; confirm first (cache) |
 | K6 | Model selector, mid-turn | API ready | `POST …/model {model}` | Confirm first (cache). Applies to subsequent calls |
 | K7 | Effort selector, mid-turn | API ready | `PATCH /api/session/{id} {effort}` | |
@@ -355,7 +355,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | H5 | Reconnect with cursor, atomic replay-to-live, dedupe by `id` | API ready | `?cursor=<generation>:<id>` or `Last-Event-ID`; first frame `server.connected` | |
 | H6 | Resync on `history_unavailable`, `cursor_generation`, `cursor_ahead`, `bus.overflow` | API ready | `GET /api/snapshot` then resubscribe from `watermark.head_cursor` | Filtered-stream gaps are normal |
 | H7 | Restore pending waits after reconnect | API ready | snapshot `approvals`, `questions` | In-memory waits; a restart cancels them with events |
-| H8 | Restore queued messages | Core work | 12a Steer and queue | |
+| H8 | Restore queued messages | API ready | Snapshot `inputs`, `held_sessions`; `GET …/input` | Durable across restart, held until release |
 | H9 | Daemon restart detection: new pid/token | API ready | `/api/info.pid`; `server.connected.generation`; re-read `daemon.json` | |
 | H10 | Interrupted turns show partial state and "interrupted by daemon restart" | API ready | E: `turn.recovered`, `session.status` idle with `reason`; recovery notice | |
 | H11 | Keyed mutations, revision conflicts | API ready | `Idempotency-Key`; `expected_revision` | See api.md route matrix |
@@ -423,7 +423,7 @@ increment. The client must show the reason and must not fake the state.
 | Flow | Blocked by | Step |
 | --- | --- | --- |
 | Start a session after reviewing and editing its starting context (N1, N4, N6, N8, N10) | No draft; editing an empty session pollutes context | 12a Session drafts |
-| Send while the agent works (K3, K4, U5, H8) | Busy prompt is 409 | 12a Steer and queue |
+| Send while the agent works (K3, K4, U5, H8) | API ready: durable steer/queue inputs | PLAN.md B |
 | Browse files, mention `@path`, open an editor, save (F1-F4, F7, E2, E3, M4) | Writes/editor, `@` completion and timeline path links remain | 12a Enforced read-before-edit; A7 |
 | Git status and diffs (G1, G2, F3) | Status and diff endpoints exist; diff UI and changed-file navigation remain | A7 / 12.4 |
 | Sign in on first run, manage providers, set defaults (Y4, ST3-ST5, ST9, ST12, ST13, Q8) | Sign-in only local; defaults read-only | 12a Settings over the API |

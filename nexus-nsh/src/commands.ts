@@ -5,7 +5,7 @@ import { loadFiles } from "./store";
 import { Clipboard, keymap, openUrl } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
-  contextDetail, addProjectOpen, alertDetail, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
+  pendingInputs, contextDetail, addProjectOpen, alertDetail, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, currentWorktree, defaultModel, draft, isNarrow, leftOpen, leftTab, live, loadComposerData, loadProjectWorktrees, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
@@ -76,7 +76,7 @@ function evalTerm(t: string): boolean {
     case "waiting.multiple": return waitItems().length > 1;
     case "composer.has_text": return (draft()[draftKey()] ?? "").trim().length > 0 || (imageDrafts()[draftKey()]?.length ?? 0) > 0;
     case "composer.empty": return (draft()[draftKey()] ?? "").trim().length === 0 && !(imageDrafts()[draftKey()]?.length);
-    case "has_queued": return false;
+    case "has_queued": return !!viewed() && (pendingInputs()[viewed()!.id]?.inputs.length ?? 0) > 0;
     case "timeline.scrolled_up": return scrolledUp();
     case "timeline.has_older": return !!model.selected?.messagesMore;
     case "view.settings": return centre() === "settings";
@@ -161,7 +161,7 @@ export function stepTab(step: number) {
   if (next !== ids[at]) void selectSession(next);
 }
 
-export async function sendPrompt(text: string, images: import("./images").DraftImage[] = []): Promise<boolean> {
+export async function sendPrompt(text: string, images: import("./images").DraftImage[] = [], mode: "send" | "steer" | "queue" = "send"): Promise<boolean> {
   text = text.trim();
   if (!text && !images.length) return false;
   const source = draftKey();
@@ -182,7 +182,7 @@ export async function sendPrompt(text: string, images: import("./images").DraftI
       await selectSession(created.id);
       ses = created;
     }
-    await request("POST", `/api/session/${ses!.id}/prompt`, { body: { text, images }, key: newKey() });
+    await request("POST", `/api/session/${ses!.id}/prompt`, { body: { text, images, mode }, key: newKey() });
     return true;
   } catch (e) {
     if (createdId) {
