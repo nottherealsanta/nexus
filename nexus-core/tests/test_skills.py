@@ -193,7 +193,7 @@ async def test_switched_off_skill_is_not_in_the_index_and_is_refused(env):
     await rt.shutdown()
 
 
-async def test_skill_added_later_is_announced_once_and_loadable(env):
+async def test_skill_added_later_is_not_injected_and_not_loadable(env):
     rt, client, provider, workspace, root = env
     write_skill(root, "old")
     sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
@@ -202,13 +202,32 @@ async def test_skill_added_later_is_announced_once_and_loadable(env):
     write_skill(root, "newcomer", "Brand new skill.")
     await _ask(rt, client, provider, sid, [[ToolCall("c1", "skill", json.dumps({"name": "newcomer"}))], [Text("ok")]], "again")
     assert provider.requests[-2].instructions == frozen and "newcomer" not in frozen
-    sent = json.dumps([m.__dict__ if hasattr(m, "__dict__") else str(m) for m in provider.requests[-2].messages], default=str)
-    assert "a skill was added after this session started: `newcomer`" in sent
+    assert "newcomer" not in json.dumps([str(m) for m in provider.requests[-2].messages])  # nothing was injected
     (result,) = tool_results((await client.get(f"/api/session/{sid}/message")).json())
-    assert '<skill name="newcomer"' in result
-    await _ask(rt, client, provider, sid, [[Text("again")]], "third")
-    sent = json.dumps([str(m) for m in provider.requests[-1].messages])
-    assert sent.count("a skill was added after this session started") == 1
+    assert "no skill named 'newcomer'" in result
+    fresh = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    assert {s["name"] for s in fresh["skills"]} == {"old", "newcomer"}
+    await rt.shutdown()
+
+
+async def test_header_switches_inject_one_json_notice_and_only_cover_what_started(env):
+    rt, client, provider, workspace, root = env
+    write_skill(root, "a")
+    write_skill(root, "b")
+    made = (await client.post("/api/session", json={"directory": str(workspace), "disabled_tools": ["skill:b"]})).json()
+    sid = made["id"]
+    assert {(s["name"], s["state"], s["locked"]) for s in made["skills"]} == {("a", "on", False), ("b", "off", True)}
+    off = await client.patch(f"/api/session/{sid}", json={"disabled_tools": ["skill:a", "skill:b"]})
+    assert off.status_code == 200 and {s["name"]: s["state"] for s in off.json()["skills"]} == {"a": "off", "b": "off"}
+    await _ask(rt, client, provider, sid, [[Text("ok")]], "hi")
+    sent = [str(m) for m in provider.requests[-1].messages]
+    assert any('{"skill_unavailable": {"name": "a"}}' in m for m in sent) and not any("tool availability" in m for m in sent)
+    locked = await client.patch(f"/api/session/{sid}", json={"disabled_tools": ["skill:a"]})
+    assert locked.status_code == 400 and "new session" in locked.text
+    back = await client.patch(f"/api/session/{sid}", json={"disabled_tools": ["skill:b"]})
+    assert back.status_code == 200 and {x["name"]: x["state"] for x in back.json()["skills"]} == {"a": "on", "b": "off"}
+    await _ask(rt, client, provider, sid, [[Text("ok")]], "again")
+    assert any('{"skill_available": {"name": "a"}}' in str(m) for m in provider.requests[-1].messages)
     await rt.shutdown()
 
 
@@ -219,9 +238,7 @@ async def test_skill_edited_mid_session_loads_current_text_and_says_so(env):
     write_skill(root, "s", body="v2")
     await _ask(rt, client, provider, sid, [[ToolCall("c1", "skill", json.dumps({"name": "s"}))], [Text("ok")]])
     (result,) = tool_results((await client.get(f"/api/session/{sid}/message")).json())
-    assert "v2" in result
-    sent = json.dumps([str(m) for m in provider.requests[0].messages])
-    assert "skill `s` changed on disk after this session started" in sent
+    assert "v2" in result and "changed on disk" in result
     await rt.shutdown()
 
 

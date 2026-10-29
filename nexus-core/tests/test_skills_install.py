@@ -104,3 +104,30 @@ async def test_endpoint_installs_into_the_chosen_scope(env):
     again = await client.post("/api/skill/install", json=body | {"scope": "project"})
     assert again.status_code == 400 and "already installed" in again.text
     await rt.shutdown()
+
+
+async def test_preview_then_install_chosen_skills_with_overwrite(env):
+    rt, client, project, tmp = env
+    repo = make_repo(tmp / "repo")
+    body = {"source": str(repo), "scope": "project", "project": (await client.post("/api/project", json={"path": str(project)})).json()["id"]}
+    preview = (await client.post("/api/skill/preview", json=body)).json()
+    assert [(f["name"], f["installed"]) for f in preview["found"]] == [("alpha", False), ("beta", False)]
+    assert preview["requested"] == []
+    first = await client.post("/api/skill/install", json={**body, "fetch_id": preview["fetch_id"], "skills": ["beta"]})
+    assert first.status_code == 200 and [i["name"] for i in first.json()["installed"]] == ["beta"]
+    gone = await client.post("/api/skill/install", json={**body, "fetch_id": preview["fetch_id"], "skills": ["alpha"]})
+    assert gone.status_code == 400 and "expired" in gone.text  # one install per fetch
+    again = (await client.post("/api/skill/preview", json=body)).json()
+    assert {f["name"]: f["installed"] for f in again["found"]} == {"alpha": False, "beta": True}
+    kept = await client.post("/api/skill/install", json={**body, "fetch_id": again["fetch_id"], "skills": ["beta"]})
+    assert kept.status_code == 400 and "already installed" in kept.text
+    again = (await client.post("/api/skill/preview", json=body)).json()
+    (project / ".agents" / "skills" / "beta" / "local-edit.txt").write_text("mine")
+    done = await client.post("/api/skill/install", json={**body, "fetch_id": again["fetch_id"], "skills": ["alpha", "beta"], "overwrite": True})
+    assert done.status_code == 200
+    assert {i["name"]: i["replaced"] for i in done.json()["installed"]} == {"alpha": False, "beta": True}
+    assert not (project / ".agents" / "skills" / "beta" / "local-edit.txt").exists()
+    empty = (await client.post("/api/skill/preview", json=body)).json()
+    none = await client.post("/api/skill/install", json={**body, "fetch_id": empty["fetch_id"], "skills": []})
+    assert none.status_code == 400 and "at least one" in none.text
+    await rt.shutdown()

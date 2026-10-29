@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -68,6 +69,7 @@ class Connection:
         self.state = "idle"  # idle | connecting | connected | failed
         self.error: str | None = None
         self.tools: list[Any] = []
+        self.instructions = ""  # what the server says about itself, sanitized and clipped
         self.listed_at = 0.0
         self.failures = 0
         self.retry_after = 0.0
@@ -142,6 +144,7 @@ class Connection:
                               message_handler=on_message) as client:
                 self.client = client
                 self.tools = await self._list()
+                self.instructions = bridge.sanitize(getattr(client, "instructions", None) or "")[:600].strip()
                 self.state, self.error, self.failures = "connected", None, 0
                 self.publish("mcp.connected", {"server": config.name, "tools": len(self.tools)})
                 self._ready.set()
@@ -275,6 +278,33 @@ class McpManager:
         if not conn.config.enabled:
             raise McpUnavailable(f"server {name} is switched off in Settings")
         return conn
+
+    async def connect_all(self, names: list[str]) -> dict[str, str | None]:
+        """Bring every named server online, in parallel. `{name: None}` when connected, else the reason it is not."""
+        async def one(name: str) -> tuple[str, str | None]:
+            try:
+                await self.connection(name).connect()
+            except McpUnavailable as exc:
+                return name, str(exc)
+            return name, None
+        return dict(await asyncio.gather(*(one(n) for n in names)))
+
+    def listing(self, names: list[str], *, full: bool, max_listed: int) -> str:
+        """The frozen context text for the servers a session starts with (fenced, untrusted)."""
+        servers = {n: self.connections[n] for n in names if n in self.connections and self.connections[n].state == "connected"}
+        total = sum(len(c.tools) for c in servers.values())
+        if full:
+            rows = [{"tool": f"{n}/{t.name}", "description": t.description or "",
+                     "input_schema": t.input_schema or {"type": "object"},
+                     "may_change_state": not bridge.read_only(t)} for n, c in servers.items() for t in c.tools]
+            return bridge.fence(json.dumps(rows, ensure_ascii=False, indent=1), server="mcp", kind="tool-definitions",
+                                limit=bridge.MAX_LISTING_CHARS)
+        if total <= max_listed:
+            lines = [f"{n}/{t.name}: {bridge.first_line(t.description)}" for n, c in servers.items() for t in c.tools]
+        else:
+            lines = [f"{n} ({len(c.tools)} tools): {c.instructions or n}" for n, c in servers.items()]
+            lines.append(f"{total} tools in all, more than {max_listed}: find them with `mcp_tool_search`.")
+        return bridge.fence("\n".join(lines) or "(no tools)", server="mcp", kind="tool-list", limit=bridge.MAX_LISTING_CHARS)
 
     async def restart(self, name: str) -> dict[str, Any]:
         conn = self.connection(name)

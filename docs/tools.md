@@ -845,30 +845,34 @@ Instructions…  (bundled files: scripts/…, references/…)
 - **The tool exists only when a skill did.** A session whose start found no
   enabled skill has no `skill` tool and gets no skill notices (start a new
   session). An agent with a `tools:` list gets it by naming `skill`.
-- **Frozen index, live body.** The body is read when the tool is called, so an
-  edit is loaded as it is now (the result says the file changed if it differs
-  from the session's record). A skill that is added or changed after the
-  session started is announced once in a notice before the next model call
-  (`skill.announced` event, `[Nexus: a skill was added…]` message); the system
-  prompt is never rewritten.
-- **Switches.** `disabled_tools` takes `skill:<name>` entries. A switched-off skill
-  is left out of the index of a session created that way, and `skill` refuses
-  it later (the already-sent index is not rewritten). Both clients' starting
-  context UI for these switches is not built yet.
+- **Frozen index, live body.** The body is read when the tool is called, so an edit is
+  loaded as it is now (the result says the file changed if it differs from the session's
+  record). A skill that is added or changed after the session started is **not** injected
+  and not loadable in it (`skill` says "no skill named"): only a new session has it, and
+  clients tell the user with `skills.changed`. The system prompt is never rewritten.
+- **Switches.** `skill:<name>` entries in `disabled_tools`, from the context header (both
+  clients). Only skills the session started with can be switched; one that was off at the start
+  is `locked` and a PATCH that turns it on returns 400 ("start a new session"). A mid-session
+  switch injects one JSON notice, visible in the timeline, and `skill` refuses a switched-off
+  skill: `{"skill_unavailable": {"name": "x"}}`, `{"skill_available": {"name": "x"}}`. The
+  session JSON carries `skills: [{name, description, scope, state: on|off, locked}]`.
 - **API.** `GET /api/skill` (`?project=` or `?directory=`) lists
   `{skills: [{name, description, scope, path, sha256, allowed_tools, warnings}],
   problems: [{path, error, kind}]}`; `GET /api/skill/{name}` adds `body`,
-  `extra` and `files`. `skills.changed` (live only) says a `SKILL.md` or skill
-  folder changed.
+  `extra` and `files`. `skills.changed` (live only) says a `SKILL.md`, a skill
+  folder or an install changed.
 - **Not yet:** `allowed-tools` narrowing while a skill is active (the result
   says it is not enforced), and the `npx skills` import.
 
 ### `/learn`: installing skills
 
-`/learn <source>` (TUI and NSH composer, `skills.learn`) asks **This project**
-(`<project>/.agents/skills/`) or **Every project** (`~/.agents/skills/`), then
-calls `POST /api/skill/install {source, scope, project?, overwrite?}`. It copies
-files; there is no npx and nothing in a skill is run. `nexus/skills/install.py`.
+`/learn <source>` (TUI and NSH composer, `skills.learn`) takes three steps: a modal for
+**This project** (`<project>/.agents/skills/`) or **Every project** (`~/.agents/skills/`);
+the fetch (`POST /api/skill/preview`); then a checklist of the skills found (Select all,
+Select none, Invert; installed ones are tagged, and ticking one replaces it) and
+`POST /api/skill/install`. If the source named skills (`owner/repo@name`, `--skill name`) and
+none of them is installed, the checklist is skipped. It copies files; there is no npx and
+nothing in a skill is run. `nexus/skills/install.py`.
 
 | Source | Meaning |
 | --- | --- |
@@ -878,16 +882,18 @@ files; there is no npx and nothing in a skill is run. `nexus/skills/install.py`.
 | `git@host:o/r.git`, `https://host/o/r.git` | any Git remote |
 | `./folder`, `../x`, `/abs`, `~/x`, `file:///abs` | a local folder; a bare `a/b` is always GitHub |
 
-A leading `npx skills add` (or `skills add`) and the options `-g/--global`
-(chooses global without asking in the CLI/API), `-y`, `-a <agent>` are accepted;
-any other option is refused. A remote source is a shallow `git clone` into a
-temporary folder (120 s limit, no prompts, only https, ssh and git; needs `git`).
-Every folder holding a `SKILL.md` below the source (five levels deep) is a skill;
-unusable ones come back in `problems`. The copy leaves out `.git`, symbolic links
-and special files, stops at 2000 files or 20 MiB, and goes through a staging
-folder, so a failure leaves nothing half-installed. A skill that is already
-installed is skipped and reported unless `overwrite` is true. Verified against
-`anthropics/skills@frontend-design` on 2026-10-29. The reply is
-`{installed: [{name, description, path, files, warnings}], skipped, problems,
-available, scope}`, and `skills.changed` is published. Existing sessions are told
-about the new skills by the usual notice.
+A leading `npx skills add` (or `skills add`) and the options `-g/--global`, `-y`,
+`-a <agent>` are accepted; any other option is refused. A remote source is a shallow
+`git clone` into a temporary folder (120 s limit, no prompts, only https, ssh and git; needs
+`git`). `preview` keeps that folder for 10 minutes under a `fetch_id` and returns
+`{fetch_id, source, scope, requested, problems, found: [{name, description, installed,
+warnings}]}`; `install` takes `{fetch_id, skills, scope, project?, overwrite?}` and releases the
+fetch (a failed install keeps it). `{source, …}` without a `fetch_id` fetches and installs in one
+step (every skill, or the ones the source names). Every folder holding a `SKILL.md` below the
+source (five levels deep) is a skill; unusable ones come back in `problems`. The copy leaves
+out `.git`, symbolic links and special files, stops at 2000 files or 20 MiB, and goes through a
+staging folder, so a failure leaves nothing half-installed. An installed skill is skipped
+unless `overwrite` is true, which replaces the whole folder (local edits are lost; the result
+says `replaced`). Verified against `anthropics/skills@frontend-design` on 2026-10-29. The
+reply is `{installed: [{name, description, path, files, warnings, replaced}], skipped, problems,
+available, scope}`, and `skills.changed` is published.

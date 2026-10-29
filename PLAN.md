@@ -609,25 +609,57 @@ load error is an `extension.failed` event and a row in Settings.
 lists `hello` in the tools grid and the model can call it, and the stress test
 passes.
 
+### F + G. Revised design (2026-10-29, agreed in review; supersedes the notes below where they differ)
+
+**One rule for both:** a running session keeps what it started with (P6, Principle 8).
+A skill or MCP server added, removed or edited later is **not** injected into running
+sessions. Clients show a notification ("available in new sessions"); only a new session
+has it. The only mid-session changes are the user's switches (below).
+
+- **Skills.** Global folder `~/.agents/skills/` and project folder `<project>/.agents/skills/`
+  (never `~/.nexus10`). The `skill` tool and the `name: description` index exist only in
+  sessions that started with at least one skill on. The late-add notice (`skill.announced`)
+  is removed. `allowed-tools` is ignored for now (Open questions).
+- **MCP modes are global, not per server and not per session**, in `config.toml`:
+  `[mcp] full_definitions = false`, `[mcp] max_listed_tools = 25`. `tool_loading` per
+  server is dropped. Tools are `mcp_tool_search` and `mcp_call` only (`mcp_show_tool_def`
+  is folded into search: a search returns the definition JSON). They exist only in
+  sessions that started with at least one MCP server on.
+  - `full_definitions = true`: the session's context holds every enabled server's tools
+    with their full definitions (no limit).
+  - `full_definitions = false`: with `max_listed_tools` or fewer tools in total (all
+    servers together) the context lists every tool as `server/tool: description`; with more,
+    it lists only each server (its `instructions`, else its name, and the tool count) and
+    the model finds tools with `mcp_tool_search`, which returns definitions, then `mcp_call`.
+  - Everything from a server is fenced untrusted data. The listing is part of the frozen
+    system prompt, so it never changes mid-session.
+- **A session starts only after every enabled MCP server is online** (connected in
+  parallel, each within its connect timeout; no disk cache). A server that cannot connect
+  does not block the session: it is listed as unavailable, switched off for that session,
+  and reported (`mcp.failed`, a toast).
+- **Switches in the starting-context header** (Skills and MCP sections, both clients):
+  per session, `skill:<name>` and `mcp:<server>` entries in `disabled_tools`. Only what
+  was present at the session's start can be switched; the rest says "new session".
+  A mid-session switch injects one JSON item, a visible notice, and enforces it:
+  `{"skill_unavailable": {"name": …}}`, `{"skill_available": {"name": …}}`,
+  `{"mcp_unavailable": {"server": …}}`, `{"mcp_available": {"server": …}}`. A switched-off
+  skill or server is refused by `skill`, `mcp_tool_search` and `mcp_call`.
+- **`/learn`** takes three steps: a modal for project or global, the fetch, then a checklist
+  of the skills found (Select all, Select none, Invert; installed ones are tagged and ticking
+  one replaces it). Core: `POST /api/skill/preview` returns `{fetch_id, found}`; `POST
+  /api/skill/install` takes `{fetch_id, skills, scope, overwrite}`.
+
 ### F. Skills
 
-**Landed 2026-10-29 (Core), pending the client UI and a real-model check:**
-`nexus/skills/` (lenient frontmatter, fail-closed resources, discovery with
-project-over-global precedence and reported clashes), the `skill` tool
+**Landed 2026-10-29 (Core; clients in progress):** `nexus/skills/` (lenient frontmatter,
+fail-closed resources, project-over-global discovery with reported clashes), the `skill` tool
 (body and bundled files, read from disk at call time), `GET /api/skill[/{name}]`,
-`skills.changed`, per-session `skill:<name>` switches, and a forward notice
-(`skill.announced`) for a skill added or changed after the session started
-(`tests/test_skills.py`, docs/tools.md "Skills"). Decisions made while porting:
-the `skill` tool exists only in sessions whose start found a skill (so no
-request gains a tool when no skill exists, and a session without it gets no
-notices); the body is not frozen in the snapshot (only the index is), so an edit
-loads as it is now and says so; a switch applied after the index was sent
-cannot rewrite it, so the tool refuses the skill instead. Open: `allowed-tools`
-narrowing (parsed, shown, not enforced; the result says so), the starting-context
-Skills section and Settings → Skills in both clients (manifest rows
-`skills.*` are still `unavailable`), default-on settings for skills. `/learn` (the `npx skills` replacement: Git or local
-source, project or global, plain copy; `POST /api/skill/install`) is built in Core,
-the TUI and NSH, and was run against anthropics/skills.
+`skills.changed`, `skill:<name>` switches with a visible JSON notice for a mid-session switch
+and `locked` rows for what the session did not start with, session JSON `skills` rows, and
+`/learn` (`POST /api/skill/preview` then `/install`, with a checklist and overwrite)
+(`tests/test_skills.py`, `test_skills_install.py`, docs/tools.md "Skills"). A skill added later
+is not injected into running sessions (see the revised design above). Open: `allowed-tools`
+(Open questions), default-on settings for skills, a real-model run.
 
 **Old:** `nexus/skills/` (`manager.py` 636, `frontmatter.py` 541, `model.py`
 368, `resources.py` 485, `activation.py` 246, `invocation.py` 135, `errors.py`),
@@ -670,21 +702,19 @@ timeline.
 
 ### G. MCP
 
-**Landed 2026-10-29 (Core), pending the client UI and a real-model session:**
-`nexus/mcp/` on the `mcp` SDK (stdio, Streamable HTTP, SSE): entry dialects and
-`${env:…}` interpolation, a lazy single-flight connection per server, health,
-backoff and restart, stderr logs, `mcp_search`/`mcp_call` (default `search`
-loading), approval and `[tools.permission]` rules decided for the target
-`mcp__<server>__<tool>`, everything a server says sanitized, bounded and fenced
-in `<untrusted-mcp-data>`, `GET /api/mcp[/{name}]`, `POST …/restart`, the
-`mcp.*` events, `mcp:<server>` session switches, and pinned browser-use offered
-disabled (`tests/test_mcp.py` runs a real stdio server; docs/mcp.md). The pinned
-browser-use 0.13.14 was launched through the manager: 16 tools, and a real
-`browser_navigate` plus `browser_get_state` of example.com. Open:
-`tool_loading = "all"` (needs tools known at snapshot time and a notice when a
-list changes), resources and prompts, image results (K8), Settings → MCP and the
-starting-context MCP section in both clients, and a run in a real session with a
-model (the "done when" below).
+**Landed 2026-10-29 (Core; clients in progress):** `nexus/mcp/` on the `mcp` SDK (stdio,
+Streamable HTTP, SSE): entry dialects and `${env:…}`, lazy single-flight connections that a new
+session waits for, health, backoff, restart, stderr logs; `mcp_tool_search` and `mcp_call`; the
+two global settings `[mcp] full_definitions` and `max_listed_tools` and the three context
+listings; approval and `[tools.permission]` rules decided for the target `mcp__<server>__<tool>`;
+everything a server says sanitized, bounded and fenced in `<untrusted-mcp-data>`;
+`GET /api/mcp[/{name}]`, `POST …/restart`, the `mcp.*` events incl. `mcp.changed`;
+`mcp:<server>` switches with the same JSON notices and locked rows as skills; pinned
+browser-use offered disabled (`tests/test_mcp.py` runs a real stdio server; docs/mcp.md). The
+pinned browser-use 0.13.14 was launched through the manager: 16 tools, and a real
+`browser_navigate` plus `browser_get_state` of example.com. Open: resources and prompts, image
+results (K8), Settings screens for adding servers, and a run in a real session with a model
+(the "done when" below).
 
 **Old:** `nexus/mcp/client.py` (2529 lines: stdio with process groups,
 Streamable HTTP and legacy SSE, deadlines, bounded and redacted stderr),
@@ -1180,9 +1210,9 @@ when each item lands.
 | Old grep/glob/ls/multiedit ran through the old `ToolSpec` with read-deny roots and a mandatory grep subprocess | `tools/grep.py`, `glob.py`, `ls.py`, `multiedit.py` on the nexus10 `Tool`: `rg` when present (killable Python scan otherwise), Git-aware fresh walk, workspace-relative paths, no read observations from searches, whole-file observation for `multiedit` (D1–D4, 2026-10-29) | Same bounds and announced clipping without read-deny roots; a search is not a read |
 | Old websearch/webfetch ran on a 1200-line outbound service with allowlisted origins, an HTML fallback for search and per-origin approval keys | `web_search`/`web_fetch` on `nexus/net.py`: public-address-only, pinned connection, same-origin redirects; search is JSON from `[web] search_url`; content fenced as untrusted; no origin allowlist (D5–D6, 2026-10-29) | The same SSRF and prompt-injection protections in one small module; per-pattern rules come with D7 |
 | Old `permissions.py` (2400 lines: bundles, session grants, path guards, unattended modes, `deny → grants → allow → ask → mode`) | `nexus/permissions.py`: `tool` or `tool(glob)` rules with allow/ask/deny; any deny wins, else the last config rule decides, agent files can only add ask/deny; keys per tool (command, resolved path, URL, query); bash compounds never match an allow; one table in `config.toml`, no per-tool sub-tables; a bad rule is skipped and reported, never dropping the good ones (D7, 2026-10-29) | Same safety properties in a page; session grants are K7; path guards already live in the tools |
-| Old skills: a strict six-key frontmatter grammar, generations, tiers, bundles, bundled-tool candidates and a body snapshot taken at refresh; `skill` always present | `nexus/skills/`: lenient frontmatter (unknown keys are warnings), project over global, the index frozen in the session's prompt and the body read at call time; `skill` only in sessions that started with a skill; a later add or change is a forward notice; `allowed-tools` parsed but not yet enforced (F, 2026-10-29) | Public skills load; the prompt stays append-only; no tool is added to sessions that cannot use it |
+| Old skills: a strict six-key frontmatter grammar, generations, tiers, bundles, bundled-tool candidates and a body snapshot taken at refresh; `skill` always present | `nexus/skills/`: lenient frontmatter (unknown keys are warnings), `<project>/.agents/skills` over `~/.agents/skills`, the index frozen in the session's prompt and the body read at call time; `skill` only in sessions that started with a skill; a skill added or changed later is not injected (new sessions only, clients notify); header switches inject a JSON notice; `allowed-tools` parsed, not enforced (F, 2026-10-29) | Public skills load; the prompt stays append-only (P6); no tool is added to sessions that cannot use it |
 | Old `npx skills` import (`skills_install.py`, runs third-party code behind a confirmation) | `/learn`: a shallow `git clone` or local folder, every `SKILL.md` found, a bounded plain copy to the project or global folder; nothing run, so the only question is the scope (F, 2026-10-29) | No npx or Node needed; installing is copying files |
-| Old MCP: a 2500-line hand-written client, `mcp.json` in two scopes, direct `mcp__server__tool` tools by default for `all` servers, `McpSearch`/`McpCall` otherwise | `nexus/mcp/` on the `mcp` SDK, servers in `config.toml`, `mcp_search`/`mcp_call` only, results fenced as untrusted, `mcp:<server>` switches, the pinned browser-use offered disabled; `all` loading, resources and prompts not yet (G, 2026-10-29) | One config file (P1); schemas stay out of requests; a small client we do not have to maintain |
+| Old MCP: a 2500-line hand-written client, `mcp.json` in two scopes, per-server `tool_loading` (direct `mcp__server__tool` tools or `McpSearch`/`McpCall`) | `nexus/mcp/` on the `mcp` SDK, servers in `config.toml`, two global modes (`[mcp] full_definitions`, `max_listed_tools`) applied when a session starts, `mcp_tool_search` and `mcp_call` only (a search returns the definition JSON), a session waits for its servers to be online, results fenced as untrusted, `mcp:<server>` switches with JSON notices, pinned browser-use offered disabled; resources and prompts not yet (G, 2026-10-29) | One config file (P1); no cache-breaking tool changes (Principle 8); a small client we do not have to maintain |
 | Old `escalate` was a registered task tool whose escalations the old runtime folded into a `SubagentOutcome.attention` | `escalate` is a control tool added to every child snapshot (`escalation: true`), recorded in memory, announced by `session.escalated`, and appended as an `Attention:` block to the parent's `session` result or notification; it grants nothing and does not wait (D8, 2026-10-29) | Principle 3: it acts on Nexus state, so it is control; the parent's timeline shows it |
 | Old `ext/manager.py` (3000 lines): loaded tool modules in the host, a `[[ext]]` config table, trash and templates | `nexus/extensions.py`: tools are `*.py` files in `tools/` folders, read as literals and run in a child process per call; the session snapshot stores their source; no config table (E, 2026-10-29) | The daemon never executes user code; a running session keeps its code (P6, Principle 8) |
 | Client composer history in memory (TUI only) or one global file for all projects (old) | Core stores what the user sent and serves it per project; both clients recall from it; Up recalls on the first line only (2026-10-29, C) | History survives restarts and is shared across clients |
@@ -1272,6 +1302,11 @@ when each item lands.
 
 ## 12. Open questions
 
+- `allowed-tools` in `SKILL.md` (decided 2026-10-29: ignore it for now; it is parsed
+  and shown, never enforced, and the `skill` result says so). Come back to it: old
+  Nexus narrowed the tool set while a skill was active; Claude Code treats it as
+  pre-approval. Neither is built, because "active" has no clear end and a changing
+  tool list breaks the prompt cache.
 - STT engine: port Bark (download needed) or use the cached MLX Whisper (I).
 - Gemini dialect (J5).
 - Whether claude-agent and antigravity workers fit the one-timeline rule (J6).

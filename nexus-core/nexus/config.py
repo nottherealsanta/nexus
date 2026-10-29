@@ -26,6 +26,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "tools": {"disabled": [], "permission": {}},
     "ui": {"detail": "medium", "reduced_motion": False},
     "web": {"search_url": "http://127.0.0.1:18765/search", "fetch_timeout_s": 15},
+    "mcp": {"full_definitions": False, "max_listed_tools": 25},
 }
 
 
@@ -41,6 +42,10 @@ SCHEMA: dict[str, dict[str, Any]] = {
                          "deny always wins, otherwise the last matching rule decides"},
     "web.search_url": {"type": "string", "description": "SearXNG /search endpoint for web_search (nexus-search/)"},
     "web.fetch_timeout_s": {"type": "number", "minimum": 1, "maximum": 60},
+    "mcp.full_definitions": {"type": "boolean", "description": "new sessions put every MCP tool's full definition in the context; "
+                             "off lists names and descriptions (or only servers past max_listed_tools) and the model uses mcp_tool_search"},
+    "mcp.max_listed_tools": {"type": "integer", "minimum": 1, "maximum": 1000,
+                             "description": "with full_definitions off: at most this many tools (all servers together) are listed by name"},
     "mcp.servers": {"type": "object", "masked_fields": ["env", "headers", "credential fields"]},
 }
 
@@ -65,6 +70,10 @@ def _valid(section: str, key: str, value: Any) -> bool:
             except ValueError:
                 return False
         return True
+    if section == "mcp":
+        if key == "full_definitions":
+            return isinstance(value, bool)
+        return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 1000
     if section == "tools" and key == "permission":
         from .permissions import parse_rules
         return isinstance(value, dict) and not parse_rules(_plain(value))[1]
@@ -140,7 +149,7 @@ class ConfigFile:
             if not isinstance(table, dict):
                 errors.append(f"{section}: expected a table")
                 continue
-            for unknown in table.keys() - keys.keys():
+            for unknown in table.keys() - keys.keys() - ({"servers"} if section == "mcp" else set()):
                 errors.append(f"{section}.{unknown}: unknown setting")
             for key in keys:
                 if key in table:
@@ -160,11 +169,16 @@ class ConfigFile:
         mcp = doc.get("mcp", {})
         if isinstance(mcp, dict) and isinstance(mcp.get("servers", {}), dict):
             from .mcp.config import with_defaults
-            values["mcp"] = {"servers": _mask(with_defaults(_plain(mcp.get("servers", {}))))}
+            values["mcp"]["servers"] = _mask(with_defaults(_plain(mcp.get("servers", {}))))
         else:
             errors.append("mcp.servers: expected a table")
         return {"revision": hashlib.sha256(raw).hexdigest(), "values": values,
                 "defaults": copy.deepcopy(DEFAULTS), "schema": copy.deepcopy(SCHEMA), "errors": errors}
+
+    def mcp_modes(self) -> tuple[bool, int]:
+        """`(full_definitions, max_listed_tools)`; a wrong value falls back to its default."""
+        values = self.read()["values"]["mcp"]
+        return bool(values["full_definitions"]), int(values["max_listed_tools"])
 
     def mcp_servers(self) -> dict[str, Any]:
         """`[mcp.servers]` as plain values with secrets intact, for the daemon's own use (never served)."""

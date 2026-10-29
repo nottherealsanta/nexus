@@ -27,6 +27,8 @@ import re
 import shlex
 import shutil
 import tempfile
+import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -231,15 +233,50 @@ def destination(scope: str, project_path: str | None) -> Path:
     raise LearnError("scope must be 'project' (with a project) or 'global'")
 
 
-async def learn(source: Source, dest: Path, *, overwrite: bool = False) -> dict[str, Any]:
-    """Fetch, find and copy. Returns `{installed, skipped, problems, available}`; raises LearnError when nothing could be installed."""
-    with tempfile.TemporaryDirectory(prefix="nexus-learn-") as tmp:
+@dataclass
+class Staged:
+    """A fetched source waiting for the user to choose skills (so a preview and its install share one clone)."""
+    id: str
+    source: Source
+    folder: Path  # holds the clone, removed when the stage is released
+    base: Path  # where the skills are searched
+    found: list[Found]
+    problems: list[dict[str, str]]
+    expires: float
+
+
+STAGE_SECONDS = 600.0
+_staged: dict[str, Staged] = {}
+
+
+def _sweep() -> None:
+    now = time.monotonic()
+    for key in [k for k, v in _staged.items() if v.expires < now]:
+        release(key)
+
+
+def release(stage_id: str) -> None:
+    staged = _staged.pop(stage_id, None)
+    if staged is not None:
+        shutil.rmtree(staged.folder, ignore_errors=True)
+
+
+def release_all() -> None:
+    for key in list(_staged):
+        release(key)
+
+
+async def stage(source: Source) -> Staged:
+    """Fetch the source and find its skills; keep the files for `STAGE_SECONDS` under a new id."""
+    _sweep()
+    folder = Path(tempfile.mkdtemp(prefix="nexus-learn-"))
+    try:
         if source.path is not None:
             root = source.path.resolve()
             if not root.is_dir():
                 raise LearnError(f"{source.path} is not a folder")
         else:
-            root = Path(tmp, "repo")
+            root = folder / "repo"
             await _clone(source, root)
             root = root.resolve()
         base = root
@@ -250,40 +287,75 @@ async def learn(source: Source, dest: Path, *, overwrite: bool = False) -> dict[
         found, problems = await asyncio.to_thread(find, base)
         if not found:
             raise LearnError(f"no SKILL.md found in {source.label}" + (f" ({problems[0]['error']})" if problems else ""))
-        available = [f.name for f in found]
-        chosen = found
-        if source.skills:
-            wanted = set(source.skills)
-            chosen = [f for f in found if f.name in wanted or f.directory.name in wanted]
-            missing = wanted - {n for f in chosen for n in (f.name, f.directory.name)}
-            if missing or not chosen:
-                raise LearnError(f"no skill named {', '.join(sorted(missing or wanted))} in {source.label}; "
-                                 f"it has: {', '.join(available)}")
-        installed: list[dict[str, Any]] = []
-        skipped: list[dict[str, str]] = []
-        dest.mkdir(parents=True, exist_ok=True)
-        seen: set[str] = set()
-        for item in chosen:
-            name = item.name
-            target = dest / name
-            if name in seen:
-                skipped.append({"name": name, "reason": "another skill in the source has the same name"})
-                continue
-            seen.add(name)
-            if target.exists() and not overwrite:
-                skipped.append({"name": name, "reason": f"already installed at {target}; run it again with overwrite"})
-                continue
-            staging = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=dest))
-            try:
-                count = await asyncio.to_thread(_copy, item.directory, staging)
-                if target.exists():
-                    shutil.rmtree(target)
-                staging.rename(target)
-            finally:
-                shutil.rmtree(staging, ignore_errors=True)
-            installed.append({"name": name, "description": frontmatter.sanitize(item.description, 200),
-                              "path": str(target), "files": count, "warnings": item.warnings})
-        if not installed:
-            raise LearnError("; ".join(f"{s['name']}: {s['reason']}" for s in skipped))
-        return {"installed": installed, "skipped": skipped, "problems": problems, "available": available,
-                "source": source.label}
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    staged = Staged(uuid.uuid4().hex[:16], source, folder, base, found, problems, time.monotonic() + STAGE_SECONDS)
+    _staged[staged.id] = staged
+    return staged
+
+
+def staged(stage_id: str) -> Staged:
+    _sweep()
+    found = _staged.get(stage_id)
+    if found is None:
+        raise LearnError("that fetch expired; run /learn again")
+    return found
+
+
+def preview(stage: Staged, dest: Path) -> list[dict[str, Any]]:
+    """Each skill the source holds, and whether `dest` already has one of that name."""
+    return [{"name": f.name, "description": frontmatter.sanitize(f.description, 300), "warnings": f.warnings,
+             "installed": (dest / f.name).exists()} for f in stage.found]
+
+
+async def install_staged(stage: Staged, dest: Path, names: list[str] | None, *, overwrite: bool = False) -> dict[str, Any]:
+    """Copy the chosen skills (all of them when `names` is None). `{installed, skipped, problems, available}`."""
+    source = stage.source
+    available = [f.name for f in stage.found]
+    chosen = stage.found
+    if names is not None:
+        wanted = set(names)
+        chosen = [f for f in stage.found if f.name in wanted or f.directory.name in wanted]
+        missing = wanted - {n for f in chosen for n in (f.name, f.directory.name)}
+        if missing or not chosen:
+            raise LearnError(f"no skill named {', '.join(sorted(missing or wanted))} in {source.label}; "
+                             f"it has: {', '.join(available)}")
+    installed: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    dest.mkdir(parents=True, exist_ok=True)
+    seen: set[str] = set()
+    for item in chosen:
+        name = item.name
+        target = dest / name
+        if name in seen:
+            skipped.append({"name": name, "reason": "another skill in the source has the same name"})
+            continue
+        seen.add(name)
+        if target.exists() and not overwrite:
+            skipped.append({"name": name, "reason": f"already installed at {target}; run it again with overwrite"})
+            continue
+        replaced = target.exists()
+        staging = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=dest))
+        try:
+            count = await asyncio.to_thread(_copy, item.directory, staging)
+            if target.exists():
+                shutil.rmtree(target)
+            staging.rename(target)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+        installed.append({"name": name, "description": frontmatter.sanitize(item.description, 200),
+                          "path": str(target), "files": count, "warnings": item.warnings, "replaced": replaced})
+    if not installed:
+        raise LearnError("; ".join(f"{s['name']}: {s['reason']}" for s in skipped))
+    return {"installed": installed, "skipped": skipped, "problems": stage.problems, "available": available,
+            "source": source.label}
+
+
+async def learn(source: Source, dest: Path, *, overwrite: bool = False) -> dict[str, Any]:
+    """Fetch, find and copy in one step: the skills named in the source (all when none are). Raises LearnError when none installed."""
+    held = await stage(source)
+    try:
+        return await install_staged(held, dest, list(source.skills) or None, overwrite=overwrite)
+    finally:
+        release(held.id)

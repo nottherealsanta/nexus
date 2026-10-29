@@ -41,3 +41,9 @@ starts asynchronous device sign-in; `GET` on that path reports status and
 `provider.login` events carry instructions and completion. OpenCode accepts
 `{api_key}`. `DELETE` cancels a pending flow and signs out. Credentials never
 appear in login events.
+
+## `[mcp]` settings
+
+`full_definitions` (boolean, default false) and `max_listed_tools` (integer 1 to 1000, default
+25) choose how a **new** session lists MCP tools in its context; running sessions keep theirs
+([mcp.md](mcp.md#what-the-model-sees)). Servers are `[mcp.servers.<name>]` tables.

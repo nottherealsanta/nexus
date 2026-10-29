@@ -14,6 +14,7 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/agent | agents for `?project=` or `?directory=` (built-in, global, project) and file problems |
 | GET | /api/agent/{name} | one agent, with its full prompt |
 | GET | /api/skill | skills for `?project=` or `?directory=` (project over global) and file problems |
+| POST | /api/skill/preview | `{source, scope, project?}`: fetch a source and list its skills (`{fetch_id, found: [{name, description, installed}], problems}`); the fetch is kept 10 minutes |
 | POST | /api/skill/install | `{source, scope: project or global, project?\|directory?, overwrite?}`: copy skills from a Git repo or folder (`/learn`); returns `{installed, skipped, problems, available}` |
 | GET | /api/skill/{name} | one skill: frontmatter facts, body and bundled files |
 | GET | /api/mcp | MCP servers: state, tool count, error and (no secret) settings |
@@ -299,11 +300,17 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                     seen.add(problem["path"])
                     runtime.bus.publish("extension.failed", problem)
 
+    def mcp_signature() -> str:
+        servers = config.mcp_servers()
+        modes = config.mcp_modes()
+        return hashlib.sha256(json.dumps([servers, modes], sort_keys=True, default=str).encode()).hexdigest()[:16]
+
     async def watch_config() -> None:
         nonlocal config_revision
         agent_stamp = agents_module.fingerprint(project_paths())
         tool_stamp = extensions_module.fingerprint(project_paths())
         skill_stamp = skills_module.fingerprint([None, *project_paths()])
+        mcp_stamp = mcp_signature()
         while True:
             await asyncio.sleep(2)
             paths = project_paths()
@@ -320,6 +327,10 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
             if stamp != skill_stamp:
                 skill_stamp = stamp
                 runtime.bus.publish("skills.changed", {})
+            signature = mcp_signature()
+            if signature != mcp_stamp:
+                mcp_stamp = signature
+                runtime.bus.publish("mcp.changed", {})  # running sessions keep their servers; new ones use these
             async with config_lock:
                 revision = config.read()["revision"]
                 if revision != config_revision:
@@ -536,18 +547,45 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         found = runtime.skills(agent_project_path(request))
         return JSONResponse({"skills": [skill_json(s) for s in found.skills.values()], "problems": found.problems})
 
-    async def skill_install(request: Request) -> Response:
+    async def skill_target(body: dict[str, Any], source: skills_install.Source | None) -> tuple[str, Path]:
+        scope = body.get("scope") or (source.scope if source else None)
+        project_path = None
+        if body.get("project"):
+            project_path = runtime.project(body["project"]).path
+        elif body.get("directory"):
+            project_path = runtime.open_project(body["directory"]).path
+        return str(scope), skills_install.destination(str(scope), project_path)
+
+    async def skill_preview(request: Request) -> Response:
         body = await _body(request)
         try:
             source = skills_install.parse(str(body.get("source") or ""))
-            scope = body.get("scope") or source.scope
-            project_path = None
-            if body.get("project"):
-                project_path = runtime.project(body["project"]).path
-            elif body.get("directory"):
-                project_path = runtime.open_project(body["directory"]).path
-            dest = skills_install.destination(str(scope), project_path)
-            result = await skills_install.learn(source, dest, overwrite=bool(body.get("overwrite")))
+            scope, dest = await skill_target(body, source)
+            held = await skills_install.stage(source)
+        except skills_install.LearnError as exc:
+            raise ValueError(str(exc)) from exc
+        return JSONResponse({"fetch_id": held.id, "source": source.label, "scope": scope, "problems": held.problems,
+                             "requested": list(source.skills),
+                             "found": skills_install.preview(held, dest)})
+
+    async def skill_install(request: Request) -> Response:
+        body = await _body(request)
+        overwrite = bool(body.get("overwrite"))
+        try:
+            if body.get("fetch_id"):
+                held = skills_install.staged(str(body["fetch_id"]))
+                scope, dest = await skill_target(body, held.source)
+                names = body.get("skills")
+                if names is not None and (not isinstance(names, list) or not all(isinstance(n, str) for n in names)):
+                    raise ValueError("skills must be a list of names")
+                if names is not None and not names:
+                    raise ValueError("choose at least one skill")
+                result = await skills_install.install_staged(held, dest, names, overwrite=overwrite)
+                skills_install.release(held.id)  # a failed install keeps the fetch, so the user can choose again
+            else:
+                source = skills_install.parse(str(body.get("source") or ""))
+                scope, dest = await skill_target(body, source)
+                result = await skills_install.learn(source, dest, overwrite=overwrite)
         except skills_install.LearnError as exc:
             raise ValueError(str(exc)) from exc
         runtime.bus.publish("skills.changed", {})
@@ -662,9 +700,9 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                 target = runtime.project(parent.project_id)
             else:
                 target = runtime.project(body["project"]) if body.get("project") else runtime.open_project(body["directory"])
-            session = runtime.create_session(target, title=body.get("title"), model=body.get("model"),
-                                             permission=body.get("permission"), effort=body.get("effort"), agent=body.get("agent"),
-                                             parent=parent, disabled_tools=body.get("disabled_tools"))
+            session = await runtime.create_session_ready(
+                target, title=body.get("title"), model=body.get("model"), permission=body.get("permission"),
+                effort=body.get("effort"), agent=body.get("agent"), parent=parent, disabled_tools=body.get("disabled_tools"))
             return JSONResponse(runtime.session_json(session))
         archived = _archive_filter(request)
         if request.query_params.get("parent"):
@@ -1008,6 +1046,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/mcp/{name}", route(mcp_one)),
         Route("/api/mcp/{name}/restart", route(mcp_restart), methods=["POST"]),
         Route("/api/skill", route(skill_list)),
+        Route("/api/skill/preview", route(skill_preview), methods=["POST"]),
         Route("/api/skill/install", route(skill_install), methods=["POST"]),
         Route("/api/skill/{name}", route(skill_one)),
         Route("/api/project", route(projects), methods=["GET", "POST"]),

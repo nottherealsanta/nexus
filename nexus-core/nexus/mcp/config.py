@@ -26,11 +26,11 @@ TRANSPORTS = ("stdio", "http", "sse")
 _TRANSPORT_NAMES = {"stdio": "stdio", "local": "stdio", "http": "http", "streamable-http": "http",
                     "streamablehttp": "http", "remote": "http", "sse": "sse"}
 _KEYS = {"command", "args", "env", "environment", "cwd", "url", "serverUrl", "httpUrl", "headers", "transport", "type",
-         "transportType", "enabled", "disabled", "tool_loading", "alwaysLoad", "includeTools", "excludeTools",
+         "transportType", "enabled", "disabled", "includeTools", "excludeTools",
          "disabledTools", "timeout", "call_timeout_s", "connect_timeout_s"}
 _SHOWN_ONLY = {"autoApprove", "alwaysAllow", "trust", "oauth", "auth", "headersHelper", "description", "gallery",
                "version", "dev", "icon", "source", "networkTimeout", "settings", "sandboxEnabled", "watchPaths",
-               "$schema"}
+               "$schema", "tool_loading", "alwaysLoad"}  # the last two: loading is a global setting now ([mcp] full_definitions)
 _VAR = re.compile(r"\$\{([^}]+)\}|\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -63,7 +63,6 @@ class ServerConfig:
     cwd: str | None = None
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
-    tool_loading: str = "search"  # search | all
     include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT
@@ -72,7 +71,7 @@ class ServerConfig:
 
     def describe(self) -> dict[str, Any]:
         """Facts for status and `/api/mcp/{name}`: no argument values, env values, header values or URL credentials."""
-        info: dict[str, Any] = {"transport": self.transport, "enabled": self.enabled, "tool_loading": self.tool_loading,
+        info: dict[str, Any] = {"transport": self.transport, "enabled": self.enabled,
                                 "include": list(self.include), "exclude": list(self.exclude),
                                 "connect_timeout": self.connect_timeout, "call_timeout": self.call_timeout,
                                 "ignored_keys": list(self.ignored)}
@@ -172,13 +171,10 @@ def parse(name: str, entry: Any, *, workspace: str = "") -> ServerConfig:
     enabled = entry.get("enabled", not entry.get("disabled", False))
     if not isinstance(enabled, bool):
         raise McpConfigError("enabled and disabled must be true or false")
-    loading = "all" if entry.get("alwaysLoad") is True else entry.get("tool_loading", "search")
-    if loading not in ("search", "all"):
-        raise McpConfigError('tool_loading must be "search" or "all"')
     include = _strings(entry.get("includeTools", []), "includeTools")
     exclude = _strings(entry.get("excludeTools", entry.get("disabledTools", [])), "excludeTools")
     base: dict[str, Any] = {
-        "name": name, "transport": transport, "enabled": enabled, "tool_loading": loading, "include": include, "exclude": exclude,
+        "name": name, "transport": transport, "enabled": enabled, "include": include, "exclude": exclude,
         "connect_timeout": _seconds(entry, DEFAULT_CONNECT_TIMEOUT, "connect_timeout_s"),
         "call_timeout": _seconds(entry, DEFAULT_CALL_TIMEOUT, "call_timeout_s", "timeout"), "ignored": ignored}
     if transport == "stdio":

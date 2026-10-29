@@ -43,7 +43,7 @@ def test_dialects_and_interpolation(monkeypatch):
 @pytest.mark.parametrize("entry_,message", [
     ({}, "command"), ({"command": "x", "bogus": 1}, "unknown keys: bogus"), ({"command": "x", "transport": "ws"}, "not supported"),
     ({"command": "x", "env": {"A": "${MISSING_VAR_Z}"}}, "MISSING_VAR_Z"), ({"url": "ftp://x"}, "http"),
-    ({"command": "x", "args": ["${input:pw}"]}, "input"), ({"command": "x", "tool_loading": "lazy"}, "tool_loading"),
+    ({"command": "x", "args": ["${input:pw}"]}, "input"),
 ])
 def test_bad_entries_name_the_problem_not_the_secret(entry_, message):
     with pytest.raises(mcp_config.McpConfigError, match=message):
@@ -139,11 +139,13 @@ class Scripted:
 
     def __init__(self):
         self.replies = []
+        self.requests = []
 
     def body(self, req):
         return {"instructions": req.instructions, "tools": [{"name": t.name} for t in req.tools]}
 
     async def stream(self, req):
+        self.requests.append(req)
         parts = self.replies.pop(0)
         for part in parts:
             yield PartDone(part)
@@ -197,10 +199,10 @@ async def test_session_searches_and_calls_through_the_two_proxy_tools(env):
     write_config(home)
     sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
     context = (await client.get(f"/api/session/{sid}/context")).json()
-    assert {"mcp_search", "mcp_call"} <= {t["name"] for t in context["tools"]} and "`fx`" in context["instructions"]
-    assert state(rt.mcp) == "idle"  # creating a session connects nothing
+    assert {"mcp_tool_search", "mcp_call"} <= {t["name"] for t in context["tools"]}
+    assert state(rt.mcp) == "connected" and "fx/echo: Echo the text back" in context["instructions"]  # online before the session starts
     results = await _run(rt, client, provider, sid, [
-        [ToolCall("c1", "mcp_search", json.dumps({"query": "echo text"}))],
+        [ToolCall("c1", "mcp_tool_search", json.dumps({"query": "echo text"}))],
         [ToolCall("c2", "mcp_call", json.dumps({"tool": "fx/echo", "arguments": {"text": "hello"}}))],
         [ToolCall("c3", "mcp_call", json.dumps({"tool": "fx/nope"}))],
         [Text("done")]])
@@ -215,7 +217,7 @@ async def test_mutating_tools_ask_in_ask_sessions_and_rules_apply_to_the_target(
     write_config(home)
     sid = (await client.post("/api/session", json={"directory": str(workspace), "permission": "ask"})).json()["id"]
     call = lambda name, **a: [ToolCall("c", "mcp_call", json.dumps({"tool": f"fx/{name}", "arguments": a}))]
-    await _run(rt, client, provider, sid, [[ToolCall("s", "mcp_search", json.dumps({"query": "select:fx/echo,fx/write_note"}))], [Text("ok")]])
+    await _run(rt, client, provider, sid, [[ToolCall("s", "mcp_tool_search", json.dumps({"query": "select:fx/echo,fx/write_note"}))], [Text("ok")]])
     # read-only: no approval needed
     results = await _run(rt, client, provider, sid, [call("echo", text="a"), [Text("ok")]], permission=None)
     assert any("A" in r for r in results) and not rt.approvals
@@ -233,22 +235,22 @@ async def test_server_switch_and_no_servers_means_no_tools(env):
     rt, client, provider, workspace, home = env
     sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
     context = (await client.get(f"/api/session/{sid}/context")).json()
-    assert "mcp_search" not in [t["name"] for t in context["tools"]]
+    assert "mcp_tool_search" not in [t["name"] for t in context["tools"]]
     write_config(home)
     made = await client.post("/api/session", json={"directory": str(workspace), "disabled_tools": ["mcp:fx"]})
     assert made.status_code == 200, made.text
     off = made.json()["id"]
     context = (await client.get(f"/api/session/{off}/context")).json()
-    assert "mcp_search" not in [t["name"] for t in context["tools"]]
+    assert "mcp_tool_search" not in [t["name"] for t in context["tools"]]
     on = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
-    results = await _run(rt, client, provider, on, [[ToolCall("c", "mcp_search", json.dumps({"query": "x", "server": "other"}))], [Text("ok")]])
+    results = await _run(rt, client, provider, on, [[ToolCall("c", "mcp_tool_search", json.dumps({"query": "x", "server": "other"}))], [Text("ok")]])
     assert "not available in this session" in results[0]
     await rt.shutdown()
 
 
 async def test_api_lists_servers_without_connecting_and_offers_browser_use_off(env):
     rt, client, _, _, home = env
-    write_config(home, 'tool_loading = "search"\n[mcp.servers.fx.env]\nSECRET = "hunter2"\n')
+    write_config(home, '\n[mcp.servers.fx.env]\nSECRET = "hunter2"\n')
     rows = {r["server"]: r for r in (await client.get("/api/mcp")).json()["servers"]}
     assert rows["fx"]["state"] == "idle" and rows["browser-use"]["state"] == "disabled"
     assert "hunter2" not in json.dumps(rows) and rows["fx"]["env_names"] == ["SECRET"]
@@ -260,4 +262,75 @@ async def test_api_lists_servers_without_connecting_and_offers_browser_use_off(e
     restarted = (await client.post("/api/mcp/fx/restart")).json()
     assert restarted["state"] == "connected" and restarted["tools"] == 4
     assert (await client.get("/api/mcp/fx")).json()["tool_names"][0] in {"echo", "write_note", "evil", "crash"}
+    await rt.shutdown()
+
+
+def set_modes(home, extra):
+    path = home / "config.toml"
+    path.write_text(path.read_text() + "\n[mcp]\n" + extra)
+
+
+async def test_names_mode_lists_tools_until_the_limit_then_only_servers(env):
+    rt, client, _provider, workspace, home = env
+    write_config(home)
+    first = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    prompt = (await client.get(f"/api/session/{first}/context")).json()["instructions"]
+    assert "fx/echo: Echo the text back" in prompt and "fx/write_note:" in prompt and "input_schema" not in prompt
+    set_modes(home, "max_listed_tools = 3\n")  # the fixture has 4 tools
+    second = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    prompt = (await client.get(f"/api/session/{second}/context")).json()["instructions"]
+    assert "fx (4 tools)" in prompt and "fx/echo:" not in prompt and "more than 3" in prompt
+    # the first session is frozen: a config change does not touch it
+    assert (await client.get(f"/api/session/{first}/context")).json()["instructions"].count("fx/echo:") == 1
+    await rt.shutdown()
+
+
+async def test_full_definitions_mode_puts_every_schema_in_the_prompt(env):
+    rt, client, _provider, workspace, home = env
+    write_config(home)
+    set_modes(home, "full_definitions = true\nmax_listed_tools = 1\n")  # the limit does not apply to this mode
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    prompt = (await client.get(f"/api/session/{sid}/context")).json()["instructions"]
+    assert '"tool": "fx/echo"' in prompt and '"tool": "fx/write_note"' in prompt and '"input_schema"' in prompt
+    assert "may_change_state" in prompt
+    await rt.shutdown()
+
+
+async def test_an_unreachable_server_does_not_block_the_session(env):
+    rt, client, _provider, workspace, home = env
+    write_config(home, "")
+    (home / "config.toml").write_text((home / "config.toml").read_text()
+                                      + '\n[mcp.servers.dead]\ncommand = "/nonexistent/server"\n')
+    made = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    rows = {r["server"]: r for r in made["mcp"]}
+    assert rows["fx"]["state"] == "on" and rows["dead"]["state"] == "unavailable" and rows["dead"]["locked"] is True
+    assert "mcp:dead" in made["disabled_tools"]
+    refused = await client.patch(f"/api/session/{made['id']}", json={"disabled_tools": []})
+    assert refused.status_code == 400 and "new session" in refused.text
+    await rt.shutdown()
+
+
+async def test_mcp_switches_inject_json_and_are_enforced(env):
+    rt, client, provider, workspace, home = env
+    write_config(home)
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    off = await client.patch(f"/api/session/{sid}", json={"disabled_tools": ["mcp:fx"]})
+    assert off.status_code == 200 and off.json()["mcp"][0]["state"] == "off"
+    results = await _run(rt, client, provider, sid, [
+        [ToolCall("c1", "mcp_call", json.dumps({"tool": "fx/echo", "arguments": {"text": "x"}}))], [Text("ok")]])
+    assert "not available in this session" in results[0]
+    assert any('{"mcp_unavailable": {"server": "fx"}}' in str(m) for m in provider.requests[-1].messages) if hasattr(provider, "requests") else True
+    on = await client.patch(f"/api/session/{sid}", json={"disabled_tools": []})
+    assert on.status_code == 200 and on.json()["mcp"][0]["state"] == "on"
+    await rt.shutdown()
+
+
+async def test_server_added_later_is_not_in_running_sessions(env):
+    rt, client, _provider, workspace, home = env
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    write_config(home)
+    context = (await client.get(f"/api/session/{sid}/context")).json()
+    assert "mcp_tool_search" not in [t["name"] for t in context["tools"]]
+    new = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    assert "mcp_tool_search" in [t["name"] for t in (await client.get(f"/api/session/{new}/context")).json()["tools"]]
     await rt.shutdown()

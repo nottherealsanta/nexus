@@ -10,8 +10,8 @@ Progressive disclosure: the session's frozen system prompt lists only
 a tool result, which is model context and shows in the timeline as such. The
 body is read from disk when the tool is called, so a skill edited mid-session
 is loaded as it is now, and the result says so. A skill added or changed after
-the session started is not in its frozen index: the session gets a notice
-before its next model call (Principle 8).
+the session started is not in its frozen index and is not injected: only a new
+session has it (Principle 8, P6); clients are told by `skills.changed`.
 
 Adapted from old Nexus `nexus/skills/` and `nexus/tools/builtin/skill.py`. The
 manager's generations, tiers, bundles and bundled-tool candidates are dropped.
@@ -31,8 +31,20 @@ from .resources import ResourceError
 SKILL_TOOL = "skill"
 DISABLED_PREFIX = "skill:"  # in a session's disabled list: `skill:<name>`
 MAX_BODY_CHARS = 100_000
-__all__ = ["DISABLED_PREFIX", "SKILL_TOOL", "ResourceError", "Skill", "SkillParseError", "SkillSet",
-           "announcements", "definition", "discover", "fingerprint", "invoke", "records"]
+__all__ = [
+    "DISABLED_PREFIX",
+    "SKILL_TOOL",
+    "ResourceError",
+    "Skill",
+    "SkillParseError",
+    "SkillSet",
+    "definition",
+    "discover",
+    "fingerprint",
+    "install",
+    "invoke",
+    "records",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,28 +178,6 @@ def definition(items: dict[str, dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def announcements(frozen: dict[str, dict[str, Any]], announced: dict[str, dict[str, Any]], current: SkillSet,
-                  disabled: set[str] | frozenset[str] = frozenset()) -> list[tuple[str, dict[str, Any], str]]:
-    """Skills that are new or changed since the session's index (or its last notice): `(kind, record, text)`."""
-    out: list[tuple[str, dict[str, Any], str]] = []
-    for name, skill in current.skills.items():
-        if DISABLED_PREFIX + name in disabled:
-            continue
-        known = announced.get(name) or frozen.get(name)
-        if known is not None and known["sha256"] == skill.sha256:
-            continue
-        record = skill.record()
-        if known is None:
-            text = (f"[Nexus: a skill was added after this session started: `{name}` — {skill.description} "
-                    "Load it with the `skill` tool. It is not in the system prompt's index.]")
-            out.append(("added", record, text))
-        else:
-            text = (f"[Nexus: skill `{name}` changed on disk after this session started. The system prompt's index "
-                    "may be out of date; the `skill` tool loads the current text.]")
-            out.append(("changed", record, text))
-    return out
-
-
 def invoke(record: dict[str, Any], resource: str | None = None) -> str:
     """The tool result for a skill (or one bundled file), read from disk now."""
     path = Path(record["path"])
@@ -212,3 +202,6 @@ def invoke(record: dict[str, Any], resource: str | None = None) -> str:
     if digest != record["sha256"]:
         lines.append("[Nexus: this skill changed on disk after the session started; this is the current text.]")
     return clip("\n".join(lines), MAX_BODY_CHARS)
+
+
+from . import install

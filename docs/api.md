@@ -35,8 +35,10 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
 | GET | `/api/model/default` | | `{model}` |
 | GET | `/api/agent` | `?project=` or `?directory=` | `{agents: [Agent], problems: [{path, error}]}` |
+| (session JSON) | | | also `skills: [{name, description, scope, state, locked}]` and `mcp: [{server, tools, state, locked, error}]`: what the starting-context header switches ([tools.md](tools.md#skills-and-the-skill-tool), [mcp.md](mcp.md)) |
 | GET | `/api/skill` | `?project=` or `?directory=` | `{skills: [{name, description, scope, path, sha256, allowed_tools, warnings}], problems: [{path, error, kind}]}` ([tools.md](tools.md#skills-and-the-skill-tool)) |
-| POST | `/api/skill/install` | `{source, scope: project or global, project?, overwrite?}` | `{installed, skipped, problems, available, scope}`: `/learn`, copies skills from a Git repo or folder ([tools.md](tools.md#learn-installing-skills)) |
+| POST | `/api/skill/install` | `{fetch_id, skills?, scope, project?, overwrite?}` or `{source, scope, …}` | `{installed, skipped, problems, available, scope}`: `/learn`, copies skills from a Git repo or folder ([tools.md](tools.md#learn-installing-skills)) |
+| POST | `/api/skill/preview` | `{source, scope, project?}` | `{fetch_id, source, scope, requested, problems, found: [{name, description, installed, warnings}]}`; the fetch is kept 10 minutes ([tools.md](tools.md#learn-installing-skills)) |
 | GET | `/api/skill/{name}` | same | one skill plus `body`, `extra`, `files` |
 | GET | `/api/mcp` | | `{servers: [...]}`: MCP server states, no secrets, never connects ([mcp.md](mcp.md#api-and-events)) |
 | GET | `/api/mcp/{name}` | | one server plus `tool_names`, `log` |
@@ -793,7 +795,7 @@ Deleting a project publishes one tombstone per deleted session, then
 | `agents.changed` | `{}`: an agent file was added, removed or edited; global, live only; clients reload `/api/agent` |
 | `extensions.changed` | `{}`: a user tool file changed; global, live only; reload `/api/extension` |
 | `skills.changed` | `{}`: a skill file changed; global, live only; reload `/api/skill` |
-| `skill.announced` | `{name, kind: added\|changed}`: a skill added or changed after the session started was announced to the model; session |
+| `mcp.changed` | `{}`: the MCP servers or the two `[mcp]` settings in `config.toml` changed; running sessions keep theirs; global, live only |
 | `mcp.connected` / `mcp.disconnected` / `mcp.failed` / `mcp.tools_changed` | `{server, …}`: an MCP server's connection changed; global, live only ([mcp.md](mcp.md)) |
 | `extension.failed` | `{path, error}`: a user tool file is invalid; global, live only |
 | `project.created` / `project.updated` | `Project`; global, stored |
