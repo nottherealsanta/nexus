@@ -18,6 +18,8 @@ const network = (extra: Record<string, unknown> = {}) => ({
   "GET */api/model/default": { body: { model: "scripted/m" } },
   "GET */api/model*": { body: { source: "t", models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000 }], model: "scripted/m" } },
   "GET */api/agent*": { body: { agents: [{ name: "build", source: "builtin" }], problems: [] } },
+  "GET */api/skill*": { body: { skills: [], problems: [] } },
+  "GET */api/mcp*": { body: { servers: [] } },
   "GET */api/project/*/worktrees": { body: { worktrees: [] } },
 });
 const mod = "mod";

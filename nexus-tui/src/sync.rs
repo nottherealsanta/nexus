@@ -115,6 +115,12 @@ pub enum SyncMsg {
         project: String,
         data: Result<Value, String>,
     },
+    /// Project skills and enabled, valid MCP servers for a new-session preview.
+    SkillMcp {
+        project: String,
+        skills: Result<Value, String>,
+        mcp: Result<Value, String>,
+    },
     Event(Event),
 }
 
@@ -138,6 +144,7 @@ pub enum Command {
     Worktrees(String),
     /// The project's own checkout, for a session that does not exist yet.
     ProjectWorktrees(String),
+    SkillMcp(String),
     Git(String),
     GitDiff {
         session: String,
@@ -213,6 +220,7 @@ struct Ctx {
     config_patch: Option<(String, String, Value)>,
     worktrees: Option<String>,
     project_worktrees: Vec<String>,
+    skill_mcp: Option<String>,
     git: Option<String>,
     git_diff: Option<(String, String)>,
     files: Option<(String, Option<String>, String, bool)>,
@@ -254,6 +262,7 @@ impl Ctx {
                     self.project_worktrees.push(project);
                 }
             }
+            Command::SkillMcp(project) => self.skill_mcp = Some(project),
             Command::Git(session) => self.git = Some(session),
             Command::GitDiff { session, path } => self.git_diff = Some((session, path)),
             Command::Files {
@@ -322,6 +331,7 @@ pub async fn run(
         config_patch: None,
         worktrees: None,
         project_worktrees: Vec::new(),
+        skill_mcp: None,
         git: None,
         git_diff: None,
         files: None,
@@ -488,6 +498,7 @@ pub async fn run(
                 return;
             }
         }
+        load_skill_mcp(&mut cx, &api).await;
         load_files(&mut cx, &api).await;
         load_git(&mut cx, &api).await;
         load_git_diff(&mut cx, &api).await;
@@ -538,6 +549,25 @@ async fn load_git_diff(cx: &mut Ctx, api: &CoreApi) {
             data,
         });
     }
+}
+
+/// Refresh the listings used by a not-yet-created session. The two endpoints
+/// are independent, so a failure in one keeps the other available.
+async fn load_skill_mcp(cx: &mut Ctx, api: &CoreApi) {
+    let Some(project) = cx.skill_mcp.take() else {
+        return;
+    };
+    let query = [("project", project.clone())];
+    let (skills, mcp) = tokio::join!(
+        api.http.get("/api/skill", &query),
+        api.http.get("/api/mcp", &[]),
+    );
+    let msg = SyncMsg::SkillMcp {
+        project,
+        skills: skills.map_err(|e| e.to_string()),
+        mcp: mcp.map_err(|e| e.to_string()),
+    };
+    cx.send(msg);
 }
 
 async fn load_files(cx: &mut Ctx, api: &CoreApi) {
@@ -983,7 +1013,7 @@ async fn stream(
             cmd = cx.cmds.recv() => {
                 match cmd {
                     Some(c) => {
-                        let was_catalog = matches!(c, Command::Config | Command::Context(_) | Command::PatchConfig { .. } | Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
+                        let was_catalog = matches!(c, Command::Config | Command::Context(_) | Command::PatchConfig { .. } | Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::SkillMcp(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
                         cx.handle(c);
                         if cx.shutdown { return StreamEnd::Stop; }
                         load_config(cx, api).await;
@@ -1004,6 +1034,7 @@ async fn stream(
                                 return StreamEnd::Stop;
                             }
                         }
+                        load_skill_mcp(cx, api).await;
                         load_files(cx, api).await;
                         load_completion(cx, api).await;
                         load_git(cx, api).await;

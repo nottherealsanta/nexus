@@ -6,6 +6,7 @@ import { Model, scratchOf, upsertTurn } from "./src/core/reduce";
 import { groupRequests, latestUsage, ledgerTotals, sumUsage } from "./src/core/turns";
 import { capToolDetail, detailOf, fmtDuration } from "./src/ui/timeline";
 import { diffItems, splitRows } from "./src/ui/diff";
+import { defaultSkillSelection, draftInventoryRows, emptyGlobalToastState, globalEventToast, selectedSkillCounts, sessionInventoryRows, setDisabledTool, shouldInstallRequestedDirectly, toggleDisabledTool } from "./src/skills-mcp";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -27,6 +28,8 @@ const core = (info: object = { name: "nexus", version: "0.10.0.dev0", pid: 1 }) 
   "GET */api/model": { body: { source: "t", models: [], model: "scripted/m" } },
   "GET */api/model*": { body: { source: "t", models: [], model: "scripted/m" } },
   "GET */api/agent*": { body: { agents: [], problems: [] } },
+  "GET */api/skill*": { body: { skills: [], problems: [] } },
+  "GET */api/mcp*": { body: { servers: [] } },
   "GET */api/session/*": { body: snapshot.sessions[0] },
 });
 const mod = "mod";
@@ -49,6 +52,93 @@ function turnSummary(id: string, startSeq: number, requests: [string | null, Usa
 const turnPage = (turns: object[], extra: Record<string, unknown> = {}) => ({ body: { ...quietTurns, turns, ...extra } });
 const userMessage = { id: "m_user", session_id: "ses_1", seq: 1, role: "user", parts: [{ type: "text", text: "hello" }], created: 1 };
 const assistantMessage = { id: "m_assistant", session_id: "ses_1", seq: 2, role: "assistant", parts: [{ type: "text", text: "done" }], created: 2 };
+
+describe("skills and MCP", () => {
+  test("direct install requires every requested skill to be found and not already installed", () => {
+    const found = [{ name: "new", installed: false }, { name: "old", installed: true }];
+    expect(shouldInstallRequestedDirectly(["new"], found)).toBe(true);
+    expect(shouldInstallRequestedDirectly([], found)).toBe(false);
+    expect(shouldInstallRequestedDirectly(["missing"], found)).toBe(false);
+    expect(shouldInstallRequestedDirectly(["old"], found)).toBe(false);
+    expect(defaultSkillSelection(found)).toEqual(["new"]);
+    expect(selectedSkillCounts(found, ["new", "old"])).toEqual({ newCount: 1, replacedCount: 1, replacedNames: ["old"] });
+  });
+
+  test("disabled_tools switches preserve other entries and draft inventory filters disabled MCP servers", () => {
+    const off = setDisabledTool(["bash", "mcp:other"], "skill:design", true);
+    expect(off).toEqual(["bash", "mcp:other", "skill:design"]);
+    expect(toggleDisabledTool(off, "skill", "design")).toEqual(["bash", "mcp:other"]);
+    expect(draftInventoryRows([{ name: "design", state: "on" }], [
+      { server: "live", enabled: true, state: "online", tools: 3 },
+      { server: "invalid", enabled: true, state: "invalid" },
+      { server: "disabled", enabled: false, state: "online" },
+    ], ["mcp:live"]).map((row) => [row.name, row.on])).toEqual([["design", true], ["live", false]]);
+  });
+
+  test("running-session inventory marks locked entries as new-session-only and shows MCP failures", () => {
+    const rows = sessionInventoryRows(
+      [{ name: "ready", state: "on" }, { name: "late", state: "off", locked: true }],
+      [{ server: "broken", state: "unavailable", error: "connection refused", tools: null, locked: true }],
+    );
+    expect(rows.map((row) => [row.name, row.on, row.hint, row.error])).toEqual([
+      ["ready", true, undefined, undefined],
+      ["late", false, "new session", undefined],
+      ["broken", false, "new session", "connection refused"],
+    ]);
+  });
+
+  test("global event toasts deduplicate changes and suppress this client's successful learn", () => {
+    const state = emptyGlobalToastState();
+    expect(globalEventToast("skills.changed", {}, state, 10_000)?.text).toBe("Skills changed. New sessions will use them.");
+    expect(globalEventToast("skills.changed", {}, state, 12_999)).toBe(null);
+    state.skillInstallPending = true;
+    expect(globalEventToast("skills.changed", {}, state, 14_000)).toBe(null);
+    state.skillInstallPending = false;
+    state.muteSkillsUntil = 20_000;
+    expect(globalEventToast("skills.changed", {}, state, 17_001)).toBe(null);
+    expect(globalEventToast("mcp.changed", {}, state, 10_000)?.text).toBe("MCP servers changed. New sessions will use them.");
+    expect(globalEventToast("mcp.changed", {}, state, 12_999)).toBe(null);
+    expect(globalEventToast("mcp.failed", { server: "docs", error: "timeout" }, state, 13_000)).toEqual({ level: "warning", text: "MCP server docs failed: timeout" });
+  });
+});
+
+describe("starting-context skills and MCP switches", () => {
+  test("a running session shows tool counts and errors, patches an unlocked row and hints on locked rows", async () => {
+    const session = {
+      ...snapshot.sessions[0], skills: [
+        { name: "design", description: "Design system", scope: "project", state: "on", locked: false },
+        { name: "late", description: "Added later", scope: "global", state: "off", locked: true },
+      ],
+      mcp: [
+        { server: "docs", tools: 5, state: "on", locked: false, error: null },
+        { server: "broken", tools: null, state: "unavailable", locked: true, error: "connection refused" },
+      ],
+      disabled_tools: [],
+    };
+    const updated = { ...session, revision: 2, disabled_tools: ["skill:design"], skills: session.skills.map((skill) => skill.name === "design" ? { ...skill, state: "off" } : skill) };
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({
+        "GET */api/snapshot*": { body: { ...snapshot, sessions: [session] } },
+        "GET */api/session/ses_1": { body: session },
+        "GET */api/session/ses_1/message": { body: [] },
+        "GET */api/session/ses_1/snapshot": { body: { system_prompt: "prompt", tools: [], instruction_file: {} } },
+        "PATCH */api/session/ses_1": { body: updated },
+      }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("text:Refactor loader");
+    await app.waitFor("id:ctx-skill-row-design");
+    expect(app.texts().join("\n").includes("5 tools")).toBe(true);
+    expect(app.texts().join("\n").includes("connection refused")).toBe(true);
+    await app.press("id:ctx-skill-row-late");
+    await app.waitFor("text:Available in a new session.");
+    await app.press("id:ctx-skill-row-design");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "PATCH" && r.url.endsWith("/api/session/ses_1")));
+    const patch = app.requests().find((r) => r.method === "PATCH" && r.url.endsWith("/api/session/ses_1")) as any;
+    expect(JSON.parse(patch.body)).toEqual({ disabled_tools: ["skill:design"] });
+  });
+});
 
 function selectedSessionNetwork(extra: Record<string, unknown> = {}) {
   return {
@@ -288,6 +378,16 @@ describe("history", () => {
     m.applyEvent(ev(5, "turn.summary", turnSummary("trn_1", 0, [["codex/gpt-5", usage(12, 4)]])));
     expect(m.selected!.turns.length).toBe(1);
     expect(latestUsage(m.selected!.turns, m.selected!.scratch)).toEqual({ input: 12, model: "codex/gpt-5" });
+  });
+
+  test("global live-only events advance the cursor without entering session scratch", () => {
+    const m = live(new Model());
+    m.select("ses_1");
+    const global = { ...ev(1, "skills.changed", {}), session_id: null };
+    expect(m.applyEvent(global)).toBe("applied");
+    expect(m.lastId).toBe(1);
+    expect(m.selected!.scratch).toEqual([]);
+    expect(m.applyEvent(global)).toBe("duplicate");
   });
 
   test("a running turn's loaded summary joins its live requests without counting twice", async () => {

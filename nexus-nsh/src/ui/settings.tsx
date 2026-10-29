@@ -1,5 +1,5 @@
 import type { JSX } from "nsh";
-import { Scroll, Text, View, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
+import { Scroll, Text, View, effect, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, T, FOCUS } from "./kit";
 import { Heading, Modal, ModalFooter, ModalTitle, SelectBar } from "./modal";
@@ -88,7 +88,36 @@ async function refreshCatalog() {
 }
 
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["providers.sign_in", "providers.sign_out", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.default_permission", "models.default_effort", "tools.defaults", "keybindings.list", "about.versions", "about.daemon"]);
+const WIRED = new Set(["providers.sign_in", "providers.sign_out", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.default_permission", "models.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "keybindings.list", "about.versions", "about.daemon"]);
+
+function McpToolsLimit() {
+  const initial = Number(config()?.values?.mcp?.max_listed_tools ?? 25);
+  const value = signal(String(initial));
+  const revision = signal<any>(config()?.revision);
+  effect(() => {
+    const current = config();
+    if (current && current.revision !== revision()) {
+      revision.set(current.revision);
+      value.set(String(current.values?.mcp?.max_listed_tools ?? 25));
+    }
+  });
+  const save = () => {
+    if (!value().trim()) { toast("warning", "Enter a number from 1 to 1000."); return; }
+    const parsed = Number(value());
+    if (!Number.isFinite(parsed)) { toast("warning", "Enter a number from 1 to 1000."); return; }
+    const bounded = Math.max(1, Math.min(1000, Math.round(parsed)));
+    value.set(String(bounded));
+    void patchConfig("mcp.max_listed_tools", bounded);
+  };
+  return (
+    <View class="flex-row items-center gap-2">
+      <Input value={value()} placeholder="1–1000" accessibilityLabel="Tools listed by name (limit)" testID="mcp-max-listed-tools"
+        onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
+        class="h-8 w-24 rounded-(--radius) border border-border bg-background px-2 text-right font-mono text-[13px] text-foreground" />
+      <Btn label="Save" onPress={save} testID="mcp-max-listed-tools-save" />
+    </View>
+  );
+}
 
 function control(r: Row): JSX.Element {
   if (r.id === "appearance.theme") {
@@ -96,6 +125,8 @@ function control(r: Row): JSX.Element {
       onPick={(v) => { if (v === "named") { toast("info", "Named themes: shared theme tokens arrive with Step 12.2."); return; } themeChoice.set(v as any); setColorScheme(v as "light" | "dark" | "system"); savePrefs(); }} />;
   }
   if (r.id === "appearance.animations") return <Seg label={r.label} options={["on", "off"]} value={config()?.values?.ui?.reduced_motion ? "off" : "on"} onPick={(v) => void patchConfig("ui.reduced_motion", v === "off")} />;
+  if (r.id === "mcp.full_definitions") return <Seg label={r.label} options={["off", "on"]} value={config()?.values?.mcp?.full_definitions ? "on" : "off"} onPick={(v) => void patchConfig("mcp.full_definitions", v === "on")} />;
+  if (r.id === "mcp.max_listed_tools") return <McpToolsLimit />;
   if (r.id === "appearance.timeline_detail") {
     return <Seg label="Timeline detail" options={r.options ?? ["low", "medium", "high"]} value={timelineDetail()} disabled={false}
       onPick={(v) => setTimelineDetail(v as "low" | "medium" | "high")} />;
@@ -132,7 +163,7 @@ function control(r: Row): JSX.Element {
   if (r.id === "tools.default_permission") return <Seg label={r.label} options={["allow", "ask"]} value={config()?.values?.defaults?.permission ?? "allow"} onPick={(v) => void patchConfig("defaults.permission", v)} />;
   if (r.id === "tools.defaults") {
     const disabled: string[] = config()?.values?.tools?.disabled ?? [];
-    return <View class="gap-1">{["read", "bash", "edit", "write", "ask", "code"].map((name) => <Button testID={`default-tool-${name}`} onPress={() => void patchConfig("tools.disabled", disabled.includes(name) ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={`${disabled.includes(name) ? "off" : "on"} · ${name}`} /></Button>)}</View>;
+    return <View class="gap-1">{["read", "grep", "glob", "ls", "bash", "edit", "multiedit", "write", "web_search", "web_fetch", "ask", "code"].map((name) => <Button testID={`default-tool-${name}`} onPress={() => void patchConfig("tools.disabled", disabled.includes(name) ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={`${disabled.includes(name) ? "off" : "on"} · ${name}`} /></Button>)}</View>;
   }
   const paths: Record<string, string> = { "providers.default_model": "model", "models.default": "model", "models.default_effort": "effort", "agents.default_root": "agent" };
   if (paths[r.id]) {

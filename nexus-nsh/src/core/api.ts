@@ -1,10 +1,12 @@
 // Core API shapes the shell needs (docs/api.md). Loose on purpose: Core owns the schema.
 
 export interface Project { id: string; path: string; name: string; created: number; updated: number; revision: number }
+export interface SessionSkill { name: string; description: string; scope: string; state: "on" | "off"; locked: boolean }
+export interface SessionMcp { server: string; tools: number | null; state: "on" | "off" | "unavailable"; locked: boolean; error: string | null }
 export interface Session {
   id: string; project_id: string; directory: string; title: string; agent: string;
   parent_id: string | null; children?: string[]; model?: string | null; model_source?: string;
-  effort?: string | null; tools?: string[]; disabled_tools?: string[]; permission?: string;
+  effort?: string | null; tools?: string[]; disabled_tools?: string[]; skills?: SessionSkill[]; mcp?: SessionMcp[]; permission?: string;
   status?: string; revision: number; created: number; updated: number; archived?: boolean;
   [k: string]: unknown;
 }

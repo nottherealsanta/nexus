@@ -174,6 +174,7 @@ pub struct Palette {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverlayKind {
     Palette(Palette),
+    LearnChecklist(LearnChecklist),
     Notifications {
         selected: usize,
     },
@@ -193,6 +194,26 @@ pub enum OverlayKind {
         top: usize,
         back: Option<usize>,
     },
+}
+
+/// One candidate returned by `/api/skill/preview`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LearnSkill {
+    pub name: String,
+    pub description: String,
+    pub installed: bool,
+}
+
+/// Selection state for the second `/learn` modal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LearnChecklist {
+    pub fetch_id: String,
+    pub source: String,
+    pub scope: String,
+    pub project: String,
+    pub skills: Vec<LearnSkill>,
+    pub selected: Vec<bool>,
+    pub cursor: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -429,6 +450,8 @@ pub enum Target {
     GitRow(usize),
     Timeline,
     ContextSection(String),
+    /// One switch row in the starting-context inventory.
+    ContextToggle(usize),
     ContextPreview {
         title: String,
         text: String,
@@ -458,6 +481,7 @@ pub enum Target {
     /// Open the full text of a toast.
     ToastOpen(u64),
     PaletteItem(usize),
+    LearnSkill(usize),
     NoticeItem(usize),
     DialogButton(usize),
     /// A surface that swallows clicks (dialogs, palette body, drawers).

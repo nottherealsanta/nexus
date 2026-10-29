@@ -5,6 +5,7 @@ import { Model, normalizeSession } from "./core/reduce";
 import { Banner, ConnectionState, Sync, SyncHost } from "./core/sync";
 import { Compat, Info, Session } from "./core/api";
 import { ApiError, request } from "./core/transport";
+import { emptyGlobalToastState, globalEventToast } from "./skills-mcp";
 
 export type CentreView = "session" | "new_session" | "settings" | "editor" | "file";
 export type Toast = { id: number; level: "success" | "info" | "warning" | "error"; text: string; at: number };
@@ -19,6 +20,26 @@ export const modelCatalog = signal<any[]>([]);
 export const catalogSource = signal("");
 export const defaultModel = signal("");
 export const config = signal<any | null>(null);
+export type LearnChecklist = {
+  fetch_id: string;
+  source: string;
+  scope: "project" | "global";
+  project: string;
+  requested: string[];
+  problems: any[];
+  found: { name: string; description?: string; installed?: boolean; warnings?: string[] }[];
+  busy?: boolean;
+};
+export const learnChecklist = signal<LearnChecklist | null>(null);
+export type StartingInventory = {
+  project: string;
+  skills: any[];
+  skillProblems: any[];
+  servers: any[];
+  loading: boolean;
+  error?: string;
+};
+export const startingInventory = signal<StartingInventory | null>(null);
 export type PendingInput = { id: string; session_id: string; mode: "steer" | "queue"; parts: any[]; held?: boolean };
 export const pendingInputs = signal<Record<string, { inputs: PendingInput[]; held: boolean }>>({});
 const inputSeq = new Map<string, number>();
@@ -76,7 +97,7 @@ export const confirmDialog = signal<null | { title: string; body: string; confir
 export const renaming = signal(false);
 export const addProjectOpen = signal(false);
 /** Choices made before a session exists; consumed by its creation request. */
-export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string }>({});
+export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string; disabled_tools?: string[] }>({});
 export const draft = signal<Record<string, string>>({});
 export const waitIndex = signal(0);
 export const tick = signal(Date.now());
@@ -274,6 +295,7 @@ const host: SyncHost = {
   configChanged() { void loadConfig().catch(() => {}); },
   contextChanged(id) { void loadContext(id).catch(() => {}); },
   inputsChanged(id) { void loadInputs(id).catch(() => {}); },
+  globalEvent(e) { handleGlobalEvent(e); },
 };
 export const sync = new Sync(host);
 
@@ -312,6 +334,60 @@ export function startApp() {
   sync.start();
   loadComposerData();
   setInterval(() => { const c = connection(); if (c.kind === "reconnecting") tick.set(Date.now()); }, 1000);
+}
+
+let inventorySeq = 0;
+/** Load the new-session skill and MCP choices for the currently selected project. */
+export function loadStartingInventory(project: string, refresh = false) {
+  const cached = startingInventory();
+  if (!refresh && cached?.project === project) return;
+  const seq = ++inventorySeq;
+  startingInventory.set({ project, skills: [], skillProblems: [], servers: [], loading: true });
+  const skills = request<any>("GET", "/api/skill", { query: { project } }).catch((e) => ({ _error: String(e), skills: [], problems: [] }));
+  const mcp = request<any>("GET", "/api/mcp").catch((e) => ({ _error: String(e), servers: [] }));
+  void Promise.all([skills, mcp]).then(([skillData, mcpData]) => {
+    if (seq !== inventorySeq) return;
+    const errors = [skillData._error, mcpData._error].filter(Boolean);
+    startingInventory.set({
+      project,
+      skills: skillData.skills ?? [],
+      skillProblems: skillData.problems ?? [],
+      servers: mcpData.servers ?? [],
+      loading: false,
+      error: errors.join(" · ") || undefined,
+    });
+  });
+}
+
+let pendingSkillInstalls = 0;
+let deferredSkillsChanged = false;
+const globalToastState = emptyGlobalToastState();
+export function beginOwnSkillInstall() {
+  pendingSkillInstalls++;
+  globalToastState.skillInstallPending = true;
+}
+export function finishOwnSkillInstall() {
+  pendingSkillInstalls = Math.max(0, pendingSkillInstalls - 1);
+  globalToastState.skillInstallPending = pendingSkillInstalls > 0;
+  globalToastState.muteSkillsUntil = Date.now() + 5000;
+  deferredSkillsChanged = false;
+}
+export function failOwnSkillInstall() {
+  pendingSkillInstalls = Math.max(0, pendingSkillInstalls - 1);
+  globalToastState.skillInstallPending = pendingSkillInstalls > 0;
+  if (!pendingSkillInstalls && deferredSkillsChanged) {
+    if (globalToastState.muteSkillsUntil <= Date.now()) toast("info", "Skills changed. New sessions will use them.");
+    deferredSkillsChanged = false;
+  }
+}
+function handleGlobalEvent(e: import("./core/api").CoreEvent) {
+  if (e.type === "skills.changed" || e.type === "mcp.changed") {
+    const project = currentProject();
+    if (project) loadStartingInventory(project, true);
+  }
+  if (e.type === "skills.changed" && pendingSkillInstalls) deferredSkillsChanged = true;
+  const alert = globalEventToast(e.type, e.data, globalToastState);
+  if (alert) toast(alert.level, alert.text);
 }
 
 export type FileEntry = { name: string; kind: string; git_status?: string | null; ignored: boolean };

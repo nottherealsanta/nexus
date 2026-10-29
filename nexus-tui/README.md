@@ -46,19 +46,26 @@ The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`): the viewed
 activity group), medium (each tool on a collapsed line, the default) and high
 (every tool expanded, long output capped). Drag the left sidebar's edge to resize it.
 The starting context is a list of `◆` sections (DESIGN_PLAN D10, `paint::context_rows`, one
-renderer for the timeline and the new-session view): System prompt, AGENTS.md, Tools (a column
-grid; switched-off tools struck through and muted) and Child agents or Workspace tools when
-present. Each header keeps its estimated count (`~2,140 tok`, characters ÷ 4) and meta, a text
-row gives the total and the share of the model's window, and there is no bar. The instruction
-file is part of the system prompt, so the total counts the prompt and the tool schemas only.
-Previews clip with `…` and a long grid ends in `+N more`. After the first turn the whole
-section folds to `▸ Context · 4 items · ~2.9k tokens`. The new-session view shows the same
+renderer for the timeline and the new-session view): System prompt, AGENTS.md, Tools, Skills,
+MCP and Child agents or Workspace tools when present. Tool, skill and MCP rows show their
+on/off state; click a row or focus the timeline and use ↑/↓ then Enter/Space to switch it.
+Locked session rows are dimmed and say `new session`. Each header keeps its estimated count
+(`~2,140 tok`, characters ÷ 4) and meta, a text row gives the total and the share of the model's
+window, and there is no bar. The instruction file is part of the system prompt, so the total
+counts the prompt and the tool schemas only. Previews clip with `…`. After the first turn the
+whole section folds to `▸ Context · 4 items · ~2.9k tokens`. The new-session view shows the same
 sections under a header block (`New session in <project>`, agent, model, effort, directory and
-branch, then the `Tab`/`ctrl+m`/`ctrl+e`/`ctrl+d` hints); until Core session drafts land
-(PLAN.md Step 12a) its preview is built on the client (the first line of the agent's prompt body, which Core serves from `GET /api/agent/{name}` (the description is never sent to the model, so it is never shown), the project's
-`AGENTS.md` when the TUI can read it, the agent's tool list or the default tools) and every
-count reads `~N` with "estimated" on hover. The turn footer adds the catalog price when the
-model has one.
+branch, then the `Tab`/`ctrl+m`/`ctrl+e`/`ctrl+d` hints); it loads project skills and enabled MCP
+servers from Core and sends draft switches with session creation. Its prompt preview is built
+from the first line of the agent's prompt body, the project's `AGENTS.md` when the TUI can read
+it, and the selected agent's tool list or the default tools. Counts read `~N` with "estimated"
+on hover. The turn footer adds the catalog price when the model has one.
+
+`/learn <source>` asks whether to install into this project or every project, previews the
+source, then either installs an unambiguous set of new skills or opens a checklist. The checklist
+uses ↑/↓, Space, `a` (all), `n` (none), `i` (invert), Enter (install) and Esc (cancel); ticking
+an installed skill replaces it. Successful installs are available in new sessions. Settings →
+MCP controls whether all tool definitions go into context and the 1–1000 name-listing limit.
 
 Every overlay (palette and pickers, Settings, confirms, help, notifications) is one
 modal recipe (`render.rs` `modal`, DESIGN_PLAN D13): the scrim over the whole frame, then

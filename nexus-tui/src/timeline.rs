@@ -42,6 +42,8 @@ pub struct TLine {
     pub focus: bool,
     /// Section heading identity, independent of its displayed text.
     pub context_section: Option<String>,
+    /// Click/key identity of a tool, skill or MCP switch row.
+    pub context_item: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -528,6 +530,7 @@ impl Builder<'_> {
             rail: None,
             focus: false,
             context_section: None,
+            context_item: None,
         });
     }
     fn blank(&mut self) {
@@ -1067,11 +1070,6 @@ impl Builder<'_> {
         let Some(s) = &view.starting else { return };
         let key = format!("context:{}", view.session_id);
         let sys = s["system_prompt"].as_str().unwrap_or("");
-        let names: Vec<&str> = s["tools"]
-            .as_array()
-            .map(|v| v.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
-        let off = crate::app::disabled_tools(self.app.viewed());
         let schemas = &s["tool_definitions"];
         let file = &s["instruction_file"];
         let agent = &s["agent"];
@@ -1128,27 +1126,15 @@ impl Builder<'_> {
         sections.push(CtxSection {
             title: "Tools".into(),
             tokens: (tool_tokens > 0).then_some(tool_tokens),
-            meta: format!(
-                "{} tools{sep}{} on",
-                names.len(),
-                names
-                    .iter()
-                    .filter(|n| !off.iter().any(|o| o == *n))
-                    .count()
-            ),
-            body: CtxBody::Grid(
-                names
-                    .iter()
-                    .map(|n| ((*n).to_owned(), !off.iter().any(|o| o == n)))
-                    .collect(),
-            ),
+            meta: String::new(),
+            body: CtxBody::Inventory(self.app.context_items_for("Tools")),
         });
         for title in ["Skills", "MCP"] {
             sections.push(CtxSection {
                 title: title.into(),
                 tokens: None,
-                meta: "not available yet".into(),
-                body: CtxBody::None,
+                meta: self.app.context_inventory_meta(title),
+                body: CtxBody::Inventory(self.app.context_items_for(title)),
             });
         }
         if s["workspace"]["active"].as_bool().unwrap_or(false) {
@@ -1178,6 +1164,12 @@ impl Builder<'_> {
                 let section = row.iter().find_map(|(text, role)| {
                     (*role == CtxRole::Title).then(|| text.trim().to_owned())
                 });
+                let context_item = row.iter().find_map(|(_, role)| match role {
+                    CtxRole::ToggleOn(index)
+                    | CtxRole::ToggleOff(index)
+                    | CtxRole::ToggleLocked(index) => Some(*index),
+                    _ => None,
+                });
                 let mut spans = vec![Span::raw("  ".to_owned())];
                 for (text, role) in row {
                     let style = match role {
@@ -1185,14 +1177,17 @@ impl Builder<'_> {
                         CtxRole::Title | CtxRole::TotalLabel => {
                             b.secondary().add_modifier(Modifier::BOLD)
                         }
-                        CtxRole::Tokens | CtxRole::Item => b.secondary(),
-                        CtxRole::ItemOff => b.meta().add_modifier(Modifier::CROSSED_OUT),
+                        CtxRole::Tokens => b.secondary(),
+                        CtxRole::ToggleOn(_) => b.secondary(),
+                        CtxRole::ToggleOff(_) => b.meta().add_modifier(Modifier::CROSSED_OUT),
+                        CtxRole::ToggleLocked(_) => b.meta(),
                         CtxRole::TotalFigure => b.secondary(),
                     };
                     spans.push(Span::styled(text, style));
                 }
                 b.line(if spans.len() == 1 { Vec::new() } else { spans });
                 b.out.last_mut().unwrap().context_section = section;
+                b.out.last_mut().unwrap().context_item = context_item;
             }
         });
     }
@@ -1422,6 +1417,7 @@ impl Builder<'_> {
                 rail: Some(rail),
                 focus: false,
                 context_section: None,
+                context_item: None,
             };
             if !folded {
                 b.out.push(pad());
@@ -1459,6 +1455,7 @@ impl Builder<'_> {
                     rail: Some(rail),
                     focus: false,
                     context_section: None,
+                    context_item: None,
                 });
             }
             if !folded {
@@ -1476,6 +1473,7 @@ impl Builder<'_> {
                         rail: Some(rail),
                         focus: false,
                         context_section: None,
+                        context_item: None,
                     });
                 }
                 b.out.push(pad());
@@ -1768,6 +1766,7 @@ impl Builder<'_> {
                 rail: None,
                 focus: false,
                 context_section: None,
+                context_item: None,
             });
             for row in text::wrap(text, b.bw.saturating_sub(2)) {
                 b.out.push(TLine {
@@ -1779,6 +1778,7 @@ impl Builder<'_> {
                     rail: None,
                     focus: false,
                     context_section: None,
+                    context_item: None,
                 });
             }
         });
@@ -2658,6 +2658,7 @@ impl Builder<'_> {
                     rail: None,
                     focus: false,
                     context_section: None,
+                    context_item: None,
                 });
                 let body = if let Some(d) = done {
                     let lines: Vec<&str> =
@@ -2688,6 +2689,7 @@ impl Builder<'_> {
                             rail: None,
                             focus: false,
                             context_section: None,
+                            context_item: None,
                         });
                     }
                 }

@@ -527,7 +527,24 @@ unavailable_reason = "Skills are not available yet."
 [[settings.section]]
 id = "mcp"
 label = "MCP"
-unavailable_reason = "MCP is not available yet."
+
+[[settings.section.row]]
+id = "mcp.full_definitions"
+label = "Full tool definitions in context"
+kind = "toggle"
+scope = "core"
+clients = "both"
+default = false
+note = "Include every enabled MCP tool definition in new-session context."
+
+[[settings.section.row]]
+id = "mcp.max_listed_tools"
+label = "Tools listed by name (limit)"
+kind = "number"
+scope = "core"
+clients = "both"
+default = 25
+note = "1–1000; applies when full tool definitions are off."
 
 [[settings.section.row]]
 id = "mcp.servers"
@@ -1805,4 +1822,3 @@ when = ["text_edit.active"]
 unavailable_reason = "No text field is being edited."
 placement = ["editor", "settings"]
 note = "Inline rename, find bar, settings field, key capture. Not the composer: Esc never clears composer text."
-

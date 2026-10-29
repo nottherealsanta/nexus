@@ -6,12 +6,13 @@ import { Clipboard, keymap, openUrl } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
   pendingInputs, contextDetail, addProjectOpen, alertDetail, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
-  agentCatalog, currentWorktree, defaultModel, draft, isNarrow, leftOpen, leftTab, live, loadComposerData, loadProjectWorktrees, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
+  agentCatalog, beginOwnSkillInstall, currentWorktree, defaultModel, draft, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
 import { Message } from "./core/api";
 import { imageDrafts } from "./images";
+import { disabledKey, selectedSkillCounts, setDisabledTool, shouldInstallRequestedDirectly, toggleDisabledTool } from "./skills-mcp";
 
 export interface Cmd {
   id: string; title: string; category: string; slash?: string; keys?: { tui?: string; nsh?: string };
@@ -81,7 +82,7 @@ function evalTerm(t: string): boolean {
     case "timeline.has_older": return !!model.selected?.messagesMore;
     case "view.settings": return centre() === "settings";
     case "view.editor": return centre() === "editor";
-    case "overlay.open": return paletteOpen() || !!picker() || !!alertDetail();
+    case "overlay.open": return paletteOpen() || !!picker() || !!learnChecklist() || !!alertDetail();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
     case "drawer.open": return !!drawer();
@@ -172,10 +173,11 @@ export async function sendPrompt(text: string, images: import("./images").DraftI
       const project = currentProject();
       if (!project) throw new ApiError(400, "Add or choose a project first.");
       const selected = sessionDraft();
-      const fields: Record<string, string> = {};
+      const fields: Record<string, unknown> = {};
       if (selected.agent) fields.agent = selected.agent;
       if (selected.model) fields.model = selected.model;
       if (selected.effort) fields.effort = selected.effort;
+      if (selected.disabled_tools !== undefined) fields.disabled_tools = selected.disabled_tools;
       const created = await request<any>("POST", "/api/session", { body: { project, ...fields }, key: newKey() });
       createdId = created.id;
       sessionDraft.set({});
@@ -210,7 +212,7 @@ export function runSlashCommand(text: string): boolean {
   return true;
 }
 
-/** `/learn <source>`: ask project or global, then have Core copy the skills (no npx). */
+/** `/learn <source>`: preview first, then install direct hits or show the found-skills checklist. */
 function learn(source: string) {
   if (!source) { toast("info", "Usage: /learn owner/repo, a GitHub URL, ./folder, or npx skills add …"); return; }
   const project = currentProject();
@@ -220,15 +222,106 @@ function learn(source: string) {
     picker.set(null);
     toast("info", `Fetching ${source}…`);
     try {
-      const r = await request<{ installed: { name: string }[]; skipped: unknown[] }>("POST", "/api/skill/install", { body: { source, scope, project } });
-      const where = scope === "global" ? "for every project" : "for this project";
-      toast("success", `Learned ${r.installed.map((i) => i.name).join(", ")} ${where}${r.skipped.length ? ` (${r.skipped.length} already installed)` : ""}`);
+      const preview = await request<any>("POST", "/api/skill/preview", { body: { source, scope, project } });
+      const found = (preview.found ?? []) as { name: string; description?: string; installed?: boolean; warnings?: string[] }[];
+      const requested = (preview.requested ?? []) as string[];
+      if (shouldInstallRequestedDirectly(requested, found)) {
+        await installSkills({ fetch_id: preview.fetch_id, source, scope, project, requested, found }, requested);
+        return;
+      }
+      learnChecklist.set({
+        fetch_id: preview.fetch_id, source, scope, project, requested,
+        problems: preview.problems ?? [], found,
+      });
     } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
   };
   picker.set({ title: "Install skills for", items: [
     { id: "project", label: "This project", hint: ".agents/skills", run: install("project") },
     { id: "global", label: "Every project", hint: "~/.agents/skills", run: install("global") },
   ] });
+}
+
+type InstallPlan = {
+  fetch_id: string; source: string; scope: "project" | "global"; project: string;
+  requested: string[]; found: { name: string; installed?: boolean }[];
+};
+
+async function installSkills(plan: InstallPlan, names: string[]) {
+  if (!names.length) { toast("info", "Choose at least one skill"); return; }
+  const counts = selectedSkillCounts(plan.found, names);
+  beginOwnSkillInstall();
+  try {
+    const result = await request<{ installed: { name: string; replaced?: boolean }[] }>("POST", "/api/skill/install", {
+      body: {
+        fetch_id: plan.fetch_id, skills: names, scope: plan.scope, project: plan.project,
+        overwrite: counts.replacedCount > 0,
+      },
+      key: newKey(),
+    });
+    finishOwnSkillInstall();
+    const installed = result.installed ?? [];
+    const namesLearned = installed.map((skill) => skill.name);
+    const where = plan.scope === "global" ? "for every project" : "for this project";
+    const replaced = installed.filter((skill) => !!skill.replaced).map((skill) => skill.name);
+    const replacement = replaced.length ? ` (replaced ${replaced.join(", ")})` : "";
+    learnChecklist.set(null);
+    toast("success", `Learned ${namesLearned.join(", ")} ${where}. Available in new sessions.${replacement}`);
+    const project = currentProject();
+    if (project) loadStartingInventory(project, true);
+  } catch (e) {
+    failOwnSkillInstall();
+    toast("error", e instanceof ApiError ? e.message : String(e));
+    learnChecklist.update((d) => d && { ...d, busy: false });
+  }
+}
+
+/** Called by the checklist modal after its selection changes. */
+export function installLearnChecklist(selected: string[]) {
+  const plan = learnChecklist();
+  if (!plan) return;
+  if (!selected.length) { toast("info", "Choose at least one skill"); return; }
+  learnChecklist.update((d) => d && { ...d, busy: true });
+  void installSkills(plan, selected);
+}
+export function closeLearnChecklist() { if (!learnChecklist()?.busy) learnChecklist.set(null); }
+
+export function toggleDraftInventory(kind: "skill" | "mcp", name: string, locked = false) {
+  if (locked) { toast("info", "Available in a new session."); return; }
+  const key = disabledKey(kind, name);
+  sessionDraft.update((draft) => ({
+    ...draft,
+    disabled_tools: setDisabledTool(draft.disabled_tools ?? [], key, !(draft.disabled_tools ?? []).includes(key)),
+  }));
+}
+
+/** Switch one skill or MCP server in a running session using its optimistic revision. */
+export async function toggleSessionInventory(kind: "skill" | "mcp", name: string, locked = false) {
+  if (locked) { toast("info", "Available in a new session."); return; }
+  const session = viewed();
+  if (!session) return;
+  const key = disabledKey(kind, name);
+  const current = Array.isArray(session.disabled_tools) ? session.disabled_tools : [];
+  const disabled = toggleDisabledTool(current, kind, name);
+  try {
+    const updated = await request<any>("PATCH", `/api/session/${session.id}`, {
+      body: { disabled_tools: disabled }, ifMatch: session.revision, key: newKey(),
+    });
+    const latest = model.sessions.get(session.id);
+    if (latest) {
+      const response = updated && typeof updated === "object" ? updated : {};
+      model.sessions.set(session.id, {
+        ...latest,
+        ...response,
+        disabled_tools: disabled,
+        skills: latest.skills?.map((skill) => skill.name === name && kind === "skill" ? { ...skill, state: disabled.includes(key) ? "off" : "on" } : skill),
+        mcp: latest.mcp?.map((server) => server.server === name && kind === "mcp" && server.state !== "unavailable" ? { ...server, state: disabled.includes(key) ? "off" : "on" } : server),
+      });
+      bump();
+    }
+  } catch (e) {
+    if (e instanceof ApiError && e.isConflict) toast("warning", "Someone else changed this session; reloaded. Try again.");
+    else toast("error", e instanceof ApiError ? e.message : String(e));
+  }
 }
 
 async function patchSession(title: string) {
@@ -302,7 +395,7 @@ on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });
 on("notifications.mark_all_read", () => { notifications.set([]); unread.set(0); });
 on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[0].id); }); // the oldest, drawn on top
 on("alert.cancel", () => { const d = confirmDialog(); if (d) { if (!d.busy) confirmDialog.set(null); } else if (connection().kind !== "incompatible") addProjectOpen.set(false); });
-on("overlay.close", () => { if (alertDetail()) { alertDetail.set(null); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
+on("overlay.close", () => { if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
 on("nav.drawer.close", () => drawer.set(null));
 on("sidebar.left.toggle", toggleLeft);
 on("sidebar.right.toggle", () => toggleRight(rightWidthHint.w));

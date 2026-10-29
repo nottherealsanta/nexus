@@ -5,7 +5,7 @@ import { RightSidebar } from "./src/ui/right";
 import { Centre } from "./src/ui/centre";
 import { ContextDetailModal } from "./src/ui/newsession";
 import { AlertDetail } from "./src/ui/alerts";
-import { AddProject, Blocking, Confirm, Drawers, Palette, Picker, RenameSession } from "./src/ui/overlays";
+import { AddProject, Blocking, Confirm, Drawers, Palette, Picker, RenameSession, SkillChecklist } from "./src/ui/overlays";
 import { bindKeys, rightIsOpen, rightWidthHint } from "./src/commands";
 import { isNarrow, leftOpen, loadPrefs, startApp, themeChoice } from "./src/store";
 import { setColorScheme } from "nsh";
@@ -32,6 +32,7 @@ function App() {
       <ContextDetailModal />
       <Palette />
       <Picker />
+      <SkillChecklist />
       <AlertDetail />
       <RenameSession />
       <Confirm />

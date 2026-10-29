@@ -91,8 +91,15 @@ Esc closes. The project strip below the card shows the project name (bold), the
 home-shortened path, `⌥ branch`, and `checkout` or `worktree` (bold violet), with
 `ctrl+p commands` on the right when idle. Before a session exists, the agent/model/effort pickers and slash commands
 set draft creation fields. Timeline detail is a saved NSH preference. The
-starting-context section lists the prompt, tools, instructions, agent and
-child/workspace tools with estimates and the catalog window share. Turn footers
+starting-context section lists the prompt, tools, instructions, skills and MCP
+servers with estimates and the catalog window share. Skills and servers have
+per-session switches; entries not available at session start are dimmed and say
+“new session”. Before a session exists, NSH loads the project skills and enabled
+MCP servers into the draft and sends its `disabled_tools` with session creation.
+`/learn` previews a source, installs an unambiguous requested skill directly,
+and otherwise offers a keyboard-operable checklist with overwrite counts. MCP
+Settings edits the global full-definitions mode and listed-tools limit through
+Core config. Turn footers
 include catalog-priced cost when prices are available. The right sidebar takes
 turns and tool usage from the messages, calls, token totals and catalog-priced
 cost from Core's spend ledger (per model, plus live usage it has not counted
@@ -111,8 +118,9 @@ session-info item not reported by Core.
 Still missing (shown disabled with their reason, never as a control that appears
 to work): the complete files/editor and Git workflows, worktree controls,
 steering/queueing, handoff and one-turn sessions, inspector wire controls,
-settings editing beyond theme, sign-in over the API and dictation. Those need
-Core increments (PLAN.md Steps 11a/12a) or the remaining 12.4 client work.
+additional settings beyond the wired defaults and MCP context options,
+sign-in over the API and dictation. Those need Core increments (PLAN.md Steps
+11a/12a) or the remaining 12.4 client work.
 
 ## Build, run, test
 
@@ -194,7 +202,6 @@ notice, without a user-message card or a new turn number.
 
 The top header omits the busy indicator; activity stays with the conversation.
 
-Starting Context lists Skills and MCP as unavailable until Core supports them.
 The system prompt opens in its detail view without an inline preview.
 
 Settings reads and edits shared defaults, timeline detail, reduced-motion choice and disabled tools through Core's

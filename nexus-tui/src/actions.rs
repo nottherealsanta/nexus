@@ -99,11 +99,26 @@ pub enum ApiCall {
         effort: String,
         revision: i64,
     },
-    /// `/learn`: copy skills from a repository or folder into the project's or the global skills folder.
-    Learn {
+    /// Fetch and inspect candidates for `/learn` before any install is made.
+    LearnPreview {
         project: String,
         source: String,
         scope: String,
+    },
+    /// Install the selected skills from one short-lived preview fetch.
+    LearnInstall {
+        project: String,
+        scope: String,
+        fetch_id: String,
+        skills: Vec<String>,
+        overwrite: bool,
+        replacing: Vec<String>,
+    },
+    /// Update the session-local tool/skill/MCP switch list.
+    SetDisabledTools {
+        session: String,
+        disabled_tools: Vec<String>,
+        revision: i64,
     },
     /// Write a Markdown transcript under `<Nexus home>/exports`.
     Export {
@@ -151,7 +166,9 @@ impl ApiCall {
             ApiCall::SetAgent { .. } => "Agent changed from the next call",
             ApiCall::SetEffort { .. } => "Effort changed from the next call",
             ApiCall::Export { .. } => "Exported",
-            ApiCall::Learn { .. } => "Skills installed",
+            ApiCall::LearnPreview { .. } => "",
+            ApiCall::LearnInstall { .. } => "Skills installed",
+            ApiCall::SetDisabledTools { .. } => "Session switches updated",
             ApiCall::ChangeDirectory { .. } => "Directory change requested",
             ApiCall::AddProject { .. } => "Project added",
             ApiCall::DeleteProject { .. } => "Project removed",
@@ -190,6 +207,8 @@ pub struct Done {
     pub input_parts: Option<Vec<Value>>,
     /// The project's prompts, oldest first (history recall).
     pub prompts: Option<Vec<String>>,
+    /// `/api/skill/preview` result, shown by the app as a checklist or install.
+    pub learn_preview: Option<Value>,
 }
 
 /// An authenticated API for the daemon in `home`, from `daemon.json`.
@@ -443,7 +462,7 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         ApiCall::DeleteProject { project } => {
             conflict(api.delete_project(project, &key).await.map_err(e)?)?;
         }
-        ApiCall::Learn {
+        ApiCall::LearnPreview {
             project,
             source,
             scope,
@@ -452,7 +471,7 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                 .http
                 .call(
                     reqwest::Method::POST,
-                    "/api/skill/install",
+                    "/api/skill/preview",
                     &[],
                     Some(&json!({ "source": source, "scope": scope, "project": project })),
                     None,
@@ -461,27 +480,87 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                 .await
                 .map_err(e)?
                 .body;
-            let names: Vec<&str> = value["installed"]
+            done.learn_preview = Some(value);
+        }
+        ApiCall::LearnInstall {
+            project,
+            scope,
+            fetch_id,
+            skills,
+            overwrite,
+            replacing,
+        } => {
+            let value = api
+                .http
+                .call(
+                    reqwest::Method::POST,
+                    "/api/skill/install",
+                    &[],
+                    Some(&json!({
+                        "fetch_id": fetch_id,
+                        "skills": skills,
+                        "scope": scope,
+                        "project": project,
+                        "overwrite": overwrite,
+                    })),
+                    None,
+                    None,
+                )
+                .await
+                .map_err(e)?
+                .body;
+            let installed: Vec<&str> = value["installed"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter_map(|i| i["name"].as_str())
                 .collect();
-            let skipped = value["skipped"].as_array().map_or(0, Vec::len);
+            let returned_replaced: Vec<&str> = value["installed"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|item| item["replaced"].as_bool().unwrap_or(false))
+                .filter_map(|item| item["name"].as_str())
+                .collect();
+            let replaced = if returned_replaced.is_empty() {
+                replacing
+                    .iter()
+                    .filter(|name| installed.contains(&name.as_str()))
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+            } else {
+                returned_replaced
+            };
             let place = if scope == "global" {
                 "for every project"
             } else {
                 "for this project"
             };
             done.message = Some(format!(
-                "Learned {} {place}{}",
-                names.join(", "),
-                if skipped > 0 {
-                    format!(" ({skipped} already installed)")
-                } else {
+                "Learned {} {place}{}. Available in new sessions.",
+                installed.join(", "),
+                if replaced.is_empty() {
                     String::new()
+                } else {
+                    format!(" (replaced {})", replaced.join(", "))
                 }
             ));
+        }
+        ApiCall::SetDisabledTools {
+            session,
+            disabled_tools,
+            revision,
+        } => {
+            conflict(
+                api.patch_session(
+                    session,
+                    json!({ "disabled_tools": disabled_tools }),
+                    Some(*revision),
+                    &key,
+                )
+                .await
+                .map_err(e)?,
+            )?;
         }
         ApiCall::Export {
             session,
@@ -596,6 +675,146 @@ mod tests {
         let body = seen.split_once("\r\n\r\n").unwrap().1;
         let sent: Value = serde_json::from_str(body).unwrap();
         assert_eq!(sent, json!({ "answers": answers }));
+    }
+
+    #[tokio::test]
+    async fn learn_preview_install_and_session_switch_use_the_two_step_contract() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for _ in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let n = socket.read(&mut chunk).await.unwrap();
+                    request.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&request);
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let length = head
+                            .lines()
+                            .find_map(|line| {
+                                let (key, value) = line.split_once(':')?;
+                                key.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if body.len() >= length {
+                            break;
+                        }
+                    }
+                }
+                let text = String::from_utf8_lossy(&request).to_string();
+                let path = text
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .to_owned();
+                let reply = match path.as_str() {
+                    "/api/skill/preview" => json!({
+                        "fetch_id": "fetch-1",
+                        "requested": ["alpha", "beta"],
+                        "problems": [],
+                        "found": []
+                    }),
+                    "/api/skill/install" => json!({
+                        "installed": [
+                            {"name": "alpha", "replaced": false},
+                            {"name": "beta", "replaced": true}
+                        ],
+                        "skipped": []
+                    }),
+                    "/api/session/ses_1" => json!({"id": "ses_1", "revision": 8}),
+                    other => panic!("unexpected request path: {other}"),
+                }
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                requests.push(text);
+            }
+            requests
+        });
+        let api = Http::new(&url, "tok").ok().map(CoreApi::new);
+
+        let preview = run(
+            api.clone(),
+            ApiCall::LearnPreview {
+                project: "prj_1".into(),
+                source: "owner/repo".into(),
+                scope: "project".into(),
+            },
+        )
+        .await;
+        assert_eq!(
+            preview.result.unwrap().learn_preview,
+            Some(json!({
+                "fetch_id": "fetch-1",
+                "requested": ["alpha", "beta"],
+                "problems": [],
+                "found": []
+            }))
+        );
+
+        let install = run(
+            api.clone(),
+            ApiCall::LearnInstall {
+                project: "prj_1".into(),
+                scope: "global".into(),
+                fetch_id: "fetch-1".into(),
+                skills: vec!["alpha".into(), "beta".into()],
+                overwrite: true,
+                replacing: vec!["beta".into()],
+            },
+        )
+        .await;
+        assert_eq!(
+            install.result.unwrap().message.as_deref(),
+            Some(
+                "Learned alpha, beta for every project (replaced beta). Available in new sessions."
+            )
+        );
+
+        let switched = run(
+            api,
+            ApiCall::SetDisabledTools {
+                session: "ses_1".into(),
+                disabled_tools: vec!["bash".into(), "skill:alpha".into(), "mcp:docs".into()],
+                revision: 7,
+            },
+        )
+        .await;
+        assert!(switched.result.is_ok());
+        let requests = server.await.unwrap();
+        assert!(requests[0].starts_with("POST /api/skill/preview "));
+        assert_eq!(
+            serde_json::from_str::<Value>(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap(),
+            json!({"source":"owner/repo", "scope":"project", "project":"prj_1"})
+        );
+        assert!(requests[1].starts_with("POST /api/skill/install "));
+        assert_eq!(
+            serde_json::from_str::<Value>(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap(),
+            json!({
+                "fetch_id":"fetch-1",
+                "skills":["alpha", "beta"],
+                "scope":"global",
+                "project":"prj_1",
+                "overwrite":true
+            })
+        );
+        assert!(requests[2].starts_with("PATCH /api/session/ses_1 "));
+        assert!(requests[2].to_ascii_lowercase().contains("if-match: 7"));
+        assert_eq!(
+            serde_json::from_str::<Value>(requests[2].split_once("\r\n\r\n").unwrap().1).unwrap(),
+            json!({"disabled_tools":["bash", "skill:alpha", "mcp:docs"]})
+        );
     }
 
     #[tokio::test]

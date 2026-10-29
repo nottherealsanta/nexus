@@ -4,11 +4,12 @@ import { Button, Input } from "nsh/base";
 import { Heading, Modal, ModalFooter, ModalTitle, SelectBar } from "./modal";
 import type { JSX } from "nsh";
 import { Btn, IconButton, T, FOCUS } from "./kit";
-import { availability, commands, escape, keyLabel, renameSession, run, Cmd } from "../commands";
-import { addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, notifications, paletteOpen, picker, selectProject, toast, unread, renaming, viewed } from "../store";
+import { availability, closeLearnChecklist, commands, escape, installLearnChecklist, keyLabel, renameSession, run, Cmd } from "../commands";
+import { addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, notifications, paletteOpen, picker, selectProject, toast, unread, renaming, viewed } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { LeftSidebar } from "./sidebar";
 import { RightSidebar } from "./right";
+import { defaultSkillSelection, selectedSkillCounts } from "../skills-mcp";
 
 // --- command palette ---------------------------------------------------------------------------
 export function Palette() {
@@ -95,6 +96,74 @@ function PickerBody() {
           </Scroll>
         </If>
         <ModalFooter hints="enter choose · esc close" right={p().items.length ? `${p().items.length} of ${p().items.length}` : undefined} />
+      </View>
+    </Modal>
+  );
+}
+
+// --- /learn checklist ---------------------------------------------------------------------------
+export function SkillChecklist() {
+  return <If when={learnChecklist() !== null}>{() => <SkillChecklistBody />}</If>;
+}
+function SkillChecklistBody() {
+  const plan = () => learnChecklist()!;
+  const fetchId = plan().fetch_id;
+  const selected = signal(defaultSkillSelection(plan().found));
+  const active = signal(0);
+  const names = () => plan().found.map((skill) => skill.name);
+  const clamp = (n: number) => Math.max(0, Math.min(Math.max(0, names().length - 1), n));
+  const toggle = (name = names()[active()]) => {
+    if (!name) return;
+    selected.update((current) => current.includes(name) ? current.filter((entry) => entry !== name) : [...current, name]);
+  };
+  const currentCounts = () => selectedSkillCounts(plan().found, selected());
+  keymap.bind("down", () => { if (learnChecklist()?.fetch_id === fetchId) active.set(clamp(active() + 1)); }, { when: "always" });
+  keymap.bind("up", () => { if (learnChecklist()?.fetch_id === fetchId) active.set(clamp(active() - 1)); }, { when: "always" });
+  keymap.bind("space", () => { if (learnChecklist()?.fetch_id === fetchId) toggle(); }, { when: "always" });
+  keymap.bind("enter", () => { if (learnChecklist()?.fetch_id === fetchId && !plan().busy) installLearnChecklist(selected()); }, { when: "always" });
+  const cancel = () => { if (!plan().busy) closeLearnChecklist(); };
+  return (
+    <Modal width={620} top="top-[10%]" label="Choose skills to install" testID="learn-checklist" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}>
+      <View class="gap-3" testID="learn-checklist-body">
+        <ModalTitle title="Choose skills to install" />
+        <Text class={T.meta}>{plan().source} · {plan().scope === "global" ? "every project" : "this project"}</Text>
+        <View class="flex-row flex-wrap gap-1.5">
+          <Btn label="Select all" onPress={() => selected.set(names())} testID="learn-select-all" />
+          <Btn label="Select none" onPress={() => selected.set([])} testID="learn-select-none" />
+          <Btn label="Invert" onPress={() => selected.set(names().filter((name) => !selected().includes(name)))} testID="learn-invert" />
+        </View>
+        <If when={plan().found.length > 0} else={<View class="py-3"><Text class={T.sec}>No skills were found in this source.</Text></View>}>
+          <Scroll class="max-h-[320px]" contentClass="gap-0.5" testID="learn-skills">
+            <Each of={plan().found} key={(skill) => skill.name}>
+              {(skill, i) => {
+                const checked = () => selected().includes(skill().name);
+                return (
+                  <Button onPress={() => { active.set(i()); toggle(skill().name); }} selected={active() === i()} accessibilityLabel={`${skill().name}, ${checked() ? "selected" : "not selected"}${skill().installed ? ", installed, will be replaced" : ""}`} testID={`learn-skill-${skill().name}`}
+                    class={`group/row relative rounded-(--radius) px-3 py-1.5 min-h-9 hover:bg-accent ${FOCUS}`}>
+                    <SelectBar on={active() === i()} hover />
+                    <View class="flex-row items-start gap-2">
+                      <Text class={`w-4 text-center text-[13px] leading-5 ${checked() ? "text-primary" : "text-muted-foreground"}`}>{checked() ? "☑" : "☐"}</Text>
+                      <View class="flex-1 min-w-0 gap-0.5">
+                        <View class="flex-row items-center gap-2">
+                          <Text class="text-[13px] leading-5 font-medium text-popover-foreground">{skill().name}</Text>
+                          <If when={!!skill().installed}><Text class="text-[10px] leading-4 text-warning rounded-(--radius) border border-border px-1.5">installed</Text></If>
+                        </View>
+                        <If when={!!skill().description}><Text style={{ numberOfLines: 2 }} class={T.meta}>{skill().description}</Text></If>
+                        <If when={!!skill().warnings?.length}><Text style={{ numberOfLines: 1 }} class="text-xs leading-4 text-warning">{skill().warnings!.join(" · ")}</Text></If>
+                      </View>
+                    </View>
+                  </Button>
+                );
+              }}
+            </Each>
+          </Scroll>
+        </If>
+        <If when={plan().problems.length > 0}><Text style={{ numberOfLines: 3 }} class={T.meta}>{plan().problems.map((problem: any) => typeof problem === "string" ? problem : problem.message ?? JSON.stringify(problem)).join(" · ")}</Text></If>
+        <View class="flex-row justify-end gap-2">
+          <Btn label="Cancel" onPress={cancel} disabled={!!plan().busy} testID="learn-cancel" />
+          <Btn label="Install" kind="primary" busy={!!plan().busy} onPress={() => installLearnChecklist(selected())} testID="learn-install" />
+        </View>
+        <ModalFooter hints="↑↓ move · space toggle · enter install · esc cancel" right={`${currentCounts().newCount} new, ${currentCounts().replacedCount} will be replaced`} />
       </View>
     </Modal>
   );

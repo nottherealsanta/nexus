@@ -3053,24 +3053,6 @@ fn empty_state(cx: &Cx) -> EmptyState {
 const PROMPT_BASE_TOKENS: u64 = 900;
 /// Tokens one tool's schema costs in the preview.
 const TOOL_SCHEMA_TOKENS: u64 = 450;
-/// The tools an agent without a `tools` list is offered, and the workspace
-/// entry point every new session gets (docs/agents.md).
-const DEFAULT_TOOLS: [&str; 13] = [
-    "read",
-    "grep",
-    "glob",
-    "ls",
-    "bash",
-    "edit",
-    "multiedit",
-    "write",
-    "web_search",
-    "web_fetch",
-    "ask",
-    "code",
-    "expose_workspace_tools",
-];
-
 /// The project's `AGENTS.md` as the preview sees it: size in bytes and its
 /// first prose line. Read once per path (the preview redraws every frame);
 /// `None` when the file is absent or unreadable (a remote Core's project).
@@ -3124,12 +3106,14 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
             .filter_map(Value::as_str)
             .map(str::to_owned)
             .collect(),
-        None => DEFAULT_TOOLS.iter().map(|t| (*t).to_owned()).collect(),
+        None => crate::app::DEFAULT_TOOLS
+            .iter()
+            .map(|t| (*t).to_owned())
+            .collect(),
     };
     if !tools.iter().any(|t| t == "expose_workspace_tools") {
         tools.push("expose_workspace_tools".into());
     }
-    let off = crate::app::disabled_tools(None);
     let project = a
         .current_project()
         .and_then(|p| a.state.model.projects.get(&p));
@@ -3162,24 +3146,15 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
     sections.push(CtxSection {
         title: "Tools".into(),
         tokens: Some(tool_tokens),
-        meta: format!(
-            "{} tools{sep}{} on",
-            tools.len(),
-            tools.iter().filter(|t| !off.contains(t)).count()
-        ),
-        body: CtxBody::Grid(
-            tools
-                .iter()
-                .map(|t| (t.clone(), !off.contains(t)))
-                .collect(),
-        ),
+        meta: String::new(),
+        body: CtxBody::Inventory(a.context_items_for("Tools")),
     });
     for title in ["Skills", "MCP"] {
         sections.push(CtxSection {
             title: title.into(),
             tokens: None,
-            meta: "not available yet".into(),
-            body: CtxBody::None,
+            meta: a.context_inventory_meta(title),
+            body: CtxBody::Inventory(a.context_items_for(title)),
         });
     }
     // The instruction file is part of the system prompt: the total counts the
@@ -3187,18 +3162,17 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
     (sections, prompt_tokens + tool_tokens)
 }
 
-fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) -> u16 {
+fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) -> usize {
     let a = cx.app;
     if r.height < 4 || r.width < 24 {
         return 0;
     }
     let sep = cx.sep();
-    let end = r.right();
-    let mut y = r.y;
     let bold = |fg| cx.st(fg, CANVAS).add_modifier(Modifier::BOLD);
     // The sections.
     let (sections, total) = preview_sections(cx);
     let r = Rect::new(r.x + 2, r.y, r.width.saturating_sub(2), r.height);
+    let end = r.right();
 
     let window = a
         .state
@@ -3222,10 +3196,14 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
         .find(|ag| ag["name"].as_str() == Some(a.current_agent().as_str()))
         .and_then(|ag| ag["prompt"].as_str())
         .unwrap_or("Agent prompt unavailable.");
-    for row in paint::context_rows(&sections, total, &layout) {
-        if y >= r.bottom() {
-            break;
-        }
+    let rows = paint::context_rows(&sections, total, &layout);
+    let total_rows = rows.len();
+    let top =
+        a.ui.scroll
+            .top
+            .min(total_rows.saturating_sub(r.height as usize));
+    for (visible_row, row) in rows.iter().skip(top).take(r.height as usize).enumerate() {
+        let y = r.y + visible_row as u16;
         let mut x = r.x;
         let mut hovered_header = false;
         if let Some((title, _)) = row.iter().find(|(_, role)| *role == paint::CtxRole::Title) {
@@ -3244,8 +3222,19 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
             let title = title.trim().to_owned();
             let detail = match title.as_str() {
                 "System prompt" => format!("Agent prompt preview; the complete system prompt is frozen when the session starts.\n\n{agent_prompt}"),
-                "Skills" | "MCP" => format!("{title} are not available yet."),
-                "Tools" => sections.iter().find(|s| s.title == "Tools").and_then(|s| match &s.body { paint::CtxBody::Grid(items) => Some(items.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>().join("\n")), _ => None }).unwrap_or_default(),
+                "Skills" | "MCP" | "Tools" => a
+                    .context_items_for(&title)
+                    .iter()
+                    .map(|item| {
+                        format!(
+                            "[{}] {}{}",
+                            if item.on { "x" } else { " " },
+                            item.label,
+                            if item.locked { " · new session" } else { "" }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
                 _ => sections.iter().find(|s| s.title == title).map(|s| match &s.body { paint::CtxBody::Preview(line) => format!("Available first-line preview:\n{line}"), _ => "Instruction file unavailable or not read by this client.".to_owned() }).unwrap_or_default(),
             };
             hits.add(
@@ -3256,28 +3245,51 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
                 },
             );
         }
+        let toggle = row.iter().find_map(|(_, role)| match role {
+            paint::CtxRole::ToggleOn(index)
+            | paint::CtxRole::ToggleOff(index)
+            | paint::CtxRole::ToggleLocked(index) => Some(*index),
+            _ => None,
+        });
+        let row_rect = Rect::new(r.x, y, r.width, 1);
+        let selected = toggle
+            .is_some_and(|index| a.ui.focus == Focus::Timeline && a.ui.context_cursor == index);
+        let hovered = toggle.is_some_and(|_| cx.hovered(row_rect));
+        if selected || hovered {
+            clear(buf, row_rect, cx.st(PRIMARY, RAISED));
+        }
         for (text, role) in row {
             let mut style = match role {
                 paint::CtxRole::Mark | paint::CtxRole::Meta | paint::CtxRole::Preview => {
                     cx.st(MUTED, CANVAS)
                 }
                 paint::CtxRole::Title | paint::CtxRole::TotalLabel => bold(SECONDARY),
-                paint::CtxRole::Tokens | paint::CtxRole::Item => cx.st(SECONDARY, CANVAS),
-                paint::CtxRole::ItemOff => cx.st(MUTED, CANVAS).add_modifier(Modifier::CROSSED_OUT),
+                paint::CtxRole::Tokens => cx.st(SECONDARY, CANVAS),
+                paint::CtxRole::ToggleOn(_) => {
+                    cx.st(SECONDARY, if selected || hovered { RAISED } else { CANVAS })
+                }
+                paint::CtxRole::ToggleOff(_) => cx
+                    .st(MUTED, if selected || hovered { RAISED } else { CANVAS })
+                    .add_modifier(Modifier::CROSSED_OUT),
+                paint::CtxRole::ToggleLocked(_) => {
+                    cx.st(MUTED, if selected || hovered { RAISED } else { CANVAS })
+                }
                 paint::CtxRole::TotalFigure => cx.st(SECONDARY, CANVAS),
             };
-            if hovered_header {
+            if hovered_header || selected || hovered {
                 style = style.patch(cx.t.bg(RAISED));
             }
             let start = x;
-            x = put(buf, x, y, &text, style, end.saturating_sub(x));
+            x = put(buf, x, y, text, style, end.saturating_sub(x));
             let counts = matches!(role, paint::CtxRole::Tokens | paint::CtxRole::TotalFigure)
                 && text.contains('~');
             if counts && cx.hovered(Rect::new(start, y, x - start, 1)) {
                 tip = Some((start, y));
             }
         }
-        y += 1;
+        if let Some(index) = toggle {
+            hits.add(row_rect, Target::ContextToggle(index));
+        }
     }
     // Hovering an estimated count says so.
     if let Some((tx, ty)) = tip {
@@ -3289,7 +3301,7 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
             put(buf, tr.x, tr.y, label, cx.st(SECONDARY, RAISED), tr.width);
         }
     }
-    y - r.y
+    total_rows
 }
 
 fn draw_timeline(
@@ -3320,7 +3332,7 @@ fn draw_timeline(
         let preview = a.viewed().is_none() && !busy && !a.state.model.projects.is_empty();
         if preview {
             // D10: the context is the view's content; no centred text.
-            draw_new_session_context(
+            let total = draw_new_session_context(
                 cx,
                 buf,
                 Rect::new(
@@ -3342,7 +3354,7 @@ fn draw_timeline(
                     1,
                 );
             }
-            return (0, r.height as usize, None);
+            return (total, r.height.saturating_sub(1) as usize, None);
         }
         let wrap_w = (inner.width as usize).saturating_sub(4).max(10);
         let body: Vec<String> = empty
@@ -3438,6 +3450,13 @@ fn draw_timeline(
     };
     for (i, line) in lines.iter().skip(top).take(h).enumerate() {
         draw_tline(cx, buf, r, inner, r.y + i as u16, line);
+        if a.ui.focus == Focus::Timeline && line.context_item == Some(a.ui.context_cursor) {
+            if let Some(bg) = cx.t.color(RAISED) {
+                for x in inner.x..inner.right() {
+                    buf[(x, r.y + i as u16)].set_bg(bg);
+                }
+            }
+        }
         let is_header = line.context_section.is_some()
             || timeline
                 .blocks
@@ -3554,6 +3573,14 @@ fn draw_timeline(
                     Target::ContextSection(title.clone()),
                 );
             }
+        }
+    }
+    for (n, line) in lines.iter().enumerate().take(top + h).skip(top) {
+        if let Some(index) = line.context_item {
+            hits.add(
+                Rect::new(inner.x, r.y + (n - top) as u16, inner.width, 1),
+                Target::ContextToggle(index),
+            );
         }
     }
     draw_sticky(cx, buf, r, inner, hits, timeline, top);
@@ -3686,6 +3713,7 @@ fn draw_sticky(
                 rail: timeline.lines[pin.first + 1 + k].rail,
                 focus: false,
                 context_section: None,
+                context_item: None,
             };
             if pin.clipped && k + 1 == pin.body {
                 crate::sticky::ellipsize(&mut line.spans, cx.ell());
@@ -5270,6 +5298,18 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
             }
             .into(),
         ),
+        "mcp.full_definitions" => a
+            .state
+            .config
+            .as_ref()
+            .and_then(|c| c["values"]["mcp"]["full_definitions"].as_bool())
+            .map(on_off),
+        "mcp.max_listed_tools" => a
+            .state
+            .config
+            .as_ref()
+            .and_then(|c| c["values"]["mcp"]["max_listed_tools"].as_u64())
+            .map(|value| value.to_string()),
         "about.versions" => {
             let core = a.state.core.as_ref();
             Some(format!(
@@ -5699,6 +5739,9 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
                 None => draw_palette(cx, buf, area, p, hits),
             }
         }
+        OverlayKind::LearnChecklist(checklist) => {
+            draw_learn_checklist(cx, buf, area, checklist, hits)
+        }
         OverlayKind::Notifications { selected } => {
             draw_notifications(cx, buf, area, *selected, hits)
         }
@@ -5710,6 +5753,135 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
             draw_alert_detail(cx, buf, area, *id, *top, hits)
         }
     }
+}
+
+/// `/learn`'s candidate checklist. It uses the shared borderless modal and keeps
+/// one row per skill, with installed candidates visibly marked for replacement.
+fn draw_learn_checklist(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    checklist: &crate::ui::LearnChecklist,
+    hits: &mut HitMap,
+) {
+    let visible = checklist
+        .skills
+        .len()
+        .min(area.height.saturating_sub(12) as usize)
+        .max(1);
+    let r = modal_box(area, 76, visible.saturating_add(8) as u16);
+    if r.width < 24 || r.height < 9 {
+        return;
+    }
+    let title = format!("Choose skills · {}", checklist.source);
+    let m = modal(cx, buf, area, r, &title, hits);
+    let source = format!("From {}/{}", checklist.scope, checklist.source);
+    put(
+        buf,
+        m.x,
+        m.body.y,
+        &truncate(&source, m.w as usize, cx.ell()),
+        cx.st(MUTED, RAISED),
+        m.w,
+    );
+    let list_y = m.body.y + 1;
+    let list_height = m.hint_y.saturating_sub(1).saturating_sub(list_y) as usize;
+    let top = checklist
+        .cursor
+        .saturating_add(1)
+        .saturating_sub(list_height.max(1));
+    let selected_new = checklist
+        .skills
+        .iter()
+        .zip(&checklist.selected)
+        .filter(|(skill, selected)| **selected && !skill.installed)
+        .count();
+    let replacing = checklist
+        .skills
+        .iter()
+        .zip(&checklist.selected)
+        .filter(|(skill, selected)| **selected && skill.installed)
+        .count();
+    let footer = format!("{selected_new} new, {replacing} will be replaced");
+    put(
+        buf,
+        m.x,
+        m.hint_y.saturating_sub(1),
+        &truncate(&footer, m.w as usize, cx.ell()),
+        cx.st(MUTED, RAISED),
+        m.w,
+    );
+    for (i, skill) in checklist
+        .skills
+        .iter()
+        .enumerate()
+        .skip(top)
+        .take(list_height)
+    {
+        let y = list_y + (i - top) as u16;
+        let rr = Rect::new(r.x + 1, y, r.width.saturating_sub(2), 1);
+        let active = checklist.cursor == i;
+        let selected = checklist.selected.get(i).copied().unwrap_or(false);
+        let base = if active {
+            band(cx, buf, &m, y, PRIMARY)
+        } else {
+            cx.st(PRIMARY, RAISED)
+        };
+        let marker = if selected { "[x]" } else { "[ ]" };
+        put(buf, m.x, y, marker, base, 3);
+        let installed = if skill.installed { "installed" } else { "" };
+        let tag_width = width(installed) as u16;
+        if tag_width > 0 {
+            put(
+                buf,
+                rr.right().saturating_sub(tag_width + 1),
+                y,
+                installed,
+                cx.st(MUTED, RAISED),
+                tag_width,
+            );
+        }
+        let label_x = m.x + 5;
+        let label_w = rr
+            .right()
+            .saturating_sub(label_x + tag_width + u16::from(tag_width > 0));
+        let name_w = (width(&skill.name) as u16).min(label_w / 2).max(1);
+        put(
+            buf,
+            label_x,
+            y,
+            &truncate(&skill.name, name_w as usize, cx.ell()),
+            base.add_modifier(Modifier::BOLD),
+            name_w,
+        );
+        let desc_x = label_x + name_w + 1;
+        let desc_w = rr
+            .right()
+            .saturating_sub(desc_x + tag_width + u16::from(tag_width > 0));
+        put(
+            buf,
+            desc_x,
+            y,
+            &truncate(&skill.description, desc_w as usize, cx.ell()),
+            cx.st(MUTED, RAISED),
+            desc_w,
+        );
+        hits.add(rr, Target::LearnSkill(i));
+    }
+    hint_row(
+        cx,
+        buf,
+        &m,
+        &[
+            ("↑/↓", "move"),
+            ("space", "toggle"),
+            ("a", "all"),
+            ("n", "none"),
+            ("i", "invert"),
+            ("enter", "install"),
+            ("esc", "cancel"),
+        ],
+    );
 }
 
 /// The `.` row menu: a small raised popover beside the focused sidebar row,

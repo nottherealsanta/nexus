@@ -249,6 +249,9 @@ impl AppState {
                     self.project_worktrees.remove(&project);
                 }
             },
+            // The TUI owns this view-only inventory cache; it is applied in
+            // `App::apply_sync`, alongside the rest of the UI state.
+            SyncMsg::SkillMcp { .. } => {}
             SyncMsg::Files {
                 project,
                 session,

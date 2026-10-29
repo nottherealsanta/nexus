@@ -121,6 +121,7 @@ pub const WIRED: &[&str] = &[
     "model.change",
     "model.effort",
     "agent.change",
+    "skills.learn",
     "composer.newline",
     "session.jump_latest",
     "session.copy_id",
@@ -171,6 +172,7 @@ const MUTATING: &[&str] = &[
     "model.change",
     "model.effort",
     "agent.change",
+    "skills.learn",
     "waiting.allow_once",
     "waiting.deny",
     "waiting.submit_answers",
@@ -178,6 +180,22 @@ const MUTATING: &[&str] = &[
 
 const NOT_WIRED: &str = "Not available yet.";
 const READ_ONLY: &str = "Read-only until Core is connected again.";
+/// Default tools offered when an agent does not declare its own list.
+pub(crate) const DEFAULT_TOOLS: [&str; 13] = [
+    "read",
+    "grep",
+    "glob",
+    "ls",
+    "bash",
+    "edit",
+    "multiedit",
+    "write",
+    "web_search",
+    "web_fetch",
+    "ask",
+    "code",
+    "expose_workspace_tools",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WaitKind {
@@ -359,6 +377,8 @@ pub struct Draft {
     pub agent: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Session-local tool, skill and MCP switches for the next session.
+    pub disabled_tools: Vec<String>,
 }
 
 impl Draft {
@@ -374,8 +394,20 @@ impl Draft {
         if let Some(e) = self.effort.as_ref().filter(|e| !e.is_empty()) {
             f.insert("effort".into(), e.clone().into());
         }
+        if !self.disabled_tools.is_empty() {
+            f.insert("disabled_tools".into(), json!(self.disabled_tools));
+        }
         Value::Object(f)
     }
+}
+
+/// Per-project data for the not-yet-created session screen.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProjectInventory {
+    pub skills: Vec<Value>,
+    pub mcp: Vec<Value>,
+    pub skills_error: Option<String>,
+    pub mcp_error: Option<String>,
 }
 
 pub struct Ui {
@@ -462,6 +494,16 @@ pub struct Ui {
     pub timeline_sel_key: Option<String>,
     /// Blocks of the last drawn timeline (selection and clicks use them).
     pub timeline_blocks: Vec<crate::timeline::Block>,
+    /// Selected switch row in the starting-context inventory.
+    pub context_cursor: usize,
+    /// Cached skill and MCP listings for the new-session preview, keyed by project.
+    pub inventories: HashMap<String, ProjectInventory>,
+    /// A `/learn` install is in flight, so its early `skills.changed` event is quiet.
+    pub learn_install_pending: bool,
+    /// Ignore the matching `skills.changed` event after this client's successful install.
+    pub learn_suppress_until: Option<Instant>,
+    pub last_skills_changed_toast: Option<Instant>,
+    pub last_mcp_changed_toast: Option<Instant>,
     pub monochrome_before: Option<Tier>,
     /// Client preferences file state; `None` until `App::apply_prefs`.
     pub prefs: Option<PrefsSync>,
@@ -605,6 +647,12 @@ impl App {
                 timeline_sel: None,
                 timeline_sel_key: None,
                 timeline_blocks: Vec::new(),
+                context_cursor: 0,
+                inventories: HashMap::new(),
+                learn_install_pending: false,
+                learn_suppress_until: None,
+                last_skills_changed_toast: None,
+                last_mcp_changed_toast: None,
                 monochrome_before: None,
                 prefs: None,
             },
@@ -680,6 +728,194 @@ impl App {
             .values()
             .max_by(|a, b| a.updated.total_cmp(&b.updated))
             .map(|p| p.id.clone())
+    }
+
+    /// Session switches in their visible order: ordinary tools, then skills,
+    /// then MCP servers. The same list drives both context renderers and keys.
+    pub fn context_items(&self) -> Vec<crate::paint::CtxItem> {
+        let session = self.viewed();
+        let disabled = session
+            .map(|s| disabled_tools(Some(s)))
+            .unwrap_or_else(|| self.ui.draft.disabled_tools.clone());
+        let mut items = Vec::new();
+        let mut push = |key: String, label: String, on: bool, locked: bool| {
+            let index = items.len();
+            items.push(crate::paint::CtxItem {
+                index,
+                key,
+                label,
+                on,
+                locked,
+            });
+        };
+
+        let tools: Vec<String> = if session.is_some() {
+            self.state
+                .model
+                .selected
+                .as_ref()
+                .and_then(|view| view.starting.as_ref())
+                .and_then(|starting| starting["tools"].as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            let agent_name = self.current_agent();
+            let agent = self
+                .state
+                .agents
+                .iter()
+                .find(|agent| agent["name"].as_str() == Some(agent_name.as_str()));
+            let mut tools: Vec<String> = match agent.and_then(|agent| agent["tools"].as_array()) {
+                Some(list) => list
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
+                None => DEFAULT_TOOLS
+                    .iter()
+                    .map(|tool| (*tool).to_owned())
+                    .collect(),
+            };
+            if !tools.iter().any(|tool| tool == "expose_workspace_tools") {
+                tools.push("expose_workspace_tools".into());
+            }
+            tools
+        };
+        for tool in tools {
+            push(
+                tool.clone(),
+                tool.clone(),
+                !disabled.iter().any(|key| key == &tool),
+                false,
+            );
+        }
+
+        let skill_values = if let Some(session) = session {
+            session
+                .extra
+                .get("skills")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.current_project()
+                .and_then(|project| self.ui.inventories.get(&project))
+                .map(|inventory| inventory.skills.clone())
+                .unwrap_or_default()
+        };
+        for skill in skill_values {
+            let Some(name) = skill["name"].as_str() else {
+                continue;
+            };
+            let key = format!("skill:{name}");
+            let mut label = name.to_owned();
+            if let Some(description) = skill["description"].as_str().filter(|s| !s.is_empty()) {
+                label.push_str(&format!(" · {description}"));
+            }
+            if let Some(scope) = skill["scope"].as_str().filter(|s| !s.is_empty()) {
+                label.push_str(&format!(" · {scope}"));
+            }
+            let on = if session.is_some() {
+                skill["state"].as_str() == Some("on") && !disabled.iter().any(|entry| entry == &key)
+            } else {
+                !disabled.iter().any(|entry| entry == &key)
+            };
+            push(key, label, on, skill["locked"].as_bool().unwrap_or(false));
+        }
+
+        let mcp_values = if let Some(session) = session {
+            session
+                .extra
+                .get("mcp")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.current_project()
+                .and_then(|project| self.ui.inventories.get(&project))
+                .map(|inventory| inventory.mcp.clone())
+                .unwrap_or_default()
+        };
+        for server in mcp_values {
+            let Some(name) = server["server"].as_str() else {
+                continue;
+            };
+            if session.is_none()
+                && (server["enabled"].as_bool() != Some(true)
+                    || server["state"].as_str() == Some("invalid"))
+            {
+                continue;
+            }
+            let key = format!("mcp:{name}");
+            let state = server["state"].as_str().unwrap_or("");
+            let mut label = name.to_owned();
+            if let Some(tools) = server["tools"].as_u64() {
+                label.push_str(&format!(" · {tools} tools"));
+            } else {
+                label.push_str(" · tools unknown");
+            }
+            if state == "unavailable" {
+                if let Some(error) = server["error"].as_str().filter(|s| !s.is_empty()) {
+                    label.push_str(&format!(" · unavailable: {error}"));
+                } else {
+                    label.push_str(" · unavailable");
+                }
+            }
+            let on = if session.is_some() {
+                state == "on" && !disabled.iter().any(|entry| entry == &key)
+            } else {
+                server["enabled"].as_bool() == Some(true)
+                    && !disabled.iter().any(|entry| entry == &key)
+            };
+            push(key, label, on, server["locked"].as_bool().unwrap_or(false));
+        }
+        items
+    }
+
+    pub fn context_items_for(&self, section: &str) -> Vec<crate::paint::CtxItem> {
+        self.context_items()
+            .into_iter()
+            .filter(|item| match section {
+                "Tools" => !item.key.contains(':'),
+                "Skills" => item.key.starts_with("skill:"),
+                "MCP" => item.key.starts_with("mcp:"),
+                _ => false,
+            })
+            .collect()
+    }
+
+    pub fn context_inventory_meta(&self, section: &str) -> String {
+        let Some(project) = self.current_project() else {
+            return "no project".into();
+        };
+        if self.viewed().is_some() {
+            return if self.context_items_for(section).is_empty() {
+                "none".into()
+            } else {
+                String::new()
+            };
+        }
+        let Some(inventory) = self.ui.inventories.get(&project) else {
+            return "loading".into();
+        };
+        let (values, error) = if section == "Skills" {
+            (&inventory.skills, &inventory.skills_error)
+        } else {
+            (&inventory.mcp, &inventory.mcp_error)
+        };
+        if let Some(error) = error {
+            return format!("unavailable: {error}");
+        }
+        if values.is_empty() {
+            "none".into()
+        } else {
+            String::new()
+        }
     }
 
     pub fn ancestors_of<'a>(&'a self, id: &'a str) -> Vec<&'a Session> {
@@ -2267,7 +2503,7 @@ impl App {
                     (self.ui.learn_source.take(), self.current_project())
                 {
                     self.toast(Level::Info, format!("Fetching {source}…"));
-                    self.api(ApiCall::Learn {
+                    self.api(ApiCall::LearnPreview {
                         project,
                         source,
                         scope,
@@ -2464,6 +2700,12 @@ impl App {
                 self.effects.push(Effect::Sync(SyncCommand::Select(None)));
                 self.ui.view = View::Session;
                 self.ui.timeline_sel = None;
+                self.ui.timeline_sel_key = None;
+                self.ui.context_cursor = 0;
+                self.ui.scroll = Scroll {
+                    follow: false,
+                    top: 0,
+                };
             }
         }
     }
@@ -2504,7 +2746,12 @@ impl App {
         self.ui.timeline_sel_key = None;
         self.ui.wait_idx = 0;
         if let Some(s) = self.state.model.sessions.get(id) {
-            self.ui.project = Some(s.project_id.clone());
+            let project = s.project_id.clone();
+            self.ui.project = Some(project.clone());
+            if !self.ui.inventories.contains_key(&project) {
+                self.effects
+                    .push(Effect::Sync(SyncCommand::SkillMcp(project.clone())));
+            }
             if !self.state.project_worktrees.contains_key(&s.project_id) {
                 self.effects
                     .push(Effect::Sync(SyncCommand::ProjectWorktrees(
@@ -2542,6 +2789,8 @@ impl App {
         self.reset_files();
         self.effects
             .push(Effect::Sync(SyncCommand::ProjectWorktrees(id.to_owned())));
+        self.effects
+            .push(Effect::Sync(SyncCommand::SkillMcp(id.to_owned())));
         self.toast(
             Level::Info,
             format!(
@@ -3300,6 +3549,33 @@ impl App {
     // ---- sync & results ------------------------------------------------------------------
 
     pub fn apply_sync(&mut self, msg: SyncMsg) {
+        if let SyncMsg::SkillMcp {
+            project,
+            skills,
+            mcp,
+        } = msg
+        {
+            self.ui.inventories.insert(
+                project,
+                ProjectInventory {
+                    skills: skills
+                        .as_ref()
+                        .ok()
+                        .and_then(|value| value["skills"].as_array())
+                        .cloned()
+                        .unwrap_or_default(),
+                    mcp: mcp
+                        .as_ref()
+                        .ok()
+                        .and_then(|value| value["servers"].as_array())
+                        .cloned()
+                        .unwrap_or_default(),
+                    skills_error: skills.err(),
+                    mcp_error: mcp.err(),
+                },
+            );
+            return;
+        }
         if let SyncMsg::Completion {
             project,
             session,
@@ -3348,6 +3624,11 @@ impl App {
                 }
             }
         }
+        let project_before = self.current_project();
+        let global_event = match &msg {
+            SyncMsg::Event(event) => Some((event.kind.clone(), event.data.clone())),
+            _ => None,
+        };
         let attention = match &msg {
             SyncMsg::Event(event) => event
                 .session_id
@@ -3388,6 +3669,55 @@ impl App {
                 .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
         }
         if self.state.events_applied > applied_before {
+            if let Some((kind, data)) = global_event {
+                match kind.as_str() {
+                    "skills.changed" => {
+                        let own_learn = self.ui.learn_install_pending
+                            || self
+                                .ui
+                                .learn_suppress_until
+                                .is_some_and(|until| self.clock < until);
+                        let debounce = self.ui.last_skills_changed_toast.is_some_and(|at| {
+                            self.clock.saturating_duration_since(at)
+                                < std::time::Duration::from_secs(3)
+                        });
+                        if !own_learn && !debounce {
+                            self.toast(Level::Info, "Skills changed. New sessions will use them.");
+                            self.ui.last_skills_changed_toast = Some(self.clock);
+                        }
+                        if let Some(project) = self.current_project() {
+                            self.effects
+                                .push(Effect::Sync(SyncCommand::SkillMcp(project)));
+                        }
+                    }
+                    "mcp.changed" => {
+                        let debounce = self.ui.last_mcp_changed_toast.is_some_and(|at| {
+                            self.clock.saturating_duration_since(at)
+                                < std::time::Duration::from_secs(3)
+                        });
+                        if !debounce {
+                            self.toast(
+                                Level::Info,
+                                "MCP servers changed. New sessions will use them.",
+                            );
+                            self.ui.last_mcp_changed_toast = Some(self.clock);
+                        }
+                        if let Some(project) = self.current_project() {
+                            self.effects
+                                .push(Effect::Sync(SyncCommand::SkillMcp(project)));
+                        }
+                    }
+                    "mcp.failed" => self.toast(
+                        Level::Warning,
+                        format!(
+                            "MCP server {} failed: {}",
+                            data["server"].as_str().unwrap_or("unknown"),
+                            data["error"].as_str().unwrap_or("unknown error")
+                        ),
+                    ),
+                    _ => {}
+                }
+            }
             if let Some((root, kind, data)) = attention {
                 let viewed_root = self.viewed_id().and_then(|id| self.root_session(id));
                 if kind == "session.error" {
@@ -3441,6 +3771,18 @@ impl App {
                 self.effects
                     .push(Effect::Sync(SyncCommand::ProjectWorktrees(project)));
             }
+            if self.viewed_id().is_none() {
+                if let Some(project) = self.current_project() {
+                    self.effects
+                        .push(Effect::Sync(SyncCommand::SkillMcp(project)));
+                }
+            }
+        }
+        if self.viewed_id().is_none() && project_before != self.current_project() {
+            if let Some(project) = self.current_project() {
+                self.effects
+                    .push(Effect::Sync(SyncCommand::SkillMcp(project)));
+            }
         }
         if let Some(gone) = self.state.model.selected_deleted.take() {
             self.toast(Level::Info, format!("Session {gone} was deleted"));
@@ -3455,6 +3797,30 @@ impl App {
 
     pub fn apply_done(&mut self, done: ActionDone) {
         let name = done.call_name();
+        if let ApiCall::LearnPreview {
+            project,
+            source,
+            scope,
+        } = done.call.clone()
+        {
+            match done.result {
+                Ok(result) => {
+                    if let Some(preview) = result.learn_preview {
+                        self.apply_learn_preview(project, source, scope, preview);
+                    } else {
+                        self.toast(Level::Error, "Learn failed: Core returned no preview");
+                    }
+                }
+                Err(error) => self.toast(Level::Error, format!("Learn failed: {error}")),
+            }
+            return;
+        }
+        if matches!(done.call, ApiCall::LearnInstall { .. }) {
+            self.ui.learn_install_pending = false;
+            if done.result.is_ok() {
+                self.ui.learn_suppress_until = Some(self.clock + std::time::Duration::from_secs(5));
+            }
+        }
         if let ApiCall::Prompts { project } = &done.call {
             // Quiet: history is a convenience. Never replace it while a recalled entry is open.
             if let (Ok(r), false) = (&done.result, self.composer_ref().in_history()) {
@@ -3561,6 +3927,181 @@ impl App {
                 self.toast(Level::Error, format!("{name}: {e}"));
             }
         }
+    }
+
+    fn apply_learn_preview(
+        &mut self,
+        project: String,
+        source: String,
+        scope: String,
+        preview: Value,
+    ) {
+        let found = preview["found"].as_array().cloned().unwrap_or_default();
+        if found.is_empty() {
+            let detail = preview["problems"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|problem| problem.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.toast(
+                Level::Info,
+                if detail.is_empty() {
+                    format!("No skills found in {source}")
+                } else {
+                    format!("No skills found in {source}: {detail}")
+                },
+            );
+            return;
+        }
+        let requested: Vec<String> = preview["requested"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        let names: Vec<String> = found
+            .iter()
+            .filter_map(|skill| skill["name"].as_str().map(str::to_owned))
+            .collect();
+        let requested_are_new = !requested.is_empty()
+            && requested.iter().all(|name| names.contains(name))
+            && found
+                .iter()
+                .filter(|skill| {
+                    skill["name"]
+                        .as_str()
+                        .is_some_and(|name| requested.iter().any(|requested| requested == name))
+                })
+                .all(|skill| skill["installed"].as_bool() != Some(true));
+        let fetch_id = preview["fetch_id"].as_str().unwrap_or_default().to_owned();
+        if requested_are_new && !fetch_id.is_empty() {
+            self.ui.learn_install_pending = true;
+            self.api(ApiCall::LearnInstall {
+                project,
+                scope,
+                fetch_id,
+                skills: requested,
+                overwrite: false,
+                replacing: Vec::new(),
+            });
+            return;
+        }
+        let skills: Vec<LearnSkill> = found
+            .into_iter()
+            .filter_map(|skill| {
+                Some(LearnSkill {
+                    name: skill["name"].as_str()?.to_owned(),
+                    description: skill["description"].as_str().unwrap_or_default().to_owned(),
+                    installed: skill["installed"].as_bool().unwrap_or(false),
+                })
+            })
+            .collect();
+        if skills.is_empty() || fetch_id.is_empty() {
+            self.toast(
+                Level::Error,
+                "Learn failed: Core returned an invalid preview",
+            );
+            return;
+        }
+        self.open_overlay(OverlayKind::LearnChecklist(LearnChecklist {
+            fetch_id,
+            source,
+            scope,
+            project,
+            selected: skills.iter().map(|skill| !skill.installed).collect(),
+            skills,
+            cursor: 0,
+        }));
+    }
+
+    fn learn_checklist_move(&mut self, delta: isize) {
+        if let Some(Overlay {
+            kind: OverlayKind::LearnChecklist(checklist),
+            ..
+        }) = self.ui.overlay.as_mut()
+        {
+            checklist.cursor = (checklist.cursor as isize + delta)
+                .clamp(0, checklist.skills.len().saturating_sub(1) as isize)
+                as usize;
+        }
+    }
+
+    fn learn_checklist_key(&mut self, name: &str) {
+        match name {
+            "up" => self.learn_checklist_move(-1),
+            "down" => self.learn_checklist_move(1),
+            "space" => {
+                if let Some(Overlay {
+                    kind: OverlayKind::LearnChecklist(checklist),
+                    ..
+                }) = self.ui.overlay.as_mut()
+                {
+                    if let Some(selected) = checklist.selected.get_mut(checklist.cursor) {
+                        *selected = !*selected;
+                    }
+                }
+            }
+            "a" | "n" | "i" => {
+                if let Some(Overlay {
+                    kind: OverlayKind::LearnChecklist(checklist),
+                    ..
+                }) = self.ui.overlay.as_mut()
+                {
+                    for selected in &mut checklist.selected {
+                        match name {
+                            "a" => *selected = true,
+                            "n" => *selected = false,
+                            _ => *selected = !*selected,
+                        }
+                    }
+                }
+            }
+            "enter" => self.learn_checklist_install(),
+            "esc" => self.close_overlay(),
+            _ => {}
+        }
+    }
+
+    fn learn_checklist_install(&mut self) {
+        let Some(Overlay {
+            kind: OverlayKind::LearnChecklist(checklist),
+            ..
+        }) = self.ui.overlay.as_ref()
+        else {
+            return;
+        };
+        let skills: Vec<String> = checklist
+            .skills
+            .iter()
+            .zip(&checklist.selected)
+            .filter(|(_, selected)| **selected)
+            .map(|(skill, _)| skill.name.clone())
+            .collect();
+        if skills.is_empty() {
+            self.toast(Level::Info, "Choose at least one skill");
+            return;
+        }
+        let replacing: Vec<String> = checklist
+            .skills
+            .iter()
+            .zip(&checklist.selected)
+            .filter(|(skill, selected)| **selected && skill.installed)
+            .map(|(skill, _)| skill.name.clone())
+            .collect();
+        let call = ApiCall::LearnInstall {
+            project: checklist.project.clone(),
+            scope: checklist.scope.clone(),
+            fetch_id: checklist.fetch_id.clone(),
+            skills,
+            overwrite: !replacing.is_empty(),
+            replacing,
+        };
+        self.close_overlay();
+        self.ui.learn_install_pending = true;
+        self.api(call);
     }
 
     /// Advance clocks. Returns true when something visible changed, so an idle
@@ -4140,6 +4681,16 @@ impl App {
     }
 
     fn overlay_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
+        if matches!(
+            self.ui.overlay,
+            Some(Overlay {
+                kind: OverlayKind::LearnChecklist(_),
+                ..
+            })
+        ) {
+            self.learn_checklist_key(name);
+            return true;
+        }
         let is_palette = matches!(
             self.ui.overlay,
             Some(Overlay {
@@ -4272,6 +4823,11 @@ impl App {
             Some(OverlayKind::ContextDetail { text, top, .. }) => {
                 let max = crate::render::context_detail_max(area, text);
                 *top = (*top as isize + delta).clamp(0, max as isize) as usize;
+            }
+            Some(OverlayKind::LearnChecklist(checklist)) => {
+                checklist.cursor = (checklist.cursor as isize + delta)
+                    .clamp(0, checklist.skills.len().saturating_sub(1) as isize)
+                    as usize;
             }
             None => {}
         }
@@ -4565,6 +5121,138 @@ impl App {
         }
     }
 
+    fn context_keyboard_active(&self) -> bool {
+        if self.viewed_id().is_none() {
+            return true;
+        }
+        self.ui
+            .timeline_sel
+            .and_then(|index| self.ui.timeline_blocks.get(index))
+            .is_some_and(|block| block.kind == crate::timeline::BlockKind::Context)
+    }
+
+    fn context_key(&mut self, name: &str) -> bool {
+        if !self.context_keyboard_active() || self.context_items().is_empty() {
+            return false;
+        }
+        let last = self.context_items().len().saturating_sub(1);
+        match name {
+            "up" | "k" => self.ui.context_cursor = self.ui.context_cursor.saturating_sub(1),
+            "down" | "j" => self.ui.context_cursor = (self.ui.context_cursor + 1).min(last),
+            "enter" | "space" => self.toggle_context_item(self.ui.context_cursor),
+            _ => return false,
+        }
+        self.reveal_context_cursor();
+        true
+    }
+
+    /// Keep a keyboard-selected draft switch visible in the scrollable
+    /// new-session context preview.
+    fn reveal_context_cursor(&mut self) {
+        let items = self.context_items();
+        let Some(item) = items.get(self.ui.context_cursor) else {
+            return;
+        };
+        let row = if item.key.starts_with("skill:") {
+            7 + item.index
+        } else if item.key.starts_with("mcp:") {
+            9 + item.index
+        } else {
+            5 + item.index
+        };
+        let offset =
+            self.state
+                .model
+                .selected
+                .as_ref()
+                .and_then(|view| view.starting.as_ref())
+                .is_some_and(|starting| starting["origin"] == "reconstructed") as usize;
+        let block_start = self
+            .ui
+            .timeline_blocks
+            .iter()
+            .find(|block| block.kind == crate::timeline::BlockKind::Context)
+            .map_or(0, |block| block.start);
+        let row = block_start + offset + row;
+        let page = self.ui.timeline_height.max(1);
+        let current_top = if self.viewed_id().is_some() && self.ui.scroll.follow {
+            self.ui.timeline_total.saturating_sub(page)
+        } else {
+            self.ui.scroll.top
+        };
+        let top = if row < current_top {
+            row
+        } else if row >= current_top + page {
+            row + 1 - page
+        } else {
+            current_top
+        };
+        if self.viewed_id().is_none() || top != current_top {
+            self.ui.scroll = Scroll {
+                follow: false,
+                top: top.min(self.ui.timeline_total.saturating_sub(page)),
+            };
+        }
+    }
+
+    fn toggle_context_item(&mut self, index: usize) {
+        let Some(item) = self.context_items().get(index).cloned() else {
+            return;
+        };
+        self.ui.context_cursor = index;
+        self.ui.focus = Focus::Timeline;
+        if self.viewed_id().is_some() {
+            if let Some((block_index, block)) = self
+                .ui
+                .timeline_blocks
+                .iter()
+                .enumerate()
+                .find(|(_, block)| block.kind == crate::timeline::BlockKind::Context)
+            {
+                self.ui.timeline_sel = Some(block_index);
+                self.ui.timeline_sel_key = Some(block.key.clone());
+            }
+        }
+        if item.locked {
+            self.toast(
+                Level::Info,
+                "This item is locked for this session; start a new session to use it.",
+            );
+            return;
+        }
+        if !self.writable() {
+            self.toast(Level::Warning, READ_ONLY);
+            return;
+        }
+        if let Some(session) = self.viewed().cloned() {
+            let mut disabled = disabled_tools(Some(&session));
+            if item.on {
+                if !disabled.iter().any(|key| key == &item.key) {
+                    disabled.push(item.key);
+                }
+            } else {
+                disabled.retain(|key| key != &item.key);
+            }
+            self.api(ApiCall::SetDisabledTools {
+                session: session.id,
+                disabled_tools: disabled,
+                revision: session.revision,
+            });
+        } else if item.on {
+            if !self
+                .ui
+                .draft
+                .disabled_tools
+                .iter()
+                .any(|key| key == &item.key)
+            {
+                self.ui.draft.disabled_tools.push(item.key);
+            }
+        } else {
+            self.ui.draft.disabled_tools.retain(|key| key != &item.key);
+        }
+    }
+
     fn adjacent_turn(&mut self, forward: bool) {
         let blocks = self.ui.timeline_blocks.clone();
         let cur = self.ui.timeline_sel.unwrap_or(0);
@@ -4670,6 +5358,9 @@ impl App {
     }
 
     fn timeline_key(&mut self, name: &str) {
+        if self.context_key(name) {
+            return;
+        }
         if let Some(cmd) = self.lookup("timeline", name) {
             if WIRED.contains(&cmd.as_str()) {
                 return self.run_command(&cmd);
@@ -4692,7 +5383,17 @@ impl App {
             "end" => {
                 let n = self.ui.timeline_blocks.len();
                 if n == 0 {
-                    self.ui.scroll = Scroll::default();
+                    if self.viewed_id().is_none() {
+                        self.ui.scroll = Scroll {
+                            follow: false,
+                            top: self
+                                .ui
+                                .timeline_total
+                                .saturating_sub(self.ui.timeline_height),
+                        };
+                    } else {
+                        self.ui.scroll = Scroll::default();
+                    }
                 } else {
                     self.select_block(n - 1);
                 }
@@ -4756,14 +5457,15 @@ impl App {
             .ui
             .timeline_total
             .saturating_sub(self.ui.timeline_height);
-        let cur = if self.ui.scroll.follow {
+        let preview = self.viewed_id().is_none();
+        let cur = if self.ui.scroll.follow && !preview {
             max_top
         } else {
             self.ui.scroll.top.min(max_top)
         };
         let top = (cur as isize + delta).clamp(0, max_top as isize) as usize;
         self.ui.scroll = Scroll {
-            follow: top >= max_top,
+            follow: !preview && top >= max_top,
             top,
         };
     }
@@ -5007,6 +5709,8 @@ impl App {
                 | "appearance.timeline_detail"
                 | "appearance.session_scope"
                 | "appearance.show_archived"
+                | "mcp.full_definitions"
+                | "mcp.max_listed_tools"
                 | "models.catalog"
                 | "models.refresh"
                 | "agents.list"
@@ -5126,6 +5830,39 @@ impl App {
                 let now = modes.iter().position(|m| *m == self.ui.notify).unwrap_or(1) as isize;
                 self.ui.notify = modes[(now + step).rem_euclid(3) as usize];
             }
+            "mcp.full_definitions" => {
+                if let Some(config) = &self.state.config {
+                    if let Some(revision) = config["revision"].as_str() {
+                        let value = !config["values"]["mcp"]["full_definitions"]
+                            .as_bool()
+                            .unwrap_or(false);
+                        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+                            revision: revision.to_owned(),
+                            path: "mcp.full_definitions".into(),
+                            value: json!(value),
+                        }));
+                    }
+                } else {
+                    self.toast(Level::Warning, "Configuration is not loaded");
+                }
+            }
+            "mcp.max_listed_tools" => {
+                if let Some(config) = &self.state.config {
+                    if let Some(revision) = config["revision"].as_str() {
+                        let current = config["values"]["mcp"]["max_listed_tools"]
+                            .as_i64()
+                            .unwrap_or(25);
+                        let value = (current + step.signum() as i64).clamp(1, 1000);
+                        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+                            revision: revision.to_owned(),
+                            path: "mcp.max_listed_tools".into(),
+                            value: json!(value),
+                        }));
+                    }
+                } else {
+                    self.toast(Level::Warning, "Configuration is not loaded");
+                }
+            }
             "appearance.timeline_detail" => self.set_detail(self.ui.detail.step(step)),
             "appearance.sidebar" => {
                 let modes = [(true, false), (true, true), (false, false)];
@@ -5166,6 +5903,7 @@ impl App {
             | "appearance.sidebar"
             | "notifications.terminal"
             | "appearance.timeline_detail" => self.settings_change(index, 1),
+            "mcp.full_definitions" | "mcp.max_listed_tools" => self.settings_change(index, 1),
             "appearance.details" => {
                 self.ui.right_open = !self.ui.right_open;
                 self.ui.right_chosen = true;
@@ -5509,6 +6247,7 @@ impl App {
                     top: 0,
                 })
             }
+            Target::ContextToggle(index) => self.toggle_context_item(index),
             Target::ContextSection(section) => {
                 if let Some(starting) = self
                     .state
@@ -5523,8 +6262,19 @@ impl App {
                         "Workspace tools" => &starting["workspace"],
                         _ => &starting["instruction_file"],
                     };
-                    let text = if section == "Skills" || section == "MCP" {
-                        format!("{section} are not available yet.")
+                    let text = if section == "Skills" || section == "MCP" || section == "Tools" {
+                        self.context_items_for(&section)
+                            .iter()
+                            .map(|item| {
+                                format!(
+                                    "[{}] {}{}",
+                                    if item.on { "x" } else { " " },
+                                    item.label,
+                                    if item.locked { " · new session" } else { "" }
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     } else if section != "System prompt"
                         && section != "Tools"
                         && section != "Workspace tools"
@@ -5602,6 +6352,18 @@ impl App {
             Target::ToastDismiss(id) => self.ui.alerts.dismiss(id),
             Target::ToastOpen(id) => self.open_alert_detail(id, None),
             Target::PaletteItem(i) => self.palette_activate(Some(i)),
+            Target::LearnSkill(i) => {
+                if let Some(Overlay {
+                    kind: OverlayKind::LearnChecklist(checklist),
+                    ..
+                }) = self.ui.overlay.as_mut()
+                {
+                    if let Some(selected) = checklist.selected.get_mut(i) {
+                        checklist.cursor = i;
+                        *selected = !*selected;
+                    }
+                }
+            }
             Target::NoticeItem(i) => self.notice_activate(i),
             Target::DialogButton(i) => {
                 if let Some(d) = self.ui.dialog.as_mut() {
@@ -5933,7 +6695,8 @@ impl ActionDone {
             ApiCall::SetAgent { .. } => "Agent change failed",
             ApiCall::SetEffort { .. } => "Effort change failed",
             ApiCall::Export { .. } => "Export failed",
-            ApiCall::Learn { .. } => "Learn failed",
+            ApiCall::LearnPreview { .. } | ApiCall::LearnInstall { .. } => "Learn failed",
+            ApiCall::SetDisabledTools { .. } => "Session switch failed",
             ApiCall::ChangeDirectory { .. } => "Directory change failed",
             ApiCall::AddProject { .. } => "Add project failed",
             ApiCall::DeleteProject { .. } => "Remove project failed",

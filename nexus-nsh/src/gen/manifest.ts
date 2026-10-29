@@ -638,8 +638,25 @@ export const manifest = {
    {
     "id": "mcp",
     "label": "MCP",
-    "unavailable_reason": "MCP is not available yet.",
     "row": [
+     {
+      "id": "mcp.full_definitions",
+      "label": "Full tool definitions in context",
+      "kind": "toggle",
+      "scope": "core",
+      "clients": "both",
+      "default": false,
+      "note": "Include every enabled MCP tool definition in new-session context."
+     },
+     {
+      "id": "mcp.max_listed_tools",
+      "label": "Tools listed by name (limit)",
+      "kind": "number",
+      "scope": "core",
+      "clients": "both",
+      "default": 25,
+      "note": "1\u20131000; applies when full tool definitions are off."
+     },
      {
       "id": "mcp.servers",
       "label": "Servers",

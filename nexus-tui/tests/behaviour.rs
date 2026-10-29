@@ -2,12 +2,69 @@
 
 mod common;
 use common::*;
-use nexus_tui::app::{App, Effect, Notify, WIRED};
+use nexus_tui::actions::{ActionDone, ApiCall, Done};
+use nexus_tui::api::Frame;
+use nexus_tui::app::{App, Effect, Notify, SettingsItem, WIRED};
 use nexus_tui::theme::{Mode, Tier};
-use nexus_tui::ui::{Focus, PaletteKind, Tab, View};
+use nexus_tui::ui::{Focus, OverlayKind, PaletteKind, Tab, Target, View};
 
 fn app() -> App {
     with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36))
+}
+
+fn begin_learn(a: &mut App, source: &str, scope: &str) -> ApiCall {
+    typing(a, &format!("/learn {source}"));
+    press(a, &["enter"]);
+    assert!(
+        matches!(
+            a.ui.overlay.as_ref().map(|overlay| &overlay.kind),
+            Some(OverlayKind::Palette(_))
+        ),
+        "composer={:?}, project={:?}, overlay={:?}, effects={:?}, toasts={:?}",
+        a.composer_ref().text(),
+        a.current_project(),
+        a.ui.overlay,
+        a.effects,
+        a.ui.alerts.toasts
+    );
+    if scope == "global" {
+        press(a, &["down"]);
+    }
+    press(a, &["enter"]);
+    a.effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Api(call @ ApiCall::LearnPreview { .. }) => Some(call.clone()),
+            _ => None,
+        })
+        .expect("scope choice starts a preview")
+}
+
+fn apply_preview(a: &mut App, call: ApiCall, preview: serde_json::Value) {
+    a.effects.clear();
+    a.apply_done(ActionDone {
+        call,
+        result: Ok(Done {
+            learn_preview: Some(preview),
+            ..Done::default()
+        }),
+    });
+}
+
+fn global_event(a: &App, id: i64, kind: &str, data: serde_json::Value) -> nexus_tui::api::Event {
+    let generation = a.state.model.generation.as_deref().unwrap();
+    let value = serde_json::json!({
+        "id": id,
+        "type": kind,
+        "session_id": null,
+        "cursor": format!("{generation}:{id}"),
+        "time": 1793113317.0,
+        "data": data,
+    });
+    let Frame::Event(event) = Frame::from_value(kind, None, &value).unwrap() else {
+        panic!("expected a global event")
+    };
+    event
 }
 
 fn rule(a: &nexus_tui::app::App) -> String {
@@ -48,6 +105,382 @@ fn model_agent_and_effort_pickers_use_core_catalog_data() {
         ),
         "models listed: {items:?}"
     );
+}
+
+#[test]
+fn learn_checklist_defaults_and_all_selection_keys_drive_install() {
+    let mut a = app();
+    let call = begin_learn(&mut a, "owner/repo", "project");
+    let ApiCall::LearnPreview {
+        project,
+        source,
+        scope,
+    } = call.clone()
+    else {
+        panic!("expected preview")
+    };
+    apply_preview(
+        &mut a,
+        call,
+        serde_json::json!({
+            "fetch_id": "fetch-1",
+            "requested": ["alpha", "beta"],
+            "problems": [],
+            "found": [
+                {"name": "alpha", "description": "A new skill", "installed": false},
+                {"name": "beta", "description": "An existing skill", "installed": true}
+            ]
+        }),
+    );
+    let Some(OverlayKind::LearnChecklist(checklist)) =
+        a.ui.overlay.as_ref().map(|overlay| &overlay.kind)
+    else {
+        panic!("expected checklist")
+    };
+    assert_eq!(checklist.selected, [true, false], "new skills start ticked");
+    assert_eq!(checklist.project, project);
+    assert_eq!(checklist.source, source);
+    assert_eq!(checklist.scope, scope);
+
+    press(&mut a, &["down", "up"]);
+    assert_eq!(
+        match a.ui.overlay.as_ref().map(|overlay| &overlay.kind) {
+            Some(OverlayKind::LearnChecklist(checklist)) => checklist.cursor,
+            _ => usize::MAX,
+        },
+        0
+    );
+    press(&mut a, &["a"]);
+    assert_eq!(checklist_selected(&a), [true, true]);
+    press(&mut a, &["n"]);
+    assert_eq!(checklist_selected(&a), [false, false]);
+    press(&mut a, &["i"]);
+    assert_eq!(checklist_selected(&a), [true, true]);
+    press(&mut a, &["n", "enter"]);
+    assert!(matches!(
+        a.ui.alerts.toasts.last().map(|toast| toast.text.as_str()),
+        Some("Choose at least one skill")
+    ));
+    assert!(
+        a.effects.is_empty(),
+        "nothing installs while none are ticked"
+    );
+
+    press(&mut a, &["down", "space", "enter"]);
+    let call = a.effects.iter().find_map(|effect| match effect {
+        Effect::Api(call @ ApiCall::LearnInstall { .. }) => Some(call),
+        _ => None,
+    });
+    assert!(matches!(
+        call,
+        Some(ApiCall::LearnInstall {
+            skills,
+            overwrite: true,
+            replacing,
+            fetch_id,
+            scope,
+            ..
+        }) if skills == &["beta"] && replacing == &["beta"] && fetch_id == "fetch-1" && scope == "project"
+    ));
+    assert!(a.ui.overlay.is_none());
+}
+
+fn checklist_selected(a: &App) -> Vec<bool> {
+    match a.ui.overlay.as_ref().map(|overlay| &overlay.kind) {
+        Some(OverlayKind::LearnChecklist(checklist)) => checklist.selected.clone(),
+        other => panic!("expected checklist, got {other:?}"),
+    }
+}
+
+#[test]
+fn learn_installs_a_requested_unambiguous_set_without_opening_a_checklist() {
+    let mut a = app();
+    let call = begin_learn(&mut a, "owner/repo", "global");
+    let preview = serde_json::json!({
+        "fetch_id": "fetch-direct",
+        "requested": ["one"],
+        "problems": [],
+        "found": [
+            {"name": "one", "description": "Requested", "installed": false},
+            {"name": "extra", "description": "Additional", "installed": true}
+        ]
+    });
+    apply_preview(&mut a, call, preview);
+    assert!(
+        a.ui.overlay.is_none(),
+        "unambiguous new skills install directly"
+    );
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Api(ApiCall::LearnInstall {
+            skills,
+            overwrite: false,
+            scope,
+            fetch_id,
+            ..
+        })) if skills == &["one"] && scope == "global" && fetch_id == "fetch-direct"
+    ));
+}
+
+#[test]
+fn escape_cancels_the_learn_checklist_without_installing() {
+    let mut a = app();
+    let call = begin_learn(&mut a, "owner/repo", "project");
+    apply_preview(
+        &mut a,
+        call,
+        serde_json::json!({
+            "fetch_id": "fetch-cancel",
+            "requested": [],
+            "found": [{"name": "one", "description": "One", "installed": false}]
+        }),
+    );
+    assert!(matches!(
+        a.ui.overlay.as_ref().map(|overlay| &overlay.kind),
+        Some(OverlayKind::LearnChecklist(_))
+    ));
+    press(&mut a, &["esc"]);
+    assert!(a.ui.overlay.is_none());
+    assert!(a.effects.is_empty());
+}
+
+#[test]
+fn context_switches_patch_the_full_session_list_and_locked_items_refuse() {
+    let mut a = app();
+    a.state.model.selected.as_mut().unwrap().starting = Some(serde_json::json!({
+        "tools": ["read", "bash"],
+        "tool_definitions": {},
+        "instruction_file": {"status": "missing"}
+    }));
+    let session = a.state.model.sessions.get_mut(SESSION).unwrap();
+    session.extra.insert(
+        "disabled_tools".into(),
+        serde_json::json!(["bash", "custom"]),
+    );
+    session.extra.insert(
+        "skills".into(),
+        serde_json::json!([
+            {"name": "planner", "description": "Plan work", "scope": "project", "state": "on", "locked": false},
+            {"name": "locked", "description": "Later", "scope": "global", "state": "off", "locked": true}
+        ]),
+    );
+    session.extra.insert(
+        "mcp".into(),
+        serde_json::json!([
+            {"server": "docs", "tools": 4, "state": "on", "locked": false, "error": null},
+            {"server": "offline", "tools": 2, "state": "unavailable", "locked": true, "error": "timeout"}
+        ]),
+    );
+    a.effects.clear();
+    draw(&mut a, 120, 36);
+    a.ui.focus = Focus::Timeline;
+    a.ui.timeline_sel =
+        a.ui.timeline_blocks
+            .iter()
+            .position(|block| block.kind == nexus_tui::timeline::BlockKind::Context);
+    let items = a.context_items();
+    let planner = items
+        .iter()
+        .position(|item| item.key == "skill:planner")
+        .unwrap();
+    a.ui.context_cursor = planner;
+    press(&mut a, &["enter"]);
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Api(ApiCall::SetDisabledTools {
+            session,
+            disabled_tools,
+            ..
+        })) if session == SESSION && disabled_tools == &["bash", "custom", "skill:planner"]
+    ));
+
+    a.effects.clear();
+    let locked = a
+        .context_items()
+        .iter()
+        .position(|item| item.key == "skill:locked")
+        .unwrap();
+    a.click(Target::ContextToggle(locked));
+    assert!(a.effects.is_empty());
+    assert!(a
+        .ui
+        .alerts
+        .toasts
+        .last()
+        .unwrap()
+        .text
+        .contains("new session"));
+    let items = a.context_items();
+    assert!(items.iter().any(|item| item.key == "mcp:offline"
+        && item.label.contains("2 tools")
+        && item.label.contains("timeout")));
+}
+
+#[test]
+fn draft_context_switches_are_sent_with_new_session_fields() {
+    let mut a = nexus_tui::app::App::new(
+        nexus_tui::state::AppState::new(),
+        nexus_tui::theme::Theme::new(opts(Mode::Dark, Tier::TrueColor)),
+        (120, 36),
+    );
+    a.state.apply(nexus_tui::sync::SyncMsg::Connection(
+        nexus_tui::state::ConnectionState::Live,
+    ));
+    a.state.apply(nexus_tui::sync::SyncMsg::Snapshot {
+        snapshot: Box::new(common::snapshot()),
+        cause: nexus_tui::sync::ResyncCause::Initial,
+    });
+    let project = a.current_project().unwrap();
+    a.apply_sync(nexus_tui::sync::SyncMsg::SkillMcp {
+        project: project.clone(),
+        skills: Ok(serde_json::json!({
+            "skills": [{"name": "writer", "description": "Write clearly", "scope": "project"}],
+            "problems": []
+        })),
+        mcp: Ok(serde_json::json!({
+            "servers": [
+                {"server": "enabled", "state": "online", "tools": 12, "enabled": true},
+                {"server": "disabled", "state": "disabled", "tools": 2, "enabled": false},
+                {"server": "invalid", "state": "invalid", "tools": null, "enabled": true}
+            ]
+        })),
+    });
+    let items = a.context_items();
+    assert!(items
+        .iter()
+        .any(|item| item.key == "mcp:enabled" && item.label.contains("12 tools")));
+    assert!(!items
+        .iter()
+        .any(|item| item.key == "mcp:disabled" || item.key == "mcp:invalid"));
+    let index = items
+        .iter()
+        .position(|item| item.key == "skill:writer")
+        .unwrap();
+    a.click(Target::ContextToggle(index));
+    assert_eq!(
+        a.ui.draft.fields()["disabled_tools"],
+        serde_json::json!(["skill:writer"])
+    );
+}
+
+#[test]
+fn skills_and_mcp_events_toast_and_debounce() {
+    let mut a = app();
+    let first = a.ui.alerts.toasts.len();
+    a.apply_sync(nexus_tui::sync::SyncMsg::Event(global_event(
+        &a,
+        500,
+        "skills.changed",
+        serde_json::json!({}),
+    )));
+    assert_eq!(a.ui.alerts.toasts.len(), first + 1);
+    assert_eq!(
+        a.ui.alerts.toasts.last().unwrap().text,
+        "Skills changed. New sessions will use them."
+    );
+    a.apply_sync(nexus_tui::sync::SyncMsg::Event(global_event(
+        &a,
+        501,
+        "skills.changed",
+        serde_json::json!({}),
+    )));
+    assert_eq!(a.ui.alerts.toasts.len(), first + 1, "repeat is debounced");
+    a.apply_sync(nexus_tui::sync::SyncMsg::Event(global_event(
+        &a,
+        502,
+        "mcp.changed",
+        serde_json::json!({}),
+    )));
+    let mcp_toasts = a.ui.alerts.toasts.len();
+    a.apply_sync(nexus_tui::sync::SyncMsg::Event(global_event(
+        &a,
+        503,
+        "mcp.changed",
+        serde_json::json!({}),
+    )));
+    assert_eq!(
+        a.ui.alerts.toasts.len(),
+        mcp_toasts,
+        "MCP repeats are debounced"
+    );
+    assert_eq!(
+        a.ui.alerts.toasts.last().unwrap().text,
+        "MCP servers changed. New sessions will use them."
+    );
+    a.apply_sync(nexus_tui::sync::SyncMsg::Event(global_event(
+        &a,
+        504,
+        "mcp.failed",
+        serde_json::json!({"server": "docs", "error": "connection timed out"}),
+    )));
+    assert_eq!(
+        a.ui.alerts.toasts.last().unwrap().text,
+        "MCP server docs failed: connection timed out"
+    );
+
+    let count = a.ui.alerts.toasts.len();
+    a.apply_done(ActionDone {
+        call: ApiCall::LearnInstall {
+            project: a.current_project().unwrap(),
+            scope: "project".into(),
+            fetch_id: "fetch".into(),
+            skills: vec!["new-skill".into()],
+            overwrite: false,
+            replacing: Vec::new(),
+        },
+        result: Ok(Done::default()),
+    });
+    a.apply_sync(nexus_tui::sync::SyncMsg::Event(global_event(
+        &a,
+        505,
+        "skills.changed",
+        serde_json::json!({}),
+    )));
+    assert_eq!(
+        a.ui.alerts.toasts.len(),
+        count + 1,
+        "only the install toast is added"
+    );
+}
+
+#[test]
+fn mcp_settings_patch_core_values_with_a_bounded_number() {
+    let mut a = app();
+    a.state.config = Some(serde_json::json!({
+        "revision": "cfg-1",
+        "values": {"mcp": {"full_definitions": false, "max_listed_tools": 1000}}
+    }));
+    a.execute("app.settings");
+    let rows = a.settings_rows();
+    let items = a.settings_items();
+    let position = |id: &str| {
+        rows.iter()
+            .position(|at| matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == id))
+            .unwrap()
+    };
+    a.ui.settings_row = position("mcp.full_definitions");
+    press(&mut a, &["right"]);
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { revision, path, value }))
+            if revision == "cfg-1" && path == "mcp.full_definitions" && value == &serde_json::json!(true)
+    ));
+    a.effects.clear();
+    a.ui.settings_row = position("mcp.max_listed_tools");
+    press(&mut a, &["right"]);
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }))
+            if path == "mcp.max_listed_tools" && value == &serde_json::json!(1000)
+    ));
+    a.state.config.as_mut().unwrap()["values"]["mcp"]["max_listed_tools"] = 1.into();
+    a.effects.clear();
+    press(&mut a, &["left"]);
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }))
+            if path == "mcp.max_listed_tools" && value == &serde_json::json!(1)
+    ));
 }
 
 #[test]

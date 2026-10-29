@@ -259,10 +259,12 @@ pub enum CtxRole {
     Meta,
     /// A preview line (muted).
     Preview,
-    /// A tool or other inventory name that is on (secondary).
-    Item,
-    /// An inventory name that is switched off (muted, struck through).
-    ItemOff,
+    /// A clickable context switch that is on.
+    ToggleOn(usize),
+    /// A clickable context switch that is off.
+    ToggleOff(usize),
+    /// A switch that cannot be enabled until a new session.
+    ToggleLocked(usize),
     /// The `Context total` label (bold secondary).
     TotalLabel,
     /// The total's figure (secondary).
@@ -280,12 +282,25 @@ pub struct CtxSection {
     pub body: CtxBody,
 }
 
+/// A tool, skill or MCP server switch in the starting context.
+#[derive(Debug, Clone)]
+pub struct CtxItem {
+    /// Index in the context's combined switch list.
+    pub index: usize,
+    /// Plain disabled_tools key: tool name, `skill:<name>` or `mcp:<server>`.
+    pub key: String,
+    /// Visible name and optional short description/status.
+    pub label: String,
+    pub on: bool,
+    pub locked: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum CtxBody {
     /// One preview line, clipped with an ellipsis.
     Preview(String),
-    /// An inventory as a column grid; the flag is whether the entry is on.
-    Grid(Vec<(String, bool)>),
+    /// An inventory whose rows can be switched on or off.
+    Inventory(Vec<CtxItem>),
     None,
 }
 
@@ -392,10 +407,10 @@ pub fn first_prompt_line(prompt: &str) -> String {
         .to_owned()
 }
 
-/// The rows of the open context: one per section header, its preview or grid
-/// rows and a blank row between sections, then the total row. Widths count
-/// terminal cells; every row fits in `layout.width`. Clipping is announced:
-/// a clipped preview ends in the ellipsis and a clipped grid in `+N more`.
+/// The rows of the open context: one per section header, preview or inventory
+/// item, and a blank row between sections, then the total row. Widths count
+/// terminal cells; every row fits in `layout.width`, with clipped text ending
+/// in an ellipsis.
 pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> Vec<CtxRow> {
     let mut rows: Vec<CtxRow> = Vec::new();
     let tilde = if layout.estimated { "~" } else { "" };
@@ -404,9 +419,9 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
             rows.push(Vec::new());
         }
         let mut head = vec![(section.title.clone(), CtxRole::Title)];
-        if let CtxBody::Grid(items) = &section.body {
+        if let CtxBody::Inventory(items) = &section.body {
             head.push((format!(" [{}]", items.len()), CtxRole::Meta));
-            let off = items.iter().filter(|(_, on)| !on).count();
+            let off = items.iter().filter(|item| !item.on).count();
             if off > 0 {
                 head.push((format!(" ({off} off)"), CtxRole::Meta));
             }
@@ -416,17 +431,36 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
                 format!(" {tilde}{}", compact(tokens).replace('k', "K")),
                 CtxRole::Tokens,
             ));
-        } else if section.title == "Skills" || section.title == "MCP" {
-            head.push(("  not available yet".into(), CtxRole::Meta));
         }
-        if section.tokens.is_none()
-            && section.title != "Skills"
-            && section.title != "MCP"
-            && section.title != "Workspace tools"
-        {
-            head.push((format!("  {}", section.meta), CtxRole::Meta));
+        if section.tokens.is_none() && section.title != "Workspace tools" {
+            let empty_inventory =
+                matches!(&section.body, CtxBody::Inventory(items) if items.is_empty());
+            if empty_inventory || !matches!(&section.body, CtxBody::Inventory(_)) {
+                head.push((format!("  {}", section.meta), CtxRole::Meta));
+            }
         }
         rows.push(clip_row(head, layout));
+        if let CtxBody::Inventory(items) = &section.body {
+            for item in items {
+                let marker = if item.on { "[x] " } else { "[ ] " };
+                let marker = format!("  {marker}");
+                let mut label = item.label.clone();
+                if item.locked {
+                    label.push_str(" · new session");
+                }
+                let role = if item.locked {
+                    CtxRole::ToggleLocked(item.index)
+                } else if item.on {
+                    CtxRole::ToggleOn(item.index)
+                } else {
+                    CtxRole::ToggleOff(item.index)
+                };
+                rows.push(clip_row(
+                    vec![(marker, CtxRole::Meta), (label, role)],
+                    layout,
+                ));
+            }
+        }
     }
     if !sections.is_empty() {
         rows.push(Vec::new());
@@ -576,17 +610,23 @@ mod ctx_tests {
     }
 
     #[test]
-    fn context_rows_show_tool_count_without_the_grid() {
+    fn context_rows_show_tool_states_and_count() {
         let s = CtxSection {
             title: "Tools".into(),
             tokens: Some(100),
             meta: String::new(),
-            body: CtxBody::Grid(vec![("read".into(), true)]),
+            body: CtxBody::Inventory(vec![CtxItem {
+                index: 0,
+                key: "read".into(),
+                label: "read".into(),
+                on: true,
+                locked: false,
+            }]),
         };
         let rows = context_rows(&[s], 100, &layout(60));
         let t = text(&rows);
         assert!(t.iter().any(|l| l.contains("Tools [1] ~100")), "{t:?}");
-        assert!(!t.iter().any(|l| l.contains("read")));
+        assert!(t.iter().any(|l| l.contains("[x] read")), "{t:?}");
     }
 }
 

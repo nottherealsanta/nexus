@@ -75,6 +75,7 @@ pub fn key(name: &str) -> KeyEvent {
         };
     }
     let code = match last {
+        "space" => KeyCode::Char(' '),
         "esc" => KeyCode::Esc,
         "enter" => KeyCode::Enter,
         "tab" => KeyCode::Tab,

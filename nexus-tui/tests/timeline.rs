@@ -972,8 +972,8 @@ fn the_context_section_lists_d10_sections_with_estimates_and_the_window_share() 
         "System prompt ~1.0K",
         "AGENTS.md ~200",
         "Tools [3] ~14",
-        "Skills  not available yet",
-        "MCP  not available yet",
+        "Skills [0]  none",
+        "MCP [0]  none",
         "total  ~1,020 tok",
         "of the window",
     ] {

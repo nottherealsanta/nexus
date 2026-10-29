@@ -7,7 +7,7 @@ import { FOCUS, Icon, IconButton, Status, T } from "./kit";
 import { DiffView } from "./diff";
 import { ContextSections, disabledOf, foldedMeta, startingSections } from "./newsession";
 import type { CtxSection } from "./newsession";
-import { byId, copyText, jump, keyLabel, run } from "../commands";
+import { byId, copyText, jump, keyLabel, run, toggleSessionInventory } from "../commands";
 import { contextDetail, agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
 import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
@@ -200,7 +200,7 @@ type TurnMeta = {
  */
 function turnMeta(msgs: Message[], turns: TurnSummary[], scratch: CoreEvent[], busy: boolean): TurnMeta[] {
   const starts: number[] = [];
-  msgs.forEach((m, i) => { if (m.role === "user" && !NOTICE.test(text(m))) starts.push(i); });
+  msgs.forEach((m, i) => { if (m.role === "user" && !NOTICE.test(text(m)) && !(m.delivery === "steer" && starts.length)) starts.push(i); });
   return starts.map((start, n) => {
     const end = n + 1 < starts.length ? starts[n + 1] : msgs.length;
     const window = msgs.slice(start, end);
@@ -319,7 +319,8 @@ export function buildRows(): Row[] {
   // Starting context, before the first turn.
   if (sel.starting) {
     const s = sel.starting;
-    const { sections, total } = startingSections(s, disabledOf(viewed()));
+    const session = viewed();
+    const { sections, total } = startingSections(s, disabledOf(session), { skills: session?.skills, mcp: session?.mcp });
     const ref = effectiveModelRef();
     const rawWindow = Number(catalogModel(ref)?.context);
     const window = Number.isFinite(rawWindow) && rawWindow > 0 ? rawWindow : undefined;
@@ -347,9 +348,11 @@ export function buildRows(): Row[] {
           tone: body.startsWith("[Nexus recovery") ? "warning" : "info",
         });
       } else {
-        const meta = metas[turnAt] ?? metas[metas.length - 1];
-        const n = turnAt;
-        turnAt += 1;
+        // A delivered steer is a message inside the running turn, not a new turn.
+        const steer = msg.delivery === "steer" && turnAt > 0;
+        const n = steer ? turnAt - 1 : turnAt;
+        const meta = metas[n] ?? metas[metas.length - 1];
+        if (!steer) turnAt += 1;
         const key = `turn:${sid}:${n}`;
         const folded = closedTurns()[key] ?? false;
         foldedTurn = folded;
@@ -421,7 +424,7 @@ export function buildRows(): Row[] {
     } // tool-role messages are shown through their call's row
     rows.push({ t: msg.created, r: out });
     // A turn's footer belongs after its last message.
-    if (turnAt > 0 && (msg === sel.messages[sel.messages.length - 1] || sel.messages[sel.messages.indexOf(msg) + 1]?.role === "user")) {
+    if (turnAt > 0 && (msg === sel.messages[sel.messages.length - 1] || (() => { const next = sel.messages[sel.messages.indexOf(msg) + 1]; return next?.role === "user" && next.delivery !== "steer"; })())) {
       const meta = metas[turnAt - 1];
       if (meta && !foldedTurn) {
         const v = viewed();
@@ -563,7 +566,7 @@ function RowView(p: { r: () => Row }) {
                   <If when={!!c.reconstructed}><Text class="text-xs text-warning">reconstructed</Text></If>
                 </View>
                 <If when={expanded()}>
-                  <View class="pt-2 pl-3"><ContextSections sections={c.sections} total={c.total} estimated window={c.window} /></View>
+                   <View class="pt-2 pl-3"><ContextSections sections={c.sections} total={c.total} estimated window={c.window} onInventoryToggle={(kind, name, locked) => { void toggleSessionInventory(kind, name, locked); }} /></View>
                 </If>
               </View>
             );
