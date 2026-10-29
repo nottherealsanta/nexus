@@ -5,7 +5,7 @@ import { Text, View } from "nsh";
 import type { JSX } from "nsh";
 import { Dialog } from "nsh/base";
 import { T } from "./kit";
-import { isNarrow } from "../store";
+import { config, isNarrow } from "../store";
 
 export const SCRIM = "bg-black/50";
 const SHADOW = "0 12px 40px rgb(0 0 0 / 0.4)";
@@ -18,7 +18,7 @@ export function Modal(p: {
   return (
     <Dialog
       open closeOnEscape={false} onCancel={p.onCancel} closeOnBackdropPress={p.closeOnBackdropPress ?? true}
-      onOpenChange={({ open }) => p.onOpenChange?.(open)} animation="fade" backdropClass={p.scrim ?? SCRIM}
+      onOpenChange={({ open }) => p.onOpenChange?.(open)} animation={config()?.values?.ui?.reduced_motion ? "none" : "fade"} backdropClass={p.scrim ?? SCRIM}
       style={isNarrow() ? { boxShadow: SHADOW } : { boxShadow: SHADOW, width: p.width }} testID={p.testID ? `${p.testID}-shell` : undefined}
       class={`absolute left-0 right-0 ${p.top ?? "top-[12%]"} ${isNarrow() ? "mx-3" : "mx-auto"} max-h-[76%] rounded-(--radius-card) bg-popover overflow-hidden ${p.padded === false ? "" : "p-6"}`}
     >

@@ -11,8 +11,21 @@ use crate::api::{CoreApi, Outcome, RequestId};
 use crate::discovery;
 use crate::transport::Http;
 
+#[derive(Clone, PartialEq)]
+pub struct Secret(pub String);
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[redacted]")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApiCall {
+    Provider {
+        id: String,
+        sign_out: bool,
+        key: Option<Secret>,
+    },
     /// Send a prompt to an existing idle session.
     Prompt {
         session: String,
@@ -102,6 +115,8 @@ impl ApiCall {
     /// Past-tense label for the success toast.
     pub fn done_label(&self) -> &'static str {
         match self {
+            ApiCall::Provider { sign_out: true, .. } => "Signed out",
+            ApiCall::Provider { .. } => "Sign-in started",
             ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. } => "Sent",
             ApiCall::NewSession { .. } => "Session created",
             ApiCall::Continue { .. } => "Continuing",
@@ -179,6 +194,29 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
     let key = RequestId::new();
     let mut done = Done::default();
     match call {
+        ApiCall::Provider { id, sign_out, key } => {
+            let method = if *sign_out {
+                reqwest::Method::DELETE
+            } else {
+                reqwest::Method::POST
+            };
+            let body = if let Some(key) = key {
+                json!({"api_key": key.0})
+            } else {
+                json!({"method": "device"})
+            };
+            api.http
+                .call(
+                    method,
+                    &format!("/api/provider/{id}/login"),
+                    &[],
+                    if *sign_out { None } else { Some(&body) },
+                    None,
+                    None,
+                )
+                .await
+                .map_err(e)?;
+        }
         ApiCall::Prompt {
             session,
             text,

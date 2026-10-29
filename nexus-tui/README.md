@@ -510,3 +510,9 @@ TUI can be driven by hand in a browser.
   Ctrl+X then M, N, O/B, G, S, L, T, R or ? opens model, new session, sessions,
   agent, settings, sidebar, effort, reconnect or shortcuts, and Ctrl+X Shift+N
   notifications. Shortcuts for capabilities Core lacks are omitted.
+
+Settings reads the shared defaults, timeline detail, reduced-motion choice and disabled tools from Core's `/api/config`.
+Use left/right or Enter to change a choice or tool switch; Core checks the file
+revision before each write. Configuration errors and rejected writes appear as
+warnings. A `config.changed` event refreshes Settings after an external edit.
+The session context meter reads Core's context budget; `~` marks estimates.

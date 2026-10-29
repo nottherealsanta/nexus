@@ -1,6 +1,6 @@
 # LLM providers
 
-`nexus/llmhub/` turns four providers into one conversation shape and one stream
+`nexus/llmhub/` turns four live providers and an optional dev mock into one conversation shape and one stream
 shape ([stream-events.md](stream-events.md)). There is one module per wire dialect
 and a table that says which provider speaks which, with what quirks.
 
@@ -8,7 +8,8 @@ and a table that says which provider speaks which, with what quirks.
 | --- | --- |
 | `llmhub/__init__.py` | The `Provider` protocol: `name`, `body(Request)`, `stream(Request)` |
 | `llmhub/types.py` | Conversation parts, `Request`, stream events |
-| `llmhub/providers.py` | `PROVIDERS` table and `make(provider_id, auth)` |
+| `llmhub/providers.py` | `PROVIDERS` table and `make(provider_id, auth, model=None)` |
+| `mock/` | Dev-only scripted provider and scenarios (`NEXUS10_DEV=1`; [scenarios](#offline-mock-provider)) |
 | `llmhub/responses.py` | OpenAI Responses dialect (codex, grok) and `ResponsesQuirks` |
 | `llmhub/chat.py` | OpenAI Chat Completions dialect (copilot, opencode) and `ChatQuirks` |
 | `llmhub/sse.py` | Server-sent events parser |
@@ -19,10 +20,11 @@ Adapters never read stored credentials. They take a header source
 
 ## The provider table
 
-`PROVIDERS` in `providers.py`:
+`PROVIDERS` in `providers.py` (the `mock` row is added only when `NEXUS10_DEV` is truthy):
 
 | id | Label | Dialect | Endpoint (`base_url`) | Request URL | models.dev id | Default model |
 | --- | --- | --- | --- | --- | --- | --- |
+| `mock` | Offline mock | scripted | — | `mock://<scenario>` | built in | `hello` (dev only) |
 | `codex` | ChatGPT (Codex) | responses | `https://chatgpt.com/backend-api/codex` | `{base}/responses` | `openai` | `gpt-6.1-terra` |
 | `grok` | xAI (SuperGrok) | responses | `https://cli-chat-proxy.grok.com/v1` | `{base}/responses` | `xai` | `grok-4.7` |
 | `copilot` | GitHub Copilot | chat | `https://api.githubcopilot.com` | `{base}/chat/completions` | `github-copilot` | `claude-sonnet-5` |
@@ -40,6 +42,7 @@ copilot, grok and opencode (PLAN.md, step 3).
 | `grok` | `session_header="x-grok-conv-id"` (everything else off) |
 | `copilot` | `initiator_header=True` |
 | `opencode` | `session_header="x-opencode-session"` |
+| `mock` | scripted events; no auth or network (dev only) |
 
 ### What each quirk field does
 
@@ -312,6 +315,27 @@ headers, before `WireRequest` is yielded ([auth.md](auth.md)).
 Limits: request timeout 300 s (15 s connect). One SSE event may be at most
 8,000,000 characters (`sse.py`), otherwise `ValueError`. Non-JSON event data is
 passed through as a string in `WireEvent.data`.
+
+
+## Offline mock provider
+
+Set `NEXUS10_DEV=1` to register `mock` and its scenario names as models, for
+example `mock/hello` or `mock/tool_marathon`. The mock provider makes no network
+requests. It drives the same `Request` and `Event` protocol as live providers:
+`WireRequest`, `WireResponse`, a `WireEvent` before each normalized delta or
+completed part, usage, and `Done`. This keeps the normal loop, persistence, turn
+summaries and clients in the path while scripts make outcomes repeatable.
+
+Scenarios are in `nexus/mock/scenarios/`; the catalogue contains `hello`,
+`bash_wait`, `cancel`, `parallel_tools`, `question`, `streaming_rich`, `stress`,
+`tool_marathon`, `provider_failure`, `parallel_subagents` and `context_pressure`.
+`parallel_subagents` requires the `orchestrate` agent, which has the `session`
+control tool; child sessions receive their own scripted reply. Tools run through
+the normal workspace tool layer. `tool_marathon` creates and
+edits `mock-output.md` in the selected workspace, so run it in a disposable
+workspace. `provider_failure` exercises the normal retry path; `cancel` parks
+until cancelled. Some old scenarios that depended on manager-only or live
+services were intentionally not carried over.
 
 ## Not verified
 

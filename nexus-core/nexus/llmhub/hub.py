@@ -5,6 +5,7 @@ The only module that knows both, and the entry point the rest of core uses.
 returns the provider and the bare model id; `default_model()` picks the model a
 new session uses.
 """
+
 from __future__ import annotations
 
 import os
@@ -17,7 +18,7 @@ MODEL_ENV = "NEXUS_MODEL"
 
 
 def connected() -> list[str]:
-    return [pid for pid in PROVIDERS if SIGN_INS[pid]().logged_in()]
+    return [pid for pid in PROVIDERS if pid == "mock" or SIGN_INS[pid]().logged_in()]
 
 
 def default_model() -> str:
@@ -52,4 +53,4 @@ def sign_in(provider_id: str):
 
 def provider_for(ref: str) -> tuple[Provider, str]:
     provider_id, model = split_ref(ref)
-    return make(provider_id, sign_in(provider_id)), model  # type: ignore[arg-type]
+    return make(provider_id, sign_in(provider_id) if provider_id != "mock" else None, model), model  # type: ignore[arg-type]

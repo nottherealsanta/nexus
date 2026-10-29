@@ -3,7 +3,7 @@ import { Scroll, Text, View } from "nsh";
 import { IconButton, Status, T, relTime, midTruncate } from "./kit";
 import { manifest } from "../gen/manifest";
 import { run } from "../commands";
-import { agentCatalog, defaultModel, gitStatus, m, model, modelCatalog, viewed } from "../store";
+import { agentCatalog, contextBudget, defaultModel, gitStatus, m, model, modelCatalog, viewed } from "../store";
 import { agentColor } from "../agent-color";
 import type { SelectedView } from "../core/reduce";
 import { latestUsage, ledgerTotals, unknownRequests } from "../core/turns";
@@ -203,11 +203,8 @@ export function RightSidebar(p: { drawer?: boolean }) {
                     <Field k="Output" v={fmtCount(totals().output)} />
                     <Field k="Reasoning" v={fmtCount(totals().reasoning)} />
                     {() => {
-                      const models = modelCatalog();
-                      const window = Number(catalogModel(totals().lastModel, models)?.context);
-                      return totals().lastInput !== null && Number.isFinite(window) && window > 0
-                        ? <View class="py-1"><ContextBar used={totals().lastInput!} window={window} /></View>
-                        : null;
+                      const budget = contextBudget()[s()?.id ?? ""];
+                      return budget?.window ? <View class="py-1"><ContextBar used={budget.used} window={budget.window} /></View> : null;
                     }}
                     <If when={totals().cost !== null}>
                       <Field k="Cost" v={`${money(totals().cost!)}${totals().partialCost ? "+" : ""}`} />

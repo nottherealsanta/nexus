@@ -324,7 +324,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | Q5b | Fold all, go to turn, toggle sidebars | Client only | T3, T1, S1 | |
 | Q6 | Change model / effort / agent / tools | API ready | K5-K9 | |
 | Q7 | Open settings, theme, notifications, copy actions | Client only | | |
-| Q8 | Sign in | Core work | 12a Settings over the API | Sign-in is `nexus login` locally |
+| Q8 | Sign in | API ready | `POST /api/provider/{id}/login` | Device instructions arrive through `provider.login` |
 | Q9 | Open inspector | API ready | L19 | |
 | Q10 | `btw`, compact/handoff | Core work | 12a | A5, O5 |
 | Q11 | Interrupt | API ready | K14 | |
@@ -384,16 +384,16 @@ Dictation, Keybindings, Notifications, About.
 | ST1 | Appearance: theme (light/dark/system/named), density, font and size (NSH) | Client only | | Per-client; shared token file |
 | ST2 | Providers: list with connected state | API ready | `GET /api/provider` (`id`, `label`, `dialect`, `connected`, `verified`, `default_model`) | |
 | ST3 | Providers: account, expiry | Core work | 12a Settings over the API | Not returned |
-| ST4 | Providers: sign in (browser/device), sign out | Core work | 12a Settings over the API | Only local `nexus login` |
+| ST4 | Providers: sign in (browser/device), sign out | API ready | `POST/GET/DELETE /api/provider/{id}/login` | Device flows and OpenCode API key |
 | ST5 | Providers: default model per provider | Core work | 12a Settings over the API | `default_model` is read-only from the provider table |
 | ST6 | Providers: add OpenAI-compatible endpoint | Deferred | INTERFACE_PLAN "when Core supports custom providers" | Only four subscription providers now |
 | ST7 | Models: catalog list | API ready | `GET /api/model[?provider=]` (`source`, models with `efforts`, `context`, costs, price `tiers`) | Lists only connected providers |
 | ST8 | Models: catalog refresh | Core work | 12a? | `catalog.load(refresh=True)` is not reachable over HTTP |
-| ST9 | Models: default model and effort (read, write) | Core work | 12a Settings over the API | `GET /api/model/default` reads only |
+| ST9 | Models: default model and effort (read, write) | API ready | `GET/PATCH /api/config` | Defaults affect new root sessions |
 | ST10 | Agents: loaded agents, source, path, problems | API ready | `GET /api/agent[?project=]` (`agents`, `problems`) | Gap: `mode` missing |
 | ST11 | Agents: open agent file in editor | Core work | 12a Files and git | Local clients could open the path externally |
-| ST12 | Agents: default root agent (write) | Core work | 12a Settings over the API | |
-| ST13 | Tools: defaults for new sessions | Core work | 12a Settings over the API | Per-session switches exist; there is no global tool list or defaults |
+| ST12 | Agents: default root agent (write) | API ready | `GET/PATCH /api/config` | `defaults.agent` |
+| ST13 | Tools: defaults for new sessions | API ready | `GET/PATCH /api/config` | `tools.disabled` |
 | ST14 | Skills: discovered, sources, diagnostics, defaults | Core work | 11a Skills | |
 | ST15 | MCP: servers, enabled defaults, status, tools, connect/disconnect/retry; browser-use default | Core work | 11a MCP, `nexus-browser/` | |
 | ST16 | Context: handoff threshold percentage | Core work | 12a Compaction as handoff | |

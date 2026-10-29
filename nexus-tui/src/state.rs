@@ -122,6 +122,9 @@ pub struct AppState {
     pub catalog_source: String,
     /// Core's default model reference, shown wherever a session sets none.
     pub default_model: String,
+    pub config: Option<serde_json::Value>,
+    pub context: std::collections::BTreeMap<String, serde_json::Value>,
+    pub config_error: Option<String>,
     /// Last worktree listing per session; validated against the current directory.
     pub worktrees: std::collections::BTreeMap<String, serde_json::Value>,
     /// Last worktree listing per project's own checkout (no session yet).
@@ -153,6 +156,9 @@ impl Default for AppState {
             agents: Vec::new(),
             catalog_source: String::new(),
             default_model: String::new(),
+            config: None,
+            context: std::collections::BTreeMap::new(),
+            config_error: None,
             worktrees: std::collections::BTreeMap::new(),
             project_worktrees: std::collections::BTreeMap::new(),
             file_dirs: std::collections::BTreeMap::new(),
@@ -172,6 +178,16 @@ impl AppState {
     pub fn apply(&mut self, msg: SyncMsg) {
         match msg {
             SyncMsg::Connection(state) => self.connection = state,
+            SyncMsg::Context { session, data } => {
+                self.context.insert(session, data);
+            }
+            SyncMsg::Config(result) => match result {
+                Ok(config) => {
+                    self.config = Some(config);
+                    self.config_error = None;
+                }
+                Err(error) => self.config_error = Some(error),
+            },
             SyncMsg::Handshake { info, compat } => {
                 self.banners
                     .retain(|b| !matches!(b, Banner::NewerCore { .. } | Banner::ApiUnreported));

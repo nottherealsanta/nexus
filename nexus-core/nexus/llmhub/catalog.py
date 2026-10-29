@@ -10,6 +10,7 @@ Codex has no models.dev entry of its own. It uses the `openai` list filtered to
 reasoning `gpt-*` models, and not every listed id is served by the Codex backend
 (not verified per id).
 """
+
 from __future__ import annotations
 
 import json
@@ -117,6 +118,13 @@ def _tiers(entry: dict[str, Any]) -> tuple[int, ...]:
 
 def models_for(catalog: dict[str, Any], provider_id: str) -> list[ModelInfo]:
     info = PROVIDERS[provider_id]
+    if provider_id == "mock":
+        from ..mock.scenarios import CATALOG
+
+        return [
+            ModelInfo("mock", name, scenario.summary, 200000, 8192, True, ("low", "medium", "high"), 0.0, 0.0, 0.0, None)
+            for name, scenario in sorted(CATALOG.items())
+        ]
     entries = (catalog.get(info.catalog_id) or {}).get("models") or {}
     out: list[ModelInfo] = []
     for model_id, entry in entries.items():
@@ -129,12 +137,21 @@ def models_for(catalog: dict[str, Any], provider_id: str) -> list[ModelInfo]:
         if provider_id == "codex" and not (model_id.startswith("gpt-") and entry.get("reasoning")):
             continue
         limit, cost = entry.get("limit") or {}, entry.get("cost") or {}
-        out.append(ModelInfo(
-            provider=provider_id, id=model_id, name=str(entry.get("name") or model_id),
-            context=limit.get("context"), max_output=limit.get("output"),
-            reasoning=bool(entry.get("reasoning")), efforts=_efforts(entry),
-            input_cost=cost.get("input"), output_cost=cost.get("output"), cache_read_cost=cost.get("cache_read"),
-            released=entry.get("release_date"), tiers=_tiers(entry),
-        ))
+        out.append(
+            ModelInfo(
+                provider=provider_id,
+                id=model_id,
+                name=str(entry.get("name") or model_id),
+                context=limit.get("context"),
+                max_output=limit.get("output"),
+                reasoning=bool(entry.get("reasoning")),
+                efforts=_efforts(entry),
+                input_cost=cost.get("input"),
+                output_cost=cost.get("output"),
+                cache_read_cost=cost.get("cache_read"),
+                released=entry.get("release_date"),
+                tiers=_tiers(entry),
+            )
+        )
     out.sort(key=lambda m: (m.released or "", m.id), reverse=True)
     return out

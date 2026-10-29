@@ -21,6 +21,8 @@ const core = (info: object = { name: "nexus", version: "0.10.0.dev0", pid: 1 }) 
   "GET */api/snapshot*": { body: snapshot },
   "GET */api/event*": { body: sse(connected), headers: { "content-type": "text/event-stream" } },
   "GET */api/provider": { body: [] },
+  "GET */api/config": { body: { revision: "test", values: { defaults: { model: "", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
+  "GET */api/session/*/context": { body: { used: 0, window: null, exact: false } },
   "GET */api/model/default": { body: { model: "scripted/m" } },
   "GET */api/model": { body: { source: "t", models: [], model: "scripted/m" } },
   "GET */api/model*": { body: { source: "t", models: [], model: "scripted/m" } },
@@ -827,6 +829,8 @@ describe("Core-backed settings values", () => {
         ...core(),
         "GET */api/model": { body: { source: "fixture catalog", models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000 }] } },
         "GET */api/model/default": { body: { model: "codex/gpt-5" } },
+        "GET */api/config": { body: { revision: "rev1", values: { defaults: { model: "codex/gpt-5", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
+        "PATCH */api/config": { body: { revision: "rev2", values: { defaults: { model: "", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
         "GET */api/agent*": { body: { agents: [{ name: "build", source: "builtin" }, { name: "plan", source: "builtin" }] } },
       },
       width: 1024, height: 768, platform: "web",
@@ -837,7 +841,11 @@ describe("Core-backed settings values", () => {
     await app.waitFor("text:1 models · fixture catalog");
     expect(app.shows("id:setting-models.default")).toBe(true);
     expect(app.texts().join("\n").includes("codex/gpt-5")).toBe(true);
-    expect(app.texts().join("\n").includes("Core has no default setting for this yet")).toBe(true);
+    await app.press("id:edit-models.default");
+    await app.waitFor("id:picker");
+    await app.press("id:pick-0");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "PATCH" && r.url.endsWith("/api/config")));
+    expect(app.texts().join("\n").includes("Core has no default setting for this yet")).toBe(false);
     const before = app.requests().filter((r) => r.method === "GET" && r.url.endsWith("/api/model")).length;
     await app.press("id:setting-model-refresh");
     await app.waitUntil(() => app.requests().filter((r) => r.method === "GET" && r.url.endsWith("/api/model")).length > before);

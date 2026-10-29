@@ -5,7 +5,7 @@ import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, fo
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
-  agentCatalog, centre, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model, modelCatalog, tick,
+  agentCatalog, contextBudget, centre, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model, modelCatalog, tick,
   projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
@@ -137,20 +137,18 @@ export function Composer() {
   /** The latest request's input occupancy, as a count and a share of the model's window. */
   const usage = (): { input: number; pct: number | null } | null => {
     m();
-    const sel = model.selected;
-    const latest = sel ? latestUsage(sel.turns, sel.scratch) : null;
-    const input = Number(latest?.input);
-    if (!latest || !Number.isFinite(input) || input < 0) return null;
-    const ref = modelRef();
-    const entry = modelCatalog().find((item) => item.ref === ref);
-    const window = Number(entry?.context);
-    return { input, pct: Number.isFinite(window) && window > 0 ? (100 * input) / window : null };
+    const id = model.selected?.sessionId;
+    const budget = id ? contextBudget()[id] : null;
+    if (!budget || !Number.isFinite(budget.used)) return null;
+    return { input: budget.used, pct: budget.window && budget.window > 0 ? 100 * budget.used / budget.window : null };
+
   };
   const usageLabel = () => {
     const u = usage();
     if (!u) return "";
-    if (u.pct === null) return compact(u.input);
-    return `${compact(u.input)} · ${u.pct >= 10 ? Math.round(u.pct) : u.pct.toFixed(1)}%`;
+    const prefix = model.selected && contextBudget()[model.selected.sessionId]?.exact === false ? "~" : "";
+    if (u.pct === null) return prefix + compact(u.input);
+    return `${prefix}${compact(u.input)} · ${u.pct >= 10 ? Math.round(u.pct) : u.pct.toFixed(1)}%`;
   };
   const meterPct = () => Math.min(100, usage()?.pct ?? 0);
 

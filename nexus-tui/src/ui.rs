@@ -119,6 +119,8 @@ pub struct Restore {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaletteMode {
     Commands,
+    ProviderLogin,
+    ProviderLogout,
     Sessions,
     Projects,
     Models,
@@ -133,6 +135,7 @@ pub enum PaletteMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaletteKind {
     Command(String),
+    Provider(String, bool),
     Session(String),
     Project(String),
     Model(String),
@@ -226,6 +229,7 @@ pub enum EditTarget {
     },
     /// Add a project by directory path.
     AddProject,
+    ProviderKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -7,7 +7,7 @@ import { manifest } from "./gen/manifest";
 import {
   contextDetail, addProjectOpen, alertDetail, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, currentWorktree, defaultModel, draft, isNarrow, leftOpen, leftTab, live, loadComposerData, loadProjectWorktrees, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
+  focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
 import { Message } from "./core/api";
@@ -118,6 +118,8 @@ export function openSettings() {
   if (centre() === "settings") { centre.set(previousCentre()); return; }
   previousCentre.set(centre()); centre.set("settings"); if (isNarrow()) drawer.set(null);
 }
+on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsSection.set("providers"); toast("info", "Choose Sign in in Provider settings."); }, true);
+on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsSection.set("providers"); toast("info", "Choose Sign out in Provider settings."); }, true);
 function tab(t: "sessions" | "files" | "projects") { if (t === "files") void loadFiles(); leftTab.set(t); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true); }
 
 export function newSession() {

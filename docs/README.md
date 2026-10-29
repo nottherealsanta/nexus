@@ -9,6 +9,7 @@ doc and the code disagree, the code wins: fix the doc.
 | Doc | About |
 | --- | --- |
 | [llm-providers.md](llm-providers.md) | The four providers, the table, both dialects, quirks, replay, redaction, errors, examples |
+| [config.md](config.md) | Configuration file primitives (in progress) |
 | [auth.md](auth.md) | Sign-in flows, `auth.json`, locking, refresh-token rotation |
 | [models.md](models.md) | models.dev catalog, cache, filters, `provider/model` refs, default model |
 | [stream-events.md](stream-events.md) | Conversation types, provider stream events, loop events, JSON codec |

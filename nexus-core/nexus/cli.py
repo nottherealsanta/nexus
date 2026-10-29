@@ -873,6 +873,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nexus")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    config = sub.add_parser("config", help="configuration utilities")
+    config.add_argument("action", choices=["import-mcp"])
+    config.add_argument("path")
+
     login = sub.add_parser("login", help="sign in to a provider")
     login.add_argument("provider", choices=list(PROVIDERS))
     login.add_argument("--method", help="browser | device | api_key (default: the provider's first)")
@@ -925,7 +929,7 @@ def main(argv: list[str] | None = None) -> int:
         if name == "run":
             cmd.add_argument("prompt")
         cmd.add_argument("--agent", help="agent for the session (default: build; see `nexus agent`)")
-        cmd.add_argument("--model", help="provider/model; overrides the agent's preference (see `nexus models`)")
+        cmd.add_argument("-m", "--model", help="provider/model; overrides the agent's preference (see `nexus models`)")
         cmd.add_argument("--effort", help="reasoning effort for the session, e.g. low | high (see `nexus models`); '' clears it")
         cmd.add_argument("--disable", metavar="TOOLS", help="comma-separated tools to switch off for the session, e.g. bash,write; '' turns all back on")
         cmd.add_argument("--session", help="continue this session id")
@@ -937,7 +941,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "login":
+        if args.command == "config":
+            from .config import import_mcp
+            names = import_mcp(Path(args.path))
+            print(f"Imported {len(names)} MCP server(s): {', '.join(names)}")
+        elif args.command == "login":
             asyncio.run(_login(args))
         elif args.command == "logout":
             SIGN_INS[args.provider]().logout()
@@ -974,7 +982,7 @@ def main(argv: list[str] | None = None) -> int:
                 wire_file = stack.enter_context(open(args.wire_file, "a")) if args.wire_file else None
                 renderer = Renderer(wire=args.wire, wire_file=wire_file)
                 asyncio.run(_chat(args, renderer) if args.command == "chat" else _run(args, renderer))
-    except (AuthError, CredentialError, ApiError, ValueError, OSError) as exc:
+    except (AuthError, CredentialError, ApiError, ValueError, TypeError, OSError) as exc:
         print(f"{RED}{exc}{RESET}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

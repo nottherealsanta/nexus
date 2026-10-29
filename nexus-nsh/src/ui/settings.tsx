@@ -1,11 +1,11 @@
 import type { JSX } from "nsh";
 import { Scroll, Text, View, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
-import { Button } from "nsh/base";
+import { Button, Input } from "nsh/base";
 import { Btn, T, FOCUS } from "./kit";
 import { Heading, Modal, ModalFooter, ModalTitle, SelectBar } from "./modal";
 import { manifest } from "../gen/manifest";
 import { byId, commands, escape, keyLabel, loadProviders, run } from "../commands";
-import { catalogSource, info, compat, isNarrow, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject } from "../store";
+import { catalogSource, info, compat, isNarrow, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker } from "../store";
 import { CLIENT_API, CLIENT_VERSION } from "../core/api";
 import { request } from "../core/transport";
 
@@ -14,8 +14,11 @@ interface Section { id: string; label: string; unavailable_reason?: string; row?
 const sections = (manifest.settings.section as unknown as Section[]);
 
 const data = signal<{ providers: any[] | null; models: any | null; modelDefault: string | null; agents: any | null }>({ providers: null, models: null, modelDefault: null, agents: null });
+const keyEntry = signal(false);
+const providerKey = signal("");
 let loaded = false;
 export function loadSettingsData() {
+  if (!config()) void loadConfig().catch(() => {});
   if (loaded) return; loaded = true;
   void loadProviders().then((p) => data.update((d) => ({ ...d, providers: p })));
   request<any>("GET", "/api/model").then((r) => data.update((d) => ({ ...d, models: r }))).catch(() => {});
@@ -85,19 +88,61 @@ async function refreshCatalog() {
 }
 
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["appearance.theme", "appearance.timeline_detail", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.defaults", "keybindings.list", "about.versions", "about.daemon"]);
+const WIRED = new Set(["providers.sign_in", "providers.sign_out", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.default_permission", "models.default_effort", "tools.defaults", "keybindings.list", "about.versions", "about.daemon"]);
 
 function control(r: Row): JSX.Element {
   if (r.id === "appearance.theme") {
     return <Seg label="Theme" options={["system", "light", "dark", "named"]} value={themeChoice()} disabled={false}
       onPick={(v) => { if (v === "named") { toast("info", "Named themes: shared theme tokens arrive with Step 12.2."); return; } themeChoice.set(v as any); setColorScheme(v as "light" | "dark" | "system"); savePrefs(); }} />;
   }
+  if (r.id === "appearance.animations") return <Seg label={r.label} options={["on", "off"]} value={config()?.values?.ui?.reduced_motion ? "off" : "on"} onPick={(v) => void patchConfig("ui.reduced_motion", v === "off")} />;
   if (r.id === "appearance.timeline_detail") {
     return <Seg label="Timeline detail" options={r.options ?? ["low", "medium", "high"]} value={timelineDetail()} disabled={false}
       onPick={(v) => setTimelineDetail(v as "low" | "medium" | "high")} />;
   }
+  if (r.id === "providers.sign_in" || r.id === "providers.sign_out") return <Btn label={r.label} onPress={() => {
+    const signOut = r.id === "providers.sign_out";
+    const providers = (data().providers ?? []).filter((p: any) => signOut ? p.connected : !p.connected);
+    picker.set({ title: r.label, items: providers.map((p: any) => ({ id: p.id, label: p.label ?? p.id, run: async () => {
+      picker.set(null);
+      if (!signOut && p.id === "opencode") { providerKey.set(""); keyEntry.set(true); return; }
+      try {
+        if (signOut) {
+          await request("DELETE", `/api/provider/${p.id}/login`);
+          data.update((d) => ({ ...d, providers: (d.providers ?? []).map((v: any) => v.id === p.id ? { ...v, connected: false } : v) }));
+          toast("success", `${p.label} signed out`);
+        } else {
+          await request("POST", `/api/provider/${p.id}/login`, { body: { method: "device" } });
+          toast("info", `Starting ${p.label} sign-in…`);
+          let previous = "";
+          for (;;) {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            const state = await request<any>("GET", `/api/provider/${p.id}/login`);
+            if (state.message && state.message !== previous) { previous = state.message; toast(state.status === "failed" ? "error" : "info", state.message); }
+            if (state.status !== "pending") {
+              if (state.status === "connected") { toast("success", `${p.label} signed in`); data.update((d) => ({ ...d, providers: (d.providers ?? []).map((v: any) => v.id === p.id ? { ...v, connected: true } : v) })); }
+              break;
+            }
+          }
+        }
+      } catch (e) { toast("error", e instanceof Error ? e.message : String(e)); }
+    } })) });
+  }} />;
   if (r.id === "about.inspector") return <Btn label="Open inspector" onPress={() => { void openUrl(new URL("/inspector", import.meta.url).href).catch(() => toast("info", "Open /inspector on the host page.")); }} />;
-  if (r.id === "providers.default_model" || r.id === "models.default") return <Value text={data().modelDefault || "not reported"} mono />;
+  if (r.id === "tools.default_permission") return <Seg label={r.label} options={["allow", "ask"]} value={config()?.values?.defaults?.permission ?? "allow"} onPick={(v) => void patchConfig("defaults.permission", v)} />;
+  if (r.id === "tools.defaults") {
+    const disabled: string[] = config()?.values?.tools?.disabled ?? [];
+    return <View class="gap-1">{["read", "bash", "edit", "write", "ask", "code"].map((name) => <Button testID={`default-tool-${name}`} onPress={() => void patchConfig("tools.disabled", disabled.includes(name) ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={`${disabled.includes(name) ? "off" : "on"} · ${name}`} /></Button>)}</View>;
+  }
+  const paths: Record<string, string> = { "providers.default_model": "model", "models.default": "model", "models.default_effort": "effort", "agents.default_root": "agent" };
+  if (paths[r.id]) {
+    const key = paths[r.id];
+    const value = config()?.values?.defaults?.[key] || "automatic";
+    return <Button testID={`edit-${r.id}`} accessibilityLabel={`Change ${r.label}`} onPress={() => {
+      const options: string[] = key === "model" ? (data().models?.models ?? []).map((m: any) => m.ref) : key === "agent" ? (data().agents?.agents ?? []).map((a: any) => a.name) : ["low", "medium", "high", "xhigh"];
+      picker.set({ title: r.label, items: ["", ...options].map((v) => ({ id: v || "automatic", label: v || "automatic", run: async () => { picker.set(null); await patchConfig(`defaults.${key}`, v); } })) });
+    }} class={`rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={value} mono /></Button>;
+  }
   if (r.id === "models.catalog" || r.id === "models.refresh" || r.id === "agents.list") return listFor(r.id);
   if (r.kind === "choice" && r.options) return <Seg label={r.label} options={r.options} value={String(r.default ?? r.options[0])} disabled />;
   if (r.kind === "toggle") return <Text class="text-[13px] leading-5 text-muted-foreground">{r.default ? "[x] on" : "[ ] off"}</Text>;
@@ -109,7 +154,7 @@ function control(r: Row): JSX.Element {
 
 function SettingRow(p: { r: Row; sec: Section }) {
   const r = p.r;
-  const reason = r.unavailable_reason ?? p.sec.unavailable_reason;
+  const reason = ["providers.sign_in", "providers.sign_out"].includes(r.id) ? undefined : r.unavailable_reason ?? p.sec.unavailable_reason;
   const wired = WIRED.has(r.id);
   const disabled = !!reason || !wired;
   const why = reason ?? (wired ? "" : "Not editable in this NSH increment yet.");
@@ -132,7 +177,7 @@ function SettingRow(p: { r: Row; sec: Section }) {
 export function SettingsView() {
   loadSettingsData();
   const cur = () => sections.find((s) => s.id === settingsSection()) ?? sections[0];
-  const list = () => (cur().row ?? []);
+  const list = () => (cur().row ?? []).filter((r) => r.clients !== "tui" || r.id === "appearance.timeline_detail");
   void m; void model; void compat; void colorScheme; void byId; void keyLabel;
   return (
     <Modal width={820} top="top-[8%]" label="Settings" testID="settings" onCancel={() => escape()} onOpenChange={(open) => { if (!open && centre() === "settings") void run("app.settings"); }}>
@@ -154,6 +199,12 @@ export function SettingsView() {
           </View>
           <Scroll class="flex-1 min-h-0" contentClass="pb-4 w-full">
             <Heading text={cur().label} first />
+            <If when={keyEntry()}><View class="gap-2 p-3">
+              <Text class={T.sec}>OpenCode Go API key</Text>
+              <Input masked autoFocus accessibilityLabel="OpenCode API key" placeholder="API key" onChange={({ value }) => providerKey.set(value)} class="h-9 rounded-(--radius) border border-border bg-background px-3 text-foreground" />
+              <View class="flex-row gap-2"><Btn label="Sign in" onPress={() => { const key = providerKey(); providerKey.set(""); keyEntry.set(false); void request("POST", "/api/provider/opencode/login", { body: { api_key: key } }).then(async () => { const providers = await loadProviders(); data.update((d) => ({ ...d, providers })); toast("success", "OpenCode signed in"); }).catch(() => toast("error", "OpenCode sign-in failed")); }} /><Btn label="Cancel" onPress={() => { providerKey.set(""); keyEntry.set(false); }} /></View>
+            </View></If>
+            <Each of={config()?.errors ?? []} key={(e: string) => e}>{(e) => <Text class={T.meta}>{e()}</Text>}</Each>
             <If when={cur().unavailable_reason}><View class="flex-row gap-2 items-start pt-1 pb-1"><Text class="text-[13px] text-muted-foreground">⊖</Text><Text class={`flex-1 ${T.sec}`}>{cur().unavailable_reason!}</Text></View></If>
             <Each of={list()} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each>
           </Scroll>

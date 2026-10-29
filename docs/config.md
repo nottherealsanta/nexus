@@ -1,0 +1,33 @@
+# Configuration
+
+Core reads `$NEXUS10_HOME/config.toml` (normally `~/.nexus10/config.toml`).
+A missing file uses defaults. Invalid keys fall back independently and appear
+in the API's `errors`; malformed TOML is never overwritten by a patch.
+
+The initial inventory is `defaults.model`, `defaults.effort`, `defaults.agent`,
+`defaults.permission` (`allow` or `ask`) and `tools.disabled`. New root sessions
+apply these values; explicit creation fields override them, and existing
+sessions keep their frozen configuration. Child sessions retain inheritance.
+Other plan items add their own operational settings as those features land.
+
+`GET /api/config` returns `{revision, values, defaults, schema, errors}`.
+`PATCH /api/config` accepts `{expected_revision, set: {"defaults.model":
+"codex/example"}, unset: []}`. Stale revisions return 409. Daemon patches are
+serialized, preserve comments, and replace the file atomically using a private
+temporary file. `config.changed` announces writes and outside edits detected
+by the daemon's two-second poll. Both clients reload Settings on that event.
+Shared `ui.detail` (`low`, `medium`, `high`) and `ui.reduced_motion` are
+read and written by both clients. Client layout preferences remain local.
+
+`nexus config import-mcp <path>` imports `servers`, `mcpServers`, `mcp` and
+`context_servers` maps into `[mcp.servers.<name>]`, refusing duplicate names.
+Entries retain their source dialect for the MCP work item. The config API
+exposes these entries with environment values, headers and credential fields
+masked. PATCH of `mcp.servers` restores unchanged `********` placeholders from
+the existing file. Importing configuration does not start an MCP server.
+
+Provider credentials remain in the auth store. `POST /api/provider/{id}/login`
+starts asynchronous device sign-in; `GET` on that path reports status and
+`provider.login` events carry instructions and completion. OpenCode accepts
+`{api_key}`. `DELETE` cancels a pending flow and signs out. Credentials never
+appear in login events.

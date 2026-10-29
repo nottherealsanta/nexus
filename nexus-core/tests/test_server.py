@@ -793,3 +793,26 @@ async def test_turn_summary_event_equals_the_turn_entry_for_every_close(setup):
     order = [e["type"] for e in events if e["type"] in ("turn.summary", "session.status")
              and e["data"].get("status") != "busy"]
     assert order == ["turn.summary", "session.status"] * 3  # the summary comes before idle
+
+
+async def test_context_budget_uses_latest_matching_model(setup, monkeypatch):
+    from nexus import server
+    from nexus.llmhub import catalog
+    from nexus.llmhub.types import Usage
+
+    rt, client, _, workspace = setup
+    async def load():
+        return {}, "test"
+    monkeypatch.setattr(catalog, "load", load)
+    monkeypatch.setattr(server, "split_ref", lambda ref: ("scripted", ref.partition("/")[2]))
+    monkeypatch.setattr(catalog, "models_for", lambda data, provider: [type("Model", (), {"id": "m", "context": 1000})()])
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    endpoint = f"/api/session/{sid}/context"
+    assert (await client.get(endpoint)).json()["exact"] is False
+    turn = rt.store.start_turn(sid)
+    request = rt.store.start_request(turn["id"], sid, 1, model="scripted/m")
+    rt.store.record_usage(request["id"], None, Usage(input_tokens=123))
+    assert {key: (await client.get(endpoint)).json()[key] for key in ("used", "window", "exact")} == {"used": 123, "window": 1000, "exact": True}
+    await client.patch(f"/api/session/{sid}", json={"model": "scripted/other"})
+    result = (await client.get(endpoint)).json()
+    assert result["exact"] is False and result["window"] is None

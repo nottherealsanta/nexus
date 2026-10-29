@@ -117,9 +117,9 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
       auth/         codex, copilot, grok, opencode; api_key.py (planned, J)
     tools/          read, bash, edit, write, ask, code
                     grep, glob, ls, multiedit, web_search, web_fetch, skill (planned, D/F)
-    config.py       (planned, A1) the one config file: schema, load, write, watch
-    mock/           (planned, A2) scripted provider and scenarios for tests and demos
-    counting.py     (planned, A3) token estimates and the context budget
+    config.py       the one config file: schema, load, write, watch
+    mock/           dev-gated scripted provider and scenarios for tests and demos
+    counting.py     token estimates and the context budget
     inputs.py       (planned, B) steer and queue: pending inputs per session
     skills/         (planned, F) discovery, frontmatter, index, invocation, resources
     mcp/            (planned, G) client, manager, bridge, search
@@ -147,6 +147,7 @@ the config file or the Hugging Face cache directly.
 
 | Step | What landed | Read |
 | --- | --- | --- |
+| A1–A3 | Single-file config and shared editable Settings, provider login/logout, dev-only mock scenarios and Core context budget (2026-10-29) | docs/config.md, docs/llm-providers.md |
 | 0–2 | Provider wire, normalized conversation types, the agent loop | docs/llm-providers.md, docs/loop.md |
 | 3 | codex, grok, copilot, opencode providers; models.dev catalog; `provider/model` refs | docs/llm-providers.md, docs/models.md, docs/auth.md |
 | 4 | Daemon, projects, sessions, turns, approvals over HTTP | docs/daemon.md, docs/api.md |
@@ -224,6 +225,18 @@ These come first because B, F, G, H and I depend on them.
 
 #### A1. The config file and Settings over the API
 
+**Landed 2026-10-29:** comment-preserving atomic config writes, schema and
+per-key errors, revision conflicts, serialized daemon patches, two-second
+outside-edit polling, config events, masked MCP credential round trips and
+`nexus config import-mcp`. Root sessions apply defaults; explicit creation
+fields win and existing snapshots stay frozen. TUI and NSH Settings edit model,
+effort, agent, permission and disabled tools and refresh on outside edits.
+Detail and reduced-motion preferences are shared through `[ui]`.
+Provider device/API-key login and logout are exposed over HTTP and in both
+clients. Later feature items add their own sections. External writers can race
+a daemon write and rapid outside edits can coalesce between polls.
+
+
 **Old:** `nexus/config/schema.py` (1455 lines, the typed schema and defaults),
 `nexus/config/layers.py` (merge order, which is dropped), `nexus/config/paths.py`,
 `nexus/host_support/settings_inventory.py` and `settings_scope.py` (path-checked,
@@ -283,6 +296,11 @@ running TUI and NSH.
 
 #### A2. Mock provider and scenarios
 
+**Landed 2026-10-29:** dev-gated `mock` provider with all eleven scenarios,
+normalized and wire events, catalog entries and a real-loop tool marathon test.
+The B-specific steer/queue assertions land with B, whose input API is not yet
+implemented.
+
 **Old:** `nexus/devtools/mock/provider.py`, `dsl.py`, `directive.py`,
 `runner.py`, `checks.py`, `sandbox.py`, `scenarios/*.py` (hello, bash_wait,
 cancel, parallel_tools, question, streaming_rich, stress, tool_marathon,
@@ -303,6 +321,12 @@ with no network, and the steer/queue tests in B use it.
 
 #### A3. Token counting and context budget
 
+**Landed 2026-10-29:** `nexus/counting.py`; the context endpoint adds top-level
+`used`, `window`, `exact` while preserving request inspection. Usage comes from
+the newest measured request only when its model matches; otherwise it is an
+announced character estimate. Unknown catalog windows remain null. Both client
+meters consume the endpoint.
+
 **Old:** `nexus/context/counting.py` (170 lines), `nexus/context/budget.py`
 (267 lines), tests `test_context_counting.py`, `test_context_budget.py`. Old
 doc: `docs/context.md` "Budget", "Token counting".
@@ -318,6 +342,15 @@ message adds).
 
 **Done when:** `GET /api/session/{id}/context` returns `{used, window, exact}`
 and the TUI meter reads it.
+
+**Section A verification (2026-10-29):** Core 404 tests and Ruff pass;
+full TUI tests pass, Clippy with warnings denied and formatting pass; shared
+interface checks and NSH type/generation checks pass. Real offline CLI marathon
+completed all 36 calls and its 5/5 verdict using an isolated home, workspace and
+port (an isolated home alone still defaults to port 4747). TUI Settings was
+rendered and inspected. NSH host tests and a focused browser Settings PATCH test pass; the broader browser shell suite's
+finite mock SSE transport causes reconnect-related failures, so it is not
+recorded as green.
 
 ### B. Steer and queue
 
@@ -875,8 +908,8 @@ green and visible in the real app.
 1. **Turn summaries 3–6** (TUI and NSH done in the working tree,
    TURN_SUMMARY_PLAN.md): clients read `/turn`. Land this before B's TUI work,
    since both change `reduce.rs`.
-2. **A1** config file and Settings over the API.
-3. **A2** mock provider.
+2. **A1 — done** config file and Settings over the API (2026-10-29).
+3. **A2 — done** mock provider (2026-10-29).
 4. **B** steer and queue (Core, then TUI, then NSH).
 5. **C** prompt history (Core endpoint without FTS first; K5 speeds it up later).
 6. **E** agent hot-reload checks, then **F** skills.
@@ -886,7 +919,7 @@ green and visible in the real app.
 9. **D** tools: D1–D4, then D7 permissions, then D5–D6 with `nexus-search`,
    then D8.
 10. **E** user tools with quarantine; **H** hooks.
-11. **A3** counting, then **K1** handoff, **K2** titles, **K4** drafts, **K5**
+11. **A3 — done** counting (2026-10-29), then **K1** handoff, **K2** titles, **K4** drafts, **K5**
     search, **K6** paging, then the rest of K.
 12. Turn summaries 7 and 9 (live partial, ephemeral deltas), after B, so steer
     delivery is tested against the new delta path.
@@ -1047,6 +1080,10 @@ when each item lands.
 | A retried attempt's usage was only in the event log | Every attempt's usage is stored and counted in the request and the ledger (2026-10-29) | A failed attempt is still billed |
 | Recovery searched the event log for `turn_end` | Recovery reads `turn.ended`, falling back to the log only for a turn left open by an older daemon (2026-10-29, TURN_SUMMARY_PLAN.md step 8) | State tables are the source of truth |
 
+| Layered old config and read-only defaults | One `config.toml`, editable HTTP-backed Settings, revision conflicts and forward defaults for new sessions (A1, 2026-10-29) | Shared settings without rewriting existing context |
+| Old scripted provider coupled to the old model protocol | Dev-gated `mock` llmhub provider and eleven offline scenarios (A2, 2026-10-29) | Exercise the real loop without network |
+| Client-only context estimate | Core context budget uses newest matching-model request usage, with explicit estimated fallback and nullable window (A3, 2026-10-29) | Consistent meters across clients |
+
 ## 11. Known gaps
 
 - Kernels have no checkpoint recovery; a timeout, interrupt, crash or resource
@@ -1109,7 +1146,7 @@ when each item lands.
   `history_unavailable` with a resync head. Expired keys are no longer safe to
   retry automatically. A very large export still holds one WAL read snapshot
   while streaming.
-- Sign-in is only the local `nexus login`, not yet an API endpoint.
+- Provider sign-in/out is available through the API and both clients; credentials remain in the auth store.
 - Nothing checks that a running daemon runs the current code: `nexus daemon stop` after changes.
 - No cross-provider message conversion beyond text and tool calls; switching
   provider mid-session works (`/model`), but foreign reasoning is dropped.

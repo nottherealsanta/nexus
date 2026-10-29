@@ -1815,7 +1815,7 @@ fn settings_shows_what_core_reports_and_refuses_what_it_cannot_change() {
         .first()
         .map(|n| n.text.clone())
         .unwrap_or_default();
-    assert!(toast.contains("no default setting"), "{toast}");
+    assert!(toast.contains("Configuration is not loaded"), "{toast}");
 }
 
 #[test]

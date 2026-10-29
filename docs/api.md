@@ -27,6 +27,8 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/kernel` | | Live kernels, metadata, retained cells and variable previews |
 | GET | `/api/kernel/{id}` | | One kernel (404 if missing) |
 | DELETE | `/api/kernel/{id}` | | 204; 409 while busy |
+| GET | `/api/config` | | `{revision, values, defaults, schema, errors}` for the initial settings |
+| PATCH | `/api/config` | `{expected_revision, set, unset}` | updated config; stale revision is 409 |
 | GET | `/api/info` | | `{name, version, api_version: {major, minor}, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retry, idempotency}` |
 | GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
 | GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, default_model, connected, verified}]` |
@@ -61,7 +63,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/session/{id}/turn` | `?after=<turn id>` or `?before=<turn id>`, `&limit=` (default 50, ≤ 200) | `{turns, more_before, more_after, floor, usage}`: turn summaries, oldest first, and the spend ledger; see [Turn summaries](#turn-summaries) |
 | GET | `/api/session/{id}/children` | | `[Session]`, direct children |
 | GET | `/api/session/{id}/tree` | | the whole tree containing it, from its root: `Session` + nested `children` |
-| GET | `/api/session/{id}/context` | | the provider request body the next turn would send |
+| GET | `/api/session/{id}/context` | | the provider request body plus `used`, `window`, `exact` context budget |
 | GET | `/api/session/{id}/snapshot` | | the full frozen session snapshot (agent, prompt, tools, instruction file, child catalog) |
 | GET | `/api/session/{id}/export` | `?format=markdown\|json&scope=session\|tree` | a read-only Markdown transcript or JSON document; see [Session export](#session-export) |
 | GET | `/api/session/{id}/permission` | | pending approvals |
@@ -72,6 +74,8 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/event` | `?session=` (that session and its descendants), `?cursor=<generation>:<id>` (or `Last-Event-ID`) | server-sent events (below) |
 | GET | `/api/info` (handshake) | | `api_version` is `{major, minor}`. A client sends nothing past `/api/info` when the major differs; a newer minor only adds fields, so older clients keep working and say what they lack |
 | GET | `/inspector` | | the session inspector page ([inspector.md](inspector.md)); static, no token needed to load it |
+
+Configuration patch paths and polling behavior are described in [config.md](config.md).
 
 ### Objects
 
@@ -777,6 +781,7 @@ Deleting a project publishes one tombstone per deleted session, then
 
 | Type | Data |
 | --- | --- |
+| `config.changed` | `{revision}`: global, stored; clients reload `/api/config` |
 | `project.created` / `project.updated` | `Project`; global, stored |
 | `project.deleted` | `{id}`; global, stored |
 | `session.created` / `session.updated` | `Session`, stored in that session's log |
@@ -987,3 +992,17 @@ On the first startup after the allow-by-default upgrade, previously stored
 `ask` permissions are changed to `allow` for existing sessions and children.
 This one-time migration increments their revisions; an explicit `ask` set after
 the migration remains in effect across restarts.
+
+## Configuration, provider login and context budget
+
+See [Configuration](config.md) for the config revision/patch contract and the
+provider login lifecycle. `POST /api/provider/{id}/login` returns 202 for a
+device flow, or 200 for an accepted OpenCode key. `GET` reports progress;
+`DELETE` signs out (204). Global `provider.login` events report progress.
+
+`GET /api/session/{id}/context` retains the provider request fields and adds
+`used`, `window` and `exact`. The newest request's measured input is used when
+its model matches the current model; otherwise `used` is a character-based
+estimate and `exact` is false. A missing catalog window is null. Measured usage
+refers to that request, rather than tokenizing newly appended context. Clients
+label estimates with `~`.

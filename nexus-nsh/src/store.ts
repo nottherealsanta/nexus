@@ -18,6 +18,19 @@ export const userHome = signal("");
 export const modelCatalog = signal<any[]>([]);
 export const catalogSource = signal("");
 export const defaultModel = signal("");
+export const config = signal<any | null>(null);
+export const contextBudget = signal<Record<string, { used: number; window: number | null; exact: boolean }>>({});
+export async function loadContext(id: string) { const data = await request<any>("GET", `/api/session/${id}/context`); contextBudget.update((all) => ({ ...all, [id]: data })); }
+function applyConfig(c: any) {
+  config.set(c);
+  const detail = c?.values?.ui?.detail;
+  if (detail === "low" || detail === "medium" || detail === "high") timelineDetail.set(detail);
+}
+export async function loadConfig() { applyConfig(await request("GET", "/api/config")); }
+export async function patchConfig(path: string, value: unknown) {
+  try { const c = config(); if (!c) throw new Error("Configuration is not loaded"); applyConfig(await request("PATCH", "/api/config", { body: { expected_revision: c.revision, set: { [path]: value }, unset: [] } })); }
+  catch (e) { void loadConfig().catch(() => {}); toast("error", e instanceof Error ? e.message : String(e)); }
+}
 export const agentCatalog = signal<{ project: string | null; agents: any[] }>({ project: null, agents: [] });
 export const sessionWorktrees = signal<Record<string, any | null>>({});
 export const projectWorktrees = signal<Record<string, any | null>>({});
@@ -92,6 +105,7 @@ export function savePrefs() {
 
 export function setTimelineDetail(level: TimelineDetail) {
   timelineDetail.set(level);
+  if (config()) void patchConfig("ui.detail", level);
   timelineOpen.update((open) => Object.fromEntries(Object.entries(open).filter(([key]) => !key.startsWith("group:") && !key.startsWith("tool:"))));
   toolOutputAll.set({});
   savePrefs();
@@ -241,7 +255,9 @@ const host: SyncHost = {
   setInfo(i, c) { info.set(i); compat.set(c); },
   addBanner(b) { banners.update((l) => [...l.filter((x) => x.kind !== b.kind), b]); },
   changed() { bump(); reconcileSelection(); },
-  snapshotApplied() { reconcileSelection(); },
+  snapshotApplied() { reconcileSelection(); void loadConfig().catch(() => {}); },
+  configChanged() { void loadConfig().catch(() => {}); },
+  contextChanged(id) { void loadContext(id).catch(() => {}); },
 };
 export const sync = new Sync(host);
 

@@ -277,8 +277,8 @@ note = "Meaning is preserved without colour."
 id = "appearance.animations"
 label = "Animations"
 kind = "toggle"
-scope = "client"
-clients = "tui"
+scope = "core"
+clients = "both"
 default = true
 note = "Spinners and the working shimmer; off keeps an idle terminal still."
 
@@ -296,8 +296,8 @@ note = "Rail shows one letter per session; hover a letter for its title. Drag th
 id = "appearance.timeline_detail"
 label = "Timeline detail"
 kind = "choice"
-scope = "client"
-clients = "tui"
+scope = "core"
+clients = "both"
 default = "medium"
 options = ["low", "medium", "high"]
 command = "timeline.detail_cycle"
@@ -349,7 +349,6 @@ kind = "action"
 scope = "core"
 clients = "both"
 command = "app.sign_in"
-unavailable_reason = "Sign-in over the API is not in Core yet; use `nexus login` locally."
 
 [[settings.section.row]]
 id = "providers.sign_out"
@@ -358,7 +357,6 @@ kind = "action"
 scope = "core"
 clients = "both"
 command = "app.sign_out"
-unavailable_reason = "Sign-out over the API is not in Core yet."
 
 [[settings.section.row]]
 id = "providers.default_model"
@@ -366,7 +364,6 @@ label = "Provider default model"
 kind = "choice"
 scope = "core"
 clients = "both"
-unavailable_reason = "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
 
 [[settings.section.row]]
 id = "providers.add_custom"
@@ -387,7 +384,6 @@ kind = "choice"
 scope = "core"
 clients = "both"
 command = "model.change"
-unavailable_reason = "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
 
 [[settings.section.row]]
 id = "models.default_effort"
@@ -396,7 +392,6 @@ kind = "choice"
 scope = "core"
 clients = "both"
 command = "model.effort"
-unavailable_reason = "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
 
 [[settings.section.row]]
 id = "models.catalog"
@@ -430,7 +425,6 @@ label = "Default root agent"
 kind = "choice"
 scope = "core"
 clients = "both"
-unavailable_reason = "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
 
 [[settings.section.row]]
 id = "agents.open_file"
@@ -444,12 +438,62 @@ id = "tools"
 label = "Tools"
 
 [[settings.section.row]]
+id = "tools.default_permission"
+label = "Default permission"
+kind = "choice"
+scope = "core"
+clients = "both"
+options = ["allow", "ask"]
+
+[[settings.section.row]]
 id = "tools.defaults"
 label = "Tools on by default for new sessions"
 kind = "list"
 scope = "core"
 clients = "both"
 command = "tools.configure"
+
+[[settings.section.row]]
+id = "tools.default_read"
+label = "read on by default"
+kind = "toggle"
+scope = "core"
+clients = "tui"
+
+[[settings.section.row]]
+id = "tools.default_bash"
+label = "bash on by default"
+kind = "toggle"
+scope = "core"
+clients = "tui"
+
+[[settings.section.row]]
+id = "tools.default_edit"
+label = "edit on by default"
+kind = "toggle"
+scope = "core"
+clients = "tui"
+
+[[settings.section.row]]
+id = "tools.default_write"
+label = "write on by default"
+kind = "toggle"
+scope = "core"
+clients = "tui"
+
+[[settings.section.row]]
+id = "tools.default_ask"
+label = "ask on by default"
+kind = "toggle"
+scope = "core"
+clients = "tui"
+
+[[settings.section.row]]
+id = "tools.default_code"
+label = "code on by default"
+kind = "toggle"
+scope = "core"
+clients = "tui"
 
 [[settings.section]]
 id = "skills"
@@ -698,17 +742,14 @@ category = "auth"
 slash = "login"
 when = ["always"]
 placement = ["palette", "settings", "banner"]
-status = "blocked_core"
-note = "Browser or device-code flow shown in the UI. Needs login-over-API in Core (docs/api.md 'Not yet')."
+note = "Device-code flow shown in the UI; OpenCode uses an API key."
 
 [[command]]
 id = "app.sign_out"
 title = "Sign out of a provider"
 category = "auth"
-when = ["provider.signed_in"]
-unavailable_reason = "No provider is signed in."
+when = ["always"]
 placement = ["palette", "settings"]
-status = "blocked_core"
 
 [[command]]
 id = "app.open_inspector"

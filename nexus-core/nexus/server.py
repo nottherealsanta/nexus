@@ -71,9 +71,12 @@ from starlette.routing import Route
 from . import export
 from .bus import Bus
 from .codec import to_json
+from .config import ConfigConflict, ConfigFile
+from .counting import budget
 from .eventlog import CursorError, Stream, format_cursor, parse_cursor
 from .llmhub import catalog
-from .llmhub.hub import connected
+from .llmhub.auth import SIGN_INS, AuthError
+from .llmhub.hub import connected, split_ref
 from .llmhub.providers import PROVIDERS
 from .paths import home
 from .runtime import Busy, Conflict, NotFound, Runtime, message_json, project_json
@@ -246,6 +249,100 @@ def sse(event: dict[str, Any]) -> str:
 
 
 def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
+    config = ConfigFile()
+    config_lock = asyncio.Lock()
+    config_revision = config.read()["revision"]
+
+    async def config_api(request: Request) -> Response:
+        nonlocal config_revision
+        async with config_lock:
+            if request.method == "GET":
+                return JSONResponse(config.read())
+            body = await _body(request)
+            revision = body.get("expected_revision")
+            set_values = body.get("set", {})
+            unset = body.get("unset", [])
+            if not isinstance(revision, str) or not isinstance(set_values, dict) or not isinstance(unset, list):
+                raise TypeError("expected_revision must be a string, set an object, and unset an array")
+            if not all(isinstance(key, str) for key in set_values) or not all(isinstance(key, str) for key in unset):
+                raise ValueError("setting paths must be strings")
+            try:
+                result = config.patch(revision, set_values, unset)
+            except ConfigConflict as exc:
+                return JSONResponse({"error": str(exc), "code": "revision_conflict"}, status_code=409)
+            config_revision = result["revision"]
+            runtime.bus.publish("config.changed", {"revision": config_revision})
+            return JSONResponse(result)
+
+    async def watch_config() -> None:
+        nonlocal config_revision
+        while True:
+            await asyncio.sleep(2)
+            async with config_lock:
+                revision = config.read()["revision"]
+                if revision != config_revision:
+                    runtime.bus.publish("config.changed", {"revision": revision})
+                    config_revision = revision
+
+    login_tasks: dict[str, asyncio.Task[None]] = {}
+    login_states: dict[str, dict[str, Any]] = {}
+
+    async def provider_login(request: Request) -> Response:
+        provider = request.path_params["id"]
+        if provider not in SIGN_INS:
+            raise NotFound(f"unknown provider {provider}")
+        auth = SIGN_INS[provider]()
+        if request.method == "GET":
+            return JSONResponse(login_states.get(provider, {"status": "idle"}))
+        if request.method == "DELETE":
+            task = login_tasks.pop(provider, None)
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            auth.logout()
+            login_states.pop(provider, None)
+            runtime.bus.publish("provider.login", {"provider": provider, "status": "signed_out"})
+            return Response(status_code=204)
+        body = await _body(request)
+        if provider in login_tasks and not login_tasks[provider].done():
+            raise Busy(f"{provider} sign-in already running")
+        method = body.get("method", "api_key" if provider == "opencode" else "device")
+        if method not in auth.methods or method == "browser":
+            raise ValueError("API sign-in supports device or api_key methods")
+        if method == "api_key":
+            key = body.get("api_key")
+            if not isinstance(key, str):
+                raise TypeError("api_key must be a string")
+            try:
+                auth.set_key(key)
+            except AuthError as exc:
+                raise ValueError(str(exc)) from exc
+            state = {"provider": provider, "status": "connected"}
+            login_states[provider] = state
+            runtime.bus.publish("provider.login", state)
+            return JSONResponse(state)
+        state = {"provider": provider, "status": "pending", "message": None}
+        login_states[provider] = state
+
+        def notify(message: str) -> None:
+            state["message"] = message
+            runtime.bus.publish("provider.login", dict(state))
+
+        async def run() -> None:
+            try:
+                await auth.login(method, notify=notify)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - never leak provider failures or credentials
+                state.update(status="failed", message="Sign-in failed; retry or use the local login command.")
+            else:
+                state.update(status="connected", message=None)
+            runtime.bus.publish("provider.login", dict(state))
+
+        login_tasks[provider] = asyncio.create_task(run())
+        return JSONResponse(dict(state), status_code=202)
+
     def route(handler: Handler) -> Handler:
         async def inner(request: Request) -> Response:
             try:
@@ -602,7 +699,21 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         return JSONResponse([message_json(m) for m in runtime.store.messages(p(request, "id"))])
 
     async def context(request: Request) -> Response:
-        return JSONResponse(runtime.context(p(request, "id")))
+        sid = p(request, "id")
+        body = runtime.context(sid)
+        model = runtime.session_json(runtime.session(sid))["model"]
+        try:
+            provider, model_id = split_ref(model)
+            data, _ = await catalog.load()
+            window = next((item.context for item in catalog.models_for(data, provider) if item.id == model_id), None)
+        except (OSError, ValueError, TypeError, KeyError):
+            window = None
+        row = runtime.store.db.execute(
+            "select model, input_tokens from turn_request where session_id = ? order by started desc, rowid desc limit 1",
+            (sid,),
+        ).fetchone()
+        measured = row["input_tokens"] if row and row["model"] == model else None
+        return JSONResponse(body | budget(body, window, measured))
 
     async def session_snapshot_json(request: Request) -> Response:
         return JSONResponse(runtime.snapshot_json(p(request, "id")))
@@ -722,12 +833,14 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     routes = [
         Route("/inspector", inspector),
         Route("/api/info", route(info)),
+        Route("/api/config", route(config_api), methods=["GET", "PATCH"]),
         Route("/api/question", route(all_questions)),
         Route("/api/bash", route(bash_jobs)),
         Route("/api/bash/{id}", route(bash_job), methods=["GET", "DELETE"]),
         Route("/api/kernel", route(kernels)),
         Route("/api/kernel/{id}", route(kernel), methods=["GET", "DELETE"]),
         Route("/api/provider", route(providers)),
+        Route("/api/provider/{id}/login", route(provider_login), methods=["GET", "POST", "DELETE"]),
         Route("/api/model", route(models)),
         Route("/api/model/default", route(default_model)),
         Route("/api/snapshot", route(snapshot)),
@@ -771,8 +884,18 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         await runtime.start_maintenance()
-        yield
-        await runtime.shutdown()
+        watcher = asyncio.create_task(watch_config())
+        try:
+            yield
+        finally:
+            for task in login_tasks.values():
+                task.cancel()
+            if login_tasks:
+                await asyncio.gather(*login_tasks.values(), return_exceptions=True)
+            watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await watcher
+            await runtime.shutdown()
 
     return Starlette(routes=routes, lifespan=lifespan)
 

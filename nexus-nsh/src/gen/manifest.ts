@@ -362,8 +362,8 @@ export const manifest = {
       "id": "appearance.animations",
       "label": "Animations",
       "kind": "toggle",
-      "scope": "client",
-      "clients": "tui",
+      "scope": "core",
+      "clients": "both",
       "default": true,
       "note": "Spinners and the working shimmer; off keeps an idle terminal still."
      },
@@ -385,8 +385,8 @@ export const manifest = {
       "id": "appearance.timeline_detail",
       "label": "Timeline detail",
       "kind": "choice",
-      "scope": "client",
-      "clients": "tui",
+      "scope": "core",
+      "clients": "both",
       "default": "medium",
       "options": [
        "low",
@@ -446,8 +446,7 @@ export const manifest = {
       "kind": "action",
       "scope": "core",
       "clients": "both",
-      "command": "app.sign_in",
-      "unavailable_reason": "Sign-in over the API is not in Core yet; use `nexus login` locally."
+      "command": "app.sign_in"
      },
      {
       "id": "providers.sign_out",
@@ -455,16 +454,14 @@ export const manifest = {
       "kind": "action",
       "scope": "core",
       "clients": "both",
-      "command": "app.sign_out",
-      "unavailable_reason": "Sign-out over the API is not in Core yet."
+      "command": "app.sign_out"
      },
      {
       "id": "providers.default_model",
       "label": "Provider default model",
       "kind": "choice",
       "scope": "core",
-      "clients": "both",
-      "unavailable_reason": "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
+      "clients": "both"
      },
      {
       "id": "providers.add_custom",
@@ -486,8 +483,7 @@ export const manifest = {
       "kind": "choice",
       "scope": "core",
       "clients": "both",
-      "command": "model.change",
-      "unavailable_reason": "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
+      "command": "model.change"
      },
      {
       "id": "models.default_effort",
@@ -495,8 +491,7 @@ export const manifest = {
       "kind": "choice",
       "scope": "core",
       "clients": "both",
-      "command": "model.effort",
-      "unavailable_reason": "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
+      "command": "model.effort"
      },
      {
       "id": "models.catalog",
@@ -531,8 +526,7 @@ export const manifest = {
       "label": "Default root agent",
       "kind": "choice",
       "scope": "core",
-      "clients": "both",
-      "unavailable_reason": "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
+      "clients": "both"
      },
      {
       "id": "agents.open_file",
@@ -548,12 +542,65 @@ export const manifest = {
     "label": "Tools",
     "row": [
      {
+      "id": "tools.default_permission",
+      "label": "Default permission",
+      "kind": "choice",
+      "scope": "core",
+      "clients": "both",
+      "options": [
+       "allow",
+       "ask"
+      ]
+     },
+     {
       "id": "tools.defaults",
       "label": "Tools on by default for new sessions",
       "kind": "list",
       "scope": "core",
       "clients": "both",
       "command": "tools.configure"
+     },
+     {
+      "id": "tools.default_read",
+      "label": "read on by default",
+      "kind": "toggle",
+      "scope": "core",
+      "clients": "tui"
+     },
+     {
+      "id": "tools.default_bash",
+      "label": "bash on by default",
+      "kind": "toggle",
+      "scope": "core",
+      "clients": "tui"
+     },
+     {
+      "id": "tools.default_edit",
+      "label": "edit on by default",
+      "kind": "toggle",
+      "scope": "core",
+      "clients": "tui"
+     },
+     {
+      "id": "tools.default_write",
+      "label": "write on by default",
+      "kind": "toggle",
+      "scope": "core",
+      "clients": "tui"
+     },
+     {
+      "id": "tools.default_ask",
+      "label": "ask on by default",
+      "kind": "toggle",
+      "scope": "core",
+      "clients": "tui"
+     },
+     {
+      "id": "tools.default_code",
+      "label": "code on by default",
+      "kind": "toggle",
+      "scope": "core",
+      "clients": "tui"
      }
     ]
    },
@@ -853,22 +900,19 @@ export const manifest = {
     "settings",
     "banner"
    ],
-   "status": "blocked_core",
-   "note": "Browser or device-code flow shown in the UI. Needs login-over-API in Core (docs/api.md 'Not yet')."
+   "note": "Device-code flow shown in the UI; OpenCode uses an API key."
   },
   {
    "id": "app.sign_out",
    "title": "Sign out of a provider",
    "category": "auth",
    "when": [
-    "provider.signed_in"
+    "always"
    ],
-   "unavailable_reason": "No provider is signed in.",
    "placement": [
     "palette",
     "settings"
-   ],
-   "status": "blocked_core"
+   ]
   },
   {
    "id": "app.open_inspector",

@@ -608,6 +608,30 @@ class Runtime:
                 f"session {parent.id} is archived; unarchive its root tree (session {root.id}) "
                 "before creating a child session"
             )
+        if parent is None:
+            from .config import ConfigFile
+            defaults = ConfigFile().read()["values"]
+            settings = defaults["defaults"]
+            if model is None and settings["model"]:
+                try:
+                    provider_for(settings["model"])
+                except ValueError:
+                    pass
+                else:
+                    model = settings["model"]
+            if permission is None:
+                permission = settings["permission"]
+            if effort is None:
+                effort = settings["effort"] or None
+            if disabled_tools is None:
+                try:
+                    disabled_tools = self.check_tool_names(defaults["tools"]["disabled"])
+                except ValueError:
+                    pass
+            if agent is None and settings["agent"]:
+                available = self.agents(project.path).allowed(child=False)
+                if settings["agent"] in [item.name for item in available]:
+                    agent = settings["agent"]
         if disabled_tools is None and parent is not None:
             disabled_tools = sorted(parent.disabled())
         if disabled_tools is not None:

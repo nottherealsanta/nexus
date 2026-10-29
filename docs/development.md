@@ -35,6 +35,7 @@ nexus/
   builtin_agents/    orchestrate, build, quick, scout, plan (.md) + NOTICE
   loop.py            the agent loop
   codec.py           JSON encoding of messages and events
+  config.py          TOML config, schema, revision-checked patches and MCP import
   paths.py           home(): $NEXUS10_HOME or ~/.nexus10
   export.py          read-only session/tree exports: Markdown and JSON
   store.py           SQLite: projects, sessions, messages, observations, turn lifecycle, mutation journal, durable event log (~/.nexus10/nexus.db)

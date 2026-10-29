@@ -15,6 +15,14 @@ adapters a header source; adapters never see stored credentials
 | `auth/opencode.py` | OpenCode Go API key |
 | `auth/errors.py` | `AuthError`: short messages, never token material |
 
+## Sign-in from clients
+
+Both clients offer provider sign-in and sign-out in Settings. Device flows use
+`POST /api/provider/{id}/login`; instructions arrive through `provider.login`
+events and `GET` on the same path reports progress. OpenCode accepts an API key
+through a masked input. `DELETE` cancels a pending flow and signs out. Keys are
+never included in progress events. See [Configuration](config.md).
+
 ## The shared interface
 
 Every sign-in class takes an optional `CredentialStore` and has:

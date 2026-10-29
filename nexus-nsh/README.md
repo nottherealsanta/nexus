@@ -196,3 +196,9 @@ The top header omits the busy indicator; activity stays with the conversation.
 
 Starting Context lists Skills and MCP as unavailable until Core supports them.
 The system prompt opens in its detail view without an inline preview.
+
+Settings reads and edits shared defaults, timeline detail, reduced-motion choice and disabled tools through Core's
+`/api/config`, using the current file revision for each write. Configuration
+errors are shown in Settings, and `config.changed` refreshes the view after an
+external edit. The session context meter uses Core's budget; `~` marks an
+estimate.

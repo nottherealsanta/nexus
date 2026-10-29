@@ -54,6 +54,8 @@ export interface SyncHost {
   changed(): void;
   /** Called once a fresh snapshot is applied, so views can reload selection. */
   snapshotApplied?(): void;
+  configChanged?(): void;
+  contextChanged?(id: string): void;
   canStart: boolean;
 }
 
@@ -165,9 +167,10 @@ export class Sync {
       let resync: string | null = null;
       let closed: string | null = null;
       for (const ev of buf) {
+        if (ev.type === "config.changed") h.configChanged?.();
         const r = m.applyEvent(ev);
         if (typeof r === "object") { resync = r.resync; break; }
-        if (r === "applied" && ev.type === "turn.summary" && ev.session_id && ev.session_id === m.selected?.sessionId) closed = ev.session_id;
+        if (r === "applied" && ["turn.summary", "message.added", "session.updated"].includes(ev.type) && ev.session_id && ev.session_id === m.selected?.sessionId) { h.contextChanged?.(ev.session_id); if (ev.type === "turn.summary") closed = ev.session_id; }
       }
       if (closed) void this.refreshLedger(closed).catch(() => {});
       buf = [];
@@ -206,6 +209,7 @@ export class Sync {
     const id = m.selected?.sessionId;
     if (!id) return;
     const wanted = () => m.selected?.sessionId === id;
+    this.host.contextChanged?.(id);
     const [msgs, starting, turns] = await Promise.all([
       request<any[]>("GET", `/api/session/${id}/message`),
       request<any>("GET", `/api/session/${id}/snapshot`).catch(() => null),

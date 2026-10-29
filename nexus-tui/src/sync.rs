@@ -52,6 +52,11 @@ pub enum ResyncCause {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyncMsg {
     Connection(ConnectionState),
+    Config(Result<Value, String>),
+    Context {
+        session: String,
+        data: Value,
+    },
     Handshake {
         info: Info,
         compat: Compat,
@@ -116,6 +121,13 @@ pub enum Command {
     Select(Option<String>),
     /// Fetch a fresh snapshot (the reducer could not continue).
     Resync,
+    Config,
+    Context(String),
+    PatchConfig {
+        revision: String,
+        path: String,
+        value: Value,
+    },
     /// Load the model catalog and agent list for a project (picker data).
     Catalog(Option<String>),
     /// Fetching also publishes a worktree.listed event on Core.
@@ -191,6 +203,9 @@ struct Ctx {
     resync: Option<ResyncCause>,
     /// A model/agent picker asked for the catalog of this project.
     catalog: Option<Option<String>>,
+    config: bool,
+    context: Option<String>,
+    config_patch: Option<(String, String, Value)>,
     worktrees: Option<String>,
     project_worktrees: Vec<String>,
     git: Option<String>,
@@ -213,11 +228,19 @@ impl Ctx {
     fn handle(&mut self, cmd: Command) {
         match cmd {
             Command::Select(s) => {
+                self.context = s.clone();
                 self.selected = s;
                 self.newest_turn = None;
                 self.resync = Some(ResyncCause::Requested);
             }
             Command::Resync => self.resync = Some(ResyncCause::Requested),
+            Command::Config => self.config = true,
+            Command::Context(session) => self.context = Some(session),
+            Command::PatchConfig {
+                revision,
+                path,
+                value,
+            } => self.config_patch = Some((revision, path, value)),
             Command::Catalog(project) => self.catalog = Some(project),
             Command::Worktrees(session) => self.worktrees = Some(session),
             Command::ProjectWorktrees(project) => {
@@ -287,6 +310,9 @@ pub async fn run(
         selected: None,
         resync: None,
         catalog: None,
+        config: true,
+        context: None,
+        config_patch: None,
         worktrees: None,
         project_worktrees: Vec::new(),
         git: None,
@@ -423,6 +449,8 @@ pub async fn run(
             }
         }
 
+        load_config(&mut cx, &api).await;
+        load_context(&mut cx, &api).await;
         // A request received while reconnecting must not be stranded until a
         // later command arrives on the live stream.
         if let Some(project) = cx.catalog.take() {
@@ -537,6 +565,48 @@ async fn load_completion(cx: &mut Ctx, api: &CoreApi) {
 
 /// Picker data: the connected providers' models and the agents that can run in
 /// this project. Read-only; a failure just leaves the picker empty.
+async fn load_context(cx: &mut Ctx, api: &CoreApi) {
+    if let Some(session) = cx.context.take() {
+        if let Ok(data) = api
+            .http
+            .get(&format!("/api/session/{session}/context"), &[])
+            .await
+        {
+            cx.send(SyncMsg::Context { session, data });
+        }
+    }
+}
+
+async fn load_config(cx: &mut Ctx, api: &CoreApi) {
+    if let Some((revision, path, value)) = cx.config_patch.take() {
+        let body =
+            serde_json::json!({"expected_revision": revision, "set": {path: value}, "unset": []});
+        let result = api
+            .http
+            .call(
+                reqwest::Method::PATCH,
+                "/api/config",
+                &[],
+                Some(&body),
+                None,
+                None,
+            )
+            .await
+            .map(|r| r.body)
+            .map_err(|e| e.to_string());
+        cx.send(SyncMsg::Config(result));
+        cx.config = true;
+    }
+    if std::mem::take(&mut cx.config) {
+        cx.send(SyncMsg::Config(
+            api.http
+                .get("/api/config", &[])
+                .await
+                .map_err(|e| e.to_string()),
+        ));
+    }
+}
+
 async fn load_catalog(
     api: &CoreApi,
     project: Option<&str>,
@@ -858,6 +928,13 @@ async fn stream(
                     }
                     Ok(Frame::Overflow(_)) => return StreamEnd::Resync { cause: ResyncCause::Overflow, progressed },
                     Ok(Frame::Event(e)) => {
+                        if e.kind == "config.changed" { cx.config = true; load_config(cx, api).await; }
+                        if matches!(e.kind.as_str(), "turn.summary" | "message.added" | "session.updated") {
+                            if let Some(id) = e.session_id.as_ref().filter(|id| cx.selected.as_ref() == Some(*id)) {
+                                cx.context = Some(id.clone());
+                                load_context(cx, api).await;
+                            }
+                        }
                         if e.kind == "turn.summary" && e.data["status"].as_str() != Some("running") {
                             if let (Some(sid), Some(turn)) = (e.session_id.as_deref(), e.data["id"].as_str()) {
                                 if cx.selected.as_deref() == Some(sid) {
@@ -884,9 +961,11 @@ async fn stream(
             cmd = cx.cmds.recv() => {
                 match cmd {
                     Some(c) => {
-                        let was_catalog = matches!(c, Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
+                        let was_catalog = matches!(c, Command::Config | Command::Context(_) | Command::PatchConfig { .. } | Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
                         cx.handle(c);
                         if cx.shutdown { return StreamEnd::Stop; }
+                        load_config(cx, api).await;
+                        load_context(cx, api).await;
                         if let Some(project) = cx.catalog.take() {
                             if let Some((models, agents, source, default_model)) = load_catalog(api, project.as_deref()).await {
                                 if !cx.send(SyncMsg::Catalog { models, agents, source, default_model }) {

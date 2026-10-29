@@ -42,6 +42,9 @@ class OpenCodeAuth:
     async def login(self, method: str = "api_key", notify: Callable[[str], None] = print) -> None:
         notify("Paste your OpenCode Go API key (from opencode.ai/auth). Input is hidden.")
         key = getpass.getpass("API key: ").strip()
+        self.set_key(key)
+
+    def set_key(self, key: str) -> None:
         if not key or len(key) > 4096 or any(ch.isspace() for ch in key):
             raise AuthError("opencode: that does not look like an API key")
         with self.store.locked():

@@ -226,11 +226,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             };
             let m = modal(&cx, buf, area, modal_box(area, 60, 8), title, &mut hits);
             let (rows, _) = e.buf.layout(m.w.max(1) as usize);
+            let masked = "•".repeat(e.buf.text().chars().count());
             put(
                 buf,
                 m.x,
                 m.body.y,
-                rows.first().map(String::as_str).unwrap_or(""),
+                if matches!(e.target, crate::ui::EditTarget::ProviderKey) {
+                    &masked
+                } else {
+                    rows.first().map(String::as_str).unwrap_or("")
+                },
                 cx.st(PRIMARY, PANEL).add_modifier(Modifier::UNDERLINED),
                 m.w,
             );
@@ -2846,14 +2851,20 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
     let none = "not reported";
     let muted = cx.st(MUTED, SIDEBAR);
     let tokens = stats.as_ref().filter(|st| st.has_tokens());
-    let window = a
-        .state
-        .models
-        .iter()
-        .find(|m| m["ref"].as_str() == Some(a.effective_model(Some(s)).as_str()))
-        .and_then(|m| m["context"].as_u64())
-        .filter(|&n| n > 0);
-    let used = tokens.and_then(|st| st.last_input);
+    let budget = a.state.context.get(&s.id);
+    let window = match budget {
+        Some(c) => c["window"].as_u64(),
+        None => a
+            .state
+            .models
+            .iter()
+            .find(|m| m["ref"].as_str() == Some(a.effective_model(Some(s)).as_str()))
+            .and_then(|m| m["context"].as_u64()),
+    }
+    .filter(|&n| n > 0);
+    let used = budget
+        .and_then(|c| c["used"].as_u64())
+        .or_else(|| tokens.and_then(|st| st.last_input));
     if let (Some(used), Some(window)) = (used, window) {
         if *y < r.bottom() {
             let fraction = used as f64 / window as f64;
@@ -4308,7 +4319,11 @@ struct ComposerUsage {
 /// The latest request's input is an estimate of occupied context. Occupancy is
 /// shown against each price tier boundary and the window, as old Nexus did.
 fn composer_usage(cx: &Cx, session: &crate::api::Session) -> Option<ComposerUsage> {
-    let input = cx.app.state.model.selected.as_ref()?.latest_input()?;
+    let budget = cx.app.state.context.get(&session.id);
+    let input = budget
+        .and_then(|b| b["used"].as_u64())
+        .or_else(|| cx.app.state.model.selected.as_ref()?.latest_input())?;
+    let exact = budget.and_then(|b| b["exact"].as_bool()).unwrap_or(true);
     let model = cx.app.effective_model(Some(session));
     let entry = cx
         .app
@@ -4316,7 +4331,11 @@ fn composer_usage(cx: &Cx, session: &crate::api::Session) -> Option<ComposerUsag
         .models
         .iter()
         .find(|m| m["ref"].as_str() == Some(model.as_str()));
-    let window = entry.and_then(|m| m["context"].as_u64()).filter(|&n| n > 0);
+    let window = match budget {
+        Some(b) => b["window"].as_u64(),
+        None => entry.and_then(|m| m["context"].as_u64()),
+    }
+    .filter(|&n| n > 0);
     let mut tiers: Vec<u64> = entry
         .and_then(|m| m["tiers"].as_array())
         .map(|tiers| tiers.iter().filter_map(Value::as_u64).collect())
@@ -4342,13 +4361,26 @@ fn composer_usage(cx: &Cx, session: &crate::api::Session) -> Option<ComposerUsag
     if !detail.is_empty() {
         lines.push(detail.join(" · "));
     }
-    lines.push("Estimated from the latest request's input tokens.".to_owned());
+    lines.push(
+        if budget.is_none() {
+            "Estimated from the latest request's input tokens."
+        } else if exact {
+            "Provider usage."
+        } else {
+            "Estimated context."
+        }
+        .to_owned(),
+    );
     let fraction = tiers
         .first()
         .filter(|&&tier| input < tier)
         .map(|&tier| input as f64 / tier as f64)
         .or_else(|| window.map(|window| input as f64 / window as f64));
-    let mut figures = vec![text::count(input)];
+    let mut figures = vec![format!(
+        "{}{}",
+        if exact { "" } else { "~" },
+        text::count(input)
+    )];
     figures.extend(tiers.iter().map(|tier| percent(input, *tier)));
     if let Some(window) = window {
         figures.push(percent(input, window));
@@ -5108,6 +5140,16 @@ fn on_off(on: bool) -> String {
 fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
     let a = cx.app;
     let live = match row.id.as_str() {
+        id if id.starts_with("tools.default_") && id != "tools.default_permission" => {
+            let name = id.trim_start_matches("tools.default_");
+            let disabled = a
+                .state
+                .config
+                .as_ref()
+                .and_then(|c| c["values"]["tools"]["disabled"].as_array())
+                .is_some_and(|v| v.iter().any(|x| x.as_str() == Some(name)));
+            Some(on_off(!disabled))
+        }
         "appearance.theme" => Some(match a.theme.opts.mode {
             crate::theme::Mode::Dark => "dark".into(),
             crate::theme::Mode::Light => "light".into(),
@@ -5156,11 +5198,27 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
             format!("pid {}{}{}", c.pid, cx.sep(), c.home)
         })),
         "keybindings.list" => Some("enter".into()),
-        "models.default" | "providers.default_model" => Some(if a.state.default_model.is_empty() {
-            "not reported".into()
-        } else {
-            a.state.default_model.clone()
-        }),
+        "models.default"
+        | "providers.default_model"
+        | "models.default_effort"
+        | "agents.default_root"
+        | "tools.default_permission" => {
+            let key = match row.id.as_str() {
+                "models.default_effort" => "effort",
+                "agents.default_root" => "agent",
+                "tools.default_permission" => "permission",
+                _ => "model",
+            };
+            Some(
+                a.state
+                    .config
+                    .as_ref()
+                    .and_then(|c| c["values"]["defaults"][key].as_str())
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or("automatic")
+                    .into(),
+            )
+        }
         "models.catalog" => Some(format!(
             "{} models{}",
             a.state.models.len(),
@@ -5178,7 +5236,7 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
                 .collect::<Vec<_>>()
                 .join(", "),
         ),
-        "models.refresh" => Some("enter".into()),
+        "models.refresh" | "providers.sign_in" | "providers.sign_out" => Some("enter".into()),
         _ => None,
     };
     match live {
@@ -5278,7 +5336,8 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
             } => {
                 let position = rows.iter().position(|p| p == i).unwrap_or(0);
                 let selected = Some(*i) == sel_item;
-                let disabled = row.unavailable_reason.is_some() || section_reason.is_some();
+                let disabled = (row.unavailable_reason.is_some() || section_reason.is_some())
+                    && !matches!(row.id.as_str(), "providers.sign_in" | "providers.sign_out");
                 let (value, wired) = settings_value(cx, row);
                 let rr = Rect::new(r.x + 1, y, r.width.saturating_sub(2), 1);
                 let mut style = cx.st(if disabled || !wired { MUTED } else { PRIMARY }, RAISED);
@@ -5333,6 +5392,7 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
             .unavailable_reason
             .clone()
             .or(section_reason.clone())
+            .filter(|_| !matches!(row.id.as_str(), "providers.sign_in" | "providers.sign_out"))
             .or_else(|| (!App::settings_wired(&row.id)).then(|| "Not available yet.".to_owned()))
             .unwrap_or_else(|| row.note.clone());
         put(
@@ -5649,6 +5709,8 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
     }
     let title = match p.mode {
         PaletteMode::Commands => "Command palette",
+        PaletteMode::ProviderLogin => "Sign in to a provider",
+        PaletteMode::ProviderLogout => "Sign out of a provider",
         PaletteMode::Sessions if cx.app.ui.scope_all => "Search sessions · Global",
         PaletteMode::Sessions => "Search sessions · Project",
         PaletteMode::Projects => "Switch project",
@@ -5668,6 +5730,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
     if q.is_empty() {
         let ph = match p.mode {
             PaletteMode::Commands => "type to filter commands",
+            PaletteMode::ProviderLogin | PaletteMode::ProviderLogout => "choose a provider",
             PaletteMode::Sessions => "type to find a session",
             PaletteMode::Projects => "type to find a project",
             PaletteMode::Models => "type to filter models",

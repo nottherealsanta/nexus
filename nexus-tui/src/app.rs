@@ -1878,6 +1878,24 @@ impl App {
                     ));
                 }
             }
+            PaletteMode::ProviderLogin | PaletteMode::ProviderLogout => {
+                let sign_out = p.mode == PaletteMode::ProviderLogout;
+                for (i, id) in ["codex", "copilot", "grok", "opencode"].iter().enumerate() {
+                    if let Some(score) = fuzzy(&q, id) {
+                        scored.push((
+                            score,
+                            i,
+                            PaletteItem {
+                                kind: PaletteKind::Provider((*id).into(), sign_out),
+                                label: (*id).into(),
+                                hint: String::new(),
+                                category: "provider".into(),
+                                reason: None,
+                            },
+                        ));
+                    }
+                }
+            }
             PaletteMode::Sessions => {
                 for (i, s) in self.state.model.sessions_recent().into_iter().enumerate() {
                     if s.parent_id.is_some()
@@ -2143,6 +2161,23 @@ impl App {
         self.close_overlay();
         match item.kind {
             PaletteKind::Command(id) => self.execute(&id),
+            PaletteKind::Provider(id, sign_out) => {
+                if id == "opencode" && !sign_out {
+                    let restore = self.restore_point();
+                    self.ui.edit = Some(TextEdit {
+                        label: "OpenCode API key".into(),
+                        target: EditTarget::ProviderKey,
+                        buf: Composer::new(),
+                        restore,
+                    });
+                } else {
+                    self.api(ApiCall::Provider {
+                        id,
+                        sign_out,
+                        key: None,
+                    });
+                }
+            }
             PaletteKind::Session(id) => self.open_session(&id),
             PaletteKind::Project(id) => self.select_project(&id),
             PaletteKind::Model(model) => {
@@ -2242,6 +2277,18 @@ impl App {
     /// or closed by hand follow the new level again.
     pub fn set_detail(&mut self, detail: crate::ui::Detail) {
         self.ui.detail = detail;
+        if let Some(revision) = self
+            .state
+            .config
+            .as_ref()
+            .and_then(|c| c["revision"].as_str())
+        {
+            self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+                revision: revision.to_owned(),
+                path: "ui.detail".into(),
+                value: serde_json::Value::String(detail.label().into()),
+            }));
+        }
         self.ui
             .timeline_open
             .retain(|key, _| !(key.starts_with("group:") || key.starts_with("tool:")));
@@ -2560,6 +2607,9 @@ impl App {
                     self.ui.view = View::Session;
                     self.ui.focus = Focus::Composer;
                 } else {
+                    self.effects.push(Effect::Sync(SyncCommand::Config));
+                    self.effects
+                        .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
                     self.ui.view = View::Settings;
                     self.ui.settings_search = Composer::new();
                     self.ui.settings_row = 0;
@@ -2668,6 +2718,8 @@ impl App {
             "sidebar.row_menu" => self.open_palette(PaletteMode::RowMenu),
             "session.switch" => self.open_palette(PaletteMode::Sessions),
             "project.switch" => self.open_palette(PaletteMode::Projects),
+            "app.sign_in" => self.open_palette(PaletteMode::ProviderLogin),
+            "app.sign_out" => self.open_palette(PaletteMode::ProviderLogout),
             "model.change" => self.open_picker(PaletteMode::Models),
             "model.effort" => self.open_picker(PaletteMode::Efforts),
             "agent.change" => self.open_picker(PaletteMode::Agents),
@@ -3177,6 +3229,44 @@ impl App {
         } = msg
         {
             return self.completion_reply(project, session, query, limit, data);
+        }
+        if let SyncMsg::Config(Err(error)) = &msg {
+            self.toast(Level::Warning, format!("Configuration: {error}"));
+        }
+        if let SyncMsg::Config(Ok(config)) = &msg {
+            if let Some(detail) = config["values"]["ui"]["detail"]
+                .as_str()
+                .and_then(crate::ui::Detail::from_label)
+            {
+                self.ui.detail = detail;
+            }
+            if let Some(reduced) = config["values"]["ui"]["reduced_motion"].as_bool() {
+                let mut options = self.theme.opts;
+                options.reduced_motion = reduced;
+                self.theme = self.theme.with(options);
+            }
+            if let Some(errors) = config["errors"].as_array().filter(|e| !e.is_empty()) {
+                self.toast(
+                    Level::Warning,
+                    format!(
+                        "Configuration: {}",
+                        errors
+                            .iter()
+                            .filter_map(|e| e.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                );
+            }
+        }
+        if let SyncMsg::Event(event) = &msg {
+            if event.kind == "provider.login" {
+                if let Some(message) = event.data["message"].as_str() {
+                    self.toast(Level::Info, message.to_owned());
+                } else if let Some(status) = event.data["status"].as_str() {
+                    self.toast(Level::Info, format!("Provider sign-in: {status}"));
+                }
+            }
         }
         let attention = match &msg {
             SyncMsg::Event(event) => event
@@ -3885,6 +3975,11 @@ impl App {
                     EditTarget::ChangeDirectory { id } => self.api(ApiCall::ChangeDirectory {
                         session: id,
                         directory: title,
+                    }),
+                    EditTarget::ProviderKey => self.api(ApiCall::Provider {
+                        id: "opencode".into(),
+                        sign_out: false,
+                        key: Some(crate::actions::Secret(title)),
                     }),
                     EditTarget::AddProject => {
                         let path = match title.strip_prefix('~') {
@@ -4652,7 +4747,20 @@ impl App {
     pub fn settings_wired(id: &str) -> bool {
         matches!(
             id,
-            "appearance.theme"
+            "providers.sign_in"
+                | "providers.sign_out"
+                | "models.default"
+                | "providers.default_model"
+                | "models.default_effort"
+                | "agents.default_root"
+                | "tools.default_permission"
+                | "tools.default_read"
+                | "tools.default_bash"
+                | "tools.default_edit"
+                | "tools.default_write"
+                | "tools.default_ask"
+                | "tools.default_code"
+                | "appearance.theme"
                 | "appearance.monochrome"
                 | "appearance.animations"
                 | "notifications.terminal"
@@ -4681,7 +4789,12 @@ impl App {
         else {
             return None;
         };
-        if let Some(why) = row.unavailable_reason.clone().or(section_reason) {
+        if let Some(why) = row
+            .unavailable_reason
+            .clone()
+            .or(section_reason)
+            .filter(|_| !matches!(row.id.as_str(), "providers.sign_in" | "providers.sign_out"))
+        {
             self.toast(Level::Warning, format!("{}: {why}", row.label));
             return None;
         }
@@ -4698,6 +4811,78 @@ impl App {
             return;
         };
         match row.id.as_str() {
+            id if id.starts_with("tools.default_") && id != "tools.default_permission" => {
+                let name = id.trim_start_matches("tools.default_");
+                if let Some(config) = &self.state.config {
+                    let mut disabled = config["values"]["tools"]["disabled"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default();
+                    if disabled.iter().any(|v| v.as_str() == Some(name)) {
+                        disabled.retain(|v| v.as_str() != Some(name));
+                    } else {
+                        disabled.push(serde_json::Value::String(name.to_owned()));
+                    }
+                    if let Some(revision) = config["revision"].as_str() {
+                        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+                            revision: revision.to_owned(),
+                            path: "tools.disabled".into(),
+                            value: serde_json::Value::Array(disabled),
+                        }));
+                    }
+                }
+            }
+            "models.default"
+            | "providers.default_model"
+            | "models.default_effort"
+            | "agents.default_root"
+            | "tools.default_permission" => {
+                let key = match row.id.as_str() {
+                    "models.default_effort" => "effort",
+                    "agents.default_root" => "agent",
+                    "tools.default_permission" => "permission",
+                    _ => "model",
+                };
+                let mut choices = vec![String::new()];
+                match key {
+                    "model" => choices.extend(
+                        self.state
+                            .models
+                            .iter()
+                            .filter_map(|m| m["ref"].as_str().map(str::to_owned)),
+                    ),
+                    "agent" => choices.extend(
+                        self.state
+                            .agents
+                            .iter()
+                            .filter_map(|a| a["name"].as_str().map(str::to_owned)),
+                    ),
+                    "permission" => {
+                        choices.clear();
+                        choices.extend(["allow", "ask"].iter().map(|s| s.to_string()));
+                    }
+                    _ => choices.extend(
+                        ["low", "medium", "high", "xhigh"]
+                            .iter()
+                            .map(|s| s.to_string()),
+                    ),
+                }
+                if let Some(config) = &self.state.config {
+                    let current = config["values"]["defaults"][key].as_str().unwrap_or("");
+                    let index = choices.iter().position(|s| s == current).unwrap_or(0) as isize;
+                    let value =
+                        choices[(index + step).rem_euclid(choices.len() as isize) as usize].clone();
+                    if let Some(revision) = config["revision"].as_str() {
+                        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+                            revision: revision.to_owned(),
+                            path: format!("defaults.{key}"),
+                            value: serde_json::Value::String(value),
+                        }));
+                    }
+                } else {
+                    self.toast(Level::Warning, "Configuration is not loaded");
+                }
+            }
             "notifications.terminal" => {
                 let modes = [Notify::Off, Notify::Waiting, Notify::All];
                 let now = modes.iter().position(|m| *m == self.ui.notify).unwrap_or(1) as isize;
@@ -4725,6 +4910,9 @@ impl App {
             return;
         };
         match row.id.as_str() {
+            id if id.starts_with("tools.default_") && id != "tools.default_permission" => {
+                self.settings_change(index, 1)
+            }
             "appearance.theme" => self.execute("app.theme"),
             "appearance.monochrome" => self.toggle_monochrome(),
             "appearance.animations" => {
@@ -4732,9 +4920,14 @@ impl App {
                 options.reduced_motion = !options.reduced_motion;
                 self.theme = self.theme.with(options);
             }
-            "appearance.sidebar" | "notifications.terminal" | "appearance.timeline_detail" => {
-                self.settings_change(index, 1)
-            }
+            "models.default"
+            | "providers.default_model"
+            | "models.default_effort"
+            | "agents.default_root"
+            | "tools.default_permission"
+            | "appearance.sidebar"
+            | "notifications.terminal"
+            | "appearance.timeline_detail" => self.settings_change(index, 1),
             "appearance.details" => {
                 self.ui.right_open = !self.ui.right_open;
                 self.ui.right_chosen = true;
@@ -5487,6 +5680,7 @@ impl App {
 impl ActionDone {
     fn call_name(&self) -> &'static str {
         match self.call {
+            ApiCall::Provider { .. } => "Provider sign-in failed",
             ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. } => "Send failed",
             ApiCall::NewSession { .. } => "New session failed",
             ApiCall::Continue { .. } => "Continue failed",
