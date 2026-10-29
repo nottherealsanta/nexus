@@ -1027,6 +1027,11 @@ review in light and dark; budgets for large sessions (with turn summaries step
 kitty and iTerm (old `mermaid_image.rs`), and Mermaid in NSH with a pinned
 `mermaid` bundle served by the host (no CDN, per its CSP).
 
+M5: Subagents should not open in a new tab beside the parent agent. instead add a row below the tabs and show the name of the subagent session (child session title). 
+also in the parent/root agent/session we should make the subagent render better. (remove the word "child") show icon (spinner animation for subagent working - spinner all dots on for completed) then name of the agent ("Build", "Scout" etc) - then name of that session. and then "Background" (highlighed in darkgray) if it was done in background. 
+in the next line show provider/model/effort - time taken ( changing when subagent is working and time taken when done)
+When the background gets back, it should rendered well. 
+
 ### N. Operations
 
 **Old:** `nexus/host_support/doctor.py`, `nexus/host/doctor.py`,
