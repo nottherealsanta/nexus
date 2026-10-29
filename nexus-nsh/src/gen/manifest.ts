@@ -1890,6 +1890,21 @@ export const manifest = {
    "status": "blocked_core"
   },
   {
+   "id": "skills.learn",
+   "title": "Learn skills",
+   "category": "tools",
+   "slash": "learn",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project first.",
+   "placement": [
+    "palette",
+    "composer"
+   ],
+   "note": "/learn owner/repo, a GitHub URL, ./folder, or `npx skills add \u2026`: copies the skills, no npx. Asks project or global."
+  },
+  {
    "id": "mcp.configure",
    "title": "MCP servers",
    "category": "tools",

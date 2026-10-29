@@ -153,7 +153,7 @@ Durations come from event `time`; Core sends no duration fields.
 | N6 | System prompt as the model will get it | Core work | 12a Session drafts | Available only after creation: `GET …/snapshot`, `GET …/context` |
 | N7 | `AGENTS.md` with path and status | API ready | `Session.snapshot.instructions` (path, status, bytes, sha256); full text in `GET …/snapshot` | Only after creation (see N1) |
 | N8 | Tools with guidance, schema and a switch each | Core work | 12a Session drafts | Per-session switches exist (`disabled_tools`; `GET …/snapshot.tool_definitions`), but not before creation |
-| N9 | Skills and MCP servers with switches and status | Core work | 11a Skills, MCP | Nothing implemented |
+| N9 | Skills and MCP servers with switches and status | Core done, client UI open | F, G | `/api/skill`, `/api/mcp`, `skill:`/`mcp:` switches; no client UI yet |
 | N10 | Token count of the whole starting context | Core work | 12a Session drafts | No token counter |
 | N11 | Prompt override | Core work | 12a Session drafts | |
 | N12 | After first send: frozen context as the first timeline item, collapsed | API ready | `GET …/snapshot`, `GET …/context` | Rendered from the snapshot; label as starting context |
@@ -232,7 +232,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | X13 | Background bash: job state and output | API ready | `GET /api/bash`, `GET /api/bash/{id}`, `DELETE /api/bash/{id}`; E: `bash.started`, `bash.finished` | Jobs live in memory; output lost on daemon restart (Known gap) |
 | X14 | `web_search`, `web_fetch` | Core work | 11a Web tools | Not implemented |
 | X15 | MCP tools (`server` + tool name) | Core work | 11a MCP | Not implemented |
-| X16 | Skill loading | Core work | 11a Skills | Not implemented |
+| X16 | Skill loading | Core done | F | `skill` tool; no client UI yet |
 | X17 | Errors and denials: error colour; denial says who denied | API ready | `result.is_error` text; E: `permission.replied` (`outcome`, `reason`) | |
 | X18 | Large output: capped UI box, first/last N lines, "N hidden · show all" | Client only | | Display cap only |
 | X19 | "Show all" fetches the full result from Core | Core work | 12a Attachments and images (durable artifacts for full tool outputs) | Today Core keeps only the clipped model-visible text; only a background bash job keeps retained output (`GET /api/bash/{id}`) |

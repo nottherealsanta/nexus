@@ -611,6 +611,24 @@ passes.
 
 ### F. Skills
 
+**Landed 2026-10-29 (Core), pending the client UI and a real-model check:**
+`nexus/skills/` (lenient frontmatter, fail-closed resources, discovery with
+project-over-global precedence and reported clashes), the `skill` tool
+(body and bundled files, read from disk at call time), `GET /api/skill[/{name}]`,
+`skills.changed`, per-session `skill:<name>` switches, and a forward notice
+(`skill.announced`) for a skill added or changed after the session started
+(`tests/test_skills.py`, docs/tools.md "Skills"). Decisions made while porting:
+the `skill` tool exists only in sessions whose start found a skill (so no
+request gains a tool when no skill exists, and a session without it gets no
+notices); the body is not frozen in the snapshot (only the index is), so an edit
+loads as it is now and says so; a switch applied after the index was sent
+cannot rewrite it, so the tool refuses the skill instead. Open: `allowed-tools`
+narrowing (parsed, shown, not enforced; the result says so), the starting-context
+Skills section and Settings → Skills in both clients (manifest rows
+`skills.*` are still `unavailable`), default-on settings for skills. `/learn` (the `npx skills` replacement: Git or local
+source, project or global, plain copy; `POST /api/skill/install`) is built in Core,
+the TUI and NSH, and was run against anthropics/skills.
+
 **Old:** `nexus/skills/` (`manager.py` 636, `frontmatter.py` 541, `model.py`
 368, `resources.py` 485, `activation.py` 246, `invocation.py` 135, `errors.py`),
 `nexus/tools/builtin/skill.py` (652), `nexus/host_support/skills_install.py`
@@ -623,7 +641,7 @@ Old doc: `docs/extensions.md` "Skills".
 **New:** `nexus-core/nexus/skills/` and `tools/skill.py`.
 
 - Discovery: `<project>/.agents/skills/<name>/SKILL.md`, then
-  `~/.nexus10/skills/<name>/SKILL.md`. The project wins on a name clash, and the
+  `~/.agents/skills/<name>/SKILL.md` (the shared home-level folder, not `~/.nexus10`). The project wins on a name clash, and the
   clash is reported.
 - Progressive disclosure, as in old Nexus: the session's frozen prompt gets an
   index of `name: description` lines, and the `skill` tool loads the body as a
@@ -646,11 +664,27 @@ Old doc: `docs/extensions.md` "Skills".
 parser turned away public skills. `allowed-tools` still only **narrows** the
 tool set while a skill is active, and never grants.
 
-**Done when:** a skill in `~/.nexus10/skills/` shows in the TUI starting
+**Done when:** a skill in `~/.agents/skills/` shows in the TUI starting
 context, the model loads it with `skill`, and its body is readable in the
 timeline.
 
 ### G. MCP
+
+**Landed 2026-10-29 (Core), pending the client UI and a real-model session:**
+`nexus/mcp/` on the `mcp` SDK (stdio, Streamable HTTP, SSE): entry dialects and
+`${env:…}` interpolation, a lazy single-flight connection per server, health,
+backoff and restart, stderr logs, `mcp_search`/`mcp_call` (default `search`
+loading), approval and `[tools.permission]` rules decided for the target
+`mcp__<server>__<tool>`, everything a server says sanitized, bounded and fenced
+in `<untrusted-mcp-data>`, `GET /api/mcp[/{name}]`, `POST …/restart`, the
+`mcp.*` events, `mcp:<server>` session switches, and pinned browser-use offered
+disabled (`tests/test_mcp.py` runs a real stdio server; docs/mcp.md). The pinned
+browser-use 0.13.14 was launched through the manager: 16 tools, and a real
+`browser_navigate` plus `browser_get_state` of example.com. Open:
+`tool_loading = "all"` (needs tools known at snapshot time and a notice when a
+list changes), resources and prompts, image results (K8), Settings → MCP and the
+starting-context MCP section in both clients, and a run in a real session with a
+model (the "done when" below).
 
 **Old:** `nexus/mcp/client.py` (2529 lines: stdio with process groups,
 Streamable HTTP and legacy SSE, deadlines, bounded and redacted stderr),
@@ -1146,6 +1180,9 @@ when each item lands.
 | Old grep/glob/ls/multiedit ran through the old `ToolSpec` with read-deny roots and a mandatory grep subprocess | `tools/grep.py`, `glob.py`, `ls.py`, `multiedit.py` on the nexus10 `Tool`: `rg` when present (killable Python scan otherwise), Git-aware fresh walk, workspace-relative paths, no read observations from searches, whole-file observation for `multiedit` (D1–D4, 2026-10-29) | Same bounds and announced clipping without read-deny roots; a search is not a read |
 | Old websearch/webfetch ran on a 1200-line outbound service with allowlisted origins, an HTML fallback for search and per-origin approval keys | `web_search`/`web_fetch` on `nexus/net.py`: public-address-only, pinned connection, same-origin redirects; search is JSON from `[web] search_url`; content fenced as untrusted; no origin allowlist (D5–D6, 2026-10-29) | The same SSRF and prompt-injection protections in one small module; per-pattern rules come with D7 |
 | Old `permissions.py` (2400 lines: bundles, session grants, path guards, unattended modes, `deny → grants → allow → ask → mode`) | `nexus/permissions.py`: `tool` or `tool(glob)` rules with allow/ask/deny; any deny wins, else the last config rule decides, agent files can only add ask/deny; keys per tool (command, resolved path, URL, query); bash compounds never match an allow; one table in `config.toml`, no per-tool sub-tables; a bad rule is skipped and reported, never dropping the good ones (D7, 2026-10-29) | Same safety properties in a page; session grants are K7; path guards already live in the tools |
+| Old skills: a strict six-key frontmatter grammar, generations, tiers, bundles, bundled-tool candidates and a body snapshot taken at refresh; `skill` always present | `nexus/skills/`: lenient frontmatter (unknown keys are warnings), project over global, the index frozen in the session's prompt and the body read at call time; `skill` only in sessions that started with a skill; a later add or change is a forward notice; `allowed-tools` parsed but not yet enforced (F, 2026-10-29) | Public skills load; the prompt stays append-only; no tool is added to sessions that cannot use it |
+| Old `npx skills` import (`skills_install.py`, runs third-party code behind a confirmation) | `/learn`: a shallow `git clone` or local folder, every `SKILL.md` found, a bounded plain copy to the project or global folder; nothing run, so the only question is the scope (F, 2026-10-29) | No npx or Node needed; installing is copying files |
+| Old MCP: a 2500-line hand-written client, `mcp.json` in two scopes, direct `mcp__server__tool` tools by default for `all` servers, `McpSearch`/`McpCall` otherwise | `nexus/mcp/` on the `mcp` SDK, servers in `config.toml`, `mcp_search`/`mcp_call` only, results fenced as untrusted, `mcp:<server>` switches, the pinned browser-use offered disabled; `all` loading, resources and prompts not yet (G, 2026-10-29) | One config file (P1); schemas stay out of requests; a small client we do not have to maintain |
 | Old `escalate` was a registered task tool whose escalations the old runtime folded into a `SubagentOutcome.attention` | `escalate` is a control tool added to every child snapshot (`escalation: true`), recorded in memory, announced by `session.escalated`, and appended as an `Attention:` block to the parent's `session` result or notification; it grants nothing and does not wait (D8, 2026-10-29) | Principle 3: it acts on Nexus state, so it is control; the parent's timeline shows it |
 | Old `ext/manager.py` (3000 lines): loaded tool modules in the host, a `[[ext]]` config table, trash and templates | `nexus/extensions.py`: tools are `*.py` files in `tools/` folders, read as literals and run in a child process per call; the session snapshot stores their source; no config table (E, 2026-10-29) | The daemon never executes user code; a running session keeps its code (P6, Principle 8) |
 | Client composer history in memory (TUI only) or one global file for all projects (old) | Core stores what the user sent and serves it per project; both clients recall from it; Up recalls on the first line only (2026-10-29, C) | History survives restarts and is shared across clients |

@@ -1,4 +1,4 @@
-"""The daemon's HTTP API, modelled on OpenCode's `/api/*` (opencode.ai/v2/docs/api).
+r"""The daemon's HTTP API, modelled on OpenCode's `/api/*` (opencode.ai/v2/docs/api).
 
 Loopback only. Every request needs `Authorization: Bearer <token>` (the token is
 in `<home>/daemon.json`, mode 0600). `GET /api/event` also accepts `?token=` so a
@@ -13,6 +13,12 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/model/default | the default `provider/model` |
 | GET | /api/agent | agents for `?project=` or `?directory=` (built-in, global, project) and file problems |
 | GET | /api/agent/{name} | one agent, with its full prompt |
+| GET | /api/skill | skills for `?project=` or `?directory=` (project over global) and file problems |
+| POST | /api/skill/install | `{source, scope: project or global, project?\|directory?, overwrite?}`: copy skills from a Git repo or folder (`/learn`); returns `{installed, skipped, problems, available}` |
+| GET | /api/skill/{name} | one skill: frontmatter facts, body and bundled files |
+| GET | /api/mcp | MCP servers: state, tool count, error and (no secret) settings |
+| GET | /api/mcp/{name} | one server: the same, plus its tool names once connected; never connects |
+| POST | /api/mcp/{name}/restart | close and reconnect one server |
 | GET | /api/extension | user tools for `?project=` or `?directory=` (global and project) and file problems |
 | GET | /api/project | all projects |
 | POST | /api/project | `{path, name?}` → the project at that path (created if new) |
@@ -72,6 +78,8 @@ from starlette.routing import Route
 from . import agents as agents_module
 from . import export
 from . import extensions as extensions_module
+from . import mcp as mcp_module
+from . import skills as skills_module
 from .bus import Bus
 from .codec import to_json
 from .config import ConfigConflict, ConfigFile
@@ -82,8 +90,10 @@ from .llmhub import catalog
 from .llmhub.auth import SIGN_INS, AuthError
 from .llmhub.hub import connected, split_ref
 from .llmhub.providers import PROVIDERS
+from .mcp import manager as mcp_manager
 from .paths import home
 from .runtime import Busy, Conflict, NotFound, Runtime, message_json, project_json
+from .skills import install as skills_install
 from .store import TURN_PAGE, TURN_PAGE_MAX, Store
 from .tools import ToolError
 
@@ -293,6 +303,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         nonlocal config_revision
         agent_stamp = agents_module.fingerprint(project_paths())
         tool_stamp = extensions_module.fingerprint(project_paths())
+        skill_stamp = skills_module.fingerprint([None, *project_paths()])
         while True:
             await asyncio.sleep(2)
             paths = project_paths()
@@ -305,6 +316,10 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                 tool_stamp = stamp
                 runtime.bus.publish("extensions.changed", {})
                 publish_extension_problems()
+            stamp = skills_module.fingerprint([None, *project_paths()])
+            if stamp != skill_stamp:
+                skill_stamp = stamp
+                runtime.bus.publish("skills.changed", {})
             async with config_lock:
                 revision = config.read()["revision"]
                 if revision != config_revision:
@@ -512,6 +527,59 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         tools = [{"name": t.name, "description": t.description, "scope": t.scope, "path": t.path,
                   "sha256": t.sha256, "timeout": t.timeout} for t in found.tools.values()]
         return JSONResponse({"tools": tools, "problems": found.problems})
+
+    def skill_json(skill: skills_module.Skill) -> dict[str, Any]:
+        return {"name": skill.name, "description": skill.description, "scope": skill.scope, "path": skill.path,
+                "sha256": skill.sha256, "allowed_tools": list(skill.allowed_tools), "warnings": list(skill.warnings)}
+
+    async def skill_list(request: Request) -> Response:
+        found = runtime.skills(agent_project_path(request))
+        return JSONResponse({"skills": [skill_json(s) for s in found.skills.values()], "problems": found.problems})
+
+    async def skill_install(request: Request) -> Response:
+        body = await _body(request)
+        try:
+            source = skills_install.parse(str(body.get("source") or ""))
+            scope = body.get("scope") or source.scope
+            project_path = None
+            if body.get("project"):
+                project_path = runtime.project(body["project"]).path
+            elif body.get("directory"):
+                project_path = runtime.open_project(body["directory"]).path
+            dest = skills_install.destination(str(scope), project_path)
+            result = await skills_install.learn(source, dest, overwrite=bool(body.get("overwrite")))
+        except skills_install.LearnError as exc:
+            raise ValueError(str(exc)) from exc
+        runtime.bus.publish("skills.changed", {})
+        return JSONResponse(result | {"scope": scope})
+
+    async def skill_one(request: Request) -> Response:
+        found = runtime.skills(agent_project_path(request))
+        skill = found.skills.get(p(request, "name"))
+        if skill is None:
+            raise NotFound(f"no skill {p(request, 'name')}")
+        parsed = skills_module.frontmatter.parse(Path(skill.path).read_bytes())
+        return JSONResponse(skill_json(skill) | {
+            "body": parsed.body, "extra": parsed.extra,
+            "files": skills_module.resources.listing(skill.directory)})
+
+    async def mcp_list(request: Request) -> Response:
+        return JSONResponse({"servers": runtime.mcp.status()})
+
+    async def mcp_one(request: Request) -> Response:
+        name = p(request, "name")
+        row = next((r for r in runtime.mcp.status() if r["server"] == name), None)
+        if row is None:
+            raise NotFound(f"no MCP server {name}")
+        conn = runtime.mcp.connections.get(name)
+        return JSONResponse(row | {"tool_names": [t.name for t in conn.tools] if conn else [],
+                                   "log": str(mcp_manager.log_path(name))})
+
+    async def mcp_restart(request: Request) -> Response:
+        try:
+            return JSONResponse(await runtime.mcp.restart(p(request, "name")))
+        except mcp_module.McpUnavailable as exc:
+            raise NotFound(str(exc)) from exc
 
     async def agent_one(request: Request) -> Response:
         return JSONResponse(agent_json(runtime.agents(agent_project_path(request)).get(p(request, "name")), prompt=True))
@@ -936,6 +1004,12 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/agent", route(agent_list)),
         Route("/api/agent/{name}", route(agent_one)),
         Route("/api/extension", route(extension_list)),
+        Route("/api/mcp", route(mcp_list)),
+        Route("/api/mcp/{name}", route(mcp_one)),
+        Route("/api/mcp/{name}/restart", route(mcp_restart), methods=["POST"]),
+        Route("/api/skill", route(skill_list)),
+        Route("/api/skill/install", route(skill_install), methods=["POST"]),
+        Route("/api/skill/{name}", route(skill_one)),
         Route("/api/project", route(projects), methods=["GET", "POST"]),
         Route("/api/project/{id}", route(project), methods=["GET", "PATCH", "DELETE"]),
         Route("/api/project/{id}/worktrees", route(project_worktrees)),

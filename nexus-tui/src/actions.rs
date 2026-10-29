@@ -99,6 +99,12 @@ pub enum ApiCall {
         effort: String,
         revision: i64,
     },
+    /// `/learn`: copy skills from a repository or folder into the project's or the global skills folder.
+    Learn {
+        project: String,
+        source: String,
+        scope: String,
+    },
     /// Write a Markdown transcript under `<Nexus home>/exports`.
     Export {
         session: String,
@@ -145,6 +151,7 @@ impl ApiCall {
             ApiCall::SetAgent { .. } => "Agent changed from the next call",
             ApiCall::SetEffort { .. } => "Effort changed from the next call",
             ApiCall::Export { .. } => "Exported",
+            ApiCall::Learn { .. } => "Skills installed",
             ApiCall::ChangeDirectory { .. } => "Directory change requested",
             ApiCall::AddProject { .. } => "Project added",
             ApiCall::DeleteProject { .. } => "Project removed",
@@ -176,6 +183,8 @@ pub struct Done {
     pub conflict: Option<String>,
     /// A local file the action produced (exports), for the success toast.
     pub path: Option<String>,
+    /// A finished sentence for the success toast (`/learn`).
+    pub message: Option<String>,
     /// A project the app should make current (added projects).
     pub project: Option<String>,
     pub input_parts: Option<Vec<Value>>,
@@ -433,6 +442,46 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         }
         ApiCall::DeleteProject { project } => {
             conflict(api.delete_project(project, &key).await.map_err(e)?)?;
+        }
+        ApiCall::Learn {
+            project,
+            source,
+            scope,
+        } => {
+            let value = api
+                .http
+                .call(
+                    reqwest::Method::POST,
+                    "/api/skill/install",
+                    &[],
+                    Some(&json!({ "source": source, "scope": scope, "project": project })),
+                    None,
+                    None,
+                )
+                .await
+                .map_err(e)?
+                .body;
+            let names: Vec<&str> = value["installed"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|i| i["name"].as_str())
+                .collect();
+            let skipped = value["skipped"].as_array().map_or(0, Vec::len);
+            let place = if scope == "global" {
+                "for every project"
+            } else {
+                "for this project"
+            };
+            done.message = Some(format!(
+                "Learned {} {place}{}",
+                names.join(", "),
+                if skipped > 0 {
+                    format!(" ({skipped} already installed)")
+                } else {
+                    String::new()
+                }
+            ));
         }
         ApiCall::Export {
             session,

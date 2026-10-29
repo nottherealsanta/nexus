@@ -205,8 +205,30 @@ export function runSlashCommand(text: string): boolean {
   if (!command) return false;
   const arg = tail.join(" ").trim();
   if (command.id === "session.rename" && arg) void patchSession(arg);
+  else if (command.id === "skills.learn") learn(arg);
   else void run(command.id);
   return true;
+}
+
+/** `/learn <source>`: ask project or global, then have Core copy the skills (no npx). */
+function learn(source: string) {
+  if (!source) { toast("info", "Usage: /learn owner/repo, a GitHub URL, ./folder, or npx skills add …"); return; }
+  const project = currentProject();
+  if (!project) { toast("warning", "Open a project first."); return; }
+  if (!live()) { toast("warning", "Core is not connected: the view is read-only."); return; }
+  const install = (scope: "project" | "global") => async () => {
+    picker.set(null);
+    toast("info", `Fetching ${source}…`);
+    try {
+      const r = await request<{ installed: { name: string }[]; skipped: unknown[] }>("POST", "/api/skill/install", { body: { source, scope, project } });
+      const where = scope === "global" ? "for every project" : "for this project";
+      toast("success", `Learned ${r.installed.map((i) => i.name).join(", ")} ${where}${r.skipped.length ? ` (${r.skipped.length} already installed)` : ""}`);
+    } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+  };
+  picker.set({ title: "Install skills for", items: [
+    { id: "project", label: "This project", hint: ".agents/skills", run: install("project") },
+    { id: "global", label: "Every project", hint: "~/.agents/skills", run: install("global") },
+  ] });
 }
 
 async function patchSession(title: string) {
@@ -303,6 +325,7 @@ on("project.add", () => addProjectOpen.set(true), true);
 on("project.remove", () => askRemoveProject());
 on("sidebar.row_menu", openFocusedSidebarMenu);
 on("session.rename", () => renaming.set(true), true);
+on("skills.learn", () => toast("info", "Type /learn followed by owner/repo, a GitHub URL or ./folder"), true);
 on("session.archive", () => archive(), true);
 on("session.unarchive", () => archive(undefined, true), true);
 on("session.delete", () => askDelete(), true);

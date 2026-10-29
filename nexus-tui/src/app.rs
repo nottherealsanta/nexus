@@ -433,6 +433,8 @@ pub struct Ui {
     pub scrolls: HashMap<String, Scroll>,
     pub drafts: HashMap<String, Composer>,
     pub image_pasting: HashSet<String>,
+    /// The `/learn` source waiting for its project-or-global answer.
+    pub learn_source: Option<String>,
     pub wait_idx: usize,
     /// The highlighted choice of the focused approval card (0 allow once, 2 deny).
     pub wait_choice: usize,
@@ -588,6 +590,7 @@ impl App {
                 completion: CompletionState::default(),
                 drafts: HashMap::new(),
                 image_pasting: HashSet::new(),
+                learn_source: None,
                 wait_idx: 0,
                 wait_choice: 0,
                 wait_seen: HashMap::new(),
@@ -2059,6 +2062,30 @@ impl App {
                     ));
                 }
             }
+            PaletteMode::LearnScope => {
+                for (i, (scope, label, hint)) in [
+                    ("project", "This project", ".agents/skills"),
+                    ("global", "Every project", "~/.agents/skills"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let Some(score) = fuzzy(&q, label) else {
+                        continue;
+                    };
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::Learn(scope.into()),
+                            label: label.into(),
+                            hint: hint.into(),
+                            category: "skills".into(),
+                            reason: None,
+                        },
+                    ));
+                }
+            }
             PaletteMode::Efforts => {
                 let mut opts: Vec<String> = Vec::new();
                 let in_use = self.effective_model(self.viewed());
@@ -2235,6 +2262,18 @@ impl App {
                 }
             }
             PaletteKind::Block(i) => self.select_block(i),
+            PaletteKind::Learn(scope) => {
+                if let (Some(source), Some(project)) =
+                    (self.ui.learn_source.take(), self.current_project())
+                {
+                    self.toast(Level::Info, format!("Fetching {source}…"));
+                    self.api(ApiCall::Learn {
+                        project,
+                        source,
+                        scope,
+                    });
+                }
+            }
             PaletteKind::Export(format, scope) => {
                 if let Some(s) = self.viewed() {
                     let session = s.id.clone();
@@ -2681,6 +2720,10 @@ impl App {
             }
             "timeline.focus" => self.ui.focus = Focus::Timeline,
             "session.export" => self.open_palette(PaletteMode::Export),
+            "skills.learn" => self.toast(
+                Level::Info,
+                "Type /learn followed by owner/repo, a GitHub URL or ./folder",
+            ),
             "turn.go_to" => self.open_palette(PaletteMode::Turns),
             "session.new" => {
                 if let Some(project) = self.current_project() {
@@ -3183,6 +3226,23 @@ impl App {
                             return;
                         }
                     }
+                    if c.id == "skills.learn" {
+                        if self.availability(&c).is_err() {
+                            return self.run_command(&c.id);
+                        }
+                        if arg.is_empty() {
+                            self.toast(
+                                Level::Info,
+                                "Usage: /learn owner/repo, a GitHub URL, ./folder, or npx skills add …",
+                            );
+                        } else if !self.writable() {
+                            self.toast(Level::Warning, READ_ONLY);
+                        } else {
+                            self.ui.learn_source = Some(arg.to_owned());
+                            self.open_palette(PaletteMode::LearnScope);
+                        }
+                        return;
+                    }
                     self.run_command(&c.id);
                     return;
                 }
@@ -3452,6 +3512,8 @@ impl App {
                     );
                 } else if let Some(path) = &r.path {
                     self.toast(Level::Success, format!("Exported to {path}"));
+                } else if let Some(message) = &r.message {
+                    self.toast(Level::Success, message.clone());
                 } else if !matches!(
                     done.call,
                     ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. }
@@ -5871,6 +5933,7 @@ impl ActionDone {
             ApiCall::SetAgent { .. } => "Agent change failed",
             ApiCall::SetEffort { .. } => "Effort change failed",
             ApiCall::Export { .. } => "Export failed",
+            ApiCall::Learn { .. } => "Learn failed",
             ApiCall::ChangeDirectory { .. } => "Directory change failed",
             ApiCall::AddProject { .. } => "Add project failed",
             ApiCall::DeleteProject { .. } => "Remove project failed",

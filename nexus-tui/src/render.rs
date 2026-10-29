@@ -5805,6 +5805,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         PaletteMode::Agents => "Change agent",
         PaletteMode::Efforts => "Reasoning effort",
         PaletteMode::Export => "Export session",
+        PaletteMode::LearnScope => "Install skills for",
         PaletteMode::Turns => "Go to turn",
         PaletteMode::RowMenu => "Actions",
     };
@@ -5824,6 +5825,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
             PaletteMode::Agents => "type to filter agents",
             PaletteMode::Efforts => "type to filter efforts",
             PaletteMode::Export => "choose a format and scope",
+            PaletteMode::LearnScope => "choose where the skills go",
             PaletteMode::Turns => "type to find a turn",
             PaletteMode::RowMenu => "choose an action",
         };

@@ -127,6 +127,8 @@ pub enum PaletteMode {
     Agents,
     Efforts,
     Export,
+    /// Where `/learn` puts the skills: this project or every project.
+    LearnScope,
     Turns,
     /// Actions on the focused sidebar row (the manifest's `row_menu` placement).
     RowMenu,
@@ -143,6 +145,8 @@ pub enum PaletteKind {
     Effort(String),
     /// (format, scope): `markdown|json`, `session|tree`.
     Export(String, String),
+    /// `project` or `global`, for the pending `/learn` source.
+    Learn(String),
     /// A timeline block to jump to (turn, notice or diagnostic).
     Block(usize),
 }

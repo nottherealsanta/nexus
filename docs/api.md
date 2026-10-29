@@ -35,6 +35,12 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
 | GET | `/api/model/default` | | `{model}` |
 | GET | `/api/agent` | `?project=` or `?directory=` | `{agents: [Agent], problems: [{path, error}]}` |
+| GET | `/api/skill` | `?project=` or `?directory=` | `{skills: [{name, description, scope, path, sha256, allowed_tools, warnings}], problems: [{path, error, kind}]}` ([tools.md](tools.md#skills-and-the-skill-tool)) |
+| POST | `/api/skill/install` | `{source, scope: project or global, project?, overwrite?}` | `{installed, skipped, problems, available, scope}`: `/learn`, copies skills from a Git repo or folder ([tools.md](tools.md#learn-installing-skills)) |
+| GET | `/api/skill/{name}` | same | one skill plus `body`, `extra`, `files` |
+| GET | `/api/mcp` | | `{servers: [...]}`: MCP server states, no secrets, never connects ([mcp.md](mcp.md#api-and-events)) |
+| GET | `/api/mcp/{name}` | | one server plus `tool_names`, `log` |
+| POST | `/api/mcp/{name}/restart` | | close and reconnect; returns the row |
 | GET | `/api/extension` | `?project=` or `?directory=` | `{tools: [{name, description, scope, path, sha256, timeout}], problems: [{path, error}]}`: user tools ([tools.md](tools.md#user-tools)) |
 | GET | `/api/agent/{name}` | `?project=` or `?directory=` | `Agent` with `prompt` |
 | GET | `/api/project` | | `[Project]`, most recently used first |
@@ -786,6 +792,9 @@ Deleting a project publishes one tombstone per deleted session, then
 | `config.changed` | `{revision}`: global, stored; clients reload `/api/config` |
 | `agents.changed` | `{}`: an agent file was added, removed or edited; global, live only; clients reload `/api/agent` |
 | `extensions.changed` | `{}`: a user tool file changed; global, live only; reload `/api/extension` |
+| `skills.changed` | `{}`: a skill file changed; global, live only; reload `/api/skill` |
+| `skill.announced` | `{name, kind: added\|changed}`: a skill added or changed after the session started was announced to the model; session |
+| `mcp.connected` / `mcp.disconnected` / `mcp.failed` / `mcp.tools_changed` | `{server, …}`: an MCP server's connection changed; global, live only ([mcp.md](mcp.md)) |
 | `extension.failed` | `{path, error}`: a user tool file is invalid; global, live only |
 | `project.created` / `project.updated` | `Project`; global, stored |
 | `project.deleted` | `{id}`; global, stored |

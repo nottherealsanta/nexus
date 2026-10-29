@@ -3,7 +3,7 @@
     "browser-use": {
       "transport": "stdio",
       "command": "uvx",
-      "args": ["--from", "browser-use[cli]", "browser-use", "--mcp"]
+      "args": ["--from", "browser-use[cli]==0.13.14", "browser-use", "--mcp"]
     }
   }
 }

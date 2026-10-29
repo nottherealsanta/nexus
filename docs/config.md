@@ -31,7 +31,7 @@ call. Neither client has a Settings row for them yet.
 
 `nexus config import-mcp <path>` imports `servers`, `mcpServers`, `mcp` and
 `context_servers` maps into `[mcp.servers.<name>]`, refusing duplicate names.
-Entries retain their source dialect for the MCP work item. The config API
+Entries retain their source dialect and are read by the MCP manager ([mcp.md](mcp.md)); `browser-use` is listed switched off when the file does not mention it. The config API
 exposes these entries with environment values, headers and credential fields
 masked. PATCH of `mcp.servers` restores unchanged `********` placeholders from
 the existing file. Importing configuration does not start an MCP server.

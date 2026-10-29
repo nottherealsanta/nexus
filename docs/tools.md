@@ -812,3 +812,82 @@ def run(args):                   # or `async def`; returns text
 - **Switches:** user tools appear in the starting-context tools grid and take
   per-session switches. A `[tools] disabled` entry in config is validated
   against built-ins and global user tools only.
+
+## Skills and the `skill` tool
+
+A skill is a folder `<name>/SKILL.md` in `<project>/.agents/skills/` or
+`~/.agents/skills/` (the project's wins a name clash, and the clash is a
+`shadowed` problem). `nexus/skills/`.
+
+```markdown
+---
+name: deploy                 # optional; the folder name by default
+description: Ship the app. Use when asked to deploy.   # required
+allowed-tools: Read Grep     # parsed and shown; not enforced yet (see below)
+---
+# Deploy
+Instructions…  (bundled files: scripts/…, references/…)
+```
+
+- **Lenient frontmatter.** Plain, quoted, folded (`>`) and literal (`|`) scalars,
+  flow and block lists, one level of nested mapping and comments are read.
+  Unknown keys (`license`, `metadata`…) are kept and listed as warnings, never
+  rejected. A skill is turned away only for no frontmatter block, no
+  description, an invalid name, more than 256 KiB, or invalid UTF-8; the file
+  is a `problems` row (`kind: "error"`).
+- **Progressive disclosure.** The session's frozen prompt lists
+  `` `name`: description `` lines in the `skill` tool's guidance. `skill {name}`
+  returns the body inside `<skill …>`, plus the bundled files it may read;
+  `skill {name, resource}` returns one file under `scripts/` or `references/`
+  as text. Nothing is run. Resources resolve fail-closed: no absolute paths,
+  `..`, `~`, backslashes, other folders, links out of the skill, directories,
+  binaries, or files over 128 KiB.
+- **The tool exists only when a skill did.** A session whose start found no
+  enabled skill has no `skill` tool and gets no skill notices (start a new
+  session). An agent with a `tools:` list gets it by naming `skill`.
+- **Frozen index, live body.** The body is read when the tool is called, so an
+  edit is loaded as it is now (the result says the file changed if it differs
+  from the session's record). A skill that is added or changed after the
+  session started is announced once in a notice before the next model call
+  (`skill.announced` event, `[Nexus: a skill was added…]` message); the system
+  prompt is never rewritten.
+- **Switches.** `disabled_tools` takes `skill:<name>` entries. A switched-off skill
+  is left out of the index of a session created that way, and `skill` refuses
+  it later (the already-sent index is not rewritten). Both clients' starting
+  context UI for these switches is not built yet.
+- **API.** `GET /api/skill` (`?project=` or `?directory=`) lists
+  `{skills: [{name, description, scope, path, sha256, allowed_tools, warnings}],
+  problems: [{path, error, kind}]}`; `GET /api/skill/{name}` adds `body`,
+  `extra` and `files`. `skills.changed` (live only) says a `SKILL.md` or skill
+  folder changed.
+- **Not yet:** `allowed-tools` narrowing while a skill is active (the result
+  says it is not enforced), and the `npx skills` import.
+
+### `/learn`: installing skills
+
+`/learn <source>` (TUI and NSH composer, `skills.learn`) asks **This project**
+(`<project>/.agents/skills/`) or **Every project** (`~/.agents/skills/`), then
+calls `POST /api/skill/install {source, scope, project?, overwrite?}`. It copies
+files; there is no npx and nothing in a skill is run. `nexus/skills/install.py`.
+
+| Source | Meaning |
+| --- | --- |
+| `owner/repo`, `https://github.com/owner/repo` | every skill in the repository |
+| `owner/repo@name`, `… --skill name` | one skill (`--skill` takes several names) |
+| `owner/repo/path/to/skills`, `…/tree/<ref>/<path>` | only that folder (and a branch or tag) |
+| `git@host:o/r.git`, `https://host/o/r.git` | any Git remote |
+| `./folder`, `../x`, `/abs`, `~/x`, `file:///abs` | a local folder; a bare `a/b` is always GitHub |
+
+A leading `npx skills add` (or `skills add`) and the options `-g/--global`
+(chooses global without asking in the CLI/API), `-y`, `-a <agent>` are accepted;
+any other option is refused. A remote source is a shallow `git clone` into a
+temporary folder (120 s limit, no prompts, only https, ssh and git; needs `git`).
+Every folder holding a `SKILL.md` below the source (five levels deep) is a skill;
+unusable ones come back in `problems`. The copy leaves out `.git`, symbolic links
+and special files, stops at 2000 files or 20 MiB, and goes through a staging
+folder, so a failure leaves nothing half-installed. A skill that is already
+installed is skipped and reported unless `overwrite` is true. Verified against
+`anthropics/skills@frontend-design` on 2026-10-29. The reply is
+`{installed: [{name, description, path, files, warnings}], skipped, problems,
+available, scope}`, and `skills.changed` is published. Existing sessions are told
+about the new skills by the usual notice.

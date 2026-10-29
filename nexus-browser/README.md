@@ -2,20 +2,22 @@
 
 The default browser MCP is the upstream **browser-use** local stdio server.
 This directory contains launch configuration, not a custom browser server.
-Core MCP support and loading this default are planned in PLAN.md Step 11a;
-`mcp.json` is a proposed Core configuration, not wired into the daemon yet.
+Core offers it as the default MCP server (PLAN.md G, `nexus-core/nexus/mcp/config.py`
+`DEFAULT_SERVERS`), switched off until the user enables it in Settings; then it is
+written into `config.toml`. `mcp.json` here is the same entry in the portable
+format (`nexus config import-mcp` reads it).
 
 Upstream launch command:
 
 ```sh
-uvx --from 'browser-use[cli]' browser-use --mcp
+uvx --from 'browser-use[cli]==0.13.14' browser-use --mcp
 ```
 
 Reference: https://github.com/browser-use/browser-use/blob/main/skills/open-source/references/integrations.md
 
-Before integration lands, pin a tested browser-use version, document its browser
-installation steps, and verify tool discovery, navigation and screenshots. The
-command above is upstream's unpinned setup example and was not launched here.
+Pinned to 0.13.14. Verified on 2026-10-29 through Nexus's MCP manager: it launched,
+discovered 16 tools, and `browser_navigate` and `browser_get_state` fetched
+example.com. Screenshots and the optional LLM-backed tools were not exercised.
 Core owns lazy startup, shutdown, health, session isolation and error reporting.
 Browser-use is configured by default, subject to each agent's tool restrictions.
 

@@ -159,11 +159,20 @@ class ConfigFile:
                         errors.append(f"{section}.{key}: invalid value")
         mcp = doc.get("mcp", {})
         if isinstance(mcp, dict) and isinstance(mcp.get("servers", {}), dict):
-            values["mcp"] = {"servers": _mask(dict(mcp.get("servers", {})))}
+            from .mcp.config import with_defaults
+            values["mcp"] = {"servers": _mask(with_defaults(_plain(mcp.get("servers", {}))))}
         else:
             errors.append("mcp.servers: expected a table")
         return {"revision": hashlib.sha256(raw).hexdigest(), "values": values,
                 "defaults": copy.deepcopy(DEFAULTS), "schema": copy.deepcopy(SCHEMA), "errors": errors}
+
+    def mcp_servers(self) -> dict[str, Any]:
+        """`[mcp.servers]` as plain values with secrets intact, for the daemon's own use (never served)."""
+        _, doc, _ = self._read()
+        table = doc.get("mcp", {})
+        servers = table.get("servers", {}) if isinstance(table, dict) else {}
+        plain = _plain(servers)
+        return plain if isinstance(plain, dict) else {}
 
     def patch(self, revision: str, set_values: dict[str, Any], unset: list[str]) -> dict[str, Any]:
         raw, doc, errors = self._read()
