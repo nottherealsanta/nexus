@@ -1029,8 +1029,9 @@ kitty and iTerm (old `mermaid_image.rs`), and Mermaid in NSH with a pinned
 
 M5: Subagents should not open in a new tab beside the parent agent. instead add a row below the tabs and show the name of the subagent session (child session title). 
 also in the parent/root agent/session we should make the subagent render better. (remove the word "child") show icon (spinner animation for subagent working - spinner all dots on for completed) then name of the agent ("Build", "Scout" etc) - then name of that session. and then "Background" (highlighed in darkgray) if it was done in background. 
-in the next line show provider/model/effort - time taken ( changing when subagent is working and time taken when done)
-When the background gets back, it should rendered well. 
+in the next line show provider/model/effort - time taken ( changing when subagent is working and time taken when done) - tokens (only after its done)
+
+When the background subagent gets back, it should rendered well. 
 
 ### N. Operations
 
