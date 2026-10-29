@@ -108,12 +108,21 @@ export class Model {
     }
   }
 
+  /** Older messages (`turn.load_older`) go before the loaded ones; duplicates are dropped by id. */
+  prependMessages(sessionId: string, older: Message[], more: boolean) {
+    const v = this.selected;
+    if (!v || v.sessionId !== sessionId) return;
+    const have = new Set(v.messages.map((x) => x.id));
+    v.messages = [...older.filter((x) => !have.has(x.id)), ...v.messages].sort((a, b) => a.seq - b.seq);
+    v.messagesMore = more;
+  }
+
   /**
    * Fold a fully loaded history into the selected view (never mixes sessions). Messages and
    * summaries applied live after the fetch are kept, and so is the scratch (a live `turn.summary`
    * already cleared it for its turn).
    */
-  applyHistory(h: { sessionId: string; messages: Message[]; turns: TurnSummary[]; floor: { seq: number } | null; usage: UsageLedger | null; starting: any | null; turnsGap: string | null; usageMark?: number }) {
+  applyHistory(h: { sessionId: string; messages: Message[]; messagesMore?: boolean; turns: TurnSummary[]; floor: { seq: number } | null; usage: UsageLedger | null; starting: any | null; turnsGap: string | null; usageMark?: number }) {
     const v = this.selected;
     if (!v || v.sessionId !== h.sessionId) return;
     // Messages applied live after the fetch are kept, ordered by seq.
@@ -125,7 +134,7 @@ export class Model {
       msgs.splice(i, 0, m);
     }
     v.messages = msgs;
-    v.messagesMore = false;
+    v.messagesMore = h.messagesMore ?? false;
     // A summary that arrived live is at least as new as the fetched copy.
     let turns = [...h.turns];
     for (const t of v.turns) turns = upsertTurn(turns, t);

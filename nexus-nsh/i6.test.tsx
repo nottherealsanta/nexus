@@ -17,7 +17,7 @@ function network(sessions: object[], extra: Record<string, unknown> = {}) {
   return {
     // Specific stubs first: the first matching key answers.
     ...extra,
-    "GET */api/session/ses_1/message": { body: [] },
+    "GET */api/session/ses_1/message*": { body: [] },
     "GET */api/session/ses_1/snapshot": { body: null },
     "GET */api/session/ses_1/turn*": { body: quiet },
     "GET */api/session/ses_1/worktrees": { body: { worktrees: [] } },

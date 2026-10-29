@@ -120,7 +120,7 @@ describe("starting-context skills and MCP switches", () => {
       network: selectedSessionNetwork({
         "GET */api/snapshot*": { body: { ...snapshot, sessions: [session] } },
         "GET */api/session/ses_1": { body: session },
-        "GET */api/session/ses_1/message": { body: [] },
+        "GET */api/session/ses_1/message*": { body: [] },
         "GET */api/session/ses_1/snapshot": { body: { system_prompt: "prompt", tools: [], instruction_file: {} } },
         "PATCH */api/session/ses_1": { body: updated },
       }),
@@ -143,7 +143,7 @@ describe("starting-context skills and MCP switches", () => {
 function selectedSessionNetwork(extra: Record<string, unknown> = {}) {
   return {
     "GET */api/session/ses_1": { body: { ...snapshot.sessions[0], model: "codex/gpt-5", directory: "/work/demo" } },
-    "GET */api/session/ses_1/message": { body: [userMessage, assistantMessage] },
+    "GET */api/session/ses_1/message*": { body: [userMessage, assistantMessage] },
     "GET */api/session/ses_1/snapshot": { body: null },
     "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
     "GET */api/session/ses_1/worktrees": { body: { session_directory: "/work/demo", project_directory: "/work/demo", worktrees: [{ path: "/work/demo", branch: "trunk", main: true }] } },
@@ -185,10 +185,10 @@ describe("shell", () => {
       // Specific stubs first: the first matching key answers, and core() ends with a broad `session/*`.
       network: {
         "GET */api/session/ses_2": { body: second },
-        "GET */api/session/ses_1/message": { body: [] },
+        "GET */api/session/ses_1/message*": { body: [] },
         "GET */api/session/ses_1/snapshot": { body: null },
         "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
-        "GET */api/session/ses_2/message": { body: [] },
+        "GET */api/session/ses_2/message*": { body: [] },
         "GET */api/session/ses_2/snapshot": { body: null },
         "GET */api/session/ses_2/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
         "GET */api/session/*/worktrees": { body: { worktrees: [] } },
@@ -217,7 +217,7 @@ describe("shell", () => {
       network: {
         "POST */api/session": { body: created },
         "GET */api/session/ses_new": { body: created },
-        "GET */api/session/ses_new/message": { body: [] },
+        "GET */api/session/ses_new/message*": { body: [] },
         "GET */api/session/ses_new/snapshot": { body: null },
         "GET */api/session/ses_new/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
         "GET */api/session/ses_new/worktrees": { body: { worktrees: [] } },
@@ -416,7 +416,7 @@ describe("history", () => {
     const app = await open("./App.tsx", {
       clock: {},
       network: {
-        "GET */api/session/ses_1/message": { body: [] },
+        "GET */api/session/ses_1/message*": { body: [] },
         "GET */api/session/ses_1/snapshot": { body: {} },
         "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
         ...core(),
@@ -469,7 +469,7 @@ describe("context, composer and footer parity", () => {
     const app = await open("./App.tsx", {
       network: {
         ...selectedSessionNetwork({
-          "GET */api/session/ses_1/message": { body: [] },
+          "GET */api/session/ses_1/message*": { body: [] },
           "GET */api/session/ses_1/snapshot": { body: starting },
           "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-5", context: 100000 }] } },
         }),
@@ -612,7 +612,7 @@ describe("markdown fences and diffs (I4)", () => {
       { id: "m_edit", session_id: "ses_1", seq: 3, role: "assistant", created: 3, parts: [{ type: "tool_call", id: "call_edit", name: "edit", arguments: JSON.stringify({ patch: "@@ -1 +1 @@\n-old line\n+new line" }) }] },
     ];
     const app = await open("./App.tsx", {
-      network: selectedSessionNetwork({ "GET */api/session/ses_1/message": { body: messages } }),
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message*": { body: messages } }),
       width: 1280, height: 800, platform: "web",
     });
     await app.waitFor("text:Refactor loader");
@@ -673,7 +673,7 @@ describe("tool output detail cap", () => {
       { id: "m_result", session_id: "ses_1", seq: 3, role: "tool", created: 3, parts: [{ type: "tool_result", call_id: "call_bash", output: plain, is_error: false }] },
     ];
     const app = await open("./App.tsx", {
-      network: selectedSessionNetwork({ "GET */api/session/ses_1/message": { body: messages } }),
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message*": { body: messages } }),
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("text:Refactor loader");
@@ -702,7 +702,7 @@ describe("tool output detail cap", () => {
       { id: "m_edit_result", session_id: "ses_1", seq: 3, role: "tool", created: 3, parts: [{ type: "tool_result", call_id: "call_edit", output: "edited", is_error: false }] },
     ];
     const diffApp = await open("./App.tsx", {
-      network: selectedSessionNetwork({ "GET */api/session/ses_1/message": { body: diffMessages } }),
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message*": { body: diffMessages } }),
       width: 1024, height: 768, platform: "web",
     });
     await diffApp.waitFor("text:Refactor loader");
@@ -729,7 +729,7 @@ describe("tool output detail cap", () => {
       { id: "m_result", session_id: "ses_1", seq: 3, role: "tool", created: 3, parts: [{ type: "tool_result", call_id: "call_bash", output: highOutput, is_error: false }, { type: "tool_result", call_id: "call_echo", output: "second output", is_error: false }] },
     ];
     const app = await open("./App.tsx", {
-      network: selectedSessionNetwork({ "GET */api/session/ses_1/message": { body: messages } }),
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message*": { body: messages } }),
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("text:Refactor loader");
@@ -784,7 +784,7 @@ describe("session info totals", () => {
       network: selectedSessionNetwork({
         "GET */api/snapshot*": { body: { ...snapshot, sessions: [session, ...children], running: [{ id: "turn_child", session_id: "ses_running" }] } },
         "GET */api/session/ses_1": { body: session },
-        "GET */api/session/ses_1/message": { body: messages },
+        "GET */api/session/ses_1/message*": { body: messages },
         "GET */api/session/ses_1/turn*": turnPage(turns, { usage: ledger }),
         "GET */api/model": { body: { source: "fixture catalog", models: [{ ref: "codex/gpt-5", context: 200_000, input_cost: 1, output_cost: 10, cache_read_cost: 0.2 }] } },
         "GET */api/model/default": { body: { model: "codex/gpt-5" } },
@@ -823,7 +823,7 @@ describe("turn summaries", () => {
     const turns = [turnSummary("trn_2", 2, [["codex/gpt-5", null]], { started: 3, finished: 4 })];
     const app = await open("./App.tsx", {
       network: selectedSessionNetwork({
-        "GET */api/session/ses_1/message": { body: [user("u1", 1, "first"), reply("a1", 2), user("u2", 3, "second"), reply("a2", 4)] },
+        "GET */api/session/ses_1/message*": { body: [user("u1", 1, "first"), reply("a1", 2), user("u2", 3, "second"), reply("a2", 4)] },
         "GET */api/session/ses_1/turn*": turnPage(turns, { floor: { seq: 3 } }),
       }),
       width: 1440, height: 900, platform: "web",
@@ -992,7 +992,7 @@ describe("image paste and background shell context", () => {
   test("a background shell completion has no user-message card", async () => {
     const notice = { ...userMessage, id: "background", seq: 3, parts: [{ type: "text", text: "→ Background Shell Done: 'make test'\nexit code 0" }] };
     const app = await open("./App.tsx", {
-      network: selectedSessionNetwork({ "GET */api/session/ses_1/message": { body: [notice] } }),
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message*": { body: [notice] } }),
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("text:Refactor loader");

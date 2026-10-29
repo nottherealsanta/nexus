@@ -798,6 +798,15 @@ when = ["always"]
 placement = ["palette", "menu"]
 
 [[command]]
+id = "app.usage"
+title = "Show plan limits"
+category = "app"
+slash = "usage"
+when = ["always"]
+placement = ["palette", "menu"]
+note = "Plan windows for the providers that report them (codex, copilot): GET /api/usage. Nothing here is a credential."
+
+[[command]]
 id = "app.quit"
 title = "Quit"
 category = "app"
@@ -1519,7 +1528,7 @@ title = "Load older turns"
 category = "timeline"
 when = ["timeline.has_older"]
 unavailable_reason = "All turns are loaded."
-placement = ["timeline"]
+placement = ["timeline", "palette"]
 
 [[command]]
 id = "tool.expand_toggle"

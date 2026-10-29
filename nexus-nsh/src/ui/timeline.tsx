@@ -41,10 +41,12 @@ type Row =
       state: "running" | "done" | "error" | "waiting"; duration?: string; seconds?: number; diff?: Diff; output?: string;
       detail: { text: string; tone: "plain" | "add" | "del" | "info" | "error" | "accent" }[];
       raw: string; open: boolean; clipped: boolean; showAll: boolean;
+      /** Images the tool returned (K8): artifacts Core stored, shown beside the output. */
+      media: { artifact: string; mime: string; name: string }[];
     }
   | { key: string; kind: "child"; childId?: string; agent: string; title: string; status: string; tone: Tone; body: string; open: boolean }
   | { key: string; kind: "diag"; text: string; label: string; detail?: string; tone: Tone }
-  | { key: string; kind: "older"; text: string }
+  | { key: string; kind: "older"; text: string; action?: "load-older" }
   | { key: string; kind: "empty" };
 
 export type ToolDetailLine = { text: string; tone: "plain" | "add" | "del" | "info" | "error" | "accent" };
@@ -403,6 +405,8 @@ export function buildRows(): Row[] {
             else if (p.name === "edit" || p.name === "patch") summary = res?.is_error ? "failed" : counts ? `+${counts.add} −${counts.del}` : "";
             else if (p.name === "write") { try { summary = `+${detailLines(String(JSON.parse(p.arguments ?? "{}").content ?? "")).length}`; } catch {} }
             else if (res?.output) summary = `${detailLines(res.output).length} lines`;
+            const media = ((res as any)?.media ?? []).filter((x: any) => /^image\//.test(x?.mime ?? ""));
+            if (media.length && !waiting.has(id)) summary = [summary, `${media.length} image${media.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
             const seconds = tr?.start !== undefined && tr?.end !== undefined ? tr.end - tr.start : undefined;
             const key = `tool:${id}`;
             const rawOpen = open(`${key}:raw`, false);
@@ -420,7 +424,7 @@ export function buildRows(): Row[] {
               diff: counts ?? undefined, output: res?.output,
               detail,
               raw: rawOpen ? JSON.stringify({ arguments: p.arguments ?? "", output: res?.output ?? "" }, null, 2) : "",
-              open: open(key, detailLevel === "high"), clipped, showAll,
+              open: open(key, detailLevel === "high" || media.length > 0), clipped, showAll, media,
             });
           }
         }
@@ -486,6 +490,7 @@ export function buildRows(): Row[] {
   const st = model.streaming.get(sel.sessionId);
   if (st?.reasoning) flat.push({ key: "stream-r", kind: "reasoning", text: st.reasoning, open: true, running: true });
   if (st?.text) flat.push({ key: "stream-t", kind: "assistant", text: st.text, streaming: true });
+  if (sel.messagesMore) flat.unshift({ key: "older-messages", kind: "older", text: "Older messages are not loaded", action: "load-older" });
   if (sel.turnsGap) flat.unshift({ key: "turns-gap", kind: "older", text: `${sel.turnsGap[0].toUpperCase()}${sel.turnsGap.slice(1)}.` });
   return groupActivities(flat);
 }
@@ -664,7 +669,16 @@ function RowView(p: { r: () => Row }) {
             </View>
           </View>
         </If>
-        <If when={r().kind === "older"}><Text class={`${T.meta} py-2`} testID="timeline-older">{(r() as any).text}</Text></If>
+        <If when={r().kind === "older"}>
+          <If when={(r() as any).action === "load-older"} else={<Text class={`${T.meta} py-2`} testID="timeline-older">{(r() as any).text}</Text>}>
+            <View class="flex-row items-center gap-2 py-2">
+              <Text class={T.meta} testID="timeline-older">{(r() as any).text}</Text>
+              <Button onPress={() => run("turn.load_older")} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}>
+                <Text class="text-xs leading-4 text-foreground">Load older messages</Text>
+              </Button>
+            </View>
+          </If>
+        </If>
       </View>
     </View>
   );
@@ -966,6 +980,13 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
               {() => <DiffView lines={body} />}
             </If>
           </Scroll>
+          <If when={r().media.length > 0}>
+            <View class="flex-row flex-wrap gap-3 px-3 pb-2" testID={`tool-media-${r().id}`}>
+              <Each of={r().media} key={(x) => x.artifact}>
+                {(x) => <View class="gap-1"><Image src={`/api/artifact/${x().artifact}`} style={{ width: 320, height: 240, objectFit: "contain" }} accessibilityLabel={x().name || "image"} /><Text class={T.meta}>{x().name || x().mime}</Text></View>}
+              </Each>
+            </View>
+          </If>
           <If when={!!marker()}>
             {() => (
               <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">

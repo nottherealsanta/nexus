@@ -943,6 +943,20 @@ export const manifest = {
    ]
   },
   {
+   "id": "app.usage",
+   "title": "Show plan limits",
+   "category": "app",
+   "slash": "usage",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette",
+    "menu"
+   ],
+   "note": "Plan windows for the providers that report them (codex, copilot): GET /api/usage. Nothing here is a credential."
+  },
+  {
    "id": "app.quit",
    "title": "Quit",
    "category": "app",
@@ -2156,7 +2170,8 @@ export const manifest = {
    ],
    "unavailable_reason": "All turns are loaded.",
    "placement": [
-    "timeline"
+    "timeline",
+    "palette"
    ]
   },
   {

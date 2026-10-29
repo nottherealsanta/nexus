@@ -139,6 +139,8 @@ impl TurnMeta {
 struct Done {
     output: String,
     is_error: bool,
+    /// Images the tool returned (K8), one label each; a terminal cannot show them inline.
+    media: Vec<String>,
 }
 
 enum Activity<'a> {
@@ -671,6 +673,21 @@ impl Builder<'_> {
                         Done {
                             output: json_str(&p["output"]),
                             is_error: p["is_error"].as_bool().unwrap_or(false),
+                            media: p["media"]
+                                .as_array()
+                                .map(|list| {
+                                    list.iter()
+                                        .map(|m| {
+                                            format!(
+                                                "image {} · {} · {}",
+                                                json_str(&m["name"]),
+                                                json_str(&m["mime"]),
+                                                json_str(&m["artifact"])
+                                            )
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
                         },
                     );
                 }
@@ -763,7 +780,7 @@ impl Builder<'_> {
         if view.messages_more {
             self.block("older-messages", BlockKind::Older, None, false, |b| {
                 b.line(vec![Span::styled(
-                    format!("{} older messages are not loaded", b.ell()),
+                    format!("{} older messages are not loaded · enter loads more", b.ell()),
                     b.meta(),
                 )]);
             });
@@ -2642,6 +2659,9 @@ impl Builder<'_> {
                                 self.secondary()
                             },
                         ));
+                    }
+                    for label in &d.media {
+                        out.push((format!("▣ {label}"), self.meta()));
                     }
                 } else if let Some(err) = trace.and_then(|t| t.error.clone()) {
                     out.push((err, self.st("status.error", CANVAS)));

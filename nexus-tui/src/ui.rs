@@ -225,6 +225,14 @@ pub struct Overlay {
 /// A deferred action that a confirm dialog performs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Confirmed {
+    /// A model or agent switch that would make the next request start cold (K9).
+    /// Exactly one of `model` and `agent` is set.
+    Switch {
+        session: String,
+        model: Option<String>,
+        agent: Option<String>,
+        revision: i64,
+    },
     DeleteSession(String),
     RemoveProject(String),
     DownloadStt,

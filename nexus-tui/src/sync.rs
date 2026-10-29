@@ -743,18 +743,23 @@ const TURN_PAGE: u32 = 200;
 /// that older turns' details were not loaded.
 const TURN_PAGES: usize = 10;
 
-/// Messages, the starting context and every turn summary, fetched together.
+/// Messages a session opens with; `turn.load_older` reads this many more each time.
+pub const MESSAGE_PAGE: u32 = 200;
+
+/// The newest page of messages, the starting context and every turn summary, fetched together.
 /// The event log is not read: the timeline's details come from summaries.
 async fn load_history(api: &CoreApi, sid: &str) -> Option<History> {
     let (messages, starting, session, page) = tokio::join!(
-        api.messages(sid),
+        api.messages_page(sid, None, MESSAGE_PAGE),
         api.snapshot_json(sid),
         api.session(sid),
         api.turns(sid, None, None, Some(TURN_PAGE)),
     );
+    let (messages, messages_more) = messages.ok()?;
     let mut h = History {
         session_id: sid.to_owned(),
-        messages: messages.ok()?,
+        messages,
+        messages_more,
         starting: starting.ok(),
         session: session.ok(),
         ..Default::default()

@@ -158,6 +158,8 @@ pub const WIRED: &[&str] = &[
     "copy.code_block",
     "copy.tool_output",
     "copy.user_message",
+    "turn.load_older",
+    "app.usage",
     "waiting.allow_once",
     "waiting.allow_session",
     "waiting.deny_note",
@@ -499,6 +501,8 @@ pub struct Ui {
     pub learn_source: Option<String>,
     /// Core's search hits for the session switcher: the query they answer and the hits.
     pub search: Option<(String, Vec<Value>)>,
+    /// An older page of messages is being read.
+    pub loading_older: bool,
     pub wait_idx: usize,
     /// The highlighted choice of the focused approval card (0 allow once, 1 allow for session, 2 deny, 3 deny with a note).
     pub wait_choice: usize,
@@ -674,6 +678,7 @@ impl App {
                 learn_source: None,
                 wait_idx: 0,
                 wait_choice: 0,
+                loading_older: false,
                 search: None,
                 wait_seen: HashMap::new(),
                 wait_shown: None,
@@ -2557,9 +2562,10 @@ impl App {
                 if let Some(s) = self.viewed() {
                     let (session, revision) = (s.id.clone(), s.revision);
                     if self.writable() {
-                        self.api(ApiCall::SetModel {
+                        self.api(ApiCall::SwitchCost {
                             session,
-                            model,
+                            model: Some(model),
+                            agent: None,
                             revision,
                         });
                     } else {
@@ -2582,9 +2588,10 @@ impl App {
                 if let Some(s) = self.viewed() {
                     let (session, revision) = (s.id.clone(), s.revision);
                     if self.writable() {
-                        self.api(ApiCall::SetAgent {
+                        self.api(ApiCall::SwitchCost {
                             session,
-                            agent,
+                            model: None,
+                            agent: Some(agent),
                             revision,
                         });
                     } else {
@@ -3439,6 +3446,10 @@ impl App {
                 }
             }
             "app.help_keys" => self.open_overlay(OverlayKind::Help { top: 0 }),
+            "app.usage" => {
+                self.toast(Level::Info, "Reading plan limits…");
+                self.api(ApiCall::Usage);
+            }
             "app.quit" => self.effects.push(Effect::Quit),
             "app.settings" => {
                 if self.ui.view == View::Settings {
@@ -3837,6 +3848,18 @@ impl App {
                     });
                 }
             }
+            "turn.load_older" => {
+                let first = self
+                    .state
+                    .model
+                    .selected
+                    .as_ref()
+                    .and_then(|v| v.messages.first().map(|m| (v.session_id.clone(), m.seq)));
+                if let (Some((session, before)), false) = (first, self.ui.loading_older) {
+                    self.ui.loading_older = true;
+                    self.api(ApiCall::OlderMessages { session, before });
+                }
+            }
             "waiting.submit_answers" => self.ask_confirm(false),
             "waiting.next" => {
                 self.ui.wait_idx += 1;
@@ -4007,6 +4030,30 @@ impl App {
         });
     }
 
+    fn do_switch(&mut self, switch: Confirmed) {
+        if let Confirmed::Switch {
+            session,
+            model,
+            agent,
+            revision,
+        } = switch
+        {
+            match (model, agent) {
+                (Some(model), _) => self.api(ApiCall::SetModel {
+                    session,
+                    model,
+                    revision,
+                }),
+                (_, Some(agent)) => self.api(ApiCall::SetAgent {
+                    session,
+                    agent,
+                    revision,
+                }),
+                _ => {}
+            }
+        }
+    }
+
     fn confirm_dialog(&mut self, yes: bool) {
         if self.blocking().is_some() {
             return; // a blocking dialog cannot be dismissed
@@ -4017,6 +4064,7 @@ impl App {
         self.apply_restore(d.restore);
         if yes {
             match d.action {
+                switch @ Confirmed::Switch { .. } => self.do_switch(switch),
                 Confirmed::DeleteSession(id) => {
                     if self.writable() {
                         self.api(ApiCall::Delete { session: id });
@@ -4518,6 +4566,74 @@ impl App {
                     top: 0,
                 }),
                 Err(error) => self.toast(Level::Error, format!("Side question failed: {error}")),
+            }
+            return;
+        }
+        if let ApiCall::Usage = &done.call {
+            match done.result {
+                Ok(r) => {
+                    let text = crate::usage::text(&r.usage.unwrap_or_default(), now_secs());
+                    self.open_overlay(OverlayKind::ContextDetail {
+                        title: "Plan limits".into(),
+                        text,
+                        top: 0,
+                    });
+                }
+                Err(error) => self.toast(Level::Error, format!("Plan limits failed to load: {error}")),
+            }
+            return;
+        }
+        if let ApiCall::SwitchCost {
+            session,
+            model,
+            agent,
+            revision,
+        } = &done.call
+        {
+            // The check is advice: when it fails or finds nothing to lose, the switch goes ahead.
+            let cost = done.result.ok().and_then(|r| r.switch_cost);
+            let lost = cost.as_ref().is_some_and(|c| c["cache_lost"] == true);
+            let switch = Confirmed::Switch {
+                session: session.clone(),
+                model: model.clone(),
+                agent: agent.clone(),
+                revision: *revision,
+            };
+            match (lost, cost) {
+                (true, Some(cost)) => {
+                    let reasons: Vec<String> = cost["reasons"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|r| r.as_str().map(str::to_owned)).collect())
+                        .unwrap_or_default();
+                    let cached = cost["cached_tokens"].as_u64().unwrap_or(0);
+                    let mut body = reasons;
+                    body.push(format!(
+                        "The next request starts cold: about {cached} cached tokens are read again at full price."
+                    ));
+                    let restore = self.restore_point();
+                    self.ui.dialog = Some(Dialog {
+                        title: if model.is_some() { "Switch model" } else { "Switch agent" }.into(),
+                        body,
+                        cancel: "Keep current".into(),
+                        confirm: "Switch".into(),
+                        danger: false,
+                        action: switch,
+                        button: 0,
+                        restore,
+                    });
+                }
+                _ => self.do_switch(switch),
+            }
+            return;
+        }
+        if let ApiCall::OlderMessages { session, .. } = &done.call {
+            self.ui.loading_older = false;
+            if let Ok(r) = done.result {
+                if let Some((messages, more)) = r.older {
+                    self.state.model.prepend_messages(session, messages, more);
+                }
+            } else if let Err(error) = done.result {
+                self.toast(Level::Error, format!("Older messages failed to load: {error}"));
             }
             return;
         }
@@ -6114,6 +6230,9 @@ impl App {
         else {
             return;
         };
+        if b.kind == crate::timeline::BlockKind::Older && b.key == "older-messages" {
+            return self.run_command("turn.load_older");
+        }
         if b.kind == crate::timeline::BlockKind::Handoff {
             if let Some(m) = self.message_by_prefix(b.target.as_deref().unwrap_or_default()) {
                 let (from, summary) = crate::timeline::handoff_parts(&message_text(&m));
@@ -7854,6 +7973,9 @@ impl ActionDone {
             ApiCall::AddProject { .. } => "Add project failed",
             ApiCall::DeleteProject { .. } => "Remove project failed",
             ApiCall::Prompts { .. } | ApiCall::Search { .. } => "",
+            ApiCall::OlderMessages { .. } => "Older messages failed to load",
+            ApiCall::SwitchCost { .. } => "",
+            ApiCall::Usage => "Plan limits failed to load",
         }
     }
 }

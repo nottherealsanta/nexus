@@ -272,6 +272,21 @@ impl Model {
     /// The snapshot carries only the newest bounded messages; history replaces
     /// them with every stored message. Messages and diagnostics already applied
     /// from the live stream are kept, and duplicates are dropped by id.
+    /// Older messages (`turn.load_older`) go before the loaded ones; duplicates are dropped by id.
+    pub fn prepend_messages(&mut self, session: &str, older: Vec<Message>, more: bool) {
+        let Some(view) = self.selected.as_mut().filter(|v| v.session_id == session) else {
+            return;
+        };
+        let mut merged: Vec<Message> = older
+            .into_iter()
+            .filter(|m| !view.messages.iter().any(|x| x.id == m.id))
+            .collect();
+        merged.append(&mut view.messages);
+        merged.sort_by_key(|m| m.seq);
+        view.messages = merged;
+        view.messages_more = more;
+    }
+
     pub fn apply_history(&mut self, h: crate::api::History) {
         let Some(view) = self.selected.as_mut() else {
             return;
@@ -288,7 +303,7 @@ impl Model {
             }
         }
         view.messages = messages;
-        view.messages_more = false;
+        view.messages_more = h.messages_more;
         view.starting = h.starting;
         if let (Some(full), Some(row)) = (h.session, self.sessions.get_mut(&h.session_id)) {
             for key in ["skills", "mcp"] {

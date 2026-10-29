@@ -143,6 +143,47 @@ fn enter_expands_a_tool_into_its_detail_and_raw_toggle_shows_arguments() {
 }
 
 #[test]
+fn a_tool_image_is_named_in_the_open_tool() {
+    let mut a = app();
+    let call = serde_json::json!({"id": 70, "type": "message.added", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:70",
+        "data": {"id": "msg_10", "session_id": SESSION, "seq": 10, "created": 1793113410.0,
+                 "role": "assistant", "parts": [{"type": "tool_call", "id": "call_9", "name": "mcp_shot", "arguments": "{}"}]}});
+    let result = serde_json::json!({"id": 71, "type": "message.added", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:71",
+        "data": {"id": "msg_11", "session_id": SESSION, "seq": 11, "created": 1793113411.0,
+                 "role": "tool", "parts": [{"type": "tool_result", "call_id": "call_9", "output": "saved",
+                 "is_error": false, "media": [{"artifact": "art_1", "mime": "image/png", "name": "shot.png"}]}]}});
+    for v in [call, result] {
+        if let Ok(nexus_tui::api::Frame::Event(e)) =
+            nexus_tui::api::Frame::from_value(v["type"].as_str().unwrap(), None, &v)
+        {
+            a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+        }
+    }
+    rows(&mut a);
+    a.ui.focus = Focus::Timeline;
+    let group = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == nexus_tui::timeline::BlockKind::Group)
+        .expect("activity group");
+    a.ui.timeline_sel = Some(group);
+    a.execute("tool.expand_toggle");
+    rows(&mut a);
+    let tool = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == nexus_tui::timeline::BlockKind::Tool)
+        .expect("a tool block");
+    a.ui.timeline_sel = Some(tool);
+    a.execute("tool.expand_toggle");
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("image shot.png"), "{text}");
+    assert!(text.contains("image/png"), "{text}");
+}
+
+#[test]
 fn history_replaces_the_bounded_snapshot_view_and_keeps_live_events() {
     let mut a = app();
     let live = serde_json::json!({"id": 300, "type": "session.error", "session_id": SESSION,

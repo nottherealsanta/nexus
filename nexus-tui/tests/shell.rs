@@ -3229,6 +3229,93 @@ fn session_search_adds_core_message_hits_after_the_title_matches() {
 }
 
 #[test]
+fn load_older_reads_the_page_before_the_oldest_message_and_prepends_it() {
+    use nexus_tui::actions::{ActionDone, ApiCall, Done};
+    use nexus_tui::app::Effect;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let view = app.state.model.selected.as_mut().unwrap();
+    view.messages_more = true;
+    let first = view.messages[0].clone();
+    let loaded = view.messages.len();
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("older messages are not loaded"));
+    app.effects.clear();
+    app.run_command("turn.load_older");
+    app.run_command("turn.load_older"); // a second press while one is in flight does nothing
+    let asked: Vec<_> = app
+        .effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Api(ApiCall::OlderMessages { session, before }) => Some((session.clone(), *before)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(asked, vec![(SESSION.to_owned(), first.seq)]);
+    let mut older = first.clone();
+    older.id = "older_1".into();
+    older.seq = first.seq - 1;
+    app.apply_done(ActionDone {
+        call: ApiCall::OlderMessages { session: SESSION.into(), before: first.seq },
+        result: Ok(Done { older: Some((vec![older], false)), ..Done::default() }),
+    });
+    let view = app.state.model.selected.as_ref().unwrap();
+    assert_eq!(view.messages.len(), loaded + 1);
+    assert_eq!(view.messages[0].id, "older_1");
+    assert!(!view.messages_more);
+}
+
+#[test]
+fn a_model_switch_that_loses_the_cache_asks_first() {
+    use nexus_tui::actions::{ActionDone, ApiCall, Done};
+    use nexus_tui::app::Effect;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.state.models = vec![serde_json::json!({"ref": "scripted/other", "name": "other-model"})];
+    app.run_command("model.change");
+    for c in "other".chars() {
+        press(&mut app, &[&c.to_string()]);
+    }
+    app.effects.clear();
+    press(&mut app, &["enter"]);
+    let asked = app.effects.iter().find_map(|e| match e {
+        Effect::Api(call @ ApiCall::SwitchCost { .. }) => Some(call.clone()),
+        _ => None,
+    });
+    let asked = asked.expect("the switch asks Core what it costs first");
+    assert!(!app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
+    app.effects.clear();
+    let cost = serde_json::json!({"reasons": ["a different model"], "cached_tokens": 1234, "cache_lost": true});
+    app.apply_done(ActionDone {
+        call: asked.clone(),
+        result: Ok(Done { switch_cost: Some(cost), ..Done::default() }),
+    });
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("1234 cached tokens"), "{}", joined(&rows));
+    // Cancel is the focused choice: Enter keeps the model.
+    press(&mut app, &["enter"]);
+    assert!(!app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
+    // Asked again and confirmed, the switch goes out.
+    app.apply_done(ActionDone {
+        call: asked.clone(),
+        result: Ok(Done {
+            switch_cost: Some(serde_json::json!({"reasons": ["a different model"], "cached_tokens": 5, "cache_lost": true})),
+            ..Done::default()
+        }),
+    });
+    press(&mut app, &["right", "enter"]);
+    assert!(app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
+    // Nothing cached: no question.
+    app.effects.clear();
+    app.apply_done(ActionDone {
+        call: asked,
+        result: Ok(Done {
+            switch_cost: Some(serde_json::json!({"reasons": [], "cached_tokens": 0, "cache_lost": false})),
+            ..Done::default()
+        }),
+    });
+    assert!(app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
+}
+
+#[test]
 fn bottom_rule_shows_context_and_activity() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
     with_usage(&mut app, 82_000);

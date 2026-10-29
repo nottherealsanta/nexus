@@ -6,6 +6,8 @@ import { Model } from "./reduce";
 
 /** `/turn` page size while loading a session's summaries (Core's maximum). */
 export const TURN_PAGE = 200;
+/** Messages a session opens with; `turn.load_older` reads this many more each time. */
+export const MESSAGE_PAGE = 200;
 /** Pages of summaries read per session open; older turns beyond them are announced, not loaded. */
 export const TURN_PAGES_MAX = 25;
 
@@ -218,18 +220,20 @@ export class Sync {
     const wanted = () => m.selected?.sessionId === id;
     this.host.contextChanged?.(id);
     this.host.inputsChanged?.(id);
-    const [msgs, starting, turns] = await Promise.all([
-      request<any[]>("GET", `/api/session/${id}/message`),
+    const [msgPage, starting, turns] = await Promise.all([
+      request<any>("GET", `/api/session/${id}/message`, { query: { limit: MESSAGE_PAGE } }),
       request<any>("GET", `/api/session/${id}/snapshot`).catch(() => null),
       loadTurns(id, wanted).then((r) => r, (e) => ({ error: String((e as Error)?.message ?? e) })),
     ]);
     if (!wanted() || turns === null) return;
+    // A page is `{messages, more}`; a plain list is the whole history.
+    const msgs: any[] = Array.isArray(msgPage) ? msgPage : msgPage.messages;
     let gap: string | null = null;
     if ("error" in turns) gap = `turn details failed to load (${turns.error}); tokens, models and timings are missing`;
     else if (turns.capped) gap = `only the newest ${TURN_PAGE * TURN_PAGES_MAX} turns have details loaded`;
     const page = "error" in turns ? null : turns.page;
     m.applyHistory({
-      sessionId: id, messages: msgs, starting, turnsGap: gap,
+      sessionId: id, messages: msgs, messagesMore: !Array.isArray(msgPage) && !!msgPage.more, starting, turnsGap: gap,
       turns: page?.turns ?? [], floor: page?.floor ?? null, usage: page?.usage ?? null,
     });
     this.host.changed();

@@ -339,6 +339,8 @@ pub struct Snapshot {
 pub struct History {
     pub session_id: String,
     pub messages: Vec<Message>,
+    /// Older messages exist that were not loaded (`turn.load_older` reads them).
+    pub messages_more: bool,
     pub starting: Option<Value>,
     /// The full session row; snapshot rows omit `skills` and `mcp`.
     pub session: Option<Session>,
@@ -1281,6 +1283,27 @@ impl CoreApi {
         self.http
             .get(&format!("/api/session/{session}/snapshot"), &[])
             .await
+    }
+
+    /// One page of messages, oldest first: the `limit` before sequence `before` (the newest when
+    /// absent), and whether older ones remain (`GET …/message?limit=&before=`).
+    pub async fn messages_page(
+        &self,
+        session: &str,
+        before: Option<i64>,
+        limit: u32,
+    ) -> Result<(Vec<Message>, bool), Error> {
+        let mut query = vec![("limit", limit.to_string())];
+        if let Some(before) = before {
+            query.push(("before", before.to_string()));
+        }
+        let page = self
+            .http
+            .get(&format!("/api/session/{session}/message"), &query)
+            .await?;
+        let more = page["more"].as_bool().unwrap_or(false);
+        let messages = serde_json::from_value(page["messages"].clone()).map_err(dec)?;
+        Ok((messages, more))
     }
 
     pub async fn messages(&self, session: &str) -> Result<Vec<Message>, Error> {

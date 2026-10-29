@@ -178,6 +178,20 @@ pub enum ApiCall {
     Prompts {
         project: String,
     },
+    /// Plan limits of the providers that report them (`GET /api/usage`).
+    Usage,
+    /// Would switching to `model` or `agent` lose the prompt cache? (`GET …/switch-cost`)
+    SwitchCost {
+        session: String,
+        model: Option<String>,
+        agent: Option<String>,
+        revision: i64,
+    },
+    /// The page of messages before sequence `before` (`turn.load_older`).
+    OlderMessages {
+        session: String,
+        before: i64,
+    },
     /// Core's session search (`GET /api/search`, titles and user messages); never toasts.
     Search {
         query: String,
@@ -262,7 +276,11 @@ impl ApiCall {
             ApiCall::ChangeDirectory { .. } => "Directory change requested",
             ApiCall::AddProject { .. } => "Project added",
             ApiCall::DeleteProject { .. } => "Project removed",
-            ApiCall::Prompts { .. } | ApiCall::Search { .. } => "",
+            ApiCall::Prompts { .. }
+            | ApiCall::Search { .. }
+            | ApiCall::OlderMessages { .. }
+            | ApiCall::SwitchCost { .. }
+            | ApiCall::Usage => "",
         }
     }
 
@@ -297,6 +315,12 @@ pub struct Done {
     pub input_parts: Option<Vec<Value>>,
     /// The project's prompts, oldest first (history recall).
     pub prompts: Option<Vec<String>>,
+    /// Core's `/api/usage`.
+    pub usage: Option<Value>,
+    /// Core's answer to `…/switch-cost`.
+    pub switch_cost: Option<Value>,
+    /// A page of older messages and whether more remain.
+    pub older: Option<(Vec<crate::api::Message>, bool)>,
     /// Core's search hits (`/api/search`).
     pub search: Option<Value>,
     /// `/api/skill/preview` result, shown by the app as a checklist or install.
@@ -370,6 +394,36 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                 )
                 .await
                 .map_err(e)?;
+        }
+        ApiCall::Usage => {
+            done.usage = Some(api.http.get("/api/usage", &[]).await.map_err(e)?);
+        }
+        ApiCall::SwitchCost {
+            session,
+            model,
+            agent,
+            ..
+        } => {
+            let mut params = Vec::new();
+            if let Some(model) = model {
+                params.push(("model", model.clone()));
+            }
+            if let Some(agent) = agent {
+                params.push(("agent", agent.clone()));
+            }
+            done.switch_cost = Some(
+                api.http
+                    .get(&format!("/api/session/{session}/switch-cost"), &params)
+                    .await
+                    .map_err(e)?,
+            );
+        }
+        ApiCall::OlderMessages { session, before } => {
+            done.older = Some(
+                api.messages_page(session, Some(*before), crate::sync::MESSAGE_PAGE)
+                    .await
+                    .map_err(e)?,
+            );
         }
         ApiCall::Search { query, project } => {
             let mut params = vec![("q", query.clone()), ("limit", "30".to_owned())];

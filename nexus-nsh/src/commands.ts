@@ -10,6 +10,7 @@ import {
   focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
+import { MESSAGE_PAGE } from "./core/sync";
 import { Message } from "./core/api";
 import { imageDrafts } from "./images";
 import { disabledKey, selectedSkillCounts, setDisabledTool, shouldInstallRequestedDirectly, toggleDisabledTool } from "./skills-mcp";
@@ -112,6 +113,40 @@ export async function loadProviders() { try { const p = await request<any[]>("GE
 /** Handlers for commands whose Core API exists (or that are pure client navigation). `mutates` = needs a live connection. */
 interface Handler { run: () => void | Promise<void>; mutates?: boolean }
 export const handlers = new Map<string, Handler>();
+const until = (at: number) => {
+  const secs = Math.max(0, Math.floor(at - Date.now() / 1000));
+  const d = Math.floor(secs / 86400), h = Math.floor((secs % 86400) / 3600), mi = Math.floor((secs % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${mi}m` : mi ? `${mi}m` : `${secs}s`;
+};
+/** `app.usage`: the plan windows of the providers that report them (K11), in the notification detail dialog. */
+async function showUsage() {
+  try {
+    const u = await request<{ providers: any[] }>("GET", "/api/usage");
+    const blocks = (u.providers ?? []).map((p) => [
+      `${p.label ?? p.id}${p.plan ? ` · ${p.plan}` : ""}`,
+      ...(p.error ? [`  could not read the limits: ${p.error}`] : (p.windows ?? []).map((w: any) =>
+        `  ${w.label ?? "window"}  ${[w.used_percent != null ? `${Math.round(w.used_percent)}% used` : "", w.resets_at ? `resets in ${until(w.resets_at)}` : "", w.detail ?? ""].filter(Boolean).join(" · ")}`)),
+      ...(p.notes ?? []).map((n: string) => `  ${n}`),
+    ].join("\n"));
+    const text = blocks.length ? blocks.join("\n\n") : "No signed-in provider reports plan limits (codex and copilot do).";
+    alertDetail.set({ id: -1, level: "info", text: `Plan limits\n${text}`, at: Date.now() });
+  } catch (e) { toast("error", `Plan limits failed to load: ${e instanceof ApiError ? e.message : String(e)}`); }
+}
+
+let loadingOlder = false;
+/** `turn.load_older`: the page of messages before the oldest loaded one. */
+async function loadOlderMessages() {
+  const sel = model.selected;
+  const first = sel?.messages[0];
+  if (!sel || !first || loadingOlder) return;
+  loadingOlder = true;
+  try {
+    const page = await request<{ messages: Message[]; more: boolean }>("GET", `/api/session/${sel.sessionId}/message`, { query: { limit: MESSAGE_PAGE, before: first.seq } });
+    model.prependMessages(sel.sessionId, page.messages, page.more);
+    bump();
+  } catch (e) { toast("error", `Older messages failed to load: ${e instanceof ApiError ? e.message : String(e)}`); }
+  loadingOlder = false;
+}
 const on = (id: string, run: Handler["run"], mutates = false) => handlers.set(id, { run, mutates });
 
 /** Copies text to the system clipboard and confirms it (the timeline's message copy). */
@@ -440,6 +475,8 @@ on("timeline.detail_cycle", () => {
   setTimelineDetail(levels[(levels.indexOf(timelineDetail()) + 1) % levels.length]);
 });
 on("session.switch", () => { tab("sessions"); });
+on("app.usage", () => void showUsage());
+on("turn.load_older", () => { void loadOlderMessages(); });
 on("project.switch", () => tab("projects"));
 on("project.add", () => addProjectOpen.set(true), true);
 on("project.remove", () => askRemoveProject());
@@ -534,6 +571,22 @@ function choose(label: string, run: () => void | Promise<void>) {
   return async () => { picker.set(null); await run(); };
 }
 
+/**
+ * K9: switching the model or the agent can make the next request start cold. Ask Core first and
+ * confirm with the user only when something cached would be lost; a failed check does not block.
+ */
+async function guardSwitch(s: { id: string }, what: "model" | "agent", value: string, go: () => Promise<void>) {
+  let cost: { reasons?: string[]; cached_tokens?: number; cache_lost?: boolean } | null = null;
+  try { cost = await request("GET", `/api/session/${s.id}/switch-cost`, { query: { [what]: value } }); } catch { /* advice only */ }
+  if (!cost?.cache_lost) { await go(); return; }
+  confirmDialog.set({
+    title: what === "model" ? "Switch model" : "Switch agent",
+    body: `${(cost.reasons ?? []).join("; ")}. The next request starts cold: about ${cost.cached_tokens ?? 0} cached tokens are read again at full price.`,
+    confirm: "Switch", destructive: false,
+    run: async () => { confirmDialog.set(null); await go(); },
+  });
+}
+
 function applyModel(model: string) {
   return async () => {
     const s = viewed();
@@ -542,10 +595,12 @@ function applyModel(model: string) {
       toast("info", `The new session will use model ${model || "default"}`);
       return;
     }
-    try {
-      await request("POST", `/api/session/${s.id}/model`, { body: { model }, ifMatch: s.revision, key: newKey() });
-      toast("success", "Model changed from the next call");
-    } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+    await guardSwitch(s, "model", model, async () => {
+      try {
+        await request("POST", `/api/session/${s.id}/model`, { body: { model }, ifMatch: s.revision, key: newKey() });
+        toast("success", "Model changed from the next call");
+      } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+    });
   };
 }
 
@@ -572,10 +627,12 @@ on("agent.change", () => void pickOne("Change agent", async () => {
         toast("info", `The new session will use agent ${a.name}`);
         return;
       }
-      try {
-        await request("POST", `/api/session/${s.id}/agent`, { body: { agent: a.name }, ifMatch: s.revision, key: newKey() });
-        toast("success", "Agent changed from the next call");
-      } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+      await guardSwitch(s, "agent", a.name, async () => {
+        try {
+          await request("POST", `/api/session/${s.id}/agent`, { body: { agent: a.name }, ifMatch: s.revision, key: newKey() });
+          toast("success", "Agent changed from the next call");
+        } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+      });
     }),
   }));
 }));

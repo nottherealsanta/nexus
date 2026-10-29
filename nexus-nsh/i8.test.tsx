@@ -30,7 +30,7 @@ const network = (extra: Record<string, unknown> = {}, snap = snapshot()) => ({
   "GET */api/agent*": { body: { agents: [], problems: [] } },
   "GET */api/skill*": { body: { skills: [], problems: [] } },
   "GET */api/mcp*": { body: { servers: [] } },
-  "GET */api/session/ses_1/message": { body: [] },
+  "GET */api/session/ses_1/message*": { body: [] },
   "GET */api/session/ses_1/snapshot": { body: null },
   "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
   "GET */api/session/ses_1/worktrees": { body: { worktrees: [] } },
