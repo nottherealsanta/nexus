@@ -885,10 +885,134 @@ fn open_file_view(content: &str) -> nexus_tui::app::App {
         session: Some(SESSION.into()),
         path: "hello.txt".into(),
         file: true,
-        data: Ok(serde_json::json!({"content": content})),
+        data: Ok(serde_json::json!({"content": content, "revision": "rev1"})),
     });
     draw(&mut app, 120, 36);
     app
+}
+
+fn save_calls(app: &nexus_tui::app::App) -> Vec<nexus_tui::actions::ApiCall> {
+    app.effects
+        .iter()
+        .filter_map(|e| match e {
+            nexus_tui::app::Effect::Api(c @ nexus_tui::actions::ApiCall::SaveFile { .. }) => {
+                Some(c.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_editor_saves_with_the_revision_it_read_and_follows_the_new_one() {
+    use nexus_tui::actions::{ActionDone, ApiCall, Done};
+    let mut app = open_file_view("one\ntwo\n");
+    press(&mut app, &["e"]);
+    assert!(app.ui.file_edit.is_some());
+    assert!(joined(&draw(&mut app, 120, 36).1).contains("editing"));
+    // Nothing to save yet.
+    app.effects.clear();
+    press(&mut app, &["ctrl+s"]);
+    assert!(save_calls(&app).is_empty());
+    typing(&mut app, "X");
+    press(&mut app, &["enter"]);
+    typing(&mut app, "y");
+    assert!(app.ui.file_edit.as_ref().unwrap().dirty());
+    press(&mut app, &["ctrl+s"]);
+    let calls = save_calls(&app);
+    let ApiCall::SaveFile { content, revision, path, .. } = &calls[0] else { panic!() };
+    assert_eq!((path.as_str(), revision.as_str()), ("hello.txt", "rev1"));
+    // The editor opens with the cursor at the top of the file.
+    assert_eq!(content, "X\nyone\ntwo\n");
+    app.apply_done(ActionDone {
+        call: calls[0].clone(),
+        result: Ok(Done { saved: Some(serde_json::json!({"revision": "rev2"})), ..Done::default() }),
+    });
+    let edit = app.ui.file_edit.as_ref().unwrap();
+    assert_eq!(edit.revision, "rev2");
+    assert!(!edit.dirty());
+    // A second save is a new write against rev2.
+    typing(&mut app, "z");
+    app.effects.clear();
+    press(&mut app, &["ctrl+s"]);
+    let ApiCall::SaveFile { revision, .. } = &save_calls(&app)[0] else { panic!() };
+    assert_eq!(revision, "rev2");
+}
+
+#[test]
+fn a_stale_save_keeps_the_text_and_a_reload_replaces_it() {
+    use nexus_tui::actions::{ActionDone, Done};
+    use nexus_tui::sync::SyncMsg;
+    let mut app = open_file_view("one\n");
+    press(&mut app, &["e"]);
+    typing(&mut app, "mine");
+    press(&mut app, &["ctrl+s"]);
+    let call = save_calls(&app).remove(0);
+    app.apply_done(ActionDone {
+        call,
+        result: Ok(Done { conflict: Some("the file changed".into()), ..Done::default() }),
+    });
+    assert!(app.ui.file_edit.as_ref().unwrap().stale);
+    assert!(joined(&draw(&mut app, 120, 36).1).contains("changed on disk"));
+    assert!(app.ui.file_edit.as_ref().unwrap().buf.text().contains("mine"));
+    // Reload asks first because the text is unsaved; confirming reads the file again.
+    app.run_command("editor.reload");
+    assert!(app.ui.dialog.is_some());
+    press(&mut app, &["right", "enter"]);
+    assert!(app.ui.file_edit.as_ref().unwrap().reloading);
+    let project = app.current_project().unwrap();
+    app.apply_sync(SyncMsg::Files {
+        project,
+        session: Some(SESSION.into()),
+        path: "hello.txt".into(),
+        file: true,
+        data: Ok(serde_json::json!({"content": "theirs\n", "revision": "rev9"})),
+    });
+    let edit = app.ui.file_edit.as_ref().unwrap();
+    assert_eq!((edit.buf.text().as_str(), edit.revision.as_str()), ("theirs\n", "rev9"));
+    assert!(!edit.stale && !edit.dirty());
+}
+
+#[test]
+fn esc_leaves_a_clean_editor_and_asks_before_dropping_changes() {
+    let mut app = open_file_view("one\n");
+    press(&mut app, &["e"]);
+    press(&mut app, &["esc"]);
+    assert!(app.ui.file_edit.is_none() && app.ui.file_open);
+    press(&mut app, &["e"]);
+    typing(&mut app, "x");
+    press(&mut app, &["esc"]);
+    assert!(app.ui.dialog.is_some() && app.ui.file_edit.is_some());
+    // Keep editing is the focused choice.
+    press(&mut app, &["enter"]);
+    assert!(app.ui.file_edit.is_some());
+    press(&mut app, &["esc", "right", "enter"]);
+    assert!(app.ui.file_edit.is_none() && app.ui.file_open);
+}
+
+#[test]
+fn an_outside_change_reloads_a_clean_editor_and_warns_a_dirty_one() {
+    use nexus_tui::sync::SyncMsg;
+    let mut app = open_file_view("one\n");
+    press(&mut app, &["e"]);
+    let project = app.current_project().unwrap();
+    let changed = |rev: &str| {
+        serde_json::json!({"project_id": project, "path": "hello.txt", "revision": rev, "source": "editor"})
+    };
+    app.effects.clear();
+    app.file_changed_for_test(&changed("rev5"));
+    assert!(app.ui.file_edit.as_ref().unwrap().reloading, "a clean editor follows the file");
+    app.apply_sync(SyncMsg::Files {
+        project: project.clone(),
+        session: Some(SESSION.into()),
+        path: "hello.txt".into(),
+        file: true,
+        data: Ok(serde_json::json!({"content": "new\n", "revision": "rev5"})),
+    });
+    typing(&mut app, "m");
+    app.file_changed_for_test(&changed("rev6"));
+    let edit = app.ui.file_edit.as_ref().unwrap();
+    assert!(edit.stale && edit.buf.text().contains('m') && !edit.reloading);
 }
 
 #[test]

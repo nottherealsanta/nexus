@@ -29,7 +29,7 @@ terms = [
   "focus.code_block", "focus.file", "focus.project", "focus.session_row",
   "focus.child_card", "focus.git_file",
   # views and overlays
-  "view.editor", "editor.dirty", "overlay.open", "dialog.open", "alert.open",
+  "view.editor", "editor.dirty", "editor.readonly", "overlay.open", "dialog.open", "alert.open",
   "drawer.open", "layout.narrow",
   # connection and accounts
   "connection.lost", "connection.no_daemon", "provider.signed_in",
@@ -1741,6 +1741,17 @@ key_context = "sidebar.projects"
 when = ["focus.project"]
 unavailable_reason = "Focus a project first."
 placement = ["sidebar"]
+
+[[command]]
+id = "editor.edit"
+title = "Edit file"
+category = "editor"
+keys = { tui = "e", nsh = "cmd+e" }
+key_context = "editor"
+when = ["view.editor", "editor.readonly"]
+unavailable_reason = "No file is open, or it is already being edited."
+placement = ["editor", "palette"]
+note = "Turns the file view into the editor. Saving writes with the revision the file was read at (PUT, K10)."
 
 [[command]]
 id = "editor.save"

@@ -280,13 +280,13 @@ function RowMenuItems(p: { row: () => SidebarRowTarget }) {
 }
 
 function FilesTab() {
-  return <Scroll class="flex-1" contentClass="p-2">
+  return <Scroll class="flex-1" contentStyle={{ padding: 8 }}>
     <If when={fileListing()} else={<Text class={T.sec}>Loading files…</Text>}>
       {() => <View>
         <If when={fileListing()!.path}><Button onPress={() => void loadFiles(fileListing()!.path.split("/").slice(0, -1).join("/"))} accessibilityLabel="Parent directory"><Text class={T.sec}>← {fileListing()!.path}</Text></Button></If>
         <If when={fileListing()!.error}><Text class={T.sec}>{fileListing()!.error}</Text></If>
         <Each of={fileListing()!.entries} key={(entry) => entry.name}>{(entry) =>
-          <Button onPress={() => { const path = [fileListing()!.path, entry().name].filter(Boolean).join("/"); if (entry().kind === "directory") void loadFiles(path); else if (entry().kind === "file") void showFile(path); }} accessibilityLabel={entry().name} class={`flex-row px-2 py-1 hover:bg-accent ${FOCUS}`}>
+          <Button onPress={() => { const path = [fileListing()!.path, entry().name].filter(Boolean).join("/"); if (entry().kind === "directory") void loadFiles(path); else if (entry().kind === "file") void showFile(path); }} accessibilityLabel={entry().name} testID={`file-entry-${entry().name}`} class={`flex-row px-2 py-1 hover:bg-accent ${FOCUS}`}>
             <Text class={entry().ignored ? T.meta : T.sec}>{entry().kind === "directory" ? "▸ " : "  "}{entry().name}{entry().git_status ? `  ${entry().git_status}` : ""}</Text>
           </Button>
         }</Each>

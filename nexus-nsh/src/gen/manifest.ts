@@ -38,6 +38,7 @@ export const manifest = {
    "focus.git_file",
    "view.editor",
    "editor.dirty",
+   "editor.readonly",
    "overlay.open",
    "dialog.open",
    "alert.open",
@@ -2524,6 +2525,26 @@ export const manifest = {
    "placement": [
     "sidebar"
    ]
+  },
+  {
+   "id": "editor.edit",
+   "title": "Edit file",
+   "category": "editor",
+   "keys": {
+    "tui": "e",
+    "nsh": "cmd+e"
+   },
+   "key_context": "editor",
+   "when": [
+    "view.editor",
+    "editor.readonly"
+   ],
+   "unavailable_reason": "No file is open, or it is already being edited.",
+   "placement": [
+    "editor",
+    "palette"
+   ],
+   "note": "Turns the file view into the editor. Saving writes with the revision the file was read at (PUT, K10)."
   },
   {
    "id": "editor.save",

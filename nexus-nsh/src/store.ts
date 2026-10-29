@@ -408,6 +408,14 @@ function handleGlobalEvent(e: import("./core/api").CoreEvent) {
     const project = currentProject();
     if (project) loadStartingInventory(project, true);
   }
+  if (e.type === "files.changed") {
+    const f = openFile();
+    const d = e.data as { project_id?: string; path?: string; revision?: string };
+    if (f && !f.saving && d.project_id === f.project && d.path === f.path && d.revision !== f.revision) {
+      if (!fileDirty()) void reloadFile();
+      else { openFile.set({ ...f, stale: true }); toast("warning", "The file changed on disk: reload before saving"); }
+    }
+  }
   if (e.type === "skills.changed" && pendingSkillInstalls) deferredSkillsChanged = true;
   const alert = globalEventToast(e.type, e.data, globalToastState);
   if (alert) toast(alert.level, alert.text);
@@ -415,7 +423,10 @@ function handleGlobalEvent(e: import("./core/api").CoreEvent) {
 
 export type FileEntry = { name: string; kind: string; git_status?: string | null; ignored: boolean };
 export const fileListing = signal<{ path: string; entries: FileEntry[]; error?: string } | null>(null);
-export const openFile = signal<{ path: string; content?: string; error?: string } | null>(null);
+/** The open project file. `draft` is set while editing (K10): the text in the editor, against `revision` as read. */
+export type OpenFile = { path: string; content?: string; revision?: string; error?: string; draft?: string; saving?: boolean; stale?: boolean; project?: string; session?: string };
+export const openFile = signal<OpenFile | null>(null);
+export const fileDirty = () => { const f = openFile(); return !!f && f.draft !== undefined && f.draft !== f.content; };
 export const gitStatus = signal<{ session: string; data?: any; error?: string } | null>(null);
 let filesRequest = 0;
 export async function loadFiles(path = "") {
@@ -432,11 +443,42 @@ export async function showFile(path: string) {
   const project = currentProject(), session = viewed()?.id;
   if (!project) return;
   const seq = ++filesRequest;
-  openFile.set({ path }); centre.set("file");
+  openFile.set({ path, project, session }); centre.set("file");
   try {
-    const data = await request<{ content: string }>("GET", `/api/project/${project}/file`, { query: { path, session } });
-    if (seq === filesRequest) openFile.set({ path, content: data.content });
-  } catch (e) { if (seq === filesRequest) openFile.set({ path, error: String(e) }); }
+    const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${project}/file`, { query: { path, session } });
+    if (seq === filesRequest) openFile.set({ path, project, session, content: data.content, revision: data.revision });
+  } catch (e) { if (seq === filesRequest) openFile.set({ path, project, session, error: String(e) }); }
+}
+/** Read the open file again; `keepEdit` leaves the editor open on the fresh text (reload), else a clean editor follows the file. */
+export async function reloadFile() {
+  const f = openFile(); if (!f?.project) return;
+  const editing = f.draft !== undefined;
+  try {
+    const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${f.project}/file`, { query: { path: f.path, session: f.session } });
+    if (openFile()?.path === f.path) openFile.set({ ...f, content: data.content, revision: data.revision, draft: editing ? data.content : undefined, stale: false, error: undefined });
+  } catch (e) { toast("error", `Reload failed: ${e instanceof Error ? e.message : String(e)}`); }
+}
+export function editFile() {
+  const f = openFile(); if (!f || f.content === undefined || f.draft !== undefined) return;
+  if (!f.revision) { toast("warning", "Core did not report a revision for this file"); return; }
+  openFile.set({ ...f, draft: f.content });
+}
+export function setDraft(text: string) { const f = openFile(); if (f && f.draft !== undefined) openFile.set({ ...f, draft: text }); }
+/** `PUT …/file` with the revision the file was read at; a stale write keeps the text and says so. */
+export async function saveFile() {
+  const f = openFile(); if (!f || f.draft === undefined || f.saving || !f.project || !fileDirty()) return;
+  openFile.set({ ...f, saving: true });
+  try {
+    const done = await request<{ revision: string }>("PUT", `/api/project/${f.project}/file`, { query: { path: f.path, session: f.session }, body: { content: f.draft, expected_revision: f.revision } });
+    const cur = openFile();
+    if (cur?.path === f.path) openFile.set({ ...cur, content: f.draft, revision: done.revision, saving: false, stale: false });
+    toast("success", "Saved");
+  } catch (e) {
+    const cur = openFile();
+    const stale = e instanceof ApiError && e.code === "stale_file";
+    if (cur?.path === f.path) openFile.set({ ...cur, saving: false, stale: stale || cur.stale });
+    toast(stale ? "warning" : "error", stale ? "The file changed on disk. Reload it; your text stays." : `Save failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 export async function loadGit(session: string) {
   gitStatus.set(null);

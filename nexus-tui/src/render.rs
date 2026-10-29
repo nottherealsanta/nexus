@@ -323,9 +323,118 @@ pub fn buffer_rows(buf: &Buffer) -> Vec<String> {
         .collect()
 }
 
+/// Where the editor's text sits in the file view: the gutter width, the first text row and
+/// column, the rows shown, the first row shown, and the columns scrolled off to the left.
+struct EditGeometry {
+    rows: Vec<String>,
+    cursor: (usize, usize),
+    digits: usize,
+    top_y: u16,
+    base_x: u16,
+    page: usize,
+    first: usize,
+    hscroll: usize,
+}
+
+fn edit_geometry(edit: &FileEdit, r: Rect) -> EditGeometry {
+    let (rows, cursor) = edit.buf.layout(8192);
+    let digits = rows.len().to_string().len().max(3);
+    let page = paint::file_page(r.height).max(1);
+    let first = visible_first(rows.len(), cursor.0, page);
+    let base_x = r.x + 1 + digits as u16 + 1 + 2;
+    let room = r.right().saturating_sub(base_x + 1) as usize;
+    let hscroll = (cursor.1 + 1).saturating_sub(room.max(1));
+    EditGeometry {
+        rows,
+        cursor,
+        digits,
+        top_y: r.y + if r.height >= 8 { 2 } else { 1 },
+        base_x,
+        page,
+        first,
+        hscroll,
+    }
+}
+
+/// `modified`, `saved`, or why a save would be refused, right-aligned in the header.
+fn edit_status(edit: &FileEdit) -> String {
+    match (edit.saving, edit.stale, edit.dirty()) {
+        (true, _, _) => "saving…".into(),
+        (_, true, _) => "changed on disk · reload".into(),
+        (_, _, true) => "● modified".into(),
+        _ => "editing".into(),
+    }
+}
+
+/// The editor: the same gutter as the read-only view, the cursor line, and a hint row.
+fn draw_file_edit(cx: &Cx, buf: &mut Buffer, r: Rect, edit: &FileEdit) {
+    let g = edit_geometry(edit, r);
+    let gutter = format!("{} ", cx.t.structure("rail"));
+    let room = r.right().saturating_sub(g.base_x + 1);
+    for (i, line) in g.rows.iter().enumerate().skip(g.first).take(g.page) {
+        let y = g.top_y + (i - g.first) as u16;
+        let number_style = if i == g.cursor.0 {
+            cx.st(PRIMARY, CANVAS)
+        } else {
+            cx.st(MUTED, CANVAS)
+        };
+        let nx = put(
+            buf,
+            r.x + 1,
+            y,
+            &format!("{:>digits$} ", i + 1, digits = g.digits),
+            number_style,
+            r.width.saturating_sub(1),
+        );
+        put(
+            buf,
+            nx,
+            y,
+            &gutter,
+            cx.st("border.default", CANVAS),
+            r.right().saturating_sub(nx),
+        );
+        // Columns scrolled off to the left are skipped by display width.
+        let mut skipped = 0;
+        let shown: String = line
+            .chars()
+            .skip_while(|c| {
+                let w = width(&c.to_string());
+                let skip = skipped < g.hscroll;
+                if skip {
+                    skipped += w;
+                }
+                skip
+            })
+            .collect();
+        put(buf, g.base_x, y, &shown, cx.st(PRIMARY, CANVAS), room);
+    }
+    if r.height >= 3 {
+        let y = r.bottom() - 1;
+        let hint = if edit.dirty() {
+            "ctrl+s save · esc discard"
+        } else {
+            "ctrl+s save · esc leave"
+        };
+        put(buf, r.x + 1, y, hint, cx.st(MUTED, CANVAS), r.width.saturating_sub(2));
+    }
+}
+
 fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
     if app.ui.dialog.is_some() || app.blocking().is_some() {
         return None;
+    }
+    if let (Some(edit), true, None, View::Session) = (
+        &app.ui.file_edit,
+        app.ui.file_open,
+        &app.ui.overlay,
+        app.ui.view,
+    ) {
+        let geo = edit_geometry(edit, g.timeline);
+        return Some(Position::new(
+            geo.base_x + (geo.cursor.1 - geo.hscroll) as u16,
+            geo.top_y + (geo.cursor.0 - geo.first) as u16,
+        ));
     }
     if app.ui.view == View::Settings {
         if app.ui.overlay.is_some() {
@@ -1697,6 +1806,10 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
         ),
         Err(_) => String::new(),
     };
+    let range = match &cx.app.ui.file_edit {
+        Some(edit) => edit_status(edit),
+        None => range,
+    };
     let range_w = width(&range) as u16;
     if range_w > 0 && r.width > range_w + 12 {
         put(
@@ -1735,6 +1848,10 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
         cx.st(PRIMARY, CANVAS).add_modifier(Modifier::BOLD),
         r.right().saturating_sub(x),
     );
+    if let Some(edit) = &cx.app.ui.file_edit {
+        draw_file_edit(cx, buf, r, edit);
+        return;
+    }
     match result {
         Ok(_) => {
             let query = cx

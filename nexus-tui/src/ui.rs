@@ -222,9 +222,35 @@ pub struct Overlay {
     pub restore: Restore,
 }
 
+/// The built-in editor over the open file (K10): the text being edited and the revision it was read at.
+#[derive(Debug, Clone)]
+pub struct FileEdit {
+    pub buf: crate::composer::Composer,
+    /// The `revision` the last read or save returned; a write is refused if the file moved on.
+    pub revision: String,
+    /// The text at that revision, to tell whether the buffer is dirty.
+    pub saved: String,
+    pub top: usize,
+    pub saving: bool,
+    /// A reload was asked: the next read of the file replaces the buffer.
+    pub reloading: bool,
+    /// The file changed on disk under unsaved text, or a save was refused.
+    pub stale: bool,
+}
+
+impl FileEdit {
+    pub fn dirty(&self) -> bool {
+        self.buf.text() != self.saved
+    }
+}
+
 /// A deferred action that a confirm dialog performs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Confirmed {
+    /// Leave the editor and drop its unsaved text (K10).
+    DiscardEdit,
+    /// Read the file again and drop the unsaved text.
+    ReloadEdit,
     /// A model or agent switch that would make the next request start cold (K9).
     /// Exactly one of `model` and `agent` is set.
     Switch {

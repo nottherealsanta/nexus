@@ -159,6 +159,9 @@ pub const WIRED: &[&str] = &[
     "copy.tool_output",
     "copy.user_message",
     "turn.load_older",
+    "editor.edit",
+    "editor.save",
+    "editor.reload",
     "app.usage",
     "waiting.allow_once",
     "waiting.allow_session",
@@ -461,6 +464,8 @@ pub struct Ui {
     pub cursor: HashMap<Tab, usize>,
     pub side_top: usize,
     pub file_open: bool,
+    /// The editor over the open file, when editing (K10).
+    pub file_edit: Option<FileEdit>,
     pub file_scroll: usize,
     /// The Git diff open in the centre column: its path and group.
     pub diff_open: Option<(String, GitGroup)>,
@@ -643,6 +648,7 @@ impl App {
                 cursor: HashMap::new(),
                 side_top: 0,
                 file_open: false,
+                file_edit: None,
                 file_scroll: 0,
                 diff_open: None,
                 diff_scroll: 0,
@@ -1546,7 +1552,9 @@ impl App {
                             b.kind == want || (name == "focus.child_card" && b.kind == K::Handoff)
                         })
             }
-            "view.editor" | "editor.dirty" => false,
+            "view.editor" => self.ui.file_open,
+            "editor.dirty" => self.ui.file_edit.as_ref().is_some_and(FileEdit::dirty),
+            "editor.readonly" => self.ui.file_open && self.ui.file_edit.is_none(),
             "view.settings" => self.ui.view == View::Settings,
             "overlay.open" => self.ui.overlay.is_some(),
             "dialog.open" => self.ui.dialog.is_some() || self.blocking().is_some(),
@@ -2025,8 +2033,12 @@ impl App {
         let Some(session) = self.viewed_id().map(str::to_owned) else {
             return;
         };
+        if self.edit_blocks() {
+            return;
+        }
         self.ui.git_cursor = index;
         self.ui.file_open = false;
+        self.ui.file_edit = None;
         self.ui.diff_scroll = 0;
         self.state.diff = None;
         // Core's diff has no untracked contents, so there is nothing to ask.
@@ -2084,6 +2096,7 @@ impl App {
         self.state.file = None;
         self.ui.files_expanded.clear();
         self.ui.file_open = false;
+        self.ui.file_edit = None;
         self.ui.file_scroll = 0;
         self.ui.diff_open = None;
         self.ui.git_cursor = 0;
@@ -3277,7 +3290,22 @@ impl App {
         }
     }
 
+    /// Unsaved editor text blocks leaving the file: say so and report true.
+    fn edit_blocks(&mut self) -> bool {
+        let dirty = self.ui.file_edit.as_ref().is_some_and(FileEdit::dirty);
+        if dirty {
+            self.toast(
+                Level::Warning,
+                "Unsaved changes in the editor: save (ctrl+s) or discard (esc) first",
+            );
+        }
+        dirty
+    }
+
     pub fn open_session(&mut self, id: &str) {
+        if self.viewed_id() != Some(id) && self.edit_blocks() {
+            return;
+        }
         if !self.ui.tabs.iter().any(|t| t == id) {
             self.ui.tabs.push(id.to_owned());
         }
@@ -3285,6 +3313,7 @@ impl App {
             self.ui.unread_sessions.remove(&root);
         }
         self.ui.file_open = false;
+        self.ui.file_edit = None;
         self.ui.diff_open = None;
         if self.viewed_id() == Some(id) && self.ui.view == View::Session {
             self.after_open();
@@ -3446,6 +3475,15 @@ impl App {
                 }
             }
             "app.help_keys" => self.open_overlay(OverlayKind::Help { top: 0 }),
+            "editor.edit" => self.start_edit(),
+            "editor.save" => self.save_file(),
+            "editor.reload" => {
+                if self.ui.file_edit.as_ref().is_some_and(FileEdit::dirty) {
+                    self.ask_reload_edit();
+                } else {
+                    self.reload_file();
+                }
+            }
             "app.usage" => {
                 self.toast(Level::Info, "Reading plan limits…");
                 self.api(ApiCall::Usage);
@@ -4065,6 +4103,8 @@ impl App {
         if yes {
             match d.action {
                 switch @ Confirmed::Switch { .. } => self.do_switch(switch),
+                Confirmed::DiscardEdit => self.ui.file_edit = None,
+                Confirmed::ReloadEdit => self.reload_file(),
                 Confirmed::DeleteSession(id) => {
                     if self.writable() {
                         self.api(ApiCall::Delete { session: id });
@@ -4359,7 +4399,11 @@ impl App {
             _ => None,
         };
         let turn_closed = matches!(&msg, SyncMsg::Event(e) if e.kind == "turn.summary");
+        let file_read = matches!(&msg, SyncMsg::Files { file: true, .. });
         self.state.apply(msg);
+        if file_read {
+            self.file_read();
+        }
         if turn_closed || snapshot {
             self.refresh_history();
         }
@@ -4410,6 +4454,7 @@ impl App {
                                 .push(Effect::Sync(SyncCommand::SkillMcp(project)));
                         }
                     }
+                    "files.changed" => self.file_changed(&data),
                     "mcp.failed" => self.toast(
                         Level::Warning,
                         format!(
@@ -4566,6 +4611,34 @@ impl App {
                     top: 0,
                 }),
                 Err(error) => self.toast(Level::Error, format!("Side question failed: {error}")),
+            }
+            return;
+        }
+        if let ApiCall::SaveFile { content, .. } = &done.call {
+            if let Some(edit) = self.ui.file_edit.as_mut() {
+                edit.saving = false;
+            }
+            match done.result {
+                Ok(r) if r.conflict.is_some() => {
+                    if let Some(edit) = self.ui.file_edit.as_mut() {
+                        edit.stale = true;
+                    }
+                    self.toast(
+                        Level::Warning,
+                        "The file changed on disk. Reload it (palette: Reload file); your text stays",
+                    );
+                }
+                Ok(r) => {
+                    if let (Some(edit), Some(saved)) = (self.ui.file_edit.as_mut(), r.saved) {
+                        if let Some(revision) = saved["revision"].as_str() {
+                            edit.revision = revision.to_owned();
+                        }
+                        edit.saved = content.clone();
+                        edit.stale = false;
+                    }
+                    self.toast(Level::Success, "Saved");
+                }
+                Err(error) => self.toast(Level::Error, format!("Save failed: {error}")),
             }
             return;
         }
@@ -5356,6 +5429,215 @@ impl App {
     }
 
     /// Keys for the file view's `/` search. Returns whether the key was taken.
+    /// Keys of the editor (K10). Returns whether the key was taken; keys it does not
+    /// know (global shortcuts) fall through.
+    fn file_edit_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
+        let page = crate::paint::file_page(self.regions.timeline.height).max(1);
+        let Some(edit) = self.ui.file_edit.as_mut() else {
+            return false;
+        };
+        match name {
+            "ctrl+s" => {
+                self.save_file();
+                return true;
+            }
+            "enter" => edit.buf.insert_str("\n"),
+            "tab" => edit.buf.insert_str("    "),
+            "ctrl+z" => edit.buf.undo(),
+            "ctrl+y" | "ctrl+shift+z" => edit.buf.redo(),
+            "pageup" | "pagedown" => {
+                for _ in 0..page {
+                    if name == "pageup" {
+                        edit.buf.up();
+                    } else {
+                        edit.buf.down();
+                    }
+                }
+            }
+            _ => {
+                let editing = keys::printable(ev).is_some()
+                    || matches!(
+                        name,
+                        "backspace"
+                            | "delete"
+                            | "left"
+                            | "right"
+                            | "up"
+                            | "down"
+                            | "home"
+                            | "end"
+                            | "ctrl+a"
+                            | "ctrl+e"
+                            | "ctrl+u"
+                            | "alt+backspace"
+                            | "alt+left"
+                            | "alt+right"
+                            | "alt+b"
+                            | "alt+f"
+                            | "ctrl+home"
+                            | "ctrl+end"
+                    )
+                    || name.starts_with("shift+");
+                if !editing {
+                    return false;
+                }
+                edit_buffer(&mut edit.buf, ev, name, false);
+            }
+        }
+        true
+    }
+
+    /// The open file's project, session scope, path and read revision.
+    fn open_file_ref(&self) -> Option<(String, Option<String>, String, Value)> {
+        let (project, session, path, result) = self.state.file.as_ref()?;
+        Some((project.clone(), session.clone(), path.clone(), result.as_ref().ok()?.clone()))
+    }
+
+    fn start_edit(&mut self) {
+        if self.ui.file_edit.is_some() {
+            return;
+        }
+        let Some((_, _, _, data)) = self.open_file_ref() else {
+            self.toast(Level::Warning, "The file is not loaded");
+            return;
+        };
+        let Some(revision) = data["revision"].as_str().map(str::to_owned) else {
+            self.toast(Level::Warning, "Core did not report a revision for this file");
+            return;
+        };
+        if !self.writable() {
+            self.toast(Level::Warning, READ_ONLY);
+            return;
+        }
+        let saved = data["content"].as_str().unwrap_or("").to_owned();
+        let mut buf = Composer::new();
+        buf.set_text(&saved);
+        buf.document_edge(false);
+        self.ui.file_edit = Some(FileEdit {
+            buf,
+            revision,
+            saved,
+            top: 0,
+            saving: false,
+            reloading: false,
+            stale: false,
+        });
+    }
+
+    fn save_file(&mut self) {
+        let Some((project, session, path, _)) = self.open_file_ref() else {
+            return;
+        };
+        if !self.writable() {
+            return self.toast(Level::Warning, READ_ONLY);
+        }
+        let Some(edit) = self.ui.file_edit.as_mut() else {
+            return;
+        };
+        if edit.saving {
+            return;
+        }
+        if !edit.dirty() {
+            return self.toast(Level::Info, "No unsaved changes");
+        }
+        edit.saving = true;
+        let call = ApiCall::SaveFile {
+            project,
+            session,
+            path,
+            content: edit.buf.expanded_text(),
+            revision: edit.revision.clone(),
+        };
+        self.api(call);
+    }
+
+    fn reload_file(&mut self) {
+        let Some((_, _, path, _)) = self.open_file_ref() else {
+            return;
+        };
+        if let Some(edit) = self.ui.file_edit.as_mut() {
+            edit.reloading = true;
+        }
+        self.request_files(path, true);
+    }
+
+    fn ask_discard_edit(&mut self) {
+        let restore = self.restore_point();
+        self.ui.dialog = Some(Dialog {
+            title: "Discard changes".into(),
+            body: vec!["The file has unsaved changes. Leaving the editor drops them.".into()],
+            cancel: "Keep editing".into(),
+            confirm: "Discard".into(),
+            danger: true,
+            action: Confirmed::DiscardEdit,
+            button: 0,
+            restore,
+        });
+    }
+
+    fn ask_reload_edit(&mut self) {
+        let restore = self.restore_point();
+        self.ui.dialog = Some(Dialog {
+            title: "Reload file".into(),
+            body: vec!["Reading the file again replaces your unsaved changes.".into()],
+            cancel: "Keep editing".into(),
+            confirm: "Reload".into(),
+            danger: true,
+            action: Confirmed::ReloadEdit,
+            button: 0,
+            restore,
+        });
+    }
+
+    /// The file was read again: a requested reload replaces the editor's text.
+    fn file_read(&mut self) {
+        let Some((_, _, _, data)) = self.open_file_ref() else {
+            return;
+        };
+        let Some(edit) = self.ui.file_edit.as_mut().filter(|e| e.reloading) else {
+            return;
+        };
+        edit.reloading = false;
+        edit.stale = false;
+        if let Some(revision) = data["revision"].as_str() {
+            edit.revision = revision.to_owned();
+        }
+        let text = data["content"].as_str().unwrap_or("").to_owned();
+        edit.buf.set_text(&text);
+        edit.saved = text;
+    }
+
+    #[doc(hidden)]
+    pub fn file_changed_for_test(&mut self, data: &Value) {
+        self.file_changed(data);
+    }
+
+    /// `files.changed` for the open file: a clean editor or view follows it; unsaved text is
+    /// kept and the editor says the file moved on.
+    fn file_changed(&mut self, data: &Value) {
+        let Some((project, _, path, current)) = self.open_file_ref() else {
+            return;
+        };
+        if data["project_id"].as_str() != Some(project.as_str())
+            || data["path"].as_str() != Some(path.as_str())
+            || data["revision"].as_str() == current["revision"].as_str()
+        {
+            return;
+        }
+        match self.ui.file_edit.as_ref().map(|e| (e.dirty(), e.revision.clone())) {
+            // Our own save already moved the editor's revision on.
+            Some((_, revision)) if data["revision"].as_str() == Some(revision.as_str()) => {}
+            Some((true, _)) => {
+                if let Some(edit) = self.ui.file_edit.as_mut() {
+                    edit.stale = true;
+                }
+                self.toast(Level::Warning, "The file changed on disk: reload before saving");
+            }
+            Some((false, _)) => self.reload_file(),
+            None => self.request_files(path, true),
+        }
+    }
+
     fn file_search_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
         let typed = keys::printable(ev);
         let Some(search) = self.ui.file_search.as_mut() else {
@@ -5539,9 +5821,14 @@ impl App {
                 && self.ui.dialog.is_none()
                 && self.ui.edit.is_none()
             {
-                // The first Esc ends a search; the next one closes the file.
+                // The first Esc ends a search, then leaves the editor (asking first when
+                // dirty); the next one closes the file.
                 if self.ui.file_search.take().is_none() {
-                    self.ui.file_open = false;
+                    match self.ui.file_edit.as_ref().map(FileEdit::dirty) {
+                        Some(true) => self.ask_discard_edit(),
+                        Some(false) => self.ui.file_edit = None,
+                        None => self.ui.file_open = false,
+                    }
                 }
                 return;
             }
@@ -5570,9 +5857,20 @@ impl App {
                 return;
             }
         }
+        if self.ui.file_edit.is_some()
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
+            && self.file_edit_key(&ev, &name)
+        {
+            return;
+        }
         if self.ui.file_open && self.ui.overlay.is_none() && self.ui.dialog.is_none() {
             if self.file_search_key(&ev, &name) {
                 return;
+            }
+            if name == "e" && self.ui.file_edit.is_none() {
+                return self.run_command("editor.edit");
             }
             let lines = self.file_line_count();
             let page = crate::paint::file_page(self.regions.timeline.height);
@@ -7689,6 +7987,10 @@ impl App {
             e.buf.insert_str(&text.replace('\n', " "));
             return;
         }
+        if let (Some(edit), true) = (self.ui.file_edit.as_mut(), self.ui.file_open) {
+            edit.buf.insert_str(text);
+            return;
+        }
         if self.ui.dialog.is_some() || self.ui.view == View::Settings {
             return;
         }
@@ -7976,6 +8278,7 @@ impl ActionDone {
             ApiCall::OlderMessages { .. } => "Older messages failed to load",
             ApiCall::SwitchCost { .. } => "",
             ApiCall::Usage => "Plan limits failed to load",
+            ApiCall::SaveFile { .. } => "Save failed",
         }
     }
 }

@@ -5,6 +5,7 @@ import { loadFiles } from "./store";
 import { Clipboard, keymap, openUrl } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
+  editFile, fileDirty, openFile, reloadFile, saveFile,
   pendingInputs, contextDetail, addProjectOpen, alertDetail, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, defaultModel, draft, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
@@ -89,7 +90,9 @@ function evalTerm(t: string): boolean {
     case "timeline.scrolled_up": return scrolledUp();
     case "timeline.has_older": return !!model.selected?.messagesMore;
     case "view.settings": return centre() === "settings";
-    case "view.editor": return centre() === "editor";
+    case "view.editor": return centre() === "file";
+    case "editor.dirty": return fileDirty();
+    case "editor.readonly": return centre() === "file" && openFile()?.draft === undefined && openFile()?.content !== undefined;
     case "overlay.open": return paletteOpen() || !!picker() || !!learnChecklist() || !!alertDetail();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
@@ -475,6 +478,20 @@ on("timeline.detail_cycle", () => {
   setTimelineDetail(levels[(levels.indexOf(timelineDetail()) + 1) % levels.length]);
 });
 on("session.switch", () => { tab("sessions"); });
+on("editor.edit", () => editFile());
+on("editor.save", () => saveFile(), true);
+on("editor.reload", () => {
+  if (!fileDirty()) { void reloadFile(); return; }
+  confirmDialog.set({ title: "Reload file", body: "Reading the file again replaces your unsaved changes.", confirm: "Reload", destructive: true, run: async () => { confirmDialog.set(null); await reloadFile(); } });
+});
+/** Esc / Close editor: a dirty editor asks first; a clean one leaves editing, then the file. */
+function closeEditor() {
+  const f = openFile();
+  const leave = () => { if (f?.draft !== undefined) openFile.set({ ...f, draft: undefined, stale: false }); else centre.set(viewed() ? "session" : "new_session"); };
+  if (!fileDirty()) { leave(); return; }
+  confirmDialog.set({ title: "Discard changes", body: "The file has unsaved changes. Leaving the editor drops them.", confirm: "Discard", destructive: true, run: () => { confirmDialog.set(null); leave(); } });
+}
+on("editor.close", closeEditor);
 on("app.usage", () => void showUsage());
 on("turn.load_older", () => { void loadOlderMessages(); });
 on("project.switch", () => tab("projects"));
@@ -720,7 +737,7 @@ export function escape() {
       if (rule.id === "alert") { void run("alert.dismiss"); return rule.id; }
       if (rule.id === "interrupt") { void run("session.interrupt"); return rule.id; }
       if (rule.id === "back") { const s = viewed(); if (s?.parent_id) void selectSession(s.parent_id); return rule.id; }
-      if (rule.id === "editor") return rule.id;
+      if (rule.id === "editor") { closeEditor(); return rule.id; }
       void run(rule.action);
       return rule.id;
     }
@@ -756,6 +773,12 @@ export function bindKeys(): () => void {
         if (id === "tool.show_all_output" && focusedTool()?.clipped) void run(id);
       }, { when: "notEditing" }));
     } catch { /* the platform keeps this keystroke */ }
+  }
+  // The editor's own keys act only while a file is open (cmd+s saves; cmd+e starts editing).
+  for (const id of ["editor.save", "editor.edit"]) {
+    const k = byId.get(id)?.keys?.nsh;
+    if (!k) continue;
+    try { offs.push(keymap.bind(toKeystroke(k), () => { if (centre() === "file") void run(id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
   }
   try { offs.push(keymap.bind("escape", () => { escape(); }, { when: "always" })); } catch {}
   return () => offs.forEach((f) => f());

@@ -178,6 +178,14 @@ pub enum ApiCall {
     Prompts {
         project: String,
     },
+    /// Write the editor's text (`PUT …/file`, K10) if the file is still at `revision`.
+    SaveFile {
+        project: String,
+        session: Option<String>,
+        path: String,
+        content: String,
+        revision: String,
+    },
     /// Plan limits of the providers that report them (`GET /api/usage`).
     Usage,
     /// Would switching to `model` or `agent` lose the prompt cache? (`GET …/switch-cost`)
@@ -281,6 +289,7 @@ impl ApiCall {
             | ApiCall::OlderMessages { .. }
             | ApiCall::SwitchCost { .. }
             | ApiCall::Usage => "",
+            ApiCall::SaveFile { .. } => "Saved",
         }
     }
 
@@ -315,6 +324,8 @@ pub struct Done {
     pub input_parts: Option<Vec<Value>>,
     /// The project's prompts, oldest first (history recall).
     pub prompts: Option<Vec<String>>,
+    /// The save's answer: the file's new revision.
+    pub saved: Option<Value>,
     /// Core's `/api/usage`.
     pub usage: Option<Value>,
     /// Core's answer to `…/switch-cost`.
@@ -394,6 +405,38 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                 )
                 .await
                 .map_err(e)?;
+        }
+        ApiCall::SaveFile {
+            project,
+            session,
+            path,
+            content,
+            revision,
+        } => {
+            let mut query = vec![("path", path.clone())];
+            if let Some(session) = session {
+                query.push(("session", session.clone()));
+            }
+            let body = json!({ "content": content, "expected_revision": revision });
+            match api
+                .http
+                .call(
+                    reqwest::Method::PUT,
+                    &format!("/api/project/{project}/file"),
+                    &query,
+                    Some(&body),
+                    None,
+                    None,
+                )
+                .await
+            {
+                Ok(r) => done.saved = Some(r.body),
+                // The file moved on since it was read: not a failure to retry, a state to show.
+                Err(crate::transport::Error::Api(error)) if error.code.as_deref() == Some("stale_file") => {
+                    done.conflict = Some(error.message)
+                }
+                Err(error) => return Err(e(error)),
+            }
         }
         ApiCall::Usage => {
             done.usage = Some(api.http.get("/api/usage", &[]).await.map_err(e)?);
