@@ -2271,8 +2271,8 @@ impl Builder<'_> {
         self.block(key, BlockKind::Reasoning, self.turn, !encrypted, |b| {
             let pad = " ".repeat(ACTIVITY_INDENT);
             let prefix = match tree {
-                Some(true) => format!("{pad}  {} ", b.t.structure("tree_end")),
-                Some(false) => format!("{pad}  {} ", b.t.structure("tree_mid")),
+                Some(true) => format!("{pad}{} ", b.t.structure("tree_end")),
+                Some(false) => format!("{pad}{} ", b.t.structure("tree_mid")),
                 None => format!("{pad}{} ", b.t.fold(open)),
             };
             let mut head = vec![
@@ -2300,7 +2300,7 @@ impl Builder<'_> {
             }
             b.line(head);
             if open {
-                let indent = " ".repeat(ACTIVITY_INDENT + if tree.is_some() { 4 } else { 2 });
+                let indent = " ".repeat(ACTIVITY_INDENT + 2);
                 let room = b.bw.saturating_sub(indent.len() + 2).max(1);
                 for row in text::wrap(&summary, room) {
                     b.line(vec![
@@ -2326,8 +2326,8 @@ impl Builder<'_> {
         self.block(key, BlockKind::Reasoning, self.turn, true, |b| {
             let pad = " ".repeat(ACTIVITY_INDENT);
             let prefix = match tree {
-                Some(true) => format!("{pad}  {} ", b.t.structure("tree_end")),
-                Some(false) => format!("{pad}  {} ", b.t.structure("tree_mid")),
+                Some(true) => format!("{pad}{} ", b.t.structure("tree_end")),
+                Some(false) => format!("{pad}{} ", b.t.structure("tree_mid")),
                 None => format!("{pad}{} ", b.t.fold(open)),
             };
             let mut head = vec![
@@ -2348,7 +2348,7 @@ impl Builder<'_> {
             }
             b.line(head);
             if open {
-                let indent = " ".repeat(ACTIVITY_INDENT + if tree.is_some() { 4 } else { 2 });
+                let indent = " ".repeat(ACTIVITY_INDENT + 2);
                 let room = b.bw.saturating_sub(indent.len() + 2).max(1);
                 for row in text::wrap(text, room) {
                     b.line(vec![
