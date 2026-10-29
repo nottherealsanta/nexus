@@ -124,6 +124,8 @@ pub struct AppState {
     pub default_model: String,
     pub config: Option<serde_json::Value>,
     pub context: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Core's starting context for the newest draft it was asked about: the request and its answer.
+    pub draft_context: Option<(serde_json::Value, Result<serde_json::Value, String>)>,
     pub inputs: std::collections::BTreeMap<String, serde_json::Value>,
     pub config_error: Option<String>,
     /// Last worktree listing per session; validated against the current directory.
@@ -159,6 +161,7 @@ impl Default for AppState {
             default_model: String::new(),
             config: None,
             context: std::collections::BTreeMap::new(),
+            draft_context: None,
             inputs: std::collections::BTreeMap::new(),
             config_error: None,
             worktrees: std::collections::BTreeMap::new(),
@@ -183,6 +186,7 @@ impl AppState {
             SyncMsg::Inputs { session, data } => {
                 self.inputs.insert(session, data);
             }
+            SyncMsg::DraftContext { request, data } => self.draft_context = Some((request, data)),
             SyncMsg::Context { session, data } => {
                 self.context.insert(session, data);
             }

@@ -1048,6 +1048,17 @@ estimate and `exact` is false. A missing catalog window is null. Measured usage
 refers to that request, rather than tokenizing newly appended context. Clients
 label estimates with `~`.
 
+`POST /api/draft/context` (session drafts, PLAN K4) takes the fields of a
+session-creation request (`project` or `directory`, and optionally `agent`,
+`model`, `effort`, `disabled_tools`), plans the session exactly as creation
+does, and returns the request its first turn would send, with nothing stored:
+the `/context` fields (`used`, `window`, `exact`, always false here), `model`,
+`agent`, `parts` (`instructions`, `tools`, `instruction_file`, estimated tokens
+of the system prompt, tool schemas and the AGENTS.md inside the prompt) and the
+`snapshot` summary. Enabled MCP servers are connected first, as for creation.
+Clients show it on the new-session screen and fall back to their own estimate
+until it answers.
+
 ## Pending inputs: steer and queue
 
 `POST /api/session/{id}/prompt` accepts `mode: "send" | "steer" | "queue"`.

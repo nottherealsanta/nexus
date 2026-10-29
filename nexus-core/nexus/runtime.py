@@ -65,7 +65,7 @@ from .bus import Bus
 from .codec import message_to_json, to_json
 from .config import ConfigFile
 from .continuation import ContextInvalid, Reconciliation, predecessor, reconcile
-from .counting import budget
+from .counting import budget, estimate_tokens
 from .hooks import HookRunner, config_hooks
 from .kernels import Kernels
 from .llmhub import catalog
@@ -786,11 +786,10 @@ class Runtime:
             return self.session_json(s) | {"children": [node(c) for c in self.store.children(s.id)]}
         return node(root)
 
-    def create_session(self, project: Project, *, title: str | None, model: str | None, permission: str | None,
-                       effort: str | None = None, agent: str | None = None, parent: Session | None = None,
-                       parent_call_id: str | None = None, launched_by: str = "user",
-                       disabled_tools: list[str] | None = None, directory: str | None = None,
-                       continued_from: str | None = None) -> Session:
+    def _plan_session(self, project: Project, *, model: str | None, permission: str | None, effort: str | None,
+                      agent: str | None, parent: Session | None, disabled_tools: list[str] | None,
+                      directory: str | None) -> dict[str, Any]:
+        """Every field a new session starts with, snapshot included; nothing is stored."""
         if permission not in (None, "ask", "allow"):
             raise ValueError("permission must be 'ask' or 'allow'")
         if parent is not None:
@@ -851,6 +850,19 @@ class Runtime:
             directory=directory, spec=spec, found=found, disabled=set(disabled_tools or []),
             child=parent is not None, project_path=project.path, carry=carry,
         )
+        return {"model": model, "permission": permission, "effort": effort, "agent": agent, "disabled_tools": disabled_tools,
+                "directory": directory, "snapshot": snapshot, "spec": spec, "parent": parent}
+
+    def create_session(self, project: Project, *, title: str | None, model: str | None, permission: str | None,
+                       effort: str | None = None, agent: str | None = None, parent: Session | None = None,
+                       parent_call_id: str | None = None, launched_by: str = "user",
+                       disabled_tools: list[str] | None = None, directory: str | None = None,
+                       continued_from: str | None = None) -> Session:
+        plan = self._plan_session(project, model=model, permission=permission, effort=effort, agent=agent, parent=parent,
+                                  disabled_tools=disabled_tools, directory=directory)
+        model, permission, effort, agent = plan["model"], plan["permission"], plan["effort"], plan["agent"]
+        disabled_tools, directory, snapshot = plan["disabled_tools"], plan["directory"], plan["snapshot"]
+        parent = plan["parent"]
         session = self.store.create_session(project, title=title or "New session", agent=agent, model=model or "",
                                             permission=permission or "allow", effort=effort or None, parent=parent,
                                             parent_call_id=parent_call_id, launched_by=launched_by,
@@ -1408,6 +1420,33 @@ class Runtime:
         model = self.session_json(self.session(session_id))["model"]
         window = await self.window_for(model)
         return body | budget(body, window, self.measured_input(session_id, model))
+
+    async def draft_context(self, project: Project, *, model: str | None = None, effort: str | None = None,
+                            agent: str | None = None, disabled_tools: list[str] | None = None,
+                            directory: str | None = None) -> dict[str, Any]:
+        """The request a new session would send first (K4): same planning as `create_session`, nothing stored.
+
+        Takes the creation fields and returns `context_usage`'s shape plus `model` and the `snapshot` summary, with
+        `exact` false (no request has run).
+        """
+        disabled = disabled_tools if disabled_tools is not None else ConfigFile().read()["values"]["tools"]["disabled"]
+        await self.mcp.connect_all(self.mcp_servers(set(disabled)))
+        plan = self._plan_session(project, model=model, permission=None, effort=effort, agent=agent, parent=None,
+                                  disabled_tools=disabled_tools, directory=directory)
+        snapshot, spec = plan["snapshot"], plan["spec"]
+        ref = plan["model"] or spec.model or self.default_model
+        provider, model_id = provider_for(ref)
+        request = Request(
+            model=model_id, instructions=snapshot["system_prompt"], messages=(),
+            tools=tuple(ToolSpec(n, d["description"], d["parameters"]) for n, d in snapshot["tool_definitions"].items()),
+            reasoning_effort=plan["effort"] or spec.effort)
+        body = provider.body(request)
+        window = await self.window_for(ref)
+        file = snapshot["instruction_file"]
+        parts = {"instructions": estimate_tokens(request.instructions), "tools": estimate_tokens([[t.name, t.description, t.parameters] for t in request.tools]),
+                 "instruction_file": estimate_tokens(file.get("content") or "")}
+        return body | budget(body, window, None) | {"model": ref, "agent": plan["agent"], "parts": parts,
+                                                    "snapshot": snapshots.summary(snapshot)}
 
     # -- one-request helpers: titles, /btw, handoff (PLAN K1-K3) ----------------
 

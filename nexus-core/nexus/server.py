@@ -1032,6 +1032,13 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     async def context(request: Request) -> Response:
         return JSONResponse(await runtime.context_usage(p(request, "id")))
 
+    async def draft_context(request: Request) -> Response:
+        body = await _body(request)
+        target = runtime.project(body["project"]) if body.get("project") else runtime.open_project(body["directory"])
+        return JSONResponse(await runtime.draft_context(
+            target, model=body.get("model"), effort=body.get("effort"), agent=body.get("agent"),
+            disabled_tools=body.get("disabled_tools")))
+
     async def btw(request: Request) -> Response:
         body = await _body(request)
         question = body.get("question", "")
@@ -1196,6 +1203,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/project/{id}/files/search", route(project_file_search)),
         Route("/api/project/{id}/prompts", route(project_prompts)),
         Route("/api/session", route(sessions), methods=["GET", "POST"]),
+        Route("/api/draft/context", route(draft_context), methods=["POST"]),
         Route("/api/session/{id}", route(session), methods=["GET", "PATCH", "DELETE"]),
         Route("/api/session/{id}/model", route(session_model), methods=["POST"]),
         Route("/api/session/{id}/agent", route(session_agent), methods=["POST"]),

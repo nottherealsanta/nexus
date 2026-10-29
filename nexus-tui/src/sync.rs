@@ -57,6 +57,11 @@ pub enum SyncMsg {
         session: String,
         data: Value,
     },
+    /// Core's starting context for the request body that was asked.
+    DraftContext {
+        request: Value,
+        data: Result<Value, String>,
+    },
     Inputs {
         session: String,
         data: Value,
@@ -133,6 +138,8 @@ pub enum Command {
     Resync,
     Config,
     Context(String),
+    /// The starting context a new session would have: `project` plus the draft's fields.
+    DraftContext(Value),
     PatchConfig {
         revision: String,
         path: String,
@@ -216,6 +223,7 @@ struct Ctx {
     catalog: Option<Option<String>>,
     config: bool,
     context: Option<String>,
+    draft: Option<Value>,
     inputs: Option<String>,
     config_patch: Option<(String, String, Value)>,
     worktrees: Option<String>,
@@ -250,6 +258,7 @@ impl Ctx {
             Command::Resync => self.resync = Some(ResyncCause::Requested),
             Command::Config => self.config = true,
             Command::Context(session) => self.context = Some(session),
+            Command::DraftContext(request) => self.draft = Some(request),
             Command::PatchConfig {
                 revision,
                 path,
@@ -327,6 +336,7 @@ pub async fn run(
         catalog: None,
         config: true,
         context: None,
+        draft: None,
         inputs: None,
         config_patch: None,
         worktrees: None,
@@ -469,6 +479,7 @@ pub async fn run(
 
         load_config(&mut cx, &api).await;
         load_context(&mut cx, &api).await;
+        load_draft(&mut cx, &api).await;
         load_inputs(&mut cx, &api).await;
         // A request received while reconnecting must not be stranded until a
         // later command arrives on the live stream.
@@ -625,6 +636,25 @@ async fn load_context(cx: &mut Ctx, api: &CoreApi) {
         {
             cx.send(SyncMsg::Context { session, data });
         }
+    }
+}
+
+async fn load_draft(cx: &mut Ctx, api: &CoreApi) {
+    if let Some(request) = cx.draft.take() {
+        let data = api
+            .http
+            .call(
+                reqwest::Method::POST,
+                "/api/draft/context",
+                &[],
+                Some(&request),
+                None,
+                None,
+            )
+            .await
+            .map(|r| r.body)
+            .map_err(|e| e.to_string());
+        cx.send(SyncMsg::DraftContext { request, data });
     }
 }
 
@@ -1015,11 +1045,12 @@ async fn stream(
             cmd = cx.cmds.recv() => {
                 match cmd {
                     Some(c) => {
-                        let was_catalog = matches!(c, Command::Config | Command::Context(_) | Command::PatchConfig { .. } | Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::SkillMcp(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
+                        let was_catalog = matches!(c, Command::Config | Command::Context(_) | Command::DraftContext(_) | Command::PatchConfig { .. } | Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::SkillMcp(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
                         cx.handle(c);
                         if cx.shutdown { return StreamEnd::Stop; }
                         load_config(cx, api).await;
                         load_context(cx, api).await;
+                        load_draft(cx, api).await;
                         if let Some(project) = cx.catalog.take() {
                             if let Some((models, agents, source, default_model)) = load_catalog(api, project.as_deref()).await {
                                 if !cx.send(SyncMsg::Catalog { models, agents, source, default_model }) {

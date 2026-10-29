@@ -7,7 +7,7 @@ import { Button } from "nsh/base";
 import { Btn, FOCUS, T, midTruncate } from "./kit";
 import { run, byId, keyLabel, toggleDraftInventory, toggleSessionInventory } from "../commands";
 import {
-  contextDetail, agentCatalog, currentProject, defaultModel, info, loadComposerData, loadStartingInventory, m, model, modelCatalog, projectWorktrees, sessionDraft, startingInventory, userHome, worktreeForDirectory,
+  contextDetail, agentCatalog, currentProject, defaultModel, info, draftContext, draftContextKey, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, projectWorktrees, sessionDraft, startingInventory, userHome, worktreeForDirectory,
 } from "../store";
 import { agentColor } from "../agent-color";
 import { request } from "../core/transport";
@@ -53,7 +53,7 @@ export function gridCells(items: { name: string; on: boolean }[]): { name: strin
 }
 const utf8 = (s: string) => { let n = 0; for (const c of s) { const p = c.codePointAt(0)!; n += p < 0x80 ? 1 : p < 0x800 ? 2 : p < 0x10000 ? 3 : 4; } return n; };
 
-/** Tokens the generated system prompt costs before the agent body and the instruction file; every figure is an estimate until Core drafts land (PLAN.md Step 12a). */
+/** Tokens the generated system prompt costs before the agent body and the instruction file; the figures are the client's estimate until Core answers `POST /api/draft/context` (PLAN K4). */
 export const PROMPT_BASE_TOKENS = 900;
 export const TOOL_SCHEMA_TOKENS = 450;
 export const DEFAULT_TOOLS = ["read", "grep", "glob", "ls", "bash", "edit", "multiedit", "write", "web_search", "web_fetch", "ask", "code", "expose_workspace_tools"];
@@ -63,13 +63,15 @@ export function previewSections(i: {
   agent: string; prompt: string; tools?: string[]; off?: string[];
   disabled_tools?: string[]; skills?: SkillEntry[]; mcp?: McpEntry[];
   inventoryLoading?: boolean; inventoryError?: string; file?: { path: string; bytes: number; line: string } | null;
+  /** Core's answer for this draft: its counts replace the estimates. */
+  core?: { used: number; parts: { instructions: number; tools: number; instruction_file: number } } | null;
 }): { sections: CtxSection[]; total: number } {
   const tools = [...(i.tools ?? DEFAULT_TOOLS)];
   if (!tools.includes("expose_workspace_tools")) tools.push("expose_workspace_tools");
   const off = i.off ?? [];
-  const fileTokens = i.file ? Math.ceil(i.file.bytes / 4) : 0;
-  const promptTokens = PROMPT_BASE_TOKENS + Math.ceil(Array.from(i.prompt).length / 4) + fileTokens;
-  const toolTokens = tools.length * TOOL_SCHEMA_TOKENS;
+  const fileTokens = i.core?.parts.instruction_file ?? (i.file ? Math.ceil(i.file.bytes / 4) : 0);
+  const promptTokens = i.core?.parts.instructions ?? PROMPT_BASE_TOKENS + Math.ceil(Array.from(i.prompt).length / 4) + fileTokens;
+  const toolTokens = i.core?.parts.tools ?? tools.length * TOOL_SCHEMA_TOKENS;
   const sections: CtxSection[] = [
     { key: "system", title: "System prompt", tokens: promptTokens, meta: i.agent, body: { kind: "none" }, detail: `Agent prompt preview (the full starting context is available after the session starts):\n\n${i.prompt}` },
     i.file
@@ -86,7 +88,7 @@ export function previewSections(i: {
     i.inventoryError,
   ));
   // The instruction file is part of the system prompt: the total counts the prompt and the tool schemas.
-  return { sections, total: promptTokens + toolTokens };
+  return { sections, total: i.core?.used ?? promptTokens + toolTokens };
 }
 
 function itemDetail(item: InventoryRow): string {
@@ -151,7 +153,7 @@ export function startingSections(s: any, off: string[], inventory?: { skills?: S
 }
 
 // --- the renderer -----------------------------------------------------------------------------
-const ESTIMATED = "estimated: Core counts when the session starts";
+const ESTIMATED = "estimated: characters ÷ 4 of Core's starting context";
 
 /** A count that is an estimate reads `~N tok` and says so on hover. */
 function Count(p: { text: string; estimated: boolean; class: string }) {
@@ -288,6 +290,7 @@ export function NewSessionView() {
     loadStartingInventory(p.id);
     ensure(p.id, agentName());
   });
+  effect(() => { const p = project(); if (p) loadDraftContext(p.id); });
   const modelRef = () => sessionDraft().model || agent()?.model || defaultModel();
   const modelEntry = () => modelCatalog().find((e) => e.ref === modelRef());
   const modelName = () => { const r = modelRef(); return r ? (modelEntry()?.name || r.split("/").at(-1) || r) : "default"; };
@@ -304,7 +307,9 @@ export function NewSessionView() {
     const p = project()!;
     const a = agent();
     const inventory = startingInventory()?.project === p.id ? startingInventory() : null;
+    const answer = draftContext();
     return previewSections({
+      core: answer?.key === draftContextKey(p.id) ? answer.data : null,
       agent: agentName(), prompt: prompts()[`${p.id}|${agentName()}`] ?? "",
       tools: Array.isArray(a?.tools) ? a.tools.filter((t: unknown): t is string => typeof t === "string") : undefined,
       disabled_tools: sessionDraft().disabled_tools,

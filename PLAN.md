@@ -995,14 +995,15 @@ the other session; NSH's card has an "Open the original session" button. Setting
 `[context] title_models` in both clients (comma-separated refs; empty keeps the first words). **Not done:**
 `/btw` while a turn runs in the clients (Core allows it), an NSH browser test for the link click (the mock event
 stream drops the selection in two-session tests; the TUI test covers it).
-K4–K11 are untouched.
+**Landed 2026-10-29: K4 session drafts.** `Runtime._plan_session` (split out of `create_session`) plans a session without storing it; `Runtime.draft_context` and `POST /api/draft/context` return the real starting request with `parts` token estimates. The TUI asks on every draft change (`App::draft_request`, `Command::DraftContext`) and the NSH new-session view does the same (`loadDraftContext`); both keep the old client estimate only until Core answers. Tests: `test_draft_context_matches_the_first_request_and_stores_nothing`, `core_answers_the_starting_context_of_the_current_draft_only`. NSH `nsh check` passes; the browser suite (chromium-1200) fails the same 12 tests as the Known gaps list, with nothing new. **Not done:** per-section detail text from Core (the section bodies are still the client's previews).
+K5–K11 are untouched.
 
 | Item | Old | New |
 | --- | --- | --- |
 | K1 handoff instead of compaction | `nexus/context/compact.py`, `handoff.py`, `handoff_model.py`, `nexus/session/handoff.py`, `host_support/session_handoff.py`, old `docs/context.md` "Same-session handoff" | At `[context] handoff_percent` (default 80) or on `/handoff`, the agent writes a visible summary turn, and a new root session of the same agent starts from it with `continued_from` and a link back. Never edits a sent context |
 | K2 auto titles | `host_support/auto_title.py`, `session/title.py` | A one-turn session on a cheap model after the first prompt, hidden from the list, inspectable. Replaces the first-60-characters title (`runtime.py` ~1385) |
 | K3 `/btw` | none (new from the archived INTERFACE_PLAN) | One call with the session's context up to its last completed tool call plus the question, no tools, answer in an overlay; the parent's context does not change |
-| K4 session drafts | `host_support/context_preview.py`, `session_preview.py` | Core builds the real starting context before the first prompt (replaces the TUI's client-side estimate) |
+| K4 session drafts | `host_support/context_preview.py`, `session_preview.py` | Core builds the real starting context before the first prompt (`POST /api/draft/context`; replaces the clients' estimate) — landed 2026-10-29 |
 | K5 search | `ui_support/fuzzy.py` (titles only) | FTS5 over titles and user messages; also serves C |
 | K6 paging | — | Message paging and load-older-turns; the snapshot caps at 200 messages today. Pairs with TURN_SUMMARY `before=` |
 | K7 approvals | `host_support/approval.py`, `ui/ratatui/permission_prompt.py` | "Allow for session" and "deny with a note" |

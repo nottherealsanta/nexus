@@ -3055,8 +3055,9 @@ fn empty_state(cx: &Cx) -> EmptyState {
 }
 
 /// Tokens the generated system prompt costs before the agent body and the
-/// instruction file are added. The preview is client-side until Core session
-/// drafts land (PLAN.md Step 12a), so every figure is an estimate.
+/// instruction file are added. Only the fallback: Core builds the real starting
+/// context (`POST /api/draft/context`, PLAN K4), and these figures show while
+/// it has not answered the current draft.
 const PROMPT_BASE_TOKENS: u64 = 900;
 /// Tokens one tool's schema costs in the preview.
 const TOOL_SCHEMA_TOKENS: u64 = 450;
@@ -3127,9 +3128,12 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
     let file_path = project.map(|p| format!("{}/AGENTS.md", p.path.trim_end_matches('/')));
     let file = file_path.as_deref().and_then(instruction_file);
     let file_tokens = file.as_ref().map_or(0, |(bytes, _)| bytes.div_ceil(4));
-    let prompt_tokens =
-        PROMPT_BASE_TOKENS + (prompt.chars().count() as u64).div_ceil(4) + file_tokens;
-    let tool_tokens = tools.len() as u64 * TOOL_SCHEMA_TOKENS;
+    let core = a.draft_context();
+    let part = |name: &str| core.and_then(|d| d["parts"][name].as_u64());
+    let file_tokens = part("instruction_file").unwrap_or(file_tokens);
+    let prompt_tokens = part("instructions")
+        .unwrap_or(PROMPT_BASE_TOKENS + (prompt.chars().count() as u64).div_ceil(4) + file_tokens);
+    let tool_tokens = part("tools").unwrap_or(tools.len() as u64 * TOOL_SCHEMA_TOKENS);
     let mut sections = vec![CtxSection {
         title: "System prompt".into(),
         tokens: Some(prompt_tokens),
@@ -3166,7 +3170,10 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
     }
     // The instruction file is part of the system prompt: the total counts the
     // prompt and the tool schemas, as the timeline does after the first turn.
-    (sections, prompt_tokens + tool_tokens)
+    let total = core
+        .and_then(|d| d["used"].as_u64())
+        .unwrap_or(prompt_tokens + tool_tokens);
+    (sections, total)
 }
 
 fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) -> usize {
@@ -3182,11 +3189,15 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
     let end = r.right();
 
     let window = a
-        .state
-        .models
-        .iter()
-        .find(|m| m["ref"].as_str() == Some(a.effective_model(None).as_str()))
-        .and_then(|m| m["context"].as_u64());
+        .draft_context()
+        .and_then(|d| d["window"].as_u64())
+        .or_else(|| {
+            a.state
+                .models
+                .iter()
+                .find(|m| m["ref"].as_str() == Some(a.effective_model(None).as_str()))
+                .and_then(|m| m["context"].as_u64())
+        });
     let layout = paint::CtxLayout {
         width: r.width as usize,
         sep: &sep,
@@ -3300,7 +3311,7 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
     }
     // Hovering an estimated count says so.
     if let Some((tx, ty)) = tip {
-        let label = " estimated: Core counts when the session starts ";
+        let label = " estimated: characters ÷ 4 of Core's starting context ";
         let w = (width(label) as u16).min(r.width);
         let tr = Rect::new(tx.min(end.saturating_sub(w)), ty + 1, w, 1);
         if tr.bottom() <= buf.area.bottom() {

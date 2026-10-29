@@ -281,3 +281,25 @@ async def test_deleting_the_original_clears_the_link_back(env):
     new = (await client.post(f"/api/session/{sid}/handoff")).json()["session"]
     assert (await client.delete(f"/api/session/{sid}")).status_code in (200, 204)
     assert (await client.get(f"/api/session/{new['id']}")).json()["continued_from"] is None
+
+
+async def test_draft_context_matches_the_first_request_and_stores_nothing(env):
+    rt, client, provider, workspace = env
+    before = (await client.get("/api/session")).json()
+    draft = await client.post("/api/draft/context", json={"directory": str(workspace), "agent": "build"})
+    assert draft.status_code == 200, draft.text
+    data = draft.json()
+    assert data["messages"] == 0 and data["exact"] is False and data["used"] > 0
+    assert data["model"] == "fake/m" and data["agent"] == "build"
+    assert data["snapshot"]["agent"]["name"] == "build"
+    assert data["parts"]["instructions"] > 0 and data["parts"]["tools"] > 0
+    assert (await client.get("/api/session")).json() == before  # nothing was created
+
+    off = await client.post("/api/draft/context", json={"directory": str(workspace), "disabled_tools": ["bash"]})
+    assert "bash" in data["tools"] and "bash" not in off.json()["tools"]
+    assert off.json()["used"] < data["used"]
+
+    sid = await _session(client, workspace)
+    await _turn(rt, client, sid)
+    first = provider.requests[0]
+    assert first.instructions and list(data["tools"]) == [t.name for t in first.tools]

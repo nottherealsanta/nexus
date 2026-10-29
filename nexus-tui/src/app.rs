@@ -524,6 +524,8 @@ pub struct Ui {
     pub context_cursor: usize,
     /// Cached skill and MCP listings for the new-session preview, keyed by project.
     pub inventories: HashMap<String, ProjectInventory>,
+    /// The last draft-context request sent to Core; a changed draft asks again.
+    pub draft_asked: Option<Value>,
     /// A `/learn` install is in flight, so its early `skills.changed` event is quiet.
     pub learn_install_pending: bool,
     /// Ignore the matching `skills.changed` event after this client's successful install.
@@ -680,6 +682,7 @@ impl App {
                 timeline_blocks: Vec::new(),
                 context_cursor: 0,
                 inventories: HashMap::new(),
+                draft_asked: None,
                 learn_install_pending: false,
                 learn_suppress_until: None,
                 last_skills_changed_toast: None,
@@ -4256,6 +4259,7 @@ impl App {
                             self.toast(Level::Info, "Skills changed. New sessions will use them.");
                             self.ui.last_skills_changed_toast = Some(self.clock);
                         }
+                        self.ui.draft_asked = None;
                         if let Some(project) = self.current_project() {
                             self.effects
                                 .push(Effect::Sync(SyncCommand::SkillMcp(project)));
@@ -4273,6 +4277,7 @@ impl App {
                             );
                             self.ui.last_mcp_changed_toast = Some(self.clock);
                         }
+                        self.ui.draft_asked = None;
                         if let Some(project) = self.current_project() {
                             self.effects
                                 .push(Effect::Sync(SyncCommand::SkillMcp(project)));
@@ -4971,9 +4976,35 @@ impl App {
 
     /// Advance clocks. Returns true when something visible changed, so an idle
     /// terminal is not redrawn (and not written to) on every tick.
+    /// The body that asks Core for the context a new session would start with.
+    pub fn draft_request(&self) -> Option<Value> {
+        if self.viewed_id().is_some() {
+            return None;
+        }
+        let project = self.current_project()?;
+        let mut body = self.ui.draft.fields();
+        body["project"] = project.into();
+        Some(body)
+    }
+
+    /// Core's starting context when it answers the current draft; `None` while asking or after a failure.
+    pub fn draft_context(&self) -> Option<&Value> {
+        match (&self.state.draft_context, self.draft_request()) {
+            (Some((asked, Ok(data))), Some(now)) if *asked == now => Some(data),
+            _ => None,
+        }
+    }
+
     pub fn tick(&mut self, now: Instant) -> bool {
         self.clock = now;
         let mut changed = false;
+        if let Some(body) = self.draft_request() {
+            if self.ui.draft_asked.as_ref() != Some(&body) {
+                self.ui.draft_asked = Some(body.clone());
+                self.effects
+                    .push(Effect::Sync(SyncCommand::DraftContext(body)));
+            }
+        }
         let animated = !self.theme.opts.reduced_motion
             && (!self.state.model.running.is_empty()
                 || !self.ui.group_flash.is_empty()

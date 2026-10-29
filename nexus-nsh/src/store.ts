@@ -100,6 +100,17 @@ export const addProjectOpen = signal(false);
 /** Choices made before a session exists; consumed by its creation request. */
 export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string; disabled_tools?: string[] }>({});
 export const draft = signal<Record<string, string>>({});
+/** Core's starting context (PLAN K4) for the draft in `key`; a newer draft ignores a late older answer. */
+export const draftContext = signal<{ key: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number } } } | null>(null);
+let draftSeq = 0;
+export const draftContextKey = (project: string, d = sessionDraft()) => JSON.stringify([project, d.agent ?? null, d.model ?? null, d.effort ?? null, d.disabled_tools ?? null]);
+export async function loadDraftContext(project: string) {
+  const d = sessionDraft(), key = draftContextKey(project, d), seq = ++draftSeq;
+  try {
+    const data = await request<any>("POST", "/api/draft/context", { body: { project, agent: d.agent, model: d.model || undefined, effort: d.effort || undefined, disabled_tools: d.disabled_tools } });
+    if (seq === draftSeq) draftContext.set({ key, data });
+  } catch { /* the client-side estimate stays */ }
+}
 export const waitIndex = signal(0);
 export const tick = signal(Date.now());
 export const settingsSection = signal<string | null>(null);

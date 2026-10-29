@@ -1766,3 +1766,45 @@ fn continued_sessions_link_back_and_title_models_are_editable() {
         if path == "context.title_models" && value == &serde_json::json!(["copilot/gpt-6-luna"]))
     );
 }
+
+#[test]
+fn core_answers_the_starting_context_of_the_current_draft_only() {
+    let mut a = nexus_tui::app::App::new(
+        nexus_tui::state::AppState::new(),
+        nexus_tui::theme::Theme::new(opts(Mode::Dark, Tier::TrueColor)),
+        (120, 36),
+    );
+    a.state.apply(SyncMsg::Snapshot {
+        snapshot: Box::new(common::snapshot()),
+        cause: nexus_tui::sync::ResyncCause::Initial,
+    });
+    a.state
+        .apply(SyncMsg::Connection(nexus_tui::state::ConnectionState::Live));
+    a.effects.clear();
+    let request = a.draft_request().expect("a project and no viewed session");
+    a.tick(std::time::Instant::now());
+    let asked = |a: &App| {
+        a.effects
+            .iter()
+            .filter(|e| matches!(e, Effect::Sync(nexus_tui::sync::Command::DraftContext(_))))
+            .count()
+    };
+    assert_eq!(asked(&a), 1);
+    a.tick(std::time::Instant::now());
+    assert_eq!(asked(&a), 1, "an unchanged draft is asked once");
+    a.apply_sync(SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({"used": 1234, "parts": {"tools": 9}})),
+    });
+    assert_eq!(
+        a.draft_context().map(|d| d["used"].as_u64()),
+        Some(Some(1234))
+    );
+    a.ui.draft.effort = Some("high".into());
+    assert!(
+        a.draft_context().is_none(),
+        "an answer for another draft is not shown"
+    );
+    a.tick(std::time::Instant::now());
+    assert_eq!(asked(&a), 2);
+}
