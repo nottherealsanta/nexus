@@ -1,6 +1,6 @@
 # Capability matrix (Step 12.1, item 1)
 
-Walks every feature and flow in [INTERFACE_PLAN.md](../INTERFACE_PLAN.md) and
+Walks every feature and flow in the former interface spec (`git show fdb1860:INTERFACE_PLAN.md`) and
 classifies it against what Core does today. Sources: `docs/api.md`,
 `docs/stream-events.md`, `docs/daemon.md`, `docs/tools.md`, `docs/inspector.md`,
 `docs/agents.md`, `docs/models.md`, checked against the route table and handlers in

@@ -4,7 +4,7 @@
 # Ids are stable. Renaming or removing one needs a PLAN.md ledger note.
 
 manifest_version = 1
-spec = "INTERFACE_PLAN.md"
+spec = "interface/design-language.md"
 
 # --- Vocabulary -------------------------------------------------------------
 # `when` terms must come from `terms`. A leading "!" negates a term.

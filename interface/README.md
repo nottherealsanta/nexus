@@ -2,9 +2,10 @@
 
 `manifest.toml` is the single machine-readable source for the screen map,
 commands and settings that the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`) both
-build from. The prose spec is [INTERFACE_PLAN.md](../INTERFACE_PLAN.md); the
-implementation order is PLAN.md Step 12. If the two disagree, fix the spec and
-the manifest together.
+build from. The visual rules are in [design-language.md](design-language.md); the work
+order is [PLAN.md](../PLAN.md) section 6. The former prose spec is archived
+(`git show fdb1860:INTERFACE_PLAN.md`). If the manifest and the design language
+disagree, fix both together.
 
 Validate after every edit:
 

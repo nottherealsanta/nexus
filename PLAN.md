@@ -1,29 +1,65 @@
 # Nexus 0.10 plan (branch nexus10)
 
-Nexus rebuilt from scratch, starting at the provider wire: the exact JSON that
-goes out and every event that comes back, token by token. It grows step by step
-toward the two clients, the Ratatui TUI and NSH. Old Nexus (branch `nexus01`,
-checkout `~/repos/nexus`) is reference and a parts bin. Nothing comes across
-without a written reason.
+Nexus is being rebuilt from scratch, starting at the provider wire: the exact JSON
+that goes out and every event that comes back, token by token. The work is now
+mostly porting. Old Nexus (`~/repos/nexus`, branch `main`; AGENTS.md calls it
+`nexus01`) already has most of the remaining features and their tests. Copy its
+code, adapt it to the nexus10 Core API and the one-timeline rule, and write down
+every behavior that changes.
 
-Branch `nexus10` (an orphan branch, checked out as a worktree at
-`~/repos/nexus10`). It is released as **0.10.0** once it replaces the old code
+Branch `nexus10` is an orphan branch, checked out as a worktree at
+`~/repos/nexus10`. It is released as **0.10.0** once it replaces the old code
 ("10" is binary for 2).
 
-This plan was rewritten on 2026-10-28: finished steps are summarised in one
-line each, and their full design notes, verification logs and delivery reviews
-stay in git (`git show 13651aa:PLAN.md`, `git show 13651aa:INTERFACE_WORK_PLAN.md`).
-The docs in `docs/` describe what the code does now.
+Rewritten on 2026-10-29. The previous plans are archived in git:
 
-## Interface direction
+| File | Read it with | Holds |
+| --- | --- | --- |
+| PLAN.md before this rewrite | `git show fdb1860:PLAN.md` | Step 12 polish notes, 12a/11a lists, dated UI notes |
+| DESIGN_PLAN.md | `git show fdb1860:DESIGN_PLAN.md` | Decisions D01–D18 and increments I0–I10. Code comments still cite these tags |
+| INTERFACE_PLAN.md | `git show fdb1860:INTERFACE_PLAN.md` | The old prose interface spec. Its rules for the composer, handoff, one-turn sessions and settings are carried into the work items below |
+| Step-by-step design notes for steps 0–11 | `git show 13651aa:PLAN.md` | Verification logs and delivery reviews |
 
-Reuse the old Nexus TUI broadly, including settings and modal pages, adapting
-it to the current Core API and the one-timeline principles. Polish a cohesive
-design language for tokens, spacing, typography and states
-(`interface/design-language.md`, `interface/theme.toml`). The TUI leads; NSH
-follows once the TUI look is settled.
+**In progress, separate plan:** [TURN_SUMMARY_PLAN.md](TURN_SUMMARY_PLAN.md).
+Core steps 1, 2 and 8 are done in the working tree (turn rows carry model,
+effort, usage and reasoning time; `session_usage`; `GET /api/session/{id}/turn`;
+`turn.summary`; recovery reads `turn.ended`). Steps 0, 3–7 and 9 are open: the
+TUI and NSH switch to summaries, then deltas become ephemeral behind a live
+partial. Work in this plan that touches turns, deltas or the event log has to
+fit that design. The overlaps are listed in [Interactions with turn
+summaries](#interactions-with-turn-summaries).
 
-## Principles
+## Contents
+
+1. Principles
+2. Layout
+3. Done
+4. How to port
+5. Decisions in this plan
+6. Work items
+   - A. Foundations: config file, mock provider, token counting
+   - B. Steer and queue
+   - C. Prompt history
+   - D. Tools
+   - E. Hot reload: user tools and agents
+   - F. Skills
+   - G. MCP
+   - H. Hooks
+   - I. Voice: speech to text and text to speech
+   - J. Providers
+   - K. Context and sessions (handoff, titles, `/btw`, drafts, search, paging)
+   - L. Worktree review and integration
+   - M. Interface (TUI open items, NSH parity, Mermaid)
+   - N. Operations: doctor, install, update
+   - O. Release gate
+7. Order
+8. Interactions with turn summaries
+9. Not in this plan
+10. Ledger
+11. Known gaps
+12. Open questions
+
+## 1. Principles
 
 1. **Context is visible.** The user can see everything the agent sees: the
    request body, every stream event, every tool argument and result, labelled.
@@ -33,95 +69,81 @@ follows once the TUI look is settled.
    the same provider is lossless (reasoning `encrypted_content`, item ids). Other
    providers use the normalized fields.
 3. **Task tools vs. control.** Tools act on the workspace: read, bash, edit,
-   write, and code to script them. Changing Nexus itself (which session, workspace or worktree, which
-   model, forking, subagents) is a separate control plane in a `nexus`
-   namespace. Those are commands with their own event type and permissions. The
-   user can run them directly, and the agent gets them only when granted. A
-   worktree is an optional property of a session, never a mandatory tool.
+   write, and code to script them. Changing Nexus itself (which session, workspace
+   or worktree, which model, forking, subagents) is a separate control plane in a
+   `nexus` namespace. Those are commands with their own event type and
+   permissions. The user can run them directly, and the agent gets them only when
+   granted. A worktree is an optional property of a session, never a mandatory
+   tool.
 4. **One step at a time.** Each step ends with something you can run and see.
-5. **Separate state.** The command is `nexus` (the old uv tool install was
-   removed). State stays in `~/.nexus10` (`$NEXUS10_HOME`) so nothing is shared
-   with old Nexus (`~/.nexus`), which still runs from its own checkout.
+5. **Separate state.** The command is `nexus`. State and the one config file stay
+   in `~/.nexus10` (`$NEXUS10_HOME`) so nothing is shared with old Nexus
+   (`~/.nexus`), which still runs from its own checkout. When 0.10.0 replaces
+   old Nexus the home becomes `~/.nexus` (release gate, O3).
 6. **uv only.** `uv sync`, `uv run`, `uv add`. Python is pinned in
    `.python-version` and dependencies are locked in `uv.lock`.
 7. **One timeline.** The timeline the user sees and the context the agent sees
-   stay as close as possible. Every item the model gets (system prompt, messages, tool
-   results, notices, context insertions, handoffs) is shown to the user in
-   order. A child launch appears in its parent’s context line; opening it shows
-   the child’s own context line. Activity indicators (running, waiting, done)
-   may update without becoming model context. Execution details are labelled
-   separately from what the model received. Presenting context well is a core
-   idea of Nexus.
-8. **Append-only context.** Context already sent to a provider is never
-   edited: it is cached, and a change invalidates the cache. A session's system
-   prompt is fixed when the session starts. Later changes (a new directory, a
-   switched setting) go forward as new items. Actions that will invalidate the
-   cache anyway (switching model or agent) warn first.
+   stay as close as possible. Every item the model gets (system prompt, messages,
+   tool results, notices, context insertions, handoffs, steered messages, skill
+   bodies, hook output) is shown to the user in order. A child launch appears in
+   its parent's context line; opening it shows the child's own context line.
+   Activity indicators (running, waiting, queued, done) may update without
+   becoming model context. Execution details are labelled separately from what
+   the model received.
+8. **Append-only context.** Context already sent to a provider is never edited:
+   it is cached, and a change invalidates the cache. A session's system prompt is
+   fixed when the session starts. Later changes (a new directory, a switched
+   setting, a new skill or MCP tool) go forward as new items. Actions that will
+   invalidate the cache anyway (switching model or agent) warn first.
+9. **Copy first.** When old Nexus has it, port it with its tests. Do not
+   redesign what already worked; change only what the nexus10 API, the
+   timeline rule or a recorded decision requires.
 
-## Layout
+## 2. Layout
 
 Each part of the repo is a self-contained project with its own toolchain. The
-root holds only plans and docs.
+root holds only plans and docs. Modules marked *(planned)* come from the work
+items below.
 
 ```
 docs/             how the code works; start at docs/README.md
-INTERFACE_PLAN.md the TUI and NSH interface spec (both clients)
 interface/        shared manifest, theme tokens, capability matrix, design language
 scripts/nexus     repo launcher (nexus, nexus tui, nexus web, nexus check …)
 nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`, command `nexus`
-  pyproject.toml, uv.lock, .python-version
   nexus/
     llmhub/         providers normalized to one conversation + stream shape
-      types.py      Message/parts (Text, Reasoning, ToolCall, ToolResult), Request, stream events
-      sse.py        server-sent events parser
-      responses.py  OpenAI Responses dialect (codex, grok) + ResponsesQuirks
-      chat.py       OpenAI Chat Completions dialect (copilot, opencode) + ChatQuirks
-      providers.py  the provider table: dialect, endpoint, models.dev id, quirks, default model
-      catalog.py    models.dev catalog: download, 24 h cache, per-provider model list
-      hub.py        joins sign-ins to the table; `provider/model` refs; default model
-      auth/         each provider's sign-in; hands the dialects a header source
-        store.py    ~/.nexus10/auth.json (0600, atomic, flock)
-        device.py   RFC 8628 device flow (copilot, grok)
-        codex.py, copilot.py, grok.py, opencode.py
-    tools/          read, bash (background jobs too), edit (replacement or apply_patch), write, ask, code; web_search/web_fetch planned
-    workspace.py    workspace control tools: expose on demand, move directory, worktree specs
-    worktrees.py    Git worktree list/create/delete, through subprocess argument arrays
-    kernels.py      Monty kernels for the `code` tool, owned by the daemon
-    bash_jobs.py    background bash jobs, owned by the daemon
-    snapshot.py     stored session configuration, tool schemas and AGENTS.md
-    observations.py per-session read observations (read-before-edit)
-    questions.py    the `ask` tool's question waits
-    files.py        project file listing, file reads, git status and diff
-    agents.py       agent files: frontmatter + prompt + mode; builtin, global, project
-    builtin_agents/ orchestrate, build, quick, scout, plan (.md) + NOTICE
-    loop.py         the agent loop (no storage; yields MessageAdded)
-    codec.py        JSON for messages and events
-    export.py       read-only Markdown/JSON exports from one SQLite snapshot
-    store.py        SQLite: projects, sessions (tree), messages, turn lifecycle, events
-    bus.py          event bus
-    eventlog.py     durable event ids, cursors, replay-to-live stream
-    recovery.py     startup reconciliation of turns a crash left unfinished
-    continuation.py manual continuation from stored context
-    retry.py        bounded, visible provider retries
-    retention.py    bounded event/lifecycle retention with recovery pins
-    runtime.py      projects, sessions, turns, approvals, interrupts, child sessions
-    server.py       the HTTP API (OpenCode-style /api/*)
-    inspector/      the session inspector page (served at /inspector)
-    daemon.py       serve / start / stop / discovery
-    client.py       HTTP client (used by the CLI)
-    cli.py          local commands + daemon-client commands
+      types.py, sse.py, responses.py, chat.py, providers.py, catalog.py, hub.py
+      messages.py   (planned, J) Anthropic Messages dialect
+      auth/         codex, copilot, grok, opencode; api_key.py (planned, J)
+    tools/          read, bash, edit, write, ask, code
+                    grep, glob, ls, multiedit, web_search, web_fetch, skill (planned, D/F)
+    config.py       (planned, A1) the one config file: schema, load, write, watch
+    mock/           (planned, A2) scripted provider and scenarios for tests and demos
+    counting.py     (planned, A3) token estimates and the context budget
+    inputs.py       (planned, B) steer and queue: pending inputs per session
+    skills/         (planned, F) discovery, frontmatter, index, invocation, resources
+    mcp/            (planned, G) client, manager, bridge, search
+    hooks/          (planned, H) command hooks
+    extensions.py   (planned, E) user tools loaded from disk, quarantine
+    voice/          (planned, I) HF cache lookup, STT engine, TTS worker, audio checks
+    workspace.py, worktrees.py, kernels.py, bash_jobs.py, snapshot.py,
+    observations.py, questions.py, files.py, images.py, agents.py,
+    builtin_agents/, loop.py, codec.py, export.py, store.py, bus.py,
+    eventlog.py, recovery.py, continuation.py, retry.py, retention.py,
+    runtime.py, server.py, inspector/, daemon.py, client.py, cli.py
   tests/
-nexus-search/     Local SearXNG container configuration: Docker and Apple container
-nexus-browser/    Default browser-use MCP configuration and setup (upstream server)
-nexus-tui/        Ratatui terminal client (Rust): shell, timeline, commands (README)
-nexus-nsh/        NSH client (TSX): browser + desktop, same interface (README)
+nexus-search/     local SearXNG container (Docker and Apple container)
+nexus-browser/    default browser-use MCP configuration
+nexus-tui/        Ratatui terminal client (Rust)
+nexus-nsh/        NSH client (TSX): browser + desktop
+nexus-design-mockup/  temporary; delete once the NSH side of the design pass lands (M2)
 ```
 
 Nexus Core runs as a daemon and exposes everything over HTTP (`docs/api.md`).
-Every surface is a client of that API: the CLI today, and the TUI and NSH later.
-No surface reads Nexus state files.
+Every surface is a client of that API. No surface reads Nexus state files,
+the config file or the Hugging Face cache directly.
 
-## Done
+## 3. Done
 
 | Step | What landed | Read |
 | --- | --- | --- |
@@ -137,163 +159,810 @@ No surface reads Nexus state files.
 | 10 | Frozen session snapshot and prompt, `AGENTS.md`, `ask`, approval-free in-directory edits, read-before-edit observations, workspace controls and worktrees, archive, export | docs/daemon.md, docs/api.md |
 | 11, 11.1–11.7 | Durable events and cursors, crash recovery, manual continuation, idempotent mutations and revisions, bounded provider retries, `/api/snapshot` resync, retention | docs/api.md, docs/stream-events.md |
 | 12.1 | Shared interface data: manifest, capability matrix, reference inventory | interface/README.md |
-| 12.3 | TUI shell: connection supervisor, header, sidebars with icon tabs and rail, palette, alerts and terminal notifications, waiting card with `ask` answers, composer with `/` and `@` completion, full timeline, Files tab with search, Git groups and diffs, settings modal, saved client preferences | nexus-tui/README.md |
+| 12.3 | TUI shell: connection supervisor, header, sidebars, palette, alerts and terminal notifications, waiting card with `ask` answers, composer with `/` and `@` completion, full timeline, Files tab with search, Git groups and diffs, settings modal, saved client preferences | nexus-tui/README.md |
 | 12.5 (web) | NSH web client with the shell, timeline, pickers and export, behind a hardened host proxy | nexus-nsh/README.md |
+| Design pass | TUI increments I0–I10 (chrome band, header tabs, timeline rhythm, Markdown and diffs, composer card, sidebars, one modal recipe, waiting card and alerts, starting context, files, narrow layouts, empty and offline states); NSH I0–I8 | `git show fdb1860:DESIGN_PLAN.md`, interface/design-language.md |
+| Images | Clipboard image paste in both clients, inline `Image` parts durable in SQLite, lettered references, replay in both dialects | docs/stream-events.md#user-images |
+| Turn summaries 1, 2, 8 (Core) | Model, effort, per-attempt usage, reasoning time and `turn.ended` on the turn rows; the `session_usage` ledger; one-time backfill; `GET /api/session/{id}/turn` and the `turn.summary` event (`api_version` 1.2); recovery reads `turn.ended` (2026-10-29). Clients still read events until TURN_SUMMARY_PLAN.md steps 3–6 | TURN_SUMMARY_PLAN.md, docs/api.md#turn-summaries |
+| Turn summaries 0, 3–5 (TUI) | The TUI loads messages, starting context and every `/turn` page together and no event history; footers, tool timing, retry and error rows, context %, header model, sidebar tokens and cost (ledger, `Since <date>`), the continue hint and a floor row come from summaries; the running turn's live events are scratch until `turn.summary`; `/turn?after=` after a reconnect; `CLIENT_API` 1.2. Measured below (2026-10-29) | TURN_SUMMARY_PLAN.md, nexus-tui/README.md |
 
-## Next
+## 4. How to port
 
-Work one reviewed increment at a time. Each increment updates the matching
-docs and this plan, runs the focused tests plus the suite and lint, and is
-checked in the real app (TUI screenshots through `nexus-tui/tools/webterm`).
+Each work item names its old Nexus sources. Paths are relative to
+`~/repos/nexus` unless they start with a nexus10 directory.
 
-### Step 12 — TUI polish (current)
+1. **Read the old doc and the old tests first.** They describe the behavior that
+   was verified. The old docs are listed per item (`docs/extensions.md`,
+   `docs/voice.md`, `docs/loop.md`, `docs/tools.md`, `docs/context.md`,
+   `docs/surfaces.md`).
+2. **Copy the module and its tests together.** Put `Adapted from old Nexus
+   <path>` in the module docstring, as `interface/reference-inventory.md` asks.
+3. **Adapt the edges, keep the core.** The usual changes:
+   - old `msgspec` host protocol structs (`nexus/host/protocol.py`) → HTTP routes
+     in `server.py` and events through `bus.py`
+   - old `ToolSpec`/`RegisteredTool` (`nexus/tools/spec.py`) → nexus10 `Tool`
+     (`nexus-core/nexus/tools/base.py`, with `guidance`)
+   - old config layers (`nexus/config/layers.py`, project + global) → the one
+     config file (A1)
+   - old `~/.nexus` / `.nexus/` paths → `$NEXUS10_HOME` and the project's
+     `.agents/` folder
+   - old event records → nexus10 durable events (`eventlog.py`) and state tables
+     (`store.py`)
+   - old Python TUI bridge (`nexus/ui/ratatui/*.py`) → logic in Core or in
+     `nexus-tui` Rust; the TUI no longer has a Python half
+4. **Drop what nexus10 does not have:** the gateway and paired devices, GPT Live,
+   the manager session, model tiers, the iOS app, old host commands with no
+   client.
+5. **Write the ledger row** when a behavior changes, in the same change.
+6. **Update the matching doc** in `docs/` and the capability matrix row in
+   `interface/capability-matrix.md`.
+7. **Check it in the real app**: `uv run pytest -q`, `uv run ruff check nexus
+   tests`, `nexus check`, and TUI screenshots through `nexus-tui/tools/webterm`
+   or `tools/shots.sh`.
 
-The startup draft uses the same Context heading and indentation as an opened session (2026-10-28).
+## 5. Decisions in this plan
 
-Model picker (2026-10-28): names appear on the left and providers on the right; `m` toggles selected model details below the picker.
+| # | Decision | Why |
+| --- | --- | --- |
+| P1 | **One config file**: `$NEXUS10_HOME/config.toml` (`~/.nexus10/config.toml`; `~/.nexus/config.toml` after 0.10.0). No project config layer, no `nexus.toml`, no separate `mcp.json` or `hooks.toml`. Settings in both clients read and write this file through Core, and an edit by hand shows up in Settings. | One place for every setting. Old Nexus had five layered files and two homes, and Settings and the host disagreed about `NEXUS_HOME` (old `docs/extensions.md`, "Adding an MCP server") |
+| P2 | Project *content* is still discovered: `.agents/agents/`, `.agents/skills/`, `.agents/tools/` and `AGENTS.md` in the project. These are files the user writes, not settings. | Agent and skill files belong with the code they describe |
+| P3 | No model tiers (no low/medium/high model routing). Reasoning effort per session stays. | User decision |
+| P4 | **Enter steers and Tab queues** while a session is working, and only when the composer has content. Idle: Enter sends as today and Tab keeps its current role. | User decision; replaces old `Ctrl+Enter` queue (old `docs/surfaces.md` line 199) |
+| P5 | Voice models are read from the **Hugging Face cache** when they are there, and downloaded into that cache (after consent) when they are not. Nexus keeps no model copy of its own. | User decision; old STT used a private copy in `~/.nexus/models/voice` |
+| P6 | Hot reload: user tools and agent files are re-read from disk. A **new** session uses the current files. A running session keeps its frozen snapshot (Principle 8). | User decision; keeps the prompt cache valid |
+| P7 | Every old tool is ported: `grep`, `glob`, `ls`, `multiedit`, `web_search`, `web_fetch`, `skill`, plus `escalate` as a control tool for children. | User decision |
+| P8 | Out of this plan: GPT Live, the iOS app and gateway, the manager session, model tiers. | User decision |
 
-Header simplification (2026-10-28): remove the busy spinner, working label and
-elapsed time from the top header in both clients. Waiting and connection status
-remain; turn activity is shown with the conversation.
+## 6. Work items
 
+Each item lists **Old** (the files to copy), **New** (where it goes), **Changes**
+(what differs from old Nexus and needs a ledger row), **Tests** and **Done when**.
 
-Context interaction correction: heading text opens details, including the top-level
-Context overview. Only its fold chevron expands/collapses the section. Section
-click targets follow row metadata, not the rendered text or span positions.
+### A. Foundations
 
-Follow-up screenshot revision (2026-10-28): the bottom strip shows the directory
-and branch, without a project-name prefix or checkout/worktree text. A linked
-worktree alone gets a muted, normal-weight icon. Collapsed sidebar search and
-session rows align with the expanded sidebar's content origin. Starting Context
-omits the separate Child agents section; each remaining section heading opens a
-scrollable detail modal showing stored content and metadata. Prompts and instructions
-come from the frozen snapshot; tool definitions are labelled as stored definitions,
-since they may change during a session.
+These come first because B, F, G, H and I depend on them.
 
+#### A1. The config file and Settings over the API
 
-Screenshot refinements (2026-10-28): both clients retain the normal background
-for selected items and show selection with a rail/marker and stronger text.
-Composer input has more top padding, the command hint is removed, the collapsed
-sidebar shows compact session initials without the three tab buttons, and Context
-and timeline gutters have more breathing room. Session search offers Project and
-Global scope; it filters loaded session titles (Core FTS remains Step 12a).
+**Old:** `nexus/config/schema.py` (1455 lines, the typed schema and defaults),
+`nexus/config/layers.py` (merge order, which is dropped), `nexus/config/paths.py`,
+`nexus/host_support/settings_inventory.py` and `settings_scope.py` (path-checked,
+hash-checked writes, secret masking and restore), `nexus/ui_support/settings_page.py`,
+`settings_help.py`. Old tests: `tests/test_config_layers.py`, `test_config_secrets.py`.
+Old docs: `docs/config.md`, `docs/extensions.md` "Settings files (host)".
 
+**New:** `nexus-core/nexus/config.py` and `docs/config.md`.
 
-**Design pass (2026-10-28):** [DESIGN_PLAN.md](DESIGN_PLAN.md) holds the decided look for
-both clients (the user's picks from the `nexus-design-mockup/` chooser). The TUI side
-(I0–I10) has landed: chrome band, header tabs, timeline rhythm, Markdown and diffs, composer,
-sidebars, one modal recipe, waiting card and alerts, the starting context, files, narrow layouts
-and the empty and offline states. NSH progress is in DESIGN_PLAN.md "Progress".
+- File: `$NEXUS10_HOME/config.toml`. A missing file means defaults. Core writes
+  it atomically (temp file and rename, the same pattern as `auth/store.py`) and
+  keeps comments and order with `tomlkit` (`uv add tomlkit`).
+- Sections (the first version; each work item adds its own):
 
-Landed 2026-10-28 (see the Done table): icon tabs in the sidebar, the
-effective model everywhere instead of "default model", a context preview in
-the new-session view, plain one-line diagnostics, `/` and `@` completion.
-Open from that round:
+  ```toml
+  [defaults]       # model, effort, agent, permission ("allow" | "ask")
+  [context]        # handoff_percent = 80 (K1)
+  [tools]          # disabled = [...]; per-tool permission rules (D7)
+  [web]            # search_url (nexus-search), fetch limits
+  [voice]          # stt model repo/revision, device, max_seconds, auto_send
+  [speech]         # tts model repo, enabled
+  [mcp.servers.<name>]   # G; same keys as old mcp.json entries
+  [[hooks.<Event>]]      # H
+  [ui]             # values both clients share (detail level, reduced motion)
+  ```
 
-- Check the new look against the old Nexus TUI in a real terminal
-  (screenshots in `nexus-tui/tools/webterm`); the user reviews visually.
-- The new-session context preview is client-side (agent list, catalog,
-  project path). Replace it with Core's real starting context once session
-  drafts exist (Step 12a).
-- Completion requests go out on every keystroke with no debounce; add one if
-  large workspaces make search slow.
-- Terminal notifications: verify OSC 777 in kitty (it may need OSC 99) and
-  track terminal focus.
+- API: `GET /api/config` returns `{revision, values, defaults, schema, errors}`
+  with secrets masked. `PATCH /api/config` takes `{expected_revision, set: {...},
+  unset: [...]}` and returns 409 when the file changed. A `config.changed` event
+  is published on every write and on every outside edit (Core polls the file's
+  mtime every 2 s; no watcher dependency).
+- An invalid file never stops the daemon. Defaults are used for the broken keys,
+  the errors are listed in `/api/config` and in Settings, and nothing else
+  changes.
+- The client-only preferences in `~/.nexus10/tui.json` stay where they are
+  (window layout, open tabs). Anything both clients should agree on moves into
+  `[ui]`.
+- Settings in the TUI and NSH become editable. The manifest's
+  `unavailable_reason = "Core has no default setting for this yet…"` rows in
+  `interface/manifest.toml` turn into real settings.
+- Sign-in and sign-out over the API (`POST /api/provider/{id}/login` running the
+  same device flow as `nexus login`, `DELETE` to sign out) land here too, from
+  old Step 12a.
 
-The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28).
-Landed 2026-10-28 (second round): the composer matches the old look (panel
-ending half a row under the controls; the strip `name branch path` with
-`worktree` only in a linked worktree); the starting-context section lists
-items with estimates, previews and a window share; the turn footer shows
-cost; head+tail tool output caps with `o` to show all (and `r`/`o`/`i` now
-work on a focused tool); Session info shows effort, turns, calls, tools by
-name, tokens, a context bar and cost; the Sessions list puts the main
-checkout first; right-click or `m` opens a row menu (sessions and projects);
-projects are added (`+ Add project`) and removed (confirmation) from the TUI;
-Settings shows what Core reports (default model, catalog, agents, refresh) and
-says why the rest cannot change. Still open:
+**Changes:** one file instead of layered project/global files; MCP servers and
+hooks move into it. `nexus config import-mcp <path>` converts an existing
+`mcp.json` (any dialect from G) into `[mcp.servers.*]` tables.
 
-1. **Timeline**
-   - `path:line` and OSC 8 links (inline hit targets in Markdown and tool
-     output; ratatui cells need an escape-safe way to carry OSC 8).
-2. **Files**
-   - Syntax highlighting (the library is still undecided).
-3. **Settings**
-   - Editing the defaults needs Core settings (Step 12a, "Settings over the
-     API").
-4. **Tests**
-   - PTY checks at 80×24 and 160×48 for anchor, follow and jump-to-latest.
-   - A review gallery from fixed fixtures (`interface/review.md`).
-5. **Session info**
-   - Child sessions failed count, enabled/disabled tools and kernels.
+**Tests:** load and defaults; invalid keys reported without failing; a write
+keeps comments; a stale revision gets 409; an outside edit publishes
+`config.changed`; secrets are masked in `GET` and restored on an unchanged masked
+`PATCH`.
 
-### Step 12a — Core work the interface needs
+**Done when:** changing the default model in TUI Settings changes
+`~/.nexus10/config.toml`, and editing the file by hand updates Settings in a
+running TUI and NSH.
 
-- **Steer and queue:** a `mode` on prompt. Today a prompt while busy returns
-  409.
-- **Session drafts and the new-session view:** the starting context before
-  the first prompt.
-- **Search:** an FTS5 index over titles and user messages.
-- **One-turn sessions:** the cheap-model title and `/btw`.
-- **Handoff instead of compaction:** `continued_from`, plus a context
-  threshold setting.
-- **File writes:** `PUT` file with `expected_revision`, a `files.changed`
-  event, then the built-in editor. Bash enforcement of read-before-edit stays
-  open (Known gaps).
-- **Durable artifacts:** user image paste now uses inline stored message parts;
-  separate artifact storage still comes before web/MCP image results.
-- **Settings over the API:** sign-in and sign-out, defaults, usage totals
-  per session.
-- **Agents:** a `mode` field in `/api/agent/{name}` and an optional `color`
-  in agent frontmatter.
-- **Approvals:** "allow for session" and "deny with a note" (today only
-  allow/deny).
-- **Messages and turns:** message paging and load-older-turns. The snapshot
-  caps at 200 messages.
-- **Warnings:** warn before an agent or model switch that invalidates the
-  cache (Principle 8).
-- **Transcription:** undecided.
+#### A2. Mock provider and scenarios
 
-### Step 11a — web, skills, MCP
+**Old:** `nexus/devtools/mock/provider.py`, `dsl.py`, `directive.py`,
+`runner.py`, `checks.py`, `sandbox.py`, `scenarios/*.py` (hello, bash_wait,
+cancel, parallel_tools, question, streaming_rich, stress, tool_marathon,
+provider_failure, parallel_subagents, context_pressure). Old doc:
+`docs/devtools.md`.
 
-- `web_search` and `web_fetch` tools against `nexus-search/`. That setup is
-  not smoke-tested yet and its image is unpinned.
-- Skills: discovery, defaults per session, visible loaded instructions.
-- MCP client, with browser-use from `nexus-browser/` as the default. It is
-  not wired into the daemon, and browser-use is unpinned and was never
-  launched.
+**New:** `nexus-core/nexus/mock/`, registered as provider `mock` only when
+`NEXUS10_DEV=1`. Models are scenario names (`mock/hello`). It produces real
+`llmhub` stream events (text, reasoning, tool calls, usage), so the loop, store,
+turn summaries and both clients run unchanged.
 
-### NSH (12.5 rest)
+**Changes:** it plugs into `llmhub/providers.py` as a dialect instead of the old
+`model/providers/scripted.py`. Scenarios that used manager or live features are
+not ported.
 
-- Mirror the TUI look once it is settled:
-  - the composer
-  - verb groups and the Working header
-  - two-line session rows
-  - the files tree with line numbers and copy/mention actions
-  - message and code copy
-  - reduced motion
-  - shimmer
-- Pin NSH.
-- Build the macOS desktop bundle.
-- Files, Git and worktree UI.
+**Done when:** `NEXUS10_DEV=1 nexus chat -m mock/tool_marathon` runs a turn
+with no network, and the steer/queue tests in B use it.
 
-### 12.6 — parity, performance, accessibility
+#### A3. Token counting and context budget
 
-- Side-by-side review of the TUI and NSH in light and dark.
-- Budgets for large sessions.
-- Keyboard-only paths.
+**Old:** `nexus/context/counting.py` (170 lines), `nexus/context/budget.py`
+(267 lines), tests `test_context_counting.py`, `test_context_budget.py`. Old
+doc: `docs/context.md` "Budget", "Token counting".
 
-### Before 0.10.0 (release gate)
+**New:** `nexus-core/nexus/counting.py`. Uses the model's window from the
+models.dev catalog and the newest request's real input tokens from turn
+summaries (`turn_request.input_tokens`) when known. Estimates are labelled as
+estimates.
 
-- Run kernels in a scrubbed helper process instead of inside the daemon.
-- Back up before migrations, and recover from a failed migration.
-- Verify `nexus login copilot|grok|opencode`, and add login tests.
-- Define the platform matrix (macOS and Linux) and run it.
+**Used by:** the composer meter (exact once a request has usage), session drafts
+(K4), the handoff threshold (K1), the steer/queue view (how much a pending
+message adds).
 
-## Changes from old Nexus (ledger)
+**Done when:** `GET /api/session/{id}/context` returns `{used, window, exact}`
+and the TUI meter reads it.
+
+### B. Steer and queue
+
+Today a prompt while a turn runs gets 409 (`server.py` route table, `runtime.py`
+`self.turns`). The TUI already renders `steer` and `queued` message tags, but
+Core sends none (archived DESIGN_PLAN "Known gaps").
+
+**Old:**
+- `nexus/session/session.py`: `enqueue` (line ~1647), `consume_steering`
+  (~1818), `add_context` (~1685), and the queue ordering helpers after them.
+  The durable events are `input.queued`, `input.consumed`, `input.dropped`,
+  `input.moved` and `input.mode_changed`.
+- `nexus/core/loop.py`: steering is consumed at a safe boundary (~2290), and a
+  step with no tool calls continues when steering is waiting (~2596).
+- `nexus/session/manager.py`: `queue_depth`, and delete refusing a pending queue
+  (~880).
+- `nexus/host/protocol.py`: `SessionEnqueue` (`mode: queue | steer |
+  interrupt`), `SessionQueueMove`, `SessionQueueRemove` (returns the text to the
+  composer), `SessionQueueSetMode`.
+- TUI: `rust/tui/src/bridge.rs` (queued section, `steer_restore_applies`),
+  `rust/tui/src/live_bar.rs` (`turn #N · steer` rows).
+- Docs: old `docs/loop.md` "Steering, queue, interrupt", old `docs/surfaces.md`
+  around line 199.
+
+**New:**
+- **Core** (`nexus-core/nexus/inputs.py`, `store.py`, `runtime.py`, `loop.py`,
+  `server.py`):
+  - A `pending_input` table: `id, session_id, mode ("steer" | "queue"), parts
+    (JSON, text and images), created, position, state ("pending" | "delivered" |
+    "removed")`. Pending input is durable, so a client can close and a daemon
+    restart keeps it.
+  - `POST /api/session/{id}/prompt` takes `mode: "send" | "steer" | "queue"`
+    (default `send`). `send` while busy still returns 409, so old clients keep
+    working. `steer` or `queue` while idle starts a turn at once (the same as
+    `send`). It returns `{input_id, mode, state}`.
+  - `GET /api/session/{id}/input` lists pending inputs (also included in
+    `/api/snapshot`). `PATCH /api/session/{id}/input/{iid}` edits the text or
+    changes the mode (`queue → steer`). `DELETE` removes one and returns its
+    parts so the client can put them back in the composer. `POST
+    .../input/{iid}/move` takes `{before: iid}`.
+  - **Steer delivery:** the loop already takes notices from `inbox` before each
+    model call (`loop.py`, `self.inbox()` near line 200, which also delivers
+    child results and `message_session` steers). Steered inputs join that path:
+    at the next model call, after the current tool results, each pending steer
+    becomes a user message with `delivery: "steer"` metadata. A steer that
+    arrives during the final answer (no tool calls) makes the loop take one more
+    step instead of ending the turn, as old `loop.py` ~2596 did. Delivery never
+    splits a tool call from its result.
+  - **Queue delivery:** when a turn ends (completed, failed or interrupted),
+    the oldest queued input starts the next turn. The user message carries
+    `delivery: "queued"`. After an interrupt the queue is **held** (not
+    started), and the timeline says so, so Esc does not trigger the next queued
+    prompt by surprise. "Send next" in the queue view releases it.
+  - **Crash recovery:** pending inputs survive. A pending steer whose turn was
+    recovered as interrupted becomes a queued input (it never reached the model)
+    and the recovery notice says so. Nothing starts by itself after a restart.
+  - **Events** (durable): `input.added`, `input.updated`, `input.removed`,
+    `input.delivered` (with `message_id` and `turn_id`). Delivery is the moment
+    the input becomes model context, and only then does it show as a message.
+    Until then it is an activity indicator in the queue view.
+  - Session delete and archive refuse while inputs are pending, unless the call
+    says `drop_inputs: true` (from old `manager.py` ~880).
+- **TUI** (`nexus-tui/src/composer.rs`, `app.rs`, `render.rs`, `api.rs`,
+  `reduce.rs`):
+  - Busy, with content: **Enter steers**, **Tab queues**. With an open `/` or
+    `@` completion, Tab still accepts the completion first. With an empty
+    composer, Tab keeps its current role.
+  - A pending-input stack above the composer card, newest at the bottom, each
+    row `steer` or `queued` with the first line of text. Up/Down selects, Enter
+    edits (back into the composer), `Backspace` removes and restores to an
+    empty draft (old `steer_restore_applies`), and `s` turns a queued input into
+    a steer.
+  - Delivered inputs appear in the timeline at the point they were inserted,
+    with the `steer` or `queued` tag the renderer already has.
+  - Esc interrupts the turn, and the control row shows no stop action (spec
+    change of 2026-10-29). The keys `enter steer · tab queue` are shown in the
+    pending stack's heading once it has an entry, and in help and the palette,
+    not on the control row.
+- **NSH** (`nexus-nsh/src/ui/composer.tsx`, `store.ts`, `core/reduce.ts`): the
+  same keys. Tab is captured only while busy with content, so keyboard focus
+  navigation still works otherwise. Shift+Tab is never captured. The same
+  pending stack, plus buttons for mouse users.
+- **Manifest:** add `composer.steer` and `composer.queue` commands with their
+  `when` conditions (`busy && has_draft`) in `interface/manifest.toml`, then
+  regenerate `nexus-nsh/src/gen/manifest.ts`.
+
+**Changes:** the default key for queue is Tab, not old `Ctrl+Enter`; no
+`interrupt` mode (Esc stops, then the queue is held); pending inputs live in a
+state table, not in replayed events.
+
+**Tests:** using A2's `mock/tool_marathon` and `mock/bash_wait`: a steer during
+a tool call is delivered after that result and before the next request (check
+the request body); a steer during the final answer adds a step; two steers keep
+their order; a queued input starts the next turn after a completed turn and is
+held after an interrupt; a restart keeps pending inputs and turns an undelivered
+steer into a queued one; `send` while busy is still 409; removal returns the
+parts; delivered inputs have `input.delivered` and a message with `delivery`;
+TUI key tests for Enter, Tab, Tab with completion open, and empty Tab.
+
+**Done when:** in the real TUI, during a long bash call, Enter on "also run the
+linter" shows the message in the timeline right after the bash result, and Tab
+on "now write the changelog" starts a new turn when the first one finishes.
+
+### C. Prompt history
+
+nexus10 has history in the TUI only (`nexus-tui/src/editor.rs`
+`history: Vec<String>`, 500 entries, Up/Down at `app.rs` ~4104). It is kept in
+memory, so it is lost when the TUI restarts, and it holds only what this client
+sent. NSH has none. Old Nexus stored it in `~/.local/state/nexus/prompt_history`
+(`nexus/ui_support/prompt_history.py`, test `tests/test_prompt_history.py`), one
+global file for every project, and the user reports that it did not work well.
+
+**New:** history comes from Core, built from what was actually sent.
+
+- `GET /api/project/{id}/prompts?q=&limit=50&before=` returns the user's own
+  messages (typed, steered or queued; not notices, child results or hook output)
+  from every session in the project, newest first, with exact duplicates
+  collapsed. Each entry is `{text, image_count, session_id, created}`. The
+  FTS5 index from K5 speeds up `q`.
+- TUI and NSH: Up on the first line of the composer (or in an empty composer)
+  goes to older entries and Down goes to newer ones. The draft being typed is
+  kept and comes back after the newest entry. Multi-line prompts come back
+  whole. Ctrl+R opens a search list over the same endpoint.
+- The in-memory `editor.history` becomes a cache of the endpoint, refreshed on
+  session switch and after each send.
+
+**Problems to test for**, taken from how the old one and the current one fail:
+multi-line entries recalled as one entry; Up in the middle of a multi-line draft
+moves the cursor instead of recalling; the draft is not lost; history survives a
+TUI restart; a prompt sent from NSH is in the TUI's history; history is per
+project, not global; images are mentioned (`[2 images]`) but not re-attached.
+
+**Done when:** after restarting both clients, Up in the TUI recalls a prompt
+sent from NSH in the same project, and the tests above pass in
+`nexus-tui/tests/behaviour.rs`.
+
+### D. Tools
+
+All are task tools (`nexus-core/nexus/tools/`), listed in `docs/tools.md`,
+with per-session switches. Each port keeps the old output limits and announces
+clipping.
+
+| Tool | Old | Notes |
+| --- | --- | --- |
+| D1 `grep` | `nexus/tools/builtin/grep.py`, `_grep_scan.py` | Uses `rg` when it is on PATH, otherwise the Python scan. Records read observations for matched files only when it returns full lines (check against `observations.py`) |
+| D2 `glob` | `glob.py` | Respects `.gitignore` like `files.py` already does |
+| D3 `ls` | `ls.py` | Shares the walk in `files.py` |
+| D4 `multiedit` | `multiedit.py` | Several replacements in one file, applied all-or-nothing with the same read-before-edit check as `edit` |
+| D5 `web_search` | `websearch.py`, `nexus/net/local_search.py` | Talks to `nexus-search/` (SearXNG). Smoke-test the container and pin its image first (it was never run). URL from `[web] search_url` |
+| D6 `web_fetch` | `webfetch.py`, `_html_markdown.py`, `nexus/net/outbound.py` (SSRF guard, redirects, size limits) | Fetched content is untrusted data and is fenced the same way as MCP output (G) |
+| D7 permission rules | `nexus/tools/permissions.py` (rule grammar and matcher), `tests/test_permissions.py` | `allow` / `ask` / `deny` per tool and per pattern (`bash(git push*)`), in agent frontmatter (`permission:`) and `[tools.permission]` in config. Agent rules narrow, never widen. Closes `docs/agents.md` "Not yet" |
+| D8 `escalate` | `escalate.py` | A **control** tool for child sessions only (Principle 3): the child reports it is blocked, its answer to the parent carries `attention`, and the parent's timeline shows it |
+
+**Tests:** copy `tests/test_builtin_websearch.py`, `test_builtin_webfetch.py`
+and `test_permissions.py`; new tests for grep, glob, ls and multiedit
+(confinement to the session directory, clipping notices, read observations).
+
+**Done when:** every tool shows in the starting-context tools grid with a
+switch, and `docs/tools.md` documents each one.
+
+### E. Hot reload: user tools and agents
+
+**Agents.** `agents.load()` already reads the files on every call
+(`nexus-core/nexus/agents.py:157`, `runtime.py:353`), and the session snapshot
+freezes the prompt (Step 10). So "an edited agent file is used by the next
+session" mostly works already. What is missing:
+- A test: edit `.agents/agents/build.md` and `~/.nexus10/agents/x.md`, and check
+  that a new session's frozen prompt has the new text while a running session
+  keeps the old one.
+- An `agents.changed` event (mtime poll with the config file, A1) so the agent
+  picker in both clients refreshes without a reconnect.
+- An invalid agent file is listed with its error (agent picker and Settings),
+  not dropped silently.
+- `color` and `mode` in frontmatter and `/api/agent/{name}` (old 12a item).
+
+**User tools.**
+**Old:** `nexus/ext/manager.py` (3008 lines; discovery, load, reload, trash),
+`ext/manifest.py`, `ext/quarantine.py` (runs a user tool in a child process),
+`ext/template.py`, `nexus/tools/loader.py`; tests `test_ext_manager.py`,
+`test_ext_manifest.py`, `test_ext_quarantine.py`, `test_hot_extension_e2e.py`,
+`test_hot_extension_stress.py` (200 reloads, no leak). Old doc:
+`docs/extensions.md` "Hot reload".
+
+**New:** `nexus-core/nexus/extensions.py`. Tools are read from
+`~/.nexus10/tools/*.py` and `<project>/.agents/tools/*.py` (P2). Port the
+quarantine: a user tool runs in a child process, never in the daemon. Following
+P6, a new session snapshot takes the current tool set and a running session
+keeps its own; a tool whose file changed mid-session keeps running the code it
+started with until the session ends, and the timeline says the file changed. A
+load error is an `extension.failed` event and a row in Settings.
+
+**Changes:** no `[[ext]]` table in a project config (P1); no Python hooks
+(H); the 3000-line manager is cut down to what tools need.
+
+**Done when:** writing `~/.nexus10/tools/hello.py` and starting a new session
+lists `hello` in the tools grid and the model can call it, and the stress test
+passes.
+
+### F. Skills
+
+**Old:** `nexus/skills/` (`manager.py` 636, `frontmatter.py` 541, `model.py`
+368, `resources.py` 485, `activation.py` 246, `invocation.py` 135, `errors.py`),
+`nexus/tools/builtin/skill.py` (652), `nexus/host_support/skills_install.py`
+(372, `npx skills` import). Tests: `test_skills_manager.py`,
+`test_skills_model.py`, `test_skill_resources.py`,
+`test_skill_activation_scope.py`, `test_builtin_skill.py`,
+`test_context_skills.py`, `test_host_skill_inspect.py`, `test_skills_install.py`.
+Old doc: `docs/extensions.md` "Skills".
+
+**New:** `nexus-core/nexus/skills/` and `tools/skill.py`.
+
+- Discovery: `<project>/.agents/skills/<name>/SKILL.md`, then
+  `~/.nexus10/skills/<name>/SKILL.md`. The project wins on a name clash, and the
+  clash is reported.
+- Progressive disclosure, as in old Nexus: the session's frozen prompt gets an
+  index of `name: description` lines, and the `skill` tool loads the body as a
+  tool result. The body is visible in the timeline as model context. Bundled
+  `scripts/` and `references/` resolve through the fail-closed resolver
+  (`resources.py`).
+- Per session: switches in the starting context's Skills section (it is listed
+  as unavailable today). Off skills leave the index.
+- A skill added or changed after the session started is not in its frozen
+  index. The session gets a notice item ("skill `x` is now available") the
+  next time the model is called, which follows Principle 8 and keeps the
+  timeline honest.
+- API: `GET /api/skill` (name, description, scope, path, error), `GET
+  /api/skill/{name}` (frontmatter and body).
+- `npx skills` import (old `skills_install.py`) is ported last, behind a
+  confirmation that says it runs third-party code.
+
+**Changes:** frontmatter is parsed leniently. Unknown keys (for example
+`license`) are kept and shown as warnings instead of rejected. The old strict
+parser turned away public skills. `allowed-tools` still only **narrows** the
+tool set while a skill is active, and never grants.
+
+**Done when:** a skill in `~/.nexus10/skills/` shows in the TUI starting
+context, the model loads it with `skill`, and its body is readable in the
+timeline.
+
+### G. MCP
+
+**Old:** `nexus/mcp/client.py` (2529 lines: stdio with process groups,
+Streamable HTTP and legacy SSE, deadlines, bounded and redacted stderr),
+`manager.py` (1749: lazy single-flight connect, health, backoff, circuit
+breaker, list cache, hot apply, one immutable snapshot), `bridge.py` (1878:
+`mcp__<server>__<tool>`, `mutates` unless `readOnlyHint`, resources, prompts),
+`search.py` (88: `mcp_search` / `mcp_call` search loading), `errors.py`.
+Tests: `test_mcp_client.py`, `test_mcp_manager.py`, `test_mcp_bridge.py`,
+`test_mcp_dialects.py`, `test_mcp_integration.py`,
+`test_mcp_loading_config.py`, `test_mcp_search_*.py`,
+`test_session_mcp_loading.py`, `test_host_mcp_show.py`, fixture
+`tests/fixtures/mcp_server.py`, `nexus/devtools/mock/mcp_server.py`. Old doc:
+`docs/extensions.md` "MCP", "MCP config dialects", "MCP search loading".
+
+**New:** `nexus-core/nexus/mcp/` (`uv add mcp`, pinned).
+
+- Config: `[mcp.servers.<name>]` in `config.toml` (P1). The entry keys are the
+  old dialect keys (`command`, `args`, `env`, `url`, `headers`, `transport`,
+  `enabled`, `tool_loading`, `includeTools`, `excludeTools`, timeouts) and the
+  same `${env:VAR}` interpolation. `nexus config import-mcp` (A1) reads any
+  dialect from old `normalize_server_entry`. Settings → MCP adds, edits, enables
+  and disables servers through `PATCH /api/config`.
+- Default server: browser-use from `nexus-browser/mcp.json`, written into the
+  default config disabled until the user enables it. Pin its version and launch
+  it once before it is enabled by default.
+- Tools are task tools named `mcp__<server>__<tool>`. Default loading is
+  `search`: the model gets `mcp_search` and `mcp_call`, and full schemas stay
+  out of the request until selected. `tool_loading = "all"` puts them in.
+- Approval: a tool that mutates (no `readOnlyHint: true`) follows the session's
+  permission and D7's rules.
+- Everything a server returns is untrusted data: sanitized, bounded, fenced in
+  `<untrusted-mcp-data>`, and shown in the timeline exactly as the model
+  received it.
+- Per session: servers are switches in the starting context's MCP section
+  (listed as unavailable today). The tool list is frozen in the snapshot. A
+  server whose tools change mid-session adds a notice item instead of rewriting
+  the tool list (Principle 8). A server that dies never fails a turn: its
+  tools return an error result and an `mcp.failed` event is published.
+- Logs: stderr goes to `~/.nexus10/logs/mcp/<server>.log`, never into context.
+- API: `GET /api/mcp` (server, scope, status, tools count, error), `GET
+  /api/mcp/{name}` (read-only detail as in old `McpServerShow`: no connecting,
+  no argument values), `POST /api/mcp/{name}/restart`. Events `mcp.connected`,
+  `mcp.disconnected`, `mcp.failed`, `mcp.tools_changed`.
+- Images in MCP results need artifact storage (K8). Until then an image result
+  is replaced by a labelled placeholder, and the placeholder says so.
+
+**Changes:** the config lives in `config.toml` instead of `mcp.json`;
+project-scoped MCP config is dropped (P1); OAuth is still not implemented.
+
+**Done when:** the browser-use server, enabled in Settings, runs a page fetch in
+a real session, the TUI MCP section shows it connected, and killing the server
+process shows `mcp.failed` while the turn continues.
+
+### H. Hooks
+
+**Old:** `nexus/hooks/manager.py` (1663 lines), `hooks/model.py` (611),
+`examples/hooks.toml`, test `test_hooks_manager.py`. Old doc:
+`docs/extensions.md` "Hooks".
+
+**New:** `nexus-core/nexus/hooks/`, **command hooks only**, configured as
+`[[hooks.<Event>]]` in `config.toml`.
+
+- Events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
+  `TurnEnd`, `SessionEnd` (old `ContextAssembled`, `PreCompact` and
+  `ExtensionLoaded` wait for K1 and E).
+- Decisions: `allow`, `warn`, `block` (a blocked tool becomes an error result
+  the model sees), `modify` (replaces the input, which is then re-validated
+  and re-approved; a hook is policy, not permission).
+- The old limits stay: argv with no shell unless `shell = true`, timeout
+  10 s default and 600 s max, stdin JSON at most 256 KiB, stdout at most
+  64 KiB, a fixed safe environment plus `NEXUS_WORKSPACE` and
+  `NEXUS_PROJECT_ROOT`.
+- Timeline: anything a hook adds to context (a block message, modified input,
+  added text) is a visible item labelled with the hook. A hook that only
+  allowed is an execution detail (`hook.fired`), not context. This closes
+  capability-matrix row T18.
+
+**Changes:** no Python hooks (they needed the quarantine; revisit after E); no
+project `hooks.toml` (P1).
+
+**Done when:** a `PreToolUse` hook that blocks `bash(rm *)` shows its block in
+the timeline and the model gets the error result.
+
+### I. Voice: speech to text and text to speech
+
+**Old:**
+- STT: `nexus/voice/manager.py` (450, serialized lifecycle, 1 running + 2
+  waiting), `engine.py` (209, `BarkEngine` → Transformers `ParakeetForTDT`),
+  `bark.py` (265, the strict `.bark` container reader), `store.py` (178,
+  pinned manifest, download), `audio.py` (112, WAV checks: mono, 16 kHz, PCM16,
+  0.2–120 s), `model.py`, `NOTICE` (CC-BY-4.0 attribution).
+- TTS: `nexus/host_support/speech.py` (569, the `ptts` worker for
+  `gradium/phonon-31m-en`, q8, CPU, sentence chunks, warm worker unloaded after
+  10 idle minutes, `HF_HUB_OFFLINE=1` when playing).
+- Client side: `nexus/ui_support/voice_capture.py` (capture and start/stop
+  cues), `ui/ratatui/voice.py`, `rust/tui/src/live_wave.rs` (waveform),
+  `ui_support/speech_settings.py`, `voice_settings.py`,
+  `speech_download.py`.
+- Tests: `test_voice_audio.py`, `test_voice_bark_format.py`,
+  `test_voice_engine.py`, `test_voice_manager.py`, `test_voice_store.py`,
+  `test_voice_config.py`, `test_voice_cues.py`, `test_speech.py`,
+  `test_speech_settings.py`, `test_ratatui_voice.py`.
+- Measurements: `memory usage/speech-to-text/measurement.md`,
+  `memory usage/text-to-speech/measurement.md`.
+- Old doc: `docs/voice.md`.
+
+**Where the Hugging Face cache is** (checked 2026-10-29 against the
+[Hub cache docs](https://huggingface.co/docs/hub/local-cache) and the
+[huggingface_hub environment variables](https://huggingface.co/docs/huggingface_hub/v1.1.1/en/package_reference/environment_variables)):
+
+1. `$HF_HUB_CACHE` if set,
+2. else `$HF_HOME/hub`,
+3. else `$XDG_CACHE_HOME/huggingface/hub`,
+4. else `~/.cache/huggingface/hub`.
+
+Layout: `models--<org>--<name>/refs/<revision>` holds a commit hash,
+`snapshots/<hash>/<file>` are links into `blobs/`, and a `blobs/*.incomplete`
+file means a download is still running or was cut off. This machine has
+`~/.cache/huggingface/hub` with `models--gradium--phonon-31m-en` (the old TTS
+model), `models--hexgrad--Kokoro-82M`, `models--sahilmahendrakar--Paradee-8M-v1.0`,
+`models--mlx-community--whisper-large-v3-turbo`, `models--mlx-community--whisper-base-mlx`,
+`models--nvidia--canary-180m-flash` and several Parakeet GGUF repos. The old STT
+weights (`ConwayResearch/Underdog-Bark-3.0-Clean`) are **not** in the HF cache
+(old Nexus kept a private copy in `~/.nexus/models/voice`, which nexus10 must
+not read).
+
+**New:** `nexus-core/nexus/voice/`.
+
+- `voice/hf_cache.py`: a small reader for the layout above with no
+  `huggingface_hub` import, so status checks stay cheap. `find(repo, revision,
+  files) -> Path | None` resolves `refs` → snapshot, checks that every needed
+  file exists, and treats any `.incomplete` blob for the repo as not ready.
+  `scan()` lists cached repos with sizes for Settings.
+- Status before anything else. `GET /api/voice` returns, for STT and TTS:
+  `{state: "unsupported" | "runtime_missing" | "absent" | "downloading" |
+  "ready" | "loaded" | "error", repo, revision, cache_path, size, error}`. It
+  never loads a model or downloads.
+- Download only after consent: `POST /api/voice/{stt|tts}/download` runs
+  `huggingface_hub.snapshot_download(repo, revision=pinned,
+  allow_patterns=[...])` in a worker into the **standard** cache, publishes
+  `voice.progress` events (cache blob growth against the expected size, as old
+  `speech.py` did) and verifies sizes and hashes from the pinned manifest
+  (old `store.py`) before the model becomes `ready`. Loading always uses
+  `local_files_only=True` / `HF_HUB_OFFLINE=1`.
+- **STT engine (decide in step I1).** Port the old `Engine` protocol (`load`,
+  `transcribe(bytes)`, `close`) and the manager unchanged. Two candidates:
+  - Port `BarkEngine` as it is. It reads `model.bark` and the five Parakeet
+    processor files from the HF cache (`ConwayResearch/Underdog-Bark-3.0-Clean`
+    at `6d34ed86…`, `nvidia/parakeet-tdt-0.6b-v3` at `541d1f99…`). Needs torch,
+    transformers, constriction and librosa. It was verified loading on `mps`;
+    accuracy was never measured. It needs a download on this machine.
+  - An MLX Whisper engine on `mlx-community/whisper-large-v3-turbo`, already
+    in the cache here. macOS arm64 only, lighter than torch.
+
+  Recommendation: port `BarkEngine` first (copy-first, tests exist), with the
+  engine chosen by `[voice] stt_model`, and add MLX Whisper as the second engine
+  only if Bark's memory (old estimate about 2.4 GB while loading) is too much.
+  Either way the runtime is an optional dependency group (`uv sync --extra
+  voice`), not a base dependency (old Nexus made it base, which broke installs
+  on unsupported platforms), and status says `runtime_missing` with the
+  command to run.
+- STT API: `POST /api/voice/transcribe` takes a WAV body (checked by
+  `audio.py`), `?partial=1` for live previews (the old pacing: at most one in
+  flight, at least 0.4 s of new audio, answered with `voice_busy` while another
+  inference runs), and returns `{text}`. Text goes into the composer as
+  editable text and is never sent by itself.
+- **TTS:** port `speech.py`'s worker with `ptts` (`uv add ptts sounddevice
+  numpy`; light, no torch) and `gradium/phonon-31m-en` from the HF cache (it is
+  cached here, so this works with no download). `/speak` reads the final answer
+  of the latest completed turn, exactly as old Nexus restricted it.
+  `POST /api/voice/speak {session_id}` streams `audio/wav` chunks back to the
+  client, which plays them (TUI: the `rodio` crate; NSH: Web Audio).
+  `POST /api/voice/speak/stop` stops. Old Nexus played on the daemon's speakers,
+  which does not work for a remote NSH.
+- **TUI capture:** the TUI is Rust only now, so capture moves from the old
+  Python `voice_capture.py` to `cpal` in `nexus-tui`: push-to-talk key (old
+  `Ctrl+X V` and `/voice`), start and stop cues (port the tones from
+  `voice_capture.py:play_cue`), the waveform strip (port
+  `rust/tui/src/live_wave.rs`), and live previews. Enter while recording stops
+  and sends after the final transcript; Esc keeps the text without sending.
+- **NSH capture:** `getUserMedia` → 16 kHz mono PCM16 WAV in the page → the
+  same endpoint. A mic button in the composer.
+- Settings → Voice and Speech: model state, cache path, size, Download, Remove
+  (removes only that repo's snapshot, after confirmation), device for STT.
+
+**Changes:** models come from the HF cache instead of `~/.nexus/models`;
+speech plays on the client instead of the daemon; the STT runtime is an
+optional extra; capture is in Rust and the browser instead of Python.
+
+**Tests:** `hf_cache.find` against a fake cache tree (env-var precedence,
+missing ref, `.incomplete` blob, missing file); status never imports torch or
+ptts; download writes into the HF cache and verifies hashes (fake hub); copy the
+old engine, manager, audio and bark tests; a fake engine for the API tests.
+
+**Done when:** on this machine `/speak` reads the last answer aloud with the
+already-cached phonon model and no download prompt, and dictation in the TUI
+puts a transcript into the composer after a consented download (or right away,
+if the model is already cached).
+
+### J. Providers
+
+**Old:** `nexus/model/providers/anthropic.py`, `gemini.py`, `ollama.py`,
+`nvidia.py`, `openai.py` (API key), `discovery.py`; `nexus/auth/api_key.py`;
+`claude_agent.py`, `claude_agent_auth.py`, `_claude_agent_worker.py`,
+`antigravity_cli.py`, `nexus/agents/claude_code_worker.py`,
+`antigravity_worker.py`. Old docs: `docs/adding-a-provider.md`,
+`docs/provider-onboarding.md`, `docs/models.md`,
+`docs/antigravity-troubleshooting.md`.
+
+| Item | Dialect in nexus10 | Notes |
+| --- | --- | --- |
+| J1 API-key sign-in | `llmhub/auth/api_key.py` | `nexus login <provider> --api-key`, stored in `auth.json` |
+| J2 openai (API key) | Responses (`responses.py`) | Same quirks table as codex |
+| J3 ollama, nvidia | Chat (`chat.py`) | Ollama is local, so no sign-in; models from its `/api/tags` |
+| J4 anthropic | New `llmhub/messages.py` | Thinking blocks with signatures kept in `raw` for lossless replay (Principle 2); cache-control breakpoints |
+| J5 gemini | New dialect or Chat-compatible endpoint | Decide by checking which keeps reasoning replayable |
+| J6 claude-agent, antigravity | External CLI workers | Last. They run their own loop, so their timeline is a child-like stream; check against the one-timeline rule before porting |
+
+Each provider lands with `docs/llm-providers.md` and `docs/auth.md`, a
+recorded wire fixture test, and a verified real call.
+
+### K. Context and sessions
+
+The old Step 12a items, with sources.
+
+| Item | Old | New |
+| --- | --- | --- |
+| K1 handoff instead of compaction | `nexus/context/compact.py`, `handoff.py`, `handoff_model.py`, `nexus/session/handoff.py`, `host_support/session_handoff.py`, old `docs/context.md` "Same-session handoff" | At `[context] handoff_percent` (default 80) or on `/handoff`, the agent writes a visible summary turn, and a new root session of the same agent starts from it with `continued_from` and a link back. Never edits a sent context |
+| K2 auto titles | `host_support/auto_title.py`, `session/title.py` | A one-turn session on a cheap model after the first prompt, hidden from the list, inspectable. Replaces the first-60-characters title (`runtime.py` ~1385) |
+| K3 `/btw` | none (new from the archived INTERFACE_PLAN) | One call with the session's context up to its last completed tool call plus the question, no tools, answer in an overlay; the parent's context does not change |
+| K4 session drafts | `host_support/context_preview.py`, `session_preview.py` | Core builds the real starting context before the first prompt (replaces the TUI's client-side estimate) |
+| K5 search | `ui_support/fuzzy.py` (titles only) | FTS5 over titles and user messages; also serves C |
+| K6 paging | — | Message paging and load-older-turns; the snapshot caps at 200 messages today. Pairs with TURN_SUMMARY `before=` |
+| K7 approvals | `host_support/approval.py`, `ui/ratatui/permission_prompt.py` | "Allow for session" and "deny with a note" |
+| K8 artifacts | `host_support/attachments.py` | Durable artifact storage, needed for MCP and web images |
+| K9 cache warning | old `docs/context.md` "Prompt-cache boundaries" | Warn before an agent or model switch (Principle 8) |
+| K10 file writes | — | `PUT` file with `expected_revision`, `files.changed`, then the built-in editor |
+| K11 usage totals | `host_support/provider_usage.py`, `usage_snapshot.py`, `ui_support/usage.py` | Per-session totals come from `session_usage` (turn summaries). Provider quota windows (codex and copilot limits) where the provider reports them |
+
+### L. Worktree review and integration
+
+**Old:** `nexus/agents/worktree_review.py`, `worktree_integrate.py`,
+`nexus/worktree_cleanup.py`, `ui/ratatui/worktree_pages.py`,
+`worktree_bar.py`, test `test_worktree_merge_permission.py`.
+
+**New:** control commands (Principle 3) in `worktrees.py`: review a worktree's
+diff against its base, merge it (fast-forward or merge commit, with
+confirmation), and remove the worktree and branch after a merge. User commands
+in both clients; the agent gets them only when granted. Closes capability row A9.
+
+### M. Interface
+
+**M1 TUI open items** (from the archived PLAN.md Step 12 and DESIGN_PLAN):
+- `path:line` and OSC 8 links (needs hit regions; ratatui cells carry no
+  escapes)
+- syntax highlighting in the file view (library undecided)
+- split-diff wrap bug: continuation rows start at the `+`/`-` column instead of
+  the text column (`nexus-tui/src/diff.rs`)
+- edit and patch diffs have no line numbers when the tool input has none
+- PTY tests at 80×24 and 160×48 for anchor, follow and jump-to-latest
+- a review gallery from fixed fixtures (`interface/review.md`)
+- Session info: failed child count, enabled and disabled tools, kernels
+- terminal notifications: check OSC 777 in kitty (it may need OSC 99) and
+  track focus
+- debounce completion requests if large workspaces make search slow
+- compare with the old TUI in a real terminal; the user reviews screenshots
+
+**M2 NSH parity:** the NSH side of DESIGN_PLAN I9 (new-session view) and I10
+(files, narrow layouts, states); search row in the sidebar (needs a
+`session.search` handler); per-row branch (needs branch data on the session
+row); thought durations, message tags and the live shimmer (thought durations
+come from turn summaries); pin NSH; build the macOS desktop bundle; files,
+Git and worktree UI; then delete `nexus-design-mockup/`.
+
+**M3 parity, performance, accessibility (old 12.6):** side-by-side TUI and NSH
+review in light and dark; budgets for large sessions (with turn summaries step
+5's numbers); keyboard-only paths.
+
+**M4 Mermaid:** the TUI already renders diagrams as text
+(`nexus-tui/src/mermaid.rs`, `mermaid_text.rs`, ported from old
+`rust/tui/src/mermaid*.rs`; see the ledger). Still missing: image rendering in
+kitty and iTerm (old `mermaid_image.rs`), and Mermaid in NSH with a pinned
+`mermaid` bundle served by the host (no CDN, per its CSP).
+
+### N. Operations
+
+**Old:** `nexus/host_support/doctor.py`, `nexus/host/doctor.py`,
+`host_support/install.py`, `setup.py`, `uninstall.py`, `update_check.py`,
+`install.sh`, `install.ps1`, old `docs/release.md`.
+
+- N1 `nexus doctor`: daemon reachable and running the current code (closes the
+  "nothing checks that a running daemon runs the current code" gap), sign-ins,
+  catalog age, config errors, search container, MCP health, voice runtime and
+  HF cache state, `rg` present.
+- N2 install and uninstall: `install.sh` that installs the uv tool, the TUI
+  binary and the NSH bundle.
+- N3 update check: compare with the latest release, never auto-update.
+
+### O. Release gate (before 0.10.0)
+
+- O1 run kernels in a scrubbed helper process instead of inside the daemon
+- O2 back up before migrations, and recover from a failed migration
+- O3 move the home: on first start of 0.10.0, `$NEXUS10_HOME` defaults to
+  `~/.nexus`, with a one-time, confirmed migration of `~/.nexus10` and the old
+  `~/.nexus` moved aside, never deleted
+- O4 verify `nexus login copilot|grok|opencode` end to end, and add login tests
+- O5 define the platform matrix (macOS and Linux) and run it
+- O6 pin `nexus-search` and browser-use images and versions
+
+## 7. Order
+
+The user's three items lead. Each line is one reviewed increment that ends
+green and visible in the real app.
+
+1. **Turn summaries 3–6** (TUI and NSH done in the working tree,
+   TURN_SUMMARY_PLAN.md): clients read `/turn`. Land this before B's TUI work,
+   since both change `reduce.rs`.
+2. **A1** config file and Settings over the API.
+3. **A2** mock provider.
+4. **B** steer and queue (Core, then TUI, then NSH).
+5. **C** prompt history (Core endpoint without FTS first; K5 speeds it up later).
+6. **E** agent hot-reload checks, then **F** skills.
+7. **G** MCP, then browser-use as the default server (O6 pins it).
+8. **I** voice: I1 HF cache reader and status; I2 TTS (model already cached);
+   I3 STT engine and Core endpoint; I4 TUI capture; I5 NSH capture.
+9. **D** tools: D1–D4, then D7 permissions, then D5–D6 with `nexus-search`,
+   then D8.
+10. **E** user tools with quarantine; **H** hooks.
+11. **A3** counting, then **K1** handoff, **K2** titles, **K4** drafts, **K5**
+    search, **K6** paging, then the rest of K.
+12. Turn summaries 7 and 9 (live partial, ephemeral deltas), after B, so steer
+    delivery is tested against the new delta path.
+13. **J** providers, **L** worktrees, **M** interface, **N** operations.
+14. **O** release gate.
+
+## 8. Interactions with turn summaries
+
+- **Steered input adds a step to the running turn.** The turn's `steps`,
+  requests and usage include it, and `turn.summary` lists it like any other
+  step. A queued input starts a new turn with its own summary.
+- **`input.*` events are durable** and are not deltas, so TURN_SUMMARY step 9
+  (ephemeral deltas) does not touch them. Pending inputs are a state table, as
+  that plan's rule requires: clients read `/input`, not the event log.
+- **Message anchors:** a delivered steer is a user message inside a turn
+  (after `start_seq`), so clients must not treat every user message as a turn
+  start. Update the TUI's turn grouping when B lands.
+- **Recovery:** B's "undelivered steer becomes queued" runs in `recovery.py`
+  next to TURN_SUMMARY step 8's `turn.ended` logic.
+- **Context meter (A3)** reads `turn_request.input_tokens` from summaries
+  instead of scanning `usage` events.
+- **Usage totals (K11)** are the `session_usage` ledger.
+
+### Turn summaries: TUI load measurement (steps 0 and 5)
+
+One seeded session in a throwaway home (never `~/.nexus10`): 40 turns, 160
+messages, 30 616 events (11 600 `text_delta`, 3 200 `reasoning_delta`,
+14 800 `wire_event`, 84 `wire_request` carrying the conversation, 80 `usage`,
+tool, retry and lifecycle events; every tenth turn retried, every seventh tool
+failed), with the same turns in the state tables. Event `data` is 4.56 MB;
+`nexus.db` is 8.1 MB. Commands, from `nexus-tui/`:
+
+```sh
+cargo build --release
+tools/bench.sh <scratch>/bench 40 3     # seeds <scratch>/bench/home once (tools/bench_seed.py),
+                                        # starts its Core, runs nexus-tui --bench 160x48 three times
+```
+
+`--bench` opens the most recent session and reports the time until its stored
+history is applied, the time to the first full frame (history plus one
+`render_buffer`), RSS from `ps` after that frame, and `render_buffer` time over
+400 frames while scrolling a half page per frame (200 up, 200 down). Frame time
+is building and painting the frame into a buffer, not terminal output. Warm
+runs (the first run after seeding is cold: 690 ms before):
+
+| | Before (event history, 20 000-event cap) | After (turn summaries) |
+| --- | --- | --- |
+| Open to history applied | 230–250 ms | 68–83 ms |
+| Open to first full frame | 237–258 ms | 73–88 ms |
+| RSS after the first frame | 133 MB (7.7 MB before open) | 19 MB (7.8 MB before open) |
+| Frame time while scrolling, mean / p95 | 4.4–4.7 / 4.6–5.4 ms | 3.6–3.7 / 3.8 ms |
+| Bytes read on open (event pages / `/turn`) | 7.97 MB of events + 139 KB messages | 59 KB of summaries + 139 KB messages |
+
+Before, the session also lost 10 617 events to the cap (`… older diagnostics
+are not loaded`), so its sidebar counted 5.2M input tokens; the ledger counts
+all 5.9M.
+
+## 9. Not in this plan
+
+- GPT Live voice calls (`nexus/live/`, `rust/tui/src/live_*.rs`)
+- the device gateway and the iOS app (`nexus/gateway/`, `ios/`)
+- the workspace manager session (`nexus/tools/manager_*.py`)
+- model tiers and routing (`nexus/model/tiers.py`, `router.py`, `usage_gate.py`)
+- per-project config files (P1)
+- Python hooks (H; revisit after E)
+- the benchmark harness (`benchmark/`), until A2 is in use
+
+## 10. Ledger: changes from old Nexus
+
+Rows cite archived plan tags (`DESIGN_PLAN D06`, `INTERFACE_PLAN`); read them
+with `git show fdb1860:<file>`. Rows for the decisions in section 5 are added
+when each item lands.
 
 | Old | New | Why |
 | --- | --- | --- |
+| Old host folded the event log into turn views; nexus10's TUI paged up to 20 000 events on open and scanned them every frame | The TUI reads `/api/session/{id}/turn` summaries and the session ledger, never the event log; live events of the running turn are scratch until its `turn.summary` (2026-10-29) | Bounded load time and memory; details survive event retention; one source of truth (TURN_SUMMARY_PLAN.md) |
 | Clipboard images uploaded through the old host's attachment store | Local TUI clipboard reads and NSH paste events feed inline `Image` parts, with draft/timeline previews; bytes are durable in SQLite and replay in both dialects (2026-10-28) | Deliver image paste on the current API while keeping all model-visible image context available after reload |
 | Background bash completions began `[Notification: background bash …]` | Completion context begins `→ Background Shell Done: …` and renders as a plain notice in both clients (2026-10-28) | Distinguish shell completion context from user-message cards |
 | New sessions defaulted to asking for tool approval | Sessions default to `allow`; existing `ask` sessions migrate once, and later explicit `ask` choices are retained (2026-10-28) | User preference: always allow tools by default |
@@ -374,8 +1043,11 @@ says why the rest cannot change. Still open:
 | Waiting card was a bracketed button row (`[ allow once ] [ deny ]`) with a 6-row card; toasts were bottom-right, one line, the oldest dropped past three; a toast kept only its text and a click dismissed it; the jump pill drew on the timeline's last row | The card has a heavy accent rail, `Allow bash?`, `waiting on you · 0:42`, the parameter table, the diff capped at 12 rows, and a key-chip choice list (`▸` on the selection band, Up/Down and Enter act on the offered choices; unoffered choices show their reason) or the question rows; it sheds diff, blanks, pads and table rows when the screen is short. Toasts are top-right under the header (36-48 cells, level `▌`, glyph, bold title, `×`, an optional body line, no hairline), three drawn with `+N more` for a queue of up to nine; a click or Enter opens the full text in the modal (`c` copies; the notifications drawer opens it too, Enter there no longer jumps to the session, the detail's Enter does). The jump pill is on the composer's live row, right-aligned with the card, `↓ N new · end` where N counts the blocks below the viewport; banner leads in the level colour (DESIGN_PLAN D14, D15, I8) | The prompt keeps the context visible and the card shows what will run; alerts stop covering the composer area and the timeline's last row |
 | The starting context was a list of name chips (`System prompt`, `Tools [n]`, `Instructions`, `Agent`) with detail rows and a `total` row; the new-session view was centred text over a `Context · preview` table | `◆` sections with an estimated `~N tok` per header, one preview line or a tools grid (off tools struck through), a text `Context total` and no bar, rendered by one function (`paint::context_rows`) for the timeline and the new-session view, which has a header block and no centred text; in the TUI the context stays expanded after the first turn; the Agent item is gone (its name is in the System prompt meta) and the new-session preview is client-side and estimated until Core session drafts land; every preview line is text the model receives (the first line of the agent's prompt body, fetched with `GET /api/agent/{name}`; never the description), and the timeline's comes from Core's `system_prompt` (DESIGN_PLAN D10, I9) | One timeline that shows what the model gets, with the same look before and after the first turn |
 | Files tree: an optional `▾ name ⌥ branch` row only with several checkouts, plain indent, no guides; file view: a bold `~` path, `NNNN  text` rows, a notice `lines 1-40 of 300 · scroll` at the bottom, search as `/query  2 matches`, all on the sidebar surface; narrow layouts (< 100 columns) kept the tab strip with 28 / 30-cell drawers and no scrim; the right sidebar was open from 100 columns; the empty and connecting screens were centred text; offline read `reconnecting in 4 s` and `Disconnected · read-only` | Always a root header (`SIDE-PROJECT` bold, `⌥ main` muted at the right; it switches checkouts when there are several), `│` guides in `border.default` per level, Git letters coloured by status on the row's own surface; the file view is on the page surface with the path in secondary and the basename bold, `lines 1-38 of 38` right-aligned in the header, a blank row, right-aligned numbers and a `│` gutter, and a reserved bottom row for search (`/ query  3 of 12   n next · N prev · esc end`, matches on the selection band, the current one reversed); `layout::Breakpoint` gives the D17 table (160+ 34 / 36, 120-159 28 / 30, 100-119 the left docked and the right closed until opened, < 100 drawers of 34 / 36 cells over `paint::scrim`), where the header keeps the toggles, the status and a crumb cut from the left; `paint::LOGO` (the `_/` N, accent, bold in mono) over the title on the empty workspace (`No projects yet`, `alt+3 add a project · ctrl+p commands`; `ctrl+o` has no command yet) and the connecting screen; a lost stream shows `✕ offline` in the header, the banner `Disconnected from Core · retrying in 4s · retry` and the composer placeholder `Reconnecting to Core… your draft is kept`; with nothing loaded the page says `Not connected to Core` instead of `No projects yet` (DESIGN_PLAN D16, D17, D18, I10) | Files read as a document with its place and range; narrow terminals keep the page readable; a missing Core is said in words and never looks like an empty workspace |
+| Turn details (usage, model, timings, retries) lived only in the event log and vanished with it after 14 days | Stored on `turn`, `turn_request` and `turn_attempt` rows and a per-session `session_usage` ledger, served by `GET /api/session/{id}/turn` and a `turn.summary` event after every close; requests from before the upgrade backfilled once where unambiguous, unknown otherwise (2026-10-29, TURN_SUMMARY_PLAN.md steps 1–2) | Details survive event retention; session totals survive turn pruning |
+| A retried attempt's usage was only in the event log | Every attempt's usage is stored and counted in the request and the ledger (2026-10-29) | A failed attempt is still billed |
+| Recovery searched the event log for `turn_end` | Recovery reads `turn.ended`, falling back to the log only for a turn left open by an older daemon (2026-10-29, TURN_SUMMARY_PLAN.md step 8) | State tables are the source of truth |
 
-## Known gaps
+## 11. Known gaps
 
 - Kernels have no checkpoint recovery; a timeout, interrupt, crash or resource
   limit discards the kernel. Startup recovery reports the loss for a reconciled
@@ -458,71 +1130,14 @@ says why the rest cannot change. Still open:
 - `instructions` uses the Responses field. The current Codex CLI sends a
   developer message instead. Both work today; revisit if the backend changes.
 
-## Open questions
+## 12. Open questions
 
+- STT engine: port Bark (download needed) or use the cached MLX Whisper (I).
+- Gemini dialect (J5).
+- Whether claude-agent and antigravity workers fit the one-timeline rule (J6).
 - Syntax highlighting library for the TUI file view.
-- Dictation engine per platform.
 - Focus ring colour: shared with the accent or a separate cool hue.
 - Worktree cleanup on archive/delete, and leaving a worktree.
-- Whether a user can steer a child session from the parent's card.
+- Whether a user can steer a child session from the parent's card (B makes it
+  possible; `message_session` already steers a child).
 - Output caps (lines vs bytes) and whether they are a setting.
-
-
-Image paste / permission / background-shell delivery check (2026-10-28): Core
-369 tests pass (including isolated daemon restart), TUI suite passes with its
-one existing ignored test, Ruff and Clippy pass, NSH type check/build and four
-host tests pass. Focused web tests exercise native image paste, preview/removal,
-image-only send and the plain background-shell notice. Real TUI PTY and web
-screenshots were reviewed from isolated fixtures; no live vision provider call
-was made. Fixed the web timeline's layout event shape while checking previews.
-
-Context and composer follow-up (2026-10-28): both clients list Skills and MCP
-as unavailable until Core implements them, and omit the inline system prompt
-preview while retaining its detail view. The TUI composer supports word movement
-and selection with Alt/Control arrows, as in old Nexus; existing mouse selection
-and local clipboard image paste remain in place.
-
-User message bands and sticky headers now sit within the timeline gutters,
-adding space on both sides of the raised surface (2026-10-28).
-
-Composer spacing (2026-10-28): the input has one full row of top padding
-and the card keeps its half-height bottom edge, matching the requested reference.
-
-Context presentation (2026-10-28): the TUI uses the reference's spaced
-label-and-count rows and compact total; section details remain clickable.
-Unavailable features and disabled tool counts remain explicit.
-
-Composer context status (2026-10-28): the TUI shows latest input tokens and
-known pricing-tier and window percentages as text, following the old status
-line; the existing path and branch strip is retained.
-
-Shortcut parity (2026-10-28): the TUI adopts old Nexus direct shortcuts and
-Ctrl+X leader sequences for actions available in 0.10; Ctrl+N now creates a
-session, Ctrl+G opens agents, and Ctrl+T cycles effort. Notifications remain
-accessible via Ctrl+X Shift+N and the palette; Go to turn remains in the palette.
-
-Image paste layout (2026-10-28): TUI draft thumbnails sit above the composer
-card; clipboard reads, removal and durable inline image parts remain unchanged.
-
-Bottom activity line (2026-10-28): restore the old Nexus rule below the
-location strip, showing context occupancy while idle and a moving activity
-segment while busy, with reduced-motion and monochrome fallbacks.
-
-Image references (2026-10-28): TUI image paste inserts lettered markers in the
-composer; Core stores an adjacent lettered text part before each user image so
-both provider dialects receive the same reference-to-image mapping.
-
-Timeline spacing (2026-10-28): agent output starts at the same horizontal
-position as user-message text, with Markdown wrapping adjusted to fit.
-
-Image preview (2026-10-28, removed same day): TUI draft thumbnails, timeline
-thumbnails and the full-view modal are gone for now; the draft shows one row of
-attached image names and the timeline an `Image: name` line.
-
-Permission upgrade (2026-10-28): existing stored `ask` sessions, including
-children, migrate once to `allow` at daemon startup, with revision bumps.
-Explicit `ask` selected after migration remains available and persists.
-
-Context figure colour (2026-10-28): context section titles, the total label and
-its figure use the secondary grey instead of primary white, so the context block
-recedes from the conversation. Counts and metadata keep their existing greys.

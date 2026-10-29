@@ -1,5 +1,5 @@
 # Nexus design language: semantic tokens shared by the TUI and NSH.
-# Source of truth for colour. Spec: INTERFACE_PLAN.md "## Design language".
+# Source of truth for colour. Spec: interface/design-language.md.
 # Check with: python3 interface/check_theme.py
 #
 # Values that are not "#rrggbb" are token references ("surface.panel").
