@@ -170,6 +170,7 @@ the config file or the Hugging Face cache directly.
 | I3 (Core) | Lazy offline Bark STT, explicit verified HF-cache download, `POST /api/voice/transcribe` and progress events; fake-engine tests (2026-10-29) | docs/voice.md, docs/api.md |
 | I4–I5 (TUI, NSH) | Dictation: `voice.dictate` (`/voice`, `Ctrl+D`, `Ctrl+X V`) in the TUI (`cpal`, waveform strip, cues) and a composer mic button in NSH (`getUserMedia`); 16 kHz PCM16 WAV, paced live previews, consent before the STT download; Enter or Stop inserts the transcript without sending, Esc cancels. `composer.dictate` became `voice.dictate`. Real microphone capture unverified (2026-10-29) | docs/voice.md |
 | I6 (Core, TUI, NSH) | Settings → Voice and speech: model status, consented Download and confirmed Remove for both models; Core adds `POST /api/voice/tts/download` and `DELETE /api/voice/{stt or tts}`; `nexus voice init` installs the runtime. Unverified with real downloads and in a browser (2026-10-29) | docs/voice.md |
+| Section I accepted unverified | Voice (I1–I6) is accepted without a run against real audio, a real Bark download or a browser; only fake-engine, API and unit tests, plus one real phonon synthesis, back it (2026-10-29, user decision) | docs/voice.md |
 
 ## 4. How to port
 

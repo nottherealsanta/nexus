@@ -115,3 +115,10 @@ confirms (Cancel is the default) and calls `DELETE /api/voice/{stt|tts}`, which 
 that repo's folder from the cache; it is refused while a download runs or speech plays. Rows
 are disabled with a reason when they make no sense in the current state. The settings are
 read on open and after each action. Not yet checked against real downloads or in a browser.
+
+## Verification status
+
+Decision (2026-10-29): section I is accepted without a run against real audio, a real Bark
+download or a browser. Everything above is covered by unit, fake-engine and API tests, and
+the TTS worker was run once with the cached phonon model. Real microphone capture, the real
+STT download and transcription, and playback and Settings in a browser are not verified.
