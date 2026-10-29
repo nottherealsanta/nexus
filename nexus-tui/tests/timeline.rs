@@ -62,8 +62,8 @@ fn folding_a_turn_keeps_only_its_header_and_never_deletes_context() {
         .unwrap();
     assert_eq!(
         folded.end - folded.start,
-        1,
-        "folded turn is a single filled row"
+        3,
+        "folded turn is one text row with a padding row above and below"
     );
     assert!(!text.contains("Hello"), "folded content is hidden: {text}");
     // Still in the model: folding is view state only.
@@ -273,7 +273,7 @@ fn history_keeps_messages_applied_live_and_announces_missing_details() {
 }
 
 #[test]
-fn user_band_is_full_width_with_a_rail_padding_and_the_fold_marker_inside() {
+fn user_band_is_full_width_with_a_rail_and_padding() {
     use nexus_tui::timeline::{build, BlockKind};
     for tier in [Tier::TrueColor, Tier::Ansi256, Tier::Ansi16, Tier::Mono] {
         let app = with_turn(opts(Mode::Dark, tier), (120, 36));
@@ -300,11 +300,8 @@ fn user_band_is_full_width_with_a_rail_padding_and_the_fold_marker_inside() {
         }
         assert!(text(block.start).trim().is_empty(), "top padding");
         assert!(text(block.end - 1).trim().is_empty(), "bottom padding");
-        // The marker is inside the band, the text starts 2 cells after it.
-        assert!(
-            text(block.start + 1).starts_with(" \u{25be} hi"),
-            "{tier:?}"
-        );
+        // No fold marker; the text keeps its 2-cell inset.
+        assert!(text(block.start + 1).starts_with("   hi"), "{tier:?}");
         assert!(text(block.start + 1).contains("#1"), "{tier:?}");
     }
 }
@@ -1028,6 +1025,39 @@ fn the_context_section_lists_d10_sections_with_estimates_and_the_window_share() 
         !total_row.contains('\u{2571}') && !total_row.contains('/'),
         "no context bar: {total_row}"
     );
+}
+
+#[test]
+fn session_tool_grid_keeps_individual_click_targets_after_a_message() {
+    let mut a = app();
+    a.state.model.selected.as_mut().unwrap().starting = Some(starting_context());
+    a.ui.scroll.follow = false;
+    a.ui.scroll.top = 0;
+    let (_, lines) = draw(&mut a, 120, 36);
+    let y = lines
+        .iter()
+        .position(|line| line.contains("read") && line.contains("bash"))
+        .expect("tools share a row");
+    let line = &lines[y];
+    let bash = nexus_tui::text::width(&line[..line.find("bash").unwrap()]);
+    click(&mut a, (bash - 2) as u16, y as u16);
+    let expected = a
+        .context_items()
+        .iter()
+        .position(|item| item.key == "bash")
+        .unwrap();
+    assert_eq!(a.ui.context_cursor, expected);
+    let (_, lines) = draw(&mut a, 120, 36);
+    let y = lines
+        .iter()
+        .position(|line| line.contains("read") && line.contains("bash"))
+        .unwrap();
+    let bash = nexus_tui::text::width(&lines[y][..lines[y].find("bash").unwrap()]);
+    click(&mut a, bash as u16, y as u16);
+    assert!(matches!(
+        a.ui.overlay.as_ref().map(|o| &o.kind),
+        Some(nexus_tui::ui::OverlayKind::ContextDetail { .. })
+    ));
 }
 
 #[test]
@@ -1894,7 +1924,7 @@ fn consecutive_background_completions_are_grouped_and_expand_in_order() {
 fn assistant_text_aligns_with_the_user_message() {
     let mut a = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     let (_, rows) = draw(&mut a, 120, 36);
-    let user = rows.iter().find(|line| line.contains("▾ hi")).unwrap();
+    let user = rows.iter().find(|line| line.contains("  hi")).unwrap();
     let assistant = rows.iter().find(|line| line.contains("Hello")).unwrap();
     let user_col = nexus_tui::text::width(&user[..user.find("hi").unwrap()]);
     let assistant_col = nexus_tui::text::width(&assistant[..assistant.find("Hello").unwrap()]);
@@ -1908,7 +1938,7 @@ fn image_labels_align_with_user_text() {
         serde_json::json!({"type":"image", "name":"Image A", "data_url":"data:image/png;base64,AA=="}),
     );
     let (_, rows) = draw(&mut a, 120, 36);
-    let text = rows.iter().find(|row| row.contains("▾ hi")).unwrap();
+    let text = rows.iter().find(|row| row.contains("  hi")).unwrap();
     let image = rows
         .iter()
         .find(|row| row.contains("Image | Image A"))

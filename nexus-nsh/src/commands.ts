@@ -1,4 +1,5 @@
 import { loadFiles } from "./store";
+import type { UsageProvider } from "./store";
 // Command registry built from interface/manifest.toml (generated to src/gen/manifest.ts).
 // Ids, titles, keys, `when` rules, reasons and placements come from the manifest; this file
 // only evaluates terms and binds handlers for the actions whose Core API exists.
@@ -6,7 +7,7 @@ import { Clipboard, keymap, openUrl } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
   editFile, fileDirty, openFile, reloadFile, saveFile,
-  pendingInputs, contextDetail, addProjectOpen, alertDetail, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
+  pendingInputs, contextDetail, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, defaultModel, draft, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
@@ -93,7 +94,7 @@ function evalTerm(t: string): boolean {
     case "view.editor": return centre() === "file";
     case "editor.dirty": return fileDirty();
     case "editor.readonly": return centre() === "file" && openFile()?.draft === undefined && openFile()?.content !== undefined;
-    case "overlay.open": return paletteOpen() || !!picker() || !!learnChecklist() || !!alertDetail();
+    case "overlay.open": return paletteOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
     case "drawer.open": return !!drawer();
@@ -116,24 +117,13 @@ export async function loadProviders() { try { const p = await request<any[]>("GE
 /** Handlers for commands whose Core API exists (or that are pure client navigation). `mutates` = needs a live connection. */
 interface Handler { run: () => void | Promise<void>; mutates?: boolean }
 export const handlers = new Map<string, Handler>();
-const until = (at: number) => {
-  const secs = Math.max(0, Math.floor(at - Date.now() / 1000));
-  const d = Math.floor(secs / 86400), h = Math.floor((secs % 86400) / 3600), mi = Math.floor((secs % 3600) / 60);
-  return d ? `${d}d ${h}h` : h ? `${h}h ${mi}m` : mi ? `${mi}m` : `${secs}s`;
-};
-/** `app.usage`: the plan windows of the providers that report them (K11), in the notification detail dialog. */
+/** `app.usage`: the plan windows of the providers that report them (K11), in the plan-limits dialog; again while open refreshes. */
 async function showUsage() {
+  usageDialog.set({ providers: usageDialog()?.providers ?? [], loading: true });
   try {
-    const u = await request<{ providers: any[] }>("GET", "/api/usage");
-    const blocks = (u.providers ?? []).map((p) => [
-      `${p.label ?? p.id}${p.plan ? ` · ${p.plan}` : ""}`,
-      ...(p.error ? [`  could not read the limits: ${p.error}`] : (p.windows ?? []).map((w: any) =>
-        `  ${w.label ?? "window"}  ${[w.used_percent != null ? `${Math.round(w.used_percent)}% used` : "", w.resets_at ? `resets in ${until(w.resets_at)}` : "", w.detail ?? ""].filter(Boolean).join(" · ")}`)),
-      ...(p.notes ?? []).map((n: string) => `  ${n}`),
-    ].join("\n"));
-    const text = blocks.length ? blocks.join("\n\n") : "No signed-in provider reports plan limits (codex and copilot do).";
-    alertDetail.set({ id: -1, level: "info", text: `Plan limits\n${text}`, at: Date.now() });
-  } catch (e) { toast("error", `Plan limits failed to load: ${e instanceof ApiError ? e.message : String(e)}`); }
+    const u = await request<{ providers: UsageProvider[] }>("GET", "/api/usage");
+    usageDialog.set({ providers: u.providers ?? [], loading: false });
+  } catch (e) { usageDialog.set(null); toast("error", `Plan limits failed to load: ${e instanceof ApiError ? e.message : String(e)}`); }
 }
 
 let loadingOlder = false;
@@ -460,7 +450,7 @@ on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });
 on("notifications.mark_all_read", () => { notifications.set([]); unread.set(0); });
 on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[0].id); }); // the oldest, drawn on top
 on("alert.cancel", () => { const d = confirmDialog(); if (d) { if (!d.busy) confirmDialog.set(null); } else if (connection().kind !== "incompatible") addProjectOpen.set(false); });
-on("overlay.close", () => { if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
+on("overlay.close", () => { if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
 on("nav.drawer.close", () => drawer.set(null));
 on("sidebar.left.toggle", toggleLeft);
 on("sidebar.right.toggle", () => toggleRight(rightWidthHint.w));

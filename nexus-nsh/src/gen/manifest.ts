@@ -948,6 +948,11 @@ export const manifest = {
    "title": "Show plan limits",
    "category": "app",
    "slash": "usage",
+   "keys": {
+    "tui": "ctrl+u",
+    "nsh": "cmd+shift+u"
+   },
+   "key_context": "global",
    "when": [
     "always"
    ],
@@ -955,7 +960,7 @@ export const manifest = {
     "palette",
     "menu"
    ],
-   "note": "Plan windows for the providers that report them (codex, copilot): GET /api/usage. Nothing here is a credential."
+   "note": "Plan windows for the providers that report them (codex, copilot): GET /api/usage. Nothing here is a credential. In the TUI ctrl+u here wins over the composer's kill-to-line-start."
   },
   {
    "id": "app.quit",

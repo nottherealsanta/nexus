@@ -382,7 +382,7 @@ interrupted = { unicode = "◼", ascii = "!", label = "interrupted", token = "st
 cancelled   = { unicode = "⊖", ascii = "o", label = "cancelled",   token = "text.muted" }
 
 [glyphs.spinner]
-unicode = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+unicode = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
 ascii = ["|", "/", "-", "\\"]
 
 [glyphs.fold]

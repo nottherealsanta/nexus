@@ -5,6 +5,7 @@ import { RightSidebar } from "./src/ui/right";
 import { Centre } from "./src/ui/centre";
 import { ContextDetailModal } from "./src/ui/newsession";
 import { AlertDetail } from "./src/ui/alerts";
+import { UsageDialog } from "./src/ui/usage";
 import { AddProject, Blocking, Confirm, Drawers, Palette, Picker, RenameSession, SkillChecklist } from "./src/ui/overlays";
 import { bindKeys, rightIsOpen, rightWidthHint } from "./src/commands";
 import { isNarrow, leftOpen, loadPrefs, startApp, themeChoice } from "./src/store";
@@ -34,6 +35,7 @@ function App() {
       <Picker />
       <SkillChecklist />
       <AlertDetail />
+      <UsageDialog />
       <RenameSession />
       <Confirm />
       <AddProject />

@@ -43,8 +43,8 @@ pub struct TLine {
     pub focus: bool,
     /// Section heading identity, independent of its displayed text.
     pub context_section: Option<String>,
-    /// Click/key identity of a tool, skill or MCP switch row.
-    pub context_item: Option<usize>,
+    /// Switch index and marker/name cell offsets within this line.
+    pub context_items: Vec<(usize, usize, usize, usize)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -551,7 +551,7 @@ impl Builder<'_> {
             rail: None,
             focus: false,
             context_section: None,
-            context_item: None,
+            context_items: Vec::new(),
         });
     }
     fn blank(&mut self) {
@@ -1201,7 +1201,7 @@ impl Builder<'_> {
                 ascii: b.t.opts.ascii,
                 estimated: true,
                 window,
-                columns: false,
+                columns: true,
             };
             let rows = crate::paint::context_rows(&sections, total, &layout);
             // The header is a box on the panel surface, kept above the
@@ -1213,12 +1213,20 @@ impl Builder<'_> {
                 let section = row.iter().find_map(|(text, role)| {
                     (*role == CtxRole::Title).then(|| text.trim().to_owned())
                 });
-                let context_item = row.iter().find_map(|(_, role)| match role {
-                    CtxRole::ToggleOn(index)
-                    | CtxRole::ToggleOff(index)
-                    | CtxRole::ToggleLocked(index) => Some(*index),
-                    _ => None,
-                });
+                let mut context_items = Vec::new();
+                let mut x = 2;
+                let mut marker_x = x;
+                for (text, role) in &row {
+                    match role {
+                        CtxRole::ToggleOn(index)
+                        | CtxRole::ToggleOff(index)
+                        | CtxRole::ToggleLocked(index) => {
+                            context_items.push((*index, marker_x, x, x + width(text)));
+                        }
+                        _ => marker_x = x,
+                    }
+                    x += width(text);
+                }
                 let mut spans = vec![Span::raw("  ".to_owned())];
                 for (text, role) in row {
                     let style = match role {
@@ -1239,7 +1247,7 @@ impl Builder<'_> {
                 b.line(if spans.len() == 1 { Vec::new() } else { spans });
                 b.out.last_mut().unwrap().bg = Some(pad);
                 b.out.last_mut().unwrap().context_section = section;
-                b.out.last_mut().unwrap().context_item = context_item;
+                b.out.last_mut().unwrap().context_items = context_items;
             }
             b.line(Vec::new());
             b.out.last_mut().unwrap().bg = Some(pad);
@@ -1463,7 +1471,6 @@ impl Builder<'_> {
         } else {
             band_meta(&tags, n, clock.as_deref(), &sep)
         };
-        let marker = self.t.fold(!folded).to_owned();
         self.block(key, BlockKind::Turn, Some(n), true, |b| {
             let pad = || TLine {
                 spans: vec![Span::styled(" ", bg)],
@@ -1471,11 +1478,9 @@ impl Builder<'_> {
                 rail: Some(rail),
                 focus: false,
                 context_section: None,
-                context_item: None,
+                context_items: Vec::new(),
             };
-            if !folded {
-                b.out.push(pad());
-            }
+            b.out.push(pad());
             let available = b.bw.saturating_sub(3);
             let meta_width = width(&metadata);
             let body_width = available.saturating_sub(meta_width + 2).max(1);
@@ -1491,11 +1496,10 @@ impl Builder<'_> {
                 rows.push(String::new());
             }
             for (i, row) in rows.iter().enumerate() {
-                // The fold marker sits inside the band; the text starts 2 cells after it.
-                let mark = if i == 0 { marker.as_str() } else { " " };
+                // The band carries no fold marker; the text keeps its 2-cell inset.
                 let mut spans = vec![
                     Span::styled(" ", bg),
-                    Span::styled(mark.to_owned(), gutter),
+                    Span::styled(" ", gutter),
                     Span::styled(format!(" {row}"), bg),
                 ];
                 if i == 0 && meta_width + 3 < b.bw {
@@ -1509,7 +1513,7 @@ impl Builder<'_> {
                     rail: Some(rail),
                     focus: false,
                     context_section: None,
-                    context_item: None,
+                    context_items: Vec::new(),
                 });
             }
             if !folded {
@@ -1527,11 +1531,11 @@ impl Builder<'_> {
                         rail: Some(rail),
                         focus: false,
                         context_section: None,
-                        context_item: None,
+                        context_items: Vec::new(),
                     });
                 }
-                b.out.push(pad());
             }
+            b.out.push(pad());
         });
         if let Some(block) = self.blocks.last_mut() {
             block.target = Some(message.id.clone());
@@ -1598,7 +1602,7 @@ impl Builder<'_> {
         match self.turn_end(meta) {
             End::Running => vec![
                 Span::styled(
-                    format!("{} ", self.t.spinner(self.frame / 2)),
+                    format!("{} ", self.t.spinner(self.frame)),
                     self.st(PRIMARY, CANVAS),
                 ),
                 Span::styled("running".to_string(), self.primary()),
@@ -1846,7 +1850,7 @@ impl Builder<'_> {
                         rail: Some(rail),
                         focus: false,
                         context_section: None,
-                        context_item: None,
+                        context_items: Vec::new(),
                     });
                 };
                 let width_in = bw.saturating_sub(3);
@@ -1921,7 +1925,7 @@ impl Builder<'_> {
                 rail: None,
                 focus: false,
                 context_section: None,
-                context_item: None,
+                context_items: Vec::new(),
             });
             for row in text::wrap(text, b.bw.saturating_sub(2)) {
                 b.out.push(TLine {
@@ -1933,7 +1937,7 @@ impl Builder<'_> {
                     rail: None,
                     focus: false,
                     context_section: None,
-                    context_item: None,
+                    context_items: Vec::new(),
                 });
             }
         });
@@ -2490,7 +2494,7 @@ impl Builder<'_> {
                     b.st("status.error", CANVAS),
                 )
             } else if running {
-                (b.t.spinner(b.frame / 2).to_owned(), b.st(PRIMARY, CANVAS))
+                (b.t.spinner(b.frame).to_owned(), b.st(PRIMARY, CANVAS))
             } else {
                 (crate::paint::verb_glyph(&name, ascii).to_owned(), b.meta())
             };
@@ -2742,13 +2746,13 @@ impl Builder<'_> {
         let (glyph, tok) = if waits {
             (self.t.status("waiting").0, "interactive.accent")
         } else if busy {
-            (self.t.spinner(self.frame / 2), PRIMARY)
+            (self.t.spinner(self.frame), PRIMARY)
         } else if failed {
             (self.t.status("error").0, "status.error")
         } else if done.is_some() || child.is_some() {
             (self.t.dots_full(), "status.success")
         } else {
-            (self.t.spinner(self.frame / 2), PRIMARY)
+            (self.t.spinner(self.frame), PRIMARY)
         };
         let background = a["wait"].as_bool() == Some(false);
         let rail = self.t.role_rail_style("child_card");
@@ -2847,7 +2851,7 @@ impl Builder<'_> {
                     rail: None,
                     focus: false,
                     context_section: None,
-                    context_item: None,
+                    context_items: Vec::new(),
                 });
                 if !meta.is_empty() {
                     b.out.push(TLine {
@@ -2859,7 +2863,7 @@ impl Builder<'_> {
                         rail: None,
                         focus: false,
                         context_section: None,
-                        context_item: None,
+                        context_items: Vec::new(),
                     });
                 }
                 let body = if let Some(d) = done {
@@ -2891,7 +2895,7 @@ impl Builder<'_> {
                             rail: None,
                             focus: false,
                             context_section: None,
-                            context_item: None,
+                            context_items: Vec::new(),
                         });
                     }
                 }

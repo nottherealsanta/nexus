@@ -95,6 +95,48 @@ impl Composer {
             self.refresh();
         }
     }
+    /// Insert `s` at byte offset `at`, padded with a space where it would touch a
+    /// word; the cursor stays on the same text (after the insertion when it sat at `at`).
+    pub fn insert_at(&mut self, at: usize, s: &str) {
+        let text = &self.editor.text;
+        let at = at.min(text.len());
+        if !text.is_char_boundary(at) {
+            return;
+        }
+        let s = clean(s);
+        let s = s.trim();
+        let prefix = if text[..at]
+            .chars()
+            .last()
+            .is_some_and(|c| !c.is_whitespace())
+        {
+            " "
+        } else {
+            ""
+        };
+        let suffix = if text[at..]
+            .chars()
+            .next()
+            .is_some_and(|c| !c.is_whitespace())
+        {
+            " "
+        } else {
+            ""
+        };
+        let addition = format!("{prefix}{s}{suffix}");
+        self.editor.text.insert_str(at, &addition);
+        if self.editor.cursor >= at {
+            self.editor.cursor += addition.len();
+        }
+        self.editor.anchor = None;
+        self.refresh();
+    }
+    /// A copy with `s` inserted at `at` (dictation preview), leaving this draft alone.
+    pub fn with_inserted(&self, at: usize, s: &str) -> Composer {
+        let mut view = self.clone();
+        view.insert_at(at, s);
+        view
+    }
     pub fn insert_str(&mut self, s: &str) {
         self.editor.insert(&clean(s));
         self.refresh();

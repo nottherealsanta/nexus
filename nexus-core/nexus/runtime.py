@@ -1534,8 +1534,10 @@ class Runtime:
                  "instruction_file": estimate_tokens(file.get("content") or "")}
         info = {n: {"description": d["description"], "guidance": d.get("guidance", "")}
                 for n, d in snapshot["tool_definitions"].items()}
+        skills, servers = self._switches(snapshot, set(disabled))
         return body | budget(body, window, None) | {"model": ref, "agent": plan["agent"], "parts": parts,
-                                                    "snapshot": snapshots.summary(snapshot), "tool_info": info}
+                                                    "snapshot": snapshots.summary(snapshot), "tool_info": info,
+                                                    "tools": list(snapshot["tools"]), "skills": skills, "mcp": servers}
 
     # -- one-request helpers: titles, /btw, handoff (PLAN K1-K3) ----------------
 

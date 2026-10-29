@@ -314,8 +314,7 @@ pub struct CtxLayout<'a> {
     pub estimated: bool,
     /// The model's context window, for the total's share.
     pub window: Option<u64>,
-    /// Lay the tools out in up to four columns instead of one per row. The
-    /// session context keeps one per row: its lines carry a single switch.
+    /// Lay the tools out in up to four columns instead of one per row.
     pub columns: bool,
 }
 
@@ -664,6 +663,51 @@ mod ctx_tests {
         assert_eq!(thousands(12), "12");
         assert_eq!(compact(17_580), "17.6k");
         assert_eq!(compact(980), "980");
+    }
+
+    #[test]
+    fn tool_grid_adapts_to_width_and_preserves_switch_indices() {
+        let items = ["read", "grep", "glob", "bash"]
+            .iter()
+            .enumerate()
+            .map(|(index, name)| CtxItem {
+                index,
+                key: (*name).into(),
+                label: (*name).into(),
+                on: index != 1,
+                locked: false,
+            })
+            .collect();
+        let section = CtxSection {
+            title: "Tools".into(),
+            tokens: None,
+            meta: String::new(),
+            body: CtxBody::Inventory(items),
+        };
+        let mut wide = layout(60);
+        wide.columns = true;
+        let rows = context_rows(std::slice::from_ref(&section), 0, &wide);
+        assert_eq!(
+            rows[1]
+                .iter()
+                .filter(|(_, role)| matches!(role, CtxRole::ToggleOn(_) | CtxRole::ToggleOff(_)))
+                .count(),
+            4
+        );
+        assert!(rows[1]
+            .iter()
+            .any(|(_, role)| *role == CtxRole::ToggleOff(1)));
+        let mut narrow = layout(12);
+        narrow.columns = true;
+        let rows = context_rows(&[section], 0, &narrow);
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row
+                    .iter()
+                    .any(|(_, role)| matches!(role, CtxRole::ToggleOn(_) | CtxRole::ToggleOff(_))))
+                .count(),
+            4
+        );
     }
 
     #[test]

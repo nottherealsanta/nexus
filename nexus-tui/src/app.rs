@@ -209,22 +209,6 @@ const MUTATING: &[&str] = &[
 
 const NOT_WIRED: &str = "Not available yet.";
 const READ_ONLY: &str = "Read-only until Core is connected again.";
-/// Default tools offered when an agent does not declare its own list.
-pub(crate) const DEFAULT_TOOLS: [&str; 13] = [
-    "read",
-    "grep",
-    "glob",
-    "ls",
-    "bash",
-    "edit",
-    "multiedit",
-    "write",
-    "web_search",
-    "web_fetch",
-    "ask",
-    "code",
-    "expose_workspace_tools",
-];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WaitKind {
@@ -807,6 +791,8 @@ impl App {
             });
         };
 
+        // Before a session exists the list is Core's own plan for it (`/api/draft/context`),
+        // never a client-side guess; until Core answers there is nothing to list.
         let tools: Vec<String> = if session.is_some() {
             self.state
                 .model
@@ -814,6 +800,12 @@ impl App {
                 .as_ref()
                 .and_then(|view| view.starting.as_ref())
                 .and_then(|starting| starting["tools"].as_array())
+                // The snapshot loads a moment after the first message; until then the plan
+                // Core just answered for the draft is what the session was created from.
+                .or_else(|| match &self.state.draft_context {
+                    Some((_, Ok(plan))) => plan["tools"].as_array(),
+                    _ => None,
+                })
                 .map(|list| {
                     list.iter()
                         .filter_map(Value::as_str)
@@ -822,27 +814,11 @@ impl App {
                 })
                 .unwrap_or_default()
         } else {
-            let agent_name = self.current_agent();
-            let agent = self
-                .state
-                .agents
+            self.draft_values("tools")
                 .iter()
-                .find(|agent| agent["name"].as_str() == Some(agent_name.as_str()));
-            let mut tools: Vec<String> = match agent.and_then(|agent| agent["tools"].as_array()) {
-                Some(list) => list
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect(),
-                None => DEFAULT_TOOLS
-                    .iter()
-                    .map(|tool| (*tool).to_owned())
-                    .collect(),
-            };
-            if !tools.iter().any(|tool| tool == "expose_workspace_tools") {
-                tools.push("expose_workspace_tools".into());
-            }
-            tools
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
         };
         for tool in tools {
             push(
@@ -861,10 +837,7 @@ impl App {
                 .cloned()
                 .unwrap_or_default()
         } else {
-            self.current_project()
-                .and_then(|project| self.ui.inventories.get(&project))
-                .map(|inventory| inventory.skills.clone())
-                .unwrap_or_default()
+            self.draft_values("skills")
         };
         for skill in skill_values {
             let Some(name) = skill["name"].as_str() else {
@@ -872,11 +845,8 @@ impl App {
             };
             let key = format!("skill:{name}");
             let label = name.to_owned();
-            let on = if session.is_some() {
-                skill["state"].as_str() == Some("on") && !disabled.iter().any(|entry| entry == &key)
-            } else {
-                !disabled.iter().any(|entry| entry == &key)
-            };
+            let on = skill["state"].as_str() == Some("on")
+                && !disabled.iter().any(|entry| entry == &key);
             push(key, label, on, skill["locked"].as_bool().unwrap_or(false));
         }
 
@@ -888,21 +858,12 @@ impl App {
                 .cloned()
                 .unwrap_or_default()
         } else {
-            self.current_project()
-                .and_then(|project| self.ui.inventories.get(&project))
-                .map(|inventory| inventory.mcp.clone())
-                .unwrap_or_default()
+            self.draft_values("mcp")
         };
         for server in mcp_values {
             let Some(name) = server["server"].as_str() else {
                 continue;
             };
-            if session.is_none()
-                && (server["enabled"].as_bool() != Some(true)
-                    || server["state"].as_str() == Some("invalid"))
-            {
-                continue;
-            }
             let key = format!("mcp:{name}");
             let state = server["state"].as_str().unwrap_or("");
             let mut label = name.to_owned();
@@ -918,12 +879,7 @@ impl App {
                     label.push_str(" · unavailable");
                 }
             }
-            let on = if session.is_some() {
-                state == "on" && !disabled.iter().any(|entry| entry == &key)
-            } else {
-                server["enabled"].as_bool() == Some(true)
-                    && !disabled.iter().any(|entry| entry == &key)
-            };
+            let on = state == "on" && !disabled.iter().any(|entry| entry == &key);
             push(key, label, on, server["locked"].as_bool().unwrap_or(false));
         }
         items
@@ -936,10 +892,7 @@ impl App {
         if let Some(name) = item.key.strip_prefix("skill:") {
             let values = match session {
                 Some(s) => s.extra.get("skills").and_then(Value::as_array).cloned(),
-                None => self
-                    .current_project()
-                    .and_then(|p| self.ui.inventories.get(&p))
-                    .map(|i| i.skills.clone()),
+                None => Some(self.draft_values("skills")),
             };
             let skill = values?
                 .into_iter()
@@ -959,10 +912,7 @@ impl App {
         if let Some(name) = item.key.strip_prefix("mcp:") {
             let values = match session {
                 Some(s) => s.extra.get("mcp").and_then(Value::as_array).cloned(),
-                None => self
-                    .current_project()
-                    .and_then(|p| self.ui.inventories.get(&p))
-                    .map(|i| i.mcp.clone()),
+                None => Some(self.draft_values("mcp")),
             };
             let server = values?
                 .into_iter()
@@ -1021,28 +971,10 @@ impl App {
     }
 
     pub fn context_inventory_meta(&self, section: &str) -> String {
-        let Some(project) = self.current_project() else {
-            return "no project".into();
-        };
-        if self.viewed().is_some() {
-            return if self.context_items_for(section).is_empty() {
-                "none".into()
-            } else {
-                String::new()
-            };
-        }
-        let Some(inventory) = self.ui.inventories.get(&project) else {
+        if self.viewed().is_none() && self.draft_context().is_none() {
             return "loading".into();
-        };
-        let (values, error) = if section == "Skills" {
-            (&inventory.skills, &inventory.skills_error)
-        } else {
-            (&inventory.mcp, &inventory.mcp_error)
-        };
-        if let Some(error) = error {
-            return format!("unavailable: {error}");
         }
-        if values.is_empty() {
+        if self.context_items_for(section).is_empty() {
             "none".into()
         } else {
             String::new()
@@ -1801,6 +1733,17 @@ impl App {
             .drafts
             .get(&self.draft_key())
             .unwrap_or_else(|| EMPTY.get_or_init(Composer::new))
+    }
+
+    /// The draft as drawn: while dictating, the live words sit inside it at the
+    /// position where recording began.
+    pub fn composer_view(&self) -> std::borrow::Cow<'_, Composer> {
+        let d = &self.ui.dictation;
+        if d.preview.is_empty() || d.draft_key != self.draft_key() {
+            return std::borrow::Cow::Borrowed(self.composer_ref());
+        }
+        let shown = d.shown_preview(!self.theme.opts.reduced_motion && !self.theme.mono());
+        std::borrow::Cow::Owned(self.composer_ref().with_inserted(d.anchor, &shown))
     }
 
     pub fn composer(&mut self) -> &mut Composer {
@@ -3057,6 +3000,7 @@ impl App {
             return;
         }
         let generation = self.ui.dictation.begin(self.draft_key());
+        self.ui.dictation.anchor = self.composer_ref().before_cursor().len();
         self.api(ApiCall::VoiceStatus { generation });
     }
 
@@ -3084,6 +3028,11 @@ impl App {
     }
 
     fn stop_dictation(&mut self) {
+        self.stop_dictation_with(false);
+    }
+
+    /// Stop capturing; `send` sends the draft once the final words are in.
+    fn stop_dictation_with(&mut self, send: bool) {
         let Some(phase) = self
             .ui
             .dictation
@@ -3093,6 +3042,7 @@ impl App {
             return;
         };
         self.ui.dictation.phase = phase;
+        self.ui.dictation.send_after = send;
         self.effects
             .push(Effect::Dictation(crate::dictation::CaptureCommand::Stop {
                 generation: self.ui.dictation.generation,
@@ -3601,10 +3551,7 @@ impl App {
                     self.reload_file();
                 }
             }
-            "app.usage" => {
-                self.toast(Level::Info, "Reading plan limits…");
-                self.api(ApiCall::Usage);
-            }
+            "app.usage" => self.api(ApiCall::Usage),
             "app.quit" => self.effects.push(Effect::Quit),
             "app.settings" => {
                 if self.ui.view == View::Settings {
@@ -4778,12 +4725,11 @@ impl App {
         if let ApiCall::Usage = &done.call {
             match done.result {
                 Ok(r) => {
-                    let text = crate::usage::text(&r.usage.unwrap_or_default(), now_secs());
-                    self.open_overlay(OverlayKind::ContextDetail {
-                        title: "Plan limits".into(),
-                        text,
-                        top: 0,
-                    });
+                    let rows = crate::usage::rows(&r.usage.unwrap_or_default(), now_secs());
+                    match self.ui.overlay.as_mut().map(|o| &mut o.kind) {
+                        Some(OverlayKind::Usage { rows: shown }) => *shown = rows,
+                        _ => self.open_overlay(OverlayKind::Usage { rows }),
+                    }
                 }
                 Err(error) => {
                     self.toast(Level::Error, format!("Plan limits failed to load: {error}"))
@@ -5188,7 +5134,7 @@ impl App {
             match result {
                 Ok(done) => {
                     if let Some(text) = done.transcript.filter(|text| !text.trim().is_empty()) {
-                        self.ui.dictation.preview = text;
+                        self.ui.dictation.set_preview(text);
                     }
                 }
                 Err(error) if error == "voice_busy" => {}
@@ -5209,8 +5155,9 @@ impl App {
         match result {
             Ok(done) => {
                 if let Some(text) = done.transcript.filter(|text| !text.trim().is_empty()) {
-                    insert_transcript(&mut self.ui.drafts, &self.ui.dictation.draft_key, &text);
-                    self.toast(Level::Success, "Dictation added to the composer");
+                    let key = self.ui.dictation.draft_key.clone();
+                    let at = self.ui.dictation.anchor;
+                    self.ui.drafts.entry(key).or_default().insert_at(at, &text);
                 } else {
                     self.toast(Level::Info, "No speech was recognized");
                 }
@@ -5223,6 +5170,10 @@ impl App {
         self.ui.dictation.preview.clear();
         self.ui.dictation.final_wav = None;
         self.ui.dictation.pacer.finish();
+        let send = std::mem::take(&mut self.ui.dictation.send_after);
+        if send && self.ui.dictation.draft_key == self.draft_key() {
+            self.send();
+        }
     }
 
     fn apply_learn_preview(
@@ -5413,6 +5364,13 @@ impl App {
         Some(body)
     }
 
+    /// One list (`tools`, `skills`, `mcp`) of Core's plan for the draft; empty until Core answers.
+    pub fn draft_values(&self, key: &str) -> Vec<Value> {
+        self.draft_context()
+            .and_then(|d| d[key].as_array().cloned())
+            .unwrap_or_default()
+    }
+
     /// Core's starting context when it answers the current draft; `None` while asking or after a failure.
     pub fn draft_context(&self) -> Option<&Value> {
         match (&self.state.draft_context, self.draft_request()) {
@@ -5431,8 +5389,13 @@ impl App {
                     .push(Effect::Sync(SyncCommand::DraftContext(body)));
             }
         }
+        let recording = matches!(
+            self.ui.dictation.phase,
+            crate::dictation::Phase::Recording | crate::dictation::Phase::Stopping
+        );
         let animated = !self.theme.opts.reduced_motion
-            && (!self.state.model.running.is_empty()
+            && (recording
+                || !self.state.model.running.is_empty()
                 || !self.ui.group_flash.is_empty()
                 || matches!(
                     self.state.connection,
@@ -5441,6 +5404,9 @@ impl App {
         if animated {
             self.frame = self.frame.wrapping_add(1);
             changed = true;
+        }
+        if !self.theme.opts.reduced_motion {
+            changed |= self.ui.dictation.settle_tick();
         }
         changed |= self.note_waits(now);
         let held = self.mouse.and_then(|(x, y)| match self.hits.at(x, y) {
@@ -5882,20 +5848,27 @@ impl App {
     fn handle_key_inner(&mut self, ev: KeyEvent) {
         let Some(name) = keys::name(&ev) else { return };
         if self.ui.dialog.is_none() && self.ui.dictation.phase != crate::dictation::Phase::Idle {
+            use crate::dictation::Phase;
+            let capturing = matches!(self.ui.dictation.phase, Phase::Starting | Phase::Recording);
             match name.as_str() {
+                // Enter stops and sends; Esc stops and keeps the words; Esc
+                // while transcribing discards them.
                 "enter" => {
-                    if matches!(
-                        self.ui.dictation.phase,
-                        crate::dictation::Phase::Starting | crate::dictation::Phase::Recording
-                    ) {
-                        self.stop_dictation();
+                    if capturing {
+                        self.stop_dictation_with(true);
                     }
                     return;
                 }
-                "esc" if self.ui.dictation.phase != crate::dictation::Phase::Consent => {
+                "esc" if capturing => {
+                    self.stop_dictation();
+                    return;
+                }
+                "esc" if self.ui.dictation.phase != Phase::Consent => {
                     self.cancel_dictation();
                     return;
                 }
+                // Typing stops the capture and the key still applies.
+                _ if capturing => self.stop_dictation(),
                 _ => {}
             }
         }
@@ -6341,6 +6314,16 @@ impl App {
                     p.model_info = !p.model_info;
                 }
             }
+            "r" if matches!(
+                self.ui.overlay,
+                Some(Overlay {
+                    kind: OverlayKind::Usage { .. },
+                    ..
+                })
+            ) =>
+            {
+                self.api(ApiCall::Usage);
+            }
             "up" => self.overlay_move(-1),
             "down" => self.overlay_move(1),
             "pageup" => self.overlay_move(-8),
@@ -6432,7 +6415,7 @@ impl App {
                     .clamp(0, checklist.skills.len().saturating_sub(1) as isize)
                     as usize;
             }
-            None => {}
+            Some(OverlayKind::Usage { .. }) | None => {}
         }
     }
 
@@ -7961,6 +7944,7 @@ impl App {
             }
             Target::SidebarEdge => self.ui.left_drag = true,
             Target::RailSearch => self.run_command("session.switch"),
+            Target::SessionScope => self.run_command("sessions.scope_toggle"),
             Target::NewSession => self.run_command("session.new"),
             Target::AddProject => self.run_command("project.add"),
             Target::RightSection(_) => self.ui.focus = Focus::Right,
@@ -8518,25 +8502,6 @@ fn voice_defaults(target: VoiceTarget) -> (&'static str, u64) {
         VoiceTarget::Stt => ("ConwayResearch/Underdog-Bark-3.0-Clean", 181_000_000),
         VoiceTarget::Tts => ("gradium/phonon-31m-en", 65_000_000),
     }
-}
-
-fn insert_transcript(drafts: &mut HashMap<String, Composer>, key: &str, transcript: &str) {
-    let composer = drafts.entry(key.to_owned()).or_default();
-    let text = composer.text();
-    let before = composer.before_cursor().to_owned();
-    let after = text.get(before.len()..).unwrap_or_default();
-    let prefix = if !before.is_empty() && !before.chars().last().is_some_and(char::is_whitespace) {
-        " "
-    } else {
-        ""
-    };
-    let suffix = if !after.is_empty() && !transcript.chars().last().is_some_and(char::is_whitespace)
-    {
-        " "
-    } else {
-        ""
-    };
-    composer.insert_str(&format!("{prefix}{}{suffix}", transcript.trim()));
 }
 
 /// The plain text of a message (user or assistant), for copying.

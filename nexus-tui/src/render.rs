@@ -322,7 +322,7 @@ fn draw_splash(cx: &Cx, buf: &mut Buffer, area: Rect) {
         ConnectionState::Starting => "Starting Nexus Core",
         _ => "Connecting to Nexus Core",
     };
-    let head = format!("{} {}", cx.t.spinner(cx.app.frame / 2), title);
+    let head = format!("{} {}", cx.t.spinner(cx.app.frame), title);
     let mut style = cx.st(ACCENT, CANVAS);
     if cx.t.opts.tier == crate::theme::Tier::Mono {
         style = style.add_modifier(Modifier::BOLD);
@@ -531,9 +531,8 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
         return None;
     }
     let inner = composer_inner(g.composer, !app.composer_ref().images.is_empty());
-    let (rows, (cr, cc)) = app.composer_ref().layout(inner.width as usize);
-    let preview_row = !app.ui.dictation.preview.is_empty();
-    let input_height = inner.height.saturating_sub(u16::from(preview_row)) as usize;
+    let (rows, (cr, cc)) = app.composer_view().layout(inner.width as usize);
+    let input_height = inner.height as usize;
     let first = app.ui.composer_drag.map_or_else(
         || visible_first(rows.len(), cr, input_height),
         |(_, top)| top,
@@ -587,7 +586,7 @@ fn composer_card(r: Rect, images: bool) -> Rect {
 fn heights(app: &App, w: u16) -> Heights {
     let banner = u16::from(!app.banners().is_empty());
     let inner_w = w.saturating_sub(10) as usize;
-    let rows = app.composer_ref().layout(inner_w).0.len().clamp(1, 8) as u16;
+    let rows = app.composer_view().layout(inner_w).0.len().clamp(1, 8) as u16;
     let (waiting, composer) = (
         waiting_height(app, w),
         rows + 7
@@ -600,11 +599,6 @@ fn heights(app: &App, w: u16) -> Heights {
                 0
             } else {
                 2
-            }
-            + if app.ui.dictation.preview.is_empty() {
-                0
-            } else {
-                1
             },
     );
     Heights {
@@ -822,10 +816,7 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
     let ascii = cx.t.opts.ascii;
     let glyph_of = |id: &str| -> (String, Style) {
         if a.is_busy(id) {
-            (
-                cx.t.spinner(a.frame / 2).to_owned(),
-                cx.st(PRIMARY, SIDEBAR),
-            )
+            (cx.t.spinner(a.frame).to_owned(), cx.st(PRIMARY, SIDEBAR))
         } else if a.ui.failed_sessions.contains(id) {
             (
                 if ascii { "o" } else { "\u{25cf}" }.to_owned(),
@@ -1023,11 +1014,7 @@ fn header_status(cx: &Cx) -> Option<(String, Style)> {
             }
         }
         ConnectionState::Starting | ConnectionState::Connecting => Some((
-            format!(
-                "{} {}",
-                cx.t.spinner(a.frame / 2),
-                a.state.connection.label()
-            ),
+            format!("{} {}", cx.t.spinner(a.frame), a.state.connection.label()),
             cx.st(SECONDARY, SIDEBAR),
         )),
         c => {
@@ -1073,7 +1060,7 @@ fn draw_subagents(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     }
     for s in a.subagents_of(&root) {
         let glyph = if a.is_busy(&s.id) {
-            cx.t.spinner(a.frame / 2)
+            cx.t.spinner(a.frame)
         } else {
             cx.t.dots_full()
         };
@@ -1124,7 +1111,7 @@ fn draw_banner(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let row = Rect::new(r.x, r.y, r.width, 1);
     clear(buf, row, cx.st(SECONDARY, PANEL));
     let (glyph, tok) = if b.loading {
-        (cx.t.spinner(cx.app.frame / 2).to_owned(), "text.primary")
+        (cx.t.spinner(cx.app.frame).to_owned(), "text.primary")
     } else {
         let (g, t) = cx.level(b.level);
         (g.to_owned(), t)
@@ -1572,7 +1559,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     let (g, t) = cx.t.attention("error");
                     (g.to_owned(), t)
                 } else if a.is_busy(&s.id) && !cx.t.opts.reduced_motion {
-                    (cx.t.spinner(a.frame / 2).to_owned(), PRIMARY)
+                    (cx.t.spinner(a.frame).to_owned(), PRIMARY)
                 } else {
                     (
                         rail_initial(&s.title),
@@ -2290,7 +2277,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         return;
     }
     // The search row opens the switcher; a blank row follows it.
-    let search = Rect::new(r.x, r.y, r.width, 1);
+    let search = Rect::new(r.x, r.y, r.width.saturating_sub(4), 1);
     let mut style = cx.st(MUTED, SIDEBAR);
     if cx.hovered(search) {
         style = style.patch(cx.st(PRIMARY, SIDEBAR));
@@ -2304,7 +2291,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         .and_then(|c| c.tui_key())
         .unwrap_or("");
     let kw = width(key) as u16;
-    let kx = r.right().saturating_sub(kw + 1);
+    let kx = search.right().saturating_sub(kw + 1);
     // `Search sessions`, or `Search` when the key hint leaves no room for it.
     let room = kx.saturating_sub(r.x + 6) as usize;
     let label = if room >= 15 {
@@ -2322,6 +2309,18 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     );
     put(buf, kx, r.y, key, style, kw);
     hits.add(search, Target::RailSearch);
+    if r.width >= 8 {
+        let scope = Rect::new(r.right() - 3, r.y, 2, 1);
+        let style = cx.st(if cx.hovered(scope) { PRIMARY } else { MUTED }, SIDEBAR);
+        let glyph = match (cx.t.opts.ascii, a.ui.scope_all) {
+            (true, true) => "*",
+            (true, false) => "#",
+            (false, true) => "◎",
+            (false, false) => "▣",
+        };
+        put(buf, scope.x, scope.y, glyph, style, scope.width);
+        hits.add(scope, Target::SessionScope);
+    }
     let list = Rect::new(r.x, r.y + 2, r.width, r.height.saturating_sub(2));
     if list.height == 0 {
         return;
@@ -2541,7 +2540,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
 fn session_mark<'t>(cx: &Cx<'t>, id: &str) -> Option<(String, &'t str)> {
     let a = cx.app;
     match a.session_mark(id)? {
-        "running" => Some((cx.t.spinner(a.frame / 2).to_owned(), PRIMARY)),
+        "running" => Some((cx.t.spinner(a.frame).to_owned(), PRIMARY)),
         name => {
             let (glyph, token) = cx.t.attention(name);
             Some((glyph.to_owned(), token))
@@ -2549,8 +2548,7 @@ fn session_mark<'t>(cx: &Cx<'t>, id: &str) -> Option<(String, &'t str)> {
     }
 }
 
-/// Line 2 of a session row: the agent in its colour, `·`, `⌥ branch`, and on
-/// the right the child count (`2 ↳`).
+/// Line 2 of a session row: `⌥ branch` and the child count (`2 ↳`).
 fn session_detail(
     cx: &Cx,
     s: &crate::api::Session,
@@ -2559,24 +2557,13 @@ fn session_detail(
     let a = cx.app;
     let muted = cx.st(MUTED, SIDEBAR);
     let mut left = Vec::new();
-    if !s.agent.is_empty() {
-        left.push((
-            s.agent.clone(),
-            cx.st(SECONDARY, SIDEBAR).patch(cx.t.agent_style(&s.agent)),
-        ));
-    }
     let branch = a
         .session_worktree(s)
         .and_then(|tree| tree["branch"].as_str())
         .filter(|branch| !branch.is_empty());
     if let Some(branch) = branch {
         let mark = if cx.t.opts.ascii { "~" } else { "⌥" };
-        let sep = if left.is_empty() {
-            String::new()
-        } else {
-            cx.sep()
-        };
-        left.push((format!("{sep}{mark} {branch}"), muted));
+        left.push((format!("{mark} {branch}"), muted));
     }
     let meta = if children == 0 {
         String::new()
@@ -3061,7 +3048,7 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
         let (glyph, _, token) = cx.t.status(name);
         put(buf, r.x + 1, *y, "Status", cx.st(MUTED, SIDEBAR), KEY_W);
         let glyph = if name == "running" {
-            cx.t.spinner(a.frame / 2)
+            cx.t.spinner(a.frame)
         } else {
             glyph
         };
@@ -3328,8 +3315,6 @@ fn empty_state(cx: &Cx) -> EmptyState {
 /// context (`POST /api/draft/context`, PLAN K4), and these figures show while
 /// it has not answered the current draft.
 const PROMPT_BASE_TOKENS: u64 = 900;
-/// Tokens one tool's schema costs in the preview.
-const TOOL_SCHEMA_TOKENS: u64 = 450;
 /// The project's `AGENTS.md` as the preview sees it: size in bytes and its
 /// first prose line. Read once per path (the preview redraws every frame);
 /// `None` when the file is absent or unreadable (a remote Core's project).
@@ -3433,22 +3418,6 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
         .and_then(|ag| ag["prompt"].as_str())
         .unwrap_or("")
         .to_owned();
-    // An agent with no `tools` list is offered every default tool; every new
-    // session also gets the workspace entry point.
-    let mut tools: Vec<String> = match agent.and_then(|ag| ag["tools"].as_array()) {
-        Some(list) => list
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect(),
-        None => crate::app::DEFAULT_TOOLS
-            .iter()
-            .map(|t| (*t).to_owned())
-            .collect(),
-    };
-    if !tools.iter().any(|t| t == "expose_workspace_tools") {
-        tools.push("expose_workspace_tools".into());
-    }
     let project = a
         .current_project()
         .and_then(|p| a.state.model.projects.get(&p));
@@ -3469,7 +3438,7 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
     let file_tokens = part("instruction_file").unwrap_or(file_tokens);
     let prompt_tokens = part("instructions")
         .unwrap_or(PROMPT_BASE_TOKENS + (prompt.chars().count() as u64).div_ceil(4) + file_tokens);
-    let tool_tokens = part("tools").unwrap_or(tools.len() as u64 * TOOL_SCHEMA_TOKENS);
+    let tool_tokens = part("tools");
     let mut sections = vec![CtxSection {
         title: "System prompt".into(),
         tokens: Some(prompt_tokens),
@@ -3492,7 +3461,7 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
     });
     sections.push(CtxSection {
         title: "Tools".into(),
-        tokens: Some(tool_tokens),
+        tokens: tool_tokens,
         meta: String::new(),
         body: CtxBody::Inventory(a.context_items_for("Tools")),
     });
@@ -3508,7 +3477,7 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
     // prompt and the tool schemas, as the timeline does after the first turn.
     let total = core
         .and_then(|d| d["used"].as_u64())
-        .unwrap_or(prompt_tokens + tool_tokens);
+        .unwrap_or(prompt_tokens + tool_tokens.unwrap_or(0));
     (sections, total)
 }
 
@@ -3549,7 +3518,7 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
         ascii: cx.t.opts.ascii,
         estimated: true,
         window,
-        columns: false,
+        columns: true,
     };
     let mut tip: Option<(u16, u16)> = None;
     let agent_prompt = a
@@ -3726,7 +3695,7 @@ fn draw_timeline(
             ConnectionState::Starting | ConnectionState::Connecting
         );
         let head = if busy {
-            format!("{} {}", cx.t.spinner(a.frame / 2), empty.title)
+            format!("{} {}", cx.t.spinner(a.frame), empty.title)
         } else {
             empty.title.clone()
         };
@@ -3852,10 +3821,15 @@ fn draw_timeline(
     };
     for (i, line) in lines.iter().skip(top).take(h).enumerate() {
         draw_tline(cx, buf, r, inner, r.y + i as u16, line);
-        if a.ui.focus == Focus::Timeline && line.context_item == Some(a.ui.context_cursor) {
-            if let Some(bg) = cx.t.color(RAISED) {
-                for x in inner.x..inner.right() {
-                    buf[(x, r.y + i as u16)].set_bg(bg);
+        for &(index, start, _, end) in &line.context_items {
+            let start = inner.x.saturating_add(start as u16).min(inner.right());
+            let end = inner.x.saturating_add((end + 2) as u16).min(inner.right());
+            let cell = Rect::new(start, r.y + i as u16, end.saturating_sub(start), 1);
+            if (a.ui.focus == Focus::Timeline && index == a.ui.context_cursor) || cx.hovered(cell) {
+                if let Some(bg) = cx.t.color(RAISED) {
+                    for x in cell.x..cell.right() {
+                        buf[(x, cell.y)].set_bg(bg);
+                    }
                 }
             }
         }
@@ -3897,6 +3871,22 @@ fn draw_timeline(
             }
         } else {
             hits.add(rect, Target::Block(bi));
+        }
+        if b.kind == crate::timeline::BlockKind::Code && b.end > 0 {
+            let row = b.end - 1;
+            if row >= top && row < top + h {
+                let text: String = lines[row]
+                    .spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect();
+                if text.contains("◇ mermaid · copy source") {
+                    hits.add(
+                        Rect::new(inner.x, r.y + (row - top) as u16, inner.width, 1),
+                        Target::CopyBlock(bi),
+                    );
+                }
+            }
         }
         // A fence's `copy` sits at the right end of its header row, on focus or hover, when the row has room.
         if b.kind == crate::timeline::BlockKind::Code
@@ -3978,13 +3968,17 @@ fn draw_timeline(
         }
     }
     for (n, line) in lines.iter().enumerate().take(top + h).skip(top) {
-        if let Some(index) = line.context_item {
-            let row = Rect::new(inner.x, r.y + (n - top) as u16, inner.width, 1);
-            hits.add(row, Target::ContextToggle(index));
-            // The name opens its info; the indent and marker switch.
-            let off = if cx.t.opts.ascii { 8 } else { 6 }.min(row.width);
+        for &(index, start, name, end) in &line.context_items {
+            let start = inner.x.saturating_add(start as u16).min(inner.right());
+            let name = inner.x.saturating_add(name as u16).min(inner.right());
+            let end = inner.x.saturating_add((end + 2) as u16).min(inner.right());
+            let y = r.y + (n - top) as u16;
             hits.add(
-                Rect::new(row.x + off, row.y, row.width - off, 1),
+                Rect::new(start, y, end.saturating_sub(start), 1),
+                Target::ContextToggle(index),
+            );
+            hits.add(
+                Rect::new(name, y, end.saturating_sub(name), 1),
                 Target::ContextInfo(index),
             );
         }
@@ -4119,7 +4113,7 @@ fn draw_sticky(
                 rail: timeline.lines[pin.first + 1 + k].rail,
                 focus: false,
                 context_section: None,
-                context_item: None,
+                context_items: Vec::new(),
             };
             if pin.clipped && k + 1 == pin.body {
                 crate::sticky::ellipsize(&mut line.spans, cx.ell());
@@ -4997,7 +4991,8 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let r = composer_content(r);
     let a = cx.app;
     let base = cx.st(PRIMARY, PANEL);
-    let comp = a.composer_ref();
+    let comp_view = a.composer_view();
+    let comp = &*comp_view;
     let card = composer_card(r, !comp.images.is_empty());
     // Rows: the pill/attachment row, the top padding, the input, a blank row,
     // the control row, the bottom edge and the project strip.
@@ -5011,8 +5006,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     hits.add(panel, Target::Composer);
     card_edge(cx, buf, panel, panel.bottom() - 1, "\u{2580}");
     let inner = composer_inner(full_r, !comp.images.is_empty());
-    let preview_row = !a.ui.dictation.preview.is_empty();
-    let input_height = inner.height.saturating_sub(u16::from(preview_row)) as usize;
+    let input_height = inner.height as usize;
     let cy = r.bottom() - 3;
     // The focus bar at the card's left edge, only where colour cannot carry
     // focus (ANSI-16 and mono; DESIGN_PLAN D11).
@@ -5107,18 +5101,6 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             );
         }
     }
-    if preview_row && input_height < inner.height as usize {
-        let label = format!("… {}", a.ui.dictation.preview.replace('\n', " "));
-        put(
-            buf,
-            inner.x,
-            inner.y + input_height as u16,
-            &truncate(&label, inner.width as usize, cx.ell()),
-            cx.st(MUTED, PANEL),
-            inner.width,
-        );
-    }
-
     // Selectors and the meter share the control row; each has its own hit
     // target. The right block is sized first: the left side gives way in the
     // order effort → provider → meter → truncated names.
@@ -5274,6 +5256,21 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         }
     }
     let selector_end = right_x.saturating_sub(2).max(panel.x + 3);
+    // Recording: a red square blinks left of the agent name, which does not move.
+    if matches!(
+        a.ui.dictation.phase,
+        crate::dictation::Phase::Recording | crate::dictation::Phase::Stopping
+    ) {
+        let lit = cx.t.opts.reduced_motion || (a.frame / 4) % 2 == 0;
+        let style = cx.st("status.error", PANEL);
+        let style = if lit {
+            style
+        } else {
+            style.add_modifier(Modifier::DIM)
+        };
+        let mark = if cx.t.opts.ascii { "#" } else { "■" };
+        put(buf, panel.x + 1, cy, mark, style, 1);
+    }
     let mut x = panel.x + 3;
     {
         let fields: Vec<(String, Target, Modifier, &str)> = vec![
@@ -5371,59 +5368,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
 fn draw_activity_line(cx: &Cx, buf: &mut Buffer, r: Rect) {
     let start = r.x + 2;
     let width = r.width.saturating_sub(4);
-    let phase = cx.app.ui.dictation.phase;
     let y = r.bottom() - 1;
-    if matches!(
-        phase,
-        crate::dictation::Phase::Recording | crate::dictation::Phase::Stopping
-    ) {
-        let label = if phase == crate::dictation::Phase::Recording {
-            "REC "
-        } else {
-            "END "
-        };
-        put(buf, start, y, label, cx.st(ACCENT, CANVAS), width.min(4));
-        let help = if width >= 28 {
-            " enter stop · esc cancel"
-        } else {
-            " enter · esc"
-        };
-        let help_width = width.min(text::width(help) as u16);
-        let bar_start = start + 4;
-        let bar_width = width.saturating_sub(4 + help_width);
-        let glyphs = if cx.t.opts.ascii {
-            ['_', '.', ':', '-', '=', '+', '*', '#']
-        } else {
-            ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
-        };
-        let levels: Vec<f32> = cx.app.ui.dictation.levels.iter().copied().collect();
-        for i in 0..bar_width as usize {
-            let level = if levels.is_empty() {
-                cx.app.ui.dictation.level
-            } else {
-                let at = i.saturating_mul(levels.len()) / usize::from(bar_width.max(1));
-                levels[at.min(levels.len() - 1)]
-            };
-            let glyph = glyphs[(level.clamp(0.0, 1.0) * 7.0).round() as usize];
-            put(
-                buf,
-                bar_start + i as u16,
-                y,
-                &glyph.to_string(),
-                cx.st(if level > 0.06 { ACCENT } else { MUTED }, CANVAS),
-                1,
-            );
-        }
-        put(
-            buf,
-            r.right().saturating_sub(help_width),
-            y,
-            help,
-            cx.st(MUTED, CANVAS),
-            help_width,
-        );
-        return;
-    }
     if let Some(progress) = &cx.app.ui.dictation.download {
         let percent = progress
             .bytes_done
@@ -5439,18 +5384,6 @@ fn draw_activity_line(cx: &Cx, buf: &mut Buffer, r: Rect) {
             None => "Downloading speech model …".into(),
         };
         put(buf, start, y, &line, cx.st(ACCENT, CANVAS), width);
-        return;
-    }
-    let activity = match phase {
-        crate::dictation::Phase::Checking => Some("Checking speech model…"),
-        crate::dictation::Phase::Starting => Some("Opening microphone…"),
-        crate::dictation::Phase::Transcribing => {
-            Some("Transcribing; transcript will be inserted into the composer…")
-        }
-        _ => None,
-    };
-    if let Some(text) = activity {
-        put(buf, start, y, text, cx.st(MUTED, CANVAS), width);
         return;
     }
     let busy = cx.app.viewed_id().is_some_and(|id| cx.app.is_busy(id));
@@ -6291,7 +6224,120 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
         OverlayKind::AlertDetail { id, top, .. } => {
             draw_alert_detail(cx, buf, area, *id, *top, hits)
         }
+        OverlayKind::Usage { rows } => draw_usage(cx, buf, area, rows, hits),
     }
+}
+
+/// `/usage`: a heading per provider, then one row per limit window as
+/// `label  ━━━━────  42%  resets in 3h 10m`. Only the filled part of the bar takes the tone.
+fn draw_usage(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    rows: &[crate::usage::Row],
+    hits: &mut HitMap,
+) {
+    use crate::usage::Row;
+    let b = modal_box(area, 64, (rows.len() + 6).clamp(9, 30) as u16);
+    let m = modal(cx, buf, area, b, "Plan limits", hits);
+    let (filled, track) = if cx.t.opts.ascii {
+        ("#", "-")
+    } else {
+        ("━", "─")
+    };
+    let bar_w = (m.w as usize).saturating_sub(34).clamp(8, 24);
+    for (i, row) in rows.iter().take(m.body.height as usize).enumerate() {
+        let y = m.body.y + i as u16;
+        match row {
+            Row::Gap => {}
+            Row::Provider { name, plan } => {
+                let x = put(
+                    buf,
+                    m.x,
+                    y,
+                    name,
+                    cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD),
+                    m.w,
+                );
+                if !plan.is_empty() {
+                    put(
+                        buf,
+                        x,
+                        y,
+                        &format!("  {plan}"),
+                        cx.st(MUTED, RAISED),
+                        m.x + m.w - x,
+                    );
+                }
+            }
+            Row::Note(text) => {
+                put(
+                    buf,
+                    m.x,
+                    y,
+                    &truncate(text, m.w as usize, cx.ell()),
+                    cx.st(MUTED, RAISED),
+                    m.w,
+                );
+            }
+            Row::Window { label, used, reset } => {
+                let end = m.x + m.w;
+                let x = put(
+                    buf,
+                    m.x + 2,
+                    y,
+                    &truncate(label, 8, cx.ell()),
+                    cx.st(SECONDARY, RAISED),
+                    8,
+                );
+                let _ = x;
+                let bx = m.x + 12;
+                let n = used.map_or(0, |u| (usize::from(u) * bar_w).div_ceil(100));
+                let tone = match used {
+                    Some(90..) => "status.error",
+                    Some(70..) => "status.warning",
+                    Some(_) => "status.success",
+                    None => MUTED,
+                };
+                let bar = format!("{}{}", filled.repeat(n), track.repeat(bar_w - n));
+                put(
+                    buf,
+                    bx,
+                    y,
+                    &track.repeat(bar_w),
+                    cx.st(MUTED, RAISED),
+                    bar_w as u16,
+                );
+                put(
+                    buf,
+                    bx,
+                    y,
+                    &bar[..bar.char_indices().nth(n).map_or(bar.len(), |(i, _)| i)],
+                    cx.st(tone, RAISED),
+                    n as u16,
+                );
+                let tx = bx + bar_w as u16 + 2;
+                let pct = used.map_or("  ?".to_owned(), |u| format!("{u:>3}%"));
+                let x = put(
+                    buf,
+                    tx,
+                    y,
+                    &pct,
+                    cx.st(PRIMARY, RAISED),
+                    end.saturating_sub(tx),
+                );
+                put(
+                    buf,
+                    x + 2,
+                    y,
+                    &truncate(reset, end.saturating_sub(x + 2) as usize, cx.ell()),
+                    cx.st(MUTED, RAISED),
+                    end.saturating_sub(x + 2),
+                );
+            }
+        }
+    }
+    hint_row(cx, buf, &m, &[("r", "refresh"), ("esc", "close")]);
 }
 
 /// `/learn`'s candidate checklist. It uses the shared borderless modal and keeps

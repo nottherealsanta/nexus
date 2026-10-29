@@ -101,7 +101,7 @@ export const addProjectOpen = signal(false);
 export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string; disabled_tools?: string[] }>({});
 export const draft = signal<Record<string, string>>({});
 /** Core's starting context (PLAN K4) for the draft in `key`; a newer draft ignores a late older answer. */
-export const draftContext = signal<{ key: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number } } } | null>(null);
+export const draftContext = signal<{ key: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: any[]; mcp: any[] } } | null>(null);
 let draftSeq = 0;
 export const draftContextKey = (project: string, d = sessionDraft()) => JSON.stringify([project, d.agent ?? null, d.model ?? null, d.effort ?? null, d.disabled_tools ?? null]);
 export async function loadDraftContext(project: string) {
@@ -266,6 +266,10 @@ const TOAST_QUEUE = 20;
 const timed = new Set<number>();
 /** The alert whose full text is open in the detail modal (D15). */
 export const alertDetail = signal<Toast | null>(null);
+/** One row of `GET /api/usage` (K11): a provider with its plan and limit windows, or the reason it could not be read. */
+export interface UsageProvider { id: string; label?: string; plan?: string; error?: string; notes?: string[]; windows?: { label?: string; used_percent?: number | null; resets_at?: number | null; detail?: string }[] }
+/** The open plan-limits dialog (`app.usage`); `null` when closed. */
+export const usageDialog = signal<{ providers: UsageProvider[]; loading: boolean } | null>(null);
 /**
  * The toast's `text` is the whole message and stays on the record (notifications, detail modal). The
  * card shows a title and an optional body: the first line, or the text up to an early `: `.

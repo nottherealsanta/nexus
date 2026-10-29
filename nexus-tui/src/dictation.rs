@@ -19,6 +19,8 @@ pub const TARGET_RATE: u32 = 16_000;
 pub const MAX_SECONDS: usize = 120;
 pub const MIN_SECONDS: f64 = 0.2;
 pub const PREVIEW_STEP_SECONDS: f64 = 0.4;
+/// Ticks (125 ms) a changed preview word takes to resolve.
+pub const SETTLE_FRAMES: u8 = 3;
 const MAX_SAMPLES: usize = MAX_SECONDS * TARGET_RATE as usize;
 const LEVEL_WINDOW: usize = TARGET_RATE as usize / 20;
 const CUE_RATE: u32 = 44_100;
@@ -121,6 +123,14 @@ pub struct DictationUi {
     /// Key into the per-session draft map, captured before recording starts.
     pub draft_key: String,
     pub preview: String,
+    /// Byte offset in the draft where the words land (the cursor when recording began).
+    pub anchor: usize,
+    /// Enter was pressed: send the draft once the transcript is in.
+    pub send_after: bool,
+    /// Chars of `preview` (up to the last whole word) unchanged by the latest update.
+    pub stable: usize,
+    /// Frames left for the changed words to resolve; counts down on the 125 ms tick.
+    pub settle: u8,
     pub seconds: f64,
     pub level: f32,
     pub levels: VecDeque<f32>,
@@ -137,6 +147,10 @@ impl Default for DictationUi {
             generation: 0,
             draft_key: String::new(),
             preview: String::new(),
+            anchor: 0,
+            send_after: false,
+            stable: 0,
+            settle: 0,
             seconds: 0.0,
             level: 0.0,
             levels: VecDeque::with_capacity(32),
@@ -149,9 +163,12 @@ impl Default for DictationUi {
 
 impl DictationUi {
     pub fn begin(&mut self, draft_key: String) -> u64 {
+        self.anchor = 0;
+        self.send_after = false;
         self.generation = self.generation.wrapping_add(1);
         self.draft_key = draft_key;
         self.preview.clear();
+        self.settle = 0;
         self.seconds = 0.0;
         self.level = 0.0;
         self.levels.clear();
@@ -163,13 +180,67 @@ impl DictationUi {
     }
 
     pub fn cancel(&mut self) -> u64 {
+        self.send_after = false;
         self.generation = self.generation.wrapping_add(1);
         self.phase = Phase::Idle;
         self.preview.clear();
+        self.settle = 0;
         self.final_wav = None;
         self.download = None;
         self.pacer.finish();
         self.generation
+    }
+
+    /// Replace the preview; words that changed resolve over `SETTLE_FRAMES` ticks.
+    pub fn set_preview(&mut self, text: String) {
+        if self.preview == text {
+            return;
+        }
+        let common = self
+            .preview
+            .chars()
+            .zip(text.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        self.stable = text
+            .chars()
+            .take(common)
+            .enumerate()
+            .filter(|(_, c)| c.is_whitespace())
+            .map(|(i, _)| i + 1)
+            .last()
+            .unwrap_or(0);
+        self.preview = text;
+        self.settle = SETTLE_FRAMES;
+    }
+
+    /// The preview as drawn: changed ASCII letters are scrambled until they resolve.
+    /// Stable words, whitespace and Unicode stay readable.
+    pub fn shown_preview(&self, animate: bool) -> String {
+        if !animate || self.settle == 0 {
+            return self.preview.clone();
+        }
+        let age = usize::from(SETTLE_FRAMES - self.settle);
+        self.preview
+            .chars()
+            .enumerate()
+            .map(|(i, c)| {
+                if i >= self.stable && c.is_ascii_alphabetic() && (i + age) % 3 != age {
+                    (b'a' + ((i * 17 + age * 11 + usize::from(self.settle) * 7) % 26) as u8) as char
+                } else {
+                    c
+                }
+            })
+            .collect()
+    }
+
+    /// One 125 ms tick; true while the words are still resolving.
+    pub fn settle_tick(&mut self) -> bool {
+        if self.settle == 0 {
+            return false;
+        }
+        self.settle -= 1;
+        true
     }
 
     pub fn add_level(&mut self, seconds: f64, level: f32) {
@@ -475,9 +546,11 @@ fn play_cue(kind: &str, wait: bool) {
     }
     let samples = cue_pcm(kind);
     let task = thread::spawn(move || {
-        let Ok(sink) = rodio::DeviceSinkBuilder::open_default_sink() else {
+        let Ok(mut sink) = rodio::DeviceSinkBuilder::open_default_sink() else {
             return;
         };
+        // The default drop notice goes to stderr and would paint over the TUI.
+        sink.log_on_drop(false);
         let player = rodio::Player::connect_new(sink.mixer());
         player.append(rodio::buffer::SamplesBuffer::new(
             NonZero::new(1u16).expect("one channel"),
@@ -726,6 +799,22 @@ mod tests {
         bounded.push(&vec![0.25; MAX_SAMPLES + 100]);
         assert!(bounded.is_full());
         assert_eq!(bounded.seconds(), MAX_SECONDS as f64);
+    }
+
+    #[test]
+    fn changed_preview_words_resolve_and_keep_stable_text() {
+        let mut ui = DictationUi::default();
+        ui.set_preview("hello word".into());
+        ui.settle = 0;
+        ui.set_preview("hello world".into());
+        let first = ui.shown_preview(true);
+        assert!(first.starts_with("hello "));
+        assert_ne!(first, "hello world");
+        assert_eq!(ui.shown_preview(false), "hello world");
+        while ui.settle_tick() {}
+        assert_eq!(ui.shown_preview(true), "hello world");
+        ui.set_preview("你好 🌍".into());
+        assert_eq!(ui.shown_preview(true), "你好 🌍");
     }
 
     #[test]

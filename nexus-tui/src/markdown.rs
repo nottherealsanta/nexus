@@ -28,6 +28,7 @@ pub struct Palette {
     border_strong: Color,
     blue: Color,
     success: Color,
+    warning: Color,
     panel: Color,
     ascii: bool,
 }
@@ -43,6 +44,7 @@ impl Palette {
             border_strong: color("border.strong"),
             blue: color("status.info"),
             success: color("status.success"),
+            warning: color("status.warning"),
             panel: color("surface.panel"),
             ascii: theme.opts.ascii,
         }
@@ -255,29 +257,36 @@ impl<'a> Walker<'a> {
     fn fence(&mut self, body: &str, language: &str, closed: bool) {
         let index = self.fences;
         self.fences += 1;
-        // Keep the original source below any generated diagram: it is model context.
-        if closed && language == "mermaid" && !self.p.ascii && !self.mermaid_art(body, index) {
-            self.mermaid_text(body, index);
+        if closed
+            && language == "mermaid"
+            && !self.p.ascii
+            && (self.mermaid_art(body, index) || self.mermaid_text(body, index))
+        {
+            return;
         }
-        // The header row names the language (a mermaid fence keeps its own
-        // name: the source below the diagram is model context). The code sits
-        // inset by 2 on the panel; there is no rule and no rail. The renderer
-        // draws `copy` at the right end of the header on focus or hover.
-        let panel = Style::default().bg(self.p.panel);
-        let label = if language.is_empty() {
-            "code"
+        // As in old Nexus (ratatui-markdown's code block): a rounded header with
+        // the language, each code line behind a `│`, a rounded footer, with no
+        // background; the code is drawn in the warning colour.
+        let panel = Style::default();
+        let (top, rail, bottom) = if self.p.ascii {
+            ("+-", "| ", "+-")
         } else {
-            language
+            ("╭─", "│ ", "╰─")
         };
-        self.cur
-            .push(Span::styled(label.to_owned(), panel.fg(self.p.quiet)));
+        let header = if language.is_empty() {
+            top.to_owned()
+        } else {
+            format!("{top} {language}")
+        };
+        self.cur.push(Span::styled(header, panel.fg(self.p.quiet)));
         self.fence_row(index);
         for line in body.replace('\t', "    ").lines() {
+            self.cur.push(Span::styled(rail, panel.fg(self.p.quiet)));
             self.cur
-                .push(Span::styled(line.to_owned(), panel.fg(self.p.text)));
+                .push(Span::styled(line.to_owned(), panel.fg(self.p.warning)));
             self.fence_row(index);
         }
-        // One panel row of padding below the code.
+        self.cur.push(Span::styled(bottom, panel.fg(self.p.quiet)));
         self.fence_row(index);
     }
     /// Push the diagram rows plus a quiet `◇ mermaid` label. `false` means the
@@ -301,7 +310,7 @@ impl<'a> Walker<'a> {
         }
         let label = Style::default().fg(self.p.quiet);
         self.cur
-            .push(Span::styled("◇ mermaid · source below", label));
+            .push(Span::styled("◇ mermaid · copy source", label));
         let (prefix, _) = self.prefix();
         let spans = std::mem::take(&mut self.cur);
         self.rows.push(Row {
@@ -346,7 +355,7 @@ impl<'a> Walker<'a> {
         }
         let label = Style::default().fg(self.p.quiet);
         self.cur
-            .push(Span::styled("◇ mermaid · source below", label));
+            .push(Span::styled("◇ mermaid · copy source", label));
         let (prefix, _) = self.prefix();
         let spans = std::mem::take(&mut self.cur);
         self.rows.push(Row {
@@ -361,12 +370,12 @@ impl<'a> Walker<'a> {
     }
     fn fence_row(&mut self, index: usize) {
         let (mut prefix, _) = self.prefix();
-        prefix.push(Span::styled("  ", Style::default().bg(self.p.panel)));
+        prefix.push(Span::raw("  "));
         let spans = std::mem::take(&mut self.cur);
         self.rows.push(Row {
             prefix,
             spans,
-            bg: Some(self.p.panel),
+            bg: None,
             blank: false,
             image: None,
             fence: Some(index),
@@ -873,8 +882,8 @@ mod tests {
             .flat_map(|row| row.prefix.iter().chain(&row.spans))
             .map(|span| span.content.as_ref())
             .collect::<String>();
-        assert!(text.contains("source below"), "{text}");
-        assert!(text.contains("A[Start] --> B[Finish]"), "{text}");
+        assert!(text.contains("◇ mermaid · copy source"), "{text}");
+        assert!(!text.contains("A[Start] --> B[Finish]"), "{text}");
         assert_eq!(
             fence_sources(source),
             ["graph TD\n  A[Start] --> B[Finish]"]
@@ -889,7 +898,7 @@ mod tests {
             .flat_map(|row| row.spans.iter())
             .map(|span| span.content.as_ref())
             .collect();
-        assert!(mono_text.contains("A[Start] --> B[Finish]"));
+        assert!(mono_text.contains("◇ mermaid · copy source"));
         let ascii = Options {
             ascii: true,
             ..Options::default()
@@ -935,26 +944,23 @@ mod tests {
     }
 
     #[test]
-    fn fence_is_a_panel_block_with_a_header_and_inset_code() {
+    fn fence_is_a_panel_block_with_a_rounded_frame() {
         let theme = Theme::new(Options::default());
         let palette = Palette::from_theme(&theme);
         let rows = lines("```python\ndef f():\n    return 1\n```", &palette, 40);
         let text: Vec<String> = rows.iter().map(row_text).collect();
         assert_eq!(
             text,
-            ["  python", "  def f():", "      return 1", "  "],
-            "header, code inset by 2, one padding row"
+            ["  ╭─ python", "  │ def f():", "  │     return 1", "  ╰─"],
+            "header, railed code, footer"
         );
-        let panel = theme.color("surface.panel");
-        assert!(rows.iter().all(|r| r.bg == panel && r.fence == Some(0)));
-        // No rule and no rail anywhere in the block.
-        assert!(text.iter().all(|t| !t.contains('─') && !t.contains('│')));
-        // The language is muted, the code primary.
+        assert!(rows.iter().all(|r| r.bg.is_none() && r.fence == Some(0)));
+        // The frame is muted, the code warning-coloured.
         let muted = theme.color("text.muted");
         assert_eq!(rows[0].spans[0].style.fg, muted);
-        assert_eq!(rows[1].spans[0].style.fg, theme.color("text.primary"));
+        assert_eq!(rows[1].spans[1].style.fg, theme.color("status.warning"));
         let bare = lines("```\nx\n```", &palette, 40);
-        assert_eq!(row_text(&bare[0]), "  code");
+        assert_eq!(row_text(&bare[0]), "  ╭─");
     }
 
     #[test]

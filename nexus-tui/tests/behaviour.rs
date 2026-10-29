@@ -332,28 +332,22 @@ fn draft_context_switches_are_sent_with_new_session_fields() {
         snapshot: Box::new(common::snapshot()),
         cause: nexus_tui::sync::ResyncCause::Initial,
     });
-    let project = a.current_project().unwrap();
-    a.apply_sync(nexus_tui::sync::SyncMsg::SkillMcp {
-        project: project.clone(),
-        skills: Ok(serde_json::json!({
-            "skills": [{"name": "writer", "description": "Write clearly", "scope": "project"}],
-            "problems": []
-        })),
-        mcp: Ok(serde_json::json!({
-            "servers": [
-                {"server": "enabled", "state": "online", "tools": 12, "enabled": true},
-                {"server": "disabled", "state": "disabled", "tools": 2, "enabled": false},
-                {"server": "invalid", "state": "invalid", "tools": null, "enabled": true}
-            ]
+    // Core's plan for the draft is the only source of the lists.
+    assert!(a.context_items().is_empty());
+    let request = a.draft_request().unwrap();
+    a.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({
+            "tools": ["read", "skill"],
+            "skills": [{"name": "writer", "description": "Write clearly", "scope": "project", "state": "on", "locked": false}],
+            "mcp": [{"server": "enabled", "state": "on", "tools": 12, "locked": false, "error": null}]
         })),
     });
     let items = a.context_items();
+    assert!(items.iter().any(|item| item.key == "skill"));
     assert!(items
         .iter()
         .any(|item| item.key == "mcp:enabled" && item.label.contains("12 tools")));
-    assert!(!items
-        .iter()
-        .any(|item| item.key == "mcp:disabled" || item.key == "mcp:invalid"));
     let index = items
         .iter()
         .position(|item| item.key == "skill:writer")
@@ -937,37 +931,42 @@ fn dictation_shortcuts_check_status_before_starting_capture() {
 }
 
 #[test]
-fn enter_stops_dictation_without_sending_and_escape_keeps_typed_text() {
-    let mut stopped = app();
-    stopped.composer().set_text("typed already");
-    let generation = stopped.ui.dictation.begin(SESSION.to_owned());
-    stopped.ui.dictation.phase = Phase::Recording;
-    stopped.ui.dictation.preview = "pending words".into();
-    stopped.effects.clear();
-    press(&mut stopped, &["enter"]);
-    assert_eq!(stopped.ui.dictation.phase, Phase::Stopping);
-    assert!(stopped
+fn enter_stops_and_sends_escape_stops_and_keeps_and_typing_stops() {
+    let mut sent = app();
+    sent.composer().set_text("typed already");
+    let generation = sent.ui.dictation.begin(SESSION.to_owned());
+    sent.ui.dictation.phase = Phase::Recording;
+    sent.effects.clear();
+    press(&mut sent, &["enter"]);
+    assert_eq!(sent.ui.dictation.phase, Phase::Stopping);
+    assert!(sent.ui.dictation.send_after);
+    assert!(sent
         .effects
         .contains(&Effect::Dictation(CaptureCommand::Stop { generation })));
-    assert_eq!(stopped.composer_ref().text(), "typed already");
-    assert!(!stopped
-        .effects
-        .iter()
-        .any(|effect| matches!(effect, Effect::Api(ApiCall::Prompt { .. }))));
+    assert_eq!(sent.composer_ref().text(), "typed already");
 
-    let mut cancelled = app();
-    cancelled.composer().set_text("keep this draft");
-    let generation = cancelled.ui.dictation.begin(SESSION.to_owned());
-    cancelled.ui.dictation.phase = Phase::Recording;
-    cancelled.ui.dictation.preview = "throw this preview away".into();
-    cancelled.effects.clear();
-    press(&mut cancelled, &["esc"]);
-    assert_eq!(cancelled.ui.dictation.phase, Phase::Idle);
-    assert!(cancelled.ui.dictation.preview.is_empty());
-    assert_eq!(cancelled.composer_ref().text(), "keep this draft");
-    assert!(cancelled
+    let mut kept = app();
+    kept.composer().set_text("keep this draft");
+    kept.ui.dictation.begin(SESSION.to_owned());
+    kept.ui.dictation.phase = Phase::Recording;
+    press(&mut kept, &["esc"]);
+    assert_eq!(kept.ui.dictation.phase, Phase::Stopping);
+    assert!(!kept.ui.dictation.send_after);
+    // Escape again, while transcribing, discards.
+    let generation = kept.ui.dictation.generation;
+    kept.effects.clear();
+    press(&mut kept, &["esc"]);
+    assert_eq!(kept.ui.dictation.phase, Phase::Idle);
+    assert!(kept
         .effects
         .contains(&Effect::Dictation(CaptureCommand::Cancel { generation })));
+
+    let mut typing = app();
+    typing.ui.dictation.begin(SESSION.to_owned());
+    typing.ui.dictation.phase = Phase::Recording;
+    press(&mut typing, &["x"]);
+    assert_eq!(typing.ui.dictation.phase, Phase::Stopping);
+    assert_eq!(typing.composer_ref().text(), "x", "the key still applies");
 }
 
 #[test]
@@ -1027,19 +1026,23 @@ fn stt_ready_progress_wins_a_race_with_the_status_request() {
 }
 
 #[test]
-fn recording_strip_keeps_preview_out_of_the_editable_draft() {
+fn live_words_sit_inside_the_composer_and_a_square_marks_recording() {
     let mut a = app();
     a.composer().set_text("typed text");
     a.ui.dictation.begin(SESSION.to_owned());
+    a.ui.dictation.anchor = "typed".len();
     a.ui.dictation.phase = Phase::Recording;
-    a.ui.dictation.levels.extend([0.0, 0.1, 0.8, 0.35]);
     a.ui.dictation.preview = "pending words".into();
     let (_, rows) = draw(&mut a, 120, 36);
     let frame = rows.join("\n");
-    assert!(frame.contains("REC"), "{frame}");
-    assert!(frame.contains("pending words"), "{frame}");
-    assert!(frame.contains("typed text"), "{frame}");
-    assert_eq!(a.composer_ref().text(), "typed text");
+    assert!(frame.contains("typed pending words text"), "{frame}");
+    assert!(!frame.contains("REC"), "{frame}");
+    assert!(frame.contains('■'), "{frame}");
+    assert_eq!(
+        a.composer_ref().text(),
+        "typed text",
+        "the draft itself is untouched"
+    );
 }
 
 /// Writes an SVG snapshot of a simulated recording state when `I4_SHOTS` is set.
@@ -1807,4 +1810,62 @@ fn core_answers_the_starting_context_of_the_current_draft_only() {
     );
     a.tick(std::time::Instant::now());
     assert_eq!(asked(&a), 2);
+}
+
+#[test]
+fn ctrl_u_reads_plan_limits_into_a_bar_modal() {
+    let mut app = app();
+    app.effects.clear();
+    press(&mut app, &["ctrl+u"]);
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::Usage))));
+    let usage = serde_json::json!({"providers": [
+        {"id": "codex", "label": "ChatGPT (Codex)", "plan": "plus", "notes": [], "windows": [
+            {"label": "5-hour", "used_percent": 42.0, "resets_at": 1e12},
+            {"label": "weekly", "used_percent": 95.0, "resets_at": null}]},
+        {"id": "copilot", "label": "GitHub Copilot", "error": "timed out", "windows": []}]});
+    app.apply_done(ActionDone {
+        call: ApiCall::Usage,
+        result: Ok(Done {
+            usage: Some(usage),
+            ..Done::default()
+        }),
+    });
+    assert!(matches!(
+        app.ui.overlay.as_ref().map(|o| &o.kind),
+        Some(OverlayKind::Usage { .. })
+    ));
+    let (_, rows) = draw(&mut app, 120, 36);
+    let text = rows.join("\n");
+    assert!(text.contains("Plan limits"), "{text}");
+    assert!(text.contains("ChatGPT (Codex)"), "{text}");
+    assert!(text.contains(" 42%"), "{text}");
+    assert!(text.contains(" 95%"), "{text}");
+    assert!(
+        text.contains("Could not read the limits: timed out"),
+        "{text}"
+    );
+    assert!(text.contains("r refresh"), "{text}");
+    app.effects.clear();
+    press(&mut app, &["r"]);
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::Usage))));
+    press(&mut app, &["esc"]);
+    assert!(app.ui.overlay.is_none());
+}
+
+#[test]
+fn a_new_session_keeps_the_drafts_tools_until_its_snapshot_loads() {
+    let mut a = app();
+    a.state.model.selected.as_mut().unwrap().starting = None;
+    assert!(a.context_items().iter().all(|item| item.key != "skill"));
+    a.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request: serde_json::json!({}),
+        data: Ok(serde_json::json!({"tools": ["read", "skill"]})),
+    });
+    assert!(a.context_items().iter().any(|item| item.key == "skill"));
 }

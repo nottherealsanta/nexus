@@ -596,7 +596,7 @@ fn project_worktrees_supply_sidebar_and_location_branches_without_a_session_list
     });
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
-    assert!(all.contains("build \u{b7} \u{2325} project-"), "{all}");
+    assert!(all.contains("\u{2325} project-branch"), "{all}");
     assert!(
         all.contains("/work/nexus-home/ws  \u{2325} project-branch  ⑂"),
         "{all}"
@@ -826,7 +826,7 @@ fn session_rows_show_project_and_cached_branch_and_both_lines_are_clickable() {
     let (_, rows) = draw(&mut app, 120, 36);
     let row = rows
         .iter()
-        .position(|line| line.contains("build · ⌥ main"))
+        .position(|line| line.contains("⌥ main"))
         .unwrap();
     assert!(rows[row - 1].contains("New session"));
     assert_eq!(app.hits.at(4, row as u16), Some(&Target::SideRow(0)));
@@ -1333,7 +1333,7 @@ fn session_rows_end_with_child_count_and_age_and_truncate_the_place_first() {
     let (_, rows) = draw(&mut app, 120, 36);
     let row = rows
         .iter()
-        .position(|line| line.contains("build · ⌥ main"))
+        .position(|line| line.contains("⌥ main"))
         .expect("parent row");
     let side: String = rows[row].chars().take(28).collect();
     assert!(side.trim_end().ends_with("2 ↳"), "{side:?}");
@@ -1356,7 +1356,7 @@ fn session_rows_end_with_child_count_and_age_and_truncate_the_place_first() {
     let (_, rows) = draw(&mut app, 120, 36);
     let row = rows
         .iter()
-        .find(|line| line.contains("build · ⌥ feature"))
+        .find(|line| line.contains("⌥ feature"))
         .expect("long row");
     assert!(row.contains('…'), "{row:?}");
     assert!(row.contains("2 ↳"), "{row:?}");
@@ -2438,8 +2438,9 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
             nexus_tui::text::width(title.trim_end()) < w as usize - 1,
             "{w}: margin"
         );
-        // line 2: the agent, then the branch; the child count right-aligned.
-        assert_eq!(col_of(detail, "build"), 4, "{w}");
+        // line 2: the branch and the child count right-aligned.
+        assert_eq!(col_of(detail, "⌥"), 4, "{w}");
+        assert!(!detail.contains("build"), "{w}");
         assert!(detail.trim_end().ends_with("1 ↳"), "{w}: {detail:?}");
         assert!(
             nexus_tui::text::width(detail.trim_end()) < w as usize - 1,
@@ -2845,6 +2846,11 @@ fn the_new_session_view_shows_the_header_block_and_d10_sections_with_agents_md()
     )
     .unwrap();
     let mut app = new_session_app(&dir, (120, 36));
+    let request = app.draft_request().unwrap();
+    app.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({"tools": ["read", "grep", "glob", "ls", "bash"], "skills": [], "mcp": []})),
+    });
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     for needle in [

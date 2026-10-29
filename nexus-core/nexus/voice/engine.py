@@ -46,7 +46,7 @@ def _build_runtime(model_dir: Path, processor_dir: Path, device: str) -> tuple[A
     resolved_device = _resolve_device(torch, device)
     if resolved_device == "cpu":
         torch.set_num_threads(max(1, min(MAX_CPU_THREADS, os.cpu_count() or 1)))
-    config, tensors = open_bark(model_dir / MODEL_FILE)
+    config, tensors = open_bark((model_dir / MODEL_FILE).resolve())  # hub snapshots link into blobs/; open_bark refuses symlinks
     model = ParakeetForTDT(ParakeetTDTConfig.from_dict(config))
     _load_tensors(model, tensors, torch)
     model.generation_config = GenerationConfig.from_pretrained(

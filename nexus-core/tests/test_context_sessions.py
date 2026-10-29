@@ -294,6 +294,7 @@ async def test_draft_context_matches_the_first_request_and_stores_nothing(env):
     assert data["snapshot"]["agent"]["name"] == "build"
     assert data["parts"]["instructions"] > 0 and data["parts"]["tools"] > 0
     assert (await client.get("/api/session")).json() == before  # nothing was created
+    assert isinstance(data["skills"], list) and isinstance(data["mcp"], list)  # the clients list nothing of their own
 
     off = await client.post("/api/draft/context", json={"directory": str(workspace), "disabled_tools": ["bash"]})
     assert "bash" in data["tools"] and "bash" not in off.json()["tools"]

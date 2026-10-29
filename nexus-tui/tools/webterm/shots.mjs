@@ -233,7 +233,7 @@ await shot({ name: "attention-error-120x36-dark", cols: 120, rows: 36, steps: as
   if (!prompt.ok) throw new Error(`attention fixture prompt: ${prompt.status}`);
   await h.waitFor("✕ Fix flaky");
 } });
-await shot({ name: "mermaid-review-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.waitFor("source below"); } });
+await shot({ name: "mermaid-review-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.waitFor("copy source"); } });
 await shot({ name: "settings-detail-120x36-light", cols: 120, rows: 36, theme: "light", steps: async (h) => { await h.key("Control+p", 200); await h.type("open settings", 200); await h.key("Enter", 300); await h.key("Enter", 300); } });
 await shot({ name: "fence-review-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.waitFor("printf done"); await h.key("Alt+k", 150); for (let i = 0; i < 24; i++) await h.key("ArrowDown", 40); await h.key("ArrowUp", 200); await h.waitFor("Copy"); } });
 await shot({ name: "tools-expanded-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.key("Alt+k", 200); await h.key("Home", 200); for (let i = 0; i < 4; i++) await h.key("ArrowDown", 80); await h.key("Enter", 300); } });

@@ -186,6 +186,10 @@ pub enum OverlayKind {
         text: String,
         top: usize,
     },
+    /// Plan limits of the signed-in providers (`/usage`, ctrl+u); `r` reads them again.
+    Usage {
+        rows: Vec<crate::usage::Row>,
+    },
     /// The full text of one alert (a toast or a past notification), wrapped
     /// and scrollable (DESIGN_PLAN.md D15). `back` is the notifications row
     /// it was opened from; Esc returns there.
@@ -492,6 +496,7 @@ pub enum Target {
     SidebarEdge,
     /// Rail search (opens the session switcher).
     RailSearch,
+    SessionScope,
     NewSession,
     /// The closing row of the Projects tab.
     AddProject,

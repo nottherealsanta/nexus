@@ -1066,9 +1066,12 @@ does, and returns the request its first turn would send, with nothing stored:
 the `/context` fields (`used`, `window`, `exact`, always false here), `model`,
 `agent`, `parts` (`instructions`, `tools`, `instruction_file`, estimated tokens
 of the system prompt, tool schemas and the AGENTS.md inside the prompt) and the
-`snapshot` summary, and `tool_info` (each tool's `description` and `guidance`). Enabled MCP servers are connected first, as for creation.
-Clients show it on the new-session screen and fall back to their own estimate
-until it answers.
+`snapshot` summary, `tool_info` (each tool's `description` and `guidance`), and
+the lists the session would start with: `tools` (names, in request order),
+`skills` and `mcp` (the session JSON's rows, with `state` and `locked`). Enabled
+MCP servers are connected first, as for creation. Clients draw the new-session
+context from these lists alone: they keep no tool list of their own and show
+"loading" until it answers.
 
 ## Pending inputs: steer and queue
 

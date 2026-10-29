@@ -70,9 +70,10 @@ ignored test (`cargo test --lib speaks_a_real_answer -- --ignored`, with
 absent a consent modal (repo, size) comes first, then `POST /api/voice/stt/download` with
 progress; `runtime_missing` and `unsupported` show the status error as a toast. Otherwise
 `nexus-tui/src/dictation.rs` captures with `cpal` on its own thread, downmixes and resamples
-to 16 kHz mono PCM16, shows a waveform strip with start and stop cues, and sends paced
-`?partial=1` previews (at least 0.4 s of new audio apart). Enter stops and inserts the final
-transcript into the composer; Esc cancels and keeps the draft. Neither sends the prompt.
+to 16 kHz mono PCM16, plays start and stop cues, shows a blinking red square left of the agent name, and sends
+paced `?partial=1` previews (at least 0.4 s of new audio apart) that appear inside the
+composer at the cursor where recording began. Enter stops and sends; Esc stops and keeps the
+words (Esc while transcribing discards them); typing stops the capture and the key applies.
 Real microphone capture is not yet checked.
 
 ## NSH (browser and desktop)

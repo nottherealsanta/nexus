@@ -26,9 +26,10 @@ hovering shows the label), the session tabs, the run status at the centre's
 right edge, the notification count and the right toggle. Sidebars are 34 / 36
 cells from 160 columns and 28 / 30 below. `paint::scrim` dims a buffer under a
 modal (see the modal recipe below). The left sidebar (D03) opens with a `⌕ Search sessions` row (`ctrl+k`, it opens the
-switcher) and shows an UPPERCASE project header, `⌥ branch  ~/…/dir` sub-groups for
-linked worktrees, and two-line rows (mark slot, title, time; agent in its colour,
-`· ⌥ branch`, `2 ↳`) ending with `+ New session`; `Settings` is pinned at the bottom. Drag its inner edge to resize it (20–60 columns);
+switcher) and a scope icon (`▣` for the current project, `◎` for all projects;
+click to toggle without a notification). It shows an UPPERCASE project header, `⌥ branch  ~/…/dir`
+sub-groups for linked worktrees, and two-line rows (mark slot, title, time;
+`⌥ branch`, `2 ↳`) ending with `+ New session`; `Settings` is pinned at the bottom. Drag its inner edge to resize it (20–60 columns);
 dragging below 14 columns collapses it to a rail of one letter per session,
 with search on top and `+` below, and hovering a letter shows the session's
 title and place. Settings → Sidebar switches full / rail / hidden. The project
@@ -49,6 +50,7 @@ The starting context is a list of `◆` sections (DESIGN_PLAN D10, `paint::conte
 renderer for the timeline and the new-session view): System prompt, AGENTS.md, Tools, Skills,
 MCP and Child agents or Workspace tools when present. Tool, skill and MCP rows show their
 on/off state; click a row or focus the timeline and use ↑/↓ then Enter/Space to switch it.
+Tools use up to four columns as space allows, both before and after a message.
 Locked session rows are dimmed and say `new session`. Each header keeps its estimated count
 (`~2,140 tok`, characters ÷ 4) and meta, a text row gives the total and the share of the model's
 window, and there is no bar. The instruction file is part of the system prompt, so the total
@@ -83,7 +85,7 @@ Consecutive diagnostics (a provider retry sequence) form one tight stack with
 delays rounded to tenths.
 
 The timeline is complete for one session: turn headers and footers, folding,
-collapsed reasoning, old-Nexus CommonMark text (supported Mermaid diagrams retain their source below), tool-specific expansion (diffs, output
+collapsed reasoning, old-Nexus CommonMark text (supported Mermaid diagrams show a clickable label to copy their source; unsupported diagrams show the source), tool-specific expansion (diffs, output
 caps, raw arguments/results), child cards, context notices, diagnostics, and the
 frozen starting-context section. Selecting a session loads its full stored
 history after the bounded snapshot view: all messages, the starting-context
@@ -124,10 +126,9 @@ pickers, session export and a directory change are wired.
 `markdown.rs` draws assistant text. Headings are bold: H1 and H2 in
 `text.primary` (H1 with a muted `─` underline as wide as its text), H3 and
 below in `text.secondary`. Inline code is `text.primary` on `surface.panel`,
-padded by one space, never accent. A fence is a `surface.panel` block across
-the reading column: a header row with the language (`code` when absent) in
-`text.muted`, the code inset by 2, one padding row; there is no rule and no
-rail. A focused or hovered fence shows `copy` at the right end of its header
+padded by one space, never accent. A fence has no background, framed as in old Nexus: a `╭─ language` header and a `╰─`
+footer in `text.muted`, each code line behind a muted `│ ` and drawn in
+`status.warning` (ASCII: `+-` and `| `). A focused or hovered fence shows `copy` at the right end of its header
 (a click copies the source). Lists use `•` and `◦`; block quotes sit behind a
 `│` in `border.strong` with `text.secondary` text; links are `status.info` and
 underlined, followed by `(url)` unless the target is a file path; task items
@@ -344,12 +345,15 @@ show Core's status error instead of opening the microphone.
 Capture uses the default input device through `cpal` on a dedicated thread.
 Interleaved channels are downmixed and resampled to mono 16 kHz PCM16 WAV. The
 start cue plays before capture opens and the stop cue after it closes. While
-recording, the composer strip shows a live waveform and partial transcripts;
-previews are requested only after at least 0.4 seconds of new audio, with one
-transcription request in flight. Press Enter to stop and insert the final
-transcript at the draft cursor. It remains editable and is never sent
-automatically. Esc cancels and leaves the text that was already typed
-untouched. Capture is capped at 120 seconds.
+recording, a red `■` blinks left of the agent name (`#` in ASCII; steady under
+reduced motion) and the partial transcript appears inside the composer at the
+cursor where recording began, its changed words resolving over three 125 ms
+ticks. Previews are requested only after at least 0.4 seconds of new audio, with
+one transcription request in flight. Enter stops and sends; Esc stops and keeps
+the words in the draft (Esc again while transcribing discards them); typing any
+key stops the capture and the key still applies. The final transcript replaces
+the preview at the position where recording began, ahead of anything typed
+since. Capture is capped at 120 seconds.
 
 Settings → **Voice and speech** reads both model statuses from Core, including
 the state, Hugging Face repository, human-readable size, cache path and any
