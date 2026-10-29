@@ -467,6 +467,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
 
     def agent_json(agent: Any, *, prompt: bool) -> dict[str, Any]:
         data = {k: getattr(agent, k) for k in ("name", "description", "source", "path", "model", "effort", "tools", "steps")}
+        data["permission"] = dict(agent.permission)
         return data | ({"prompt": agent.prompt} if prompt else {})
 
     def agent_project_path(request: Request) -> str | None:

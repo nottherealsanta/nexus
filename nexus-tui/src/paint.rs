@@ -138,8 +138,8 @@ pub const VERBS: [(&str, &str, &str); 8] = [
 /// The verb family of a tool name (a `VERBS` name), if it has one.
 pub fn verb_family(tool: &str) -> Option<&'static str> {
     Some(match tool {
-        "read" => "read",
-        "edit" | "write" | "patch" => "edit",
+        "read" | "ls" => "read",
+        "edit" | "write" | "patch" | "multiedit" => "edit",
         "bash" | "bash_output" | "bash_kill" => "shell",
         "grep" | "glob" | "search" | "find" => "search",
         "code" => "code",

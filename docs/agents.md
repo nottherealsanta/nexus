@@ -27,6 +27,7 @@ You review code. Point out bugs and risks; do not edit files.
 | `tools` | list of tool names | The only tools the model is offered. Omit it for every tool. An unknown name makes session creation fail with a clear error. |
 | `control` | list | Control tools an agent may grant explicitly: only `session` today, which starts child sessions. Never implied: omitting `tools` does not grant it. Ignored in child sessions. The workspace controls are not granted here: new sessions always start with the `expose_workspace_tools` entry point (see below). |
 | `steps` | 1–500 | Max model calls per turn. |
+| `permission` | map `rule: ask \| deny` | Rules that narrow what the user's config allows: `"bash(git push*)": deny`, `web_fetch: ask`. `allow` is refused here, since an agent never widens. Frozen into the session snapshot. See [tools.md](tools.md#permission-rules). |
 
 Any other key is an error, so a typo is never silently ignored.
 
@@ -237,6 +238,5 @@ are task tools, not control tools; a child session sees its tree's jobs.
 
 ## Not yet
 
-- Per-tool permission rules (OpenCode's `permission` map).
 - `temperature`/`top_p`.
 - Hidden or disabled agents.

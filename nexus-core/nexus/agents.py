@@ -10,6 +10,7 @@ effort: high                                     # preferred reasoning effort
 tools: [read, bash]                              # allowed task tools; omit for all task tools
 control: [session]                               # control tools; none unless listed
 steps: 20                                        # max loop steps per turn (default 50)
+permission: {"bash(git push*)": deny, web_fetch: ask}   # narrows the user's rules; ask or deny only
 ---
 You review code. Point out bugs and risks; do not edit files.
 ```
@@ -51,13 +52,14 @@ BUILTIN_DIR = Path(__file__).parent / "builtin_agents"
 DEFAULT_AGENT = "build"
 MAX_FILE_BYTES = 256 * 1024
 _NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
-_FIELDS = {"description", "mode", "model", "effort", "tools", "control", "steps"}
+_FIELDS = {"description", "mode", "model", "effort", "tools", "control", "steps", "permission"}
 MODES = ("primary", "subagent", "all")
 CONTROL_TOOLS = ("session",)  # the control tools an agent file may grant
 # Every control tool, whether granted by an agent or always available: none of these
 # is ever bound inside a `code` cell.
 MESSAGE_TOOL = "message_session"  # exposed to a session by its first `session` call, never granted by an agent file
-NEXUS_CONTROL_TOOLS = ("session", MESSAGE_TOOL, "expose_workspace_tools", "change_session_directory", "worktree")
+ESCALATE_TOOL = "escalate"  # every child session has it; a root session never does; never granted by an agent file
+NEXUS_CONTROL_TOOLS = ("session", MESSAGE_TOOL, ESCALATE_TOOL, "expose_workspace_tools", "change_session_directory", "worktree")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +75,7 @@ class AgentDef:
     tools: tuple[str, ...] | None = None  # None = every task tool
     control: tuple[str, ...] = ()  # control tools (CONTROL_TOOLS); never implied
     steps: int | None = None
+    permission: tuple[tuple[str, str], ...] = ()  # (rule, "ask" | "deny") in file order
 
 
 @dataclass
@@ -137,6 +140,12 @@ def parse(path: Path, source: str) -> AgentDef:
     for key in ("model", "effort"):
         if meta.get(key) is not None and not isinstance(meta[key], str):
             raise ValueError(f"{key} must be a string")
+    rules: list[Any] = []
+    if meta.get("permission") is not None:
+        from .permissions import parse_rules
+        rules, problems = parse_rules(meta["permission"], agent=True)
+        if problems:
+            raise ValueError("permission: " + "; ".join(problems))
     prompt = match.group(2).strip()
     if not prompt:
         raise ValueError("the body (system prompt) is empty")
@@ -144,6 +153,7 @@ def parse(path: Path, source: str) -> AgentDef:
         name=name, description=description.strip(), prompt=prompt, source=source, path=str(path), mode=mode,
         model=meta.get("model"), effort=meta.get("effort"),
         tools=tuple(tools) if tools is not None else None, control=tuple(control), steps=steps,
+        permission=tuple((rule.text, rule.action) for rule in rules),
     )
 
 

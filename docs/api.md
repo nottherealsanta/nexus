@@ -118,7 +118,8 @@ Configuration patch paths and polling behavior are described in [config.md](conf
  "parts": [{"type": "tool_call", "id": "call_…", "name": "bash", "arguments": "{…}", "origin": "codex", "raw": {…}}]}
 
 // Pending approval (also the data of permission.asked)
-{"id": "per_…", "session_id": "ses_…", "tool": "bash", "call_id": "call_…", "args": {"command": "ls"}}
+{"id": "per_…", "session_id": "ses_…", "tool": "bash", "call_id": "call_…", "args": {"command": "ls"},
+ "rule": "bash(git *)"}   // `rule` only when a permission rule made it ask (docs/tools.md#permission-rules)
 
 // Pending question (also the data of question.asked)
 {"id": "qst_…", "session_id": "ses_…", "call_id": "call_…", "created": 1793…,
@@ -799,6 +800,7 @@ Deleting a project publishes one tombstone per deleted session, then
 | `log.retention` | a global retention pass: `{at, events: {removed, floor, head, protected, pinned}, turns, mutations, settings}` |
 | `session.notified` | `{from, text}`: a `wait: false` child finished, and its answer goes to this (parent) session |
 | `session.workspace_tools` | `{active, entry, tools}`: the on-demand workspace controls were activated |
+| `session.escalated` | `{needed, why, parent_id}`: a child reported it is blocked (its parent's report carries it) |
 | `session.message_tool` | `{active, tools}`: `message_session` was exposed by the session's first `session` call (once) |
 | `session.directory_changed` | `{from, to, branch, repository, worktree, source, project_id, frozen_directory, instructions}` |
 | `worktree.listed` | `{repository, main, session_directory, worktrees: [...]}` |

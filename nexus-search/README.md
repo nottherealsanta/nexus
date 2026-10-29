@@ -4,9 +4,13 @@ Local SearXNG deployment for the planned Core `web_search` tool. Adapted from
 `../nexus/websearch/`; Core integration is tracked in PLAN.md Step 11a.
 Default endpoint: `http://127.0.0.1:18765/search`.
 
-Run either Docker or Apple container, not both on the same port. These commands
-have not yet been smoke-tested here. `latest` is a bootstrap default; set
-`SEARXNG_IMAGE` to a tested tag/digest before release.
+Run either Docker or Apple container, not both on the same port. The Docker
+Compose path was smoke-tested on 2026-10-29: the container starts and
+`/search?format=json` returns results. The Apple `container` path has not been
+tried here. `latest` is a bootstrap default; the tested image was
+`searxng/searxng@sha256:eb2a404db174d33a04cd9f2e519bcae2ca722a58923510652cc1314be94e8e63`
+(created 2026-09-29). Set `SEARXNG_IMAGE` to that digest, or a newer tested one,
+before release (PLAN.md O6).
 
 ## Configuration
 

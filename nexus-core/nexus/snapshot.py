@@ -132,6 +132,7 @@ def agent_record(agent: Any) -> dict[str, Any]:
         "tools": list(agent.tools) if agent.tools is not None else None,
         "control": list(agent.control),
         "steps": agent.steps,
+        "permission": dict(agent.permission),
         "prompt": agent.prompt,
     }
 

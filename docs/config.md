@@ -19,6 +19,16 @@ by the daemon's two-second poll. Both clients reload Settings on that event.
 Shared `ui.detail` (`low`, `medium`, `high`) and `ui.reduced_motion` are
 read and written by both clients. Client layout preferences remain local.
 
+`[tools.permission]` holds permission rules, `"bash(git push*)" = "deny"`; see
+[tools.md](tools.md#permission-rules). Rules that do not parse are listed in `errors`
+and skipped, and the others still apply.
+
+`[web]` configures the web tools: `search_url` (default
+`http://127.0.0.1:18765/search`, the `nexus-search/` SearXNG; any http(s)
+SearXNG `/search` endpoint works) and `fetch_timeout_s` (default 15, 1 to 60;
+a call may ask for less, never more than 20). The web tools read these on each
+call. Neither client has a Settings row for them yet.
+
 `nexus config import-mcp <path>` imports `servers`, `mcpServers`, `mcp` and
 `context_servers` maps into `[mcp.servers.<name>]`, refusing duplicate names.
 Entries retain their source dialect for the MCP work item. The config API

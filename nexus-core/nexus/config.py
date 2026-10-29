@@ -23,8 +23,9 @@ from .paths import home
 # increments can extend this inventory without changing the file format.
 DEFAULTS: dict[str, dict[str, Any]] = {
     "defaults": {"model": "", "effort": "", "agent": "", "permission": "allow"},
-    "tools": {"disabled": []},
+    "tools": {"disabled": [], "permission": {}},
     "ui": {"detail": "medium", "reduced_motion": False},
+    "web": {"search_url": "http://127.0.0.1:18765/search", "fetch_timeout_s": 15},
 }
 
 
@@ -36,6 +37,10 @@ SCHEMA: dict[str, dict[str, Any]] = {
     "defaults.agent": {"type": "string"},
     "defaults.permission": {"type": "string", "enum": ["allow", "ask"]},
     "tools.disabled": {"type": "array", "items": {"type": "string"}},
+    "tools.permission": {"type": "object", "description": "rule = allow | ask | deny, e.g. \"bash(git push*)\" = \"deny\"; "
+                         "deny always wins, otherwise the last matching rule decides"},
+    "web.search_url": {"type": "string", "description": "SearXNG /search endpoint for web_search (nexus-search/)"},
+    "web.fetch_timeout_s": {"type": "number", "minimum": 1, "maximum": 60},
     "mcp.servers": {"type": "object", "masked_fields": ["env", "headers", "credential fields"]},
 }
 
@@ -44,6 +49,10 @@ def _valid(section: str, key: str, value: Any) -> bool:
     if section == "ui":
         return (isinstance(value, bool) if key == "reduced_motion"
                 else isinstance(value, str) and value in ("low", "medium", "high"))
+    if section == "web":
+        if key == "search_url":
+            return isinstance(value, str) and value.startswith(("http://", "https://")) and len(value) <= 2048
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and 1 <= value <= 60
     if section == "defaults":
         if not isinstance(value, str):
             return False
@@ -56,6 +65,9 @@ def _valid(section: str, key: str, value: Any) -> bool:
             except ValueError:
                 return False
         return True
+    if section == "tools" and key == "permission":
+        from .permissions import parse_rules
+        return isinstance(value, dict) and not parse_rules(_plain(value))[1]
     if section == "tools" and key == "disabled":
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             return False
@@ -66,6 +78,12 @@ def _valid(section: str, key: str, value: Any) -> bool:
             return False
         return True
     return False
+
+
+def _plain(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    return value.unwrap() if hasattr(value, "unwrap") else value
 
 
 MASK = "********"
@@ -127,7 +145,15 @@ class ConfigFile:
             for key in keys:
                 if key in table:
                     value = table[key]
-                    if _valid(section, key, value):
+                    if (section, key) == ("tools", "permission"):
+                        # Valid rules still apply when one is wrong: a typo must not drop a deny rule.
+                        from .permissions import parse_rules
+                        plain = _plain(value)
+                        problems = parse_rules(plain)[1] if isinstance(plain, dict) else ["expected a table"]
+                        errors.extend(f"tools.permission: {problem}" for problem in problems)
+                        if isinstance(plain, dict):
+                            values[section][key] = plain
+                    elif _valid(section, key, value):
                         values[section][key] = value.unwrap() if hasattr(value, "unwrap") else value
                     else:
                         errors.append(f"{section}.{key}: invalid value")

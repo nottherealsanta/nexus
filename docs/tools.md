@@ -1,14 +1,14 @@
 # Tools
 
-`nexus/tools/` holds the six task tools and the two companion tools for
-background bash. They act on the workspace, except `ask`, which asks the user a
+`nexus/tools/` holds the twelve task tools (read, grep, glob, ls, bash, edit,
+multiedit, write, web_search, web_fetch, ask, code) and the two companion tools for background bash. They act on the workspace, except `ask`, which asks the user a
 question and returns the answer as data. Changing Nexus itself (session,
 workspace, worktree, model) is never a task tool; it is the control plane
 (PLAN.md, "Task tools vs. control"). The workspace controls in this document are
 control tools: they are defined in `nexus/workspace.py`, executed by the daemon,
 and are not part of `DEFAULT_TOOLS` or `nexus/tools/`.
 
-`DEFAULT_TOOLS = (read, bash, edit, write, ask, code)`.
+`DEFAULT_TOOLS = (read, grep, glob, ls, bash, edit, multiedit, write, web_search, web_fetch, ask, code)`.
 `BASH_JOB_TOOLS = (bash_output, bash_kill)` is granted with `bash` (unless
 disabled individually), because a background command needs a way to be read and
 stopped. Agents may also name a job tool explicitly; disabling `bash` removes
@@ -21,12 +21,68 @@ guard and whether the result is model-visible.
 | File | Role |
 | --- | --- |
 | `tools/base.py` | `Tool`, `ToolContext`, `ToolError`, `resolve()`, `clip()` |
-| `tools/read.py`, `bash.py`, `edit.py`, `write.py` | Workspace tools |
+| `tools/read.py`, `bash.py`, `edit.py`, `multiedit.py`, `write.py` | Workspace tools |
+| `tools/web_search.py`, `web_fetch.py`, `_html_markdown.py`, `net.py` | Web tools, the HTML-to-Markdown converter and the public-only HTTP client |
+| `tools/grep.py`, `glob.py`, `ls.py`, `walk.py`, `_grep_scan.py` | Search and listing tools, the shared walk and the fallback scan worker |
 | `tools/ask.py`, `questions.py` | `ask` spec and the validated question/reply contract |
 | `tools/code.py`, `kernels.py` | Code spec and daemon-owned Monty kernels |
 | `observations.py` | Per-session read observations and the read-before-edit guard |
 | `bash_jobs.py` | Daemon-owned background bash jobs |
 | `workspace.py`, `worktrees.py` | Workspace control tools, directory moves and Git worktree operations |
+
+## Permission rules
+
+`allow`, `ask` or `deny` per tool and per pattern, from
+`[tools.permission]` in the config file and from an agent file's `permission:`
+map (`nexus/permissions.py`, adapted from old Nexus). A rule is `tool` (every
+call) or `tool(pattern)`:
+
+```toml
+[tools.permission]
+bash = "ask"                       # every command asks, even in an allow session
+"bash(git status*)" = "allow"      # except this one: no prompt, even in an ask session
+"bash(git push*)" = "deny"         # never runs; the model gets an error naming the rule
+"read(*.env)" = "deny"
+"edit(src/*)" = "allow"
+web_fetch = "ask"
+"web_fetch(https://docs.python.org/*)" = "allow"
+```
+
+* **Key.** The pattern is matched against the call's key: `bash`, the command;
+  `read`, `grep`, `glob`, `ls`, `edit`, `write`, `multiedit`, the path (relative
+  to the session directory with `..` and symlinks resolved, or absolute when
+  outside it; a missing `grep`/`glob`/`ls` path is the workspace, `.`); an
+  `edit` patch has one key per file it touches; `web_fetch`, the URL without
+  credentials, query or fragment and with a lowercased host; `web_search`, the
+  query with spaces collapsed. Every other tool has no key, so only a bare
+  `tool` rule matches it. `tool` may be a glob (`mcp__github__*`). In a pattern
+  `*` matches any characters including `/`, `?` one character, `\` escapes;
+  matching is case sensitive.
+* **Order.** Any matching `deny`, from either source, wins. Otherwise the last
+  matching rule in `[tools.permission]` (file order) decides `allow` or `ask`.
+  The agent's rules (`ask` and `deny` only) add an `ask`. A call no rule
+  matches is decided as before: the session's `permission`, and the tools that
+  never ask. For a patch, a `deny` or `ask` pattern matches if *any* file does,
+  and an `allow` pattern only if *every* file does.
+* **bash.** A compound command (`;`, `&&`, `|`, a newline, `$(…)`, backticks,
+  an unclosed quote) is never matched by an `allow` pattern. `deny` and `ask`
+  patterns are tested on the whole command and on each part, so
+  `"bash(rm -rf*)" = "deny"` also stops `cd build && rm -rf .`.
+* **Where it applies.** Every tool call, including calls nested in a `code`
+  cell. A denied call is an error result: `bash was refused by permission rule
+  `bash(git push*)` (config); do not retry it…`. A rule that made a call ask adds
+  `rule` to `permission.asked`.
+* **Live and frozen.** Config rules are re-read when the file changes, so an
+  edit applies to running sessions at their next call. Agent rules are part of
+  the session's frozen agent snapshot.
+* **Errors.** A rule that does not parse is skipped and listed in the config
+  `errors` (`tools.permission: …`); the valid rules still apply, so a typo never
+  drops a `deny`. A write through `PATCH /api/config` with a bad rule is
+  refused. A bad agent rule makes the agent file invalid (listed in `problems`).
+* **Limits.** This is a guard against mistakes, not a sandbox. A rule on `read`
+  does not stop `bash` from running `cat`. Rule tables per tool
+  (`[tools.permission.bash]`) are not supported, because TOML orders sub-tables
+  after plain keys and would change which rule is last.
 
 ## Shared rules
 
@@ -48,12 +104,13 @@ sees, never silent.
 **Approval.** Tools do not ask for permission. The loop calls an `approve` callback before each
 call ([loop.md](loop.md#approval)). The daemon auto-approves `read`, `bash_output`,
 `bash_kill`, `ask`, `edit`, `write`, the outer `code` call, the `session` and
-`message_session` control tools and every workspace control tool; `edit` and `write`
+`message_session` and `escalate` control tools and every workspace control tool; `edit` and `write`
 are approval-free inside the session directory by fixed policy, with no setting
 to change that. `bash` (including `background`) still asks unless the session's
 permission is `allow` (`--yes`), which is the default for new sessions. `ask`
 is not an approval: its answers are data for the model, never a grant. Path confinement and read freshness still apply to
-every in-directory edit. Activation and moving do not ask a question.
+every in-directory edit. Activation and moving do not ask a question. [Permission rules](#permission-rules)
+can make any of these ask or refuse, and let `bash` or the web tools run without asking.
 
 <a id="read-observations-and-freshness"></a>
 **Read observations and freshness.** A direct `read` whose result enters the
@@ -276,6 +333,109 @@ Read a text file with line numbers, or list a directory.
   saved result back into conversation history. A read whose result is unknown
   grants no coverage, so recovery cannot authorize an edit from content the
   model never received ([daemon.md](daemon.md#crash-recovery)).
+
+## grep, glob, ls
+
+Adapted from old Nexus. All three are read-only, confined to the session
+directory (a path outside it, or a symlink out of it, is refused or skipped),
+auto-approved, and record **no** read observation: a match or a listing is not
+a read, so a file still has to be `read` before `edit`. Output is clipped to the
+30,000-character rule, and every cut says so in the result.
+
+The walk (`tools/walk.py`) is what Git would show in a work tree (tracked and
+untracked, minus `.gitignore`d, recomputed on every call so a file written a
+moment ago is found) and a plain walk elsewhere. Symlinks are never followed or
+listed, `.git` is never entered, hidden (dot-prefixed) entries are skipped
+unless `include_hidden`, and the walk stops at 50,000 entries (announced).
+
+### `grep {pattern, path?, glob?, regex?, case_insensitive?, include_hidden?, max_matches?}`
+
+Lines are `path:line:text`, sorted by path, with paths relative to the workspace
+(so they can go straight into `read`). `regex` defaults to true; `max_matches`
+defaults to 100 and is capped at 2000, after which `[showing the first N
+matches; there are more …]` is added. A line over 2000 characters is cut and
+marked. `no matches` is the empty result. Files over 2 MiB and binary files
+are skipped. A search over 20 s is stopped with an error.
+
+With `rg` on PATH the search is `rg` (Rust regex syntax, which cannot
+backtrack catastrophically). Without it, a Python `re` scan runs in a
+killable subprocess (`_grep_scan.py`, started with `-I`) over the same file list,
+so a runaway pattern is killed, not run in the daemon.
+
+### `glob {pattern, path?, include_hidden?}`
+
+A shell glob relative to `path`; `**` spans directories and a trailing `/` matches
+directories only. Returns up to 200 sorted paths (directories end in `/`); more
+adds `[showing 200 of N matches …]`. At most 4 `**` segments and 1024 characters.
+
+### `ls {path?, include_hidden?}`
+
+One directory as it is on disk (it does not apply `.gitignore`). Directories end
+in `/`, a symlink in `@` (`@ -> target` only when the target is inside the
+workspace). At most 1000 entries, then a clip notice. An empty directory returns
+`(empty directory)`.
+
+## multiedit
+
+`multiedit {path, edits: [{old_string, new_string, replace_all?}]}` applies the
+edits in order to the progressively edited text of one file and writes once; if
+any edit is invalid (not found, ambiguous without `replace_all`, identical,
+malformed) nothing is written. Because positions in intermediate text do not map
+to the lines the model read, it needs a **complete** observation of the current
+revision (like overwrite), not just coverage of the touched lines. It runs under
+the same mutation lock as `edit`, drops the file's observation after writing,
+and is auto-approved inside the session directory.
+
+## web_search
+
+`web_search {query, limit?, page?}` queries the SearXNG at `[web] search_url`
+([config.md](config.md)), the service in `nexus-search/` (Docker Compose or Apple
+`container`; see its README). Core never starts a container: when the service is
+down the error says how to start it. Only JSON is read (`json` must be an
+enabled format in SearXNG's `settings.yml`, which the shipped one does).
+`query` is at most 1000 characters, `limit` 1 to 10, `page` 1 or 2, the response
+at most 512,000 bytes, the call 15 s.
+
+The result is a header (`Search query`, `Provider`) and the results between
+`<<< BEGIN UNTRUSTED SEARCH RESULTS >>>` and `<<< END … >>>`: title, URL,
+snippet (1200 characters), source engines and date. Control characters are
+removed, text that imitates the markers is defused, duplicate URLs are dropped,
+and only `http(s)` URLs without credentials are kept. Links are never fetched
+by this tool. Results over the output limit end with `[results clipped]`. HTTP
+429, 403, other statuses, a timeout, an unreachable service and a non-SearXNG
+body each give a distinct error.
+
+## web_fetch
+
+`web_fetch {url, offset?, limit?, timeout_s?}` fetches a public page and returns
+Markdown between `<<< BEGIN UNTRUSTED WEB CONTENT >>>` and `<<< END … >>>`,
+after a header with `Source`, `Final URL`, `HTTP status`, `Content-Type` and
+`Title`. The header never contains credentials, query or fragment. HTML is
+converted offline by `_html_markdown.py` (scripts, styles, forms and navigation
+are dropped; limits on input, nodes, depth and output); `text/plain` and
+Markdown are returned as they are; PDFs and other types are refused.
+`offset`/`limit` select Markdown lines (1-based). The output is cut to the
+30,000-character limit with `[showing lines A–B of N; use offset=… to read on]`,
+a single line longer than the budget is cut and says so, and a download stopped
+at 2,000,000 bytes says so. A status of 400 or more is an error.
+
+`nexus/net.py` enforces the network policy for every hop:
+
+* http or https only; no credentials, spaces or control characters in the URL;
+* the host is resolved and **every** address must be globally routable.
+  Loopback, private, link-local (including cloud metadata), unique-local,
+  multicast, unspecified and IPv4-mapped forms are refused;
+* the connection is made to the checked address, with the original `Host` and
+  TLS server name, so the name cannot resolve differently afterwards;
+* redirects (up to 5) are followed only within the same origin and re-checked at
+  each hop; a redirect to another origin is an error naming it, and the model
+  may fetch that URL itself;
+* no proxy or environment settings are read.
+
+Both web tools reach the network, so they are **not** auto-approved: a session
+with permission `ask` prompts for each call, unless a [permission rule](#permission-rules) says otherwise.
+The default agents without a `tools` list (`build`, `quick`, `plan`) and `scout`
+have them; `orchestrate` does not.
 
 ## bash
 

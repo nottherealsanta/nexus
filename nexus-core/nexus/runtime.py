@@ -52,10 +52,10 @@ from pathlib import Path
 from typing import Any
 
 from . import agents as agent_files
+from . import permissions, worktrees
 from . import questions as question_contract
 from . import snapshot as snapshots
 from . import workspace as workspace_control
-from . import worktrees
 from .bash_jobs import NOTICE_CHARS, Job, Jobs
 from .bus import Bus
 from .codec import message_to_json, to_json
@@ -102,9 +102,12 @@ from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError
 from .tools import bash as bash_tool
 from .tools.base import clip
 
-AUTO_APPROVED = {"read", "bash_output", "bash_kill", "session", agent_files.MESSAGE_TOOL, "code", "ask", "edit", "write",
+AUTO_APPROVED = {"read", "grep", "glob", "ls", "multiedit", "bash_output", "bash_kill", "session", agent_files.MESSAGE_TOOL,
+                 agent_files.ESCALATE_TOOL, "code", "ask", "edit", "write",
                  *workspace_control.CONTROL_NAMES}
 CHILD_RESULT_CHARS = 30_000
+MAX_ESCALATIONS = 5  # blocks one child can report before its parent reads them
+MAX_ESCALATION_FIELD = 600
 TITLE_CHARS = 60
 MAX_RESOLVED_QUESTIONS = 256  # tombstones so a late or duplicate reply gets 409, not a second event
 
@@ -184,6 +187,7 @@ class Runtime:
         self.resolved_questions: dict[str, str] = {}  # qst id -> "answered" | "cancelled" (bounded tombstones)
         self.inboxes: dict[str, list[str]] = {}  # session id -> notices waiting for its next model call
         self.notify: dict[str, str] = {}  # child id -> parent id, for children started with wait: false
+        self.escalations: dict[str, list[str]] = {}  # child id -> blocks it reported, until its parent's report carries them
         self.errors: dict[str, str] = {}  # session id -> how its last turn failed
         self._parents: dict[str, str | None] = {}  # session id -> parent id (never changes)
         self.pending_reads: dict[str, list[FileObservation]] = {}
@@ -417,7 +421,8 @@ class Runtime:
 
     @staticmethod
     def enabled_names(granted: list[str], control: list[str], disabled: set[str], child: bool,
-                      workspace: dict[str, Any] | None, messaging: dict[str, Any] | None = None) -> list[str]:
+                      workspace: dict[str, Any] | None, messaging: dict[str, Any] | None = None,
+                      escalation: bool = False) -> list[str]:
         """Every tool the next request offers: task tools, granted control tools and workspace controls."""
         names = Runtime.enabled_tool_names(granted, control, disabled, child)
         state = workspace or {}
@@ -430,6 +435,9 @@ class Runtime:
         # Exposed by the first `session` call; it needs `session` itself to be available.
         if (messaging or {}).get("activated") and "session" in names and agent_files.MESSAGE_TOOL not in disabled:
             names.append(agent_files.MESSAGE_TOOL)
+        # Children report a block to their parent. Snapshots from before `escalate` existed lack the flag.
+        if child and escalation and agent_files.ESCALATE_TOOL not in disabled:
+            names.append(agent_files.ESCALATE_TOOL)
         return names
 
     @staticmethod
@@ -437,7 +445,7 @@ class Runtime:
         """Enabled tools in request order, from the snapshot's grants and the session's switches."""
         return Runtime.enabled_names(
             snapshot["granted_tools"], snapshot["control"], session.disabled(), session.parent_id is not None,
-            snapshot.get("workspace"), snapshot.get("messaging"))
+            snapshot.get("workspace"), snapshot.get("messaging"), bool(snapshot.get("escalation")))
 
     def _session_spec(self, child_agents: list[dict[str, Any]]) -> ToolSpec:
         return ToolSpec(
@@ -496,6 +504,33 @@ class Runtime:
             ),
         }
 
+    @staticmethod
+    def _escalate_definition() -> dict[str, Any]:
+        return {
+            "name": agent_files.ESCALATE_TOOL,
+            "description": (
+                "Report to the agent that launched you that you are blocked and cannot finish without a decision, "
+                "permission or resource you lack (a denied tool, a path outside your scope, missing credentials, an "
+                "ambiguous requirement only the user can settle). State exactly what is needed and why. This grants "
+                "nothing and does not wait: after calling it, stop working and summarize what you finished and what "
+                "is left. Do not use it for ordinary errors you can work around."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "needed": {"type": "string", "description": "What is needed: the specific action, access or decision."},
+                    "why": {"type": "string", "description": "Why the task cannot be completed without it."},
+                },
+                "required": ["needed", "why"],
+                "additionalProperties": False,
+            },
+            "guidance": (
+                "If you are truly blocked (a refused tool, access you lack, a decision only the user can make), call "
+                "`escalate` with what you need and why, then stop and report. It grants nothing and does not wait. "
+                "Work around ordinary errors instead; never route around a refusal."
+            ),
+        }
+
     def _definition(self, name: str, registry: dict[str, Tool], child_agents: list[dict[str, Any]]) -> dict[str, Any]:
         if name == "session":
             return {
@@ -506,6 +541,8 @@ class Runtime:
             }
         if name == agent_files.MESSAGE_TOOL:
             return self._message_definition()
+        if name == agent_files.ESCALATE_TOOL:
+            return self._escalate_definition()
         if name in workspace_control.CONTROL_NAMES:
             return workspace_control.definition(name)
         tool = registry[name]
@@ -528,7 +565,7 @@ class Runtime:
             )
         child_agents = [snapshots.agent_summary(a) for a in found.allowed(child=True)]
         state = dict(workspace) if workspace is not None else {"entry": True, "activated": False}
-        names = self.enabled_names(granted, list(spec.control), disabled, child, state, messaging)
+        names = self.enabled_names(granted, list(spec.control), disabled, child, state, messaging, escalation=child)
         definitions = {n: self._definition(n, registry, child_agents) for n in names}
         if instruction_file is None:
             instruction_file = snapshots.read_instruction_file(directory)
@@ -547,6 +584,7 @@ class Runtime:
             "tool_definitions": definitions,
             "workspace": state,
             "messaging": {"activated": bool((messaging or {}).get("activated"))},
+            "escalation": child,
             "directory_changes": list(directory_changes or []),
             "child_agents": child_agents,
             "instruction_file": instruction_file,
@@ -745,7 +783,8 @@ class Runtime:
         if before_snapshot is not None and new_disabled is not None:
             target = self.enabled_names(
                 before_snapshot["granted_tools"], before_snapshot["control"], set(new_disabled),
-                current.parent_id is not None, before_snapshot.get("workspace"), before_snapshot.get("messaging"))
+                current.parent_id is not None, before_snapshot.get("workspace"), before_snapshot.get("messaging"),
+                bool(before_snapshot.get("escalation")))
             registry = self._registry()
             unknown_exec = [n for n in target if n not in registry and n not in agent_files.NEXUS_CONTROL_TOOLS
                             and n != "code"]
@@ -1165,7 +1204,7 @@ class Runtime:
         if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
             raise ValueError("disabled_tools must be a list of tool names")
         known = ([t.spec.name for t in DEFAULT_TOOLS + BASH_JOB_TOOLS] + list(agent_files.CONTROL_TOOLS)
-                 + [agent_files.MESSAGE_TOOL] + list(workspace_control.CONTROL_NAMES))
+                 + [agent_files.MESSAGE_TOOL, agent_files.ESCALATE_TOOL] + list(workspace_control.CONTROL_NAMES))
         unknown = [n for n in names if n not in known]
         if unknown:
             raise ValueError(f"unknown tools: {', '.join(unknown)}; known: {', '.join(known)}")
@@ -1266,6 +1305,9 @@ class Runtime:
         async def run_message(args: dict[str, Any], ctx: ToolContext) -> str:
             return self._message_child(session.id, args)
 
+        async def run_escalate(args: dict[str, Any], ctx: ToolContext) -> str:
+            return self._escalate(session, args)
+
         async def run_ask(args: dict[str, Any], ctx: ToolContext) -> str:
             try:
                 questions = question_contract.normalize_request(args)
@@ -1293,7 +1335,8 @@ class Runtime:
                 raise ToolError(str(exc)) from exc
 
         bound = {"bash": run_bash, "bash_output": run_bash_output, "bash_kill": run_bash_kill,
-                 "session": run_session, agent_files.MESSAGE_TOOL: run_message, "ask": run_ask,
+                 "session": run_session, agent_files.MESSAGE_TOOL: run_message, agent_files.ESCALATE_TOOL: run_escalate,
+                 "ask": run_ask,
                  workspace_control.EXPOSE: run_expose,
                  workspace_control.CHANGE_DIRECTORY: run_change_directory,
                  workspace_control.WORKTREE: run_worktree}
@@ -1430,10 +1473,37 @@ class Runtime:
         return (f"Child session {child_id} (agent {child.agent}) was idle; started a new turn with your message. Its "
                 "answer will arrive as a message when it finishes.")
 
+    def _escalate(self, child: Session, args: dict[str, Any]) -> str:
+        """`escalate`: record a block for the parent. It grants nothing and asks the user nothing."""
+        fields = []
+        for key in ("needed", "why"):
+            value = args.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ToolError("escalate needs non-empty 'needed' and 'why'")
+            fields.append(" ".join(value.split())[:MAX_ESCALATION_FIELD])
+        needed, why = fields
+        recorded = self.escalations.setdefault(child.id, [])
+        if len(recorded) >= MAX_ESCALATIONS:
+            raise ToolError(f"escalation limit reached ({MAX_ESCALATIONS}); stop and report what you have")
+        recorded.append(f"{needed} (why: {why})")
+        self.bus.publish("session.escalated", {"needed": needed, "why": why, "parent_id": child.parent_id},
+                         session_id=child.id)
+        return ("Escalation recorded for the agent that launched you. It grants nothing. Stop now and give a final "
+                "report: what you finished, what is left, and what you need.")
+
+    def _attention(self, child_id: str) -> str:
+        blocks = self.escalations.pop(child_id, [])
+        if not blocks:
+            return ""
+        return ("\n\nAttention: the child reported it is blocked. You are the escalation point: resolve what you can "
+                "(then send the child a follow-up with `message_session`), and ask the user for anything only they "
+                "can decide. The child does not wait for an answer.\n" + "\n".join(f"- {b}" for b in blocks))
+
     def _child_report(self, child_id: str) -> str:
         child = self.session(child_id)
         if child_id in self.errors:
-            return f"Child session {child_id} (agent {child.agent}) failed: {self.errors[child_id]}"
+            return (f"Child session {child_id} (agent {child.agent}) failed: {self.errors[child_id]}"
+                    + self._attention(child_id))
         answer = ""
         for stored in reversed(self.store.messages(child_id)):
             if stored.message.role == "assistant":
@@ -1442,7 +1512,8 @@ class Runtime:
                     break
         if len(answer) > CHILD_RESULT_CHARS:
             answer = answer[:CHILD_RESULT_CHARS] + f"\n[… answer clipped at {CHILD_RESULT_CHARS} of {len(answer)} characters]"
-        return f"Child session {child_id} (agent {child.agent}) finished.\n\n{answer or '(no text answer)'}"
+        return (f"Child session {child_id} (agent {child.agent}) finished.\n\n{answer or '(no text answer)'}"
+                + self._attention(child_id))
 
     def _deliver(self, child_id: str) -> None:
         """A wait: false child finished: hand its report to the parent."""
@@ -1890,11 +1961,33 @@ class Runtime:
 
     # -- approvals -------------------------------------------------------------
 
+    def permission_verdict(self, session: Session, tool: str, args: dict[str, Any]) -> permissions.Verdict | None:
+        """The permission rules' verdict for a call (nexus/permissions.py), from the config file and the frozen agent."""
+        try:
+            agent_rules = permissions.parse_rules(self.snapshot_for(session)["agent"].get("permission") or {},
+                                                  agent=True)[0]
+        except (KeyError, TypeError, ValueError):
+            agent_rules = []
+        return permissions.decide(tool, args, session.directory, permissions.config_rules(), agent_rules)
+
     async def _approve(self, session_id: str, call: ToolCall, args: dict[str, Any]) -> bool:
-        if call.name in AUTO_APPROVED or self.session(session_id).permission == "allow":
+        try:
+            session = self.session(session_id)
+        except NotFound:
+            if call.name not in AUTO_APPROVED:
+                raise
+            return True
+        verdict = self.permission_verdict(session, call.name, args)
+        if verdict is not None and verdict.action == "deny":
+            raise ToolError(f"{call.name} was refused by {verdict.reason}; do not retry it, "
+                            "choose another approach or ask the user")
+        asked_by_rule = verdict is not None and verdict.action == "ask"
+        if not asked_by_rule and (verdict is not None or call.name in AUTO_APPROVED or session.permission == "allow"):
             return True
         approval_id = new_id("per")
         request = {"id": approval_id, "session_id": session_id, "tool": call.name, "call_id": call.id, "args": args}
+        if verdict is not None:
+            request["rule"] = verdict.rule
         future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self.approvals[approval_id] = (session_id, future, request)
         self.bus.publish("permission.asked", request, session_id=session_id)

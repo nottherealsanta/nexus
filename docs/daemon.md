@@ -240,6 +240,21 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   answer goes to the parent (`session.notified`): it is added before the
   parent's next model call if the parent is busy, or it starts a new parent turn
   if the parent is idle.
+- **`escalate`.** Every child session (never a root) has `escalate {needed, why}`,
+  recorded in its snapshot as `escalation: true`; an agent file cannot grant it
+  and a switch can turn it off. It is a control tool: it grants nothing, asks
+  nobody and does not wait. It records the block (each field at most 600
+  characters, at most 5 per child until the parent reads them) and publishes
+  `session.escalated` on the child. The child is told to stop and report. When
+  the parent receives the child's report (the `session` result, or the
+  `session.notified` text for `wait: false`), it ends with an `Attention:` block
+  listing each `needed (why: …)`, saying the parent is the escalation point:
+  resolve what it can, continue the child with `message_session`, and ask the
+  user only for what the user alone can decide. The user sees it in the parent's
+  timeline (the report) and the child's (the call and its result). A child
+  session from before this existed has no `escalation` flag and does not gain
+  the tool. Pending escalations are in memory: a daemon restart interrupts the
+  turn that would have carried them.
 - **`message_session`.** The first successful `session` call also exposes
   `message_session {session, message}` to the calling session, once, recorded
   in its snapshot as `messaging: {activated: true}` and announced with

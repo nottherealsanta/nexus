@@ -283,8 +283,12 @@ class Agent:
             return ToolResult(call.id, f"unknown tool {call.name!r}", is_error=True)
         if args is None:
             return ToolResult(call.id, "arguments were not a JSON object", is_error=True)
-        if self.approve is not None and not await self.approve(call, args):
-            return ToolResult(call.id, "the user declined this tool call", is_error=True)
+        if self.approve is not None:
+            try:
+                if not await self.approve(call, args):
+                    return ToolResult(call.id, "the user declined this tool call", is_error=True)
+            except ToolError as exc:  # refused by a permission rule
+                return ToolResult(call.id, str(exc), is_error=True)
         try:
             return ToolResult(call.id, await tool.run(args, ToolContext(
                 self.workspace, call.id, files=self.files, cwd_changed=self.cwd_changed)))

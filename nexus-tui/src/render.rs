@@ -3055,11 +3055,17 @@ const PROMPT_BASE_TOKENS: u64 = 900;
 const TOOL_SCHEMA_TOKENS: u64 = 450;
 /// The tools an agent without a `tools` list is offered, and the workspace
 /// entry point every new session gets (docs/agents.md).
-const DEFAULT_TOOLS: [&str; 7] = [
+const DEFAULT_TOOLS: [&str; 13] = [
     "read",
+    "grep",
+    "glob",
+    "ls",
     "bash",
     "edit",
+    "multiedit",
     "write",
+    "web_search",
+    "web_fetch",
     "ask",
     "code",
     "expose_workspace_tools",

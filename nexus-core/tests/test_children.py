@@ -83,7 +83,7 @@ async def test_blocking_child_answers_the_parent_tool_call(env):
     tool_output = next(t for role, t in await _texts(client, parent["id"]) if role == "tool")
     assert tool_output.startswith(f"Child session {child['id']} (agent helper) finished.\n\n42\n\n[Nexus notice: `message_session` is now available]")
     # A child never gets the session tool, even when its agent lists it.
-    assert [t.name for t in providers["child"].requests[0].tools] == ["read", "bash", "bash_output", "bash_kill", "edit", "write", "ask", "code", "expose_workspace_tools"]
+    assert [t.name for t in providers["child"].requests[0].tools] == ["read", "grep", "glob", "ls", "bash", "bash_output", "bash_kill", "edit", "multiedit", "write", "web_search", "web_fetch", "ask", "code", "expose_workspace_tools", "escalate"]
     tree = (await client.get(f"/api/session/{child['id']}/tree")).json()
     assert tree["id"] == parent["id"] and [c["id"] for c in tree["children"]] == [child["id"]]
 
@@ -279,3 +279,87 @@ async def test_message_session_steers_a_working_child(env):
     assert child_texts[-1] == ("assistant", "after steer")
     notices = [t for role, t in await _texts(client, parent["id"]) if role == "user" and t.startswith("[Notification")]
     assert notices and notices[-1].endswith("after steer")
+
+
+def _escalate(call_id, **args):
+    return ToolCall(call_id, "escalate", json.dumps(args))
+
+
+async def test_escalate_is_offered_to_children_only_and_is_a_control_tool(env):
+    rt, client, _providers, workspace = env
+    parent = await _start_parent(client, workspace)
+    child = (await client.post("/api/session", json={"parent": parent["id"], "agent": "helper"})).json()
+    assert "escalate" not in parent["tools"] and child["tools"][-1] == "escalate"
+    child_prompt = rt.store.snapshot(child["id"])["system_prompt"]
+    assert "`escalate`" in child_prompt and "never route around a refusal" in child_prompt
+    assert "`escalate`" not in rt.store.snapshot(parent["id"])["system_prompt"]
+    # It can be switched off per session like any tool.
+    off = (await client.patch(f"/api/session/{child['id']}", json={"disabled_tools": ["escalate"]})).json()
+    assert "escalate" not in off["tools"]
+    # An agent file cannot grant it to a root session.
+    (workspace / ".agents" / "agents" / "sneaky.md").write_text(
+        "---\ndescription: x\ntools: [read, escalate]\n---\nBody.\n")
+    response = await client.post("/api/session", json={"directory": str(workspace), "agent": "sneaky"})
+    assert response.status_code >= 400
+
+
+async def test_blocking_parent_reads_the_childs_escalation(env):
+    rt, client, providers, workspace = env
+    providers["parent"].replies = [[_call("c1", agent="helper", prompt="deploy it")], [Text("asking the user")]]
+    providers["child"].replies = [
+        [_escalate("e1", needed="  the deploy   key ", why="the tool was denied")],
+        [Text("Built it; could not deploy.")]]
+    parent = await _start_parent(client, workspace)
+    await _prompt_and_wait(rt, client, parent["id"])
+    [child] = (await client.get(f"/api/session/{parent['id']}/children")).json()
+    tool_output = next(t for role, t in await _texts(client, parent["id"]) if role == "tool")
+    assert "finished.\n\nBuilt it; could not deploy." in tool_output
+    assert "Attention: the child reported it is blocked." in tool_output
+    assert "- the deploy key (why: the tool was denied)" in tool_output and "message_session" in tool_output
+    # The child's own timeline shows the call and its result, and an event says it escalated.
+    child_texts = await _texts(client, child["id"])
+    assert any("Escalation recorded" in (t or "") and "grants nothing" in t for role, t in child_texts if role == "tool")
+    events = (await client.get(f"/api/session/{child['id']}/event")).json()["events"]
+    [escalated] = [e["data"] for e in events if e["type"] == "session.escalated"]
+    assert (escalated["needed"], escalated["why"], escalated["parent_id"]) == ("the deploy key", "the tool was denied", parent["id"])
+    assert not rt.escalations  # carried once, then cleared
+
+
+async def test_non_blocking_escalation_arrives_in_the_notification(env):
+    rt, client, providers, workspace = env
+    providers["parent"].replies = [[_call("c1", agent="helper", prompt="look", wait=False)], [Text("waiting")], [Text("ok")]]
+    providers["child"].replies = [[_escalate("e1", needed="a decision", why="two options")], [Text("stopped")]]
+    parent = await _start_parent(client, workspace)
+    await _prompt_and_wait(rt, client, parent["id"])
+    notice = next(t for role, t in await _texts(client, parent["id"]) if role == "user" and t.startswith("[Notification"))
+    assert "stopped" in notice and "- a decision (why: two options)" in notice
+
+
+async def test_escalate_refuses_bad_arguments_and_is_limited(env):
+    rt, client, providers, workspace = env
+    calls = [_escalate("bad", needed="", why="x")] + [_escalate(f"e{i}", needed=f"n{i}", why="w") for i in range(6)]
+    providers["parent"].replies = [[_call("c1", agent="helper", prompt="go")], [Text("done")]]
+    providers["child"].replies = [calls, [Text("report")]]
+    parent = await _start_parent(client, workspace)
+    await _prompt_and_wait(rt, client, parent["id"])
+    [child] = (await client.get(f"/api/session/{parent['id']}/children")).json()
+    outputs = [t for role, t in await _texts(client, child["id"]) if role == "tool"]
+    assert "non-empty 'needed' and 'why'" in outputs[0]
+    assert sum("Escalation recorded" in o for o in outputs) == 5 and "escalation limit reached (5)" in outputs[-1]
+    tool_output = next(t for role, t in await _texts(client, parent["id"]) if role == "tool")
+    assert tool_output.count("\n- ") == 5
+
+
+async def test_a_child_without_the_flag_keeps_working_and_never_gains_escalate(env):
+    rt, client, providers, workspace = env
+    parent = await _start_parent(client, workspace)
+    child = (await client.post("/api/session", json={"parent": parent["id"], "agent": "helper"})).json()
+    snapshot = rt.store.snapshot(child["id"])
+    snapshot.pop("escalation")
+    snapshot["tool_definitions"].pop("escalate")
+    snapshot["tools"].remove("escalate")
+    rt.store.set_snapshot(child["id"], snapshot)
+    assert "escalate" not in (await client.get(f"/api/session/{child['id']}")).json()["tools"]
+    providers["child"].replies = [[Text("fine")]]
+    await _prompt_and_wait(rt, client, child["id"])
+    assert (await _texts(client, child["id"]))[-1] == ("assistant", "fine")

@@ -510,6 +510,30 @@ sent from NSH in the same project, and the tests above pass in
 
 ### D. Tools
 
+**Landed 2026-10-29: D1–D4** (grep, glob, ls, multiedit) and **D5–D6**
+(`web_search`, `web_fetch`; Core 469 tests, Ruff, TUI tests pass; docs/tools.md).
+**D7 landed 2026-10-29** (permission rules: `nexus/permissions.py`,
+`[tools.permission]`, agent `permission:`; docs/tools.md "Permission rules").
+**D8 landed 2026-10-29** (`escalate`, a child-only control tool; Core 492 tests;
+docs/daemon.md). **Section D is complete.** D5 was smoke-tested against a real
+container on 2026-10-29: `nexus-search/`'s Docker Compose starts SearXNG and
+serves `/search?format=json`, and `web_search` returned real results (image
+`searxng/searxng@sha256:eb2a404d…`, recorded in its README; still to be pinned
+in compose, O6). The Apple `container` path is untried. Port 18765 was held by
+old Nexus's own `websearch-searxng-1` container, so the compose was run on a
+temporary port. The tool is tested against a local
+fake SearXNG. D5/D6 decisions: search reads `[web] search_url` and only JSON; the
+HTML fallback, remote-instance allowlists and the old 1200-line outbound service
+are dropped; `web_fetch` follows only same-origin redirects and refuses
+non-public addresses, with the connection pinned to the checked address
+(`nexus/net.py`); both tools need approval in `ask` sessions. Decisions made while porting:
+grep uses `rg` or a killable Python scan, paths are relative to the workspace,
+and neither grep nor glob nor ls records read observations (a match is not a
+read); `ls` shows the directory as it is on disk (no `.gitignore`); `multiedit`
+needs a complete observation, since its intermediate positions do not map to
+lines read. `scout` and `orchestrate` get grep, glob and ls. Not yet checked in
+a real session with a model; the TUI preview lists the new tools.
+
 All are task tools (`nexus-core/nexus/tools/`), listed in `docs/tools.md`,
 with per-session switches. Each port keeps the old output limits and announces
 clipping.
@@ -1104,6 +1128,10 @@ when each item lands.
 | Layered old config and read-only defaults | One `config.toml`, editable HTTP-backed Settings, revision conflicts and forward defaults for new sessions (A1, 2026-10-29) | Shared settings without rewriting existing context |
 | Old scripted provider coupled to the old model protocol | Dev-gated `mock` llmhub provider and eleven offline scenarios (A2, 2026-10-29) | Exercise the real loop without network |
 | Client-only context estimate | Core context budget uses newest matching-model request usage, with explicit estimated fallback and nullable window (A3, 2026-10-29) | Consistent meters across clients |
+| Old grep/glob/ls/multiedit ran through the old `ToolSpec` with read-deny roots and a mandatory grep subprocess | `tools/grep.py`, `glob.py`, `ls.py`, `multiedit.py` on the nexus10 `Tool`: `rg` when present (killable Python scan otherwise), Git-aware fresh walk, workspace-relative paths, no read observations from searches, whole-file observation for `multiedit` (D1–D4, 2026-10-29) | Same bounds and announced clipping without read-deny roots; a search is not a read |
+| Old websearch/webfetch ran on a 1200-line outbound service with allowlisted origins, an HTML fallback for search and per-origin approval keys | `web_search`/`web_fetch` on `nexus/net.py`: public-address-only, pinned connection, same-origin redirects; search is JSON from `[web] search_url`; content fenced as untrusted; no origin allowlist (D5–D6, 2026-10-29) | The same SSRF and prompt-injection protections in one small module; per-pattern rules come with D7 |
+| Old `permissions.py` (2400 lines: bundles, session grants, path guards, unattended modes, `deny → grants → allow → ask → mode`) | `nexus/permissions.py`: `tool` or `tool(glob)` rules with allow/ask/deny; any deny wins, else the last config rule decides, agent files can only add ask/deny; keys per tool (command, resolved path, URL, query); bash compounds never match an allow; one table in `config.toml`, no per-tool sub-tables; a bad rule is skipped and reported, never dropping the good ones (D7, 2026-10-29) | Same safety properties in a page; session grants are K7; path guards already live in the tools |
+| Old `escalate` was a registered task tool whose escalations the old runtime folded into a `SubagentOutcome.attention` | `escalate` is a control tool added to every child snapshot (`escalation: true`), recorded in memory, announced by `session.escalated`, and appended as an `Attention:` block to the parent's `session` result or notification; it grants nothing and does not wait (D8, 2026-10-29) | Principle 3: it acts on Nexus state, so it is control; the parent's timeline shows it |
 | Client composer history in memory (TUI only) or one global file for all projects (old) | Core stores what the user sent and serves it per project; both clients recall from it; Up recalls on the first line only (2026-10-29, C) | History survives restarts and is shared across clients |
 
 ## 11. Known gaps

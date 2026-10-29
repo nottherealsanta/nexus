@@ -119,7 +119,7 @@ approves `read`, `bash_output`, `bash_kill`, `session`, `message_session`,
 silently; `edit` and `write` are
 approval-free inside the session directory by fixed policy (path confinement and
 read freshness still apply). Nested code calls go through the same approval
-callback. For the other tools (including background `bash`) it approves when the
+callback. Permission rules (`[tools.permission]` and the agent's `permission:`, [tools.md](tools.md#permission-rules)) are checked first: a `deny` becomes an error result the model sees, an `ask` waits even in an `allow` session, and an `allow` skips the wait. For the other tools (including background `bash`) it approves when the
 session's permission is `allow` (the default for new sessions); otherwise it
 publishes `permission.asked` and waits for a client's reply. The CLI answers with `allow <tool>? [y/N]`; `--yes`
 sets the session to `allow`. `ask` has its own `question.asked` wait, not an
