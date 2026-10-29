@@ -5,3 +5,4 @@ __pycache__/
 *.jsonl
 .ruff_cache/
 artifacts/
+.env

@@ -29,6 +29,10 @@ Adapters never read stored credentials. They take a header source
 | `grok` | xAI (SuperGrok) | responses | `https://cli-chat-proxy.grok.com/v1` | `{base}/responses` | `xai` | `grok-4.7` |
 | `copilot` | GitHub Copilot | chat | `https://api.githubcopilot.com` | `{base}/chat/completions` | `github-copilot` | `claude-sonnet-5` |
 | `opencode` | OpenCode Go | chat | `https://opencode.ai/zen/go/v1` | `{base}/chat/completions` | `opencode-go` | `kimi-k3` |
+| `openai` | OpenAI (API key) | responses | `https://api.openai.com/v1` | `{base}/responses` | `openai` | `gpt-6.1-terra` |
+| `groq` | Groq | chat | `https://api.groq.com/openai/v1` | `{base}/chat/completions` | `groq` | `openai/gpt-oss-120b` |
+| `nvidia` | NVIDIA | chat | `https://integrate.api.nvidia.com/v1` | `{base}/chat/completions` | `nvidia` | `openai/gpt-oss-20b` |
+| `ollama` | Ollama (local) | chat | `http://localhost:11434` (from `$OLLAMA_HOST`) | `{base}/v1/chat/completions` | none; models from `GET /api/tags` | none |
 
 `ProviderInfo` also has `verified` (a live multi-step tool turn has run through
 the adapter). It is `True` for all four. Sign-in itself is not verified for
@@ -342,3 +346,19 @@ services were intentionally not carried over.
 * Whether every Codex-listed model id is served by the Codex backend.
 * Copilot GPT models: the catalog (`provider.npm = @ai-sdk/openai`) routes them to `{base}/responses`, with `x-initiator`, and no encrypted-reasoning replay yet (`providers.copilot_uses_responses`). Verified live with `gpt-6-luna` (2026-10-29); other families stay on Chat.
 * Which models of each provider understand images; Nexus sends them to any model.
+
+## API-key and local providers (J1–J3)
+
+`openai`, `groq`, `nvidia` and `opencode` sign in with a pasted key (`nexus login <id>`,
+or `POST /api/provider/{id}/login` with `{"method": "api_key", "api_key": …}`). The key goes in
+`auth.json`; `$OPENAI_API_KEY`, `$GROQ_API_KEY`, `$NVIDIA_API_KEY` or `$OPENCODE_API_KEY` is used
+when set and nothing is stored (`llmhub/auth/api_key.py`). Providers that speak the OpenAI chat
+format share `ChatProvider`, so adding one is a table row and a sign-in. `openai` uses the same
+Responses quirks as codex. A model id may contain `/` (`groq/openai/gpt-oss-120b`); only the first
+`/` separates the provider.
+
+`ollama` needs no key. `nexus login ollama` records the server (`$OLLAMA_HOST`, else
+`http://localhost:11434`). Its models are whatever the server has pulled (`/api/tags`, embedding
+models left out); it reports no context window or prices, so those are unknown. `groq` and `nvidia` ran a live read + bash turn (`verified`); `openai` and `ollama` have not. NVIDIA's
+catalog lists end-of-life models that answer HTTP 410, and some (deepseek-v4.1-flash) queue for
+over a minute; the default is `openai/gpt-oss-20b`. Groq's free tier answers 429, which the retry handles.

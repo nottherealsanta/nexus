@@ -155,3 +155,34 @@ def models_for(catalog: dict[str, Any], provider_id: str) -> list[ModelInfo]:
         )
     out.sort(key=lambda m: (m.released or "", m.id), reverse=True)
     return out
+
+
+async def discover_ollama(base_url: str, *, client: httpx.AsyncClient | None = None) -> list[ModelInfo]:
+    """Models the local Ollama server has pulled (`GET /api/tags`). The server reports no
+    context window, prices or reasoning efforts, so those are unknown."""
+    own = client or httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0))
+    try:
+        response = await own.get(f"{base_url.rstrip('/')}/api/tags")
+        response.raise_for_status()
+        entries = response.json().get("models") or []
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return []
+    finally:
+        if client is None:
+            await own.aclose()
+    out = [
+        ModelInfo("ollama", str(e["name"]), str(e["name"]), None, None, False, (), None, None, None,
+                  str(e.get("modified_at") or "")[:10] or None)
+        for e in entries if isinstance(e, dict) and e.get("name") and "embed" not in str(e["name"])
+    ]
+    out.sort(key=lambda m: (m.released or "", m.id), reverse=True)
+    return out
+
+
+async def list_models(data: dict[str, Any], provider_id: str) -> list[ModelInfo]:
+    """`models_for`, plus the providers that list their models themselves."""
+    if provider_id == "ollama":
+        from .hub import sign_in
+
+        return await discover_ollama(sign_in("ollama").base_url)
+    return models_for(data, provider_id)

@@ -7,6 +7,10 @@ quirks as data (PLAN.md step 3).
 | grok     | responses | cli-chat-proxy.grok.com/v1            | xai            |
 | copilot  | chat      | api.githubcopilot.com                 | github-copilot |
 | opencode | chat      | opencode.ai/zen/go/v1 (OpenCode Go)   | opencode-go    |
+| openai   | responses | api.openai.com/v1 (API key)           | openai         |
+| groq     | chat      | api.groq.com/openai/v1 (API key)      | groq           |
+| nvidia   | chat      | integrate.api.nvidia.com/v1 (API key) | nvidia         |
+| ollama   | chat      | localhost:11434/v1 (no key)           | none (`/api/tags`) |
 
 Credentials are not here: `make()` takes a header source from `nexus.llmhub.auth`.
 """
@@ -76,6 +80,28 @@ PROVIDERS: dict[str, ProviderInfo] = {
         default_model="kimi-k3",
         verified=True,
     ),
+    "openai": ProviderInfo(
+        "openai",
+        "OpenAI (API key)",
+        "responses",
+        "https://api.openai.com/v1",
+        "openai",
+        ResponsesQuirks(encrypted_reasoning=True, replay_raw=True, prompt_cache_key=True),
+        default_model="gpt-6.1-terra",
+        verified=False,
+    ),
+    "groq": ProviderInfo(
+        "groq", "Groq", "chat", "https://api.groq.com/openai/v1", "groq", ChatQuirks(),
+        default_model="openai/gpt-oss-120b", verified=True,
+    ),
+    "nvidia": ProviderInfo(
+        "nvidia", "NVIDIA", "chat", "https://integrate.api.nvidia.com/v1", "nvidia", ChatQuirks(),
+        default_model="openai/gpt-oss-20b", verified=True,
+    ),
+    "ollama": ProviderInfo(
+        "ollama", "Ollama (local)", "chat", "http://localhost:11434", "ollama", ChatQuirks(),
+        default_model="", verified=False,
+    ),
 }
 
 
@@ -109,4 +135,7 @@ def make(provider_id: str, auth: HeaderSource, model: str | None = None) -> Prov
         return ResponsesProvider(info.id, info.base_url, auth, ResponsesQuirks(initiator_header=True))
     if isinstance(info.quirks, ResponsesQuirks):
         return ResponsesProvider(info.id, info.base_url, auth, info.quirks)
-    return ChatProvider(info.id, info.base_url, auth, info.quirks)
+    base_url = getattr(auth, "base_url", None) or info.base_url
+    if provider_id == "ollama":
+        base_url = f"{base_url.rstrip('/')}/v1"
+    return ChatProvider(info.id, base_url, auth, info.quirks)

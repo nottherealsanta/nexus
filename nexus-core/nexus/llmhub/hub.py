@@ -25,7 +25,7 @@ def default_model() -> str:
     """`$NEXUS_MODEL`, else codex's default when connected, else the first connected provider's."""
     if os.environ.get(MODEL_ENV):
         return os.environ[MODEL_ENV]
-    ids = connected() or ["codex"]
+    ids = [pid for pid in connected() if PROVIDERS[pid].default_model] or ["codex"]
     provider = "codex" if "codex" in ids else ids[0]
     return f"{provider}/{PROVIDERS[provider].default_model}"
 

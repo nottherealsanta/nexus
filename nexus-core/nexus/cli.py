@@ -843,9 +843,9 @@ async def _models(args: argparse.Namespace) -> None:
         if pid not in live and not args.all:
             print(f"\n{BOLD}{pid}{RESET} {DIM}{info.label} · not connected (nexus login {pid}){RESET}")
             continue
-        models = catalog.models_for(data, pid)
+        models = await catalog.list_models(data, pid)
         state = "connected" if pid in live else "not connected"
-        print(f"\n{BOLD}{pid}{RESET} {DIM}{info.label} · {state} · {len(models)} models from models.dev/{info.catalog_id}{RESET}")
+        print(f"\n{BOLD}{pid}{RESET} {DIM}{info.label} · {state} · {len(models)} models from {'the local server' if pid == 'ollama' else 'models.dev/' + info.catalog_id}{RESET}")
         width = max((len(m.id) for m in models), default=0)
         for m in models:
             efforts = " ".join(m.efforts) if m.efforts else ("yes" if m.reasoning else "no")

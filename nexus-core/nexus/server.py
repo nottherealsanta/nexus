@@ -376,9 +376,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         body = await _body(request)
         if provider in login_tasks and not login_tasks[provider].done():
             raise Busy(f"{provider} sign-in already running")
-        method = body.get("method", "api_key" if provider == "opencode" else "device")
+        method = body.get("method", "device" if "device" in auth.methods else auth.methods[0])
         if method not in auth.methods or method == "browser":
-            raise ValueError("API sign-in supports device or api_key methods")
+            raise ValueError("API sign-in supports device, api_key or local methods")
         if method == "api_key":
             key = body.get("api_key")
             if not isinstance(key, str):
@@ -527,7 +527,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     async def models(request: Request) -> Response:
         data, source = await catalog.load()
         wanted = request.query_params.get("provider")
-        out = [to_json(m) | {"ref": m.ref} for pid in connected() if not wanted or pid == wanted for m in catalog.models_for(data, pid)]
+        out = [to_json(m) | {"ref": m.ref} for pid in connected() if not wanted or pid == wanted for m in await catalog.list_models(data, pid)]
         return JSONResponse({"source": source, "models": out})
 
     async def default_model(request: Request) -> Response:

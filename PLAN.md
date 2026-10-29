@@ -938,6 +938,13 @@ if the model is already cached).
 
 ### J. Providers
 
+**Landed 2026-10-29: J1–J3** (Core; groq and nvidia verified live 2026-10-29 with a read + bash tool turn; openai and ollama untested): `llmhub/auth/api_key.py` (one class per
+provider, env var fallback), providers `openai` (Responses), `groq` and `nvidia` (Chat), `ollama`
+(Chat on `/v1`, models from `/api/tags`, no key; `nexus login ollama` records `$OLLAMA_HOST`),
+`catalog.list_models`, login default method taken from the sign-in's own list
+(`tests/test_api_key_providers.py`, docs/llm-providers.md). Next: J4 anthropic (the `anthropic` SDK as a plain Messages client; Nexus owns the loop, tools and context), then J5 gemini, J6 antigravity. Still to do for J1–J3: a real call for openai and ollama (no key here),
+the Settings screens' key entry for the new providers, and docs/auth.md.
+
 **Old:** `nexus/model/providers/anthropic.py`, `gemini.py`, `ollama.py`,
 `nvidia.py`, `openai.py` (API key), `discovery.py`; `nexus/auth/api_key.py`;
 `claude_agent.py`, `claude_agent_auth.py`, `_claude_agent_worker.py`,
@@ -1205,6 +1212,7 @@ when each item lands.
 | An interrupted provider stream could be mistaken for a finished reply | Partial output stays diagnostic in the event log; only a response that durably reached `Done` is restored, and a recovery notice labels the rest (done 2026-10-27) | Never present partial text, arguments or reasoning as complete |
 | A crashed daemon silently dropped pending approvals and questions | Recovery publishes explicit `permission.replied`/`question.replied` cancellations; late ids cannot resume work (done 2026-10-27) | A vanished wait is not an answer |
 | Continuing meant sending a new message ("continue"), which appended model-visible text | An explicit `POST …/continue`, `/continue` and `nexus session continue ID` send the stored context unchanged, reconcile dangling calls from durable evidence, and record continuation provenance (done 2026-10-27) | The model receives exactly the context the user sees, with no invented user turn |
+| Old per-vendor adapters (`openai.py` 1586 lines, `nvidia.py`, `ollama.py` 1125 lines with a native `/api/chat` mode) | OpenAI-compatible vendors share `ChatProvider` through a table row and an API-key sign-in; `openai` shares the Responses dialect; Ollama uses its OpenAI-compatible `/v1` endpoint only (J1–J3, 2026-10-29) | One parser per wire dialect; no native Ollama mode, so its reasoning replay and token counts are only as good as `/v1` gives |
 | Compaction rewrites the session's history | A handoff to a new root session linked by `continued_from` (planned, Step 12a) | What the user sees stays what the model saw |
 | System prompt rendered per turn | Rendered once at session creation and replayed unchanged | A stable cached prefix |
 | Workspace edits require approval unless allowed | In-directory `edit`/`write` (patches and nested calls too) are auto-approved with no setting; bash approval is unchanged (done 2026-10-27) | Editing authorization and command execution are separate |
