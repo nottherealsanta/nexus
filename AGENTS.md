@@ -1,11 +1,11 @@
 # AGENTS.md
 
 This branch (`nexus10`, Nexus 0.10) rebuilds Nexus from the provider wire up. **Read [PLAN.md](PLAN.md)
-first**: principles, layout, the current step, and the ledger of deliberate
-changes from old Nexus.
+first** for outstanding work; see [docs/porting-ledger.md](docs/porting-ledger.md)
+for deliberate changes from old Nexus.
 
 - Old Nexus is reference only: branch `nexus01`, checkout `~/repos/nexus`. Copy
-  code from it deliberately, and add a ledger row in PLAN.md when you change a
+  code from it deliberately, and add a row in docs/porting-ledger.md when you change a
   behavior. Its AGENTS.md and docs do not apply here.
 - Keep the context visible: wire events are never dropped, and clipping is announced.
 - One timeline: the "timeline" (or "context line"), which is what the user sees

@@ -3,7 +3,7 @@
 `manifest.toml` is the single machine-readable source for the screen map,
 commands and settings that the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`) both
 build from. The visual rules are in [design-language.md](design-language.md); the work
-order is [PLAN.md](../PLAN.md) section 6. The former prose spec is archived
+order is [PLAN.md](../PLAN.md). The former prose spec is archived
 (`git show fdb1860:INTERFACE_PLAN.md`). If the manifest and the design language
 disagree, fix both together.
 
@@ -134,7 +134,7 @@ Every command bound to `esc` has `key_context = "escape_chain"` and must be the
 ## Stability rules
 
 - Ids (commands, settings sections and rows, navigation ids) are stable.
-  A rename, removal or move needs a ledger note in PLAN.md and a migration for
+  A rename, removal or move needs a ledger note in docs/porting-ledger.md and a migration for
   saved keybindings and settings.
 - Add a command or row by appending in its intended position; do not reorder
   shared rows without a ledger note.

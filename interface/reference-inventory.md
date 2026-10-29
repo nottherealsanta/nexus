@@ -10,7 +10,7 @@ code** transfers.
 
 Paths are relative to `~/repos/nexus/rust/` unless they start with `docs/`.
 Sizes are line counts. "Copy" means copy deliberately with attribution in the new
-file header (`Adapted from old Nexus <path>`) and a PLAN.md ledger row if
+file header (`Adapted from old Nexus <path>`) and a docs/porting-ledger.md row if
 behavior changes. Nothing here has been copied yet.
 
 Not verified: no old-TUI screenshots or runnable app were used. The parity doc
@@ -211,5 +211,5 @@ Improve or avoid:
 
 ## 10. Attribution and ledger notes for later steps
 - When copying, put `Adapted from old Nexus (nexus01) rust/<path>` in the new file header.
-- Behavior changes to log in PLAN.md's ledger when they land: tools as one line per call (no verb groups by default); sessions grouped by worktree not status; Settings built from a shared manifest, not host-sent pages; copy toasts to a durable drawer; markdown streaming defers unfinished tables.
+- Behavior changes to log in docs/porting-ledger.md when they land: tools as one line per call (no verb groups by default); sessions grouped by worktree not status; Settings built from a shared manifest, not host-sent pages; copy toasts to a durable drawer; markdown streaming defers unfinished tables.
 - Dependencies seen in `tui/Cargo.toml` worth re-pinning after a fresh check: `ratatui 0.29`, `crossterm 0.28` (feature `use-dev-tty`), `pulldown-cmark 0.13`, `ratatui-markdown =0.3.6`, `ratatui-image 8`, `unicode-segmentation 1`, `unicode-width 0.2`, `base64 0.22`, `image 0.25`.

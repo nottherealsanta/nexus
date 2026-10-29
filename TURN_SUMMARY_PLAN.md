@@ -11,14 +11,14 @@ step 6; step 9 has not started.
 | Step | State | Notes |
 | --- | --- | --- |
 | Before step 0: green TUI tree | Done | 19 failing TUI tests fixed on top of the rework (`fdb1860`). `esc stop` while busy stays removed (user decision); `Target::Stop` deleted (INTERFACE_PLAN and DESIGN_PLAN, since archived, were updated to match). Focus bar restored in mono/ANSI-16. `scratch_render` ignored. `cargo test`, `clippy -D warnings` and `fmt --check` pass |
-| 0. Baseline | Done | `nexus-tui/tools/bench.sh` + `bench_seed.py` (30 616 events) and `nexus-tui --bench`; numbers and commands in PLAN.md ("TUI load measurement") |
+| 0. Baseline | Done | `nexus-tui/tools/bench.sh` + `bench_seed.py` (30 616 events) and `nexus-tui --bench`; numbers and commands in docs/turn-summary-benchmark.md |
 | 1. Core store and runtime | Done | Core suite 387 passed, ruff clean |
 | 2. Core API | Done | `GET /api/session/{id}/turn`, `turn.summary`, API 1.2 |
 | 3. TUI data | Done | Types, `CoreApi::turns`, concurrent `load_history` (all pages, cap 10×200), `turn.summary` in `reduce.rs`, `SyncMsg::Turns` after a reconnect, `CLIENT_API` 1.2. The parallel event path was not kept (see Deviations, TUI) |
 | 4. TUI views | Done | Every 5.1 row except "Thought for" (see Deviations, TUI); event paging, `HISTORY_EVENT_CAP`, `fold_event_pages`, `page_last_id`, `events_gap`, `Event::from_stored` removed; floor row added. Done-when grep finds only live (scratch) handling. 492 tests pass, clippy and fmt clean. `nexus-tui/README.md` restored from `fdb1860^` with its real appended TUI notes re-applied |
-| 5. Measure | Done | Open 240 → 75 ms, RSS 133 → 19 MB, scrolling frame mean 4.5 → 3.6 ms (PLAN.md) |
+| 5. Measure | Done | Open 240 → 75 ms, RSS 133 → 19 MB, scrolling frame mean 4.5 → 3.6 ms (docs/turn-summary-benchmark.md) |
 | 6. NSH | Done | See "Deviations (step 6)". 58 tests, 52 pass; the 6 failures also fail on a clean HEAD. Typecheck clean |
-| 7. Docs and ledger | Partly done | Core ledger rows and step entry in PLAN.md; `docs/api.md`, `docs/stream-events.md`, `docs/daemon.md` updated. TUI ledger row, step entry and measurement in PLAN.md; `nexus-tui/README.md` updated. `docs/development.md` and `interface/design-language.md` (floor row) not touched (other agents) |
+| 7. Docs and ledger | Partly done | Core ledger rows in docs/porting-ledger.md; `docs/api.md`, `docs/stream-events.md`, `docs/daemon.md` updated. TUI ledger row in docs/porting-ledger.md and measurement in docs/turn-summary-benchmark.md; `nexus-tui/README.md` updated. `docs/development.md` and `interface/design-language.md` (floor row) not touched (other agents) |
 | 8. Recovery off `turn_end` | Done | Log fallback kept for turns with `ended` null |
 | 9. Live partial | Open | Not started. Needs core (`nexus/live.py`, ephemeral deltas, `partial` column) and both clients |
 
@@ -593,8 +593,8 @@ from a green tree. (Done: the rework landed as `fdb1860`; tests fixed after.)
    `nexus-core/tests/fixtures/` or `scripts/`), open it in a release TUI build,
    and record: time from open to first full frame, RSS after load, mean and
    p95 frame time while scrolling, and the session's event-log bytes. Record
-   the numbers and the command in PLAN.md.
-   *Done when* the numbers are in PLAN.md.
+   the numbers and the command in docs/turn-summary-benchmark.md.
+   *Done when* the numbers are in docs/turn-summary-benchmark.md.
 
 1. **Core store and runtime: usage, model, ledger.** Schema (4.1, without
    `partial`), `start_request` with model and effort, `record_usage`, the
@@ -635,15 +635,15 @@ from a green tree. (Done: the rework landed as `fdb1860`; tests fixed after.)
    *Done when* `grep -n '"usage"\|wire_request\|events_gap' nexus-tui/src`
    finds nothing outside live handling, and all TUI tests pass.
 
-5. **Measure.** Repeat step 0 on the same seeded session. Record in PLAN.md
+5. **Measure.** Repeat step 0 on the same seeded session. Record in docs/turn-summary-benchmark.md
    next to the baseline.
-   *Done when* both sets of numbers are in PLAN.md.
+   *Done when* both sets of numbers are in docs/turn-summary-benchmark.md.
 
 6. **NSH.** 5.2.
    Docs: `nexus-nsh/README.md`.
    *Done when* NSH loads no event history and its tests pass.
 
-7. **Docs and ledger.** Ledger rows (7) and the step entry in PLAN.md;
+7. **Docs and ledger.** Ledger rows (7) in docs/porting-ledger.md;
    `docs/development.md` where it mentions event history;
    `interface/design-language.md` if the floor row is a new pattern.
 

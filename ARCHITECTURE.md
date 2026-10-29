@@ -200,7 +200,7 @@ Measure first, then keep these as tests or benchmarks (numbers are proposals):
    durability).
 6. **More engine paths** only where step 2 shows a need.
 
-Each step adds a ledger row in PLAN.md where it changes behavior, and updates
+Each step adds a ledger row in docs/porting-ledger.md where it changes behavior, and updates
 `docs/` in the same change.
 
 ## Not doing

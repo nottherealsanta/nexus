@@ -3,7 +3,7 @@
 ## Repo layout
 
 ```
-PLAN.md           the plan, principles, ledger of changes from old Nexus
+PLAN.md           remaining work; docs/porting-ledger.md records porting decisions
 AGENTS.md         instructions for agents; points to docs/
 docs/             this documentation
 nexus-core/       Python (uv): everything that is not a UI
