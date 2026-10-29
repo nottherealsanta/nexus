@@ -349,10 +349,10 @@ class McpManager:
             raise McpUnavailable(f"server {server} is not connected yet; run `mcp_search` for it first")
         raise McpUnavailable(f"{server} has no tool {tool!r}; search again{hint}")
 
-    async def call(self, target: str, arguments: dict[str, Any]) -> tuple[str, bool]:
+    async def call(self, target: str, arguments: dict[str, Any], save: Any = None) -> tuple[str, bool]:
         conn, tool = self.find(target)
         result = await conn.call(tool.name, arguments)
-        return bridge.convert_result(result, server=conn.config.name, tool=tool.name)
+        return bridge.convert_result(result, server=conn.config.name, tool=tool.name, save=save)
 
     def approval(self, target: str) -> tuple[str, bool]:
         """`(qualified name for permission rules, read-only)` of a `server/tool`; unknown means a mutating call."""

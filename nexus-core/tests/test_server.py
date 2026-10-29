@@ -59,7 +59,7 @@ async def test_token_is_required(setup):
 async def test_info_reports_the_api_contract_clients_check(setup):
     _, client, _, _ = setup
     info = (await client.get("/api/info")).json()
-    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 2}
+    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 3}
     assert set(info) >= {"version", "pid", "home", "url", "log", "retention", "retry", "idempotency"}
 
 
@@ -824,3 +824,110 @@ async def test_missing_pending_input_is_404(setup):
     assert (await client.delete(path)).status_code == 404
     assert (await client.patch(path, json={"text": "new"})).status_code == 404
     assert (await client.post(path + "/move", json={"before": "inp_other"})).status_code == 404
+
+
+async def _pending(rt, sid, after=None):
+    for _ in range(200):
+        if pending := [a for a in rt.pending_approvals(sid) if a["id"] != after]:
+            return pending[0]
+        await asyncio.sleep(0.01)
+    raise AssertionError("no approval was asked")
+
+
+async def test_allow_for_session_covers_the_same_command_only(setup):
+    rt, client, provider, workspace = setup
+    provider.replies = [[ToolCall("b1", "bash", json.dumps({"command": "echo one"}))],
+                        [ToolCall("b2", "bash", json.dumps({"command": "echo one"})),
+                         ToolCall("b3", "bash", json.dumps({"command": "echo two"}))], [Text("done")]]
+    sid = (await client.post("/api/session", json={"directory": str(workspace), "permission": "ask"})).json()["id"]
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "go"})
+    first = await _pending(rt, sid)
+    assert first["grant"] == "bash: echo one"
+    r = await client.post(f"/api/session/{sid}/permission/{first['id']}", json={"reply": "allow", "scope": "session"})
+    assert r.status_code == 204
+    second = await _pending(rt, sid, first["id"])  # `echo one` ran without asking again; only `echo two` asks
+    assert second["args"]["command"] == "echo two"
+    assert (await client.get(f"/api/session/{sid}/grant")).json() == {"grants": ["bash: echo one"]}
+    await client.post(f"/api/session/{sid}/permission/{second['id']}", json={"reply": "allow"})
+    await _wait_idle(rt, sid)
+    events = (await client.get(f"/api/session/{sid}/event")).json()["events"]
+    replied = [e["data"] for e in events if e["type"] == "permission.replied"]
+    assert replied[0]["scope"] == "session" and "scope" not in replied[1]
+    assert sum(e["type"] == "permission.asked" for e in events) == 2
+    assert (await client.delete(f"/api/session/{sid}/grant")).status_code == 204
+    assert (await client.get(f"/api/session/{sid}/grant")).json() == {"grants": []}
+
+
+async def test_deny_with_a_note_reaches_the_model_and_bad_replies_are_refused(setup):
+    rt, client, provider, workspace = setup
+    provider.replies = [[ToolCall("b1", "bash", json.dumps({"command": "rm -rf build"}))], [Text("ok")]]
+    sid = (await client.post("/api/session", json={"directory": str(workspace), "permission": "ask"})).json()["id"]
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "go"})
+    ask = await _pending(rt, sid)
+    url = f"/api/session/{sid}/permission/{ask['id']}"
+    assert (await client.post(url, json={"reply": "deny", "scope": "session"})).status_code == 400
+    assert (await client.post(url, json={"reply": "allow", "note": "hm"})).status_code == 400
+    assert (await client.post(url, json={"reply": "deny", "note": "use make clean instead"})).status_code == 204
+    await _wait_idle(rt, sid)
+    result = next(p for m in rt.store.messages(sid) if m.message.role == "tool" for p in m.message.parts)
+    assert result.is_error and "use make clean instead" in result.output
+    assert rt.session_grants(sid) == []
+
+
+async def test_switch_cost_warns_only_when_a_cache_would_be_lost(setup):
+    rt, client, provider, workspace = setup
+    provider.replies = [[Text("hi")]]
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+
+    async def cost(**params):
+        r = await client.get(f"/api/session/{sid}/switch-cost", params=params)
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    fresh = await cost(model="scripted/other")
+    assert fresh["cache_lost"] is False and fresh["cached_tokens"] is None and fresh["reasons"]
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "hello"})
+    await _wait_idle(rt, sid)
+    with rt.store.db:
+        rt.store.db.execute("update turn_request set input_tokens = 900, cached_input_tokens = 800 where session_id = ?", (sid,))
+    warned = await cost(model="scripted/other")
+    assert warned["cache_lost"] and warned["cached_tokens"] == 800 and "per model" in warned["reasons"][0]
+    assert (await cost(model="scripted/m"))["cache_lost"] is False  # the same model keeps it
+    assert (await cost())["reasons"] == []
+    body = (await client.get("/api/agent")).json()
+    agents = body["agents"] if isinstance(body, dict) else body
+    other = next(a["name"] for a in agents if a["name"] != rt.session(sid).agent)
+    assert (await cost(agent=other))["cache_lost"]
+
+
+async def test_file_put_needs_the_revision_it_read_and_announces_the_change(setup):
+    rt, client, _provider, workspace = setup
+    (workspace / "a.txt").write_text("one\n")
+    (workspace / "a.txt").chmod(0o755)
+    (workspace / "sub").mkdir()
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    url = f"/api/project/{rt.session(sid).project_id}/file"
+    read = (await client.get(url, params={"path": "a.txt"})).json()
+    put = await client.put(url, params={"path": "a.txt", "session": sid},
+                           json={"content": "two\n", "expected_revision": read["revision"]})
+    assert put.status_code == 200, put.text
+    assert (workspace / "a.txt").read_text() == "two\n" and (workspace / "a.txt").stat().st_mode & 0o777 == 0o755
+    assert put.json()["revision"] == (await client.get(url, params={"path": "a.txt"})).json()["revision"]
+    stale = await client.put(url, params={"path": "a.txt"}, json={"content": "three\n", "expected_revision": read["revision"]})
+    assert stale.status_code == 409 and stale.json()["code"] == "stale_file"
+    assert stale.json()["current_revision"] == put.json()["revision"] and (workspace / "a.txt").read_text() == "two\n"
+    made = await client.put(url, params={"path": "sub/new.txt"}, json={"content": "hi", "expected_revision": "new"})
+    assert made.status_code == 200 and (workspace / "sub" / "new.txt").read_text() == "hi"
+    again = await client.put(url, params={"path": "sub/new.txt"}, json={"content": "x", "expected_revision": "new"})
+    assert again.status_code == 409
+    for path in ("../out.txt", "/etc/x", "missing/dir/f.txt"):
+        r = await client.put(url, params={"path": path}, json={"content": "x", "expected_revision": "new"})
+        assert r.status_code in (400, 404), (path, r.status_code)
+    (workspace / "link").symlink_to(workspace.parent)
+    r = await client.put(url, params={"path": "link/escape.txt"}, json={"content": "x", "expected_revision": "new"})
+    assert r.status_code in (400, 404) and not (workspace.parent / "escape.txt").exists()
+    assert (await client.put(url, params={"path": "a.txt"}, json={"content": "x"})).status_code == 400
+    assert not [n.name for n in workspace.iterdir() if n.name.endswith(".tmp")]
+    events = (await client.get(f"/api/session/{sid}/event")).json()["events"]
+    changed = [e["data"] for e in events if e["type"] == "files.changed"]
+    assert [c["path"] for c in changed] == ["a.txt"] and changed[0]["revision"] == put.json()["revision"]

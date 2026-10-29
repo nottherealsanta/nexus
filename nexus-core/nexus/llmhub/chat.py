@@ -41,6 +41,8 @@ from .types import (
     WireEvent,
     WireRequest,
     WireResponse,
+    has_images,
+    tool_images,
 )
 
 REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
@@ -50,6 +52,7 @@ REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
 class ChatQuirks:
     session_header: str | None = None  # header that carries the conversation id
     initiator_header: bool = False  # Copilot: `x-initiator: user|agent` per request
+    vision_header: bool = False  # Copilot: `copilot-vision-request: true` when the request carries an image
 
 
 # -- Request ----------------------------------------------------------------
@@ -59,7 +62,17 @@ def chat_messages(req: Request, *, origin: str) -> list[dict[str, Any]]:
     wire: list[dict[str, Any]] = [{"role": "system", "content": req.instructions}] if req.instructions else []
     for message in req.messages:
         if message.role == "tool":
-            wire.extend({"role": "tool", "tool_call_id": p.call_id, "content": p.output} for p in message.parts if isinstance(p, ToolResult))
+            results = [p for p in message.parts if isinstance(p, ToolResult)]
+            wire.extend({"role": "tool", "tool_call_id": p.call_id, "content": p.output} for p in results)
+            # A tool message holds text only, so images follow the whole group as one user message that says where
+            # they came from (the same bytes the model would get inside the result on a dialect that allows it).
+            shown = [(p, m) for p in results for m in tool_images(p)]
+            if shown:
+                content: list[dict[str, Any]] = []
+                for p, m in shown:
+                    content += [{"type": "text", "text": f"[Image returned by tool call {p.call_id}{': ' + m.name if m.name else ''}]"},
+                                {"type": "image_url", "image_url": {"url": m.data_url}}]
+                wire.append({"role": "user", "content": content})
             continue
         text = "".join(p.text for p in message.parts if isinstance(p, Text))
         if message.role == "user":
@@ -205,6 +218,8 @@ class ChatProvider:
         if self._quirks.initiator_header:
             last = req.messages[-1].role if req.messages else "user"
             headers["x-initiator"] = "user" if last == "user" else "agent"
+        if self._quirks.vision_header and has_images(req.messages):
+            headers["copilot-vision-request"] = "true"
         headers.update(await self._auth.headers())
         yield WireRequest("POST", url, redact_headers(headers), body)
 

@@ -105,8 +105,9 @@ JSON carries `mcp: [{server, tools, state: on|off|unavailable, locked, error}]`.
 text are stripped of control, bidirectional and invisible characters, bounded (24 000
 characters per result) and wrapped in `<untrusted-mcp-data>` with a notice that it carries no
 authority. Text that imitates the delimiters is replaced. The fenced text is exactly what the
-model receives and what the timeline shows. Images and audio are not kept anywhere (artifact
-storage is PLAN.md K8): each becomes a labelled placeholder.
+model receives and what the timeline shows. Images and audio are stored as artifacts
+([api.md](api.md#artifacts-k8)): the text names the artifact, and an image also reaches the model beside the text when it takes images
+([llm-providers.md](llm-providers.md#tool-result-media)).
 
 ## API and events
 

@@ -7,8 +7,9 @@ carries no authority. A server cannot forge the fence: any text that looks like
 our delimiters is replaced. The fenced text is exactly what the model receives
 and what the timeline shows.
 
-Images and audio are not stored anywhere yet (artifact storage is PLAN.md K8),
-so each becomes a labelled placeholder that says so.
+Images and audio are handed to a `save` callback (artifact storage, PLAN.md K8) and the text names the
+artifact. The runtime sends images (not audio) to the model as `Media` beside this text when the model takes
+image input, and says in the result when it does not. Without a callback they are dropped.
 
 Adapted from old Nexus `nexus/mcp/bridge.py` (the descriptor protocols, resource
 and prompt bridges, and per-call caps objects are dropped).
@@ -94,8 +95,11 @@ def schema_text(tool: Any, limit: int = MAX_SCHEMA_CHARS) -> str:
     return text
 
 
-def convert_result(result: Any, *, server: str, tool: str) -> tuple[str, bool]:
-    """`(fenced text, is_error)` for a `CallToolResult`."""
+def convert_result(result: Any, *, server: str, tool: str, save: Any = None) -> tuple[str, bool]:
+    """`(fenced text, is_error)` for a `CallToolResult`.
+
+    `save(data, mime_type, kind)` stores a media block and returns its artifact id (or raises ValueError).
+    """
     blocks: list[str] = []
     for item in getattr(result, "content", None) or []:
         kind = getattr(item, "type", "")
@@ -103,8 +107,14 @@ def convert_result(result: Any, *, server: str, tool: str) -> tuple[str, bool]:
             blocks.append(item.text)
         elif kind in ("image", "audio"):
             size = len(getattr(item, "data", "") or "") * 3 // 4
-            blocks.append(f"[{kind} result ({getattr(item, 'mime_type', '?')}, about {size} bytes) not shown: "
-                          "Nexus has no artifact storage for media yet, so it was dropped.]")
+            mime = sanitize(str(getattr(item, "mime_type", "") or "?"), keep_newlines=False)[:80]
+            try:
+                if save is None:
+                    raise ValueError("no artifact storage in this call")
+                artifact = save(getattr(item, "data", "") or "", mime, kind)
+                blocks.append(f"[{kind} result ({mime}, {size} bytes) saved as artifact {artifact}]")
+            except ValueError as exc:
+                blocks.append(f"[{kind} result ({mime}, about {size} bytes) not stored: {sanitize(str(exc), keep_newlines=False)[:120]}]")
         elif kind == "resource_link":
             blocks.append(f"[resource link: {item.uri}" + (f" ({item.name})" if getattr(item, "name", None) else "") + "]")
         elif kind == "resource":

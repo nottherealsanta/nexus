@@ -52,7 +52,7 @@ A conversation is a list of `Message`s made of ordered parts.
 | `Text` | `text`, `origin=None`, `raw=None` | Plain text |
 | `Reasoning` | `summary`, `origin=None`, `raw=None` | Visible reasoning summary; `raw` carries the opaque state to send back |
 | `ToolCall` | `id`, `name`, `arguments` (JSON text exactly as the model produced it), `origin=None`, `raw=None` | A tool call |
-| `ToolResult` | `call_id`, `output`, `is_error=False` | The result of a call; no `origin` or `raw` |
+| `ToolResult` | `call_id`, `output`, `is_error=False`, `media=()` | The result of a call; no `origin` or `raw`. `media` is images the tool returned, `Media(artifact, mime, name)`; JSON never carries their bytes ([llm-providers.md](llm-providers.md#tool-result-media)) |
 | `Message` | `role` (`"user"`, `"assistant"` or `"tool"`), `parts` (tuple) | |
 
 `Part = Text | Reasoning | ToolCall | ToolResult | Image`.

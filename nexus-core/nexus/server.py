@@ -114,7 +114,7 @@ VERSION = "0.10.0.dev0"
 # The HTTP API contract clients check before sending anything else. A change
 # that a client written for an older major cannot survive is a new major; new
 # fields and endpoints are a minor bump.
-API_VERSION = {"major": 1, "minor": 2}
+API_VERSION = {"major": 1, "minor": 3}
 INSPECTOR = Path(__file__).parent / "inspector" / "index.html"
 INSPECTOR_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
 MAX_BODY_BYTES = 1024 * 1024
@@ -529,6 +529,14 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             for i in PROVIDERS.values()
         ])
 
+    async def provider_limits(request: Request) -> Response:
+        from nexus import provider_usage
+        return JSONResponse(await provider_usage.providers_usage())
+
+    async def session_usage_totals(request: Request) -> Response:
+        runtime.session(p(request, "id"))
+        return JSONResponse(runtime.store.session_usage(p(request, "id")))
+
     async def models(request: Request) -> Response:
         data, source = await catalog.load()
         wanted = request.query_params.get("provider")
@@ -791,10 +799,31 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
 
     async def project_file(request: Request) -> Response:
         from nexus import files
+        if request.method == "PUT":
+            return await project_file_write(request)
         try:
             return JSONResponse(files.read_file(file_root(request), request.query_params.get("path", "")))
         except ValueError as exc:
             raise (_missing(exc) or exc) from exc
+
+    async def project_file_write(request: Request) -> Response:
+        """K10: the built-in editor's save. `expected_revision` is the `revision` a read returned, or "new"."""
+        from nexus import files
+        body = await _body(request)
+        path, content, expected = request.query_params.get("path", ""), body.get("content"), body.get("expected_revision")
+        if not isinstance(content, str) or not isinstance(expected, str) or not expected:
+            raise ValueError("content and expected_revision (a read's revision, or \"new\") are required")
+        project = runtime.project(p(request, "id"))
+        root = file_root(request)
+        try:
+            done = files.write_file(root, path, content, expected)
+        except files.StaleFile as exc:
+            raise Conflict(str(exc), code="stale_file", payload={"path": path, "current_revision": exc.revision}) from exc
+        except ValueError as exc:
+            raise (_missing(exc) or exc) from exc
+        runtime.bus.publish("files.changed", {"project_id": project.id, "path": path, "revision": done["revision"],
+                                              "source": "editor"}, session_id=request.query_params.get("session") or None)
+        return JSONResponse(done)
 
     async def project_file_search(request: Request) -> Response:
         from nexus import files
@@ -817,6 +846,42 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             raise ValueError("limit and before must be integers") from None
         prompts = runtime.store.prompt_history(project.id, q=request.query_params.get("q", ""), limit=limit, before=before)
         return JSONResponse({"prompts": prompts})
+
+    async def search(request: Request) -> Response:
+        try:
+            limit = max(1, min(100, int(request.query_params.get("limit", "30"))))
+        except ValueError:
+            raise ValueError("limit must be an integer") from None
+        project_id = request.query_params.get("project")
+        if project_id:
+            runtime.project(project_id)
+        hits = runtime.store.search(request.query_params.get("q", ""), project_id=project_id,
+                                    archived=_archive_filter(request), limit=limit)
+        out = []
+        for hit in hits:
+            session = runtime.store.session(hit["session_id"])
+            if session is not None:
+                out.append({**hit, "session": runtime.session_json(session)})
+        return JSONResponse({"query": request.query_params.get("q", ""), "hits": out})
+
+    async def artifact_list(request: Request) -> Response:
+        runtime.session(p(request, "id"))
+        return JSONResponse([{k: a[k] for k in ("id", "mime", "name", "bytes", "source", "created")}
+                             for a in runtime.store.artifacts(p(request, "id"))])
+
+    async def artifact_one(request: Request) -> Response:
+        from nexus import artifacts
+        record = runtime.store.artifact(p(request, "id"))
+        if record is None:
+            raise NotFound(f"no artifact {p(request, 'id')}")
+        try:
+            raw = artifacts.read_blob(record["sha"])
+        except OSError:
+            raise NotFound("the artifact's bytes are gone") from None
+        # Served as an attachment with a fixed type and no sniffing: a server's SVG or HTML never runs on this origin.
+        return Response(raw, media_type=record["mime"], headers={
+            "content-disposition": "attachment", "x-content-type-options": "nosniff",
+            "content-security-policy": "sandbox", "cache-control": "private, max-age=31536000, immutable"})
 
     async def session_git(request: Request) -> Response:
         from nexus import files
@@ -919,6 +984,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         if expected is not None:
             fields["expected_revision"] = expected
         return JSONResponse(runtime.session_json(runtime.update_session(p(request, "id"), **fields)))
+
+    async def session_switch_cost(request: Request) -> Response:
+        query = request.query_params
+        return JSONResponse(runtime.switch_cost(p(request, "id"), model=query.get("model"), agent=query.get("agent")))
 
     async def session_agent(request: Request) -> Response:
         body = await _body(request)
@@ -1027,6 +1096,13 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
 
     async def messages(request: Request) -> Response:
         runtime.session(p(request, "id"))
+        if "limit" in request.query_params or "before" in request.query_params:  # a page: K6
+            try:
+                limit = max(1, min(500, int(request.query_params.get("limit", "100"))))
+                before = int(request.query_params["before"]) if request.query_params.get("before") else None
+            except ValueError:
+                raise ValueError("limit and before must be integers") from None
+            return JSONResponse(runtime.store.messages_page(p(request, "id"), before=before, limit=limit))
         return JSONResponse([message_json(m) for m in runtime.store.messages(p(request, "id"))])
 
     async def context(request: Request) -> Response:
@@ -1081,11 +1157,22 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         return JSONResponse(runtime.pending_approvals(p(request, "id")))
 
     async def permission_reply(request: Request) -> Response:
-        reply = (await _body(request)).get("reply")
+        body = await _body(request)
+        reply = body.get("reply")
         if reply not in ("allow", "deny"):
             raise ValueError("reply must be 'allow' or 'deny'")
-        runtime.reply(p(request, "id"), p(request, "pid"), reply == "allow")
+        scope, note = body.get("scope", "once"), body.get("note", "")
+        if not isinstance(scope, str) or not isinstance(note, str):
+            raise TypeError("scope and note must be strings")
+        runtime.reply(p(request, "id"), p(request, "pid"), reply == "allow", scope=scope, note=note)
         return Response(status_code=204)
+
+    async def grants(request: Request) -> Response:
+        runtime.session(p(request, "id"))
+        if request.method == "DELETE":
+            runtime.clear_grants(p(request, "id"))
+            return Response(status_code=204)
+        return JSONResponse({"grants": runtime.session_grants(p(request, "id"))})
 
     async def questions(request: Request) -> Response:
         sid = p(request, "id")
@@ -1175,6 +1262,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/kernel/{id}", route(kernel), methods=["GET", "DELETE"]),
         Route("/api/provider", route(providers)),
         Route("/api/provider/{id}/login", route(provider_login), methods=["GET", "POST", "DELETE"]),
+        Route("/api/usage", route(provider_limits)),
+        Route("/api/session/{id}/usage", route(session_usage_totals)),
         Route("/api/model", route(models)),
         Route("/api/model/default", route(default_model)),
         Route("/api/snapshot", route(snapshot)),
@@ -1199,13 +1288,16 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/project/{id}", route(project), methods=["GET", "PATCH", "DELETE"]),
         Route("/api/project/{id}/worktrees", route(project_worktrees)),
         Route("/api/project/{id}/files", route(project_files)),
-        Route("/api/project/{id}/file", route(project_file)),
+        Route("/api/project/{id}/file", route(project_file), methods=["GET", "PUT"]),
         Route("/api/project/{id}/files/search", route(project_file_search)),
         Route("/api/project/{id}/prompts", route(project_prompts)),
+        Route("/api/search", route(search)),
+        Route("/api/artifact/{id}", route(artifact_one)),
         Route("/api/session", route(sessions), methods=["GET", "POST"]),
         Route("/api/draft/context", route(draft_context), methods=["POST"]),
         Route("/api/session/{id}", route(session), methods=["GET", "PATCH", "DELETE"]),
         Route("/api/session/{id}/model", route(session_model), methods=["POST"]),
+        Route("/api/session/{id}/switch-cost", route(session_switch_cost)),
         Route("/api/session/{id}/agent", route(session_agent), methods=["POST"]),
         Route("/api/session/{id}/workspace-tools", route(session_workspace_tools), methods=["POST"]),
         Route("/api/session/{id}/archive", route(session_archive), methods=["POST"]),
@@ -1232,6 +1324,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/session/{id}/snapshot", route(session_snapshot_json)),
         Route("/api/session/{id}/export", route(session_export)),
         Route("/api/session/{id}/permission", route(permissions)),
+        Route("/api/session/{id}/artifact", route(artifact_list)),
+        Route("/api/session/{id}/grant", route(grants), methods=["GET", "DELETE"]),
         Route("/api/session/{id}/permission/{pid}", route(permission_reply), methods=["POST"]),
         Route("/api/session/{id}/question", route(questions)),
         Route("/api/session/{id}/question/{qid}", route(question_reply), methods=["POST"]),

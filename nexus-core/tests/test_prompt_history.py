@@ -62,3 +62,54 @@ def test_record_prompt_labels_images_out():
     message = Message("user", (Text("look"), Text("[Image A]"), Image("data:image/png;base64,AA")))
     assert Store._prompt_text(message) == ("look", 1)
 
+
+
+async def test_search_finds_titles_and_user_messages(setup_inputs):
+    runtime, client, _provider, workspace = setup_inputs
+    first = await _session(client, workspace)
+    second = await _session(client, workspace)
+    await _send(client, first, "refactor the report generator, and also remember the quarterly invoice rounding")
+    await _idle(runtime, first)
+    await _send(client, second, "hello there")
+    await _idle(runtime, second)
+    runtime.store.update_session(second, title="Gardening Notes")
+
+    async def hits(**params):
+        r = await client.get("/api/search", params=params)
+        assert r.status_code == 200, r.text
+        return r.json()["hits"]
+
+    found = await hits(q="quart invoice")
+    assert [h["session_id"] for h in found] == [first] and found[0]["kind"] == "user"
+    assert "[" in found[0]["snippet"] and found[0]["session"]["id"] == first
+    assert [h["session_id"] for h in await hits(q="garden")] == [second]
+    assert (await hits(q="garden"))[0]["kind"] == "title"
+    assert await hits(q="nothing like this") == [] and await hits(q="") == []
+    assert await hits(q='"; drop table') == []  # query text is never FTS syntax
+    await client.post(f"/api/session/{second}/archive")
+    assert await hits(q="garden", archived="exclude") == []
+    assert len(await hits(q="garden", archived="only")) == 1
+    await client.delete(f"/api/session/{second}")
+    assert await hits(q="garden") == []
+
+
+async def test_messages_page_walks_back_to_the_first_message(setup_inputs):
+    runtime, client, _provider, workspace = setup_inputs
+    sid = await _session(client, workspace)
+    for n in range(3):
+        await _send(client, sid, f"turn {n}")
+        await _idle(runtime, sid)
+    total = len(runtime.store.messages(sid))
+    assert total >= 6
+    seen: list[int] = []
+    before = None
+    while True:
+        params = {"limit": 2, **({"before": before} if before else {})}
+        page = (await client.get(f"/api/session/{sid}/message", params=params)).json()
+        assert len(page["messages"]) <= 2
+        seen = [m["seq"] for m in page["messages"]] + seen
+        if not page["more"]:
+            break
+        before = page["oldest_seq"]
+    assert seen == [m.seq for m in runtime.store.messages(sid)]
+    assert len((await client.get(f"/api/session/{sid}/message")).json()) == total  # no params: the whole list

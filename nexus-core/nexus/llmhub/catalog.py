@@ -47,6 +47,7 @@ class ModelInfo:
     # Prompt sizes where the input price rises (models.dev `cost.tiers`),
     # ascending. Clients use them to show occupancy of the next price tier.
     tiers: tuple[int, ...] = ()
+    image_input: bool = False  # models.dev `modalities.input` has "image"; unknown models are treated as text-only
 
     @property
     def ref(self) -> str:
@@ -151,6 +152,7 @@ def models_for(catalog: dict[str, Any], provider_id: str) -> list[ModelInfo]:
                 cache_read_cost=cost.get("cache_read"),
                 released=entry.get("release_date"),
                 tiers=_tiers(entry),
+                image_input="image" in ((entry.get("modalities") or {}).get("input") or []),
             )
         )
     out.sort(key=lambda m: (m.released or "", m.id), reverse=True)

@@ -31,6 +31,9 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | PATCH | `/api/config` | `{expected_revision, set, unset}` | updated config; stale revision is 409 |
 | GET | `/api/info` | | `{name, version, api_version: {major, minor}, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retry, idempotency}` |
 | GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
+| GET | `/api/search` | `?q=`, `?project=`, `?archived=exclude\|only\|include`, `?limit=` (1..100, default 30) | `{query, hits: [{session_id, kind: "title" or "user", message_id, snippet, rank, session}]}`: one hit per session, best first ([Search](#search-k5)) |
+| GET | `/api/usage` | | `{fetched, providers: [{id, label, plan, windows, notes, error}]}`: plan limits of signed-in codex and copilot ([Usage](#usage-k11)) |
+| GET | `/api/artifact/{id}` | | the stored bytes, served as an attachment with the stored media type ([Artifacts](#artifacts-k8)) |
 | GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, default_model, connected, verified}]` |
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
 | GET | `/api/model/default` | | `{model}` |
@@ -67,6 +70,11 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | POST | `/api/session/{id}/unarchive` | | `Session` for the whole root tree; idempotent |
 | POST | `/api/session/{id}/model` | `{model}`; `""` returns to the agent's or default model | `Session` |
 | POST | `/api/session/{id}/agent` | `{agent}` | `Session` |
+| GET | `/api/session/{id}/switch-cost` | `?model=`, `?agent=` | `{cache_lost, reasons, cached_tokens, input_tokens}`: ask before switching ([Cache warning](#cache-warning-k9)) |
+| GET | `/api/session/{id}/usage` | | the session's spend ledger `{since, models}` (also in `/turn`) |
+| GET | `/api/session/{id}/artifact` | | `[{id, mime, name, bytes, source, created}]` |
+| GET | `/api/session/{id}/grant` | | `{grants: [...]}`: what "allow for this session" now covers |
+| DELETE | `/api/session/{id}/grant` | | 204; forget the grants |
 | POST | `/api/session/{id}/workspace-tools` | | `Session`; activates the two on-demand workspace tools (idempotent) |
 | POST | `/api/session/{id}/directory` | `{directory}` | `Session` + `change`; 200 applied/unchanged, 202 pending while a turn runs |
 | GET | `/api/session/{id}/worktrees` | | `{repository, main, session_directory, worktrees: [...]}` |
@@ -820,7 +828,10 @@ Deleting a project publishes one tombstone per deleted session, then
 | `session.status` | `{status: "busy" or "idle", turn_id?, origin?: "prompt" or "continuation", continuation?, reconciled?}` before and after each turn; a recovered turn's idle also carries `reason` and `turn_id` |
 | `message.added` | `Message`, once it is saved |
 | `permission.asked` | pending approval |
-| `permission.replied` | `{id, session_id?, allow, outcome: "allowed" or "denied" or "cancelled", reason?}`; a cancellation has `allow: false` |
+| `permission.replied` | `{id, session_id?, allow, outcome: "allowed" or "denied" or "cancelled", reason?, scope?: "session", grant?, note?}`; a cancellation has `allow: false` ([Approvals](#approvals-k7)) |
+| `permission.grants_cleared` | `{session_id}` |
+| `artifact.added` | `{id, mime, name, bytes, source}` ([Artifacts](#artifacts-k8)) |
+| `files.changed` | `{project_id, path, revision, source: "editor"}` after a `PUT` of a project file ([File writes](#file-writes-k10)) |
 | `question.asked` | pending question request (`id`, `session_id`, `call_id`, `questions`, `created`) |
 | `question.replied` | `{id, session_id, call_id, outcome: "answered" or "cancelled", answers, reason?}` |
 | `turn.recovered` | a turn a daemon restart interrupted: its outcome, restored messages, tool classifications, cancelled waits and lost runtime state (see [Crash recovery](#crash-recovery)) |
@@ -1098,3 +1109,63 @@ the session's cache, and a tool call in the reply is ignored. Each request and r
   unchanged and the next completed turn tries again). Session JSON carries `continued_from` (the session whose summary this one starts from; stored on the session row and cleared if that session is deleted) and `continued_to` (the newest session started from this one). Both clients use them: the handoff card names the original and `/origin` (`/continuation` the other way) opens it.
 - **Titles.** The first words of the first prompt are the title at once; a model-written title (Title Case, a few
   words, from the first message only) replaces it unless the user renamed the session meanwhile. The model comes from `[context] title_models`, tried in order; if all fail the first words stay. The `mock/` provider is skipped.
+
+## Search, paging, approvals, artifacts, writes, usage (K5–K11)
+
+### Search (K5)
+
+`GET /api/search?q=` matches the sessions' titles and the user's own messages (notices are not indexed) with
+SQLite FTS5 (`search_index`, kept up to date as messages and titles change and backfilled once). Every word of `q`
+is a prefix, all must match, and `q` is never FTS syntax. A hit is the session's title when that matches, else its
+best message; `snippet` marks the match with `[ ]`. Prompt history (`/project/{id}/prompts?q=`) stays a plain
+substring match, which is what Up-arrow recall wants.
+
+### Message paging (K6)
+
+`GET /api/session/{id}/message` returns the whole list as before. With `limit` (1..500, default 100) or `before`
+it returns a page, `{messages, more, oldest_seq}`: the `limit` messages before sequence `before` (the newest when
+absent), oldest first. Pass `oldest_seq` as the next `before` until `more` is false. `/api/snapshot` still caps its
+selected session at `message_limit` and reports `messages_more` and `oldest_seq`, so a client loads older messages
+with this endpoint. Turn summaries page with `before=<turn id>` as before.
+
+### Approvals (K7)
+
+`POST /api/session/{id}/permission/{pid}` takes `{reply: "allow" or "deny", scope?: "once" or "session", note?}`.
+`scope: "session"` (allow only) also grants the same call for the rest of the session: the tool, or for `bash` the
+exact command. A deny rule still wins over a grant, and a grant covers an `ask` rule too. Grants live in memory
+(a daemon restart forgets them; `GET`/`DELETE …/grant` shows and clears them). `note` (deny only) is added to the
+refusal the model reads: `the user declined this tool call: <note>`. Both show in `permission.replied`.
+
+### Artifacts (K8)
+
+Media a session produced is stored once per content in `~/.nexus10/artifacts/<sha256>` with a row per session in
+`artifact` (id, media type, name, size, source). Today the source is an MCP `image` or `audio` result: the tool
+result names the artifact. An image (PNG, JPEG, GIF, WebP) also reaches the model beside the text, in each dialect's
+tool-result item ([llm-providers.md](llm-providers.md#tool-result-media)); for a model without image input the result
+says `[N image not sent: …]`; audio stays text only. Media types are
+cleaned to `type/subtype`, anything else is `application/octet-stream`; up to 16 MiB each. `GET /api/artifact/{id}`
+serves the bytes with `content-disposition: attachment`, `nosniff` and `content-security-policy: sandbox`, so a
+server's HTML or SVG never runs. Deleting a session removes its rows and any bytes no row names.
+
+### Cache warning (K9)
+
+`GET /api/session/{id}/switch-cost?model=&agent=` says whether the switch would make the next request start cold:
+`reasons` lists why (a different model; a different agent, which replaces the system prompt and tool definitions at
+the front of the request), `cached_tokens` is what the newest request read from the cache, and `cache_lost` is true
+only when there is a reason and something was cached. Clients ask before `…/model` or `…/agent` and confirm with
+the user; the switches themselves are unchanged.
+
+### File writes (K10)
+
+`PUT /api/project/{id}/file?path=&session=` with `{content, expected_revision}` writes a UTF-8 text file (at most 1
+MiB) only if it is still at the `revision` a read returned; `"new"` creates a file that must not exist. A stale
+revision is 409 `stale_file` with `current_revision`. Paths are opened without following symlinks and cannot leave
+the workspace; the write is a temporary file renamed over the target and keeps the file's mode. The event
+`files.changed` follows. The model's own freshness guard sees the new content as a user change.
+
+### Usage (K11)
+
+Per-session totals are the `session_usage` ledger (`GET /api/session/{id}/usage`, and in `/turn`). `GET /api/usage`
+asks the providers that report plan limits (codex, copilot) for their windows; a window is `{label, used_percent,
+resets_at, period_seconds, kind, detail}`. A provider that fails has an `error` in its row and the others still
+answer. Nothing in the response is a credential.

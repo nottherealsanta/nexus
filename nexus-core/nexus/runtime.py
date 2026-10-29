@@ -45,17 +45,19 @@ existing conversation. Either way its answer comes back as a notification.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from . import agents as agent_files
+from . import artifacts, oneshot, permissions, worktrees
 from . import extensions as extension_files
 from . import mcp as mcp_files
-from . import oneshot, permissions, worktrees
 from . import questions as question_contract
 from . import skills as skill_files
 from . import snapshot as snapshots
@@ -73,6 +75,7 @@ from .llmhub.auth import AuthError, CredentialError
 from .llmhub.hub import provider_for, split_ref
 from .llmhub.types import (
     Done,
+    Media,
     Message,
     PartDone,
     ProviderError,
@@ -107,7 +110,7 @@ from .recovery import Recovery, open_approvals
 from .retention import Retention
 from .retry import RetryPolicy
 from .store import Project, Session, Store, StoredMessage, new_id
-from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError
+from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError, ToolOutput
 from .tools import bash as bash_tool
 from .tools.base import clip
 
@@ -204,6 +207,7 @@ class Runtime:
         self.default_model = default_model
         self.turns: dict[str, asyncio.Task[None]] = {}
         self.approvals: dict[str, tuple[str, asyncio.Future[bool], dict[str, Any]]] = {}  # id -> (session, future, request)
+        self.grants: dict[str, set[str]] = {}  # session -> grant keys from "allow for this session" (K7); lost on restart
         self.questions: dict[str, PendingQuestion] = {}  # qst id -> pending question request
         self.resolved_questions: dict[str, str] = {}  # qst id -> "answered" | "cancelled" (bounded tombstones)
         self.mcp = mcp_files.McpManager(lambda kind, data: self.bus.publish(kind, data),
@@ -218,6 +222,7 @@ class Runtime:
         self.closing_sessions: set[str] = set()
         self.handoffs: set[str] = set()  # sessions whose handoff summary is being written
         self.background: set[asyncio.Future[None]] = set()  # titles and automatic handoffs
+        self.vision: dict[str, bool] = {}  # model id -> takes image input; set when a turn starts, absent means yes
         self.window_for = self._catalog_window  # model ref -> context window; replaceable in tests
         self.pending_directories: dict[str, dict[str, Any]] = {}  # session id -> a validated, not-yet-applied move
         self.file_lock = asyncio.Lock()  # serializes Nexus file mutations for this daemon
@@ -1337,8 +1342,11 @@ class Runtime:
             for sid in ids:
                 self.pending_directories.pop(sid, None)  # a queued move must not apply to a deleted session
             await self.jobs.cancel_for(ids)  # a background command must not outlive the session that started it
+            shas = {a["sha"] for sid in ids for a in self.store.artifacts(sid)}
             if not self.store.delete_session(session_id):
                 raise NotFound(f"no session {session_id}")
+            for sha in self.store.orphan_blobs(shas):  # the descendants went with it (on delete cascade)
+                artifacts.remove_blob(sha)
             self._publish_tombstones(descendants, session_id)
         finally:
             self.closing_sessions.difference_update(ids)
@@ -1406,6 +1414,49 @@ class Runtime:
         except (OSError, ValueError, TypeError, KeyError):
             return None
 
+    async def image_input(self, ref: str) -> bool:
+        """Whether the catalog says this model takes images. Unknown models count as yes: a provider that refuses
+        says so, and silently hiding an image from a model that could read it is worse."""
+        try:
+            provider, model_id = split_ref(ref)
+            data, _ = await catalog.load()
+            info = next((item for item in catalog.models_for(data, provider) if item.id == model_id), None)
+        except (OSError, ValueError, TypeError, KeyError):
+            return True
+        return True if info is None else info.image_input
+
+    def render_media(self, message: Message, model: str) -> Message:
+        """The message as a provider should see it: each tool image carries its bytes (`Media.data_url`).
+
+        A model without image input, or an artifact whose bytes are gone, gets the text with one line saying the
+        image was not sent. Nothing stored changes; this runs on every request build.
+        """
+        if message.role != "tool" or not any(isinstance(p, ToolResult) and p.media for p in message.parts):
+            return message
+        sendable = self.vision.get(model, True)
+        parts: list[Any] = []
+        for part in message.parts:
+            if not isinstance(part, ToolResult) or not part.media:
+                parts.append(part)
+                continue
+            media, missed = [], 0
+            for item in part.media:
+                try:
+                    record = self.store.artifact(item.artifact)
+                    if not sendable or record is None:
+                        raise OSError
+                    raw = artifacts.read_blob(record["sha"])
+                except (OSError, ValueError):
+                    missed += 1
+                    continue
+                media.append(replace(item, data_url=f"data:{item.mime};base64,{base64.b64encode(raw).decode()}"))
+            note = ""
+            if missed:
+                why = "this model takes no image input" if not sendable else "its bytes are no longer stored"
+                note = f"\n[{missed} image{'s' if missed != 1 else ''} not sent: {why}]"
+            parts.append(replace(part, output=part.output + note, media=tuple(media)))
+        return Message(message.role, tuple(parts))
+
     def measured_input(self, session_id: str, model: str) -> int | None:
         """Input tokens of the newest request, when it ran on `model`."""
         row = self.store.db.execute(
@@ -1413,6 +1464,34 @@ class Runtime:
             (session_id,),
         ).fetchone()
         return row["input_tokens"] if row and row["model"] == model else None
+
+    def switch_cost(self, session_id: str, *, model: str | None = None, agent: str | None = None) -> dict[str, Any]:
+        """What switching the model or agent would do to the prompt cache (K9, Principle 8).
+
+        A provider caches the request's prefix per model, and the system prompt and tool definitions come first,
+        so a different model or agent makes the next request start cold. `cached_tokens` is what the newest
+        request read from the cache; `None` means nothing was measured yet, so there is nothing to lose.
+        """
+        session = self.session(session_id)
+        current = self.session_json(session)
+        reasons: list[str] = []
+        if model is not None:
+            if model:
+                provider_for(model)  # a bad ref is a 400, as for the switch itself
+            target = model or None
+            if target and target != current["model"]:
+                reasons.append(f"model {current['model']} -> {target}: the provider caches the prefix per model")
+            elif not target and current["model_source"] == "session":
+                reasons.append("model returns to the agent's choice: the provider caches the prefix per model")
+        if agent is not None and agent != session.agent:
+            reasons.append(f"agent {session.agent} -> {agent}: the system prompt and tool definitions come first "
+                           "in the request, so everything after them is a new prefix")
+        row = self.store.db.execute(
+            "select input_tokens, cached_input_tokens from turn_request where session_id = ? and input_tokens is not null"
+            " order by started desc, rowid desc limit 1", (session_id,)).fetchone()
+        cached = row["cached_input_tokens"] or 0 if row else None
+        return {"session_id": session_id, "cache_lost": bool(reasons) and bool(cached), "reasons": reasons,
+                "cached_tokens": cached, "input_tokens": row["input_tokens"] if row else None}
 
     async def context_usage(self, session_id: str) -> dict[str, Any]:
         """`context()` plus `used`, `window` and `exact` (PLAN A3)."""
@@ -1457,7 +1536,6 @@ class Runtime:
         history = oneshot.settled(messages if messages is not None else base.messages)
         request = oneshot.with_instruction(base, instruction, messages=history)
         if system is not None:
-            from dataclasses import replace
             request = replace(request, instructions=system, tools=(), reasoning_effort=None)
         return agent.provider, request
 
@@ -1746,6 +1824,7 @@ class Runtime:
             cwd_changed=cwd_changed,
             retry_policy=self.retry_policy,
             hooks=self._hook_runner(session, workspace),
+            render=lambda message: self.render_media(message, model),
         )
 
     def _hook_runner(self, session: Session, workspace: Path) -> HookRunner | None:
@@ -1835,12 +1914,33 @@ class Runtime:
         if server not in self._mcp_allowed(self.session(session_id)):
             raise ToolError(f"server {server!r} is not available in this session")
         try:
-            text, is_error = await self.mcp.call(target, arguments)
+            media: list[Media] = []
+
+            def save(data: str, mime: str, kind: str) -> str:
+                name = f"{target.replace('/', '-')}.{kind}"
+                artifact = self.save_artifact(session_id, data, mime, name=name, source=f"mcp:{target}")
+                if kind == "image" and artifacts.clean_mime(mime) in artifacts.MODEL_IMAGE_TYPES:
+                    media.append(Media(artifact, artifacts.clean_mime(mime), name))
+                return artifact
+
+            text, is_error = await self.mcp.call(target, arguments, save=save)
         except mcp_files.McpUnavailable as exc:
             raise ToolError(mcp_bridge.fence(str(exc), server=server, kind="tool-error", limit=2000)) from exc
         if is_error:
             raise ToolError(text)
-        return text
+        return ToolOutput(text, tuple(media)) if media else text
+
+    # -- artifacts -------------------------------------------------------------
+
+    def save_artifact(self, session_id: str, data: str | bytes, mime: str | None, *, name: str, source: str) -> str:
+        """Store media a session produced and return its id; ValueError if it cannot be stored."""
+        raw = data if isinstance(data, bytes) else artifacts.decode(data)
+        mime = artifacts.clean_mime(mime)
+        sha = artifacts.write_blob(raw)
+        record = self.store.add_artifact(session_id, sha=sha, mime=mime, name=name[:120], size=len(raw), source=source)
+        self.bus.publish("artifact.added", {k: record[k] for k in ("id", "mime", "name", "bytes", "source")},
+                         session_id=session_id)
+        return record["id"]
 
     # -- skills ----------------------------------------------------------------
 
@@ -2162,6 +2262,7 @@ class Runtime:
         try:
             agent = self._agent(self.session(session_id))
             agent.turn_id = turn_id
+            self.vision[agent.model] = await self.image_input(self.session_json(self.session(session_id))["model"])
             async for event in agent.turn(user_text):
                 if isinstance(event, MessageAdded):
                     if event.message.role == "assistant":
@@ -2488,15 +2589,22 @@ class Runtime:
         asked_by_rule = verdict is not None and verdict.action == "ask"
         if not asked_by_rule and (verdict is not None or quiet or session.permission == "allow"):
             return True
+        grant = self.grant_key(name, call.name, args)
+        if grant in self.grants.get(session_id, ()):  # a deny rule already raised above, so a grant never beats one
+            return True
         approval_id = new_id("per")
-        request = {"id": approval_id, "session_id": session_id, "tool": call.name, "call_id": call.id, "args": args}
+        request = {"id": approval_id, "session_id": session_id, "tool": call.name, "call_id": call.id, "args": args,
+                   "grant": grant}
         if verdict is not None:
             request["rule"] = verdict.rule
         future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self.approvals[approval_id] = (session_id, future, request)
         self.bus.publish("permission.asked", request, session_id=session_id)
         try:
-            return await future
+            allowed = await future
+            if not allowed and request.get("note"):
+                raise ToolError(f"the user declined this tool call: {request['note']}")
+            return allowed
         finally:
             removed = self.approvals.pop(approval_id, None)
             answered = future.done() and not future.cancelled()
@@ -2511,15 +2619,46 @@ class Runtime:
     def pending_approvals(self, session_id: str) -> list[dict[str, Any]]:
         return [request for sid, _, request in self.approvals.values() if sid == session_id]
 
-    def reply(self, session_id: str, approval_id: str, allow: bool) -> None:
+    @staticmethod
+    def grant_key(name: str, tool: str, args: dict[str, Any]) -> str:
+        """What "allow for this session" covers: the tool, except bash, which is the exact command (K7)."""
+        if tool == "bash":
+            command = args.get("command")
+            return "bash: " + command if isinstance(command, str) else "bash"
+        return name
+
+    def session_grants(self, session_id: str) -> list[str]:
+        return sorted(self.grants.get(session_id, ()))
+
+    def clear_grants(self, session_id: str) -> None:
+        self.grants.pop(session_id, None)
+        self.bus.publish("permission.grants_cleared", {"session_id": session_id}, session_id=session_id)
+
+    def reply(self, session_id: str, approval_id: str, allow: bool, *, scope: str = "once", note: str = "") -> None:
+        """Answer an approval. `scope="session"` (allow only) also grants the same call for the rest of the session;
+        `note` (deny only) goes to the model with the refusal."""
         entry = self.approvals.get(approval_id)
         if entry is None or entry[0] != session_id:
             raise NotFound(f"no pending permission {approval_id}")
         if entry[1].done():
             raise Conflict(f"permission {approval_id} was already resolved")
-        self.bus.publish("permission.replied", {"id": approval_id, "session_id": session_id,
-                                                "outcome": "allowed" if allow else "denied", "allow": allow},
-                         session_id=session_id)
+        if scope not in ("once", "session"):
+            raise ValueError("scope must be 'once' or 'session'")
+        if scope == "session" and not allow:
+            raise ValueError("only an allow can be for the session")
+        note = note.strip()
+        if note and allow:
+            raise ValueError("a note goes with a deny")
+        event = {"id": approval_id, "session_id": session_id,
+                 "outcome": "allowed" if allow else "denied", "allow": allow}
+        if scope == "session":
+            event["scope"] = "session"
+            event["grant"] = entry[2]["grant"]
+            self.grants.setdefault(session_id, set()).add(entry[2]["grant"])
+        if note:
+            event["note"] = note
+            entry[2]["note"] = note
+        self.bus.publish("permission.replied", event, session_id=session_id)
         if not entry[1].done():
             entry[1].set_result(allow)
 

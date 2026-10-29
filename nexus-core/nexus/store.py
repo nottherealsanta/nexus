@@ -42,6 +42,7 @@ never zero.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import sqlite3
 import time
@@ -51,7 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .codec import message_from_json, message_to_json, part_from_json
+from .codec import message_from_json, message_to_json, part_from_json, to_json
 from .llmhub.types import Image, Message, Text, ToolCall, ToolResult, Usage
 from .paths import home
 
@@ -159,6 +160,21 @@ create table if not exists prompt_history (
   created real not null
 );
 create index if not exists prompt_history_session on prompt_history(session_id, id);
+create table if not exists artifact (
+  id text primary key,
+  session_id text not null references session(id) on delete cascade,
+  sha text not null,
+  mime text not null,
+  name text not null,
+  bytes integer not null,
+  source text not null,
+  created real not null
+);
+create index if not exists artifact_session on artifact(session_id);
+create index if not exists artifact_sha on artifact(sha);
+create virtual table if not exists search_index using fts5(
+  text, session_id unindexed, message_id unindexed, kind unindexed, tokenize = 'unicode61 remove_diacritics 2'
+);
 create table if not exists file_observation (
   session_id text not null references session(id) on delete cascade,
   path text not null,
@@ -230,6 +246,7 @@ create table if not exists turn_tool (
   output text,
   is_error integer not null default 0,
   observations text not null default '[]',
+  media text,
   primary key (turn_id, call_id)
 );
 create index if not exists turn_tool_call on turn_tool(session_id, call_id);
@@ -362,6 +379,9 @@ class Store:
         with self.db:  # one-time: sessions from before prompt history keep what the user typed
             if self.db.execute("insert or ignore into migration (name) values ('prompt_history_v1')").rowcount:
                 self._backfill_prompt_history()
+        with self.db:  # one-time: titles and user messages that predate the search index
+            if self.db.execute("insert or ignore into migration (name) values ('search_index_v1')").rowcount:
+                self._backfill_search()
         project_columns = {r["name"] for r in self.db.execute("pragma table_info(project)")}
         if "revision" not in project_columns:
             self.db.execute("alter table project add column revision integer not null default 1")
@@ -384,6 +404,8 @@ class Store:
             with self.db:
                 self.db.execute("alter table turn add column start_seq integer not null default 0")
         tool_columns = {r["name"] for r in self.db.execute("pragma table_info(turn_tool)")}
+        if tool_columns and "media" not in tool_columns:
+            self.db.execute("alter table turn_tool add column media text")
         if "message_id" not in tool_columns:
             self.db.execute("alter table turn_tool add column message_id text")
         self.db.execute("create index if not exists session_parent on session(parent_id)")
@@ -593,6 +615,7 @@ class Store:
                 self.db.execute("insert into session_snapshot (session_id, data, created) values (?, ?, ?)",
                                 (session.id, json.dumps(snapshot), now))
             self.db.execute("update project set updated = ? where id = ?", (now, project.id))
+            self._index_title(session.id, session.title)
         return session
 
     def snapshot(self, session_id: str) -> dict[str, Any] | None:
@@ -716,11 +739,35 @@ class Store:
                         (*allowed.values(), time.time(), session_id)).rowcount
                 if not changed:
                     return None
+                if "title" in allowed:
+                    self._index_title(session_id, allowed["title"])
         return self.session(session_id)
+
+    def add_artifact(self, session_id: str, *, sha: str, mime: str, name: str, size: int, source: str) -> dict[str, Any]:
+        record = {"id": new_id("art"), "session_id": session_id, "sha": sha, "mime": mime, "name": name,
+                  "bytes": size, "source": source, "created": time.time()}
+        with self.db:
+            self.db.execute("insert into artifact (id, session_id, sha, mime, name, bytes, source, created)"
+                            " values (:id, :session_id, :sha, :mime, :name, :bytes, :source, :created)", record)
+        return record
+
+    def artifact(self, artifact_id: str) -> dict[str, Any] | None:
+        row = self.db.execute("select * from artifact where id = ?", (artifact_id,)).fetchone()
+        return dict(row) if row else None
+
+    def artifacts(self, session_id: str) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.db.execute("select * from artifact where session_id = ? order by created, rowid",
+                                                 (session_id,))]
+
+    def orphan_blobs(self, shas: set[str]) -> set[str]:
+        """Those of `shas` that no artifact record names any more."""
+        return {sha for sha in shas
+                if not self.db.execute("select 1 from artifact where sha = ? limit 1", (sha,)).fetchone()}
 
     def delete_session(self, session_id: str) -> bool:
         with self.db:
             self.db.execute("update session set continued_from = null where continued_from = ?", (session_id,))
+            self.db.execute("delete from search_index where session_id = ?", (session_id,))
             return self.db.execute("delete from session where id = ?", (session_id,)).rowcount > 0
 
     def continuation_of(self, session_id: str) -> str | None:
@@ -1008,9 +1055,59 @@ class Store:
             (stored.id, session_id, seq, message.role, json.dumps(message_to_json(message)["parts"]), now),
         )
         self.db.execute("update session set updated = ? where id = ?", (now, session_id))
+        if message.role == "user":
+            self._index_message(session_id, stored.id, message)
         return stored
 
     NOTICE_PREFIXES = ("[Nexus notice", "[Notification", "→ Background Shell")
+
+    def _index_message(self, session_id: str, message_id: str, message: Message) -> None:
+        text, _ = self._prompt_text(message)
+        if text.strip() and not text.startswith(self.NOTICE_PREFIXES):
+            self.db.execute("insert into search_index (text, session_id, message_id, kind) values (?, ?, ?, 'user')",
+                            (text, session_id, message_id))
+
+    def _index_title(self, session_id: str, title: str) -> None:
+        self.db.execute("delete from search_index where session_id = ? and kind = 'title'", (session_id,))
+        if title.strip():
+            self.db.execute("insert into search_index (text, session_id, message_id, kind) values (?, ?, null, 'title')",
+                            (title, session_id))
+
+    def _backfill_search(self) -> None:
+        for r in self.db.execute("select id, title from session").fetchall():
+            self._index_title(r["id"], r["title"])
+        for r in self.db.execute("select id, session_id, parts from message where role = 'user' order by created, seq").fetchall():
+            self._index_message(r["session_id"], r["id"], message_from_json({"role": "user", "parts": json.loads(r["parts"])}))
+
+    def search(self, q: str, *, project_id: str | None = None, archived: str = "include",
+               limit: int = 30) -> list[dict[str, Any]]:
+        """Sessions whose title or user messages match every word of `q` (each as a prefix), best first.
+
+        One hit per session: the title when it matches, else the best-ranked user message, with a short snippet.
+        """
+        words = re.findall(r"\w+", q, flags=re.UNICODE)
+        if not words:
+            return []
+        match = " ".join(f'"{w}"*' for w in words)
+        sql = ("select i.session_id, i.kind, i.message_id, bm25(search_index) rank,"
+               " snippet(search_index, 0, '[', ']', '…', 12) snippet from search_index i"
+               " join session s on s.id = i.session_id where search_index match ?")
+        params: list[Any] = [match]
+        if project_id:
+            sql += " and s.project_id = ?"
+            params.append(project_id)
+        sql += _archive_clause(archived).replace(" archived", " s.archived")
+        sql += " order by rank limit ?"
+        params.append(limit * 5)
+        seen: dict[str, dict[str, Any]] = {}
+        for r in self.db.execute(sql, params):
+            hit = seen.get(r["session_id"])
+            if hit is None:
+                seen[r["session_id"]] = {"session_id": r["session_id"], "kind": r["kind"], "message_id": r["message_id"],
+                                         "snippet": r["snippet"], "rank": r["rank"]}
+            elif r["kind"] == "title" and hit["kind"] != "title":
+                hit.update(kind="title", message_id=None, snippet=r["snippet"])
+        return list(seen.values())[:limit]
 
     def _backfill_prompt_history(self) -> None:
         """Old user messages that are not notices; child sessions are prompted by their parent."""
@@ -1025,7 +1122,6 @@ class Store:
 
     @staticmethod
     def _prompt_text(message: Message) -> tuple[str, int]:
-        import re
         text = "".join(p.text for p in message.parts
                        if isinstance(p, Text) and not re.fullmatch(r"\[Image [A-Z]\]", p.text))
         return text, sum(isinstance(p, Image) for p in message.parts)
@@ -1074,6 +1170,23 @@ class Store:
             StoredMessage(r["id"], r["session_id"], r["seq"], message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"])
             for r in rows
         ]
+
+    def messages_page(self, session_id: str, *, before: int | None = None, limit: int = 100) -> dict[str, Any]:
+        """The `limit` messages just before sequence `before` (the newest when None), oldest first.
+
+        `more` says older ones exist; pass `oldest_seq` as the next `before`.
+        """
+        sql, params = "select * from message where session_id = ?", [session_id]
+        if before is not None:
+            sql += " and seq < ?"
+            params.append(before)
+        rows = self.db.execute(sql + " order by seq desc limit ?", (*params, limit + 1)).fetchall()
+        more = len(rows) > limit
+        rows = list(reversed(rows[:limit]))
+        return {"messages": [{"id": r["id"], "session_id": r["session_id"], "seq": r["seq"], "created": r["created"],
+                              "role": r["role"], "parts": json.loads(r["parts"]),
+                              **({"delivery": r["delivery"]} if r["delivery"] else {})} for r in rows],
+                "more": more, "oldest_seq": rows[0]["seq"] if rows else None}
 
     def messages_after_seq(self, session_id: str, seq: int) -> list[StoredMessage]:
         """Messages after a turn's starting sequence; recovery uses this, not a clock."""
@@ -1540,6 +1653,7 @@ class Store:
             "name": row["name"], "arguments": row["arguments"], "state": row["state"],
             "started": row["started"], "finished": row["finished"], "output": row["output"],
             "is_error": bool(row["is_error"]), "observations": json.loads(row["observations"] or "[]"),
+            "media": json.loads(row["media"] or "[]"),
         }
 
     def tools_for_turn(self, turn_id: str) -> list[dict[str, Any]]:
@@ -1589,19 +1703,24 @@ class Store:
         now = time.time()
         with self.db:
             changed = self.db.execute(
-                "update turn_tool set state = 'finished', finished = ?, output = ?, is_error = ?, observations = ?"
-                " where turn_id = ? and call_id = ? and state in ('started', 'saved', 'finished')",
+                "update turn_tool set state = 'finished', finished = ?, output = ?, is_error = ?, observations = ?,"
+                " media = ? where turn_id = ? and call_id = ? and state in ('started', 'saved', 'finished')",
                 (now, result.output, 1 if result.is_error else 0, json.dumps(observations or []),
-                 turn_id, result.call_id),
+                 self._media_json(result), turn_id, result.call_id),
             ).rowcount
             if not changed:
                 self.db.execute(
                     "insert into turn_tool (turn_id, session_id, call_id, name, arguments, state, started,"
-                    " finished, output, is_error, observations)"
-                    " values (?, ?, ?, ?, ?, 'finished', ?, ?, ?, ?, ?)",
+                    " finished, output, is_error, observations, media)"
+                    " values (?, ?, ?, ?, ?, 'finished', ?, ?, ?, ?, ?, ?)",
                     (turn_id, session_id, result.call_id, call.name, call.arguments, now, now,
-                     result.output, 1 if result.is_error else 0, json.dumps(observations or [])),
+                     result.output, 1 if result.is_error else 0, json.dumps(observations or []),
+                     self._media_json(result)),
                 )
+
+    @staticmethod
+    def _media_json(result: ToolResult) -> str | None:
+        return json.dumps(to_json(result.media)) if result.media else None
 
     def save_assistant_message(self, session_id: str, message: Message, *, turn_id: str,
                                request_id: str | None = None) -> StoredMessage:
@@ -1635,15 +1754,16 @@ class Store:
             if not isinstance(part, ToolResult):
                 continue
             changed = self.db.execute(
-                "update turn_tool set state = 'inserted', output = ?, is_error = ?, finished = coalesce(finished, ?)"
-                " where turn_id = ? and call_id = ?",
-                (part.output, 1 if part.is_error else 0, now, turn_id, part.call_id),
+                "update turn_tool set state = 'inserted', output = ?, is_error = ?, finished = coalesce(finished, ?),"
+                " media = ? where turn_id = ? and call_id = ?",
+                (part.output, 1 if part.is_error else 0, now, self._media_json(part), turn_id, part.call_id),
             ).rowcount
             if not changed:  # a result whose call predates the lifecycle record still closes visibly
                 self.db.execute(
                     "insert into turn_tool (turn_id, session_id, call_id, name, arguments, state,"
-                    " finished, output, is_error) values (?, ?, ?, '', '', 'inserted', ?, ?, ?)",
-                    (turn_id, session_id, part.call_id, now, part.output, 1 if part.is_error else 0),
+                    " finished, output, is_error, media) values (?, ?, ?, '', '', 'inserted', ?, ?, ?, ?)",
+                    (turn_id, session_id, part.call_id, now, part.output, 1 if part.is_error else 0,
+                     self._media_json(part)),
                 )
 
     def save_tool_message(self, session_id: str, message: Message, *, turn_id: str | None) -> StoredMessage:

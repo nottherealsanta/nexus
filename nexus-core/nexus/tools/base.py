@@ -12,9 +12,9 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
-from ..llmhub.types import ToolSpec
+from ..llmhub.types import Media, ToolSpec
 
 if TYPE_CHECKING:
     from ..observations import FileGuard
@@ -24,6 +24,18 @@ MAX_OUTPUT_CHARS = 30_000
 
 class ToolError(Exception):
     """A failure reported back to the model as an error result."""
+
+
+class ToolOutput(str):
+    """A tool's text plus images it returned (`Media`). Still a `str`, so anything that only wants text, such as a
+    code cell, a hook or a clip, treats it as one; the loop sends `media` along with the result."""
+
+    media: tuple[Media, ...]
+
+    def __new__(cls, text: str, media: tuple[Media, ...] = ()) -> Self:
+        self = super().__new__(cls, text)
+        self.media = media
+        return self
 
 
 @dataclass(frozen=True, slots=True)

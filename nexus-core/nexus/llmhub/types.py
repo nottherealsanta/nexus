@@ -44,10 +44,26 @@ class ToolCall:
 
 
 @dataclass(frozen=True, slots=True)
+class Media:
+    """An image a tool returned, kept as a reference to a stored artifact (PLAN K8).
+
+    Stored and sent to clients without bytes. `Agent.request()` fills `data_url` just before a provider sees
+    the message, so a dialect reads `data_url` and never touches the artifact store. `data_url` None means the
+    image is not being sent (see docs/llm-providers.md, "Tool-result media").
+    """
+
+    artifact: str
+    mime: str
+    name: str = ""
+    data_url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ToolResult:
     call_id: str
     output: str
     is_error: bool = False
+    media: tuple[Media, ...] = ()  # images that come after `output`, in order
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,10 +77,21 @@ class Image:
 Part = Text | Reasoning | ToolCall | ToolResult | Image
 
 
+def tool_images(part: ToolResult) -> list[Media]:
+    """The images of a tool result a provider should send: only those whose bytes were filled in."""
+    return [m for m in part.media if m.data_url]
+
+
 @dataclass(frozen=True, slots=True)
 class Message:
     role: Literal["user", "assistant", "tool"]
     parts: tuple[Part, ...]
+
+
+def has_images(messages: Any) -> bool:
+    """Whether a request carries any image, a user's or a tool's (Copilot wants a header then)."""
+    return any(isinstance(p, Image) or (isinstance(p, ToolResult) and tool_images(p))
+               for m in messages for p in m.parts)
 
 
 @dataclass(frozen=True, slots=True)

@@ -66,7 +66,7 @@ PROVIDERS: dict[str, ProviderInfo] = {
         "chat",
         "https://api.githubcopilot.com",
         "github-copilot",
-        ChatQuirks(initiator_header=True),
+        ChatQuirks(initiator_header=True, vision_header=True),
         default_model="claude-sonnet-5",
         verified=True,
     ),
@@ -132,7 +132,7 @@ def make(provider_id: str, auth: HeaderSource, model: str | None = None) -> Prov
 
         return MockProvider(model or info.default_model)
     if provider_id == "copilot" and copilot_uses_responses(model):
-        return ResponsesProvider(info.id, info.base_url, auth, ResponsesQuirks(initiator_header=True))
+        return ResponsesProvider(info.id, info.base_url, auth, ResponsesQuirks(initiator_header=True, vision_header=True))
     if isinstance(info.quirks, ResponsesQuirks):
         return ResponsesProvider(info.id, info.base_url, auth, info.quirks)
     base_url = getattr(auth, "base_url", None) or info.base_url

@@ -42,6 +42,8 @@ from .types import (
     WireEvent,
     WireRequest,
     WireResponse,
+    has_images,
+    tool_images,
 )
 
 REDACTED_HEADERS = {"authorization", "proxy-authorization", "cookie", "set-cookie", "chatgpt-account-id",
@@ -61,6 +63,7 @@ class ResponsesQuirks:
     prompt_cache_key: bool = False  # send the conversation id as `prompt_cache_key`
     session_header: str | None = None  # header that carries the conversation id
     initiator_header: bool = False  # Copilot: `x-initiator: user|agent` per request
+    vision_header: bool = False  # Copilot: `copilot-vision-request: true` when the request carries an image
 
 
 # -- Request ----------------------------------------------------------------
@@ -95,7 +98,12 @@ def input_items(messages: tuple[Message, ...] | list[Message], *, origin: str, q
                 else:
                     items.append({"type": "function_call", "call_id": part.id, "name": part.name, "arguments": part.arguments})
             elif isinstance(part, ToolResult):
-                items.append({"type": "function_call_output", "call_id": part.call_id, "output": part.output})
+                images = tool_images(part)
+                # Text-only results stay a plain string; with images `output` is an ordered content array.
+                output: Any = part.output if not images else [
+                    {"type": "input_text", "text": part.output},
+                    *({"type": "input_image", "image_url": m.data_url} for m in images)]
+                items.append({"type": "function_call_output", "call_id": part.call_id, "output": output})
     return items
 
 
@@ -257,6 +265,8 @@ class ResponsesProvider:
         if self._quirks.initiator_header:
             last = req.messages[-1].role if req.messages else "user"
             headers["x-initiator"] = "user" if last == "user" else "agent"
+        if self._quirks.vision_header and has_images(req.messages):
+            headers["copilot-vision-request"] = "true"
         headers.update(await self._auth.headers())
         yield WireRequest("POST", url, redact_headers(headers), body)
 

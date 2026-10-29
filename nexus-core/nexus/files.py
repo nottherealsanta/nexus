@@ -1,4 +1,4 @@
-"""Read-only project file browsing, confined to a workspace root."""
+"""Project file browsing and the editor's save, confined to a workspace root."""
 from __future__ import annotations
 
 import asyncio
@@ -129,6 +129,72 @@ def read_file(root: Path, name: str) -> dict:
         raise ValueError(str(exc)) from exc
     finally:
         os.close(fd)
+
+
+class StaleFile(Exception):
+    """The file is not at the revision the writer read; nothing was written."""
+
+    def __init__(self, message: str, revision: str | None) -> None:
+        super().__init__(message)
+        self.revision = revision
+
+
+def write_file(root: Path, name: str, content: str, expected_revision: str) -> dict:
+    """Replace a text file only if it is still at `expected_revision` (`"new"` means it must not exist yet).
+
+    Opens every path part without following symlinks, like reads do, writes a temporary file beside the target
+    and renames it over, so a reader never sees half a file. Keeps the file's mode. The new revision is returned.
+    """
+    parts = Path(name).parts
+    if not parts:
+        raise ValueError("path must name a file")
+    data = content.encode("utf-8")
+    if len(data) > MAX_FILE_BYTES:
+        raise ValueError(f"file exceeds {MAX_FILE_BYTES} bytes")
+    if b"\0" in data:
+        raise ValueError("content must be text")
+    if Path(name).is_absolute() or any(part in ("..", ".") for part in parts):
+        raise ValueError("path must stay within the workspace")
+    parent = _open(root, str(Path(*parts[:-1])) if len(parts) > 1 else "", directory=True)
+    leaf = parts[-1]
+    tmp = f".{leaf}.nexus-{os.getpid()}.tmp"
+    try:
+        try:
+            fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        except FileNotFoundError:
+            current, mode = None, 0o644
+        except OSError as exc:
+            raise ValueError(str(exc)) from exc
+        else:
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError("path is not a regular file")
+                with os.fdopen(fd, "rb", closefd=False) as handle:
+                    old = handle.read(MAX_FILE_BYTES + 1)
+                if len(old) > MAX_FILE_BYTES or b"\0" in old:
+                    raise ValueError("file is too large or binary to edit here")
+                current, mode = "sha256:" + hashlib.sha256(old).hexdigest(), stat.S_IMODE(info.st_mode)
+            finally:
+                os.close(fd)
+        if current != (None if expected_revision == "new" else expected_revision):
+            raise StaleFile("the file changed since it was read" if current else "the file does not exist", current)
+        out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent)
+        try:
+            with os.fdopen(out, "wb", closefd=False) as handle:
+                handle.write(data)
+        finally:
+            os.close(out)
+        os.replace(tmp, leaf, src_dir_fd=parent, dst_dir_fd=parent)
+    except OSError as exc:
+        raise ValueError(str(exc)) from exc
+    finally:
+        try:
+            os.unlink(tmp, dir_fd=parent)
+        except OSError:
+            pass
+        os.close(parent)
+    return {"path": name, "revision": "sha256:" + hashlib.sha256(data).hexdigest(), "bytes": len(data)}
 
 
 async def git_status(root: Path) -> dict:

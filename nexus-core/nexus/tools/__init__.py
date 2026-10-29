@@ -9,7 +9,7 @@ one of these tools (PLAN.md, "Task tools vs. control").
 from __future__ import annotations
 
 from .ask import TOOL as ASK
-from .base import Tool, ToolContext, ToolError
+from .base import Tool, ToolContext, ToolError, ToolOutput
 from .bash import KILL_TOOL as BASH_KILL
 from .bash import OUTPUT_TOOL as BASH_OUTPUT
 from .bash import TOOL as BASH
@@ -27,4 +27,4 @@ from .write import TOOL as WRITE
 DEFAULT_TOOLS: tuple[Tool, ...] = (READ, GREP, GLOB, LS, BASH, EDIT, MULTIEDIT, WRITE, WEB_SEARCH, WEB_FETCH, ASK, CODE)
 BASH_JOB_TOOLS: tuple[Tool, ...] = (BASH_OUTPUT, BASH_KILL)  # granted with bash for background jobs
 
-__all__ = ["BASH_JOB_TOOLS", "DEFAULT_TOOLS", "Tool", "ToolContext", "ToolError"]
+__all__ = ["BASH_JOB_TOOLS", "DEFAULT_TOOLS", "Tool", "ToolContext", "ToolError", "ToolOutput"]

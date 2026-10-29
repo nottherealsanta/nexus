@@ -762,8 +762,8 @@ Tests: `test_mcp_client.py`, `test_mcp_manager.py`, `test_mcp_bridge.py`,
   /api/mcp/{name}` (read-only detail as in old `McpServerShow`: no connecting,
   no argument values), `POST /api/mcp/{name}/restart`. Events `mcp.connected`,
   `mcp.disconnected`, `mcp.failed`, `mcp.tools_changed`.
-- Images in MCP results need artifact storage (K8). Until then an image result
-  is replaced by a labelled placeholder, and the placeholder says so.
+- Images in MCP results are stored as artifacts (K8) and sent to the model beside the result's text when it
+  takes image input (see K, 2026-10-29).
 
 **Changes:** the config lives in `config.toml` instead of `mcp.json`;
 project-scoped MCP config is dropped (P1); OAuth is still not implemented.
@@ -996,7 +996,23 @@ the other session; NSH's card has an "Open the original session" button. Setting
 `/btw` while a turn runs in the clients (Core allows it), an NSH browser test for the link click (the mock event
 stream drops the selection in two-session tests; the TUI test covers it).
 **Landed 2026-10-29: K4 session drafts.** `Runtime._plan_session` (split out of `create_session`) plans a session without storing it; `Runtime.draft_context` and `POST /api/draft/context` return the real starting request with `parts` token estimates. The TUI asks on every draft change (`App::draft_request`, `Command::DraftContext`) and the NSH new-session view does the same (`loadDraftContext`); both keep the old client estimate only until Core answers. Tests: `test_draft_context_matches_the_first_request_and_stores_nothing`, `core_answers_the_starting_context_of_the_current_draft_only`. NSH `nsh check` passes; the browser suite (chromium-1200) fails the same 12 tests as the Known gaps list, with nothing new. **Not done:** per-section detail text from Core (the section bodies are still the client's previews).
-K5–K11 are untouched.
+**Landed 2026-10-29: K5–K11 in Core** (API 1.3; docs in [api.md](docs/api.md#search-paging-approvals-artifacts-writes-usage-k5k11)).
+K5 `search_index` (FTS5; titles and user messages, backfilled) and `GET /api/search`. K6 `GET …/message?limit=&before=`
+pages (`more`, `oldest_seq`). K7 `permission` replies take `scope: "session"` and `note`; grants are per session, in
+memory, for the tool (bash: the exact command), and a deny rule still wins. K8 `nexus/artifacts.py`, the `artifact`
+table, `GET /api/artifact/{id}` served inert, MCP image/audio saved with the text saying the model cannot see them.
+K9 `GET …/switch-cost`. K10 `PUT …/file` with `expected_revision` and `files.changed`. K11 `GET /api/usage`
+(codex, copilot windows; `nexus/provider_usage.py`) and `GET …/usage`. Tests: `test_prompt_history.py`, `test_server.py`,
+`test_artifacts.py`, `test_provider_usage.py`. **Not done:** every client part (search UI, load-older-turns, the two
+approval choices, the cache confirm, the built-in editor, limits in Settings/status), the timeline showing tool
+images inline, an Anthropic-format tool result (J4), persistence of session grants, a real-account run of `/api/usage`. TUI and NSH only had their API version bumped.
+**Tool-result images (K8, later the same day):** `ToolResult.media` (`Media` refs, never bytes in JSON), `ToolOutput(str)`
+for tools, `Agent.request()` -> `Runtime.render_media` fills `data_url`, `turn_tool.media` for recovery, Responses
+`function_call_output` as an `input_text`/`input_image` array, Chat as one user message after the tool group, Copilot
+`copilot-vision-request` header, `ModelInfo.image_input`. Decision: Route A (the MCP spec's ordered content list; opencode
+does the same, cloned to `references/opencode`, gitignored). Verified live on codex, copilot (both dialects) and grok.
+Guide for new providers: [llm-providers.md](docs/llm-providers.md#tool-result-media). Ledger: an MCP image used to be dropped
+with a placeholder; the model now sees it.
 
 | Item | Old | New |
 | --- | --- | --- |
@@ -1368,7 +1384,7 @@ when each item lands.
 - No cross-provider message conversion beyond text and tool calls; switching
   provider mid-session works (`/model`), but foreign reasoning is dropped.
 - Copilot GPT models (catalog `@ai-sdk/openai`) are sent over Responses and the rest over Chat Completions; verified live with `gpt-6-luna` (2026-10-29). Responses replay for Copilot has no encrypted reasoning yet.
-- User images replay in both dialects; tool/MCP image results and general artifact storage are not implemented.
+- User images replay in both dialects; tool/MCP image results are stored (K8) and sent to the model (below).
 - Tool paths are confined to the workspace, but `bash` is not sandboxed, so
   "read-only" (`scout`) and "Markdown only" (`plan`) rest on their prompts.
   Read-before-edit is enforced only for the `edit`/`write` tools: unrestricted

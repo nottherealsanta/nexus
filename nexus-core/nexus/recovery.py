@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import questions as question_contract
 from .codec import part_from_json
-from .llmhub.types import Message, Text, ToolCall, ToolResult
+from .llmhub.types import Media, Message, Text, ToolCall, ToolResult
 from .observations import FileGuard
 from .store import Store, StoredMessage
 from .tools.base import clip
@@ -517,6 +517,10 @@ OUTCOMES = {
 }
 
 
+def _media(row: dict[str, Any]) -> tuple[Media, ...]:
+    return tuple(Media(**item) for item in row.get("media") or ())
+
+
 def classify_call(call: ToolCall, row: dict[str, Any], questions: dict[str, dict[str, Any]],
                   approvals: dict[str, dict[str, Any]],
                   answers: dict[str, tuple[str, str | None]], *, legacy: bool = False) -> tuple[str, ToolResult]:
@@ -530,9 +534,9 @@ def classify_call(call: ToolCall, row: dict[str, Any], questions: dict[str, dict
             is_error=True,
         )
     if state == "finished":
-        return "restored", ToolResult(call.id, row["output"] or "", is_error=bool(row["is_error"]))
+        return "restored", ToolResult(call.id, row["output"] or "", is_error=bool(row["is_error"]), media=_media(row))
     if state == "inserted":
-        return "inserted", ToolResult(call.id, row["output"] or "", is_error=bool(row["is_error"]))
+        return "inserted", ToolResult(call.id, row["output"] or "", is_error=bool(row["is_error"]), media=_media(row))
     if state == "saved":
         return "not_run", ToolResult(
             call.id, "interrupted by a daemon restart before this tool ran", is_error=True)

@@ -177,8 +177,10 @@ class Agent:
         retry_random: Callable[[], float] | None = None,
         hooks: HookRunner | None = None,
         turn_id: str | None = None,
+        render: Callable[[Message], Message] | None = None,
     ) -> None:
         self.hooks = hooks
+        self.render: Callable[[Message], Message] | None = render  # fills tool images' bytes for the provider
         self.turn_id = turn_id
         self._hook_notes: list[str] = []
         self.provider = provider
@@ -205,7 +207,7 @@ class Agent:
         return Request(
             model=self.model,
             instructions=self.instructions,
-            messages=tuple(self.messages),
+            messages=tuple(self.render(m) for m in self.messages) if self.render else tuple(self.messages),
             tools=tuple(tool.spec for tool in self.tools.values()),
             reasoning_effort=self.reasoning_effort,
             conversation_id=self.conversation_id,
@@ -369,8 +371,9 @@ class Agent:
             except ToolError as exc:  # refused by a permission rule
                 return ToolResult(call.id, str(exc), is_error=True)
         try:
-            return ToolResult(call.id, await tool.run(args, ToolContext(
-                self.workspace, call.id, files=self.files, cwd_changed=self.cwd_changed)))
+            output = await tool.run(args, ToolContext(
+                self.workspace, call.id, files=self.files, cwd_changed=self.cwd_changed))
+            return ToolResult(call.id, str(output), media=getattr(output, "media", ()))
         except ToolError as exc:
             return ToolResult(call.id, str(exc), is_error=True)
         except (OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:

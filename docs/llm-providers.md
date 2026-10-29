@@ -58,6 +58,8 @@ copilot, grok and opencode (PLAN.md, step 3).
 | `replay_raw` | Own-origin text and function-call items are sent back verbatim (`raw`) instead of rebuilt |
 | `prompt_cache_key` | Sends `prompt_cache_key` = conversation id, cut to 64 characters, when the request has one |
 | `session_header` | Name of a header that carries the conversation id (cut to 64 characters) when the request has one |
+| `initiator_header` | Sets `x-initiator` (as for Chat, below) |
+| `vision_header` | Copilot: sends `copilot-vision-request: true` when any message carries an image, a user's or a tool's (`types.has_images`) |
 
 `ChatQuirks` (`chat.py`):
 
@@ -65,6 +67,7 @@ copilot, grok and opencode (PLAN.md, step 3).
 | --- | --- |
 | `session_header` | Same as above |
 | `initiator_header` | Sets `x-initiator`: `user` when the last message is from the user, otherwise `agent` (an empty history counts as `user`) |
+| `vision_header` | Same as for Responses |
 
 ## Request bodies
 
@@ -176,6 +179,57 @@ maps to the right image, and the labels survive replay.
 Stored images replay in both dialects whichever provider the session switches
 to. Whether the model understands them depends on the selected model; Nexus
 does not check.
+
+## Tool-result media
+
+A tool can return images, not just text (today: an MCP server's `image` content; the shape is general). This section
+is the checklist for a new dialect or provider. The design follows the MCP tools spec, where a result is an
+**ordered list of typed content items** that the client hands to the model, and what opencode does
+(`packages/ai/src/protocols/open-responses.ts`, `anthropic-messages.ts`, `openai-chat.ts`, which keep the list and
+lower it per protocol).
+
+**In Nexus.** `ToolResult(call_id, output, is_error, media)` where `media` is a tuple of
+`Media(artifact, mime, name, data_url)`: the text comes first, then the images in order. A stored message holds
+only `artifact` (an id in the artifact store, [api.md](api.md#artifacts-k8)), `mime` and `name`; the JSON codec drops
+`data_url`, so stored messages, events and exports stay small and never hold image bytes. Just before a request is
+built, `Agent.request()` runs `Runtime.render_media` on each message, which fills `data_url` from the artifact
+(`data:<mime>;base64,…`). **A dialect only ever reads `data_url`** (use `types.tool_images(result)`, which
+returns the images that have bytes) and never touches the artifact store. A `Media` without `data_url` is not sent.
+`render_media` leaves it empty, and appends `[N image(s) not sent: <reason>]` to the result's text, when the model
+takes no image input (`ModelInfo.image_input`, from models.dev `modalities.input`; a model the catalog does not
+know counts as taking images) or the artifact's bytes are gone. Only PNG, JPEG, GIF and WebP are sent
+(`artifacts.MODEL_IMAGE_TYPES`); audio stays an artifact with a text line. A tool returns media by returning
+`ToolOutput(text, media)`, which is a `str`, so code cells, hooks and clipping treat it as plain text.
+
+**What a dialect must decide.** Where do a tool result's images go on this wire? Check, in this order:
+
+1. Can the tool-result item itself hold images? Then put them there, after the text, in order, and keep a text-only
+   result as a plain string so existing fixtures do not change.
+2. If not, the images follow the whole group of tool results as **one user message**, each preceded by a text part
+   that says which call returned it. The tool messages must stay contiguous right after the assistant message that
+   made the calls, so the extra message goes after the last of them.
+3. If the wire takes no images at all, send the text only (the result already says an image was stored).
+
+Then set `vision_header`-style quirks if the provider wants a flag when images are present, and add a recorded wire
+fixture test (see `tests/test_tool_media.py`) plus a real call, as for any provider.
+
+| Dialect | Where the images go | Verified live |
+| --- | --- | --- |
+| Responses | `function_call_output.output` becomes `[{"type": "input_text", "text": …}, {"type": "input_image", "image_url": <data URL>}, …]` | codex `gpt-6-luna`, copilot `gpt-6-luna`, grok `grok-4.7` (2026-10-29) |
+| Chat | the `role: "tool"` message keeps the text; one `role: "user"` message follows the group with `[Image returned by tool call <id>: <name>]` then an `image_url` part per image | copilot `claude-sonnet-5` (2026-10-29) |
+| Messages (Anthropic, J4) | planned: `tool_result.content` is an array of `text` and `image` blocks (`{"type":"image","source":{"type":"base64","media_type":…,"data":…}}`); that dialect supports it natively | not built |
+
+Things that are easy to get wrong:
+
+* **A provider may reject small or odd images.** grok answered `HTTP 400 invalid_image` for a 16×16 PNG (minimum 512
+  pixels); the same call with a 64×64 image worked.
+* **Copilot refuses images unless `copilot-vision-request: true` is set.** The header is on for any request with an
+  image anywhere, because a tool image makes the request a vision request.
+* **Replay across providers.** Because only the reference is stored, a session that moves from one provider to
+  another re-renders its tool images for the new dialect. Nothing about the old wire format is kept for them.
+* **Wire events show the bytes.** The request body in a `wire_request` event contains the base64, because wire
+  events are never clipped. Redaction does not apply to image data.
+* **Prompt cache.** Changing whether images are sent (model switch to a text-only model) changes the prefix.
 
 ## Replay rules
 
@@ -345,7 +399,7 @@ services were intentionally not carried over.
 
 * Whether every Codex-listed model id is served by the Codex backend.
 * Copilot GPT models: the catalog (`provider.npm = @ai-sdk/openai`) routes them to `{base}/responses`, with `x-initiator`, and no encrypted-reasoning replay yet (`providers.copilot_uses_responses`). Verified live with `gpt-6-luna` (2026-10-29); other families stay on Chat.
-* Which models of each provider understand images; Nexus sends them to any model.
+* Which models understand *user* images; Nexus sends them to any model. Tool-result images are skipped for models the catalog marks text-only (see "Tool-result media").
 
 ## API-key and local providers (J1–J3)
 

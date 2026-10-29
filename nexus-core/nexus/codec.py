@@ -10,7 +10,7 @@ import dataclasses
 import re
 from typing import Any
 
-from .llmhub.types import Image, Message, Part, Reasoning, Text, ToolCall, ToolResult
+from .llmhub.types import Image, Media, Message, Part, Reasoning, Text, ToolCall, ToolResult
 
 _PARTS: dict[str, type] = {"image": Image, "text": Text, "reasoning": Reasoning, "tool_call": ToolCall, "tool_result": ToolResult}
 _NAMES = {cls: name for name, cls in _PARTS.items()}
@@ -22,6 +22,8 @@ def snake(name: str) -> str:
 
 def to_json(value: Any) -> Any:
     """Dataclasses become dicts with a `type` tag; everything else passes through."""
+    if isinstance(value, Media):  # the bytes (data_url) never leave the provider layer
+        return {"artifact": value.artifact, "mime": value.mime, "name": value.name}
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         name = _NAMES.get(type(value)) or snake(type(value).__name__)
         return {"type": name, **{f.name: to_json(getattr(value, f.name)) for f in dataclasses.fields(value)}}
@@ -34,6 +36,8 @@ def to_json(value: Any) -> Any:
 
 def part_from_json(data: dict[str, Any]) -> Part:
     fields = {k: v for k, v in data.items() if k != "type"}
+    if data["type"] == "tool_result":
+        fields["media"] = tuple(Media(**m) for m in fields.get("media") or ())
     return _PARTS[data["type"]](**fields)
 
 

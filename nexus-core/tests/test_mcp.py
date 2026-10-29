@@ -85,7 +85,7 @@ async def test_manager_connects_lazily_calls_and_survives_a_dead_server(tmp_path
     manager = McpManager(lambda kind, data: events.append((kind, data)), lambda: {"fx": entry()})
     assert state(manager) == "idle" and events == []
     result = await manager.search("echo", servers=["fx"], server=None, limit=5)
-    assert [m.name for m in result.matches] == ["fx/echo"] and ("mcp.connected", {"server": "fx", "tools": 4}) in events
+    assert [m.name for m in result.matches] == ["fx/echo"] and ("mcp.connected", {"server": "fx", "tools": 5}) in events
     text, is_error = await manager.call("fx/echo", {"text": "hi"})
     assert "HI" in text and "<untrusted-mcp-data>" in text and not is_error
     assert manager.approval("fx/echo") == ("mcp__fx__echo", True) and manager.approval("fx/write_note")[1] is False
@@ -260,7 +260,7 @@ async def test_api_lists_servers_without_connecting_and_offers_browser_use_off(e
     shown = (await client.get("/api/config")).json()["values"]["mcp"]["servers"]
     assert shown["browser-use"]["enabled"] is False and shown["fx"]["env"]["SECRET"] != "hunter2"
     restarted = (await client.post("/api/mcp/fx/restart")).json()
-    assert restarted["state"] == "connected" and restarted["tools"] == 4
+    assert restarted["state"] == "connected" and restarted["tools"] == 5
     assert (await client.get("/api/mcp/fx")).json()["tool_names"][0] in {"echo", "write_note", "evil", "crash"}
     await rt.shutdown()
 
@@ -276,10 +276,10 @@ async def test_names_mode_lists_tools_until_the_limit_then_only_servers(env):
     first = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
     prompt = (await client.get(f"/api/session/{first}/context")).json()["instructions"]
     assert "fx/echo: Echo the text back" in prompt and "fx/write_note:" in prompt and "input_schema" not in prompt
-    set_modes(home, "max_listed_tools = 3\n")  # the fixture has 4 tools
+    set_modes(home, "max_listed_tools = 3\n")  # the fixture has 5 tools
     second = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
     prompt = (await client.get(f"/api/session/{second}/context")).json()["instructions"]
-    assert "fx (4 tools)" in prompt and "fx/echo:" not in prompt and "more than 3" in prompt
+    assert "fx (5 tools)" in prompt and "fx/echo:" not in prompt and "more than 3" in prompt
     # the first session is frozen: a config change does not touch it
     assert (await client.get(f"/api/session/{first}/context")).json()["instructions"].count("fx/echo:") == 1
     await rt.shutdown()
@@ -333,4 +333,40 @@ async def test_server_added_later_is_not_in_running_sessions(env):
     assert "mcp_tool_search" not in [t["name"] for t in context["tools"]]
     new = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
     assert "mcp_tool_search" in [t["name"] for t in (await client.get(f"/api/session/{new}/context")).json()["tools"]]
+    await rt.shutdown()
+
+
+async def test_an_mcp_image_is_stored_and_reaches_the_model_in_the_tool_result(env):
+    import base64
+
+    from nexus.llmhub.types import ToolResult
+    rt, client, provider, workspace, home = env
+    write_config(home)
+    seen = []
+    original = provider.stream
+
+    async def spy(req):
+        seen.append(req)
+        async for event in original(req):
+            yield event
+
+    provider.stream = spy
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 40
+    url = "data:image/png;base64," + base64.b64encode(png).decode()
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    await _run(rt, client, provider, sid, [
+        [ToolCall("c1", "mcp_tool_search", json.dumps({"query": "screenshot"}))],
+        [ToolCall("c2", "mcp_call", json.dumps({"tool": "fx/screenshot", "arguments": {}}))], [Text("saw it")]])
+    stored = [p for m in rt.store.messages(sid) for p in m.message.parts if isinstance(p, ToolResult) and p.media]
+    assert len(stored) == 1 and "caption" in stored[0].output and stored[0].media[0].data_url is None
+    assert rt.store.artifact(stored[0].media[0].artifact)["mime"] == "image/png"
+    last = seen[-1]
+    sent = next(p for m in last.messages for p in m.parts if isinstance(p, ToolResult) and p.media)
+    assert sent.media[0].data_url == url  # bytes are filled in only for the provider
+    row = next(t for t in rt.store.tools_for_turn(rt.store.turns_for_session(sid)[0]["id"]) if t["media"])
+    assert row["media"][0]["artifact"] == stored[0].media[0].artifact  # restart recovery rebuilds the result from here
+    rt.vision["m"] = False  # a model without image input
+    note = rt.render_media(next(m.message for m in rt.store.messages(sid) if m.message.role == "tool" and any(
+        isinstance(p, ToolResult) and p.media for p in m.message.parts)), "m").parts[0]
+    assert note.media == () and "1 image not sent: this model takes no image input" in note.output
     await rt.shutdown()
