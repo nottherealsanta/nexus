@@ -537,6 +537,10 @@ pub struct Ui {
     pub timeline_blocks: Vec<crate::timeline::Block>,
     /// Selected switch row in the starting-context inventory.
     pub context_cursor: usize,
+    /// The directory Nexus was launched from, until it has been opened as a project.
+    pub launch_dir: Option<String>,
+    /// The launch directory's project is being opened: then show its new-session screen.
+    pub launch_new: bool,
     /// Cached skill and MCP listings for the new-session preview, keyed by project.
     pub inventories: HashMap<String, ProjectInventory>,
     /// The last draft-context request sent to Core; a changed draft asks again.
@@ -699,6 +703,8 @@ impl App {
                 timeline_sel_key: None,
                 timeline_blocks: Vec::new(),
                 context_cursor: 0,
+                launch_dir: None,
+                launch_new: false,
                 inventories: HashMap::new(),
                 draft_asked: None,
                 learn_install_pending: false,
@@ -865,13 +871,7 @@ impl App {
                 continue;
             };
             let key = format!("skill:{name}");
-            let mut label = name.to_owned();
-            if let Some(description) = skill["description"].as_str().filter(|s| !s.is_empty()) {
-                label.push_str(&format!(" · {description}"));
-            }
-            if let Some(scope) = skill["scope"].as_str().filter(|s| !s.is_empty()) {
-                label.push_str(&format!(" · {scope}"));
-            }
+            let label = name.to_owned();
             let on = if session.is_some() {
                 skill["state"].as_str() == Some("on") && !disabled.iter().any(|entry| entry == &key)
             } else {
@@ -927,6 +927,85 @@ impl App {
             push(key, label, on, server["locked"].as_bool().unwrap_or(false));
         }
         items
+    }
+
+    /// What a context entry is, for its info modal: title and text.
+    pub fn context_item_info(&self, index: usize) -> Option<(String, String)> {
+        let item = self.context_items().into_iter().nth(index)?;
+        let session = self.viewed();
+        if let Some(name) = item.key.strip_prefix("skill:") {
+            let values = match session {
+                Some(s) => s.extra.get("skills").and_then(Value::as_array).cloned(),
+                None => self
+                    .current_project()
+                    .and_then(|p| self.ui.inventories.get(&p))
+                    .map(|i| i.skills.clone()),
+            };
+            let skill = values?
+                .into_iter()
+                .find(|s| s["name"].as_str() == Some(name))?;
+            let mut text = skill["description"]
+                .as_str()
+                .filter(|d| !d.is_empty())
+                .unwrap_or("No description.")
+                .to_owned();
+            for (label, key) in [("Scope", "scope"), ("Path", "path")] {
+                if let Some(v) = skill[key].as_str().filter(|v| !v.is_empty()) {
+                    text.push_str(&format!("\n\n{label}: {v}"));
+                }
+            }
+            return Some((format!("Skill · {name}"), text));
+        }
+        if let Some(name) = item.key.strip_prefix("mcp:") {
+            let values = match session {
+                Some(s) => s.extra.get("mcp").and_then(Value::as_array).cloned(),
+                None => self
+                    .current_project()
+                    .and_then(|p| self.ui.inventories.get(&p))
+                    .map(|i| i.mcp.clone()),
+            };
+            let server = values?
+                .into_iter()
+                .find(|s| s["server"].as_str() == Some(name))?;
+            let mut lines = vec![format!(
+                "State: {}",
+                server["state"].as_str().unwrap_or("unknown")
+            )];
+            lines.push(match server["tools"].as_u64() {
+                Some(n) => format!("Tools: {n}"),
+                None => "Tools: unknown until it connects".to_owned(),
+            });
+            if let Some(e) = server["error"].as_str().filter(|e| !e.is_empty()) {
+                lines.push(format!("Error: {e}"));
+            }
+            return Some((format!("MCP · {name}"), lines.join("\n")));
+        }
+        let from_session = self
+            .state
+            .model
+            .selected
+            .as_ref()
+            .and_then(|v| v.starting.as_ref())
+            .map(|st| st["tool_definitions"][item.key.as_str()].clone())
+            .filter(|d| !d.is_null());
+        let def = from_session.or_else(|| {
+            self.draft_context()
+                .map(|d| d["tool_info"][item.key.as_str()].clone())
+                .filter(|d| !d.is_null())
+        });
+        let mut text = def
+            .as_ref()
+            .and_then(|d| d["description"].as_str())
+            .unwrap_or("No description loaded yet.")
+            .to_owned();
+        if let Some(g) = def
+            .as_ref()
+            .and_then(|d| d["guidance"].as_str())
+            .filter(|g| !g.is_empty())
+        {
+            text.push_str(&format!("\n\nGuidance: {g}"));
+        }
+        Some((format!("Tool · {}", item.key), text))
     }
 
     pub fn context_items_for(&self, section: &str) -> Vec<crate::paint::CtxItem> {
@@ -2246,7 +2325,10 @@ impl App {
                         {
                             continue;
                         }
-                        let snippet = hit["snippet"].as_str().unwrap_or("").replace(['[', ']'], "");
+                        let snippet = hit["snippet"]
+                            .as_str()
+                            .unwrap_or("")
+                            .replace(['[', ']'], "");
                         scored.push((
                             i32::MIN / 2,
                             1000 + i,
@@ -3228,20 +3310,46 @@ impl App {
 
     /// The header's tabs: the sessions opened so far that still exist, and the
     /// viewed one if it was reached some other way.
+    /// Subagent sessions have no tab: they live in the strip under the tabs, and a
+    /// viewed one keeps its root's tab active.
     pub fn tab_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self
             .ui
             .tabs
             .iter()
-            .filter(|id| self.state.model.sessions.contains_key(id.as_str()))
+            .filter(|id| {
+                self.state
+                    .model
+                    .sessions
+                    .get(id.as_str())
+                    .is_some_and(|s| s.parent_id.is_none())
+            })
             .cloned()
             .collect();
-        if let Some(id) = self.viewed_id() {
-            if !ids.iter().any(|t| t == id) {
-                ids.push(id.to_owned());
+        if let Some(id) = self.viewed_root() {
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
         ids
+    }
+
+    /// The root of the viewed session's tree (itself when it has no parent).
+    pub fn viewed_root(&self) -> Option<String> {
+        self.viewed_id().and_then(|id| self.root_session(id))
+    }
+
+    /// Every session below `root`, oldest first: the strip's entries.
+    pub fn subagents_of(&self, root: &str) -> Vec<&Session> {
+        let mut family: Vec<&Session> = self
+            .state
+            .model
+            .sessions
+            .values()
+            .filter(|s| s.id != root && self.is_descendant(&s.id, root))
+            .collect();
+        family.sort_by(|a, b| a.created.total_cmp(&b.created));
+        family
     }
 
     /// Close a tab (the session stays); the neighbouring tab, or the new
@@ -3252,7 +3360,7 @@ impl App {
             return;
         };
         self.ui.tabs = ids.iter().filter(|t| t.as_str() != id).cloned().collect();
-        if self.viewed_id() != Some(id) {
+        if self.viewed_root().as_deref() != Some(id) {
             return;
         }
         let next = ids
@@ -3260,26 +3368,35 @@ impl App {
             .or_else(|| at.checked_sub(1).and_then(|i| ids.get(i)));
         match next.cloned() {
             Some(next) => self.open_session(&next),
-            None => {
-                self.state.model.select(None);
-                self.effects.push(Effect::Sync(SyncCommand::Select(None)));
-                self.ui.view = View::Session;
-                self.ui.timeline_sel = None;
-                self.ui.timeline_sel_key = None;
-                self.ui.context_cursor = 0;
-                self.ui.scroll = Scroll {
-                    follow: false,
-                    top: 0,
-                };
-            }
+            None => self.show_new_session(),
         }
+    }
+
+    /// Show the new-session screen: no session is created until a message is sent.
+    fn show_new_session(&mut self) {
+        let from = self.draft_key();
+        self.ui.scrolls.insert(from, self.ui.scroll);
+        self.state.model.select(None);
+        self.effects.push(Effect::Sync(SyncCommand::Select(None)));
+        self.ui.view = View::Session;
+        self.ui.file_open = false;
+        self.ui.file_edit = None;
+        self.ui.diff_open = None;
+        self.ui.draft = Draft::default();
+        self.ui.timeline_sel = None;
+        self.ui.timeline_sel_key = None;
+        self.ui.context_cursor = 0;
+        self.ui.scroll = Scroll {
+            follow: false,
+            top: 0,
+        };
     }
 
     fn step_tab(&mut self, step: isize) {
         let ids = self.tab_ids();
         let Some(at) = self
-            .viewed_id()
-            .and_then(|id| ids.iter().position(|t| t == id))
+            .viewed_root()
+            .and_then(|id| ids.iter().position(|t| *t == id))
         else {
             return;
         };
@@ -3306,10 +3423,10 @@ impl App {
         if self.viewed_id() != Some(id) && self.edit_blocks() {
             return;
         }
-        if !self.ui.tabs.iter().any(|t| t == id) {
-            self.ui.tabs.push(id.to_owned());
-        }
         if let Some(root) = self.root_session(id) {
+            if !self.ui.tabs.contains(&root) {
+                self.ui.tabs.push(root.clone());
+            }
             self.ui.unread_sessions.remove(&root);
         }
         self.ui.file_open = false;
@@ -3569,12 +3686,12 @@ impl App {
                 "Type /learn followed by owner/repo, a GitHub URL or ./folder",
             ),
             "turn.go_to" => self.open_palette(PaletteMode::Turns),
+            // The new-session screen; the session exists once the first message is sent.
             "session.new" => {
-                if let Some(project) = self.current_project() {
-                    let fields = self.ui.draft.fields();
-                    self.ui.draft = Draft::default();
-                    self.api(ApiCall::NewSession { project, fields });
+                if self.edit_blocks() {
+                    return;
                 }
+                self.show_new_session();
             }
             "session.open" => {
                 let c = self.cursor(self.ui.tab);
@@ -3863,7 +3980,10 @@ impl App {
                 self.ui.cursor.insert(Tab::Sessions, 0);
                 self.ui.side_top = 0;
             }
-            "waiting.allow_once" | "waiting.allow_session" | "waiting.deny" | "waiting.deny_note" => {
+            "waiting.allow_once"
+            | "waiting.allow_session"
+            | "waiting.deny"
+            | "waiting.deny_note" => {
                 if let Some(w) = self.wait_focused().filter(|w| w.kind == WaitKind::Approval) {
                     let allow = id.starts_with("waiting.allow");
                     let mut note = None;
@@ -3871,7 +3991,10 @@ impl App {
                         // The note is the composer's text, as an answer is.
                         let text = self.composer_ref().expanded_text().trim().to_owned();
                         if text.is_empty() {
-                            self.toast(Level::Warning, "Type the note in the composer, then press d");
+                            self.toast(
+                                Level::Warning,
+                                "Type the note in the composer, then press d",
+                            );
                             return;
                         }
                         self.composer().take();
@@ -4005,9 +4128,12 @@ impl App {
     }
 
     fn ask_remove_project(&mut self) {
-        let Some(id) = self.menu_project() else {
-            return;
-        };
+        if let Some(id) = self.menu_project() {
+            self.ask_remove_project_id(id);
+        }
+    }
+
+    fn ask_remove_project_id(&mut self, id: String) {
         let Some(p) = self.state.model.projects.get(&id) else {
             return;
         };
@@ -4401,6 +4527,13 @@ impl App {
         let turn_closed = matches!(&msg, SyncMsg::Event(e) if e.kind == "turn.summary");
         let file_read = matches!(&msg, SyncMsg::Files { file: true, .. });
         self.state.apply(msg);
+        // Launched from a directory: open it as a project (Core reuses one at the same path).
+        if snapshot {
+            if let Some(path) = self.ui.launch_dir.take() {
+                self.ui.launch_new = true;
+                self.api(ApiCall::AddProject { path });
+            }
+        }
         if file_read {
             self.file_read();
         }
@@ -4652,7 +4785,9 @@ impl App {
                         top: 0,
                     });
                 }
-                Err(error) => self.toast(Level::Error, format!("Plan limits failed to load: {error}")),
+                Err(error) => {
+                    self.toast(Level::Error, format!("Plan limits failed to load: {error}"))
+                }
             }
             return;
         }
@@ -4676,7 +4811,11 @@ impl App {
                 (true, Some(cost)) => {
                     let reasons: Vec<String> = cost["reasons"]
                         .as_array()
-                        .map(|a| a.iter().filter_map(|r| r.as_str().map(str::to_owned)).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|r| r.as_str().map(str::to_owned))
+                                .collect()
+                        })
                         .unwrap_or_default();
                     let cached = cost["cached_tokens"].as_u64().unwrap_or(0);
                     let mut body = reasons;
@@ -4685,7 +4824,12 @@ impl App {
                     ));
                     let restore = self.restore_point();
                     self.ui.dialog = Some(Dialog {
-                        title: if model.is_some() { "Switch model" } else { "Switch agent" }.into(),
+                        title: if model.is_some() {
+                            "Switch model"
+                        } else {
+                            "Switch agent"
+                        }
+                        .into(),
                         body,
                         cancel: "Keep current".into(),
                         confirm: "Switch".into(),
@@ -4706,7 +4850,10 @@ impl App {
                     self.state.model.prepend_messages(session, messages, more);
                 }
             } else if let Err(error) = done.result {
-                self.toast(Level::Error, format!("Older messages failed to load: {error}"));
+                self.toast(
+                    Level::Error,
+                    format!("Older messages failed to load: {error}"),
+                );
             }
             return;
         }
@@ -4789,6 +4936,9 @@ impl App {
                 }
                 if let Some(id) = r.project {
                     self.select_project(&id);
+                    if std::mem::take(&mut self.ui.launch_new) {
+                        self.show_new_session();
+                    }
                 }
             }
             Err(e) => {
@@ -5490,7 +5640,12 @@ impl App {
     /// The open file's project, session scope, path and read revision.
     fn open_file_ref(&self) -> Option<(String, Option<String>, String, Value)> {
         let (project, session, path, result) = self.state.file.as_ref()?;
-        Some((project.clone(), session.clone(), path.clone(), result.as_ref().ok()?.clone()))
+        Some((
+            project.clone(),
+            session.clone(),
+            path.clone(),
+            result.as_ref().ok()?.clone(),
+        ))
     }
 
     fn start_edit(&mut self) {
@@ -5502,7 +5657,10 @@ impl App {
             return;
         };
         let Some(revision) = data["revision"].as_str().map(str::to_owned) else {
-            self.toast(Level::Warning, "Core did not report a revision for this file");
+            self.toast(
+                Level::Warning,
+                "Core did not report a revision for this file",
+            );
             return;
         };
         if !self.writable() {
@@ -5624,14 +5782,22 @@ impl App {
         {
             return;
         }
-        match self.ui.file_edit.as_ref().map(|e| (e.dirty(), e.revision.clone())) {
+        match self
+            .ui
+            .file_edit
+            .as_ref()
+            .map(|e| (e.dirty(), e.revision.clone()))
+        {
             // Our own save already moved the editor's revision on.
             Some((_, revision)) if data["revision"].as_str() == Some(revision.as_str()) => {}
             Some((true, _)) => {
                 if let Some(edit) = self.ui.file_edit.as_mut() {
                     edit.stale = true;
                 }
-                self.toast(Level::Warning, "The file changed on disk: reload before saving");
+                self.toast(
+                    Level::Warning,
+                    "The file changed on disk: reload before saving",
+                );
             }
             Some((false, _)) => self.reload_file(),
             None => self.request_files(path, true),
@@ -7752,25 +7918,32 @@ impl App {
                 let Some(id) = self.tab_ids().get(i).cloned() else {
                     return;
                 };
-                if self.viewed_id() == Some(id.as_str()) && self.ui.view == View::Session {
+                if self.viewed_root().as_deref() == Some(id.as_str())
+                    && self.viewed().is_some_and(|v| v.parent_id.is_none())
+                    && self.ui.view == View::Session
+                {
                     self.run_command("session.rename");
                 } else {
                     self.open_session(&id);
                 }
             }
-            Target::SessionCrumb(i) => {
-                let id = self
-                    .viewed_id()
-                    .and_then(|v| self.ancestors_of(v).get(i).map(|s| s.id.clone()));
-                if let Some(id) = id {
-                    self.open_session(&id);
-                }
-            }
+            Target::Subagent(id) => self.open_session(&id),
             Target::SessionTabClose(i) => {
                 if let Some(id) = self.tab_ids().get(i).cloned() {
                     self.close_tab(&id);
                 }
             }
+            Target::ArchiveSession(session) => {
+                if self.writable() {
+                    self.api(ApiCall::Archive {
+                        session,
+                        archived: true,
+                    });
+                } else {
+                    self.toast(Level::Warning, READ_ONLY);
+                }
+            }
+            Target::RemoveProject(id) => self.ask_remove_project_id(id),
             Target::Notifications => self.run_command("notifications.open"),
             Target::Tab(tab) => {
                 let id = match tab {
@@ -7804,6 +7977,15 @@ impl App {
                 })
             }
             Target::ContextToggle(index) => self.toggle_context_item(index),
+            Target::ContextInfo(index) => {
+                if let Some((title, text)) = self.context_item_info(index) {
+                    self.open_overlay(OverlayKind::ContextDetail {
+                        title,
+                        text,
+                        top: 0,
+                    });
+                }
+            }
             Target::ContextSection(section) => {
                 if let Some(starting) = self
                     .state
@@ -7861,7 +8043,20 @@ impl App {
             }
             Target::Block(i) => {
                 self.select_block(i);
-                self.activate_block();
+                // A click expands a clipped reply but never folds an open one,
+                // so selecting text in it doesn't collapse it; Enter still folds.
+                let open_reply = self.ui.timeline_blocks.get(i).is_some_and(|b| {
+                    b.kind == crate::timeline::BlockKind::Assistant
+                        && self
+                            .ui
+                            .timeline_open
+                            .get(&b.key)
+                            .copied()
+                            .unwrap_or_else(|| self.block_default_open(b))
+                });
+                if !open_reply {
+                    self.activate_block();
+                }
             }
             Target::CopyBlock(i) => {
                 self.select_block(i);
@@ -8245,7 +8440,6 @@ impl ActionDone {
             ApiCall::Input { .. } => "Pending input failed",
             ApiCall::Provider { .. } => "Provider sign-in failed",
             ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. } => "Send failed",
-            ApiCall::NewSession { .. } => "New session failed",
             ApiCall::Continue { .. } => "Continue failed",
             ApiCall::Speak { .. } => "Speak failed",
             ApiCall::Handoff { .. } => "Handoff failed",

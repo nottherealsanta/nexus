@@ -326,7 +326,8 @@ async def test_disabled_tool_cannot_run_inside_code(setup):
 
 async def test_no_tools_and_disabled_direct_call(setup):
     rt, client, provider, workspace = setup
-    names = ['read', 'grep', 'glob', 'ls', 'bash', 'edit', 'write', 'code', 'session', 'expose_workspace_tools']
+    probe = (await client.post('/api/session', json={'directory': str(workspace), 'agent': 'orchestrate'})).json()
+    names = [t['name'] if isinstance(t, dict) else t for t in probe['tools']]
     session = (await client.post('/api/session', json={
         'directory': str(workspace), 'agent': 'orchestrate', 'disabled_tools': names})).json()
     sid = session['id']

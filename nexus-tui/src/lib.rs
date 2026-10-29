@@ -38,6 +38,6 @@ pub mod term;
 pub mod text;
 pub mod theme;
 pub mod timeline;
-pub mod usage;
 pub mod transport;
 pub mod ui;
+pub mod usage;

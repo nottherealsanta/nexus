@@ -30,6 +30,7 @@ while [ -L "$source_file" ]; do
     *) source_file="$(dirname "$source_file")/$target" ;;
   esac
 done
+PWD_AT_START="$PWD"
 ROOT="$(cd "$(dirname "$source_file")/.." && pwd)"
 CORE="$ROOT/nexus-core"
 TUI="$ROOT/nexus-tui"
@@ -82,7 +83,7 @@ tui() {
     --debug) profile=(); shift ;;
     --release) shift ;;
   esac
-  (cd "$TUI" && NEXUS_TUI_CORE_CMD="$(core_cmd)" cargo run --quiet ${profile[@]+"${profile[@]}"} -- "$@")
+  (cd "$TUI" && NEXUS_TUI_LAUNCH_DIR="$PWD_AT_START" NEXUS_TUI_CORE_CMD="$(core_cmd)" cargo run --quiet ${profile[@]+"${profile[@]}"} -- "$@")
 }
 
 build_all() {

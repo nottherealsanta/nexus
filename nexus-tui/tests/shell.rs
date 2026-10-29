@@ -920,13 +920,24 @@ fn the_editor_saves_with_the_revision_it_read_and_follows_the_new_one() {
     assert!(app.ui.file_edit.as_ref().unwrap().dirty());
     press(&mut app, &["ctrl+s"]);
     let calls = save_calls(&app);
-    let ApiCall::SaveFile { content, revision, path, .. } = &calls[0] else { panic!() };
+    let ApiCall::SaveFile {
+        content,
+        revision,
+        path,
+        ..
+    } = &calls[0]
+    else {
+        panic!()
+    };
     assert_eq!((path.as_str(), revision.as_str()), ("hello.txt", "rev1"));
     // The editor opens with the cursor at the top of the file.
     assert_eq!(content, "X\nyone\ntwo\n");
     app.apply_done(ActionDone {
         call: calls[0].clone(),
-        result: Ok(Done { saved: Some(serde_json::json!({"revision": "rev2"})), ..Done::default() }),
+        result: Ok(Done {
+            saved: Some(serde_json::json!({"revision": "rev2"})),
+            ..Done::default()
+        }),
     });
     let edit = app.ui.file_edit.as_ref().unwrap();
     assert_eq!(edit.revision, "rev2");
@@ -935,7 +946,9 @@ fn the_editor_saves_with_the_revision_it_read_and_follows_the_new_one() {
     typing(&mut app, "z");
     app.effects.clear();
     press(&mut app, &["ctrl+s"]);
-    let ApiCall::SaveFile { revision, .. } = &save_calls(&app)[0] else { panic!() };
+    let ApiCall::SaveFile { revision, .. } = &save_calls(&app)[0] else {
+        panic!()
+    };
     assert_eq!(revision, "rev2");
 }
 
@@ -950,11 +963,21 @@ fn a_stale_save_keeps_the_text_and_a_reload_replaces_it() {
     let call = save_calls(&app).remove(0);
     app.apply_done(ActionDone {
         call,
-        result: Ok(Done { conflict: Some("the file changed".into()), ..Done::default() }),
+        result: Ok(Done {
+            conflict: Some("the file changed".into()),
+            ..Done::default()
+        }),
     });
     assert!(app.ui.file_edit.as_ref().unwrap().stale);
     assert!(joined(&draw(&mut app, 120, 36).1).contains("changed on disk"));
-    assert!(app.ui.file_edit.as_ref().unwrap().buf.text().contains("mine"));
+    assert!(app
+        .ui
+        .file_edit
+        .as_ref()
+        .unwrap()
+        .buf
+        .text()
+        .contains("mine"));
     // Reload asks first because the text is unsaved; confirming reads the file again.
     app.run_command("editor.reload");
     assert!(app.ui.dialog.is_some());
@@ -969,7 +992,10 @@ fn a_stale_save_keeps_the_text_and_a_reload_replaces_it() {
         data: Ok(serde_json::json!({"content": "theirs\n", "revision": "rev9"})),
     });
     let edit = app.ui.file_edit.as_ref().unwrap();
-    assert_eq!((edit.buf.text().as_str(), edit.revision.as_str()), ("theirs\n", "rev9"));
+    assert_eq!(
+        (edit.buf.text().as_str(), edit.revision.as_str()),
+        ("theirs\n", "rev9")
+    );
     assert!(!edit.stale && !edit.dirty());
 }
 
@@ -996,12 +1022,13 @@ fn an_outside_change_reloads_a_clean_editor_and_warns_a_dirty_one() {
     let mut app = open_file_view("one\n");
     press(&mut app, &["e"]);
     let project = app.current_project().unwrap();
-    let changed = |rev: &str| {
-        serde_json::json!({"project_id": project, "path": "hello.txt", "revision": rev, "source": "editor"})
-    };
+    let changed = |rev: &str| serde_json::json!({"project_id": project, "path": "hello.txt", "revision": rev, "source": "editor"});
     app.effects.clear();
     app.file_changed_for_test(&changed("rev5"));
-    assert!(app.ui.file_edit.as_ref().unwrap().reloading, "a clean editor follows the file");
+    assert!(
+        app.ui.file_edit.as_ref().unwrap().reloading,
+        "a clean editor follows the file"
+    );
     app.apply_sync(SyncMsg::Files {
         project: project.clone(),
         session: Some(SESSION.into()),
@@ -2118,7 +2145,7 @@ fn sidebar_icons_sit_in_the_band_over_the_sidebar() {
 }
 
 #[test]
-fn a_viewed_child_session_shows_root_and_child_crumbs() {
+fn a_viewed_subagent_keeps_the_root_tab_and_shows_the_strip() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
     let mut parent = app.state.model.sessions[SESSION].clone();
     parent.id = "ses_parent".into();
@@ -2128,19 +2155,22 @@ fn a_viewed_child_session_shows_root_and_child_crumbs() {
     {
         let child = app.state.model.sessions.get_mut(SESSION).unwrap();
         child.parent_id = Some("ses_parent".into());
+        child.agent = "scout".into();
         child.title = "Child task".into();
     }
     let (_, rows) = draw(&mut app, 160, 40);
-    assert!(
-        rows[0].contains("Root task \u{203a} Child task"),
-        "{:?}",
-        rows[0]
-    );
-    // the earlier crumb is clickable and opens the root
-    let crumb = app.hits.rect_of(&Target::SessionCrumb(0)).expect("crumb");
-    assert_eq!(crumb.y, 0);
-    assert_eq!(app.hits.at(crumb.x, 0), Some(&Target::SessionCrumb(0)));
-    app.click(Target::SessionCrumb(0));
+    // the tab row names the root only; the child has no tab
+    assert!(rows[0].contains("Root task"), "{:?}", rows[0]);
+    assert!(!rows[0].contains("Child task"), "{:?}", rows[0]);
+    assert_eq!(app.tab_ids(), vec!["ses_parent".to_string()]);
+    // the row below the tabs lists the subagent, and a click opens it
+    assert!(rows[1].contains("Scout Child task"), "{:?}", rows[1]);
+    let hit = app
+        .hits
+        .rect_of(&Target::Subagent(SESSION.into()))
+        .expect("strip entry");
+    assert_eq!(hit.y, 1);
+    app.click(Target::Subagent("ses_parent".into()));
     assert_eq!(app.viewed_id(), Some("ses_parent"));
 }
 
@@ -3336,7 +3366,10 @@ fn session_search_adds_core_message_hits_after_the_title_matches() {
     assert_eq!(asked.as_deref(), Some("login"));
     assert!(app.palette_items().is_empty());
     app.apply_done(ActionDone {
-        call: ApiCall::Search { query: "login".into(), project: None },
+        call: ApiCall::Search {
+            query: "login".into(),
+            project: None,
+        },
         result: Ok(Done {
             search: Some(serde_json::json!({"hits": [
                 {"session_id": "other", "kind": "message", "snippet": "fix the [login] bug"}]})),
@@ -3370,7 +3403,9 @@ fn load_older_reads_the_page_before_the_oldest_message_and_prepends_it() {
         .effects
         .iter()
         .filter_map(|e| match e {
-            Effect::Api(ApiCall::OlderMessages { session, before }) => Some((session.clone(), *before)),
+            Effect::Api(ApiCall::OlderMessages { session, before }) => {
+                Some((session.clone(), *before))
+            }
             _ => None,
         })
         .collect();
@@ -3379,8 +3414,14 @@ fn load_older_reads_the_page_before_the_oldest_message_and_prepends_it() {
     older.id = "older_1".into();
     older.seq = first.seq - 1;
     app.apply_done(ActionDone {
-        call: ApiCall::OlderMessages { session: SESSION.into(), before: first.seq },
-        result: Ok(Done { older: Some((vec![older], false)), ..Done::default() }),
+        call: ApiCall::OlderMessages {
+            session: SESSION.into(),
+            before: first.seq,
+        },
+        result: Ok(Done {
+            older: Some((vec![older], false)),
+            ..Done::default()
+        }),
     });
     let view = app.state.model.selected.as_ref().unwrap();
     assert_eq!(view.messages.len(), loaded + 1);
@@ -3405,18 +3446,31 @@ fn a_model_switch_that_loses_the_cache_asks_first() {
         _ => None,
     });
     let asked = asked.expect("the switch asks Core what it costs first");
-    assert!(!app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
+    assert!(!app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
     app.effects.clear();
     let cost = serde_json::json!({"reasons": ["a different model"], "cached_tokens": 1234, "cache_lost": true});
     app.apply_done(ActionDone {
         call: asked.clone(),
-        result: Ok(Done { switch_cost: Some(cost), ..Done::default() }),
+        result: Ok(Done {
+            switch_cost: Some(cost),
+            ..Done::default()
+        }),
     });
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("1234 cached tokens"), "{}", joined(&rows));
+    assert!(
+        joined(&rows).contains("1234 cached tokens"),
+        "{}",
+        joined(&rows)
+    );
     // Cancel is the focused choice: Enter keeps the model.
     press(&mut app, &["enter"]);
-    assert!(!app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
+    assert!(!app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
     // Asked again and confirmed, the switch goes out.
     app.apply_done(ActionDone {
         call: asked.clone(),
@@ -3426,17 +3480,25 @@ fn a_model_switch_that_loses_the_cache_asks_first() {
         }),
     });
     press(&mut app, &["right", "enter"]);
-    assert!(app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
     // Nothing cached: no question.
     app.effects.clear();
     app.apply_done(ActionDone {
         call: asked,
         result: Ok(Done {
-            switch_cost: Some(serde_json::json!({"reasons": [], "cached_tokens": 0, "cache_lost": false})),
+            switch_cost: Some(
+                serde_json::json!({"reasons": [], "cached_tokens": 0, "cache_lost": false}),
+            ),
             ..Done::default()
         }),
     });
-    assert!(app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::SetModel { .. }))));
 }
 
 #[test]

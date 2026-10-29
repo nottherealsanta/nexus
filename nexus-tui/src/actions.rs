@@ -48,10 +48,6 @@ pub enum ApiCall {
         /// Agent, model and effort chosen before the session existed.
         fields: serde_json::Value,
     },
-    NewSession {
-        project: String,
-        fields: serde_json::Value,
-    },
     Continue {
         session: String,
     },
@@ -243,7 +239,6 @@ impl ApiCall {
             ApiCall::Provider { sign_out: true, .. } => "Signed out",
             ApiCall::Provider { .. } => "Sign-in started",
             ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. } => "Sent",
-            ApiCall::NewSession { .. } => "Session created",
             ApiCall::Continue { .. } => "Continuing",
             ApiCall::Speak { .. } => "Finished speaking",
             ApiCall::Handoff { .. } => "Handed off to a new session",
@@ -432,7 +427,9 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             {
                 Ok(r) => done.saved = Some(r.body),
                 // The file moved on since it was read: not a failure to retry, a state to show.
-                Err(crate::transport::Error::Api(error)) if error.code.as_deref() == Some("stale_file") => {
+                Err(crate::transport::Error::Api(error))
+                    if error.code.as_deref() == Some("stale_file") =>
+                {
                     done.conflict = Some(error.message)
                 }
                 Err(error) => return Err(e(error)),
@@ -567,15 +564,6 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                     .await
                     .map_err(e)?,
             )?;
-        }
-        ApiCall::NewSession { project, fields } => {
-            let s = conflict(
-                api.create_session(project, fields.clone(), &key)
-                    .await
-                    .map_err(e)?,
-            )?
-            .ok_or("no session returned")?;
-            done.open = Some(s.id);
         }
         ApiCall::Continue { session } => {
             conflict(api.continue_turn(session, &key).await.map_err(e)?)?;

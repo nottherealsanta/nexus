@@ -3,7 +3,7 @@
 A session does not reload its agent file, its tool descriptions or its
 instruction file on later turns. At creation (root or child) the runtime loads
 the current agent definitions, resolves the selected agent and its tools,
-renders the system prompt once, reads exactly `<session.directory>/AGENTS.md`,
+renders the system prompt once, reads the session directory's `AGENTS.md` (else the nearest parent's, up to the Git root),
 and stores all of it as JSON next to the session (`session_snapshot` in
 `nexus/store.py`). Later turns and daemon restarts replay that snapshot, so an
 edited, added or deleted agent file and an edited `AGENTS.md` only affect new
@@ -45,14 +45,28 @@ def file_fingerprint(path: str | Path) -> str | None:
         return None
 
 
-def read_instruction_file(directory: str | Path) -> dict[str, Any]:
-    """Read exactly `<directory>/AGENTS.md`, recording every outcome explicitly.
+def find_instruction_file(directory: str | Path) -> Path:
+    """`<directory>/AGENTS.md`, else the nearest one in a parent up to the Git root (the directory holding `.git`).
 
-    No ancestor or nested search is done. A missing, unreadable or oversized file
-    still produces a record, so the prompt can say what happened instead of
-    silently omitting the instructions.
+    With none found, the exact path in `directory`, which the record reports missing.
     """
-    path = Path(directory) / INSTRUCTIONS_FILE
+    start = Path(directory)
+    for folder in (start, *start.parents):
+        candidate = folder / INSTRUCTIONS_FILE
+        if candidate.is_file():
+            return candidate
+        if (folder / ".git").exists():
+            break
+    return start / INSTRUCTIONS_FILE
+
+
+def read_instruction_file(directory: str | Path) -> dict[str, Any]:
+    """Read the session's `AGENTS.md` (see `find_instruction_file`), recording every outcome explicitly.
+
+    A missing, unreadable or oversized file still produces a record, so the prompt
+    can say what happened instead of silently omitting the instructions.
+    """
+    path = find_instruction_file(directory)
     record: dict[str, Any] = {
         "path": str(path),
         "status": "missing",
@@ -99,8 +113,8 @@ def instruction_section(record: dict[str, Any]) -> str:
     if status == "missing":
         return (
             f"{head}Status: not found\n"
-            "No instructions file was loaded: this path does not exist. Only this exact file is read; "
-            "ancestor and nested directories are not searched."
+            "No instructions file was loaded: this path does not exist, and no parent directory up to the Git root "
+            "has one. Nested directories are not searched."
         )
     if status == "too_large":
         return (

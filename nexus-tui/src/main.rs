@@ -197,6 +197,15 @@ async fn run(
     let size = terminal.size()?;
     let mut app = App::new(AppState::new(), Theme::new(opts), (size.width, size.height));
     app.apply_prefs(&home, prefs::load(&home), over);
+    // The launcher runs cargo from the repo, so it passes the directory you started in.
+    app.ui.launch_dir = std::env::var("NEXUS_TUI_LAUNCH_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|d| d.to_string_lossy().into_owned())
+        });
 
     let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<Event>();
     std::thread::spawn(move || {

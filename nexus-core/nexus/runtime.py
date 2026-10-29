@@ -417,7 +417,13 @@ class Runtime:
             "archived": bool(s.archived), "revision": s.revision, "continued_from": s.continued_from,
             "continued_to": self.store.continuation_of(s.id),
             "created": s.created, "updated": s.updated,
+            # A child's spend, for its card in the parent; no ledger query for root sessions.
+            **({"tokens": self._spent_tokens(s.id)} if s.parent_id else {}),
         }
+
+    def _spent_tokens(self, session_id: str) -> int:
+        models = self.store.session_usage(session_id)["models"].values()
+        return sum(m["input"] + m["output"] for m in models)
 
     @staticmethod
     def _switches(snapshot: dict[str, Any], disabled: set[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1025,6 +1031,8 @@ class Runtime:
             self._sync_tool_definitions(snapshot, session)
             self.store.set_snapshot(session_id, snapshot)
             notice = self._tool_notice(snapshot, self.effective_tool_names(snapshot, session), before_enabled)
+        if rebuilt is not None and not self.store.messages(session_id):
+            notice = None  # nothing was sent yet: the new snapshot is the starting context, so there is nothing to announce
         if notice is not None:
             if session_id in self.turns:
                 # Add at the next model boundary, after the active call's results.
@@ -1524,8 +1532,10 @@ class Runtime:
         file = snapshot["instruction_file"]
         parts = {"instructions": estimate_tokens(request.instructions), "tools": estimate_tokens([[t.name, t.description, t.parameters] for t in request.tools]),
                  "instruction_file": estimate_tokens(file.get("content") or "")}
+        info = {n: {"description": d["description"], "guidance": d.get("guidance", "")}
+                for n, d in snapshot["tool_definitions"].items()}
         return body | budget(body, window, None) | {"model": ref, "agent": plan["agent"], "parts": parts,
-                                                    "snapshot": snapshots.summary(snapshot)}
+                                                    "snapshot": snapshots.summary(snapshot), "tool_info": info}
 
     # -- one-request helpers: titles, /btw, handoff (PLAN K1-K3) ----------------
 

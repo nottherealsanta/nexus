@@ -478,8 +478,12 @@ pub enum Target {
     /// An open session's tab in the header, by position.
     SessionTab(usize),
     SessionTabClose(usize),
-    /// An earlier crumb of the viewed child session's tab: index into its ancestors.
-    SessionCrumb(usize),
+    /// The `×` on a hovered sidebar session row: archive it.
+    ArchiveSession(String),
+    /// The `×` on a hovered project row: remove it (after confirming).
+    RemoveProject(String),
+    /// An entry of the subagent strip: the session to open.
+    Subagent(String),
     Notifications,
     Tab(Tab),
     SettingsEntry,
@@ -498,6 +502,8 @@ pub enum Target {
     ContextSection(String),
     /// One switch row in the starting-context inventory.
     ContextToggle(usize),
+    /// The name of a tool, skill or MCP server in the context: show what it is.
+    ContextInfo(usize),
     ContextPreview {
         title: String,
         text: String,

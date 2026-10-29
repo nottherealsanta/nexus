@@ -102,7 +102,10 @@ fn all_four_choices_are_targets_and_the_cursor_walks_them() {
     for label in ["Allow for session", "Deny with a note"] {
         let y = rows.iter().position(|r| r.contains(label)).unwrap() as u16;
         let x = rows[y as usize].find(label).unwrap() as u16;
-        assert!(matches!(app.hits.at(x, y), Some(Target::Wait(_))), "{label}");
+        assert!(
+            matches!(app.hits.at(x, y), Some(Target::Wait(_))),
+            "{label}"
+        );
         assert!(!rows[y as usize].contains("not offered"), "{label}");
     }
     // down, down reaches Deny and enter denies

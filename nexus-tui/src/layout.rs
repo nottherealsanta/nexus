@@ -60,6 +60,8 @@ pub fn left_width(total: u16, flags: Flags) -> u16 {
 /// Heights the centre column needs, given its width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Heights {
+    /// The subagent strip under the tabs: 0 or 1.
+    pub strip: u16,
     pub banner: u16,
     pub waiting: u16,
     pub composer: u16,
@@ -76,6 +78,7 @@ pub struct Regions {
     /// A drawer drawn over the centre (narrow layouts), with its side.
     pub drawer: Option<(Side, Rect)>,
     pub centre: Rect,
+    pub strip: Rect,
     pub banner: Rect,
     pub timeline: Rect,
     pub waiting: Rect,
@@ -199,11 +202,12 @@ impl Regions {
         let mut h = heights(centre.width);
         let max_extra = centre.height.saturating_sub(3);
         let mut left_rows = max_extra;
-        for v in [&mut h.composer, &mut h.banner, &mut h.waiting] {
+        for v in [&mut h.composer, &mut h.strip, &mut h.banner, &mut h.waiting] {
             *v = (*v).min(left_rows);
             left_rows -= *v;
         }
-        let banner = r(centre.x, centre.y, centre.width, h.banner);
+        let strip = r(centre.x, centre.y, centre.width, h.strip);
+        let banner = r(centre.x, centre.y + h.strip, centre.width, h.banner);
         let composer = r(
             centre.x,
             centre.y + centre.height - h.composer,
@@ -248,6 +252,7 @@ impl Regions {
             right,
             drawer,
             centre,
+            strip,
             banner,
             timeline,
             waiting,
@@ -326,6 +331,7 @@ mod tests {
             banner: 1,
             waiting: 0,
             composer: 5,
+            ..Default::default()
         }
     }
 
@@ -461,6 +467,7 @@ mod tests {
             banner: 2,
             waiting: 6,
             composer: 8,
+            ..Default::default()
         });
         assert!(g.timeline.height >= 3);
         assert!(g.composer.y >= g.timeline.y + g.timeline.height);

@@ -314,6 +314,9 @@ pub struct CtxLayout<'a> {
     pub estimated: bool,
     /// The model's context window, for the total's share.
     pub window: Option<u64>,
+    /// Lay the tools out in up to four columns instead of one per row. The
+    /// session context keeps one per row: its lines carry a single switch.
+    pub columns: bool,
 }
 
 pub type CtxRow = Vec<(String, CtxRole)>;
@@ -441,8 +444,12 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
         }
         rows.push(clip_row(head, layout));
         if let CtxBody::Inventory(items) = &section.body {
+            if layout.columns && section.title == "Tools" {
+                grid_rows(items, layout, &mut rows);
+                continue;
+            }
             for item in items {
-                let marker = if item.on { "[x] " } else { "[ ] " };
+                let marker = switch_marker(item.on, layout.ascii);
                 let marker = format!("  {marker}");
                 let mut label = item.label.clone();
                 if item.locked {
@@ -488,6 +495,55 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
     rows
 }
 
+/// A switch's marker: a full circle when on, an empty one when off.
+fn switch_marker(on: bool, ascii: bool) -> &'static str {
+    match (on, ascii) {
+        (true, false) => "\u{25cf} ",
+        (false, false) => "\u{25cb} ",
+        (true, true) => "(*) ",
+        (false, true) => "( ) ",
+    }
+}
+
+/// Switch cells in columns: `● name` padded to the widest, as many columns
+/// as fit up to four (at least one).
+fn grid_rows(items: &[CtxItem], layout: &CtxLayout, rows: &mut Vec<CtxRow>) {
+    use crate::text::width;
+    let label = |item: &CtxItem| {
+        if item.locked {
+            format!("{} \u{b7} new session", item.label)
+        } else {
+            item.label.clone()
+        }
+    };
+    let mw = width(switch_marker(true, layout.ascii));
+    let cell = items.iter().map(|i| width(&label(i))).max().unwrap_or(0) + 2 + mw + 2;
+    let columns = (layout.width / cell.max(1)).clamp(1, 4);
+    for chunk in items.chunks(columns) {
+        let mut row: CtxRow = Vec::new();
+        for item in chunk {
+            let text = label(item);
+            let role = if item.locked {
+                CtxRole::ToggleLocked(item.index)
+            } else if item.on {
+                CtxRole::ToggleOn(item.index)
+            } else {
+                CtxRole::ToggleOff(item.index)
+            };
+            let pad = cell - 2 - mw - width(&text);
+            row.push((
+                format!("  {}", switch_marker(item.on, layout.ascii)),
+                CtxRole::Meta,
+            ));
+            row.push((text, role));
+            // The cell's hover reaches 2 cells past the name, as it does before the marker.
+            row.push(("  ".to_owned(), CtxRole::Meta));
+            row.push((" ".repeat(pad.saturating_sub(2)), CtxRole::Meta));
+        }
+        rows.push(clip_row(row, layout));
+    }
+}
+
 /// Clip a row to the layout width with the ellipsis (never silently).
 fn clip_row(mut row: CtxRow, layout: &CtxLayout) -> CtxRow {
     use crate::text::{truncate, width};
@@ -516,6 +572,7 @@ mod ctx_tests {
             ascii: false,
             estimated: true,
             window: Some(200_000),
+            columns: false,
         }
     }
 
@@ -626,7 +683,7 @@ mod ctx_tests {
         let rows = context_rows(&[s], 100, &layout(60));
         let t = text(&rows);
         assert!(t.iter().any(|l| l.contains("Tools [1] ~100")), "{t:?}");
-        assert!(t.iter().any(|l| l.contains("[x] read")), "{t:?}");
+        assert!(t.iter().any(|l| l.contains("\u{25cf} read")), "{t:?}");
     }
 }
 

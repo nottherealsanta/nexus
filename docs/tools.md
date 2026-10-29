@@ -226,7 +226,7 @@ A successful change:
 
 - persists the new resolved directory on the session; the project stays the same
   (project identity is separate from where the session runs);
-- reads exactly `<new directory>/AGENTS.md` (no ancestor or nested search) and
+- reads `<new directory>/AGENTS.md`, else the nearest parent's up to the Git root (no nested search) and
   includes its labelled `# Instructions file` section in the announcement, with
   `Status: loaded`, `not found`, `unreadable` or `too large` and the error or
   limit stated;
@@ -434,8 +434,8 @@ at 2,000,000 bytes says so. A status of 400 or more is an error.
 
 Both web tools reach the network, so they are **not** auto-approved: a session
 with permission `ask` prompts for each call, unless a [permission rule](#permission-rules) says otherwise.
-The default agents without a `tools` list (`build`, `quick`, `plan`) and `scout`
-have them; `orchestrate` does not.
+The default agents without a `tools` list (`build`, `orchestrate`, `quick`, `plan`) and `scout`
+have them.
 
 ## bash
 
@@ -757,7 +757,7 @@ From `nexus-core/` with Codex signed in:
 uv run nexus run --agent orchestrate --model codex/gpt-6.1-terra "$(cat ../artifacts/shared_kernel_smoke.txt)"
 ```
 
-The built-in orchestrator has `code` alongside read and bash. The prompt asks
+The built-in orchestrator has every task tool `build` has, including `code`. The prompt asks
 it to store a dictionary, launch a build child that receives only the variable
 name (not its contents), and verify the child's changes in a third cell. All
 three code results should show the same `krn_…` and successive cell numbers.

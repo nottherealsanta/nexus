@@ -18,6 +18,7 @@ use crate::theme::Theme;
 
 const CANVAS: &str = "surface.canvas";
 const PANEL: &str = "surface.panel";
+const SIDEBAR: &str = "surface.sidebar";
 const PRIMARY: &str = "text.primary";
 const SECONDARY: &str = "text.secondary";
 const MUTED: &str = "text.muted";
@@ -780,7 +781,10 @@ impl Builder<'_> {
         if view.messages_more {
             self.block("older-messages", BlockKind::Older, None, false, |b| {
                 b.line(vec![Span::styled(
-                    format!("{} older messages are not loaded · enter loads more", b.ell()),
+                    format!(
+                        "{} older messages are not loaded · enter loads more",
+                        b.ell()
+                    ),
                     b.meta(),
                 )]);
             });
@@ -1197,8 +1201,14 @@ impl Builder<'_> {
                 ascii: b.t.opts.ascii,
                 estimated: true,
                 window,
+                columns: false,
             };
             let rows = crate::paint::context_rows(&sections, total, &layout);
+            // The header is a box on the panel surface, kept above the
+            // conversation for the whole session.
+            let pad = b.st(MUTED, PANEL);
+            b.line(Vec::new());
+            b.out.last_mut().unwrap().bg = Some(pad);
             for row in rows {
                 let section = row.iter().find_map(|(text, role)| {
                     (*role == CtxRole::Title).then(|| text.trim().to_owned())
@@ -1212,22 +1222,25 @@ impl Builder<'_> {
                 let mut spans = vec![Span::raw("  ".to_owned())];
                 for (text, role) in row {
                     let style = match role {
-                        CtxRole::Mark | CtxRole::Meta | CtxRole::Preview => b.meta(),
+                        CtxRole::Mark | CtxRole::Meta | CtxRole::Preview => b.st(MUTED, PANEL),
                         CtxRole::Title | CtxRole::TotalLabel => {
-                            b.secondary().add_modifier(Modifier::BOLD)
+                            b.st(SECONDARY, PANEL).add_modifier(Modifier::BOLD)
                         }
-                        CtxRole::Tokens => b.secondary(),
-                        CtxRole::ToggleOn(_) => b.secondary(),
-                        CtxRole::ToggleOff(_) => b.meta().add_modifier(Modifier::CROSSED_OUT),
-                        CtxRole::ToggleLocked(_) => b.meta(),
-                        CtxRole::TotalFigure => b.secondary(),
+                        CtxRole::Tokens => b.st(SECONDARY, PANEL),
+                        CtxRole::ToggleOn(_) => b.st(SECONDARY, PANEL),
+                        CtxRole::ToggleOff(_) => b.st(MUTED, PANEL).add_modifier(Modifier::CROSSED_OUT),
+                        CtxRole::ToggleLocked(_) => b.st(MUTED, PANEL),
+                        CtxRole::TotalFigure => b.st(SECONDARY, PANEL),
                     };
                     spans.push(Span::styled(text, style));
                 }
                 b.line(if spans.len() == 1 { Vec::new() } else { spans });
+                b.out.last_mut().unwrap().bg = Some(pad);
                 b.out.last_mut().unwrap().context_section = section;
                 b.out.last_mut().unwrap().context_item = context_item;
             }
+            b.line(Vec::new());
+            b.out.last_mut().unwrap().bg = Some(pad);
         });
     }
 
@@ -2723,17 +2736,19 @@ impl Builder<'_> {
                     .any(|w| w.session_id == c.id)
         });
         let busy = child.as_ref().is_some_and(|c| self.app.is_busy(&c.id));
+        let failed = done.is_some_and(|d| d.is_error);
         let (glyph, tok) = if waits {
             (self.t.status("waiting").0, "interactive.accent")
         } else if busy {
             (self.t.spinner(self.frame / 2), PRIMARY)
-        } else if done.is_some_and(|d| d.is_error) {
+        } else if failed {
             (self.t.status("error").0, "status.error")
         } else if done.is_some() || child.is_some() {
-            (self.t.status("done").0, "status.success")
+            (self.t.dots_full(), "status.success")
         } else {
             (self.t.spinner(self.frame / 2), PRIMARY)
         };
+        let background = a["wait"].as_bool() == Some(false);
         let rail = self.t.role_rail_style("child_card");
         let st = self.t.role_style("child_card");
         let heavy = self.t.structure("rail_heavy").to_owned();
@@ -2741,42 +2756,71 @@ impl Builder<'_> {
         let bgst = self.st(&bg, &bg);
         let key = format!("child:{call_id}");
         let child_id = child.as_ref().map(|c| c.id.clone());
-        let status_word = if waits {
-            "waiting for input".to_string()
-        } else if busy {
-            "running".into()
-        } else if done.is_some_and(|d| d.is_error) {
-            "failed".into()
-        } else if done.is_some() {
-            "done".into()
-        } else {
-            "starting…".into()
-        };
         let title = if title.is_empty() {
             child.as_ref().map(|c| c.title.clone()).unwrap_or_default()
         } else {
             title
         };
-        let quote = if title.is_empty() {
-            String::new()
-        } else {
-            format!(" · \"{}\"", truncate(&title, 48, self.ell()))
-        };
-        let head = vec![
+        let sep = self.sep().to_owned();
+        let meta = child.as_ref().map_or_else(String::new, |c| {
+            let mut bits: Vec<String> = Vec::new();
+            let mut model = c.model.clone().filter(|m| !m.is_empty() && m != "default");
+            if let Some(effort) = c.extra.get("effort").and_then(Value::as_str) {
+                if !effort.is_empty() && effort != "none" && effort != "default" {
+                    model = Some(match model {
+                        Some(m) => format!("{m}/{effort}"),
+                        None => effort.to_owned(),
+                    });
+                }
+            }
+            bits.extend(model);
+            let end = if busy {
+                crate::app::now_secs()
+            } else {
+                c.updated
+            };
+            if c.created > 0.0 {
+                bits.push(fmt_duration(end - c.created));
+            }
+            if !busy {
+                if let Some(t) = c
+                    .extra
+                    .get("tokens")
+                    .and_then(Value::as_u64)
+                    .filter(|t| *t > 0)
+                {
+                    bits.push(format!("{} tokens", crate::paint::compact(t)));
+                }
+            }
+            bits.join(&sep)
+        });
+        let mut head = vec![
             Span::styled(heavy.clone(), rail),
             Span::styled(format!(" {glyph} "), self.st(tok, PANEL)),
             Span::styled(
-                "child",
-                self.st(SECONDARY, PANEL).add_modifier(Modifier::BOLD),
+                crate::text::capitalize(&agent),
+                self.st(PRIMARY, PANEL)
+                    .patch(self.t.agent_style(&agent))
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" · ", self.st(SECONDARY, PANEL)),
-            Span::styled(
-                agent.clone(),
-                self.st(PRIMARY, PANEL).patch(self.t.agent_style(&agent)),
-            ),
-            Span::styled(quote, self.st(SECONDARY, PANEL)),
         ];
-        let right = vec![Span::styled(status_word, self.st(tok, PANEL))];
+        if !title.is_empty() {
+            head.push(Span::styled(
+                format!(" {}", truncate(&title, 48, self.ell())),
+                self.st(SECONDARY, PANEL),
+            ));
+        }
+        if background {
+            head.push(Span::raw(" "));
+            head.push(Span::styled(" Background ", self.st(SECONDARY, SIDEBAR)));
+        }
+        let right = if waits {
+            vec![Span::styled("waiting for input", self.st(tok, PANEL))]
+        } else if failed {
+            vec![Span::styled("failed", self.st(tok, PANEL))]
+        } else {
+            Vec::new()
+        };
         self.block(
             key.clone(),
             BlockKind::Child,
@@ -2803,6 +2847,19 @@ impl Builder<'_> {
                     context_section: None,
                     context_item: None,
                 });
+                if !meta.is_empty() {
+                    b.out.push(TLine {
+                        spans: vec![
+                            Span::styled(format!("{heavy}   "), rail),
+                            Span::styled(meta.clone(), st),
+                        ],
+                        bg: Some(bgst),
+                        rail: None,
+                        focus: false,
+                        context_section: None,
+                        context_item: None,
+                    });
+                }
                 let body = if let Some(d) = done {
                     let lines: Vec<&str> =
                         d.output.lines().filter(|l| !l.trim().is_empty()).collect();

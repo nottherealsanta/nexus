@@ -112,7 +112,7 @@ Configuration patch paths and polling behavior are described in [config.md](conf
 
 // Session
 {"id": "ses_…", "project_id": "prj_…", "directory": "/abs/path", "title": "…", "agent": "build",
- "parent_id": null, "parent_call_id": null, "launched_by": "user", "children": ["ses_…"],  // who launched whom
+ "parent_id": null, "parent_call_id": null, "launched_by": "user", "children": ["ses_…"],  // who launched whom; a child row also has "tokens" (input + output spent)
  "model": "codex/gpt-6.1-terra", "model_source": "default",   // session | agent | default
  "effort": "high", "effort_source": "agent",                    // session | agent | provider
  "tools": ["read", "edit", "write", "ask", "code", "expose_workspace_tools"], "disabled_tools": ["bash"],
@@ -1066,7 +1066,7 @@ does, and returns the request its first turn would send, with nothing stored:
 the `/context` fields (`used`, `window`, `exact`, always false here), `model`,
 `agent`, `parts` (`instructions`, `tools`, `instruction_file`, estimated tokens
 of the system prompt, tool schemas and the AGENTS.md inside the prompt) and the
-`snapshot` summary. Enabled MCP servers are connected first, as for creation.
+`snapshot` summary, and `tool_info` (each tool's `description` and `guidance`). Enabled MCP servers are connected first, as for creation.
 Clients show it on the new-session screen and fall back to their own estimate
 until it answers.
 

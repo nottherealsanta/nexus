@@ -13,7 +13,7 @@ import pytest
 
 from nexus import agents as agents_module
 from nexus import runtime as runtime_module
-from nexus.llmhub.types import Done, PartDone, Text, ToolCall
+from nexus.llmhub.types import Done, Message, PartDone, Text, ToolCall
 from nexus.server import build_app, make_runtime
 from nexus.store import Store
 
@@ -289,7 +289,12 @@ async def test_agent_switch_is_the_deliberate_prompt_replacement(env):
     assert store.snapshot(sid)["system_prompt"] == rebuilt["instructions"]
     messages = (await client.get(f"/api/session/{sid}/message")).json()
     notices = [p["text"] for m in messages for p in m["parts"] if "agent changed" in (p.get("text") or "")]
-    assert len(notices) == 2
+    assert notices == []  # nothing was sent yet: the new snapshot is the starting context
+    store.append_message(sid, Message("user", (Text("hello"),)))
+    await client.post(f"/api/session/{sid}/agent", json={"agent": "orchestrate"})
+    messages = (await client.get(f"/api/session/{sid}/message")).json()
+    notices = [p["text"] for m in messages for p in m["parts"] if "agent changed" in (p.get("text") or "")]
+    assert len(notices) == 1
     await rt.shutdown()
 
 

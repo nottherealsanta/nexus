@@ -24,7 +24,10 @@ pub fn text(usage: &Value, now: f64) -> String {
         let plan = p["plan"].as_str().filter(|s| !s.is_empty());
         out.push(format!(
             "{}{}",
-            p["label"].as_str().or(p["id"].as_str()).unwrap_or("provider"),
+            p["label"]
+                .as_str()
+                .or(p["id"].as_str())
+                .unwrap_or("provider"),
             plan.map(|s| format!(" · {s}")).unwrap_or_default()
         ));
         if let Some(error) = p["error"].as_str().filter(|s| !s.is_empty()) {
@@ -34,8 +37,13 @@ pub fn text(usage: &Value, now: f64) -> String {
         }
         for w in p["windows"].as_array().cloned().unwrap_or_default() {
             let used = w["used_percent"].as_f64().map(|u| format!("{u:.0}% used"));
-            let reset = w["resets_at"].as_f64().map(|r| format!("resets in {}", until(r, now)));
-            let detail = w["detail"].as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+            let reset = w["resets_at"]
+                .as_f64()
+                .map(|r| format!("resets in {}", until(r, now)));
+            let detail = w["detail"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
             let parts: Vec<String> = [used, reset, detail].into_iter().flatten().collect();
             out.push(format!(
                 "  {}  {}",
@@ -65,7 +73,10 @@ mod tests {
             {"id": "copilot", "label": "GitHub Copilot", "error": "timed out", "windows": []}]});
         let text = text(&usage, 0.0);
         assert!(text.contains("ChatGPT (Codex) · plus"));
-        assert!(text.contains("5-hour  42% used · resets in 3h 10m"), "{text}");
+        assert!(
+            text.contains("5-hour  42% used · resets in 3h 10m"),
+            "{text}"
+        );
         assert!(text.contains("could not read the limits: timed out"));
         assert_eq!(until(90_000.0, 0.0), "1d 1h");
         assert!(super::text(&serde_json::json!({"providers": []}), 0.0).contains("No signed-in"));

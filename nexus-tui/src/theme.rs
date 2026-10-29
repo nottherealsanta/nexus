@@ -474,6 +474,15 @@ impl Theme {
         &frames[frame % frames.len()]
     }
 
+    /// The finished subagent's mark: the spinner with every dot on.
+    pub fn dots_full(&self) -> &'static str {
+        if self.opts.ascii {
+            "#"
+        } else {
+            "\u{28ff}"
+        }
+    }
+
     /// Old Nexus modal frame: rounded Unicode hairlines or ASCII.
     pub fn border_set(&self) -> ratatui::symbols::border::Set {
         if self.opts.ascii {

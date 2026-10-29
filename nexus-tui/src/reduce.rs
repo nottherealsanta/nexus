@@ -252,6 +252,11 @@ impl Model {
         // Pending waits come only from the snapshot: stale ones are discarded.
         self.approvals = s.approvals.into_iter().map(|a| (a.id.clone(), a)).collect();
         self.questions = s.questions.into_iter().map(|q| (q.id.clone(), q)).collect();
+        // The frozen starting context does not change: keep it across the rebuild.
+        let kept = self
+            .selected
+            .as_ref()
+            .and_then(|v| v.starting.clone().map(|st| (v.session_id.clone(), st)));
         self.selected = match (s.selected, wanted) {
             (Some(sel), _) => Some(SelectedView {
                 session_id: sel.session_id,
@@ -265,6 +270,11 @@ impl Model {
             }),
             _ => None,
         };
+        if let (Some(view), Some((id, starting))) = (self.selected.as_mut(), kept) {
+            if view.session_id == id {
+                view.starting = Some(starting);
+            }
+        }
     }
 
     /// Fold a session's fully loaded history into the selected view.
@@ -304,7 +314,10 @@ impl Model {
         }
         view.messages = messages;
         view.messages_more = h.messages_more;
-        view.starting = h.starting;
+        // A failed snapshot read keeps what was loaded before.
+        if h.starting.is_some() {
+            view.starting = h.starting;
+        }
         if let (Some(full), Some(row)) = (h.session, self.sessions.get_mut(&h.session_id)) {
             for key in ["skills", "mcp"] {
                 if let Some(value) = full.extra.get(key) {

@@ -332,7 +332,7 @@ export function buildRows(): Row[] {
       r: [{
         key: `context-${sid}`, kind: "context",
         meta: foldedMeta(sections.length, total, true),
-        reconstructed: s.origin === "reconstructed", open: open(`context:${sid}`, metas.length === 0),
+        reconstructed: s.origin === "reconstructed", open: open(`context:${sid}`, true),
         sections, total, window,
       }],
     });
@@ -568,7 +568,7 @@ function RowView(p: { r: () => Row }) {
             const c = r() as Extract<Row, { kind: "context" }>;
             const expanded = () => open(`context:${model.selected?.sessionId}`, c.open);
             return (
-              <View class="pt-5 pb-2" testID="context-section">
+              <View class="mt-5 mb-2 rounded-(--radius-card) bg-card border border-border px-2 py-1" testID="context-section">
                 <View class="w-full flex-row items-center gap-2 px-1 min-h-7" testID="context-header">
                   <Button onPress={() => toggle(`context:${model.selected?.sessionId}`, c.open)} accessibilityLabel={expanded() ? "Collapse context" : "Expand context"} testID="context-fold" class={`rounded-(--radius) ${FOCUS}`}><Text class={T.meta}>{expanded() ? "▾" : "▸"}</Text></Button>
                   <Button onPress={() => contextDetail.set({ title: "Context", detail: c.sections.map((s) => `${s.title}\n${s.detail}`).join("\n\n") })} accessibilityLabel="View context details" testID="context-overview" class={`flex-1 flex-row items-center gap-2 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">Context</Text><Text class={`flex-1 ${T.meta}`}>{c.meta}</Text></Button>

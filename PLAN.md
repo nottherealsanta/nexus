@@ -1092,11 +1092,20 @@ review in light and dark; budgets for large sessions (with turn summaries step
 kitty and iTerm (old `mermaid_image.rs`), and Mermaid in NSH with a pinned
 `mermaid` bundle served by the host (no CDN, per its CSP).
 
-M5: Subagents should not open in a new tab beside the parent agent. instead add a row below the tabs and show the name of the subagent session (child session title). 
+**M5 (TUI done 2026-10-29; NSH not yet):** Subagents should not open in a new tab beside the parent agent. instead add a row below the tabs and show the name of the subagent session (child session title). 
 also in the parent/root agent/session we should make the subagent render better. (remove the word "child") show icon (spinner animation for subagent working - spinner all dots on for completed) then name of the agent ("Build", "Scout" etc) - then name of that session. and then "Background" (highlighed in darkgray) if it was done in background. 
 in the next line show provider/model/effort - time taken ( changing when subagent is working and time taken when done) - tokens (only after its done)
 
-When the background subagent gets back, it should rendered well. 
+When the background subagent gets back, it should rendered well.
+
+M5 as built in the TUI: subagent sessions have no tab (`App::tab_ids`); a
+viewed subagent keeps its root's tab active, and a strip under the tabs
+(`Regions.strip`, `draw_subagents`) lists the root and every subagent, spinner
+dots while working and `⣿` once done. The parent's card shows
+`dots Agent title [Background]` (`Background` when the spawn had `wait: false`),
+then `provider/model/effort · time · tokens`; time ticks while busy, tokens show
+once done. Core adds `tokens` (input + output) to a child's session JSON. The
+NSH side still opens subagents as tabs. 
 
 ### N. Operations
 
@@ -1250,7 +1259,7 @@ when each item lands.
 | Agent prompts name their tools in prose | `{{tools}}` placeholder filled from the session's actual tools (`Tool.guidance`) | A switched-off tool is never described to the model |
 | Fixed list of child agents in the orchestrator's prompt | The `session` guidance and enum are snapshotted from freshly checked agent files at each new session | New sessions pick up agent changes without rewriting existing prompts |
 | Agent files read again on every turn | Resolved once into a stored `session_snapshot`; later turns replay it | A cached prefix stays stable; edits cannot silently change an existing session |
-| No session instruction file | Exactly `<session.directory>/AGENTS.md`, labelled in the starting context with explicit absence/error/size status | Project instructions are visible to the model and inspector, without ancestor discovery |
+| No session instruction file | `<session.directory>/AGENTS.md`, else the nearest parent's up to the Git root (2026-10-29: a session in `repo/sub` loads `repo/AGENTS.md`), labelled in the starting context with explicit absence/error/size status | Project instructions are visible to the model and inspector; no nested search |
 | Old sessions have no original prompt record | Lazy reconstruction marked `reconstructed`, with a visible note and a one-time `session.snapshot` event | Honest migration; stable afterwards |
 | Worktree tool, effectively mandatory | On-demand workspace controls: activate change-session-directory and worktree list/create/delete when needed (done 2026-10-27) | Keep ordinary sessions small and separate task work from Nexus state |
 | A session always ran in its project path | A session can move to any existing directory; the project identity is unchanged and children inherit the move (done 2026-10-27) | Worktrees and sibling checkouts without pretending they are new projects |
