@@ -59,7 +59,7 @@ async def test_token_is_required(setup):
 async def test_info_reports_the_api_contract_clients_check(setup):
     _, client, _, _ = setup
     info = (await client.get("/api/info")).json()
-    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 3}
+    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 4}
     assert set(info) >= {"version", "pid", "home", "url", "log", "retention", "retry", "idempotency"}
 
 

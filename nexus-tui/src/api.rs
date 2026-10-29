@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 use crate::transport::{ApiError, Error, Http, SseFrame};
 
 /// The Core API major/minor this client was written against.
-pub const CLIENT_API: ApiVersion = ApiVersion { major: 1, minor: 3 };
+pub const CLIENT_API: ApiVersion = ApiVersion { major: 1, minor: 4 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ApiVersion {
@@ -1447,9 +1447,9 @@ mod tests {
 
     #[test]
     fn version_handshake() {
-        let c = ApiVersion { major: 1, minor: 3 };
+        let c = ApiVersion { major: 1, minor: 4 };
         assert_eq!(
-            check_compat(Some(ApiVersion { major: 1, minor: 3 }), c),
+            check_compat(Some(ApiVersion { major: 1, minor: 4 }), c),
             Compat::Compatible
         );
         assert_eq!(
@@ -1483,7 +1483,7 @@ mod tests {
     fn version_parsing() {
         assert_eq!(
             ApiVersion::parse("1.3"),
-            Some(ApiVersion { major: 1, minor: 3 })
+            Some(ApiVersion { major: 1, minor: 4 })
         );
         assert_eq!(
             ApiVersion::parse("2"),

@@ -356,10 +356,10 @@ mod tests {
         s.apply(SyncMsg::Handshake {
             info: info.clone(),
             compat: Compat::NewerMinor {
-                core: ApiVersion { major: 1, minor: 3 },
+                core: ApiVersion { major: 1, minor: 4 },
             },
         });
-        assert_eq!(s.banners, [Banner::NewerCore { core: "1.3".into() }]);
+        assert_eq!(s.banners, [Banner::NewerCore { core: "1.4".into() }]);
         s.apply(SyncMsg::Handshake {
             info,
             compat: Compat::Compatible,
