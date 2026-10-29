@@ -124,7 +124,7 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
     skills/         (planned, F) discovery, frontmatter, index, invocation, resources
     mcp/            (planned, G) client, manager, bridge, search
     hooks/          (planned, H) command hooks
-    extensions.py   (planned, E) user tools loaded from disk, quarantine
+    extensions.py   user tools loaded from disk, run in a child process
     voice/          (planned, I) HF cache lookup, STT engine, TTS worker, audio checks
     workspace.py, worktrees.py, kernels.py, bash_jobs.py, snapshot.py,
     observations.py, questions.py, files.py, images.py, agents.py,
@@ -557,6 +557,21 @@ and `test_permissions.py`; new tests for grep, glob, ls and multiedit
 switch, and `docs/tools.md` documents each one.
 
 ### E. Hot reload: user tools and agents
+
+**Landed 2026-10-29 (Core), pending a real-session check and client UI:**
+`agents.changed` from a two-second poll, `color` in frontmatter and `mode`/`color`
+in `/api/agent`, hot-reload tests for global and project agent files
+(`tests/test_agents_reload.py`), and user tools (`nexus/extensions.py`,
+`GET /api/extension`, `extensions.changed`, `extension.failed`,
+`tests/test_extensions.py`, docs/tools.md "User tools"). Core 504 tests and Ruff
+pass. Decisions made while porting: metadata is read with `ast.literal_eval`
+so the daemon never executes a file; each call runs in a child `python -I`
+process; the snapshot stores the granted tools' source (`snapshot.extensions`)
+so a running session keeps its code, even across a daemon restart, and a result
+says when the file changed on disk. Not done: showing agent and tool problems
+in the clients' pickers and Settings, a changed-file notice item (the result
+line stands in), memory limits for a tool process, and `[tools] disabled`
+validation of project-only tool names.
 
 **Agents.** `agents.load()` already reads the files on every call
 (`nexus-core/nexus/agents.py:157`, `runtime.py:353`), and the session snapshot
@@ -1132,6 +1147,7 @@ when each item lands.
 | Old websearch/webfetch ran on a 1200-line outbound service with allowlisted origins, an HTML fallback for search and per-origin approval keys | `web_search`/`web_fetch` on `nexus/net.py`: public-address-only, pinned connection, same-origin redirects; search is JSON from `[web] search_url`; content fenced as untrusted; no origin allowlist (D5–D6, 2026-10-29) | The same SSRF and prompt-injection protections in one small module; per-pattern rules come with D7 |
 | Old `permissions.py` (2400 lines: bundles, session grants, path guards, unattended modes, `deny → grants → allow → ask → mode`) | `nexus/permissions.py`: `tool` or `tool(glob)` rules with allow/ask/deny; any deny wins, else the last config rule decides, agent files can only add ask/deny; keys per tool (command, resolved path, URL, query); bash compounds never match an allow; one table in `config.toml`, no per-tool sub-tables; a bad rule is skipped and reported, never dropping the good ones (D7, 2026-10-29) | Same safety properties in a page; session grants are K7; path guards already live in the tools |
 | Old `escalate` was a registered task tool whose escalations the old runtime folded into a `SubagentOutcome.attention` | `escalate` is a control tool added to every child snapshot (`escalation: true`), recorded in memory, announced by `session.escalated`, and appended as an `Attention:` block to the parent's `session` result or notification; it grants nothing and does not wait (D8, 2026-10-29) | Principle 3: it acts on Nexus state, so it is control; the parent's timeline shows it |
+| Old `ext/manager.py` (3000 lines): loaded tool modules in the host, a `[[ext]]` config table, trash and templates | `nexus/extensions.py`: tools are `*.py` files in `tools/` folders, read as literals and run in a child process per call; the session snapshot stores their source; no config table (E, 2026-10-29) | The daemon never executes user code; a running session keeps its code (P6, Principle 8) |
 | Client composer history in memory (TUI only) or one global file for all projects (old) | Core stores what the user sent and serves it per project; both clients recall from it; Up recalls on the first line only (2026-10-29, C) | History survives restarts and is shared across clients |
 
 ## 11. Known gaps

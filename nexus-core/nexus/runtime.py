@@ -46,12 +46,13 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from . import agents as agent_files
+from . import extensions as extension_files
 from . import permissions, worktrees
 from . import questions as question_contract
 from . import snapshot as snapshots
@@ -400,9 +401,17 @@ class Runtime:
         return {tool.spec.name: tool for tool in (*DEFAULT_TOOLS, *BASH_JOB_TOOLS)}
 
     @staticmethod
-    def granted_tool_names(spec: agent_files.AgentDef) -> list[str]:
-        """The task tools an agent grants. bash's background companions are added when it is available."""
-        return list(spec.tools) if spec.tools is not None else [t.spec.name for t in DEFAULT_TOOLS]
+    def granted_tool_names(spec: agent_files.AgentDef, extra: Iterable[str] = ()) -> list[str]:
+        """The task tools an agent grants (user tools included when it lists none). bash's background companions are added when it is available."""
+        return list(spec.tools) if spec.tools is not None else [t.spec.name for t in DEFAULT_TOOLS] + list(extra)
+
+    @staticmethod
+    def builtin_names() -> frozenset[str]:
+        return frozenset([t.spec.name for t in DEFAULT_TOOLS + BASH_JOB_TOOLS] + list(agent_files.CONTROL_TOOLS)
+                         + list(agent_files.NEXUS_CONTROL_TOOLS) + ["code"])
+
+    def extensions(self, project_path: str | None) -> extension_files.ExtensionSet:
+        return extension_files.discover(project_path, self.builtin_names())
 
     @staticmethod
     def enabled_tool_names(granted: list[str], control: list[str], disabled: set[str], child: bool) -> list[str]:
@@ -554,19 +563,22 @@ class Runtime:
                         current_instruction_file: dict[str, Any] | None = None,
                         notice: str | None = None, workspace: dict[str, Any] | None = None,
                         directory_changes: list[dict[str, Any]] | None = None,
-                        messaging: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Freeze one session's agent, prompt, tool schemas and child catalog."""
+                        messaging: dict[str, Any] | None = None,
+                        project_path: str | None = None) -> dict[str, Any]:
+        """Freeze one session's agent, prompt, tool schemas (user tool code included) and child catalog."""
         registry = self._registry()
-        granted = self.granted_tool_names(spec)
-        unknown = [n for n in granted if n not in registry]
+        user_tools = self.extensions(project_path).tools
+        granted = self.granted_tool_names(spec, user_tools)
+        unknown = [n for n in granted if n not in registry and n not in user_tools]
         if unknown:
             raise ValueError(
-                f"agent {spec.name} lists unknown tools: {', '.join(unknown)}; available: {', '.join(registry)}"
+                f"agent {spec.name} lists unknown tools: {', '.join(unknown)}; available: {', '.join([*registry, *user_tools])}"
             )
         child_agents = [snapshots.agent_summary(a) for a in found.allowed(child=True)]
         state = dict(workspace) if workspace is not None else {"entry": True, "activated": False}
         names = self.enabled_names(granted, list(spec.control), disabled, child, state, messaging, escalation=child)
-        definitions = {n: self._definition(n, registry, child_agents) for n in names}
+        definitions = {n: user_tools[n].record(source=False) if n in user_tools
+                       else self._definition(n, registry, child_agents) for n in names}
         if instruction_file is None:
             instruction_file = snapshots.read_instruction_file(directory)
         agent_prompt = agent_files.render_prompt(
@@ -582,6 +594,7 @@ class Runtime:
             "control": list(spec.control),
             "tools": names,
             "tool_definitions": definitions,
+            "extensions": {n: user_tools[n].record() for n in granted if n in user_tools},
             "workspace": state,
             "messaging": {"activated": bool((messaging or {}).get("activated"))},
             "escalation": child,
@@ -605,6 +618,7 @@ class Runtime:
             child=session.parent_id is not None, origin="reconstructed", notice=snapshots.RECONSTRUCTED_NOTE,
             # Older sessions do not silently gain the on-demand workspace entry point.
             workspace={"entry": False, "activated": False},
+            project_path=self.project(session.project_id).path,
         )
         self.store.set_snapshot(session.id, rebuilt)
         self.bus.publish("session.snapshot", snapshots.summary(rebuilt), session_id=session.id)
@@ -626,9 +640,12 @@ class Runtime:
         for name in list(snapshot["tool_definitions"]):
             if name not in available:
                 del snapshot["tool_definitions"][name]
+        frozen = snapshot.get("extensions", {})
         for name in names:
             if name not in snapshot["tool_definitions"]:
-                snapshot["tool_definitions"][name] = self._definition(name, registry, snapshot["child_agents"])
+                snapshot["tool_definitions"][name] = (
+                    {**frozen[name], "extension": {k: v for k, v in frozen[name]["extension"].items() if k != "source"}}
+                    if name in frozen else self._definition(name, registry, snapshot["child_agents"]))
         snapshot["tools"] = names
 
     def session(self, session_id: str) -> Session:
@@ -693,7 +710,7 @@ class Runtime:
                 effort = settings["effort"] or None
             if disabled_tools is None:
                 try:
-                    disabled_tools = self.check_tool_names(defaults["tools"]["disabled"])
+                    disabled_tools = self.check_tool_names(defaults["tools"]["disabled"], self.extensions(project.path).tools)
                 except ValueError:
                     pass
             if agent is None and settings["agent"]:
@@ -703,7 +720,7 @@ class Runtime:
         if disabled_tools is None and parent is not None:
             disabled_tools = sorted(parent.disabled())
         if disabled_tools is not None:
-            self.check_tool_names(disabled_tools)
+            self.check_tool_names(disabled_tools, self.extensions(project.path).tools)
         if model:
             provider_for(model)  # validates the provider name
         found = self.agents(project.path)
@@ -716,7 +733,7 @@ class Runtime:
         self._check_removing_worktree(directory)
         snapshot = self._build_snapshot(
             directory=directory, spec=spec, found=found, disabled=set(disabled_tools or []),
-            child=parent is not None,
+            child=parent is not None, project_path=project.path,
         )
         session = self.store.create_session(project, title=title or "New session", agent=agent, model=model or "",
                                             permission=permission or "allow", effort=effort or None, parent=parent,
@@ -761,7 +778,8 @@ class Runtime:
         if fields.get("model"):
             provider_for(fields["model"])
         if fields.get("disabled_tools") is not None:
-            self.check_tool_names(fields["disabled_tools"])
+            self.check_tool_names(fields["disabled_tools"],
+                                  self.extensions(self.project(current.project_id).path).tools)
         if fields.get("agent") == "":
             raise ValueError("agent must not be empty")
         if expected_revision is not None and expected_revision != current.revision:
@@ -787,7 +805,7 @@ class Runtime:
                 bool(before_snapshot.get("escalation")))
             registry = self._registry()
             unknown_exec = [n for n in target if n not in registry and n not in agent_files.NEXUS_CONTROL_TOOLS
-                            and n != "code"]
+                            and n != "code" and n not in before_snapshot.get("extensions", {})]
             if unknown_exec:
                 raise ValueError(
                     f"session snapshot needs tools this Nexus build cannot execute: {', '.join(unknown_exec)}; "
@@ -809,6 +827,7 @@ class Runtime:
                 else {"entry": False, "activated": False},
                 directory_changes=(previous.get("directory_changes") if previous else None),
                 messaging=previous.get("messaging") if previous else None,
+                project_path=self.project(current.project_id).path,
             )
         session = self.store.update_session(session_id, expected_revision=expected_revision, **fields)
         if session is None:
@@ -1200,11 +1219,12 @@ class Runtime:
     # -- turns ---------------------------------------------------------------
 
     @staticmethod
-    def check_tool_names(names: Any) -> list[str]:
+    def check_tool_names(names: Any, extra: Iterable[str] = ()) -> list[str]:
         if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
             raise ValueError("disabled_tools must be a list of tool names")
         known = ([t.spec.name for t in DEFAULT_TOOLS + BASH_JOB_TOOLS] + list(agent_files.CONTROL_TOOLS)
-                 + [agent_files.MESSAGE_TOOL, agent_files.ESCALATE_TOOL] + list(workspace_control.CONTROL_NAMES))
+                 + [agent_files.MESSAGE_TOOL, agent_files.ESCALATE_TOOL] + list(workspace_control.CONTROL_NAMES)
+                 + list(extra))
         unknown = [n for n in names if n not in known]
         if unknown:
             raise ValueError(f"unknown tools: {', '.join(unknown)}; known: {', '.join(known)}")
@@ -1266,8 +1286,9 @@ class Runtime:
                 "switch the agent or clear the tool switch that re-enabled them"
             )
         registry = self._registry()
+        frozen = snapshot.get("extensions", {})
         missing_exec = [n for n in names if n not in registry and n not in agent_files.NEXUS_CONTROL_TOOLS
-                        and n != "code"]
+                        and n != "code" and n not in frozen]
         if missing_exec:
             raise ValueError(
                 f"session snapshot needs tools this Nexus build cannot execute: {', '.join(missing_exec)}; "
@@ -1341,9 +1362,15 @@ class Runtime:
                  workspace_control.CHANGE_DIRECTORY: run_change_directory,
                  workspace_control.WORKTREE: run_worktree}
 
+        def user_runner(record: dict[str, Any]) -> Callable[[dict[str, Any], ToolContext], Awaitable[str]]:
+            async def run_user(args: dict[str, Any], ctx: ToolContext) -> str:
+                return await extension_files.call(record, args, ctx.workspace)
+            return run_user
+
         def stored_tool(name: str) -> Tool:
             definition = definitions[name]
-            runner = bound.get(name) or (None if name == "code" else registry[name].run)
+            runner = bound.get(name) or (user_runner(frozen[name]) if name in frozen
+                                         else None if name == "code" else registry[name].run)
             return Tool(ToolSpec(name, definition["description"], definition["parameters"]), runner,  # type: ignore[arg-type]
                         guidance=definition["guidance"])
 

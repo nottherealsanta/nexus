@@ -22,6 +22,7 @@ You review code. Point out bugs and risks; do not edit files.
 | --- | --- | --- |
 | `description` | string, required | What the agent is for. Shown in lists, and later used to pick an agent for a child session. |
 | `mode` | `primary`, `subagent`, `all` | Where the agent may run: `primary` only as a root session, `subagent` only as a child session, `all` both. Enforced when a session is created or its agent is changed. Default `all`. |
+| `color` | colour name or `#rrggbb` | A hint for clients (agent chips and tabs). Served by `/api/agent`; not part of the prompt. |
 | `model` | `provider/model` | Used when the session has no model of its own. |
 | `effort` | string | Used when the session has no effort of its own. |
 | `tools` | list of tool names | The only tools the model is offered. Omit it for every tool. An unknown name makes session creation fail with a clear error. |
@@ -229,8 +230,17 @@ Switching agents (`POST /api/session/{id}/agent`) is the deliberate prompt
 replacement: the agent prompt, tool definitions and child catalog are rebuilt
 from the current files, with a `[Nexus notice: agent changed]` message. The
 loaded `AGENTS.md` section is retained. Model and effort changes apply from the
-next model call and never mutate a running call. No filesystem hot reload is performed
-for existing sessions.
+next model call and never mutate a running call.
+
+### Hot reload
+
+Agent files are read from disk each time they are needed, so an edit, a new
+file or a deletion applies to the **next new session**; a running session keeps
+its frozen snapshot. Core polls the global and every project's agent folder every
+two seconds and publishes `agents.changed` when a file is added, removed or
+edited, so pickers refresh without a reconnect. A file that fails to parse is
+listed in `problems` of `GET /api/agent`, never dropped silently. User tools
+reload the same way ([tools.md](tools.md#user-tools)).
 
 `bash` brings `bash_output` and `bash_kill` with it, unless they are switched
 off individually, so a background command can always be read and stopped. They

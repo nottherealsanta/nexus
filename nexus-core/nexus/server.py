@@ -13,6 +13,7 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/model/default | the default `provider/model` |
 | GET | /api/agent | agents for `?project=` or `?directory=` (built-in, global, project) and file problems |
 | GET | /api/agent/{name} | one agent, with its full prompt |
+| GET | /api/extension | user tools for `?project=` or `?directory=` (global and project) and file problems |
 | GET | /api/project | all projects |
 | POST | /api/project | `{path, name?}` → the project at that path (created if new) |
 | GET/PATCH/DELETE | /api/project/{id} | one project; PATCH `{name}` |
@@ -68,7 +69,9 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from . import agents as agents_module
 from . import export
+from . import extensions as extensions_module
 from .bus import Bus
 from .codec import to_json
 from .config import ConfigConflict, ConfigFile
@@ -275,10 +278,33 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
             runtime.bus.publish("config.changed", {"revision": config_revision})
             return JSONResponse(result)
 
+    def project_paths() -> list[str]:
+        return [x.path for x in runtime.store.projects()]
+
+    def publish_extension_problems() -> None:
+        seen: set[str] = set()
+        for path in [None, *project_paths()]:
+            for problem in runtime.extensions(path).problems:
+                if problem["path"] not in seen:
+                    seen.add(problem["path"])
+                    runtime.bus.publish("extension.failed", problem)
+
     async def watch_config() -> None:
         nonlocal config_revision
+        agent_stamp = agents_module.fingerprint(project_paths())
+        tool_stamp = extensions_module.fingerprint(project_paths())
         while True:
             await asyncio.sleep(2)
+            paths = project_paths()
+            stamp = agents_module.fingerprint(paths)
+            if stamp != agent_stamp:
+                agent_stamp = stamp
+                runtime.bus.publish("agents.changed", {})
+            stamp = extensions_module.fingerprint(paths)
+            if stamp != tool_stamp:
+                tool_stamp = stamp
+                runtime.bus.publish("extensions.changed", {})
+                publish_extension_problems()
             async with config_lock:
                 revision = config.read()["revision"]
                 if revision != config_revision:
@@ -466,7 +492,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         return JSONResponse({"model": runtime.default_model})
 
     def agent_json(agent: Any, *, prompt: bool) -> dict[str, Any]:
-        data = {k: getattr(agent, k) for k in ("name", "description", "source", "path", "model", "effort", "tools", "steps")}
+        data = {k: getattr(agent, k) for k in ("name", "description", "source", "path", "mode", "color", "model", "effort", "tools", "steps")}
         data["permission"] = dict(agent.permission)
         return data | ({"prompt": agent.prompt} if prompt else {})
 
@@ -480,6 +506,12 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     async def agent_list(request: Request) -> Response:
         found = runtime.agents(agent_project_path(request))
         return JSONResponse({"agents": [agent_json(a, prompt=False) for a in found.agents.values()], "problems": found.problems})
+
+    async def extension_list(request: Request) -> Response:
+        found = runtime.extensions(agent_project_path(request))
+        tools = [{"name": t.name, "description": t.description, "scope": t.scope, "path": t.path,
+                  "sha256": t.sha256, "timeout": t.timeout} for t in found.tools.values()]
+        return JSONResponse({"tools": tools, "problems": found.problems})
 
     async def agent_one(request: Request) -> Response:
         return JSONResponse(agent_json(runtime.agents(agent_project_path(request)).get(p(request, "name")), prompt=True))
@@ -903,6 +935,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/snapshot", route(snapshot)),
         Route("/api/agent", route(agent_list)),
         Route("/api/agent/{name}", route(agent_one)),
+        Route("/api/extension", route(extension_list)),
         Route("/api/project", route(projects), methods=["GET", "POST"]),
         Route("/api/project/{id}", route(project), methods=["GET", "PATCH", "DELETE"]),
         Route("/api/project/{id}/worktrees", route(project_worktrees)),

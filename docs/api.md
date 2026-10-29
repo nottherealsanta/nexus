@@ -35,6 +35,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
 | GET | `/api/model/default` | | `{model}` |
 | GET | `/api/agent` | `?project=` or `?directory=` | `{agents: [Agent], problems: [{path, error}]}` |
+| GET | `/api/extension` | `?project=` or `?directory=` | `{tools: [{name, description, scope, path, sha256, timeout}], problems: [{path, error}]}`: user tools ([tools.md](tools.md#user-tools)) |
 | GET | `/api/agent/{name}` | `?project=` or `?directory=` | `Agent` with `prompt` |
 | GET | `/api/project` | | `[Project]`, most recently used first |
 | POST | `/api/project` | `{path, name?}` | the project at `path`, created if new |
@@ -111,7 +112,7 @@ Configuration patch paths and polling behavior are described in [config.md](conf
 
 // Agent (see agents.md)
 {"name": "plan", "description": "…", "source": "builtin", "path": "…/plan.md",
- "model": null, "effort": null, "tools": ["read", "bash"], "steps": null}
+ "mode": "all", "color": null, "model": null, "effort": null, "tools": ["read", "bash"], "steps": null}
 
 // Message (parts encoded as in stream-events.md, including raw wire items)
 {"id": "msg_…", "session_id": "ses_…", "seq": 2, "created": 1793…, "role": "assistant",
@@ -783,6 +784,9 @@ Deleting a project publishes one tombstone per deleted session, then
 | Type | Data |
 | --- | --- |
 | `config.changed` | `{revision}`: global, stored; clients reload `/api/config` |
+| `agents.changed` | `{}`: an agent file was added, removed or edited; global, live only; clients reload `/api/agent` |
+| `extensions.changed` | `{}`: a user tool file changed; global, live only; reload `/api/extension` |
+| `extension.failed` | `{path, error}`: a user tool file is invalid; global, live only |
 | `project.created` / `project.updated` | `Project`; global, stored |
 | `project.deleted` | `{id}`; global, stored |
 | `session.created` / `session.updated` | `Session`, stored in that session's log |

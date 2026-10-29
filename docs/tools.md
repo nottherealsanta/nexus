@@ -774,3 +774,41 @@ unavailable working-tree status is a refusal, not evidence of a clean tree.
 Git subprocess cancellation kills and reaps the process group before releasing
 the operation lock. Git's NUL-delimited worktree metadata preserves unusual path
 characters. External processes and other daemons remain outside these checks.
+
+## User tools
+
+A user tool is a Python file in `~/.nexus10/tools/` or `<project>/.agents/tools/`
+(the project's replaces a global one of the same name). `nexus/extensions.py`.
+
+```python
+NAME = "hello"                # optional; the file name by default (a-z, 0-9, _)
+DESCRIPTION = "Greet someone."
+PARAMETERS = {"type": "object", "properties": {"who": {"type": "string"}}, "required": ["who"]}
+GUIDANCE = "Use to say hello."   # optional, one line for the prompt's tools section
+TIMEOUT = 30                     # optional seconds, at most 600 (default 60)
+
+def run(args):                   # or `async def`; returns text
+    return f"Hello, {args['who']}!"
+```
+
+- **The daemon never runs the file.** Metadata is read with `ast.literal_eval`,
+  so `DESCRIPTION` and the others must be literals. A call runs in a child
+  Python (`-I`, a scrubbed environment of `PATH`, `HOME`, `LANG`, `TMPDIR`
+  plus `NEXUS_WORKSPACE`, the session directory as cwd, killed as a process
+  group on timeout or cancel). This is process quarantine, not a sandbox: the
+  tool can do what the user can. Printed output is kept off the result channel.
+- **Granting:** an agent with no `tools:` list gets every user tool; list a
+  name to grant it to a restricted agent. A name may not shadow a built-in tool
+  or start with `mcp__`. Approval follows the session's permission setting and
+  the permission rules (`my_tool(...)` keys are not defined; use `my_tool` alone).
+- **Frozen per session:** a new session's snapshot stores each granted tool's
+  source (`snapshot.extensions`). A running session keeps running that code. If
+  the file differs on disk, the result ends with a line saying so, so the
+  timeline shows it. A new session uses the current file; an agent switch
+  rebuilds the snapshot from the current files.
+- **Errors:** an invalid file is a `problems` row in `GET /api/extension` and an
+  `extension.failed` event. A tool that raises, times out or dies returns an
+  error result; it never fails the turn.
+- **Switches:** user tools appear in the starting-context tools grid and take
+  per-session switches. A `[tools] disabled` entry in config is validated
+  against built-ins and global user tools only.

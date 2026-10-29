@@ -5,6 +5,7 @@ is the system prompt (after OpenCode's agent files).
 ---
 description: Reviews code without changing it   # required: what it is for
 mode: subagent                                   # primary | subagent | all (default all)
+color: "#7aa2f7"                                 # optional: a colour name or #rrggbb for clients
 model: copilot/claude-sonnet-5                   # preferred model, if the session sets none
 effort: high                                     # preferred reasoning effort
 tools: [read, bash]                              # allowed task tools; omit for all task tools
@@ -38,6 +39,7 @@ The whole prompt is visible in a session's context (`GET …/context`).
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -52,7 +54,8 @@ BUILTIN_DIR = Path(__file__).parent / "builtin_agents"
 DEFAULT_AGENT = "build"
 MAX_FILE_BYTES = 256 * 1024
 _NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
-_FIELDS = {"description", "mode", "model", "effort", "tools", "control", "steps", "permission"}
+_FIELDS = {"description", "mode", "color", "model", "effort", "tools", "control", "steps", "permission"}
+_COLOR = re.compile(r"#[0-9a-fA-F]{6}|[a-z][a-z-]{0,31}\Z")
 MODES = ("primary", "subagent", "all")
 CONTROL_TOOLS = ("session",)  # the control tools an agent file may grant
 # Every control tool, whether granted by an agent or always available: none of these
@@ -76,6 +79,7 @@ class AgentDef:
     control: tuple[str, ...] = ()  # control tools (CONTROL_TOOLS); never implied
     steps: int | None = None
     permission: tuple[tuple[str, str], ...] = ()  # (rule, "ask" | "deny") in file order
+    color: str | None = None  # a theme colour name or #rrggbb, for clients
 
 
 @dataclass
@@ -137,6 +141,9 @@ def parse(path: Path, source: str) -> AgentDef:
     steps = meta.get("steps")
     if steps is not None and (not isinstance(steps, int) or not 1 <= steps <= 500):
         raise ValueError("steps must be an integer from 1 to 500")
+    color = meta.get("color")
+    if color is not None and not (isinstance(color, str) and _COLOR.fullmatch(color)):
+        raise ValueError("color must be a colour name or #rrggbb")
     for key in ("model", "effort"):
         if meta.get(key) is not None and not isinstance(meta[key], str):
             raise ValueError(f"{key} must be a string")
@@ -153,7 +160,7 @@ def parse(path: Path, source: str) -> AgentDef:
         name=name, description=description.strip(), prompt=prompt, source=source, path=str(path), mode=mode,
         model=meta.get("model"), effort=meta.get("effort"),
         tools=tuple(tools) if tools is not None else None, control=tuple(control), steps=steps,
-        permission=tuple((rule.text, rule.action) for rule in rules),
+        permission=tuple((rule.text, rule.action) for rule in rules), color=color,
     )
 
 
@@ -177,6 +184,29 @@ def load(project_path: str | None = None) -> AgentSet:
                 continue
             result.agents[agent.name] = agent
     return result
+
+
+def fingerprint(project_paths: list[str]) -> str:
+    """Changes when an agent file is added, removed or edited in the global folder or any project's.
+    Built-in agents ship with the code and are left out."""
+    stamps: list[tuple[str, int, int]] = []
+    for source, directory in directories(None):
+        if source == "global":
+            stamps += _stamps(directory)
+    for path in sorted(set(project_paths)):
+        stamps += _stamps(Path(path) / ".agents" / "agents")
+    return hashlib.sha256(repr(stamps).encode()).hexdigest()[:16]
+
+
+def _stamps(directory: Path) -> list[tuple[str, int, int]]:
+    out = []
+    try:
+        for path in sorted(directory.glob("*.md")):
+            stat = path.stat()
+            out.append((str(path), stat.st_mtime_ns, stat.st_size))
+    except OSError:
+        pass
+    return out
 
 
 TOOLS_PLACEHOLDER = "{{tools}}"
