@@ -102,10 +102,14 @@ pub enum ApiCall {
     Delete {
         session: String,
     },
+    /// `scope_session` also grants the same call for the rest of the session
+    /// (allow only); `note` is added to a refusal the model reads (deny only).
     Reply {
         session: String,
         id: String,
         allow: bool,
+        scope_session: bool,
+        note: Option<String>,
     },
     /// Answer a pending `ask` request: one `{question_id, selected, text}` per
     /// question (see `docs/api.md`), submitted once with its own key.
@@ -235,6 +239,11 @@ impl ApiCall {
             ApiCall::Archive { .. } => "Unarchived",
             ApiCall::Rename { .. } => "Renamed",
             ApiCall::Delete { .. } => "Deleted",
+            ApiCall::Reply {
+                allow: true,
+                scope_session: true,
+                ..
+            } => "Allowed for this session",
             ApiCall::Reply { allow: true, .. } => "Allowed",
             ApiCall::Reply { .. } => "Denied",
             ApiCall::Answer { .. } => "Answered",
@@ -597,9 +606,15 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         ApiCall::Delete { session } => {
             conflict(api.delete_session(session, &key).await.map_err(e)?)?;
         }
-        ApiCall::Reply { session, id, allow } => {
+        ApiCall::Reply {
+            session,
+            id,
+            allow,
+            scope_session,
+            note,
+        } => {
             conflict(
-                api.reply_permission(session, id, *allow, &key)
+                api.reply_permission(session, id, *allow, *scope_session, note.as_deref(), &key)
                     .await
                     .map_err(e)?,
             )?;

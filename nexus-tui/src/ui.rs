@@ -428,7 +428,9 @@ pub struct BannerItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitButton {
     Allow,
+    AllowSession,
     Deny,
+    DenyNote,
     Next,
     Submit,
 }

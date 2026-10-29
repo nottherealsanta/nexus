@@ -4184,15 +4184,15 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     (
                         "Allow for session",
                         "waiting.allow_session",
-                        None,
-                        "not offered by Core yet",
+                        Some(WaitButton::AllowSession),
+                        "",
                     ),
                     ("Deny", "waiting.deny", Some(WaitButton::Deny), ""),
                     (
                         "Deny with a note",
                         "waiting.deny_note",
-                        None,
-                        "Core does not support notes yet",
+                        Some(WaitButton::DenyNote),
+                        "",
                     ),
                 ];
                 let (label, cmd, target, why) = defs[*n];

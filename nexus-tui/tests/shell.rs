@@ -348,7 +348,7 @@ fn connection_states_become_banners_and_a_blocking_dialog() {
 }
 
 #[test]
-fn waiting_card_sits_above_the_composer_and_hides_unoffered_choices() {
+fn waiting_card_sits_above_the_composer_and_offers_all_four_choices() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     // replay up to the approval only
     let mut app2 = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
@@ -372,9 +372,7 @@ fn waiting_card_sits_above_the_composer_and_hides_unoffered_choices() {
             && all.contains("Allow for session")
             && all.contains("Deny with a note")
     );
-    // a choice Core does not offer shows its reason (D14)
-    assert!(all.contains("not offered by Core yet"), "{all}");
-    assert!(all.contains("Core does not support notes yet"), "{all}");
+    assert!(!all.contains("not offered by Core yet"), "{all}");
     assert!(all.contains("1 of 2"));
     // y allows once, through the focused card
     press(&mut app2, &["alt+w", "y"]);
@@ -385,6 +383,57 @@ fn waiting_card_sits_above_the_composer_and_hides_unoffered_choices() {
         ))
     ));
     let _ = &mut app;
+}
+
+fn waiting_app() -> nexus_tui::app::App {
+    let mut app = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.open_session(SESSION);
+    for e in events(TURN).into_iter().filter(|e| e.id <= 11) {
+        app.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+    }
+    draw(&mut app, 120, 36);
+    app
+}
+
+#[test]
+fn a_allows_for_the_session() {
+    let mut app = waiting_app();
+    press(&mut app, &["alt+w", "a"]);
+    assert!(matches!(
+        app.effects.last(),
+        Some(nexus_tui::app::Effect::Api(
+            nexus_tui::actions::ApiCall::Reply {
+                allow: true,
+                scope_session: true,
+                note: None,
+                ..
+            }
+        ))
+    ));
+}
+
+#[test]
+fn d_denies_with_the_composer_text_as_the_note() {
+    let mut app = waiting_app();
+    // no note yet: nothing is sent
+    press(&mut app, &["alt+w", "d"]);
+    assert!(!matches!(
+        app.effects.last(),
+        Some(nexus_tui::app::Effect::Api(
+            nexus_tui::actions::ApiCall::Reply { .. }
+        ))
+    ));
+    app.composer().insert_str("use ripgrep instead");
+    press(&mut app, &["alt+w", "d"]);
+    match app.effects.last() {
+        Some(nexus_tui::app::Effect::Api(nexus_tui::actions::ApiCall::Reply {
+            allow: false,
+            note: Some(note),
+            ..
+        })) => assert_eq!(note, "use ripgrep instead"),
+        other => panic!("{other:?}"),
+    }
+    assert!(app.composer().text().is_empty());
 }
 
 #[test]

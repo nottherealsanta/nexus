@@ -1029,14 +1029,22 @@ impl CoreApi {
         session: &str,
         id: &str,
         allow: bool,
+        scope_session: bool,
+        note: Option<&str>,
         key: &RequestId,
     ) -> Result<Outcome<()>, Error> {
-        let reply = if allow { "allow" } else { "deny" };
+        let mut body = json!({ "reply": if allow { "allow" } else { "deny" } });
+        if allow && scope_session {
+            body["scope"] = json!("session");
+        }
+        if let (false, Some(note)) = (allow, note.filter(|n| !n.is_empty())) {
+            body["note"] = json!(note);
+        }
         Ok(self
             .mutate(
                 Method::POST,
                 &format!("/api/session/{session}/permission/{id}"),
-                Some(json!({ "reply": reply })),
+                Some(body),
                 key,
                 None,
             )

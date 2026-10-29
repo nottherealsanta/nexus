@@ -159,6 +159,8 @@ pub const WIRED: &[&str] = &[
     "copy.tool_output",
     "copy.user_message",
     "waiting.allow_once",
+    "waiting.allow_session",
+    "waiting.deny_note",
     "waiting.deny",
     "waiting.submit_answers",
     "waiting.next",
@@ -194,6 +196,8 @@ const MUTATING: &[&str] = &[
     "agent.change",
     "skills.learn",
     "waiting.allow_once",
+    "waiting.allow_session",
+    "waiting.deny_note",
     "waiting.deny",
     "waiting.submit_answers",
 ];
@@ -494,7 +498,7 @@ pub struct Ui {
     /// The `/learn` source waiting for its project-or-global answer.
     pub learn_source: Option<String>,
     pub wait_idx: usize,
-    /// The highlighted choice of the focused approval card (0 allow once, 2 deny).
+    /// The highlighted choice of the focused approval card (0 allow once, 1 allow for session, 2 deny, 3 deny with a note).
     pub wait_choice: usize,
     /// When each waiting request was first seen, for `waiting on you · 0:42`.
     pub wait_seen: HashMap<String, Instant>,
@@ -3749,12 +3753,26 @@ impl App {
                 self.ui.cursor.insert(Tab::Sessions, 0);
                 self.ui.side_top = 0;
             }
-            "waiting.allow_once" | "waiting.deny" => {
+            "waiting.allow_once" | "waiting.allow_session" | "waiting.deny" | "waiting.deny_note" => {
                 if let Some(w) = self.wait_focused().filter(|w| w.kind == WaitKind::Approval) {
+                    let allow = id.starts_with("waiting.allow");
+                    let mut note = None;
+                    if id == "waiting.deny_note" {
+                        // The note is the composer's text, as an answer is.
+                        let text = self.composer_ref().expanded_text().trim().to_owned();
+                        if text.is_empty() {
+                            self.toast(Level::Warning, "Type the note in the composer, then press d");
+                            return;
+                        }
+                        self.composer().take();
+                        note = Some(text);
+                    }
                     self.api(ApiCall::Reply {
                         session: w.session_id,
                         id: w.id,
-                        allow: id == "waiting.allow_once",
+                        allow,
+                        scope_session: id == "waiting.allow_session",
+                        note,
                     });
                 }
             }
@@ -6523,15 +6541,16 @@ impl App {
         {
             match name {
                 "up" | "down" => {
-                    // only the offered choices (allow once, deny) take the cursor
-                    self.ui.wait_choice = if self.ui.wait_choice == 0 { 2 } else { 0 };
+                    let step = if name == "down" { 1 } else { 3 };
+                    self.ui.wait_choice = (self.ui.wait_choice + step) % 4;
                     return;
                 }
                 "enter" => {
-                    let id = if self.ui.wait_choice == 2 {
-                        "waiting.deny"
-                    } else {
-                        "waiting.allow_once"
+                    let id = match self.ui.wait_choice {
+                        1 => "waiting.allow_session",
+                        2 => "waiting.deny",
+                        3 => "waiting.deny_note",
+                        _ => "waiting.allow_once",
                     };
                     return self.run_command(id);
                 }
@@ -7373,7 +7392,9 @@ impl App {
                 self.ui.focus = Focus::Waiting;
                 self.run_command(match b {
                     WaitButton::Allow => "waiting.allow_once",
+                    WaitButton::AllowSession => "waiting.allow_session",
                     WaitButton::Deny => "waiting.deny",
+                    WaitButton::DenyNote => "waiting.deny_note",
                     WaitButton::Next => "waiting.next",
                     WaitButton::Submit => "waiting.submit_answers",
                 });

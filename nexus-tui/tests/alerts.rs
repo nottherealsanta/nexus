@@ -96,27 +96,17 @@ fn a_diff_is_capped_at_twelve_rows_and_gives_way_when_the_card_is_short() {
 }
 
 #[test]
-fn unoffered_choices_show_their_reason_and_only_offered_ones_are_targets() {
+fn all_four_choices_are_targets_and_the_cursor_walks_them() {
     let mut app = approving("bash", serde_json::json!({"command": "ls"}), (120, 36));
     let (_, rows) = draw(&mut app, 120, 36);
-    let session = rows
-        .iter()
-        .find(|r| r.contains("Allow for session"))
-        .unwrap();
-    assert!(session.contains("not offered by Core yet"), "{session}");
-    let y = rows
-        .iter()
-        .position(|r| r.contains("Allow for session"))
-        .unwrap() as u16;
-    let x = rows[y as usize].find("Allow for session").unwrap() as u16;
-    assert!(!matches!(app.hits.at(x, y), Some(Target::Wait(_))));
-    let y = rows
-        .iter()
-        .position(|r| r.contains("Deny") && r.contains(" n "))
-        .unwrap() as u16;
-    assert!(matches!(app.hits.at(40, y), Some(Target::Wait(_))));
-    // down moves to Deny and enter denies
-    press(&mut app, &["alt+w", "down", "enter"]);
+    for label in ["Allow for session", "Deny with a note"] {
+        let y = rows.iter().position(|r| r.contains(label)).unwrap() as u16;
+        let x = rows[y as usize].find(label).unwrap() as u16;
+        assert!(matches!(app.hits.at(x, y), Some(Target::Wait(_))), "{label}");
+        assert!(!rows[y as usize].contains("not offered"), "{label}");
+    }
+    // down, down reaches Deny and enter denies
+    press(&mut app, &["alt+w", "down", "down", "enter"]);
     assert!(matches!(
         app.effects.last(),
         Some(nexus_tui::app::Effect::Api(

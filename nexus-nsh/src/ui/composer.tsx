@@ -565,11 +565,23 @@ const answers = signal<Record<string, { selected: string[]; text: string }>>({})
 const busyWait = signal(false);
 const waitError = signal<string | null>(null);
 
-async function reply(a: Approval, allow: boolean) {
+/** `session` also grants the same call for the rest of the session (allow only); `note` goes to the model with a refusal (deny only). */
+async function reply(a: Approval, allow: boolean, extra: { session?: boolean; note?: string } = {}) {
   busyWait.set(true); waitError.set(null);
-  try { await request("POST", `/api/session/${a.session_id}/permission/${a.id}`, { body: { reply: allow ? "allow" : "deny" }, key: newKey() }); }
+  const body: Record<string, unknown> = { reply: allow ? "allow" : "deny" };
+  if (allow && extra.session) body.scope = "session";
+  if (!allow && extra.note) body.note = extra.note;
+  try { await request("POST", `/api/session/${a.session_id}/permission/${a.id}`, { body, key: newKey() }); }
   catch (e) { waitError.set(e instanceof ApiError ? e.message : String(e)); }
   busyWait.set(false);
+}
+/** The note is the composer's text, as an answer to a question is. */
+function denyWithNote(a: Approval) {
+  const k = draftKey();
+  const note = (draft()[k] ?? "").trim();
+  if (!note) { waitError.set("Type the note in the composer, then choose Deny with a note"); return; }
+  draft.update((d) => ({ ...d, [k]: "" }));
+  void reply(a, false, { note });
 }
 async function submitQuestion(q: Question) {
   busyWait.set(true); waitError.set(null);
@@ -641,7 +653,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     const bind = (id: string, fn: () => void) => { const key = k(id); if (key && /(cmd|ctrl|alt|mod)\+/.test(key)) map[key] = fn; };
     if (p.count > 1) { bind("waiting.next", () => run("waiting.next")); bind("waiting.prev", () => run("waiting.prev")); }
     const a = approval(), q = question();
-    if (a && live()) bind("waiting.deny", () => void reply(a, false));
+    if (a && live()) { bind("waiting.deny", () => void reply(a, false)); bind("waiting.allow_session", () => void reply(a, true, { session: true })); bind("waiting.deny_note", () => denyWithNote(a)); }
     if (a && live()) {
       const move = (d: number) => {
         const list = approvalChoices(a);
@@ -689,9 +701,9 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
 type Choice = { id: string; title: string; cmd: string; run?: () => void; why?: string };
 const approvalChoices = (a: Approval): Choice[] => [
   { id: "allow-once", title: "Allow once", cmd: "waiting.allow_once", run: () => void reply(a, true) },
-  { id: "allow-session", title: "Allow for session", cmd: "waiting.allow_session", why: "not offered by Core yet" },
+  { id: "allow-session", title: "Allow for session", cmd: "waiting.allow_session", run: () => void reply(a, true, { session: true }) },
   { id: "deny", title: "Deny", cmd: "waiting.deny", run: () => void reply(a, false) },
-  { id: "deny-note", title: "Deny with a note", cmd: "waiting.deny_note", why: "Core does not support notes yet" },
+  { id: "deny-note", title: "Deny with a note", cmd: "waiting.deny_note", run: () => denyWithNote(a) },
 ];
 /** The selected choice of the approval card (`▸`); arrows move it over the offered choices. */
 const choice = signal(0);

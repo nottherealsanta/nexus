@@ -61,7 +61,7 @@ describe("waiting card (D14)", () => {
     expect(card.map((l) => l.text)).toEqual(["@@ a.py", "-x = 1", "+x = 2"]);
   });
 
-  test("an approval shows the title, timer, table and the choice list; unoffered choices say why", async () => {
+  test("an approval shows the title, timer, table and the choice list; all four choices are offered", async () => {
     const app = await view(snapshot({ approvals: [bash] }));
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
@@ -71,8 +71,7 @@ describe("waiting card (D14)", () => {
     expect(app.texts().includes("pytest tests/test_loader.py -q")).toBe(true);
     expect(app.shows("id:waiting-rail")).toBe(true);
     for (const id of ["allow-once", "allow-session", "deny", "deny-note"]) expect(app.shows(`id:${id}`)).toBe(true);
-    expect(app.texts().includes("not offered by Core yet")).toBe(true);
-    expect(app.texts().includes("Core does not support notes yet")).toBe(true);
+    expect(app.texts().includes("not offered by Core yet")).toBe(false);
     // The harness cannot hold the event stream open, so Core reads as disconnected: the offered choices say so too.
     expect(app.texts().filter((t) => t === "Core is not connected").length).toBeGreaterThan(0);
   });
