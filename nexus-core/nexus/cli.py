@@ -45,7 +45,7 @@ from .llmhub.providers import PROVIDERS
 DISPLAY_RESULT_LINES = 40
 WIRE_TYPES = {"wire_request", "wire_response", "wire_event"}
 
-DIM, BOLD, CYAN, YELLOW, RED, RESET = "\033[2m", "\033[1m", "\033[36m", "\033[33m", "\033[31m", "\033[0m"
+DIM, BOLD, CYAN, GREEN, YELLOW, RED, RESET = "\033[2m", "\033[1m", "\033[36m", "\033[32m", "\033[33m", "\033[31m", "\033[0m"
 
 
 # -- rendering the daemon's event stream -------------------------------------
@@ -869,6 +869,18 @@ def _daemon(action: str) -> None:
         print(f"running at {found['url']} (pid {found['pid']}) · logs {daemon.log_path()}" if found else "not running")
 
 
+def _doctor(as_json: bool) -> int:
+    from . import doctor
+    rows = doctor.run()
+    if as_json:
+        print(json.dumps(rows, indent=2))
+    else:
+        marks = {"ok": f"{GREEN}ok{RESET}  ", "warn": f"{YELLOW}warn{RESET}", "fail": f"{RED}FAIL{RESET}"}
+        for row in rows:
+            print(f"{marks[row['status']]}  {row['name']:<14} {row['detail']}")
+    return 1 if any(r["status"] == "fail" for r in rows) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nexus")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -889,6 +901,10 @@ def main(argv: list[str] | None = None) -> int:
     models.add_argument("--all", action="store_true", help="also list providers that are not connected")
     models.add_argument("--refresh", action="store_true", help="download the catalog now")
 
+    doctor = sub.add_parser("doctor", help="check the install: daemon code, sign-ins, catalog, config, search, MCP, voice, rg")
+    doctor.add_argument("--json", action="store_true", help="print the rows as JSON")
+    update = sub.add_parser("update", help="check for a newer release (never installs anything)")
+    update.add_argument("--json", action="store_true", help="print the result as JSON")
     serve = sub.add_parser("serve", help="run the daemon in the foreground")
     serve.add_argument("--port", type=int)
     voice = sub.add_parser("voice", help="speech to text and text to speech")
@@ -966,6 +982,14 @@ def main(argv: list[str] | None = None) -> int:
                 return install.init()
             for name, entry in voice_status.status().items():
                 print(f"{name}: {entry['state']} ({entry['repo']})" + (f" - {entry['error']}" if entry["error"] else ""))
+        elif args.command == "doctor":
+            return _doctor(args.json)
+        elif args.command == "update":
+            from . import doctor
+            from .server import VERSION
+            result = doctor.update_check(VERSION)
+            print(json.dumps(result, indent=2) if args.json else
+                  result["detail"] + (f"\n{result['url']}\nUpdate by pulling the checkout and running ./install.sh." if result["state"] == "available" else ""))
         elif args.command == "serve":
             daemon.serve(args.port)
         elif args.command == "daemon":

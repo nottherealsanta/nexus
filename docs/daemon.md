@@ -17,6 +17,16 @@ the [HTTP API](api.md). Clients never read Nexus state files.
 
 `nexus run`, `chat`, `project` and `session` start the daemon automatically.
 
+`nexus doctor` (`nexus/doctor.py`; `--json` for rows) prints one `ok | warn |
+FAIL` row each for: the daemon (reachable, and its `code` fingerprint from
+`/api/info` equals the hash of the checkout's `nexus/**/*.py`, so a daemon
+started before a code change fails), sign-ins (fails with none), the models.dev
+cache age (warns past 7 days), config errors (fails), the `[web] search_url`
+container, MCP servers (fails on `failed`/`invalid`), voice STT/TTS and their
+Hugging Face cache, and `rg`. It exits 1 on any FAIL and never starts the daemon,
+loads a model or downloads. `nexus update` compares `/api/info`'s version with
+the latest GitHub release and never installs.
+
 - **Discovery.** While it runs, the daemon writes `~/.nexus10/daemon.json` (0600)
   with `{url, pid, token, started}` and removes it on exit. A client trusts the
   file only after `GET /api/info` answers with the token.

@@ -14,7 +14,8 @@
 #   nexus check               tests, lints and shared-file checks
 #   nexus test                Core and TUI tests
 #   nexus fmt                 format the TUI and regenerate shared files
-#   nexus doctor              show versions, paths and daemon state
+#   nexus doctor              versions and paths, then Core's checks (daemon code, sign-ins, ...)
+#   nexus update              check for a newer release (never installs)
 #   nexus core <args>         run the Core CLI (login, chat, session, ...)
 #
 # Anything not listed is passed to the Core CLI, so `nexus login codex`,
@@ -198,7 +199,8 @@ doctor() {
     printf 'nsh         missing\n'
   fi
   if [ -d "$HOME_DIR" ]; then
-    printf 'daemon      %s\n' "$(core daemon status 2>/dev/null || echo 'not running')"
+    printf '\n'
+    core doctor
   else
     printf 'daemon      home not created\n'
   fi
@@ -230,6 +232,7 @@ case "${1:-}" in
   test)                shift; test_all "$@" ;;
   fmt)                 shift; fmt_all "$@" ;;
   doctor)              shift; doctor "$@" ;;
+  update)              shift; ensure_home; core update "$@" ;;
   core)                shift; core "$@" ;;
   help|-h|--help)      usage ;;
   *)                   core "$@" ;;

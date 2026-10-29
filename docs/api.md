@@ -29,7 +29,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | DELETE | `/api/kernel/{id}` | | 204; 409 while busy |
 | GET | `/api/config` | | `{revision, values, defaults, schema, errors}` for the initial settings |
 | PATCH | `/api/config` | `{expected_revision, set, unset}` | updated config; stale revision is 409 |
-| GET | `/api/info` | | `{name, version, api_version: {major, minor}, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retry, idempotency}` |
+| GET | `/api/info` | | `{name, version, api_version: {major, minor}, code, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retry, idempotency}` |
 | GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
 | GET | `/api/search` | `?q=`, `?project=`, `?archived=exclude\|only\|include`, `?limit=` (1..100, default 30) | `{query, hits: [{session_id, kind: "title" or "user", message_id, snippet, rank, session}]}`: one hit per session, best first ([Search](#search-k5)) |
 | GET | `/api/usage` | | `{fetched, providers: [{id, label, plan, windows, notes, error}]}`: plan limits of signed-in codex and copilot ([Usage](#usage-k11)) |

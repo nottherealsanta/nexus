@@ -91,6 +91,7 @@ from . import skills as skills_module
 from .bus import Bus
 from .codec import to_json
 from .config import ConfigConflict, ConfigFile
+from .doctor import source_fingerprint
 from .eventlog import CursorError, Stream, format_cursor, parse_cursor
 from .inputs import InputBusy, InputNotFound
 from .llmhub import catalog
@@ -284,6 +285,7 @@ def sse(event: dict[str, Any]) -> str:
 
 def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceManager | None = None) -> Starlette:
     config = ConfigFile()
+    code_fingerprint = source_fingerprint()  # what `nexus doctor` compares with the checkout
     config_lock = asyncio.Lock()
     config_revision = config.read()["revision"]
 
@@ -507,7 +509,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         generation = runtime.store.log_generation()
         head = runtime.store.log_head()
         return JSONResponse({
-            "name": "nexus", "version": VERSION, "api_version": API_VERSION,
+            "name": "nexus", "version": VERSION, "api_version": API_VERSION, "code": code_fingerprint,
             "pid": os.getpid(), "home": str(home()), "url": url,
             "log": {"generation": generation, "head": head, "head_cursor": format_cursor(generation, head),
                     "floor": runtime.store.log_floor(),

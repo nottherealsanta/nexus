@@ -82,7 +82,9 @@ Then, from any directory:
 | `nexus test` | Core and TUI test suites |
 | `nexus check` | Tests, lints, shared theme/manifest checks, NSH checks |
 | `nexus fmt` | `cargo fmt` and regenerate the shared NSH files |
-| `nexus doctor` | Versions, paths and daemon state |
+| `nexus doctor` | Versions and paths, then Core's `nexus doctor` rows |
+| `nexus update` | Compares with the latest GitHub release; reports only |
+| `./install.sh` | Installs the `nexus` uv tool, `nexus-tui` and the NSH bundle under `$PREFIX` (default `~/.local`); `--uninstall` removes them and never touches `$NEXUS10_HOME` |
 | `nexus core <args>` | Core CLI explicitly |
 
 Anything not listed is passed to the Core CLI, so `nexus login codex`,

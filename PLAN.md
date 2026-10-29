@@ -1113,13 +1113,13 @@ NSH side still opens subagents as tabs.
 `host_support/install.py`, `setup.py`, `uninstall.py`, `update_check.py`,
 `install.sh`, `install.ps1`, old `docs/release.md`.
 
-- N1 `nexus doctor`: daemon reachable and running the current code (closes the
+- N1 (done 2026-10-29: `nexus/doctor.py`, `/api/info.code`) `nexus doctor`: daemon reachable and running the current code (closes the
   "nothing checks that a running daemon runs the current code" gap), sign-ins,
   catalog age, config errors, search container, MCP health, voice runtime and
   HF cache state, `rg` present.
-- N2 install and uninstall: `install.sh` that installs the uv tool, the TUI
+- N2 (done 2026-10-29: `install.sh` from a checkout; release downloads wait for O) install and uninstall: `install.sh` that installs the uv tool, the TUI
   binary and the NSH bundle.
-- N3 update check: compare with the latest release, never auto-update.
+- N3 (done 2026-10-29: `nexus update`) update check: compare with the latest release, never auto-update.
 
 ### O. Release gate (before 0.10.0)
 
