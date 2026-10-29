@@ -63,7 +63,21 @@ from .continuation import ContextInvalid, Reconciliation, predecessor, reconcile
 from .kernels import Kernels
 from .llmhub.auth import AuthError, CredentialError
 from .llmhub.hub import provider_for
-from .llmhub.types import Done, Message, PartDone, ProviderError, Text, ToolCall, ToolResult, ToolSpec
+from .llmhub.types import (
+    Done,
+    Message,
+    PartDone,
+    ProviderError,
+    Reasoning,
+    ReasoningDelta,
+    Text,
+    TextDelta,
+    ToolCall,
+    ToolCallStarted,
+    ToolResult,
+    ToolSpec,
+    Usage,
+)
 from .loop import (
     MAX_STEPS,
     NO_USER_MESSAGE,
@@ -76,6 +90,7 @@ from .loop import (
     StepStart,
     ToolEnd,
     ToolStart,
+    TurnEnd,
 )
 from .observations import FileGuard, FileObservation
 from .questions import PendingQuestion, QuestionError
@@ -126,6 +141,32 @@ def project_json(p: Project) -> dict[str, Any]:
 
 def message_json(m: StoredMessage) -> dict[str, Any]:
     return {"id": m.id, "session_id": m.session_id, "seq": m.seq, "created": m.created, **message_to_json(m.message)}
+
+
+class ReasoningClock:
+    """Thinking time of one provider request.
+
+    A reasoning part runs from its first delta to its `PartDone`, or to the
+    first delta of another part when the dialect sends `PartDone` late (chat).
+    """
+
+    def __init__(self) -> None:
+        self.open: float | None = None
+        self.total: float | None = None
+
+    def delta(self) -> None:
+        if self.open is None:
+            self.open = time.monotonic()
+
+    def close(self) -> None:
+        if self.open is not None:
+            self.total = (self.total or 0.0) + time.monotonic() - self.open
+            self.open = None
+
+    def seconds(self) -> float | None:
+        """Total so far, closing an open part; `None` when no reasoning streamed."""
+        self.close()
+        return round(self.total, 3) if self.total is not None else None
 
 
 class Runtime:
@@ -1438,6 +1479,7 @@ class Runtime:
         active_request: str | None = None
         active_attempt: str | None = None
         request_parts: list[dict[str, Any]] = []
+        clock = ReasoningClock()
         step = 0
         closed = False
         try:
@@ -1452,6 +1494,7 @@ class Runtime:
                         active_request = None
                         active_attempt = None
                         request_parts = []
+                        clock = ReasoningClock()
                     elif event.message.role == "tool":
                         stored = self.store.save_tool_message(session_id, event.message, turn_id=turn_id)
                     else:
@@ -1461,20 +1504,35 @@ class Runtime:
                 else:
                     if isinstance(event, StepStart):
                         step = event.step
-                        active_request = self.store.start_request(turn_id, session_id, event.step)["id"]
+                        # `refresh` has re-bound the agent: record what this step runs with.
+                        active_request = self.store.start_request(
+                            turn_id, session_id, event.step, model=self._model_ref(session_id),
+                            effort=agent.reasoning_effort)["id"]
                         active_attempt = f"{active_request}:1"
                         self.store.start_attempt(turn_id, session_id, active_request, active_attempt, 1)
                         self.store.mark_attempt_started(active_attempt)
                         request_parts = []
+                        clock = ReasoningClock()
+                    elif isinstance(event, ReasoningDelta):
+                        clock.delta()
+                    elif isinstance(event, (TextDelta, ToolCallStarted)):
+                        clock.close()
                     elif isinstance(event, PartDone):
+                        if isinstance(event.part, Reasoning):
+                            clock.close()
                         request_parts.append(to_json(event.part))
+                    elif isinstance(event, Usage):
+                        if active_request is not None:
+                            self.store.record_usage(active_request, active_attempt, event)
                     elif isinstance(event, Done):
                         if active_request is not None:
                             self.store.finish_request(
                                 active_request, stop=event.stop, response_id=event.response_id,
-                                parts=request_parts)
+                                parts=request_parts, reasoning_seconds=clock.seconds())
                         if active_attempt is not None:
                             self.store.finish_attempt(active_attempt, "completed")
+                    elif isinstance(event, TurnEnd):
+                        self.store.mark_turn_ended(turn_id, event.stop, event.steps)
                     elif isinstance(event, ToolStart):
                         started.add(event.call.id)
                         self.store.mark_tool_started(turn_id, session_id, event.call)
@@ -1502,7 +1560,8 @@ class Runtime:
             closed = True
         except asyncio.CancelledError:
             if active_request is not None:
-                self.store.interrupt_request(active_request, reason="interrupted by the user")
+                self.store.interrupt_request(active_request, reason="interrupted by the user",
+                                             reasoning_seconds=clock.seconds())
             if active_attempt is not None:
                 self.store.finish_attempt(active_attempt, "interrupted")
             self._close_dangling_calls(
@@ -1515,7 +1574,7 @@ class Runtime:
         except ProviderError as exc:
             error = {"kind": "provider", "message": str(exc), "status": exc.status, "body": exc.body}
             if active_request is not None:
-                self.store.fail_request(active_request, error)
+                self.store.fail_request(active_request, error, reasoning_seconds=clock.seconds())
             if active_attempt is not None:
                 self.store.finish_attempt(active_attempt, "failed", error=str(exc))
             self._fail(session_id, error)
@@ -1524,7 +1583,7 @@ class Runtime:
         except (AuthError, CredentialError, ValueError) as exc:
             error = {"kind": "auth" if not isinstance(exc, ValueError) else "request", "message": str(exc)}
             if active_request is not None:
-                self.store.fail_request(active_request, error)
+                self.store.fail_request(active_request, error, reasoning_seconds=clock.seconds())
             if active_attempt is not None:
                 self.store.finish_attempt(active_attempt, "failed", error=str(exc))
             self._fail(session_id, error)
@@ -1533,12 +1592,17 @@ class Runtime:
         finally:
             if not closed:  # an unexpected failure still closes the durable turn visibly
                 if active_request is not None:
-                    self.store.interrupt_request(active_request, reason="the turn ended without a recorded outcome")
+                    self.store.interrupt_request(active_request, reason="the turn ended without a recorded outcome",
+                                                 reasoning_seconds=clock.seconds())
                 if active_attempt is not None:
                     self.store.finish_attempt(active_attempt, "failed", error="the turn ended without a recorded outcome")
                 self.store.finish_turn(
                     turn_id, "interrupted", steps=step,
                     error={"kind": "internal", "message": "the turn ended without a recorded outcome"})
+            # Before idle, so a client has the closed turn when it sees the session idle.
+            # A clean close's bookkeeping (`recovery` back to none) lands below; a crash
+            # before it leaves the turn to startup recovery, which publishes again.
+            self.publish_turn_summary(session_id, turn_id, recovery="none" if closed else None)
             self.pending_reads.pop(session_id, None)
             self.turns.pop(session_id, None)
             # A move queued during the turn lands here if no later call boundary did.
@@ -1571,6 +1635,27 @@ class Runtime:
             if closed:
                 self.store.set_turn_recovery(turn_id, "none")
             self.store.resolve_mutations_for_turn(turn_id, lifetime=self.mutation_lifetime)
+
+    def publish_turn_summary(self, session_id: str, turn_id: str, *, recovery: str | None = None) -> None:
+        """Announce a closed turn's summary: the same entry `GET /api/session/{id}/turn` returns.
+
+        `recovery` is the state the caller is about to record, when it publishes
+        before that last bookkeeping write.
+        """
+        if self.store.session(session_id) is None:
+            return
+        summary = self.store.turn_summary(turn_id)
+        if summary is not None:
+            if recovery is not None:
+                summary["recovery"] = recovery
+            self.bus.publish("turn.summary", summary, session_id=session_id)
+
+    def _model_ref(self, session_id: str) -> str | None:
+        """The `provider/model` ref the session runs with now, as `_agent` resolves it."""
+        session = self.store.session(session_id)
+        if session is None:
+            return None
+        return self.resolve_model(session, self.snapshot_for(session)["agent"])[0]
 
     def _fail(self, session_id: str, error: dict[str, Any]) -> None:
         self.errors[session_id] = error["message"]

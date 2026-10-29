@@ -9,15 +9,20 @@
 //!   never a reason to resync. `seq` is never used for ordering or dedup.
 //! * An event from another log generation, or any event before the first
 //!   snapshot, cannot be applied: the reducer asks for a resync.
-//! * Every event of the selected session is kept in `SelectedView::events`
-//!   (wire events are never dropped by the client).
+//! * The selected session's history is its messages and turn summaries
+//!   (`SelectedView::turns`); the event log is not loaded. Live events of the
+//!   running turn are kept as scratch until its `turn.summary` replaces them.
+//!   Deltas are folded into `Model::streaming`, never kept.
 
 use std::collections::BTreeMap;
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::api::{parse_cursor, Approval, Event, Message, Project, Question, Session, Snapshot};
+use crate::api::{
+    parse_cursor, Approval, Event, LedgerRow, Message, Project, Question, Session, Snapshot,
+    TurnPage, TurnSummary, UsageLedger,
+};
 
 /// Why the reducer cannot continue from the current state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,14 +73,111 @@ pub struct SelectedView {
     pub session_id: String,
     pub messages: Vec<Message>,
     pub messages_more: bool,
-    /// Every event of this session since the snapshot, in id order, unfiltered.
-    pub events: Vec<Event>,
+    /// Live events of this session since its newest turn summary, in id
+    /// order: the running turn's scratch, cleared when a `turn.summary`
+    /// arrives. Deltas and raw wire traffic are not kept (`Model::streaming`
+    /// folds the text); a `wire_request` keeps only its body's model.
+    pub scratch: Vec<Event>,
     /// `GET /api/session/{id}/snapshot`: the frozen starting context. `None`
     /// until loaded (or when Core has no snapshot for the session yet).
     pub starting: Option<Value>,
-    /// Why the loaded diagnostics are incomplete; the timeline announces it.
-    /// Messages are complete either way.
-    pub events_gap: Option<String>,
+    /// Turn summaries, oldest to newest.
+    pub turns: Vec<TurnSummary>,
+    /// Older turns exist whose summaries were not loaded.
+    pub turns_more_before: bool,
+    /// Messages below this seq have no turn summary; the timeline says so.
+    pub floor: Option<i64>,
+    /// The session's spend ledger, kept current as summaries arrive.
+    pub usage: UsageLedger,
+    /// What each loaded turn contributes to `usage`, so a newer summary of the
+    /// same turn replaces its share instead of adding to it.
+    pub counted: BTreeMap<String, BTreeMap<String, LedgerRow>>,
+    /// Why turn summaries are missing; the timeline announces it.
+    pub turns_error: Option<String>,
+}
+
+impl SelectedView {
+    /// Insert or replace one turn summary (ordered by start) and keep the
+    /// ledger in step: the turn's old share is replaced by its new one.
+    pub fn upsert_turn(&mut self, turn: TurnSummary, now: f64) {
+        let share = UsageLedger::of_turn(&turn);
+        let old = self.counted.remove(&turn.id).unwrap_or_default();
+        self.usage.replace(&old, &share, now);
+        self.counted.insert(turn.id.clone(), share);
+        self.place(turn);
+    }
+
+    fn place(&mut self, turn: TurnSummary) {
+        if let Some(at) = self.turns.iter().position(|t| t.id == turn.id) {
+            self.turns[at] = turn;
+        } else {
+            let at = self.turns.partition_point(|t| {
+                (t.started, t.id.as_str()) <= (turn.started, turn.id.as_str())
+            });
+            self.turns.insert(at, turn);
+        }
+    }
+
+    /// Input tokens of the newest request that reported usage: what the
+    /// context holds now. Live usage of the running turn wins.
+    pub fn latest_input(&self) -> Option<u64> {
+        self.scratch
+            .iter()
+            .rev()
+            .find(|e| e.kind == "usage")
+            .and_then(|e| e.data["input_tokens"].as_u64())
+            .or_else(|| {
+                self.turns
+                    .iter()
+                    .rev()
+                    .flat_map(|t| t.requests.iter().rev())
+                    .find_map(|r| r.usage.map(|u| u.input))
+            })
+    }
+
+    /// The model of the newest request: the running request's (live), else
+    /// the newest recorded one. A `provider/model` ref or a bare model id.
+    pub fn latest_request_model(&self) -> Option<String> {
+        self.scratch
+            .iter()
+            .rev()
+            .find(|e| e.kind == "wire_request")
+            .and_then(|e| e.data["body"]["model"].as_str())
+            .map(str::to_owned)
+            .or_else(|| {
+                self.turns
+                    .iter()
+                    .rev()
+                    .flat_map(|t| t.requests.iter().rev())
+                    .find_map(|r| r.model.clone())
+            })
+    }
+}
+
+/// Live events the timeline reads for the running turn. Deltas, raw wire
+/// traffic and `part_done` are folded or not needed; they are never kept.
+fn keep_in_scratch(kind: &str) -> bool {
+    !matches!(
+        kind,
+        "text_delta"
+            | "reasoning_delta"
+            | "tool_call_started"
+            | "tool_args_delta"
+            | "wire_event"
+            | "wire_response"
+            | "part_done"
+            | "turn.summary"
+    )
+}
+
+/// A scratch copy: a `wire_request` keeps only its model, not its body.
+fn scratch_copy(event: &Event) -> Event {
+    let mut e = event.clone();
+    if e.kind == "wire_request" {
+        let model = e.data["body"]["model"].clone();
+        e.data = serde_json::json!({"body": {"model": model}});
+    }
+    e
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -155,7 +257,6 @@ impl Model {
                 session_id: sel.session_id,
                 messages: sel.messages,
                 messages_more: sel.messages_more,
-                events: Vec::new(),
                 ..Default::default()
             }),
             (None, Some(id)) if self.sessions.contains_key(&id) => Some(SelectedView {
@@ -188,14 +289,46 @@ impl Model {
         }
         view.messages = messages;
         view.messages_more = false;
-        let newest = h.events.last().map(|e| e.id).unwrap_or(0);
-        let mut events = h.events;
-        events.extend(view.events.iter().filter(|e| e.id > newest).cloned());
-        events.sort_by_key(|e| e.id);
-        events.dedup_by_key(|e| e.id);
-        view.events = events;
-        view.events_gap = h.events_gap;
         view.starting = h.starting;
+        // Summaries that arrived live after the fetch are newer; keep them.
+        let live: Vec<TurnSummary> = std::mem::take(&mut view.turns)
+            .into_iter()
+            .filter(|t| !h.turns.iter().any(|x| x.id == t.id))
+            .collect();
+        view.usage = h.usage;
+        view.counted = h
+            .turns
+            .iter()
+            .map(|t| (t.id.clone(), UsageLedger::of_turn(t)))
+            .collect();
+        view.turns = h.turns;
+        for t in live {
+            let now = t.finished.unwrap_or(t.started);
+            view.upsert_turn(t, now);
+        }
+        view.turns_more_before = h.more_before;
+        view.floor = h.floor;
+        view.turns_error = h.turns_error;
+    }
+
+    /// Summaries re-read after a reconnect (`/turn?after=`): they replace the
+    /// ones held, and the page's ledger is current for all of them.
+    pub fn apply_turns(&mut self, session: &str, page: TurnPage) {
+        let Some(view) = self.selected.as_mut().filter(|v| v.session_id == session) else {
+            return;
+        };
+        view.usage = page.usage;
+        if let Some(floor) = page.floor {
+            view.floor = Some(floor.seq);
+        }
+        let closed = page.turns.last().is_some_and(|t| t.status != "running");
+        for t in page.turns {
+            view.counted.insert(t.id.clone(), UsageLedger::of_turn(&t));
+            view.place(t);
+        }
+        if closed {
+            view.scratch.clear();
+        }
     }
 
     pub fn apply_event(&mut self, event: &Event) -> Applied {
@@ -216,8 +349,8 @@ impl Model {
         self.last_id = event.id;
         self.reduce(event);
         if let (Some(view), Some(sid)) = (self.selected.as_mut(), event.session_id.as_deref()) {
-            if view.session_id == sid {
-                view.events.push(event.clone());
+            if view.session_id == sid && keep_in_scratch(&event.kind) {
+                view.scratch.push(scratch_copy(event));
             }
         }
         Applied::Applied
@@ -293,6 +426,20 @@ impl Model {
                 } else {
                     self.running.remove(&sid);
                     self.streaming.remove(&sid);
+                }
+            }
+            "turn.summary" => {
+                let Some(turn) = decode::<TurnSummary>(&e.data) else {
+                    return;
+                };
+                if let Some(view) = self
+                    .selected
+                    .as_mut()
+                    .filter(|v| Some(v.session_id.as_str()) == sid.as_deref())
+                {
+                    view.upsert_turn(turn, e.time);
+                    // The summary now holds what the running turn's events said.
+                    view.scratch.clear();
                 }
             }
             "turn.recovered" => {
@@ -470,9 +617,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["user", "assistant"]
         );
-        // Wire/loop events are retained, none dropped.
-        assert_eq!(view.events.len(), evs.len());
-        assert!(view.events.iter().any(|e| e.kind == "text_delta"));
+        // The running turn's events are scratch; deltas are folded, not kept.
+        assert!(view.scratch.iter().any(|e| e.kind == "turn_end"));
+        assert!(!view.scratch.iter().any(|e| e.kind == "text_delta"));
     }
 
     #[test]

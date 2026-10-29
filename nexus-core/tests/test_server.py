@@ -59,7 +59,7 @@ async def test_token_is_required(setup):
 async def test_info_reports_the_api_contract_clients_check(setup):
     _, client, _, _ = setup
     info = (await client.get("/api/info")).json()
-    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 1}
+    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 2}
     assert set(info) >= {"version", "pid", "home", "url", "log", "retention", "retry", "idempotency"}
 
 
@@ -703,3 +703,93 @@ def test_existing_permissions_migrate_once_and_explicit_ask_survives(tmp_path):
     assert store.session(parent.id).permission == 'ask'
     assert store.session(child.id).permission == 'allow'
     store.close()
+
+
+async def _summary_events(client, session_id):
+    events = (await client.get(f"/api/session/{session_id}/event", params={"type": "turn.summary"})).json()
+    return [e["data"] for e in events["events"]]
+
+
+async def test_turn_summaries_shape_order_and_errors(setup):
+    rt, client, provider, workspace = setup
+    provider.replies = [[ToolCall("c1", "read", '{"path": "."}')], [Text("done")], [Text("again")]]
+    session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    sid = session["id"]
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "look"})
+    await _wait_idle(rt, sid)
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "more"})
+    await _wait_idle(rt, sid)
+
+    page = (await client.get(f"/api/session/{sid}/turn")).json()
+    assert set(page) == {"turns", "more_before", "more_after", "floor", "usage"}
+    first, second = page["turns"]
+    assert first["started"] <= second["started"]
+    assert (first["status"], first["steps"], first["stop"], first["ended"], first["recovery"]) == (
+        "completed", 2, "end_turn", {"stop": "end_turn", "steps": 2}, "none")
+    assert first["start_seq"] == 0 and second["start_seq"] == 4
+    assert [(r["step"], r["model"], r["stop"], r["usage"]) for r in first["requests"]] == [
+        (1, "scripted/m", "tool_calls", None), (2, "scripted/m", "end_turn", None)]
+    messages = (await client.get(f"/api/session/{sid}/message")).json()
+    assert [r["message_id"] for r in first["requests"]] == [messages[1]["id"], messages[3]["id"]]
+    assert first["requests"][0]["attempts"] == [{
+        "n": 1, "status": "completed", "delay": None, "error": None, "usage": None,
+        "started": first["requests"][0]["attempts"][0]["started"],
+        "finished": first["requests"][0]["attempts"][0]["finished"]}]
+    [tool] = first["tools"]
+    assert (tool["call_id"], tool["name"], tool["state"], tool["is_error"]) == ("c1", "read", "inserted", False)
+    assert "output" not in tool and "arguments" not in tool and "partial" not in first["requests"][0]
+    assert (page["more_before"], page["more_after"], page["floor"]) == (False, False, None)
+    assert page["usage"] == {"since": None, "models": {}}
+
+    older = (await client.get(f"/api/session/{sid}/turn", params={"before": second["id"]})).json()
+    assert [t["id"] for t in older["turns"]] == [first["id"]] and older["more_after"]
+    newer = (await client.get(f"/api/session/{sid}/turn", params={"after": first["id"], "limit": 1})).json()
+    assert [t["id"] for t in newer["turns"]] == [second["id"]] and not newer["more_after"]
+    one = (await client.get(f"/api/session/{sid}/turn", params={"limit": 1})).json()
+    assert [t["id"] for t in one["turns"]] == [second["id"]] and one["more_before"]
+
+    assert (await client.get("/api/session/ses_nope/turn")).status_code == 404
+    for params in ({"after": "trn_nope"}, {"before": "trn_nope"}, {"limit": "x"}, {"limit": 0},
+                   {"after": first["id"], "before": second["id"]}):
+        assert (await client.get(f"/api/session/{sid}/turn", params=params)).status_code == 400
+    other = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    assert (await client.get(f"/api/session/{other['id']}/turn", params={"after": first["id"]})).status_code == 400
+
+
+async def test_turn_summary_event_equals_the_turn_entry_for_every_close(setup):
+    from nexus.llmhub.types import ProviderError
+
+    rt, client, provider, workspace = setup
+    session = (await client.post("/api/session", json={"directory": str(workspace), "permission": "ask"})).json()
+    sid = session["id"]
+    provider.replies = [[Text("hi")]]
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "one"})
+    await _wait_idle(rt, sid)
+
+    original = provider.stream
+
+    async def failing(req):
+        raise ProviderError("bad request", status=400, phase="response")
+        yield  # pragma: no cover
+
+    provider.stream = failing
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "two"})
+    await _wait_idle(rt, sid)
+    provider.stream = original
+
+    provider.replies = [[ToolCall("c1", "bash", '{"command": "true"}')]]
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "three"})
+    for _ in range(100):
+        if rt.pending_approvals(sid):
+            break
+        await asyncio.sleep(0.01)
+    assert (await client.post(f"/api/session/{sid}/interrupt")).status_code == 204
+    await _wait_idle(rt, sid)
+
+    page = (await client.get(f"/api/session/{sid}/turn")).json()
+    assert [t["status"] for t in page["turns"]] == ["completed", "failed", "interrupted"]
+    assert await _summary_events(client, sid) == page["turns"]
+    events = (await client.get(f"/api/session/{sid}/event")).json()["events"]
+    order = [e["type"] for e in events if e["type"] in ("turn.summary", "session.status")
+             and e["data"].get("status") != "busy"]
+    assert order == ["turn.summary", "session.status"] * 3  # the summary comes before idle

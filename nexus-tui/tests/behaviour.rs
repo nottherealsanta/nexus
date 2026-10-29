@@ -39,10 +39,13 @@ fn model_agent_and_effort_pickers_use_core_catalog_data() {
     assert!(items.iter().any(|i| i.label == "scout"), "agents listed");
     a.execute("model.change");
     let items = a.palette_items();
+    // the model's name on the left, its provider on the right (nexus-tui README)
     assert!(
-        items
-            .iter()
-            .any(|i| i.label.contains("codex/gpt-6.1-terra")),
+        items.iter().any(
+            |i| i.kind == PaletteKind::Model("codex/gpt-6.1-terra".into())
+                && i.label == "GPT"
+                && i.hint == "codex"
+        ),
         "models listed: {items:?}"
     );
 }

@@ -141,3 +141,31 @@ pub fn right_click(app: &mut App, x: u16, y: u16) {
         modifiers: KeyModifiers::NONE,
     });
 }
+
+/// Apply a `turn.summary` event for the viewed session, as Core publishes it
+/// when a turn closes: it replaces the running turn's live events.
+pub fn summarize(app: &mut App, id: i64, summary: serde_json::Value) {
+    let v = serde_json::json!({"id": id, "type": "turn.summary", "session_id": SESSION,
+        "time": 1793113317.0, "cursor": format!("log_c915bfc9b6d826c4:{id}"), "data": summary});
+    if let Ok(Frame::Event(e)) = Frame::from_value("turn.summary", None, &v) {
+        app.apply_sync(SyncMsg::Event(e));
+    }
+}
+
+/// The fixture turn (`hi` / `Hello`) as Core stores it: one request that
+/// produced `msg_2` with this model and usage (`null` for unknown).
+pub fn fixture_summary(model: &str, usage: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "id": "trn_1", "status": "completed", "started": 1793113304.0,
+        "finished": 1793113315.0, "start_seq": 0, "steps": 1, "stop": "end_turn",
+        "ended": {"stop": "end_turn", "steps": 1}, "error": null, "recovery": "none",
+        "requests": [{
+            "id": "req_1", "step": 1, "status": "completed", "model": model, "effort": null,
+            "started": 1793113307.0, "finished": 1793113314.0, "stop": "end_turn", "error": null,
+            "message_id": "msg_2", "usage": usage, "reasoning_seconds": null,
+            "attempts": [{"n": 1, "status": "completed", "delay": null, "started": 1793113307.0,
+                          "finished": 1793113314.0, "error": null, "usage": usage}]
+        }],
+        "tools": []
+    })
+}

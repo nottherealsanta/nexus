@@ -109,12 +109,12 @@ class Recovery:
         if turn["status"] == "completed":  # a previous run finished the turn but not its recovery bookkeeping
             return self._finish_completed(turn, requests)
         if turn["status"] == "running":
-            end = self._durable_turn_end(session_id, requests)
+            end = self._durable_turn_end(session_id, turn, requests)
             self.store.set_turn_recovery(turn_id, "pending")
             if end is not None:
                 # The loop yielded TurnEnd before the daemon stopped: the turn finished;
                 # only its closing bookkeeping was lost. Do not call it interrupted.
-                self.store.finish_turn(turn_id, "completed", steps=int(end["data"].get("steps") or 0))
+                self.store.finish_turn(turn_id, "completed", steps=int(end.get("steps") or 0))
                 turn = self.store.turn(turn_id) or turn
                 return self._finish_completed(turn, requests)
             self.store.finish_turn(turn_id, "interrupted", steps=max(
@@ -172,6 +172,7 @@ class Recovery:
         self._publish_recovered(turn, summary)
         self._checkpoint("recovered_event")
         self.store.set_turn_recovery(turn_id, "done")
+        self.runtime.publish_turn_summary(session_id, turn_id)
         self.store.resolve_mutations_for_turn(turn_id, lifetime=self.runtime.mutation_lifetime)
         return summary
 
@@ -204,7 +205,7 @@ class Recovery:
     # -- provider output -------------------------------------------------------
 
     def _finish_completed(self, turn: dict[str, Any], requests: list[dict[str, Any]]) -> dict[str, Any]:
-        """Close the bookkeeping of a turn whose durable `turn_end` says it finished."""
+        """Close the bookkeeping of a turn whose durable end (`turn.ended`) says it finished."""
         self._restore_inserted_observations(turn)
         self._publish_idle(turn, reason="the daemon restarted after the turn completed")
         summary = {
@@ -220,15 +221,23 @@ class Recovery:
         }
         self._publish_recovered(turn, summary)
         self.store.set_turn_recovery(turn["id"], "done")
+        self.runtime.publish_turn_summary(turn["session_id"], turn["id"])
         self.store.resolve_mutations_for_turn(turn["id"], lifetime=self.runtime.mutation_lifetime)
         return summary
 
-    def _durable_turn_end(self, session_id: str, requests: list[dict[str, Any]]) -> dict[str, Any] | None:
-        """The turn's own `turn_end` event, if the loop finished before the crash."""
+    def _durable_turn_end(self, session_id: str, turn: dict[str, Any],
+                          requests: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """`{"stop", "steps"}` if the loop ended the turn before the crash, else `None`.
+
+        `turn.ended` is the record. A turn left open by a daemon from before that
+        column has `ended` null; for it the log's `turn_end` event is the evidence.
+        """
+        if turn.get("ended") is not None:
+            return turn["ended"]
         if not requests:
             return None
         rows = self.store.events(session_id, after=requests[-1]["event_after"], limit=1, types=["turn_end"])
-        return rows[0] if rows else None
+        return rows[0]["data"] if rows else None
 
     def _restore_completed_response(self, turn: dict[str, Any], request: dict[str, Any] | None) -> StoredMessage | None:
         """Restore a durably completed response whose message was never saved.

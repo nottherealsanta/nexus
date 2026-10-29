@@ -33,6 +33,7 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | POST | /api/session/{id}/interrupt | cancel the running turn → 204 |
 | GET | /api/session/{id}/message | saved messages, in order |
 | GET | /api/session/{id}/event | stored events: `?after=<event id>&limit=&type=a,b` (the durable log) |
+| GET | /api/session/{id}/turn | turn summaries (usage, model, timings, retries) and the spend ledger: `?after=` or `?before=<turn id>&limit=` |
 | GET | /api/session/{id}/children | direct children |
 | GET | /api/session/{id}/tree | the whole tree containing it, from its root, nested |
 | GET | /api/session/{id}/context | the request body the next turn would send |
@@ -76,14 +77,14 @@ from .llmhub.hub import connected
 from .llmhub.providers import PROVIDERS
 from .paths import home
 from .runtime import Busy, Conflict, NotFound, Runtime, message_json, project_json
-from .store import Store
+from .store import TURN_PAGE, TURN_PAGE_MAX, Store
 from .tools import ToolError
 
 VERSION = "0.10.0.dev0"
 # The HTTP API contract clients check before sending anything else. A change
 # that a client written for an older major cannot survive is a new major; new
 # fields and endpoints are a minor bump.
-API_VERSION = {"major": 1, "minor": 1}
+API_VERSION = {"major": 1, "minor": 2}
 INSPECTOR = Path(__file__).parent / "inspector" / "index.html"
 INSPECTOR_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
 MAX_BODY_BYTES = 1024 * 1024
@@ -491,6 +492,15 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                              "generation": runtime.store.log_generation(),
                              "history_truncated": runtime.store.log_floor() > 0})
 
+    async def turns(request: Request) -> Response:
+        """Turn summaries, oldest first: the newest page, or one page after/before a turn."""
+        sid = p(request, "id")
+        runtime.session(sid)
+        query = request.query_params
+        return JSONResponse(runtime.store.turn_summaries(
+            sid, after=query.get("after") or None, before=query.get("before") or None,
+            limit=min(int(query.get("limit") or TURN_PAGE), TURN_PAGE_MAX)))
+
     async def snapshot(request: Request) -> Response:
         """A consistent view to rebuild client state, plus an event watermark.
 
@@ -745,6 +755,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/session/{id}/interrupt", route(interrupt), methods=["POST"]),
         Route("/api/session/{id}/message", route(messages)),
         Route("/api/session/{id}/event", route(stored_events)),
+        Route("/api/session/{id}/turn", route(turns)),
         Route("/api/session/{id}/children", route(children)),
         Route("/api/session/{id}/tree", route(tree)),
         Route("/api/session/{id}/context", route(context)),

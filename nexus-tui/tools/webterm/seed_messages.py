@@ -6,16 +6,18 @@ successful two-file `patch` edit: it gives the shots a split and a unified diff
 (D09), with a CJK comment and a long line that wraps. It ends with an assistant
 reply, so the turn is complete and the composer shows the context meter.
 
-It also seeds what the sidebars need and the API alone cannot write: a `usage`
-event after the turn (the composer's context meter reads the latest one), and a
-child session launched by the `session` tool from the seeded turn (the `2 ↳`
-count and the child line). Rows are written straight to the store, as Core does
+It also seeds what the sidebars need and the API alone cannot write: turn
+records for each prompt (`turn`, `turn_request` with model and usage, attempts
+and tool timings), which the timeline footers, the composer's context meter and
+the sidebar totals read through `GET /api/session/{id}/turn`, and a child
+session launched by the `session` tool from the seeded turn (the `2 ↳` count
+and the child line). Rows are written straight to the store, as Core does
 when it publishes them, so this must run while the daemon is stopped."""
 import sys
 import json
 import time
 from nexus.store import Store
-from nexus.llmhub.types import Message, Text, Reasoning, ToolCall, ToolResult
+from nexus.llmhub.types import Message, Text, Reasoning, ToolCall, ToolResult, Usage
 st = Store()
 sid = sys.argv[1]
 ms = [
@@ -50,24 +52,63 @@ ms = [
  # short, and the composer then shows `continue` instead of the context meter.
  Message("assistant", (Text("Done: the loader caches the manifest on its mtime, and the new test checks that a cache hit skips the parse."),)),
 ]
-for m in ms:
-    st.append_message(sid, m)
+MODEL = "codex/gpt-6.1-terra"
 
-def usage(session_id, input_tokens, cached, output, reasoning):
-    st.append_event({"session_id": session_id, "seq": 1, "time": time.time(), "type": "usage",
-                     "data": {"input_tokens": input_tokens, "cached_input_tokens": cached,
-                              "output_tokens": output, "reasoning_tokens": reasoning}})
+
+def record(session_id, messages, usages):
+    """Store `messages` as Core does while running them: one turn per prompt,
+    one request per assistant message (with the next of `usages`), tool calls
+    started and finished, every turn completed."""
+    usages = iter(usages)
+    turn, step = None, 0
+
+    def close():
+        st.mark_turn_ended(turn["id"], "end_turn", step)
+        st.finish_turn(turn["id"], "completed", steps=step)
+        st.set_turn_recovery(turn["id"], "none")
+
+    for m in messages:
+        if m.role == "user":
+            if turn is not None:
+                close()
+            turn, step = st.start_turn(session_id), 0
+            st.append_message(session_id, m)
+        elif m.role == "assistant":
+            step += 1
+            request = st.start_request(turn["id"], session_id, step, model=MODEL, effort="medium")
+            attempt = f"{request['id']}:1"
+            st.start_attempt(turn["id"], session_id, request["id"], attempt, 1)
+            st.mark_attempt_started(attempt)
+            st.record_usage(request["id"], attempt, Usage(*next(usages)))
+            calls = [p for p in m.parts if isinstance(p, ToolCall)]
+            st.finish_attempt(attempt, "completed")
+            st.finish_request(request["id"], stop="tool_calls" if calls else "end_turn", response_id=None,
+                              parts=[], reasoning_seconds=1.4 if any(isinstance(p, Reasoning) for p in m.parts) else None)
+            st.save_assistant_message(session_id, m, turn_id=turn["id"], request_id=request["id"])
+            for call in calls:
+                st.mark_tool_started(turn["id"], session_id, call)
+        else:
+            calls = {}
+            for row in st.tools_for_turn(turn["id"]):
+                calls[row["call_id"]] = ToolCall(row["call_id"], row["name"], row["arguments"])
+            for result in m.parts:
+                st.mark_tool_finished(turn["id"], session_id, calls[result.call_id], result)
+            st.save_tool_message(session_id, m, turn_id=turn["id"])
+    close()
+
 
 parent = st.session(sid)
-usage(sid, 48_200, 36_000, 2_150, 640)
+# input, cached input, output, reasoning per request; the last one is the
+# context in use (48.2K).
+record(sid, ms, [(12_400, 9_000, 410, 120), (18_900, 15_200, 520, 0), (21_300, 18_100, 160, 0),
+                 (30_100, 24_000, 300, 80), (36_800, 30_500, 620, 0), (41_000, 33_900, 900, 0),
+                 (48_200, 36_000, 2_150, 640)])
 
 child = st.create_session(st.project(parent.project_id), title="Survey parse_manifest callers",
                           agent="scout", parent=parent, parent_call_id="call_5", launched_by="agent",
                           disabled_tools=sorted(parent.disabled()), snapshot=st.snapshot(sid))
-for m in (
+record(child.id, (
  Message("user", (Text("List every call site of parse_manifest and say which ones run per request."),)),
  Message("assistant", (Text("Three call sites: `Loader.load` runs per request, the CLI check in `cli.py` runs once, and `test_loader.py` only in tests."),)),
-):
-    st.append_message(child.id, m)
-usage(child.id, 9_400, 6_100, 380, 0)
+), [(9_400, 6_100, 380, 0)])
 print("seeded", len(ms), "messages; child", child.id)

@@ -140,6 +140,24 @@ MessageAdded(assistant)
 TurnEnd("end_turn", 2)
 ```
 
+### What the daemon stores from them
+
+The daemon's turn task (`Runtime._run`) keeps a durable summary of each turn
+beside publishing every event:
+
+| Event | Stored |
+| --- | --- |
+| `StepStart` | a `turn_request` row with the `provider/model` ref and reasoning effort this step runs with (read after the loop re-binds the agent, so a model change between steps shows per request) |
+| `ReasoningDelta` … reasoning `PartDone` | `reasoning_seconds`: from a reasoning part's first delta to its `PartDone`, or to the first `TextDelta`/`ToolCallStarted` when the dialect sends `PartDone` late; summed over the request |
+| `Usage` | the attempt's usage (the last report wins), the request's usage (the sum over its attempts) and the session's `session_usage` ledger row for its model |
+| `TurnEnd` | `turn.ended = {stop, steps}`, before the turn is closed |
+
+After the turn closes the daemon publishes `turn.summary`, a durable event whose
+`data` is the turn's entry from `GET /api/session/{id}/turn`
+([api.md](api.md#turn-summaries)). It is published for completed, failed and
+interrupted turns (which never yield `TurnEnd`), before the closing
+`session.status` idle, and by startup recovery once it has closed a turn.
+
 ## JSON encoding (`nexus/codec.py`)
 
 Storage and the HTTP API use this encoding.
@@ -289,7 +307,8 @@ A daemon restart reconciles turns it left unfinished ([daemon.md](daemon.md#cras
 Recovery publishes only durable, replayable facts:
 
 - `turn.recovered` once per turn: `outcome` (`interrupted`, or `completed`
-  when a durable `turn_end` proved the loop finished), the recorded `origin`
+  when the turn's `ended` record proved the loop finished; a turn left open by
+  an older daemon has no record, and its `turn_end` event is used), the recorded `origin`
   (`prompt` or `continuation`; null for an older turn) and `continuation` link,
   the request state, restored `assistant_message` and `tool_message` ids, each
   tool call's classification, cancelled waits, lost runtime state, the
@@ -300,6 +319,7 @@ Recovery publishes only durable, replayable facts:
   notice. Earlier messages are never rewritten.
 - `session.status` `/` idle with `reason` and `turn_id`, `question.replied`
   cancellations and `permission.replied` cancellations.
+- `turn.summary` for each turn it closed (below).
 
 **Partial output.** Deltas, `part_done` items and `wire_event` records of an
 interrupted stream remain durable diagnostic history. They are not inserted as

@@ -58,6 +58,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | POST | `/api/session/{id}/interrupt` | | 204 |
 | GET | `/api/session/{id}/message` | | `[Message]` in order |
 | GET | `/api/session/{id}/event` | `?after=<event id>&limit=` (≤ 5000) `&type=a,b` | `{events, counts, more, floor, head, generation, history_truncated}`: the retained stored event log |
+| GET | `/api/session/{id}/turn` | `?after=<turn id>` or `?before=<turn id>`, `&limit=` (default 50, ≤ 200) | `{turns, more_before, more_after, floor, usage}`: turn summaries, oldest first, and the spend ledger; see [Turn summaries](#turn-summaries) |
 | GET | `/api/session/{id}/children` | | `[Session]`, direct children |
 | GET | `/api/session/{id}/tree` | | the whole tree containing it, from its root: `Session` + nested `children` |
 | GET | `/api/session/{id}/context` | | the provider request body the next turn would send |
@@ -140,6 +141,67 @@ cancellation. Shapes and limits: [tools.md](tools.md#ask).
 or `allow` (the default for new sessions; nothing asks). Session-directory edits are approval-free by fixed
 policy; see [tools.md](tools.md#read-observations-and-freshness). `status` is
 `busy` while a turn runs.
+
+### Turn summaries
+
+`GET /api/session/{id}/turn` (since `api_version` 1.2) returns what a client
+shows about each turn without reading the event log: status, steps, stop,
+error, recovery, every provider request with its `provider/model` ref, effort,
+token usage, reasoning time and attempts (retries), and each tool call's timing
+and error flag. Tool arguments and output stay out; they are in the messages.
+
+- No cursor: the newest `limit` turns. `after=<turn id>`: the oldest `limit`
+  turns started after that turn (reconnect). `before=<turn id>`: the newest
+  `limit` turns before it (load earlier). Turns are always oldest first.
+- `more_before` / `more_after`: whether older / newer turns exist beyond the page.
+- `floor.seq`: messages with a lower `seq` have no summary (their turns were
+  pruned, or they predate turn records). `null` when every message is covered.
+- `usage`: the session's spend ledger per model, every request and attempt
+  counted. It outlives pruned turns. `since` is when its first row counted
+  (`null` when nothing was counted); for an older session totals start there.
+- `usage` on a request or attempt is `null` when unknown (no report, or a crash
+  before the provider reported it), never zeros. A request's usage is the sum of
+  its attempts'.
+- `stop` is the loop's `TurnEnd.stop` (`ended`), else the last request's stop.
+  `ended` is `{stop, steps}` once the loop ended the turn, else `null`.
+- `message_id` ties a request to its assistant message; `start_seq` is the last
+  message seq before the turn.
+- Requests that predate this version were backfilled once from the events that
+  were still retained: `model` is then the bare provider model id (no
+  `provider/` prefix), and usage is filled only where exactly one `usage` event
+  fell in the request's range.
+- 404 for an unknown session; 400 for an `after`/`before` turn that is not in
+  this session, both cursors at once, or a `limit` below 1.
+
+```json
+{
+  "turns": [{
+    "id": "trn_…", "status": "completed", "started": 1793241740.77, "finished": 1793241775.34,
+    "start_seq": 150, "steps": 2, "stop": "end_turn", "ended": {"stop": "end_turn", "steps": 2},
+    "error": null, "recovery": "none",
+    "requests": [{
+      "id": "req_…", "step": 1, "status": "completed", "model": "openai/gpt-6.1-terra", "effort": "low",
+      "started": 1793241740.78, "finished": 1793241747.71, "stop": "tool_calls", "error": null,
+      "message_id": "msg_…", "usage": {"input": 48880, "cached": 48384, "output": 89, "reasoning": 0},
+      "reasoning_seconds": 2.1,
+      "attempts": [{"n": 1, "status": "completed", "delay": null, "started": 1793241740.78,
+                    "finished": 1793241747.71, "error": null,
+                    "usage": {"input": 48880, "cached": 48384, "output": 89, "reasoning": 0}}]
+    }],
+    "tools": [{"call_id": "call_…", "name": "bash", "state": "inserted",
+               "started": 1793241747.72, "finished": 1793241748.01, "is_error": false}]
+  }],
+  "more_before": false, "more_after": false, "floor": null,
+  "usage": {"since": 1793241740.79,
+            "models": {"openai/gpt-6.1-terra": {"requests": 1, "input": 48880, "cached": 48384,
+                                                "output": 89, "reasoning": 0}}}
+}
+```
+
+After every turn closes (completed, failed or interrupted) the daemon publishes
+a durable `turn.summary` event whose `data` is that turn's entry, before the
+`session.status` idle event. Startup recovery publishes one for each turn it
+closes. A client replaces its copy of that turn with it.
 
 ### Archive and session lists
 
@@ -763,7 +825,8 @@ durable log:
 - One `turn.recovered` per turn with `{turn_id, session_id, outcome,
   reason, legacy, origin, continuation, request, assistant_message, tool_message,
   tools, waits, losses, partial_output, notice}`. `outcome` is `interrupted`, or
-  `completed` when a durable `turn_end` proved the loop finished before the crash
+  `completed` when the turn's `ended` record (or, for a turn left open by an older
+  daemon, a durable `turn_end` event) proved the loop finished before the crash
   (then `notice` is null). `legacy` is true for a pre-execution-record session.
   `origin` is `prompt` or `continuation` when recorded (null for an older turn),
   and `continuation` is the predecessor link a continuation crashed with.
@@ -773,6 +836,8 @@ durable log:
   `approval_denied`, `approval_cancelled`, `question_answered`,
   `question_cancelled`, `unknown`,
   `unknown_code` or `legacy_unknown`; `losses` reports `{kernels, bash_jobs}`.
+- One `turn.summary` per closed turn, after `turn.recovered`, equal to its
+  `GET /api/session/{id}/turn` entry.
 
 Partial provider output (deltas and completed parts of an interrupted stream)
 stays in the event log but is **not** inserted into the conversation, because
@@ -797,7 +862,7 @@ during recovery does not duplicate a result, notice, cancellation or
    `wire_request` → `wire_event`… with `text_delta`/`tool_call_started`… →
    `part_done`… → `usage` → `done` → `message.added` (assistant) → `tool_start`
    → (`permission.asked` → client replies) → `tool_end` → `message.added`
-   (tool) → `step_start` … → `turn_end` → `session.status idle`.
+   (tool) → `step_start` … → `turn_end` → `turn.summary` → `session.status idle`.
 4. `POST …/interrupt` at any point cancels. A tool call left without a result
    gets an error result ("interrupted while running" or "before it ran"), so the
    next request stays valid. A pending question is closed with

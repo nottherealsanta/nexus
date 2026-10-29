@@ -1,6 +1,61 @@
 # Plan: turn summaries instead of loading event history
 
-Status: proposed 2026-10-28, revised 2026-10-29. Not started.
+Status: proposed 2026-10-28, revised 2026-10-29. Steps 0–6 and 8 committed
+2026-10-29; 7 partly done; 9 open. See Progress.
+
+## Progress (2026-10-29)
+
+Steps marked Done are committed (2026-10-29). Subagents were stopped after
+step 6; step 9 has not started.
+
+| Step | State | Notes |
+| --- | --- | --- |
+| Before step 0: green TUI tree | Done | 19 failing TUI tests fixed on top of the rework (`fdb1860`). `esc stop` while busy stays removed (user decision); `Target::Stop` deleted (INTERFACE_PLAN and DESIGN_PLAN, since archived, were updated to match). Focus bar restored in mono/ANSI-16. `scratch_render` ignored. `cargo test`, `clippy -D warnings` and `fmt --check` pass |
+| 0. Baseline | Done | `nexus-tui/tools/bench.sh` + `bench_seed.py` (30 616 events) and `nexus-tui --bench`; numbers and commands in PLAN.md ("TUI load measurement") |
+| 1. Core store and runtime | Done | Core suite 387 passed, ruff clean |
+| 2. Core API | Done | `GET /api/session/{id}/turn`, `turn.summary`, API 1.2 |
+| 3. TUI data | Done | Types, `CoreApi::turns`, concurrent `load_history` (all pages, cap 10×200), `turn.summary` in `reduce.rs`, `SyncMsg::Turns` after a reconnect, `CLIENT_API` 1.2. The parallel event path was not kept (see Deviations, TUI) |
+| 4. TUI views | Done | Every 5.1 row except "Thought for" (see Deviations, TUI); event paging, `HISTORY_EVENT_CAP`, `fold_event_pages`, `page_last_id`, `events_gap`, `Event::from_stored` removed; floor row added. Done-when grep finds only live (scratch) handling. 492 tests pass, clippy and fmt clean. `nexus-tui/README.md` restored from `fdb1860^` with its real appended TUI notes re-applied |
+| 5. Measure | Done | Open 240 → 75 ms, RSS 133 → 19 MB, scrolling frame mean 4.5 → 3.6 ms (PLAN.md) |
+| 6. NSH | Done | See "Deviations (step 6)". 58 tests, 52 pass; the 6 failures also fail on a clean HEAD. Typecheck clean |
+| 7. Docs and ledger | Partly done | Core ledger rows and step entry in PLAN.md; `docs/api.md`, `docs/stream-events.md`, `docs/daemon.md` updated. TUI ledger row, step entry and measurement in PLAN.md; `nexus-tui/README.md` updated. `docs/development.md` and `interface/design-language.md` (floor row) not touched (other agents) |
+| 8. Recovery off `turn_end` | Done | Log fallback kept for turns with `ended` null |
+| 9. Live partial | Open | Not started. Needs core (`nexus/live.py`, ephemeral deltas, `partial` column) and both clients |
+
+Not yet run: the "done when" checks that need a real daemon (`nexus chat`,
+`curl` on a real session). The step 1 migration and backfill run once on
+`~/.nexus10/nexus.db` at the next daemon start; on a copy it took 0.4 s and
+filled usage for 578 of 587 requests and a model for 586.
+
+**Clobbered files in `fdb1860`.** That commit replaced `docs/daemon.md`,
+`docs/loop.md`, `docs/tools.md`, `docs/llm-providers.md`,
+`nexus-nsh/README.md` and `nexus-tui/README.md` with copies of
+`docs/stream-events.md` plus appended paragraphs. The four docs pages and the
+NSH README are restored from `fdb1860^` with that commit's real changes
+re-applied (images, `message_session`, approval defaults, Background Shell
+Done notice, the turn-summary section in `daemon.md`). The TUI README is restored
+in step 4. Some test fixes before step 0 cited the TUI README for
+design decisions (composer padding, picker provider column, header without a
+working label). Those three came only from the appended text; the real README
+does not state them, but the code matches all three, and the restored README
+now records them under "Interface notes".
+
+**Open questions for the user**
+
+- "Thought for Ns": `reasoning_seconds` is stored and served but not shown,
+  because the current design shows no reasoning duration. Show it or not?
+- The turn footer now includes effort, so at 140 columns its last segment
+  wraps to a second row. Drop or shorten effort, or accept the wrap?
+- Retry rows after a reload read "retry n in Ns", not "n/max": attempts do not
+  store the retry budget. Store `max_attempts` on the attempt, or accept?
+
+**Next**
+
+1. Run the real-daemon checks (steps 1 and 2 "done when"); the first start
+   migrates `~/.nexus10/nexus.db`.
+2. Step 7 remainder: `docs/development.md`, `interface/design-language.md`
+   (floor row).
+3. Step 9.
 
 Clients stop loading the event log when they open a session. Core keeps a small
 durable summary of every turn (tokens, cache, model, tool timings, thinking
@@ -532,7 +587,7 @@ Each step lands green (`uv run pytest -q`, `uv run ruff check nexus tests`,
 
 **Before step 0:** land or park the uncommitted TUI rework in `timeline.rs`
 and `render.rs` and fix the failing tests, so measurements and step 4 start
-from a green tree.
+from a green tree. (Done: the rework landed as `fdb1860`; tests fixed after.)
 
 0. **Baseline.** Seed a session with 30 000 events (a script under
    `nexus-core/tests/fixtures/` or `scripts/`), open it in a release TUI build,
@@ -648,3 +703,144 @@ Out of scope:
   session still loads every message.
 - Server-side views with patches, as old Nexus did.
 - Changing wire-event retention.
+
+## Deviations (steps 1, 2, 8 as built)
+
+Recorded where the code differs from the design above.
+
+- **`partial` left out.** No `partial` column and no `partial` key on requests
+  in `/turn` until step 9. `finish_request`, `interrupt_request` and
+  `fail_request` take only `reasoning_seconds` for now.
+- **Reasoning time without `LivePartial`.** A small `ReasoningClock` in
+  `runtime.py` (monotonic clock) times a reasoning part from its first
+  `ReasoningDelta` to its reasoning `PartDone`, or to the first `TextDelta` /
+  `ToolCallStarted` (chat sends `PartDone` late). `null` when no reasoning
+  streamed. Step 9 can fold it into `LivePartial`.
+- **`more_after`.** The page also carries `more_after`, so a reconnect with more
+  than `limit` new turns pages forward with `after=` instead of missing some.
+- **`ended` in the turn entry.** The turn summary includes `ended` (`{stop,
+  steps}` or null) next to `stop`; the TUI's "enter continue" hint needs it.
+- **Attempts carry `started` and `finished`.** Additive, for retry timing.
+- **`floor` definition.** No record of pruning exists, so `floor.seq` is
+  `min(turn.start_seq) + 1` for the session (or `max(message.seq) + 1` when the
+  session has no turn rows), and `null` when that is 1. It therefore also covers
+  messages from before turn records existed, which have no summary either.
+- **Query count.** A page is four queries for turns, requests, attempts and
+  tools (one each, not per turn), plus the floor and ledger queries.
+- **`turn.summary` timing.** The turn task publishes it after `finish_turn` and
+  before `session.status` idle, with `recovery: "none"` (the value its last
+  bookkeeping write sets just after idle; a crash before that leaves the turn to
+  recovery, which publishes again). Recovery publishes after it marks the turn
+  `done`, so the event equals the `/turn` entry; a crash between those two
+  writes loses that one event, and `/turn` still has the row.
+- **Unknown ledger model.** A request with no recorded model counts under the
+  ledger key `unknown`.
+- **`since` per ledger row.** Backfilled rows take the oldest backfilled
+  request's start per (session, model); new rows take the time of their first
+  report. The API's `usage.since` is the earliest of a session's rows.
+- **Backfill bounds.** A request's range ends at the next request's
+  `event_after` in the same session; the last request's range is open (no
+  turn-end bound needed, since only `usage` and `wire_request` events are read
+  and a later request starts a new range). `effort` reads `reasoning.effort`
+  (Responses) or `reasoning_effort` (chat). On a real 587-request database the
+  backfill filled usage for 578 requests and took under half a second.
+- **Recovery notice text** (4.7, "That output remains in the session's event
+  log") is unchanged until step 9 provides `partial_summary`.
+
+## Deviations (step 6, NSH, as built)
+
+- **Where the types live.** `src/core/api.ts` (with the other wire types), not
+  `src/store.ts`; helpers in the new `src/core/turns.ts`. `CLIENT_API` 1.2.
+- **Loading.** Messages, snapshot and `/turn` load in parallel: the newest
+  200 turns, then `before=` pages, capped at 25 pages; the timeline says when
+  the cap is hit. A failed `/turn` read shows a row and messages still load.
+  Against a Core older than 1.2, NSH still connects and shows that row.
+- **Live state.** Live events go to `scratch`; deltas and wire events are not
+  kept (they still fold into the streaming text) and a `wire_request` keeps
+  only its model. `turn.summary` replaces or inserts the turn and clears the
+  scratch. A running turn's loaded summary is merged with live requests by
+  step, so usage is counted once.
+- **Ledger refresh.** After each `turn.summary` for the selected session, NSH
+  re-reads `/turn?limit=1` for the ledger. Live usage after the ledger read is
+  added by event id; around a read one usage event can be counted twice or
+  missed until that re-read.
+- **Directory changes.** Worktrees reload when `session.directory` differs
+  from the one last read; selecting a session now calls `host.changed()`.
+- **Live-only rows.** Directory moves, child-finished notices and cancelled
+  approvals or questions exist only as live events and are not rebuilt after
+  a reload; their messages carry them.
+- **Retry rows** read "provider retry n/attempts made": summaries have no
+  `max_attempts`. A running turn loaded midway shows its earlier retries only
+  once its `turn.summary` arrives.
+- **Below the floor** a user turn shows as done, with no token segment; the
+  floor row explains why.
+- **Mixed usage.** A turn with some unknown requests shows the known total
+  followed by "+ unknown".
+- **"Totals since"** shows when the ledger's `since` is more than 60 s after
+  the first message (a chosen threshold).
+- **Generated file.** `src/gen/manifest.ts` was regenerated by `npm run gen`
+  from the uncommitted `interface/manifest.toml`.
+- **Tests** need Playwright's Chrome for Testing
+  (`nsh test --target web --browser <path>`); plain `npm test` finds no
+  Chrome.
+
+## Deviations (steps 0, 3–5, TUI, as built)
+
+- **Benchmark harness in `nexus-tui/`.** The seed script is
+  `nexus-tui/tools/bench_seed.py` (not `nexus-core/tests/fixtures/`), run by
+  `tools/bench.sh`; the TUI gained a headless `--bench WxH` mode. Frame time is
+  `render_buffer` (timeline build and painting), not terminal output; RSS is
+  `ps` after the first frame.
+- **No parallel event path (step 3).** Steps 3 and 4 landed together; the
+  comparison is the before/after measurement and screenshots on the same seeded
+  session instead of a side-by-side debug view.
+- **Scratch, not a part list.** Without `partial` (step 9) the running turn's
+  live events are kept as `SelectedView::scratch` (deltas, `wire_event`,
+  `wire_response`, `part_done`, `tool_call_started`, `tool_args_delta` dropped;
+  `wire_request` reduced to its model); streaming text still folds into
+  `Model::streaming`. `turn.summary` replaces the turn and clears the scratch.
+  The running turn's footer, live context %, "(next call)" model and live
+  sidebar usage read the scratch. `LivePartial` is not typed yet.
+- **All summary pages on open.** `load_history` reads every `/turn` page
+  (200 each, `before=`) up to 10 pages, so every loaded message has its
+  footer; beyond that the floor row covers the unloaded older turns.
+- **Reconnect.** After a dropped stream resumes from its cursor the supervisor
+  reads `/turn?after=<newest closed turn>` (following `more_after`) and sends
+  `SyncMsg::Turns`; the page's ledger replaces the held one. A resync (overflow,
+  rejected cursor) reloads the whole history as before.
+- **Turn grouping.** A stored turn's messages are those with `seq` greater than
+  its `start_seq` (the last seq before the turn, not the first of it). A
+  timeline turn (one prompt) aggregates every stored turn that starts inside it,
+  so continuations and notice turns join their prompt's footer.
+- **Retry rows from attempts.** A stored attempt does not record the retry
+  budget, so a reloaded retry reads `provider retry 1 in 1.5s` where the live
+  row reads `1/4`; `retry started`, `retries exhausted` (a failed request with
+  more than one attempt) and the turn's `session.error` row are synthesized
+  from `attempts` and `turn.error`, placed before the request's message or
+  after the turn's last message.
+- **Other diagnostics after reload.** `turn.recovered`,
+  `session.directory_changed`, `session.notified` and cancelled
+  approval/question rows show only while live; after a reload their facts are
+  the stored notice and tool messages. A stored denial is recognised from its
+  tool result (`the user declined this tool call`).
+- **Unknown usage.** A completed request without usage, or a turn none of whose
+  requests reported any, puts `usage unknown` (or `some usage unknown`) in the
+  footer; a request that failed before responding is not counted as unknown.
+- **No "Thought for Ns".** The TUI shows no reasoning duration (design
+  decision: only shell tools show an elapsed time; a test asserts it), so
+  `reasoning_seconds` is typed but unused, and the old test-only delta timers
+  were removed.
+- **Footer effort** comes from the turn's requests when recorded, else the
+  session's; model names fall back to the bare model id.
+- **Ledger in the client.** `usage` from the page plus, per turn, its share
+  (requests with usage, per model key): a newer summary of a turn replaces its
+  share, so replays never double count. "Since <date>" shows when the ledger's
+  `since` is more than a minute after the session's creation.
+- **Floor row placement.** Before the first prompt at or above `floor.seq`, or
+  after the last message when none is; it closes the open turn (footer first).
+  Text: "the turns above have no recorded details (tokens, models, timings):
+  pruned, or older than turn records".
+- **Visual harness seeding.** `tools/webterm/seed_messages.py` now writes turn
+  records (requests with model and usage, attempts, tool timings) instead of a
+  `usage` event, since the TUI no longer reads events on open.
+

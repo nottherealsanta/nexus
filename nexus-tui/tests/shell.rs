@@ -388,7 +388,7 @@ fn waiting_card_sits_above_the_composer_and_hides_unoffered_choices() {
 }
 
 #[test]
-fn composer_controls_and_stop_have_hit_targets() {
+fn composer_controls_have_hit_targets() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     draw(&mut app, 120, 36);
     for target in [
@@ -400,32 +400,26 @@ fn composer_controls_and_stop_have_hit_targets() {
         let r = app.hits.rect_of(&target).expect("composer control");
         assert_eq!(app.hits.at(r.x, r.y), Some(&target));
     }
-    busy(&mut app);
-    let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("esc stop"));
-    assert!(app.hits.rect_of(&Target::Stop).is_some());
 }
 
 #[test]
 fn composer_uses_latest_usage_and_catalog_window() {
-    use nexus_tui::api::Event;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
     app.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/example".into());
     app.state.models = vec![
         serde_json::json!({"ref": "codex/example", "name": "Example Model", "context": 200000}),
     ];
-    let events = &mut app.state.model.selected.as_mut().unwrap().events;
-    for (id, input, output) in [(100, 1000, 100), (101, 10000, 1000)] {
-        events.push(Event {
-            id,
-            cursor: None,
-            seq: None,
-            time: id as f64,
-            kind: "usage".into(),
-            session_id: Some(SESSION.into()),
-            data: serde_json::json!({"input_tokens": input, "output_tokens": output}),
-        });
-    }
+    // Two requests: the newest one's input is the context in use.
+    let mut turn = fixture_summary(
+        "codex/example",
+        serde_json::json!({"input": 1000, "cached": 0, "output": 100, "reasoning": 0}),
+    );
+    let mut newest = turn["requests"][0].clone();
+    newest["id"] = "req_2".into();
+    newest["usage"] =
+        serde_json::json!({"input": 10000, "cached": 0, "output": 1000, "reasoning": 0});
+    turn["requests"].as_array_mut().unwrap().push(newest);
+    summarize(&mut app, 100, turn);
     let (_, rows) = draw(&mut app, 160, 48);
     let all = joined(&rows);
     assert!(all.contains("Example Model codex"), "{all}");
@@ -442,7 +436,6 @@ fn composer_uses_latest_usage_and_catalog_window() {
 
 #[test]
 fn composer_capitalises_the_agent_and_shows_price_tier_occupancy() {
-    use nexus_tui::api::Event;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
     let session = app.state.model.sessions.get_mut(SESSION).unwrap();
     session.agent = "orchestrate".into();
@@ -451,21 +444,14 @@ fn composer_capitalises_the_agent_and_shows_price_tier_occupancy() {
         "ref": "codex/example", "name": "Example Model",
         "context": 1_000_000, "tiers": [200_000]
     })];
-    app.state
-        .model
-        .selected
-        .as_mut()
-        .unwrap()
-        .events
-        .push(Event {
-            id: 300,
-            cursor: None,
-            seq: None,
-            time: 1.0,
-            kind: "usage".into(),
-            session_id: Some(SESSION.into()),
-            data: serde_json::json!({"input_tokens": 52000}),
-        });
+    summarize(
+        &mut app,
+        300,
+        fixture_summary(
+            "codex/example",
+            serde_json::json!({"input": 52000, "cached": 0, "output": 0, "reasoning": 0}),
+        ),
+    );
     let (_, rows) = draw(&mut app, 160, 48);
     let row = rows
         .iter()
@@ -509,7 +495,7 @@ fn composer_shows_a_pending_model_and_truncates_in_priority_order() {
         serde_json::json!({"ref": "codex/example", "name": "Old Model", "context": 200000}),
         serde_json::json!({"ref": "codex/new", "name": "New Model", "context": 200000}),
     ];
-    app.state.model.selected.as_mut().unwrap().events.extend([
+    app.state.model.selected.as_mut().unwrap().scratch.extend([
         Event {
             id: 400,
             cursor: None,
@@ -536,11 +522,10 @@ fn composer_shows_a_pending_model_and_truncates_in_priority_order() {
     assert!(all.contains('\u{2192}'), "{all}");
 
     // Narrow: effort goes first, then the provider, then the model shortens,
-    // while the agent and `esc stop` stay (busy swaps the meter for the stop hint).
+    // while the agent stays; Esc interrupts, so there is no stop action.
     let (_, rows) = draw(&mut app, 60, 24);
     let all = joined(&rows);
     assert!(all.contains("Build"), "{all}");
-    assert!(all.contains("esc stop"), "{all}");
     assert!(!all.contains("default"), "{all}");
 }
 
@@ -1696,27 +1681,23 @@ fn nothing_completes_while_a_palette_is_open() {
 
 #[test]
 fn session_info_totals_tokens_tools_context_and_cost() {
-    use nexus_tui::api::Event;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
     app.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/example".into());
     app.state.models = vec![serde_json::json!({
         "ref": "codex/example", "name": "Example", "context": 200000,
         "input_cost": 1.0, "output_cost": 10.0, "cache_read_cost": 0.2
     })];
-    let events = &mut app.state.model.selected.as_mut().unwrap().events;
-    for (id, input, cached, output) in [(100, 10_000, 0, 1000), (101, 50_000, 20_000, 2000)] {
-        events.push(Event {
-            id,
-            cursor: None,
-            seq: None,
-            time: id as f64,
-            kind: "usage".into(),
-            session_id: Some(SESSION.into()),
-            data: serde_json::json!({
-                "input_tokens": input, "cached_input_tokens": cached, "output_tokens": output
-            }),
-        });
-    }
+    // Two requests of the stored turn; the ledger counts both.
+    let mut turn = fixture_summary(
+        "codex/example",
+        serde_json::json!({"input": 10_000, "cached": 0, "output": 1000, "reasoning": 0}),
+    );
+    let mut second = turn["requests"][0].clone();
+    second["id"] = "req_2".into();
+    second["usage"] =
+        serde_json::json!({"input": 50_000, "cached": 20_000, "output": 2000, "reasoning": 0});
+    turn["requests"].as_array_mut().unwrap().push(second);
+    summarize(&mut app, 100, turn);
     let (_, rows) = draw(&mut app, 160, 40);
     let all = joined(&rows);
     for needle in [
@@ -1997,27 +1978,21 @@ fn row_text(buf: &ratatui::buffer::Buffer, y: u16) -> String {
     (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
 }
 
+/// A stored turn whose request reported `input` tokens.
 fn with_usage(app: &mut nexus_tui::app::App, input: u64) {
-    use nexus_tui::api::Event;
     app.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/example".into());
     app.state.models = vec![
         serde_json::json!({"ref": "codex/example", "name": "Example Model", "context": 200000}),
     ];
-    app.state
-        .model
-        .selected
-        .as_mut()
-        .unwrap()
-        .events
-        .push(Event {
-            id: 900,
-            cursor: None,
-            seq: None,
-            time: 1.0,
-            kind: "usage".into(),
-            session_id: Some(SESSION.into()),
-            data: serde_json::json!({"input_tokens": input}),
-        });
+    // Below `busy`'s id 40, so a test can still mark the session busy.
+    summarize(
+        app,
+        30,
+        fixture_summary(
+            "codex/example",
+            serde_json::json!({"input": input, "cached": 0, "output": 0, "reasoning": 0}),
+        ),
+    );
 }
 
 #[test]
@@ -2119,17 +2094,6 @@ fn mono_and_ascii_cards_use_rules_and_only_they_keep_the_focus_bar() {
 fn working_strip_aligns_with_usage_and_omits_output_tokens() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
     with_usage(&mut app, 82_000);
-    let event = app
-        .state
-        .model
-        .selected
-        .as_mut()
-        .unwrap()
-        .events
-        .last_mut()
-        .unwrap();
-    event.time = nexus_tui::app::now_secs();
-    event.data["output_tokens"] = serde_json::json!(284);
     busy(&mut app);
     let (_, rows) = draw(&mut app, 160, 48);
     let control = rows.iter().find(|row| row.contains("82.0K")).unwrap();
@@ -2143,16 +2107,22 @@ fn working_strip_aligns_with_usage_and_omits_output_tokens() {
 }
 
 #[test]
-fn busy_shows_the_working_row_and_esc_stop_not_the_meter() {
+fn busy_shows_the_working_row_and_not_the_meter() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
     with_usage(&mut app, 82_000);
     busy(&mut app);
     let (buf, rows) = draw(&mut app, 160, 48);
     let r = app.regions.composer;
-    let live = &rows[r.y as usize];
-    assert!(live.contains("\u{25d0} Working"), "{live:?}");
-    let control = &rows[r.bottom() as usize - 4];
-    assert!(control.trim_end().ends_with("esc stop"), "{control:?}");
+    // `Working · 12s` sits below the card, by the strip, with no spinner glyph
+    // (INTERFACE_PLAN "Composer", 2026-10-28 revision).
+    let control_y = r.bottom() as usize - 4;
+    let live_y = rows
+        .iter()
+        .position(|row| row.contains("Working \u{b7}"))
+        .expect("a Working row");
+    assert!(live_y > control_y, "{rows:?}");
+    assert!(!rows[live_y].contains('\u{25d0}'), "{:?}", rows[live_y]);
+    let control = &rows[control_y];
     assert!(!control.contains('\u{2571}'), "{control:?}");
     assert!(!rows[r.bottom() as usize - 1].contains("ctrl+p commands"));
     // No old busy marker inside the card.

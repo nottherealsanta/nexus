@@ -12,14 +12,14 @@ const snapshot = (sessions: object[]) => ({
   projects: [{ id: "prj_1", path: "/work/demo", name: "demo", created: 1, updated: 2, revision: 1 }],
   sessions, running: [], approvals: [], questions: [], selected: null,
 });
-const quiet = { events: [], more: false, floor: 0, history_truncated: false };
+const quiet = { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } };
 function network(sessions: object[], extra: Record<string, unknown> = {}) {
   return {
     // Specific stubs first: the first matching key answers.
     ...extra,
     "GET */api/session/ses_1/message": { body: [] },
     "GET */api/session/ses_1/snapshot": { body: null },
-    "GET */api/session/ses_1/event*": { body: quiet },
+    "GET */api/session/ses_1/turn*": { body: quiet },
     "GET */api/session/ses_1/worktrees": { body: { worktrees: [] } },
     "GET */api/session/ses_1": { body: sessions[0] },
     "GET */__nexus/host": { body: { host: "test", canStart: false } },

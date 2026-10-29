@@ -12,6 +12,7 @@ import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question } from "../core/api";
 import { agentColor, agentRailColor } from "../agent-color";
 import { detailOf, fmtDuration } from "./timeline";
+import { groupRequests, latestUsage, sumUsage, turnsIn } from "../core/turns";
 import type { ToolDetailLine } from "./timeline";
 import { DiffView, diffItems } from "./diff";
 
@@ -136,10 +137,10 @@ export function Composer() {
   /** The latest request's input occupancy, as a count and a share of the model's window. */
   const usage = (): { input: number; pct: number | null } | null => {
     m();
-    const events = model.selected?.events ?? [];
-    const latest = [...events].reverse().find((event) => event.type === "usage");
-    const input = Number(latest?.data?.input_tokens);
-    if (!Number.isFinite(input) || input < 0) return null;
+    const sel = model.selected;
+    const latest = sel ? latestUsage(sel.turns, sel.scratch) : null;
+    const input = Number(latest?.input);
+    if (!latest || !Number.isFinite(input) || input < 0) return null;
     const ref = modelRef();
     const entry = modelCatalog().find((item) => item.ref === ref);
     const window = Number(entry?.context);
@@ -327,12 +328,11 @@ function WorkingRow() {
   const output = () => {
     m();
     const u = turn();
-    if (!u) return 0;
-    return (model.selected?.events ?? []).reduce((sum, e) => {
-      if (e.type !== "usage" || !(e.time >= u.created)) return sum;
-      const n = Number(e.data?.output_tokens);
-      return sum + (Number.isFinite(n) && n > 0 ? n : 0);
-    }, 0);
+    const sel = model.selected;
+    if (!u || !sel) return 0;
+    // The running turn: its loaded summary (joined mid-turn) completed by the live usage.
+    const group = turnsIn(sel.turns, u.seq, Infinity);
+    return sumUsage(groupRequests(group, sel.scratch)).output;
   };
   effect(() => {
     const id = setInterval(() => tick.set(Date.now()), 1000);

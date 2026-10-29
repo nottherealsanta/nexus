@@ -49,6 +49,8 @@ Other:
                          (real colours and styles; truecolor unless --256/--16)
   --name NAME            with --dump-frame --out: file stem (default
                          frame-WxH; with several sizes NAME-WxH)
+  --bench WxH            open the most recent session and print load time,
+                         RSS and frame times while scrolling (tools/bench.sh)
   --help
 ";
 
@@ -62,6 +64,7 @@ struct Args {
     svg: bool,
     keys: Vec<Vec<KeyEvent>>,
     name: Option<String>,
+    bench: Option<(u16, u16)>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -76,6 +79,7 @@ fn parse_args() -> Result<Args, String> {
         svg: false,
         keys: Vec::new(),
         name: None,
+        bench: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -117,6 +121,15 @@ fn parse_args() -> Result<Args, String> {
             "--keys" => a.keys = keys::parse_spec(&it.next().ok_or("--keys needs a spec")?)?,
             "--name" => a.name = Some(it.next().ok_or("--name needs a file stem")?),
             "--out" => a.out = Some(PathBuf::from(it.next().ok_or("--out needs a directory")?)),
+            "--bench" => {
+                let v = it.next().ok_or("--bench needs a size such as 120x36")?;
+                let (w, h) = v.split_once('x').ok_or_else(|| format!("bad size {v}"))?;
+                let size = (w.parse(), h.parse());
+                let (Ok(w), Ok(h)) = size else {
+                    return Err(format!("bad size {v}"));
+                };
+                a.bench = Some((w, h));
+            }
             "--dump-frame" => {
                 let v = it.next().ok_or("--dump-frame needs sizes such as 80x24")?;
                 for s in v.split(',') {
@@ -154,6 +167,8 @@ async fn main() {
     cfg.bootstrap = std::env::var_os("NEXUS_TUI_NO_START").is_none();
     let code = if args.once {
         once(cfg).await
+    } else if let Some(size) = args.bench {
+        bench(cfg, args.opts, size).await
     } else if !args.dump.is_empty() {
         dump(cfg, &args).await
     } else {
@@ -452,6 +467,93 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
     }
     let _ = handle.commands.send(sync::Command::Shutdown);
     0
+}
+
+/// `--bench WxH`: open the most recent session and measure what opening and
+/// scrolling a long session costs. Frame time is `render_buffer` (timeline
+/// build, layout and painting into a buffer), not terminal output.
+async fn bench(cfg: SyncConfig, opts: Options, (w, h): (u16, u16)) -> i32 {
+    let mut handle = sync::spawn(cfg);
+    let mut app = App::new(AppState::new(), Theme::new(opts), (w, h));
+    if !wait_live(&mut handle, &mut app, Duration::from_secs(30)).await {
+        eprintln!("nexus-tui: Core did not become live");
+        return 1;
+    }
+    let Some(id) = app
+        .state
+        .model
+        .sessions_recent()
+        .first()
+        .map(|s| s.id.clone())
+    else {
+        eprintln!("nexus-tui: no session to open");
+        return 1;
+    };
+    let rss_before = rss_kib();
+    let opened = Instant::now();
+    app.open_session(&id);
+    for e in std::mem::take(&mut app.effects) {
+        if let Effect::Sync(c) = e {
+            let _ = handle.commands.send(c);
+        }
+    }
+    // Loaded when the selected session's stored history has been applied.
+    let deadline = opened + Duration::from_secs(120);
+    let mut loaded = false;
+    while !loaded && Instant::now() < deadline {
+        if let Ok(Some(m)) =
+            tokio::time::timeout(Duration::from_millis(200), handle.messages.recv()).await
+        {
+            loaded = matches!(&m, SyncMsg::History(h) if h.session_id == id);
+            app.apply_sync(m);
+        }
+    }
+    if !loaded {
+        eprintln!("nexus-tui: the session history did not load");
+        return 1;
+    }
+    let history = opened.elapsed();
+    let _ = render::render_buffer(&mut app, w, h);
+    let first_frame = opened.elapsed();
+    let rss_after = rss_kib();
+    // Scroll up a page per frame from the newest end, then back down.
+    let page = (h / 2).max(1) as isize;
+    let mut frames = Vec::new();
+    for i in 0..400 {
+        app.scroll_timeline(if i < 200 { -page } else { page });
+        let t = Instant::now();
+        let _ = render::render_buffer(&mut app, w, h);
+        frames.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    let mean = frames.iter().sum::<f64>() / frames.len() as f64;
+    frames.sort_by(f64::total_cmp);
+    let p95 = frames[frames.len() * 95 / 100];
+    let view = app.state.model.selected.as_ref();
+    println!("session {id}");
+    println!("messages {}", view.map_or(0, |v| v.messages.len()));
+    println!("history_ms {:.1}", history.as_secs_f64() * 1000.0);
+    println!("first_frame_ms {:.1}", first_frame.as_secs_f64() * 1000.0);
+    println!(
+        "rss_kib before {} after {}",
+        rss_before.unwrap_or(0),
+        rss_after.unwrap_or(0)
+    );
+    println!(
+        "frame_ms mean {mean:.2} p95 {p95:.2} max {:.2} (n={})",
+        frames.last().copied().unwrap_or(0.0),
+        frames.len()
+    );
+    let _ = handle.commands.send(sync::Command::Shutdown);
+    0
+}
+
+/// This process's resident set size from `ps`, in KiB.
+fn rss_kib() -> Option<u64> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
 async fn once(cfg: SyncConfig) -> i32 {

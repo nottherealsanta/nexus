@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 use crate::transport::{ApiError, Error, Http, SseFrame};
 
 /// The Core API major/minor this client was written against.
-pub const CLIENT_API: ApiVersion = ApiVersion { major: 1, minor: 1 };
+pub const CLIENT_API: ApiVersion = ApiVersion { major: 1, minor: 2 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ApiVersion {
@@ -324,17 +324,243 @@ pub struct Snapshot {
 }
 
 /// The full stored history of one session, loaded after the snapshot: every
-/// saved message, the retained diagnostic events (bounded), and the frozen
-/// starting-context snapshot.
+/// saved message, the summaries of its turns (`GET /api/session/{id}/turn`,
+/// every page) and the frozen starting-context snapshot. The event log is not
+/// read.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct History {
     pub session_id: String,
     pub messages: Vec<Message>,
-    pub events: Vec<Event>,
     pub starting: Option<Value>,
-    /// Why the diagnostics are incomplete (retention, the load cap, a failed
-    /// page), shown in the timeline. `None` when every retained event loaded.
-    pub events_gap: Option<String>,
+    /// Oldest to newest. Empty when the request failed (`turns_error`).
+    pub turns: Vec<TurnSummary>,
+    /// Older turns exist that were not loaded (the page cap was reached).
+    pub more_before: bool,
+    /// Messages below this seq have no turn summary (pruned turns, or history
+    /// from before turns were recorded).
+    pub floor: Option<i64>,
+    pub usage: UsageLedger,
+    /// Why the turn summaries are missing or incomplete; the timeline says so.
+    pub turns_error: Option<String>,
+}
+
+/// Token counts as Core reports them. A request or attempt without a report
+/// has `None` (unknown), never zeros.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+pub struct Usage {
+    #[serde(default)]
+    pub input: u64,
+    #[serde(default)]
+    pub cached: u64,
+    #[serde(default)]
+    pub output: u64,
+    #[serde(default)]
+    pub reasoning: u64,
+}
+
+impl Usage {
+    pub fn add(&mut self, other: &Usage) {
+        self.input += other.input;
+        self.cached += other.cached;
+        self.output += other.output;
+        self.reasoning += other.reasoning;
+    }
+}
+
+/// One provider attempt of a request (retries included).
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct AttemptSummary {
+    #[serde(default)]
+    pub n: u32,
+    #[serde(default)]
+    pub status: String,
+    /// Seconds waited before this attempt (a retry's backoff).
+    #[serde(default)]
+    pub delay: Option<f64>,
+    #[serde(default)]
+    pub started: Option<f64>,
+    #[serde(default)]
+    pub finished: Option<f64>,
+    /// Why this attempt (or the one before it, for a retry) failed.
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub usage: Option<Usage>,
+}
+
+/// One provider request (one model step) of a turn.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct RequestSummary {
+    pub id: String,
+    #[serde(default)]
+    pub step: u32,
+    #[serde(default)]
+    pub status: String,
+    /// The `provider/model` ref the request ran with.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub started: Option<f64>,
+    #[serde(default)]
+    pub finished: Option<f64>,
+    #[serde(default)]
+    pub stop: Option<String>,
+    #[serde(default)]
+    pub error: Option<Value>,
+    /// The assistant message this request produced.
+    #[serde(default)]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub usage: Option<Usage>,
+    #[serde(default)]
+    pub reasoning_seconds: Option<f64>,
+    #[serde(default)]
+    pub attempts: Vec<AttemptSummary>,
+}
+
+/// One tool call of a turn: timing and outcome; output stays in the messages.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct ToolSummary {
+    pub call_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub started: Option<f64>,
+    #[serde(default)]
+    pub finished: Option<f64>,
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+/// What a turn ran, cost and how it ended (`docs/api.md`, turn summaries).
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct TurnSummary {
+    pub id: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub started: f64,
+    #[serde(default)]
+    pub finished: Option<f64>,
+    /// The last message seq before the turn: its messages have greater seqs.
+    #[serde(default)]
+    pub start_seq: i64,
+    #[serde(default)]
+    pub steps: u64,
+    #[serde(default)]
+    pub stop: Option<String>,
+    /// `{stop, steps}` once the loop ended the turn, else `None`.
+    #[serde(default)]
+    pub ended: Option<Value>,
+    #[serde(default)]
+    pub error: Option<Value>,
+    #[serde(default)]
+    pub recovery: Option<String>,
+    #[serde(default)]
+    pub requests: Vec<RequestSummary>,
+    #[serde(default)]
+    pub tools: Vec<ToolSummary>,
+}
+
+/// One model's row of the session spend ledger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+pub struct LedgerRow {
+    #[serde(default)]
+    pub requests: u64,
+    #[serde(flatten)]
+    pub usage: Usage,
+}
+
+/// The session's spend per `provider/model` (`unknown` for a request with no
+/// recorded model). It covers pruned turns; `since` is when counting began.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct UsageLedger {
+    #[serde(default)]
+    pub since: Option<f64>,
+    #[serde(default)]
+    pub models: BTreeMap<String, LedgerRow>,
+}
+
+impl UsageLedger {
+    /// The ledger key of a request's model.
+    pub fn key(model: Option<&str>) -> String {
+        model
+            .filter(|m| !m.is_empty())
+            .unwrap_or("unknown")
+            .to_owned()
+    }
+
+    /// What one turn's requests add to the ledger, per model key.
+    pub fn of_turn(turn: &TurnSummary) -> BTreeMap<String, LedgerRow> {
+        let mut out: BTreeMap<String, LedgerRow> = BTreeMap::new();
+        for r in &turn.requests {
+            if let Some(u) = &r.usage {
+                let row = out.entry(Self::key(r.model.as_deref())).or_default();
+                row.requests += 1;
+                row.usage.add(u);
+            }
+        }
+        out
+    }
+
+    /// Replace a turn's counted contribution `old` with `new`.
+    pub fn replace(
+        &mut self,
+        old: &BTreeMap<String, LedgerRow>,
+        new: &BTreeMap<String, LedgerRow>,
+        now: f64,
+    ) {
+        for (model, row) in old {
+            if let Some(have) = self.models.get_mut(model) {
+                have.requests = have.requests.saturating_sub(row.requests);
+                have.usage.input = have.usage.input.saturating_sub(row.usage.input);
+                have.usage.cached = have.usage.cached.saturating_sub(row.usage.cached);
+                have.usage.output = have.usage.output.saturating_sub(row.usage.output);
+                have.usage.reasoning = have.usage.reasoning.saturating_sub(row.usage.reasoning);
+            }
+        }
+        for (model, row) in new {
+            let have = self.models.entry(model.clone()).or_default();
+            have.requests += row.requests;
+            have.usage.add(&row.usage);
+        }
+        if !new.is_empty() && self.since.is_none() {
+            self.since = Some(now);
+        }
+    }
+
+    pub fn total(&self) -> Usage {
+        let mut u = Usage::default();
+        for row in self.models.values() {
+            u.add(&row.usage);
+        }
+        u
+    }
+}
+
+/// `{"seq": n}`: messages below `seq` have no turn summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+pub struct Floor {
+    pub seq: i64,
+}
+
+/// One page of `GET /api/session/{id}/turn`, oldest turn first.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct TurnPage {
+    #[serde(default)]
+    pub turns: Vec<TurnSummary>,
+    #[serde(default)]
+    pub more_before: bool,
+    #[serde(default)]
+    pub more_after: bool,
+    #[serde(default)]
+    pub floor: Option<Floor>,
+    #[serde(default)]
+    pub usage: UsageLedger,
 }
 
 /// `<generation>:<id>`. The generation may not contain `:`; split at the last one.
@@ -346,32 +572,6 @@ pub fn parse_cursor(cursor: &str) -> Option<(&str, i64)> {
 
 pub fn format_cursor(generation: &str, id: i64) -> String {
     format!("{generation}:{id}")
-}
-
-impl Event {
-    /// A row from `GET /api/session/{id}/event`. Stored rows carry the same
-    /// fields as a streamed event, without a cursor when returned in a page.
-    pub fn from_stored(v: &Value) -> Option<Self> {
-        let kind = v.get("type").and_then(Value::as_str)?.to_owned();
-        let id = v.get("id").and_then(Value::as_i64).or_else(|| {
-            v.get("cursor")
-                .and_then(Value::as_str)
-                .and_then(parse_cursor)
-                .map(|(_, id)| id)
-        })?;
-        Some(Self {
-            id,
-            cursor: v.get("cursor").and_then(Value::as_str).map(str::to_owned),
-            seq: v.get("seq").and_then(Value::as_i64),
-            time: v.get("time").and_then(Value::as_f64).unwrap_or(0.0),
-            kind,
-            session_id: v
-                .get("session_id")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            data: v.get("data").cloned().unwrap_or(Value::Null),
-        })
-    }
 }
 
 /// A durable log event (every SSE frame except `server.connected` and
@@ -852,15 +1052,31 @@ impl CoreApi {
             .map(|_| ()))
     }
 
-    /// One page of a session's durable event log (`?after=<id>&limit=`).
-    /// Returns the raw payload: `events`, `more`, `floor`, `head`, `generation`.
-    pub async fn event_page(&self, session: &str, after: i64, limit: u32) -> Result<Value, Error> {
-        self.http
-            .get(
-                &format!("/api/session/{session}/event"),
-                &[("after", after.to_string()), ("limit", limit.to_string())],
-            )
-            .await
+    /// One page of turn summaries: the newest `limit`, or the page after or
+    /// before a known turn id (`after` and `before` are exclusive).
+    pub async fn turns(
+        &self,
+        session: &str,
+        after: Option<&str>,
+        before: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<TurnPage, Error> {
+        let mut q = Vec::new();
+        if let Some(a) = after {
+            q.push(("after", a.to_owned()));
+        }
+        if let Some(b) = before {
+            q.push(("before", b.to_owned()));
+        }
+        if let Some(n) = limit {
+            q.push(("limit", n.to_string()));
+        }
+        serde_json::from_value(
+            self.http
+                .get(&format!("/api/session/{session}/turn"), &q)
+                .await?,
+        )
+        .map_err(dec)
     }
 
     /// Move the session to an existing directory. Returns the session and the

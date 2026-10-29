@@ -1,8 +1,35 @@
 // Connection supervisor: handshake, snapshot, SSE with durable cursors, reconnect with backoff,
 // resync, daemon-restart detection. Mirrors nexus-tui/src/sync.rs.
 import { ApiError, Backoff, eventStream, request, sleep } from "./transport";
-import { Compat, CoreEvent, Info, Snapshot, checkCompat, parseApiVersion } from "./api";
-import { EventPage, Model, foldEventPages } from "./reduce";
+import { Compat, CoreEvent, Info, Snapshot, TurnPage, TurnSummary, checkCompat, parseApiVersion } from "./api";
+import { Model } from "./reduce";
+
+/** `/turn` page size while loading a session's summaries (Core's maximum). */
+export const TURN_PAGE = 200;
+/** Pages of summaries read per session open; older turns beyond them are announced, not loaded. */
+export const TURN_PAGES_MAX = 25;
+
+/**
+ * Every turn summary of a session, newest page first and then `before=` pages to the oldest,
+ * returned oldest first with the newest page's floor and ledger. A failed or malformed read
+ * throws; the caller announces it.
+ */
+export async function loadTurns(id: string, stillWanted: () => boolean = () => true): Promise<{ page: TurnPage; capped: boolean } | null> {
+  const first = await request<TurnPage>("GET", `/api/session/${id}/turn`, { query: { limit: TURN_PAGE } });
+  if (!first || !Array.isArray(first.turns)) throw new Error("Core returned no turn summaries");
+  let turns: TurnSummary[] = first.turns;
+  let more = !!first.more_before;
+  let pages = 1;
+  while (more && turns.length && pages < TURN_PAGES_MAX) {
+    if (!stillWanted()) return null;
+    const page = await request<TurnPage>("GET", `/api/session/${id}/turn`, { query: { before: turns[0].id, limit: TURN_PAGE } });
+    if (!page || !Array.isArray(page.turns)) throw new Error("Core returned no turn summaries");
+    turns = [...page.turns, ...turns];
+    more = !!page.more_before && page.turns.length > 0;
+    pages++;
+  }
+  return { page: { ...first, turns, more_before: more }, capped: more };
+}
 
 export type ConnectionState =
   | { kind: "starting" }
@@ -136,10 +163,13 @@ export class Sync {
     const flush = () => {
       scheduled = false;
       let resync: string | null = null;
+      let closed: string | null = null;
       for (const ev of buf) {
         const r = m.applyEvent(ev);
         if (typeof r === "object") { resync = r.resync; break; }
+        if (r === "applied" && ev.type === "turn.summary" && ev.session_id && ev.session_id === m.selected?.sessionId) closed = ev.session_id;
       }
+      if (closed) void this.refreshLedger(closed).catch(() => {});
       buf = [];
       h.changed();
       if (resync) { this.needSnapshot = true; h.addBanner({ kind: "resynced", why: resync }); this.abort?.abort(); }
@@ -167,41 +197,38 @@ export class Sync {
   }
 
   /**
-   * Load the selected session's full history: every saved message, the frozen
-   * starting context and the retained diagnostics (turn durations and usage).
-   * The snapshot's own message view is bounded; this is the complete timeline.
+   * Load the selected session's full history: every saved message, the frozen starting
+   * context and the turn summaries with the spend ledger (`GET …/turn`). The event log is
+   * not read: live events cover the running turn, summaries cover the rest.
    */
   async loadSelected(): Promise<void> {
     const m = this.host.model;
     const id = m.selected?.sessionId;
     if (!id) return;
-    const msgs = await request<any[]>("GET", `/api/session/${id}/message`);
-    if (m.selected?.sessionId !== id) return;
-    const starting = await request<any>("GET", `/api/session/${id}/snapshot`).catch(() => null);
-    if (m.selected?.sessionId !== id) return;
-    // Diagnostics, paged by durable id to the end; the fold keeps the newest and
-    // says what is missing (retention, the cap, a failed page).
-    const pages: EventPage[] = [];
-    let after = 0;
-    let failed: { after: number; error: string } | null = null;
-    for (;;) {
-      let page: EventPage & { more?: boolean };
-      try {
-        page = await request<EventPage & { more?: boolean }>("GET", `/api/session/${id}/event`, { query: { after, limit: 5000 } });
-      } catch (e) {
-        failed = { after, error: String((e as Error)?.message ?? e) };
-        break;
-      }
-      if (m.selected?.sessionId !== id) return;
-      pages.push(page);
-      const evs = page.events ?? [];
-      const last = evs.length ? evs[evs.length - 1].id : after;
-      if (!page.more || last <= after) break;
-      after = last;
-    }
-    const { events, gap } = foldEventPages(pages, failed);
-    if (m.selected?.sessionId !== id) return;
-    m.applyHistory({ sessionId: id, messages: msgs, events, starting, eventsGap: gap });
+    const wanted = () => m.selected?.sessionId === id;
+    const [msgs, starting, turns] = await Promise.all([
+      request<any[]>("GET", `/api/session/${id}/message`),
+      request<any>("GET", `/api/session/${id}/snapshot`).catch(() => null),
+      loadTurns(id, wanted).then((r) => r, (e) => ({ error: String((e as Error)?.message ?? e) })),
+    ]);
+    if (!wanted() || turns === null) return;
+    let gap: string | null = null;
+    if ("error" in turns) gap = `turn details failed to load (${turns.error}); tokens, models and timings are missing`;
+    else if (turns.capped) gap = `only the newest ${TURN_PAGE * TURN_PAGES_MAX} turns have details loaded`;
+    const page = "error" in turns ? null : turns.page;
+    m.applyHistory({
+      sessionId: id, messages: msgs, starting, turnsGap: gap,
+      turns: page?.turns ?? [], floor: page?.floor ?? null, usage: page?.usage ?? null,
+    });
+    this.host.changed();
+  }
+
+  /** Re-read the ledger (and floor) after a turn closed; the summary itself came on the stream. */
+  async refreshLedger(id: string): Promise<void> {
+    const m = this.host.model;
+    const page = await request<TurnPage>("GET", `/api/session/${id}/turn`, { query: { limit: 1 } });
+    if (m.selected?.sessionId !== id || !page?.usage) return;
+    m.applyLedger(id, page.usage, page.floor ?? null, m.lastId);
     this.host.changed();
   }
 }

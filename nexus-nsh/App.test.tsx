@@ -2,7 +2,8 @@
 import { describe, expect, open, test } from "nsh/test";
 import { manifest } from "./src/gen/manifest";
 import { agentSlot } from "./src/agent-color";
-import { Model, foldEventPages } from "./src/core/reduce";
+import { Model, scratchOf, upsertTurn } from "./src/core/reduce";
+import { groupRequests, latestUsage, ledgerTotals, sumUsage } from "./src/core/turns";
 import { capToolDetail, detailOf, fmtDuration } from "./src/ui/timeline";
 import { diffItems, splitRows } from "./src/ui/diff";
 
@@ -27,6 +28,23 @@ const core = (info: object = { name: "nexus", version: "0.10.0.dev0", pid: 1 }) 
   "GET */api/session/*": { body: snapshot.sessions[0] },
 });
 const mod = "mod";
+const quietTurns = { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } };
+type Usage = { input: number; cached: number; output: number; reasoning: number } | null;
+const usage = (input: number, output = 0, cached = 0, reasoning = 0): Usage => ({ input, cached, output, reasoning });
+/** A turn summary as `GET …/turn` serves it: one request per `[model, usage]`, all closed. */
+function turnSummary(id: string, startSeq: number, requests: [string | null, Usage][], extra: Record<string, unknown> = {}) {
+  return {
+    id, status: "completed", started: 1, finished: 1.9, start_seq: startSeq, steps: requests.length, stop: "end_turn",
+    ended: { stop: "end_turn", steps: requests.length }, error: null, recovery: "none", tools: [],
+    requests: requests.map(([model, u], i) => ({
+      id: `${id}-r${i + 1}`, step: i + 1, status: "completed", model, effort: null, started: 1.1 + i * 0.1, finished: 1.15 + i * 0.1,
+      stop: i + 1 === requests.length ? "end_turn" : "tool_calls", error: null, message_id: null, usage: u, reasoning_seconds: null,
+      attempts: [{ n: 1, status: "completed", delay: null, started: 1.1 + i * 0.1, finished: 1.15 + i * 0.1, error: null, usage: u }],
+    })),
+    ...extra,
+  };
+}
+const turnPage = (turns: object[], extra: Record<string, unknown> = {}) => ({ body: { ...quietTurns, turns, ...extra } });
 const userMessage = { id: "m_user", session_id: "ses_1", seq: 1, role: "user", parts: [{ type: "text", text: "hello" }], created: 1 };
 const assistantMessage = { id: "m_assistant", session_id: "ses_1", seq: 2, role: "assistant", parts: [{ type: "text", text: "done" }], created: 2 };
 
@@ -35,7 +53,7 @@ function selectedSessionNetwork(extra: Record<string, unknown> = {}) {
     "GET */api/session/ses_1": { body: { ...snapshot.sessions[0], model: "codex/gpt-5", directory: "/work/demo" } },
     "GET */api/session/ses_1/message": { body: [userMessage, assistantMessage] },
     "GET */api/session/ses_1/snapshot": { body: null },
-    "GET */api/session/ses_1/event*": { body: { events: [], more: false, floor: 0, history_truncated: false } },
+    "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
     "GET */api/session/ses_1/worktrees": { body: { session_directory: "/work/demo", project_directory: "/work/demo", worktrees: [{ path: "/work/demo", branch: "trunk", main: true }] } },
     ...core(),
     ...extra,
@@ -77,10 +95,10 @@ describe("shell", () => {
         "GET */api/session/ses_2": { body: second },
         "GET */api/session/ses_1/message": { body: [] },
         "GET */api/session/ses_1/snapshot": { body: null },
-        "GET */api/session/ses_1/event*": { body: { events: [], more: false, floor: 0, history_truncated: false } },
+        "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
         "GET */api/session/ses_2/message": { body: [] },
         "GET */api/session/ses_2/snapshot": { body: null },
-        "GET */api/session/ses_2/event*": { body: { events: [], more: false, floor: 0, history_truncated: false } },
+        "GET */api/session/ses_2/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
         "GET */api/session/*/worktrees": { body: { worktrees: [] } },
         ...core(),
         "GET */api/snapshot*": { body: { ...snapshot, sessions: [snapshot.sessions[0], second] } },
@@ -109,7 +127,7 @@ describe("shell", () => {
         "GET */api/session/ses_new": { body: created },
         "GET */api/session/ses_new/message": { body: [] },
         "GET */api/session/ses_new/snapshot": { body: null },
-        "GET */api/session/ses_new/event*": { body: { events: [], more: false, floor: 0, history_truncated: false } },
+        "GET */api/session/ses_new/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
         "GET */api/session/ses_new/worktrees": { body: { worktrees: [] } },
         "POST */api/session/ses_new/prompt": { status: 204, body: null },
         ...core(),
@@ -235,27 +253,60 @@ describe("connection states", () => {
 });
 
 describe("history", () => {
-  const ev = (id: number) => ({ id, type: "usage", session_id: "ses_1", cursor: `log_t:${id}`, seq: id, time: 0, data: {} }) as any;
+  const ev = (id: number, type = "usage", data: any = {}) => ({ id, type, session_id: "ses_1", cursor: `log_t:${id}`, seq: id, time: id, data }) as any;
   const msg = (id: string, seq: number) => ({ id, session_id: "ses_1", seq, role: "assistant", parts: [], time: 0 }) as any;
+  const live = (m: Model) => { m.generation = "log_t"; return m; };
 
-  test("event pages keep the newest and say what is missing", async () => {
-    expect(foldEventPages([{ events: [ev(4), ev(5)] }], null, 10)).toEqual({ events: [ev(4), ev(5)], gap: null });
-    const capped = foldEventPages([{ events: [ev(4), ev(5), ev(6)], floor: 3, history_truncated: true }, { events: [ev(7), ev(8)] }], null, 3);
-    expect(capped.events.map((e) => e.id)).toEqual([6, 7, 8]);
-    expect(capped.gap!.includes("at or before event 3 expired")).toBe(true);
-    expect(capped.gap!.includes("2 older diagnostics")).toBe(true);
-    const failed = foldEventPages([{ events: [ev(4)] }], { after: 4, error: "timed out" }, 10);
-    expect(failed.gap!.includes("after event 4 failed to load (timed out)")).toBe(true);
-  });
-
-  test("history keeps messages and events the stream applied after the fetch", async () => {
-    const m = new Model();
+  test("history keeps messages and summaries the stream applied after the fetch", async () => {
+    const m = live(new Model());
     m.select("ses_1");
     m.selected!.messages = [msg("m1", 1), msg("m3", 3)]; // m3 arrived live
-    m.selected!.events = [ev(9)];
-    m.applyHistory({ sessionId: "ses_1", messages: [msg("m1", 1), msg("m2", 2)], events: [ev(4)], starting: null, eventsGap: null });
+    const closedLive = turnSummary("trn_2", 2, [["codex/gpt-5", usage(5)]], { started: 2 });
+    m.selected!.turns = [closedLive as any];
+    const fetched = { ...turnSummary("trn_2", 2, [["codex/gpt-5", null]], { started: 2 }), status: "running" };
+    m.applyHistory({ sessionId: "ses_1", messages: [msg("m1", 1), msg("m2", 2)], turns: [turnSummary("trn_1", 0, []) as any, fetched as any], floor: null, usage: null, starting: null, turnsGap: null });
     expect(m.selected!.messages.map((x) => x.id)).toEqual(["m1", "m2", "m3"]);
-    expect(m.selected!.events.map((e) => e.id)).toEqual([4, 9]);
+    expect(m.selected!.turns.map((t) => [t.id, t.status])).toEqual([["trn_1", "completed"], ["trn_2", "completed"]]);
+  });
+
+  test("scratch keeps live events without deltas or wire bodies; turn.summary replaces it", async () => {
+    expect(scratchOf(ev(1, "text_delta", { text: "x" }))).toBe(null);
+    expect(scratchOf(ev(1, "wire_event", {}))).toBe(null);
+    expect(scratchOf(ev(1, "wire_request", { body: { model: "gpt-5", input: ["huge"] } }))!.data).toEqual({ body: { model: "gpt-5" } });
+    const m = live(new Model());
+    m.select("ses_1");
+    for (const e of [ev(1, "step_start", { step: 1 }), ev(2, "text_delta", { text: "hi" }), ev(3, "usage", { input_tokens: 10, output_tokens: 4 })]) m.applyEvent(e);
+    expect(m.selected!.scratch.map((e) => e.type)).toEqual(["step_start", "usage"]);
+    expect(m.streaming.get("ses_1")?.text).toBe("hi");
+    expect(sumUsage(groupRequests([], m.selected!.scratch)).output).toBe(4);
+    m.applyEvent(ev(4, "turn.summary", turnSummary("trn_1", 0, [["codex/gpt-5", usage(10, 4)]])));
+    expect(m.selected!.scratch).toEqual([]);
+    expect(m.selected!.turns.map((t) => t.id)).toEqual(["trn_1"]);
+    // Replacing, not appending: a second summary for the same turn wins.
+    m.applyEvent(ev(5, "turn.summary", turnSummary("trn_1", 0, [["codex/gpt-5", usage(12, 4)]])));
+    expect(m.selected!.turns.length).toBe(1);
+    expect(latestUsage(m.selected!.turns, m.selected!.scratch)).toEqual({ input: 12, model: "codex/gpt-5" });
+  });
+
+  test("a running turn's loaded summary joins its live requests without counting twice", async () => {
+    const running = { ...turnSummary("trn_1", 0, [["codex/gpt-5", usage(100, 10)], ["codex/gpt-5", null]]), status: "running" } as any;
+    running.requests[1].status = "running";
+    const scratch = [
+      ev(1, "step_start", { step: 1 }), ev(2, "usage", { input_tokens: 100, output_tokens: 10 }),
+      ev(3, "step_start", { step: 2 }), ev(4, "usage", { input_tokens: 200, output_tokens: 20 }), ev(5, "step_start", { step: 3 }),
+    ];
+    // Step 1 is in both and counted once; step 2 gets its live usage; step 3 is new and still running.
+    const reqs = groupRequests([running], scratch);
+    expect(reqs.map((r) => r.step)).toEqual([1, 2, 3]);
+    expect(sumUsage(reqs)).toEqual({ input: 300, cached: 0, output: 30, reasoning: 0, known: 2, unknown: 0 });
+  });
+
+  test("summaries are ordered by start; the ledger adds only live usage it has not counted", async () => {
+    const order = upsertTurn(upsertTurn([], turnSummary("b", 1, [], { started: 5 }) as any), turnSummary("a", 0, [], { started: 1 }) as any);
+    expect(order.map((t) => t.id)).toEqual(["a", "b"]);
+    const ledger = { since: 1, models: { "codex/gpt-5": { requests: 1, input: 100, cached: 0, output: 10, reasoning: 0 } } };
+    const rows = ledgerTotals(ledger, [ev(3, "usage", { input_tokens: 50 }), ev(7, "usage", { input_tokens: 70 })], 5, "codex/gpt-5");
+    expect(rows.get("codex/gpt-5")).toEqual({ requests: 2, input: 170, cached: 0, output: 10, reasoning: 0 });
   });
 
   test("selecting loads history without a global snapshot; a daemon restart reloads it", async () => {
@@ -265,7 +316,7 @@ describe("history", () => {
       network: {
         "GET */api/session/ses_1/message": { body: [] },
         "GET */api/session/ses_1/snapshot": { body: {} },
-        "GET */api/session/ses_1/event*": { body: { events: [], more: false, floor: 0, history_truncated: false } },
+        "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
         ...core(),
         "GET */api/info": () => ({ body: { name: "nexus", version: "x", pid, api_version: { major: 1, minor: 0 } } }),
       },
@@ -349,14 +400,9 @@ describe("context, composer and footer parity", () => {
   });
 
   test("turn footer prices cached and uncached input using the catalog", async () => {
-    const events = [
-      { id: 1, type: "wire_request", session_id: "ses_1", cursor: "log_t:1", seq: 1, time: 1.1, data: { body: { model: "gpt-5" } } },
-      { id: 2, type: "usage", session_id: "ses_1", cursor: "log_t:2", seq: 2, time: 1.2, data: { input_tokens: 100000, cached_input_tokens: 50000, output_tokens: 10000 } },
-      { id: 3, type: "turn_end", session_id: "ses_1", cursor: "log_t:3", seq: 3, time: 1.9, data: { stop: "completed", steps: 1 } },
-    ];
     const app = await open("./App.tsx", {
       network: selectedSessionNetwork({
-        "GET */api/session/ses_1/event*": { body: { events, more: false, floor: 0, history_truncated: false } },
+        "GET */api/session/ses_1/turn*": turnPage([turnSummary("trn_1", 0, [["codex/gpt-5", usage(100000, 10000, 50000)]])]),
         "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-5", context: 400000, input_cost: 1, output_cost: 10, cache_read_cost: 0.2 }] } },
       }),
       width: 1024, height: 768, platform: "web",
@@ -370,13 +416,9 @@ describe("context, composer and footer parity", () => {
   });
 
   test("composer control row shows the context meter; the project strip shows the palette hint", async () => {
-    const events = [
-      { id: 1, type: "usage", session_id: "ses_1", cursor: "log_t:1", seq: 1, time: 1.1, data: { input_tokens: 1000 } },
-      { id: 2, type: "usage", session_id: "ses_1", cursor: "log_t:2", seq: 2, time: 1.2, data: { input_tokens: 11100 } },
-    ];
     const app = await open("./App.tsx", {
       network: selectedSessionNetwork({
-        "GET */api/session/ses_1/event*": { body: { events, more: false, floor: 0, history_truncated: false } },
+        "GET */api/session/ses_1/turn*": turnPage([turnSummary("trn_1", 0, [["codex/gpt-5", usage(1000)], ["codex/gpt-5", usage(11100)]])]),
         "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-6.1 Terra", context: 1_000_000, tiers: [270_000] }] } },
       }),
       width: 1024, height: 768, platform: "web",
@@ -393,17 +435,15 @@ describe("context, composer and footer parity", () => {
   });
 
   test("location strip uses the longest matching linked worktree and shows disabled action reasons", async () => {
-    const session = { ...snapshot.sessions[0], directory: "/work/demo/ws/nested", model: "codex/gpt-5" };
+    // The session moved: the snapshot still has the old directory, the session view the new one
+    // (as after `session.updated`), so the worktrees are read again for it. No event is loaded.
+    const session = { ...snapshot.sessions[0], directory: "/work/demo/ws/nested", model: "codex/gpt-5", revision: 2, directory_changed: true };
     let worktreeReads = 0;
     const app = await open("./App.tsx", {
       network: {
         ...selectedSessionNetwork({
-          "GET */api/snapshot*": { body: { ...snapshot, sessions: [session] } },
+          "GET */api/snapshot*": { body: { ...snapshot, sessions: [{ ...session, directory: "/work/demo", revision: 1, directory_changed: false }] } },
           "GET */api/session/ses_1": { body: session },
-          "GET */api/session/ses_1/event*": { body: { events: [{
-            id: 8, type: "session.directory_changed", session_id: "ses_1", cursor: "log_t:8", seq: 8, time: 3,
-            data: { from: "/work/demo", to: session.directory },
-          }], more: false, floor: 0, history_truncated: false } },
           "GET */api/session/ses_1/worktrees": () => {
             worktreeReads++;
             return { body: {
@@ -421,8 +461,8 @@ describe("context, composer and footer parity", () => {
     });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
+    await app.waitFor("text:⌥ nested");
     await app.waitFor("id:location-worktree");
-    await app.waitFor("id:msg-diag");
     const shown = app.texts().join("\n");
     expect(shown.includes("demo")).toBe(true);
     expect(shown.includes("nested")).toBe(true);
@@ -631,20 +671,19 @@ describe("session info totals", () => {
       { ...userMessage, parts: [{ type: "text", text: "Summarize this session" }] },
       { id: "m_tools", session_id: "ses_1", seq: 2, role: "assistant", parts: toolCalls, created: 2 },
     ];
-    const events = [
-      { id: 1, type: "wire_request", session_id: "ses_1", cursor: "log_t:1", seq: 1, time: 1.1, data: { body: { model: "unpriced/model" } } },
-      { id: 2, type: "usage", session_id: "ses_1", cursor: "log_t:2", seq: 2, time: 1.2, data: { input_tokens: 1000, output_tokens: 0 } },
-      { id: 3, type: "wire_request", session_id: "ses_1", cursor: "log_t:3", seq: 3, time: 1.3, data: { body: { model: "gpt-5" } } },
-      { id: 4, type: "usage", session_id: "ses_1", cursor: "log_t:4", seq: 4, time: 1.4, data: { input_tokens: 10_000, output_tokens: 1000, reasoning_tokens: 200 } },
-      { id: 5, type: "wire_request", session_id: "ses_1", cursor: "log_t:5", seq: 5, time: 1.5, data: { body: { model: "codex/gpt-5" } } },
-      { id: 6, type: "usage", session_id: "ses_1", cursor: "log_t:6", seq: 6, time: 1.6, data: { input_tokens: 50_000, cached_input_tokens: 20_000, output_tokens: 2000, reasoning_tokens: 300 } },
-    ];
+    // The ledger is per model (a backfilled row has the bare id); the newest request with usage gives the context bar.
+    const ledger = { since: 1.1, models: {
+      "unpriced/model": { requests: 1, input: 1000, cached: 0, output: 0, reasoning: 0 },
+      "gpt-5": { requests: 1, input: 10_000, cached: 0, output: 1000, reasoning: 200 },
+      "codex/gpt-5": { requests: 1, input: 50_000, cached: 20_000, output: 2000, reasoning: 300 },
+    } };
+    const turns = [turnSummary("trn_1", 0, [["unpriced/model", usage(1000)], ["gpt-5", usage(10_000, 1000, 0, 200)], ["codex/gpt-5", usage(50_000, 2000, 20_000, 300)]])];
     const app = await open("./App.tsx", {
       network: selectedSessionNetwork({
         "GET */api/snapshot*": { body: { ...snapshot, sessions: [session, ...children], running: [{ id: "turn_child", session_id: "ses_running" }] } },
         "GET */api/session/ses_1": { body: session },
         "GET */api/session/ses_1/message": { body: messages },
-        "GET */api/session/ses_1/event*": { body: { events, more: false, floor: 0, history_truncated: false } },
+        "GET */api/session/ses_1/turn*": turnPage(turns, { usage: ledger }),
         "GET */api/model": { body: { source: "fixture catalog", models: [{ ref: "codex/gpt-5", context: 200_000, input_cost: 1, output_cost: 10, cache_read_cost: 0.2 }] } },
         "GET */api/model/default": { body: { model: "codex/gpt-5" } },
       }),
@@ -671,6 +710,68 @@ describe("session info totals", () => {
     const shown = app.texts().join("\n");
     expect(shown.includes("Tokens") && shown.includes("not reported")).toBe(true);
     expect(shown.includes("Input")).toBe(false);
+  });
+});
+
+describe("turn summaries", () => {
+  const user = (id: string, seq: number, text: string) => ({ id, session_id: "ses_1", seq, role: "user", parts: [{ type: "text", text }], created: seq });
+  const reply = (id: string, seq: number) => ({ id, session_id: "ses_1", seq, role: "assistant", parts: [{ type: "text", text: `reply ${seq}` }], created: seq + 0.5 });
+
+  test("unknown usage reads unknown, a floor row marks turns without details, and no event history is read", async () => {
+    const turns = [turnSummary("trn_2", 2, [["codex/gpt-5", null]], { started: 3, finished: 4 })];
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({
+        "GET */api/session/ses_1/message": { body: [user("u1", 1, "first"), reply("a1", 2), user("u2", 3, "second"), reply("a2", 4)] },
+        "GET */api/session/ses_1/turn*": turnPage(turns, { floor: { seq: 3 } }),
+      }),
+      width: 1440, height: 900, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:timeline-older");
+    await app.waitFor("text:reply 4");
+    const shown = app.texts().join("\n");
+    expect(shown.includes("Turns above have no details")).toBe(true);
+    expect(shown.includes("tokens unknown")).toBe(true);
+    expect(shown.includes("0 i")).toBe(false);
+    expect(shown.includes("1 request reported no usage (unknown, not zero)")).toBe(true);
+    expect(shown.includes("/continue")).toBe(false); // a turn without a summary is not called interrupted
+    expect(app.requests().some((r) => r.url.includes("/api/session/ses_1/turn"))).toBe(true);
+    expect(app.requests().some((r) => r.url.includes("/api/session/ses_1/event"))).toBe(false);
+  });
+
+  test("retries and the turn error come from the summary's attempts", async () => {
+    const failed = turnSummary("trn_1", 0, [["codex/gpt-5", null]], {
+      status: "failed", stop: null, ended: null, error: { kind: "provider", message: "overloaded", status: 529 },
+    }) as any;
+    failed.requests[0].status = "failed";
+    failed.requests[0].attempts = [
+      { n: 1, status: "failed", delay: null, started: 1.1, finished: 1.2, error: "HTTP 529", usage: null },
+      { n: 2, status: "failed", delay: 2, started: 3.2, finished: 3.3, error: "HTTP 529 again", usage: null },
+    ];
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/turn*": turnPage([failed]) }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:msg-diag");
+    const shown = app.texts().join("\n");
+    expect(shown.includes("provider retry 2/2 in 2.0s")).toBe(true);
+    expect(shown.includes("provider retries exhausted")).toBe(true);
+    expect(shown.includes("provider: overloaded")).toBe(true);
+  });
+
+  test("a turn the client cannot read details for is announced, and the timeline still loads", async () => {
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/turn*": { status: 500, body: { error: "boom" } } }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:timeline-older");
+    expect(app.texts().join("\n").includes("Turn details failed to load")).toBe(true);
+    expect(app.texts().includes("done")).toBe(true);
   });
 });
 

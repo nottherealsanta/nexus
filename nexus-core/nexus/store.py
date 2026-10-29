@@ -30,6 +30,14 @@ through started and finished (result durable, not yet in context) to inserted
 (result in the conversation). Rows cascade with their session. The message row's
 `event_id` links a saved message to the `message.added` event that announced it,
 so recovery can publish a missing announcement exactly once.
+
+Each `turn_request` also records the `provider/model` ref and effort it ran
+with, its token usage (the sum over its `turn_attempt` rows, each of which keeps
+its own) and its reasoning time; `turn.ended` records the loop's `TurnEnd`.
+`session_usage` is the per-session, per-model spend ledger: it references only
+the session, so it outlives pruned turns. `turn_summaries` serves all of this as
+`GET /api/session/{id}/turn` (TURN_SUMMARY_PLAN.md). Unknown usage is `null`,
+never zero.
 """
 from __future__ import annotations
 
@@ -44,7 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from .codec import message_from_json, message_to_json, part_from_json
-from .llmhub.types import Message, ToolCall, ToolResult
+from .llmhub.types import Message, ToolCall, ToolResult, Usage
 from .paths import home
 
 SCHEMA = """
@@ -120,7 +128,11 @@ create table if not exists turn_attempt (
   delay real,
   started real,
   finished real,
-  error text
+  error text,
+  input_tokens integer,
+  cached_input_tokens integer,
+  output_tokens integer,
+  reasoning_tokens integer
 );
 create index if not exists turn_attempt_request on turn_attempt(request_id, attempt);
 create table if not exists session_snapshot (
@@ -156,7 +168,8 @@ create table if not exists turn (
   error text,
   recovery text not null default 'none',
   notice_id text,
-  data text not null default '{}'
+  data text not null default '{}',
+  ended text
 );
 create index if not exists turn_session on turn(session_id, started);
 create index if not exists turn_open on turn(status, recovery);
@@ -174,9 +187,27 @@ create table if not exists turn_request (
   response_id text,
   error text,
   parts text not null default '[]',
-  data text not null default '{}'
+  data text not null default '{}',
+  model text,
+  effort text,
+  input_tokens integer,
+  cached_input_tokens integer,
+  output_tokens integer,
+  reasoning_tokens integer,
+  reasoning_seconds real
 );
 create index if not exists turn_request_turn on turn_request(turn_id, step);
+create table if not exists session_usage (
+  session_id text not null references session(id) on delete cascade,
+  model text not null,
+  requests integer not null default 0,
+  input_tokens integer not null default 0,
+  cached_input_tokens integer not null default 0,
+  output_tokens integer not null default 0,
+  reasoning_tokens integer not null default 0,
+  since real not null,
+  primary key (session_id, model)
+);
 create table if not exists turn_tool (
   turn_id text not null references turn(id) on delete cascade,
   session_id text not null references session(id) on delete cascade,
@@ -205,6 +236,11 @@ def new_generation() -> str:
     return f"log_{secrets.token_hex(8)}"
 
 
+USAGE_COLUMNS = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens")
+USAGE_KEYS = ("input", "cached", "output", "reasoning")  # their names in the API
+UNKNOWN_MODEL = "unknown"  # ledger key for a request whose model was never recorded
+TURN_PAGE = 50
+TURN_PAGE_MAX = 200
 MUTATION_BODY_MAX = 64 * 1024  # retained response bytes; larger results replay as a bounded accepted record
 
 
@@ -214,6 +250,19 @@ def _archive_clause(mode: str) -> str:
         return {"exclude": " and archived = 0", "only": " and archived = 1", "include": ""}[mode]
     except KeyError as exc:
         raise ValueError("archived must be 'exclude', 'only' or 'include'") from exc
+
+
+def _usage_values(row: sqlite3.Row) -> tuple[int, ...] | None:
+    """A row's four usage columns, or `None` when it never reported usage."""
+    if row["input_tokens"] is None:
+        return None
+    return tuple(row[c] or 0 for c in USAGE_COLUMNS)
+
+
+def _usage_json(row: sqlite3.Row) -> dict[str, int] | None:
+    """API usage (`input`, `cached`, `output`, `reasoning`); `None` is unknown, never zeros."""
+    values = _usage_values(row)
+    return dict(zip(USAGE_KEYS, values, strict=True)) if values is not None else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,7 +369,84 @@ class Store:
             self.db.execute("alter table turn_tool add column message_id text")
         self.db.execute("create index if not exists session_parent on session(parent_id)")
         self._migrate_event_log()
+        self._migrate_usage()
         self._generation = self._ensure_log()
+
+    def _migrate_usage(self) -> None:
+        """Add model, effort, usage and reasoning time to requests, and `turn.ended`.
+
+        Runs its backfill only in the transaction that adds the columns, so it
+        runs once (TURN_SUMMARY_PLAN.md 4.9).
+        """
+        request_columns = {r["name"] for r in self.db.execute("pragma table_info(turn_request)")}
+        attempt_columns = {r["name"] for r in self.db.execute("pragma table_info(turn_attempt)")}
+        turn_columns = {r["name"] for r in self.db.execute("pragma table_info(turn)")}
+        wanted_request = ("model text", "effort text", *(f"{c} integer" for c in USAGE_COLUMNS),
+                          "reasoning_seconds real")
+        missing_request = [c for c in wanted_request if c.split()[0] not in request_columns]
+        missing_attempt = [f"{c} integer" for c in USAGE_COLUMNS if c not in attempt_columns]
+        if not missing_request and not missing_attempt and "ended" in turn_columns:
+            return
+        with self.db:
+            self.db.execute("begin immediate")  # the columns and their backfill land together
+            for column in missing_request:
+                self.db.execute(f"alter table turn_request add column {column}")
+            for column in missing_attempt:
+                self.db.execute(f"alter table turn_attempt add column {column}")
+            if "ended" not in turn_columns:
+                self.db.execute("alter table turn add column ended text")
+            if "input_tokens" not in request_columns:
+                self._backfill_usage()
+
+    def _backfill_usage(self) -> None:
+        """Fill old requests' usage, model and effort from the events that remain.
+
+        A request's events are those after its `event_after` up to the next
+        request's `event_after` in the same session. Exactly one `usage` event
+        there fills the request and its last attempt; zero or several leave them
+        unknown. `model` is the bare id from the first `wire_request` body (the
+        provider is not in the body). The ledger is seeded from what was filled.
+        """
+        rows = self.db.execute(
+            "select id, session_id, event_after from turn_request order by session_id, event_after, started, id"
+        ).fetchall()
+        by_session: dict[str, list[sqlite3.Row]] = {}
+        for row in rows:
+            by_session.setdefault(row["session_id"], []).append(row)
+        for session_id, requests in by_session.items():
+            events = self.db.execute(
+                "select id, type, data from event where session_id = ? and id > ?"
+                " and type in ('usage', 'wire_request') order by id",
+                (session_id, requests[0]["event_after"])).fetchall()
+            for index, request in enumerate(requests):
+                low = request["event_after"]
+                high = requests[index + 1]["event_after"] if index + 1 < len(requests) else None
+                inside = [e for e in events if e["id"] > low and (high is None or e["id"] <= high)]
+                usages = [json.loads(e["data"]) for e in inside if e["type"] == "usage"]
+                wires = [json.loads(e["data"]) for e in inside if e["type"] == "wire_request"]
+                body = (wires[0].get("body") if wires else None) or {}
+                model = body.get("model") if isinstance(body.get("model"), str) else None
+                reasoning = body.get("reasoning") if isinstance(body.get("reasoning"), dict) else {}
+                effort = body.get("reasoning_effort") or reasoning.get("effort")
+                self.db.execute(
+                    "update turn_request set model = coalesce(model, ?), effort = coalesce(effort, ?) where id = ?",
+                    (model, effort if isinstance(effort, str) else None, request["id"]))
+                if len(usages) != 1:
+                    continue
+                values = tuple(int(usages[0].get(c) or 0) for c in USAGE_COLUMNS)
+                sets = ", ".join(f"{c} = ?" for c in USAGE_COLUMNS)
+                self.db.execute(f"update turn_request set {sets} where id = ?", (*values, request["id"]))
+                self.db.execute(
+                    f"update turn_attempt set {sets} where id = (select id from turn_attempt where request_id = ?"
+                    " order by attempt desc, started desc limit 1)", (*values, request["id"]))
+        self.db.execute(
+            "insert into session_usage (session_id, model, requests, input_tokens, cached_input_tokens,"
+            " output_tokens, reasoning_tokens, since)"
+            " select session_id, coalesce(model, ?), count(*), sum(input_tokens), sum(cached_input_tokens),"
+            " sum(output_tokens), sum(reasoning_tokens), min(started) from turn_request"
+            " where input_tokens is not null group by session_id, coalesce(model, ?)"
+            " on conflict(session_id, model) do nothing",
+            (UNKNOWN_MODEL, UNKNOWN_MODEL))
 
     def _migrate_event_log(self) -> None:
         """Make session_id nullable so global lifecycle events and tombstones can be logged.
@@ -1135,6 +1261,7 @@ class Store:
             "start_seq": row["start_seq"],
             "error": json.loads(row["error"]) if row["error"] else None,
             "recovery": row["recovery"], "notice_id": row["notice_id"], "data": data,
+            "ended": json.loads(row["ended"]) if row["ended"] else None,
         }
 
     def turn(self, turn_id: str) -> dict[str, Any] | None:
@@ -1168,6 +1295,12 @@ class Store:
             ).rowcount > 0
         return changed
 
+    def mark_turn_ended(self, turn_id: str, stop: str, steps: int) -> None:
+        """Record that the loop ended the turn (its `TurnEnd`), before the turn is closed."""
+        with self.db:
+            self.db.execute("update turn set ended = ? where id = ?",
+                            (json.dumps({"stop": stop, "steps": steps}), turn_id))
+
     def set_turn_recovery(self, turn_id: str, state: str) -> None:
         if state not in ("none", "pending", "done"):
             raise ValueError("recovery must be 'none', 'pending' or 'done'")
@@ -1185,20 +1318,83 @@ class Store:
             self.db.execute("update turn set notice_id = ? where id = ?", (stored.id, turn_id))
         return stored
 
-    def start_request(self, turn_id: str, session_id: str, step: int) -> dict[str, Any]:
-        """Record one provider request before it is sent, with the log watermark."""
+    def start_request(self, turn_id: str, session_id: str, step: int, *, model: str | None = None,
+                      effort: str | None = None) -> dict[str, Any]:
+        """Record one provider request before it is sent, with the log watermark.
+
+        `model` is the `provider/model` ref this step runs with and `effort` its
+        reasoning effort; both are read after the loop re-binds the agent, so a
+        model change between steps is recorded per request.
+        """
         now = time.time()
         request = {"id": new_id("req"), "turn_id": turn_id, "session_id": session_id, "step": step,
                    "status": "started", "started": now, "finished": None,
                    "event_after": self.log_head(), "message_id": None, "stop": None,
-                   "response_id": None, "error": None, "parts": [], "data": {}}
+                   "response_id": None, "error": None, "parts": [], "data": {},
+                   "model": model, "effort": effort, "usage": None, "reasoning_seconds": None}
         with self.db:
             self.db.execute(
-                "insert into turn_request (id, turn_id, session_id, step, status, started, event_after)"
-                " values (?, ?, ?, ?, 'started', ?, ?)",
-                (request["id"], turn_id, session_id, step, now, request["event_after"]),
+                "insert into turn_request (id, turn_id, session_id, step, status, started, event_after, model, effort)"
+                " values (?, ?, ?, ?, 'started', ?, ?, ?, ?)",
+                (request["id"], turn_id, session_id, step, now, request["event_after"], model, effort),
             )
         return request
+
+    def record_usage(self, request_id: str, attempt_id: str | None, usage: Usage) -> None:
+        """Store one attempt's reported usage, re-sum its request and update the ledger.
+
+        A provider reports one cumulative `Usage` per response, so the attempt's
+        columns are replaced (the last report wins). The request holds the sum
+        over its attempts that reported usage, and `session_usage` gains the
+        difference for the request's model. Repeating the same `Usage` changes
+        nothing.
+        """
+        new = tuple(int(getattr(usage, c) or 0) for c in USAGE_COLUMNS)
+        sets = ", ".join(f"{c} = ?" for c in USAGE_COLUMNS)
+        with self.db:
+            request = self.db.execute(
+                "select session_id, model, " + ", ".join(USAGE_COLUMNS) + " from turn_request where id = ?",
+                (request_id,)).fetchone()
+            if request is None:
+                return
+            counted = request["input_tokens"] is not None  # an earlier attempt already counted this request
+            attempt = None if attempt_id is None else self.db.execute(
+                "select " + ", ".join(USAGE_COLUMNS) + " from turn_attempt where id = ? and request_id = ?",
+                (attempt_id, request_id)).fetchone()
+            if attempt is not None:
+                old = _usage_values(attempt)
+                self.db.execute(f"update turn_attempt set {sets} where id = ?", (*new, attempt_id))
+                self.db.execute(
+                    f"update turn_request set {sets} where id = ?",
+                    (*self.db.execute(
+                        "select " + ", ".join(f"sum({c})" for c in USAGE_COLUMNS)
+                        + " from turn_attempt where request_id = ? and input_tokens is not null",
+                        (request_id,)).fetchone(), request_id))
+            else:  # no attempt row to hold it: the request's own report is replaced
+                old = _usage_values(request)
+                self.db.execute(f"update turn_request set {sets} where id = ?", (*new, request_id))
+            delta = [n - o for n, o in zip(new, old or (0, 0, 0, 0), strict=True)]
+            if counted and not any(delta):
+                return
+            model = request["model"] or UNKNOWN_MODEL
+            self.db.execute(
+                "insert into session_usage (session_id, model, since) values (?, ?, ?)"
+                " on conflict(session_id, model) do nothing", (request["session_id"], model, time.time()))
+            self.db.execute(
+                "update session_usage set requests = requests + ?, "
+                + ", ".join(f"{c} = {c} + ?" for c in USAGE_COLUMNS) + " where session_id = ? and model = ?",
+                (0 if counted else 1, *delta, request["session_id"], model))
+
+    def session_usage(self, session_id: str) -> dict[str, Any]:
+        """The session's spend ledger, which outlives pruned turns."""
+        rows = self.db.execute(
+            "select * from session_usage where session_id = ? order by model", (session_id,)).fetchall()
+        return {
+            "since": min((row["since"] for row in rows), default=None),
+            "models": {row["model"]: {"requests": row["requests"],
+                                      **dict(zip(USAGE_KEYS, (row[c] for c in USAGE_COLUMNS), strict=True))}
+                       for row in rows},
+        }
 
     @staticmethod
     def _request_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -1209,6 +1405,8 @@ class Store:
             "message_id": row["message_id"], "stop": row["stop"], "response_id": row["response_id"],
             "error": json.loads(row["error"]) if row["error"] else None,
             "parts": json.loads(row["parts"] or "[]"), "data": json.loads(row["data"] or "{}"),
+            "model": row["model"], "effort": row["effort"], "usage": _usage_json(row),
+            "reasoning_seconds": row["reasoning_seconds"],
         }
 
     def request(self, request_id: str) -> dict[str, Any] | None:
@@ -1220,31 +1418,32 @@ class Store:
         return [self._request_row(row) for row in rows]
 
     def finish_request(self, request_id: str, *, stop: str | None, response_id: str | None,
-                       parts: list[dict[str, Any]]) -> None:
+                       parts: list[dict[str, Any]], reasoning_seconds: float | None = None) -> None:
         with self.db:
             self.db.execute(
-                "update turn_request set status = 'completed', finished = ?, stop = ?, response_id = ?, parts = ?"
-                " where id = ? and status = 'started'",
-                (time.time(), stop, response_id, json.dumps(parts), request_id),
+                "update turn_request set status = 'completed', finished = ?, stop = ?, response_id = ?, parts = ?,"
+                " reasoning_seconds = coalesce(?, reasoning_seconds) where id = ? and status = 'started'",
+                (time.time(), stop, response_id, json.dumps(parts), reasoning_seconds, request_id),
             )
 
     def interrupt_request(self, request_id: str, error: dict[str, Any] | None = None,
-                          reason: str | None = None) -> None:
+                          reason: str | None = None, *, reasoning_seconds: float | None = None) -> None:
         """Close an unfinished provider request; its streamed output stays in the event log."""
         with self.db:
             self.db.execute(
-                "update turn_request set status = 'interrupted', finished = ?, error = ?, data = ?"
-                " where id = ? and status = 'started'",
+                "update turn_request set status = 'interrupted', finished = ?, error = ?, data = ?,"
+                " reasoning_seconds = coalesce(?, reasoning_seconds) where id = ? and status = 'started'",
                 (time.time(), json.dumps(error) if error else None,
-                 json.dumps({"reason": reason} if reason else {}), request_id),
+                 json.dumps({"reason": reason} if reason else {}), reasoning_seconds, request_id),
             )
 
-    def fail_request(self, request_id: str, error: dict[str, Any]) -> None:
+    def fail_request(self, request_id: str, error: dict[str, Any], *,
+                     reasoning_seconds: float | None = None) -> None:
         with self.db:
             self.db.execute(
-                "update turn_request set status = 'failed', finished = ?, error = ?"
-                " where id = ? and status = 'started'",
-                (time.time(), json.dumps(error), request_id),
+                "update turn_request set status = 'failed', finished = ?, error = ?,"
+                " reasoning_seconds = coalesce(?, reasoning_seconds) where id = ? and status = 'started'",
+                (time.time(), json.dumps(error), reasoning_seconds, request_id),
             )
 
     @staticmethod
@@ -1490,6 +1689,116 @@ class Store:
                     "oldest_seq": rows[0]["seq"] if rows else None,
                 }
             return out
+
+    # -- turn summaries ----------------------------------------------------------
+
+    def turn_summaries(self, session_id: str, *, after: str | None = None, before: str | None = None,
+                       limit: int = TURN_PAGE) -> dict[str, Any]:
+        """One page of turn summaries, oldest to newest, with the session's ledger.
+
+        No cursor: the newest `limit` turns. `after`: the oldest `limit` turns
+        started after that turn. `before`: the newest `limit` turns started
+        before it. Requests, attempts and tools are read in one query each for
+        the whole page. `floor.seq` is the first message seq a summary covers;
+        messages below it (pruned turns, history from before turns were
+        recorded) have none. It is `None` when every message is covered.
+        """
+        if after is not None and before is not None:
+            raise ValueError("give after or before, not both")
+        if not 1 <= limit <= TURN_PAGE_MAX:
+            raise ValueError(f"limit must be 1..{TURN_PAGE_MAX}")
+        with self.read_transaction():
+            anchor = None
+            if after is not None or before is not None:
+                anchor = self.db.execute(
+                    "select started, id from turn where id = ? and session_id = ?",
+                    (after or before, session_id)).fetchone()
+                if anchor is None:
+                    raise ValueError(f"unknown turn {after or before} in session {session_id}")
+            if after is not None:
+                rows = self.db.execute(
+                    "select * from turn where session_id = ? and (started, id) > (?, ?)"
+                    " order by started, id limit ?",
+                    (session_id, anchor["started"], anchor["id"], limit + 1)).fetchall()
+                more_after, more_before = len(rows) > limit, True
+                rows = rows[:limit]
+            else:
+                if before is not None:
+                    rows = self.db.execute(
+                        "select * from turn where session_id = ? and (started, id) < (?, ?)"
+                        " order by started desc, id desc limit ?",
+                        (session_id, anchor["started"], anchor["id"], limit + 1)).fetchall()
+                else:
+                    rows = self.db.execute(
+                        "select * from turn where session_id = ? order by started desc, id desc limit ?",
+                        (session_id, limit + 1)).fetchall()
+                more_before, more_after = len(rows) > limit, before is not None
+                rows = list(reversed(rows[:limit]))
+            turns = self._summaries(rows)
+            covered = self.db.execute(
+                "select min(start_seq) from turn where session_id = ?", (session_id,)).fetchone()[0]
+            if covered is None:  # no turn rows: no message has a summary
+                covered = self.db.execute(
+                    "select coalesce(max(seq), 0) from message where session_id = ?", (session_id,)).fetchone()[0]
+            return {"turns": turns, "more_before": more_before, "more_after": more_after,
+                    "floor": {"seq": covered + 1} if covered > 0 else None,
+                    "usage": self.session_usage(session_id)}
+
+    def turn_summary(self, turn_id: str) -> dict[str, Any] | None:
+        """One turn's summary, the same entry `turn_summaries` returns."""
+        with self.read_transaction():
+            rows = self.db.execute("select * from turn where id = ?", (turn_id,)).fetchall()
+            summaries = self._summaries(rows)
+        return summaries[0] if summaries else None
+
+    def _summaries(self, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+        """Summaries for turn rows, in their order, with three queries for all of them."""
+        if not rows:
+            return []
+        ids = [row["id"] for row in rows]
+        marks = ", ".join("?" * len(ids))
+        requests: dict[str, list[dict[str, Any]]] = {turn_id: [] for turn_id in ids}
+        by_request: dict[str, list[dict[str, Any]]] = {}
+        for row in self.db.execute(
+                f"select * from turn_request where turn_id in ({marks}) order by step, started, id", ids):
+            attempts: list[dict[str, Any]] = []
+            by_request[row["id"]] = attempts
+            requests[row["turn_id"]].append({
+                "id": row["id"], "step": row["step"], "status": row["status"],
+                "model": row["model"], "effort": row["effort"],
+                "started": row["started"], "finished": row["finished"], "stop": row["stop"],
+                "error": json.loads(row["error"]) if row["error"] else None,
+                "message_id": row["message_id"], "usage": _usage_json(row),
+                "reasoning_seconds": row["reasoning_seconds"], "attempts": attempts,
+            })
+        for row in self.db.execute(
+                f"select * from turn_attempt where turn_id in ({marks}) order by attempt, started, id", ids):
+            if row["request_id"] in by_request:
+                by_request[row["request_id"]].append({
+                    "n": row["attempt"], "status": row["status"], "delay": row["delay"],
+                    "started": row["started"], "finished": row["finished"], "error": row["error"],
+                    "usage": _usage_json(row),
+                })
+        tools: dict[str, list[dict[str, Any]]] = {turn_id: [] for turn_id in ids}
+        for row in self.db.execute(
+                "select turn_id, call_id, name, state, started, finished, is_error from turn_tool"
+                f" where turn_id in ({marks}) order by rowid", ids):
+            tools[row["turn_id"]].append({
+                "call_id": row["call_id"], "name": row["name"], "state": row["state"],
+                "started": row["started"], "finished": row["finished"], "is_error": bool(row["is_error"]),
+            })
+        out = []
+        for row in rows:
+            ended = json.loads(row["ended"]) if row["ended"] else None
+            turn_requests = requests[row["id"]]
+            stop = ended["stop"] if ended else (turn_requests[-1]["stop"] if turn_requests else None)
+            out.append({
+                "id": row["id"], "status": row["status"], "started": row["started"], "finished": row["finished"],
+                "start_seq": row["start_seq"], "steps": row["steps"], "stop": stop, "ended": ended,
+                "error": json.loads(row["error"]) if row["error"] else None, "recovery": row["recovery"],
+                "requests": turn_requests, "tools": tools[row["id"]],
+            })
+        return out
 
     def stream_summary(self, session_id: str, after: int) -> dict[str, Any]:
         """What one interrupted provider request left in the durable event log.

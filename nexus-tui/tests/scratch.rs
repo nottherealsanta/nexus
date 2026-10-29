@@ -3,6 +3,7 @@ mod common;
 use common::*;
 
 #[test]
+#[ignore = "visual scratch: prints rows and panics; run with --ignored --nocapture"]
 fn scratch_render() {
     let mut a = with_turn(
         opts(
@@ -22,7 +23,7 @@ fn scratch_render() {
         {"id":"u", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"start"}]},
         {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":calls}
     ])).unwrap();
-    a.state.model.selected.as_mut().unwrap().events.clear();
+    a.state.model.selected.as_mut().unwrap().scratch.clear();
     busy(&mut a);
     for (id, text) in [
         (50, "Let me think about this. "),

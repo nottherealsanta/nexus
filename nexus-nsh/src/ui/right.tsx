@@ -5,6 +5,8 @@ import { manifest } from "../gen/manifest";
 import { run } from "../commands";
 import { agentCatalog, defaultModel, gitStatus, m, model, modelCatalog, viewed } from "../store";
 import { agentColor } from "../agent-color";
+import type { SelectedView } from "../core/reduce";
+import { latestUsage, ledgerTotals, unknownRequests } from "../core/turns";
 
 const sections = manifest.navigation.right_sidebar.section as unknown as { id: string; label: string; order: number; unavailable_reason?: string }[];
 
@@ -35,9 +37,6 @@ function fmtCount(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
   return String(n);
 }
-function tokenCount(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0 ? value : 0;
-}
 function messageText(message: { parts: any[] }): string {
   return message.parts.filter((part) => part.type === "text").map((part) => part.text ?? "").join("");
 }
@@ -50,9 +49,13 @@ function effectiveModel(session: any): string {
   const agent = agentCatalog().agents.find((item) => item.name === session.agent);
   return agent?.model || defaultModel();
 }
-function sessionTotals(messages: any[], events: any[], models: any[], fallback: string) {
+/**
+ * Session totals: turns and tools from the messages; tokens, calls and cost from Core's spend
+ * ledger (plus live usage it has not counted yet); the context bar from the newest request
+ * with known usage. Unknown usage is reported as such, never as zero.
+ */
+function sessionTotals(view: SelectedView | null, messages: any[], models: any[], fallback: string) {
   let turns = 0, calls = 0, input = 0, cached = 0, output = 0, reasoning = 0;
-  let reported = false, lastInput: number | null = null, lastModel = fallback;
   let priced = false, partialCost = false, usd = 0;
   const toolIds = new Set<string>();
   const toolCounts = new Map<string, number>();
@@ -65,34 +68,31 @@ function sessionTotals(messages: any[], events: any[], models: any[], fallback: 
     }
   }
   const tools = [...toolCounts.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  for (const event of events) {
-    const data = event.data ?? {};
-    if (event.type === "wire_request") {
-      if (typeof data.body?.model === "string") lastModel = data.body.model;
-      continue;
-    }
-    if (event.type !== "usage") continue;
-    reported = true;
-    calls++;
-    const requestInput = tokenCount(data.input_tokens);
-    const requestCached = tokenCount(data.cached_input_tokens);
-    const requestOutput = tokenCount(data.output_tokens);
-    input += requestInput;
-    cached += requestCached;
-    output += requestOutput;
-    reasoning += tokenCount(data.reasoning_tokens);
-    lastInput = requestInput;
-    const entry = catalogModel(lastModel, models);
+  const scratch = view?.scratch ?? [];
+  const rows = ledgerTotals(view?.usage ?? null, scratch, view?.usageMark ?? 0, fallback);
+  for (const [ref, row] of rows) {
+    calls += row.requests;
+    input += row.input; cached += row.cached; output += row.output; reasoning += row.reasoning;
+    const entry = catalogModel(ref, models);
     const inputCost = entry?.input_cost, outputCost = entry?.output_cost;
     if (typeof inputCost !== "number" || !Number.isFinite(inputCost) || typeof outputCost !== "number" || !Number.isFinite(outputCost)) {
       partialCost = true;
       continue;
     }
     const cacheCost = typeof entry.cache_read_cost === "number" && Number.isFinite(entry.cache_read_cost) ? entry.cache_read_cost : inputCost;
-    usd += (Math.max(0, requestInput - requestCached) * inputCost + requestCached * cacheCost + requestOutput * outputCost) / 1_000_000;
+    usd += (Math.max(0, row.input - row.cached) * inputCost + row.cached * cacheCost + row.output * outputCost) / 1_000_000;
     priced = true;
   }
-  return { turns, calls, tools, input, cached, output, reasoning, reported, lastInput, lastModel, cost: priced ? usd : null, partialCost };
+  const latest = view ? latestUsage(view.turns, scratch) : null;
+  // A ledger that started counting well after the conversation did covers only part of it.
+  const since = view?.usage?.since ?? null;
+  const first = messages[0]?.created;
+  const partialSince = since !== null && typeof first === "number" && since > first + 60 ? since : null;
+  return {
+    turns, calls, tools, input, cached, output, reasoning, reported: rows.size > 0,
+    lastInput: latest ? latest.input : null, lastModel: latest?.model ?? fallback,
+    cost: priced ? usd : null, partialCost, since: partialSince, unknown: view ? unknownRequests(view.turns) : 0,
+  };
 }
 function money(usd: number): string { return usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`; }
 function ContextBar(p: { used: number; window: number }) {
@@ -167,8 +167,7 @@ export function RightSidebar(p: { drawer?: boolean }) {
               const ses = () => { m(); return s()!; };
               const selected = () => { m(); return model.selected?.sessionId === ses().id ? model.selected : null; };
               const msgs = () => selected()?.messages ?? [];
-              const events = () => selected()?.events ?? [];
-              const totals = () => sessionTotals(msgs(), events(), modelCatalog(), effectiveModel(ses()));
+              const totals = () => sessionTotals(selected(), msgs(), modelCatalog(), effectiveModel(ses()));
               const descendants = () => model.tree(ses().id).slice(1).map((id) => model.sessions.get(id)).filter(Boolean) as any[];
               const kids = () => descendants().length;
               const runningKids = () => descendants().filter((child) => child.status === "busy" || model.running.has(child.id)).length;
@@ -213,6 +212,12 @@ export function RightSidebar(p: { drawer?: boolean }) {
                     <If when={totals().cost !== null}>
                       <Field k="Cost" v={`${money(totals().cost!)}${totals().partialCost ? "+" : ""}`} />
                     </If>
+                    <If when={totals().since !== null}>
+                      <Text class={`${T.meta} pt-1`} testID="usage-since">{`Totals since ${date(totals().since!)}`}</Text>
+                    </If>
+                  </If>
+                  <If when={totals().unknown > 0}>
+                    <Text class={`${T.meta} pt-1`} testID="usage-unknown">{`${totals().unknown} request${totals().unknown === 1 ? "" : "s"} reported no usage (unknown, not zero)`}</Text>
                   </If>
                   <If when={!totals().reported}><Field k="Tokens" v="not reported" /></If>
                   <Text class={`${T.meta} pt-3`}>Kernel state is not reported by Core yet.</Text>

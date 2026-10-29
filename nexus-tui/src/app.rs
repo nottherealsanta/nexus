@@ -990,7 +990,8 @@ impl App {
         let Some(v) = self.state.model.selected.as_ref() else {
             return false;
         };
-        for e in v.events.iter().rev() {
+        // The running turn's live events come after its newest summary.
+        for e in v.scratch.iter().rev() {
             match e.kind.as_str() {
                 "turn_end" => return false,
                 "turn.recovered" => return true,
@@ -999,8 +1000,16 @@ impl App {
                 _ => {}
             }
         }
-        // Without events (a fresh snapshot): a conversation that ends on a user
-        // or tool message was cut short; Core refuses with 409/400 otherwise.
+        if let Some(t) = v.turns.last() {
+            return match t.status.as_str() {
+                "completed" => false,
+                "interrupted" | "failed" => true,
+                // A running turn of an idle session was cut short (recovery pending).
+                _ => !self.is_busy(&v.session_id),
+            };
+        }
+        // No turn records: a conversation that ends on a user or tool message
+        // was cut short; Core refuses with 409/400 otherwise.
         v.messages.last().is_some_and(|m| m.role != "assistant")
     }
 
@@ -3564,14 +3573,13 @@ impl App {
             && self.ui.overlay.is_none()
             && self.ui.dialog.is_none()
             && self.ui.edit.is_none()
+            && name == "ctrl+v"
         {
-            if name == "ctrl+v" {
-                let key = self.draft_key();
-                if self.ui.image_pasting.insert(key.clone()) {
-                    self.effects.push(Effect::PasteImage(key));
-                }
-                return;
+            let key = self.draft_key();
+            if self.ui.image_pasting.insert(key.clone()) {
+                self.effects.push(Effect::PasteImage(key));
             }
+            return;
         }
         match name.as_str() {
             "ctrl+z"
@@ -5149,7 +5157,6 @@ impl App {
                     self.toast(Level::Warning, READ_ONLY);
                 }
             }
-            Target::Stop => self.run_command("session.interrupt"),
             Target::Continue => self.run_command("session.continue"),
             Target::BannerAction(i) => {
                 if let Some((_, _, cmd)) = self.banners().get(i).and_then(|b| b.action.clone()) {

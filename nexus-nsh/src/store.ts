@@ -111,7 +111,8 @@ const sessionWorktreeRequests = new Set<string>();
 const projectWorktreeRequests = new Set<string>();
 const sessionWorktreeSeq = new Map<string, number>();
 const projectWorktreeSeq = new Map<string, number>();
-const directoryEventsSeen = new Map<string, number>();
+/** The session directory each session's worktree listing was requested for. */
+const worktreeDirectories = new Map<string, string>();
 
 export function loadComposerData(project = currentProject()) {
   if (!modelsAsked) {
@@ -146,6 +147,8 @@ export async function reloadModelCatalog() {
 export function loadSessionWorktrees(id: string, refresh = false) {
   if (!refresh && (sessionWorktreeRequests.has(id) || Object.prototype.hasOwnProperty.call(sessionWorktrees(), id))) return;
   sessionWorktreeRequests.add(id);
+  const directory = model.sessions.get(id)?.directory;
+  if (directory) worktreeDirectories.set(id, directory);
   const seq = (sessionWorktreeSeq.get(id) ?? 0) + 1;
   sessionWorktreeSeq.set(id, seq);
   void request<any>("GET", `/api/session/${id}/worktrees`).then((data) => {
@@ -259,11 +262,11 @@ function reconcileSelection() {
   if (project) loadComposerData(project);
   if (selected) {
     loadSessionWorktrees(selected);
-    const newest = model.selected?.events.filter((e) => e.type === "session.directory_changed").at(-1);
-    if (newest && newest.id > (directoryEventsSeen.get(selected) ?? 0)) {
-      directoryEventsSeen.set(selected, newest.id);
-      loadSessionWorktrees(selected, true);
-    }
+    // A directory move updates the session view (`session.updated` after the move): reload the
+    // worktrees when its directory differs from the one they were read for.
+    const directory = model.sessions.get(selected)?.directory;
+    const seen = worktreeDirectories.get(selected);
+    if (directory && seen !== undefined && seen !== directory) loadSessionWorktrees(selected, true);
   } else if (project) {
     loadProjectWorktrees(project);
   }
@@ -336,9 +339,9 @@ export async function selectSession(id: string) {
   if (isNarrow()) drawer.set(null);
   void request<any>("GET", `/api/session/${id}`).then((full) => {
     const cur = model.sessions.get(id);
-    if (cur && full.revision >= cur.revision) { model.sessions.set(id, { ...cur, ...normalizeSession(full), status: full.status ?? cur.status }); bump(); }
+    if (cur && full.revision >= cur.revision) { model.sessions.set(id, { ...cur, ...normalizeSession(full), status: full.status ?? cur.status }); host.changed(); }
   }).catch(() => {});
-  // The complete history (messages, diagnostics, starting context); no global snapshot needed.
+  // The complete history (messages, turn summaries, starting context); no global snapshot needed.
   try {
     await sync.loadSelected();
   } catch (e) {

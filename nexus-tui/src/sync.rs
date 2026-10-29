@@ -30,7 +30,8 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::api::{
-    check_compat, format_cursor, Compat, CoreApi, Event, Frame, History, Info, Snapshot, CLIENT_API,
+    check_compat, format_cursor, Compat, CoreApi, Event, Frame, History, Info, Snapshot, TurnPage,
+    CLIENT_API,
 };
 use crate::discovery::{self, DaemonInfo, Identity};
 use crate::state::ConnectionState;
@@ -62,6 +63,12 @@ pub enum SyncMsg {
     /// The selected session's full stored history, sent after the snapshot and
     /// before live events. The app ignores it when the selection changed.
     History(Box<History>),
+    /// Turn summaries fetched after a reconnect (`/turn?after=`), with the
+    /// fresh ledger. The app ignores it when the selection changed.
+    Turns {
+        session: String,
+        page: Box<TurnPage>,
+    },
     /// Picker data: connected providers' models and the available agents.
     Catalog {
         models: Vec<Value>,
@@ -190,6 +197,9 @@ struct Ctx {
     git_diff: Option<(String, String)>,
     files: Option<(String, Option<String>, String, bool)>,
     complete: Option<(String, Option<String>, String, u32)>,
+    /// The selected session and its newest closed turn, the anchor of
+    /// `/turn?after=` after a reconnect.
+    newest_turn: Option<(String, String)>,
     shutdown: bool,
 }
 
@@ -204,6 +214,7 @@ impl Ctx {
         match cmd {
             Command::Select(s) => {
                 self.selected = s;
+                self.newest_turn = None;
                 self.resync = Some(ResyncCause::Requested);
             }
             Command::Resync => self.resync = Some(ResyncCause::Requested),
@@ -282,6 +293,7 @@ pub async fn run(
         git_diff: None,
         files: None,
         complete: None,
+        newest_turn: None,
         shutdown: false,
     };
     let mut backoff = cx.cfg.backoff.clone();
@@ -291,6 +303,9 @@ pub async fn run(
     let mut cursor: Option<String> = None;
     let mut bootstrap_tried = false;
     let mut last_error = String::new();
+    // A dropped stream resumes from its cursor; the selected session's turn
+    // summaries are re-read too (`/turn?after=`), so none can be missed.
+    let mut refetch_turns = false;
 
     cx.state(ConnectionState::Connecting);
     loop {
@@ -332,6 +347,7 @@ pub async fn run(
         let compat = check_compat(info.api_version, CLIENT_API);
         cx.send(SyncMsg::Handshake { info, compat });
 
+        let resyncing = pending.is_some();
         if let Some(cause) = pending.take() {
             match api
                 .snapshot(cx.selected.as_deref(), Some(cx.cfg.message_limit))
@@ -356,6 +372,12 @@ pub async fn run(
                     // is the resume cursor.
                     if let Some(sid) = cx.selected.clone() {
                         if let Some(h) = load_history(&api, &sid).await {
+                            cx.newest_turn = h
+                                .turns
+                                .iter()
+                                .rev()
+                                .find(|t| t.status != "running")
+                                .map(|t| (sid.clone(), t.id.clone()));
                             cx.send(SyncMsg::History(Box::new(h)));
                         }
                     }
@@ -374,6 +396,29 @@ pub async fn run(
                         return;
                     }
                     continue;
+                }
+            }
+        }
+
+        if !resyncing && std::mem::take(&mut refetch_turns) {
+            if let Some(sid) = cx.selected.clone() {
+                let anchor = cx
+                    .newest_turn
+                    .as_ref()
+                    .filter(|(s, _)| *s == sid)
+                    .map(|(_, t)| t.clone());
+                let page = match anchor {
+                    Some(after) => load_turns_after(&api, &sid, &after).await,
+                    None => api.turns(&sid, None, None, Some(TURN_PAGE)).await.ok(),
+                };
+                if let Some(page) = page {
+                    if let Some(t) = page.turns.iter().rev().find(|t| t.status != "running") {
+                        cx.newest_turn = Some((sid.clone(), t.id.clone()));
+                    }
+                    cx.send(SyncMsg::Turns {
+                        session: sid,
+                        page: Box::new(page),
+                    });
                 }
             }
         }
@@ -422,6 +467,7 @@ pub async fn run(
             }
             StreamEnd::Dropped(reason) => {
                 last_error = reason;
+                refetch_turns = true;
                 if !reconnect_pause(&mut cx, &mut backoff, &last_error, had_live).await {
                     return;
                 }
@@ -540,86 +586,89 @@ async fn load_catalog(
     ))
 }
 
-/// Cap on retained-diagnostic events kept for one session. Messages are not
-/// capped (the message endpoint returns all of them), so the timeline is still
-/// complete. Paging runs to the end and keeps the newest events, so the kept
-/// diagnostics join the live stream without a gap; the UI announces the rest.
-pub const HISTORY_EVENT_CAP: usize = 20_000;
+/// Turn summaries are read 200 to a page (Core's maximum).
+const TURN_PAGE: u32 = 200;
+/// Pages of older turn summaries read on open; beyond them the timeline says
+/// that older turns' details were not loaded.
+const TURN_PAGES: usize = 10;
 
+/// Messages, the starting context and every turn summary, fetched together.
+/// The event log is not read: the timeline's details come from summaries.
 async fn load_history(api: &CoreApi, sid: &str) -> Option<History> {
-    let messages = api.messages(sid).await.ok()?;
-    let starting = api.snapshot_json(sid).await.ok();
-    let mut pages = Vec::new();
-    let mut after = 0i64;
-    let mut failed = None;
-    loop {
-        match api.event_page(sid, after, 5000).await {
+    let (messages, starting, page) = tokio::join!(
+        api.messages(sid),
+        api.snapshot_json(sid),
+        api.turns(sid, None, None, Some(TURN_PAGE)),
+    );
+    let mut h = History {
+        session_id: sid.to_owned(),
+        messages: messages.ok()?,
+        starting: starting.ok(),
+        ..Default::default()
+    };
+    match page {
+        Ok(page) => {
+            h.floor = page.floor.map(|f| f.seq);
+            h.usage = page.usage;
+            h.more_before = page.more_before;
+            h.turns = page.turns;
+        }
+        Err(e) => {
+            h.turns_error = Some(format!("turn details failed to load ({e})"));
+            return Some(h);
+        }
+    }
+    // Older pages, newest first, until the start or the cap.
+    for _ in 1..TURN_PAGES {
+        let Some(oldest) = h
+            .turns
+            .first()
+            .map(|t| t.id.clone())
+            .filter(|_| h.more_before)
+        else {
+            break;
+        };
+        match api.turns(sid, None, Some(&oldest), Some(TURN_PAGE)).await {
             Ok(page) => {
-                let next = page_last_id(&page).unwrap_or(after);
-                let more = page.get("more").and_then(Value::as_bool).unwrap_or(false);
-                pages.push(page);
-                if !more || next <= after {
-                    break; // done, or no progress: never loop on a bad page
+                h.more_before = page.more_before;
+                if page.turns.is_empty() {
+                    h.more_before = false;
                 }
-                after = next;
+                let mut turns = page.turns;
+                turns.append(&mut h.turns);
+                h.turns = turns;
             }
             Err(e) => {
-                failed = Some((after, e.to_string()));
+                h.turns_error = Some(format!("older turn details failed to load ({e})"));
                 break;
             }
         }
     }
-    let (events, events_gap) = fold_event_pages(pages, failed, HISTORY_EVENT_CAP);
-    Some(History {
-        session_id: sid.to_owned(),
-        messages,
-        events,
-        starting,
-        events_gap,
-    })
+    Some(h)
 }
 
-fn page_last_id(page: &Value) -> Option<i64> {
-    page.get("events")?.as_array()?.last()?.get("id")?.as_i64()
-}
-
-/// Fold stored event pages into the newest `cap` events and a notice saying
-/// what is missing: events expired by retention, events beyond the cap, or a
-/// page that failed to load (`failed` is the last id read and the error).
-pub fn fold_event_pages(
-    pages: Vec<Value>,
-    failed: Option<(i64, String)>,
-    cap: usize,
-) -> (Vec<Event>, Option<String>) {
-    let mut events: Vec<Event> = Vec::new();
-    let mut floor = 0i64;
-    for page in &pages {
-        if page.get("history_truncated").and_then(Value::as_bool) == Some(true) {
-            floor = floor.max(page.get("floor").and_then(Value::as_i64).unwrap_or(0));
-        }
-        let rows = page.get("events").and_then(Value::as_array);
-        events.extend(rows.into_iter().flatten().filter_map(Event::from_stored));
+/// After a dropped stream resumed from its cursor: the turns that started
+/// after `after` (the newest closed turn the app knows), every page.
+async fn load_turns_after(api: &CoreApi, sid: &str, after: &str) -> Option<TurnPage> {
+    let mut out = api
+        .turns(sid, Some(after), None, Some(TURN_PAGE))
+        .await
+        .ok()?;
+    let mut pages = 1;
+    while out.more_after && pages < TURN_PAGES {
+        let Some(last) = out.turns.last().map(|t| t.id.clone()) else {
+            break;
+        };
+        let Ok(mut page) = api.turns(sid, Some(&last), None, Some(TURN_PAGE)).await else {
+            break;
+        };
+        out.turns.append(&mut page.turns);
+        out.more_after = page.more_after;
+        out.usage = page.usage;
+        out.floor = page.floor;
+        pages += 1;
     }
-    let mut notes = Vec::new();
-    if floor > 0 {
-        notes.push(format!(
-            "diagnostics at or before event {floor} expired under retention"
-        ));
-    }
-    if events.len() > cap {
-        let dropped = events.len() - cap;
-        events.drain(..dropped);
-        notes.push(format!(
-            "{dropped} older diagnostics are not loaded (only the newest {cap} are kept)"
-        ));
-    }
-    if let Some((after, err)) = failed {
-        notes.push(format!(
-            "diagnostics after event {after} failed to load ({err}); some are missing"
-        ));
-    }
-    let gap = (!notes.is_empty()).then(|| format!("{} (messages are complete)", notes.join("; ")));
-    (events, gap)
+    Some(out)
 }
 
 async fn reconnect_pause(
@@ -809,6 +858,13 @@ async fn stream(
                     }
                     Ok(Frame::Overflow(_)) => return StreamEnd::Resync { cause: ResyncCause::Overflow, progressed },
                     Ok(Frame::Event(e)) => {
+                        if e.kind == "turn.summary" && e.data["status"].as_str() != Some("running") {
+                            if let (Some(sid), Some(turn)) = (e.session_id.as_deref(), e.data["id"].as_str()) {
+                                if cx.selected.as_deref() == Some(sid) {
+                                    cx.newest_turn = Some((sid.to_owned(), turn.to_owned()));
+                                }
+                            }
+                        }
                         let next = e.cursor.clone().or_else(|| {
                             cursor.as_deref().and_then(crate::api::parse_cursor).map(|(g, _)| format_cursor(g, e.id))
                         });

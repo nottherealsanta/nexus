@@ -198,6 +198,7 @@ impl AppState {
                 }
             }
             SyncMsg::History(history) => self.model.apply_history(*history),
+            SyncMsg::Turns { session, page } => self.model.apply_turns(&session, *page),
             SyncMsg::Catalog {
                 models,
                 agents,

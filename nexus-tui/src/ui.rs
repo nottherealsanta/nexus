@@ -56,7 +56,8 @@ impl Tab {
 pub enum Detail {
     /// One line per activity group (`Ran 1 command, Read 2 files`).
     Low,
-    /// Every tool on its own collapsed line with its key detail.
+    /// Finished groups fold to their summary; a live group shows its newest
+    /// members as a tree.
     #[default]
     Medium,
     /// Every tool expanded, long output capped to its ends.
@@ -442,7 +443,6 @@ pub enum Target {
     Wait(WaitButton),
     /// Option `i` of the question the waiting card asks.
     WaitOption(usize),
-    Stop,
     Continue,
     BannerAction(usize),
     BannerHide(usize),

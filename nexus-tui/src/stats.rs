@@ -1,13 +1,13 @@
-//! Totals for the viewed session, derived from the messages and events the
-//! client has loaded (the right sidebar's Session info). Nothing here is
-//! stored or sent: a bounded history gives bounded totals, and the caller says
-//! so when messages or diagnostics are incomplete.
+//! Totals for the viewed session (the right sidebar's Session info): turn and
+//! tool counts from the messages, tokens and cost from Core's spend ledger
+//! (`usage` on `GET /api/session/{id}/turn`), which survives turn pruning, plus
+//! the running turn's live `usage` events until its summary arrives.
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::api::{Event, Message};
+use crate::reduce::SelectedView;
 
 /// Catalog prices in USD per million tokens.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -70,6 +70,8 @@ pub struct SessionStats {
     pub cost: Option<f64>,
     /// Some requests used a model without a price, so the cost is a floor.
     pub partial_cost: bool,
+    /// When the ledger began counting (`None`: no ledger rows yet).
+    pub since: Option<f64>,
 }
 
 impl SessionStats {
@@ -78,16 +80,11 @@ impl SessionStats {
     }
 }
 
-pub fn compute(
-    messages: &[Message],
-    events: &[Event],
-    models: &[Value],
-    fallback: &str,
-) -> SessionStats {
+pub fn compute(view: &SelectedView, models: &[Value], fallback: &str) -> SessionStats {
     let mut s = SessionStats::default();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut seen = std::collections::HashSet::new();
-    for m in messages {
+    for m in &view.messages {
         if m.role == "user" {
             let text = m
                 .parts
@@ -111,10 +108,31 @@ pub fn compute(
     let mut tools: Vec<(String, usize)> = counts.into_iter().collect();
     tools.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     s.tools = tools;
-    let mut model = fallback.to_owned();
     let mut total = 0.0;
     let mut priced = false;
-    for e in events {
+    let mut add = |s: &mut SessionStats, model: &str, calls: u64, u: &crate::api::Usage| {
+        s.calls += calls;
+        s.input += u.input;
+        s.cached += u.cached;
+        s.output += u.output;
+        s.reasoning += u.reasoning;
+        match catalog_entry(models, model).and_then(price_of) {
+            Some(p) => {
+                total += cost(p, u.input, u.cached, u.output);
+                priced = true;
+            }
+            None => s.partial_cost = true,
+        }
+    };
+    for (model, row) in &view.usage.models {
+        if row.requests > 0 || row.usage != crate::api::Usage::default() {
+            add(&mut s, model, row.requests, &row.usage);
+        }
+    }
+    s.since = view.usage.since;
+    // The running turn: live usage, counted by the ledger once its summary lands.
+    let mut model = fallback.to_owned();
+    for e in &view.scratch {
         match e.kind.as_str() {
             "wire_request" => {
                 if let Some(m) = e.data["body"]["model"].as_str() {
@@ -122,26 +140,18 @@ pub fn compute(
                 }
             }
             "usage" => {
-                let input = e.data["input_tokens"].as_u64().unwrap_or(0);
-                let cached = e.data["cached_input_tokens"].as_u64().unwrap_or(0);
-                let output = e.data["output_tokens"].as_u64().unwrap_or(0);
-                s.calls += 1;
-                s.input += input;
-                s.cached += cached;
-                s.output += output;
-                s.reasoning += e.data["reasoning_tokens"].as_u64().unwrap_or(0);
-                s.last_input = Some(input);
-                match catalog_entry(models, &model).and_then(price_of) {
-                    Some(p) => {
-                        total += cost(p, input, cached, output);
-                        priced = true;
-                    }
-                    None => s.partial_cost = true,
-                }
+                let u = crate::api::Usage {
+                    input: e.data["input_tokens"].as_u64().unwrap_or(0),
+                    cached: e.data["cached_input_tokens"].as_u64().unwrap_or(0),
+                    output: e.data["output_tokens"].as_u64().unwrap_or(0),
+                    reasoning: e.data["reasoning_tokens"].as_u64().unwrap_or(0),
+                };
+                add(&mut s, &model, 1, &u);
             }
             _ => {}
         }
     }
+    s.last_input = view.latest_input();
     s.cost = priced.then_some(total);
     s
 }

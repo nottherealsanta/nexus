@@ -323,6 +323,7 @@ def test_completed_result_missing_from_history_is_inserted_once(tmp_path):
 
 
 def test_durable_turn_end_is_not_reported_as_interrupted(tmp_path):
+    # A turn left open before `turn.ended` existed: the log's `turn_end` is the fallback evidence.
     workspace = tmp_path / "proj"
     workspace.mkdir()
     crash = Crash(tmp_path / "nexus.db", workspace)
@@ -353,6 +354,64 @@ def test_durable_turn_end_is_not_reported_as_interrupted(tmp_path):
     again = restart(tmp_path / "nexus.db")
     try:
         assert again.recovered == []
+    finally:
+        again.store.close()
+
+
+def test_turn_ended_row_proves_completion_without_the_event_log(tmp_path):
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    crash = Crash(tmp_path / "nexus.db", workspace)
+    session = crash.session()
+    turn = crash.turn(session)
+    request = crash.request(turn)
+    user = crash.store.append_message(session.id, Message("user", (Text("hi"),)))
+    crash.publish_message(session, user)
+    crash.assistant(session, turn, [Text("done")], request=request)
+    crash.event(session, "turn_end", {"type": "turn_end", "stop": "end_turn", "steps": 1})
+    crash.store.mark_turn_ended(turn["id"], "end_turn", 1)
+    # Crash before finish_turn; retention or anything else removed every event but the outbox.
+    crash.store.db.execute("delete from event where type != 'message.added'")
+    crash.store.db.commit()
+    crash.close()
+
+    rt = restart(tmp_path / "nexus.db")
+    try:
+        [summary] = rt.recovered
+        assert summary["outcome"] == "completed" and summary["notice"] is None
+        [stored] = rt.store.turns_for_session(session.id)
+        assert (stored["status"], stored["steps"], stored["recovery"]) == ("completed", 1, "done")
+        assert [m.message.role for m in rt.store.messages(session.id)] == ["user", "assistant"]
+        [event] = rt.store.events(session.id, types=["turn.summary"])
+        assert event["data"] == rt.store.turn_summaries(session.id)["turns"][0]
+        assert event["data"]["stop"] == "end_turn" and event["data"]["ended"] == {"stop": "end_turn", "steps": 1}
+    finally:
+        rt.store.close()
+
+
+def test_recovered_interrupted_turn_publishes_its_summary_once(tmp_path):
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    crash = Crash(tmp_path / "nexus.db", workspace)
+    session = crash.session()
+    turn = crash.turn(session)
+    crash.store.start_request(turn["id"], session.id, 1, model="scripted/m", effort="low")
+    crash.close()
+
+    rt = restart(tmp_path / "nexus.db")
+    try:
+        assert rt.recovered[0]["outcome"] == "interrupted"
+        [event] = rt.store.events(session.id, types=["turn.summary"])
+        [entry] = rt.store.turn_summaries(session.id)["turns"]
+        assert event["data"] == entry
+        assert (entry["status"], entry["recovery"], entry["requests"][0]["status"]) == (
+            "interrupted", "done", "interrupted")
+        assert (entry["requests"][0]["model"], entry["requests"][0]["usage"]) == ("scripted/m", None)
+    finally:
+        rt.store.close()
+    again = restart(tmp_path / "nexus.db")
+    try:
+        assert len(again.store.events(session.id, types=["turn.summary"])) == 1
     finally:
         again.store.close()
 

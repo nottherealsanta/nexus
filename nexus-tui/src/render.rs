@@ -2797,14 +2797,13 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
         );
         *y += 1;
     }
-    let stats = a.state.model.selected.as_ref().map(|v| {
-        crate::stats::compute(
-            &v.messages,
-            &v.events,
-            &a.state.models,
-            &a.effective_model(Some(s)),
-        )
-    });
+    let stats = a
+        .state
+        .model
+        .selected
+        .as_ref()
+        .filter(|v| v.session_id == s.id)
+        .map(|v| crate::stats::compute(v, &a.state.models, &a.effective_model(Some(s))));
     if let Some(stats) = &stats {
         let calls = if stats.calls > 0 {
             format!("{}{} tools", cx.sep(), stats.calls)
@@ -2932,6 +2931,15 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
             Some(v) => kv(cx, buf, r, y, key, &v, primary),
             None => kv(cx, buf, r, y, key, none, muted),
         }
+    }
+    // The ledger began after the session did (it is older than turn records):
+    // the totals count from then, and say so.
+    if let Some(since) = tokens
+        .and_then(|st| st.since)
+        .filter(|since| *since > s.created + 60.0)
+    {
+        let date = crate::timeline::local_date(since).unwrap_or_else(|| text::ago(now, since));
+        kv(cx, buf, r, y, "Since", &date, muted);
     }
 }
 
@@ -4300,13 +4308,7 @@ struct ComposerUsage {
 /// The latest request's input is an estimate of occupied context. Occupancy is
 /// shown against each price tier boundary and the window, as old Nexus did.
 fn composer_usage(cx: &Cx, session: &crate::api::Session) -> Option<ComposerUsage> {
-    let events = cx.app.state.model.selected.as_ref()?.events.as_slice();
-    let input = events
-        .iter()
-        .rev()
-        .find(|event| event.kind == "usage")
-        .and_then(|event| event.data.get("input_tokens"))
-        .and_then(Value::as_u64)?;
+    let input = cx.app.state.model.selected.as_ref()?.latest_input()?;
     let model = cx.app.effective_model(Some(session));
     let entry = cx
         .app
@@ -4441,8 +4443,8 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let base = cx.st(PRIMARY, PANEL);
     let comp = a.composer_ref();
     let card = composer_card(r, !comp.images.is_empty());
-    // Rows: the live row, the top edge, the input, a blank row, the control
-    // row, the bottom edge and the project strip.
+    // Rows: the pill/attachment row, the top padding, the input, a blank row,
+    // the control row, the bottom edge and the project strip.
     let panel = Rect::new(
         card.x + 2,
         card.y + 1,
@@ -4454,6 +4456,25 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     card_edge(cx, buf, panel, panel.bottom() - 1, "\u{2580}");
     let inner = composer_inner(full_r, !comp.images.is_empty());
     let cy = r.bottom() - 3;
+    // The focus bar at the card's left edge, only where colour cannot carry
+    // focus (ANSI-16 and mono; DESIGN_PLAN D11).
+    if a.ui.focus == Focus::Composer
+        && matches!(
+            cx.t.opts.tier,
+            crate::theme::Tier::Ansi16 | crate::theme::Tier::Mono
+        )
+    {
+        for y in inner.y..=cy {
+            put(
+                buf,
+                panel.x,
+                y,
+                cx.t.structure("focus_bar"),
+                cx.st("interactive.focus", PANEL),
+                1,
+            );
+        }
+    }
 
     // input
     if !comp.images.is_empty() && card.y >= r.y + 2 {
@@ -4547,14 +4568,8 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         .model
         .selected
         .as_ref()
-        .and_then(|view| {
-            view.events
-                .iter()
-                .rev()
-                .find(|event| event.kind == "wire_request")
-        })
-        .and_then(|event| event.data["body"]["model"].as_str())
-        .map(str::to_owned);
+        .and_then(|view| view.latest_request_model())
+        .map(|m| m.rsplit('/').next().unwrap_or(&m).to_owned());
     let mut effort_on = true;
     let mut provider_on = true;
     // A new session starts with the build agent until one is chosen.
@@ -4698,7 +4713,12 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let mut x = panel.x + 3;
     {
         let fields: Vec<(String, Target, Modifier, &str)> = vec![
-            (agent_label, Target::ComposerAgent, Modifier::BOLD, PRIMARY),
+            (
+                agent_label,
+                Target::ComposerAgent,
+                Modifier::empty(),
+                PRIMARY,
+            ),
             (
                 model_label,
                 Target::ComposerModel,

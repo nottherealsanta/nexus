@@ -156,7 +156,6 @@ fn history_replaces_the_bounded_snapshot_view_and_keeps_live_events() {
     let h = History {
         session_id: SESSION.into(),
         messages: a.messages().to_vec(),
-        events: events(TURN),
         starting: Some(serde_json::json!({
             "origin": "created",
             "system_prompt": "You are helpful.",
@@ -167,19 +166,19 @@ fn history_replaces_the_bounded_snapshot_view_and_keeps_live_events() {
             "child_agents": [],
             "workspace": {"entry": true, "active": false}
         })),
-        events_gap: None,
+        ..Default::default()
     };
     a.apply_sync(nexus_tui::sync::SyncMsg::History(Box::new(h)));
     let view = a.state.model.selected.as_ref().unwrap();
     assert!(!view.messages_more);
-    assert!(view.events.iter().any(|e| e.id == 300), "live event kept");
+    assert!(view.scratch.iter().any(|e| e.id == 300), "live event kept");
     assert!(view.starting.is_some());
-    // Collapsed once the session has turns; open it to see the rows.
+    // The starting context stays open after the first turn, with no
+    // `Context` header row (see the_context_sections_stay_open_without_a_header_row).
     rows(&mut a);
     a.execute("turn.unfold_all");
     let text = rows(&mut a).join("\n");
-    assert!(text.contains("Context"), "context section: {text}");
-    assert!(text.contains("System prompt"), "{text}");
+    assert!(text.contains("System prompt"), "context section: {text}");
     assert!(text.contains("boom"), "live diagnostic: {text}");
 }
 
@@ -204,7 +203,7 @@ fn keyboard_and_mouse_select_the_same_block() {
 }
 
 #[test]
-fn history_keeps_messages_applied_live_and_announces_a_gap() {
+fn history_keeps_messages_applied_live_and_announces_missing_details() {
     let mut a = app();
     let mut msgs = a.messages().to_vec();
     let live = msgs.pop().expect("a message");
@@ -212,9 +211,8 @@ fn history_keeps_messages_applied_live_and_announces_a_gap() {
     let h = History {
         session_id: SESSION.into(),
         messages: msgs,
-        events: events(TURN),
-        starting: None,
-        events_gap: Some("diagnostics at or before event 7 expired under retention".into()),
+        turns_error: Some("turn details failed to load (timed out)".into()),
+        ..Default::default()
     };
     a.apply_sync(nexus_tui::sync::SyncMsg::History(Box::new(h)));
     let view = a.state.model.selected.as_ref().unwrap();
@@ -228,39 +226,9 @@ fn history_keeps_messages_applied_live_and_announces_a_gap() {
     );
     let text = rows(&mut a).join("\n");
     assert!(
-        text.contains("expired under retention"),
+        text.contains("turn details failed to load (timed out)"),
         "gap announced: {text}"
     );
-}
-
-#[test]
-fn event_pages_keep_the_newest_and_say_what_is_missing() {
-    use nexus_tui::sync::fold_event_pages;
-    let row = |id: i64| serde_json::json!({"id": id, "type": "usage", "session_id": SESSION});
-    let page = |ids: std::ops::RangeInclusive<i64>, truncated: bool| {
-        serde_json::json!({"events": ids.map(row).collect::<Vec<_>>(), "more": true,
-            "floor": 3, "history_truncated": truncated})
-    };
-    let (events, gap) = fold_event_pages(vec![page(4..=6, false)], None, 10);
-    assert_eq!(events.len(), 3);
-    assert_eq!(gap, None, "a complete history has no notice");
-
-    let (events, gap) = fold_event_pages(vec![page(4..=6, true), page(7..=9, true)], None, 4);
-    assert_eq!(
-        events.iter().map(|e| e.id).collect::<Vec<_>>(),
-        vec![6, 7, 8, 9],
-        "newest kept"
-    );
-    let gap = gap.expect("a notice");
-    assert!(gap.contains("before event 3 expired"), "{gap}");
-    assert!(gap.contains("2 older diagnostics"), "{gap}");
-
-    let (events, gap) =
-        fold_event_pages(vec![page(4..=6, false)], Some((6, "timed out".into())), 10);
-    assert_eq!(events.len(), 3);
-    assert!(gap
-        .unwrap()
-        .contains("after event 6 failed to load (timed out)"));
 }
 
 #[test]
@@ -373,7 +341,7 @@ fn activity_groups_respect_text_and_child_boundaries_and_preserve_details() {
     ]);
     let view = a.state.model.selected.as_mut().unwrap();
     view.messages = serde_json::from_value(msgs).unwrap();
-    view.events.clear();
+    view.scratch.clear();
     let timeline = build(&a, &a.theme, 0, 100);
     let groups: Vec<_> = timeline
         .blocks
@@ -407,13 +375,15 @@ fn activity_groups_respect_text_and_child_boundaries_and_preserve_details() {
 fn waiting_groups_stay_open_and_live_groups_settle_without_changing_key() {
     use nexus_tui::timeline::{build, BlockKind};
     let mut a = app();
+    // Medium shows the live tree; low folds a running group to `Working` (D06).
+    a.ui.detail = nexus_tui::ui::Detail::Medium;
     let msgs = serde_json::json!([
         {"id":"u", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"start"}]},
         {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":[{"type":"tool_call","id":"c1","name":"bash","arguments":"{\"command\":\"date\"}"}]}
     ]);
     let view = a.state.model.selected.as_mut().unwrap();
     view.messages = serde_json::from_value(msgs).unwrap();
-    view.events.clear();
+    view.scratch.clear();
     busy(&mut a);
     let live = build(&a, &a.theme, 0, 100);
     let group = live
@@ -432,8 +402,10 @@ fn waiting_groups_stay_open_and_live_groups_settle_without_changing_key() {
     let mut options = a.theme.opts;
     options.reduced_motion = false;
     a.theme = a.theme.with(options);
+    // The grey sweep (muted to secondary) starts off the word's left edge, so
+    // compare frames far enough apart for the highlight to have reached `W`.
     let frame0 = build(&a, &a.theme, 0, 100);
-    let frame1 = build(&a, &a.theme, 1, 100);
+    let frame1 = build(&a, &a.theme, 12, 100);
     let index0 = frame0
         .blocks
         .iter()
@@ -488,12 +460,14 @@ fn waiting_groups_stay_open_and_live_groups_settle_without_changing_key() {
 fn live_group_announces_clipping_and_explicit_expansion_restores_members() {
     use nexus_tui::timeline::{build, BlockKind};
     let mut a = app();
+    // Medium shows the live tree; low folds a running group to `Working` (D06).
+    a.ui.detail = nexus_tui::ui::Detail::Medium;
     let calls: Vec<_> = (0..7).map(|n| serde_json::json!({"type":"tool_call", "id":format!("c{n}"), "name":"read", "arguments":"{}"})).collect();
     a.state.model.selected.as_mut().unwrap().messages = serde_json::from_value(serde_json::json!([
         {"id":"u", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"start"}]},
         {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":calls}
     ])).unwrap();
-    a.state.model.selected.as_mut().unwrap().events.clear();
+    a.state.model.selected.as_mut().unwrap().scratch.clear();
     busy(&mut a);
     let t = build(&a, &a.theme, 0, 100);
     let group = t
@@ -544,6 +518,12 @@ fn live_group_announces_clipping_and_explicit_expansion_restores_members() {
             .count(),
         7
     );
+    // Low detail keeps the live group to its single `Working` row.
+    a.ui.timeline_open.remove(&group.key);
+    a.ui.detail = nexus_tui::ui::Detail::Low;
+    let t = build(&a, &a.theme, 0, 100);
+    assert!(!t.blocks.iter().any(|b| b.kind == BlockKind::Tool));
+    assert!(t.lines.iter().any(|l| line_text(l).contains("Working")));
 }
 
 #[test]
@@ -557,7 +537,7 @@ fn denied_approval_is_labelled_separately_from_failure() {
         {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":[{"type":"tool_call","id":"c1","name":"bash","arguments":"{\"command\":\"date\"}"}]},
         {"id":"t", "session_id":SESSION, "seq":3, "created":3.0, "role":"tool", "parts":[{"type":"tool_result","call_id":"c1","output":"denied","is_error":true}]}
     ])).unwrap();
-    view.events = [
+    view.scratch = [
         (
             10,
             "permission.asked",
@@ -852,7 +832,7 @@ fn calls(a: &mut nexus_tui::app::App, tools: &[(&str, Option<&str>)]) {
         {"id":"t", "session_id":SESSION, "seq":3, "created":3.0, "role":"tool", "parts":results}
     ]))
     .unwrap();
-    view.events.clear();
+    view.scratch.clear();
 }
 
 #[test]
@@ -922,6 +902,8 @@ fn working_shimmer_peaks_in_secondary_grey() {
 #[test]
 fn collapsed_bash_rows_show_a_non_zero_exit_code() {
     let mut a = app();
+    // Medium shows the live tree; low folds a running group to `Working` (D06).
+    a.ui.detail = nexus_tui::ui::Detail::Medium;
     // The second call keeps the group live, so member rows are visible.
     calls(
         &mut a,
@@ -1055,35 +1037,20 @@ fn the_context_sections_stay_open_without_a_header_row() {
 
 #[test]
 fn the_turn_footer_shows_usage_without_cost() {
-    use nexus_tui::api::Event;
     let mut a = app();
     a.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/gpt-5".into());
     a.state.models = vec![serde_json::json!({
         "ref": "codex/gpt-5", "context": 400000,
         "input_cost": 1.0, "output_cost": 10.0, "cache_read_cost": 0.2
     })];
-    let first = a.messages()[0].created;
-    let events = &mut a.state.model.selected.as_mut().unwrap().events;
-    events.push(Event {
-        id: 900,
-        cursor: None,
-        seq: None,
-        time: first + 0.1,
-        kind: "wire_request".into(),
-        session_id: Some(SESSION.into()),
-        data: serde_json::json!({"body": {"model": "gpt-5"}}),
-    });
-    events.push(Event {
-        id: 901,
-        cursor: None,
-        seq: None,
-        time: first + 0.2,
-        kind: "usage".into(),
-        session_id: Some(SESSION.into()),
-        data: serde_json::json!({
-            "input_tokens": 100000, "cached_input_tokens": 50000, "output_tokens": 10000
-        }),
-    });
+    summarize(
+        &mut a,
+        900,
+        fixture_summary(
+            "codex/gpt-5",
+            serde_json::json!({"input": 100000, "cached": 50000, "output": 10000, "reasoning": 0}),
+        ),
+    );
     let text = rows(&mut a).join("\n");
     assert!(
         text.contains("100K i") && text.contains("10.0K o") && text.contains("50% c"),
@@ -1264,7 +1231,7 @@ fn add_tool(a: &mut nexus_tui::app::App, n: i64, command: &str, output: &str) {
 }
 
 #[test]
-fn detail_levels_show_groups_then_each_tool_then_every_tool_expanded() {
+fn detail_levels_fold_finished_groups_until_high_expands_every_tool() {
     use nexus_tui::timeline::BlockKind;
     use nexus_tui::ui::Detail;
     let mut a = app();
@@ -1279,19 +1246,14 @@ fn detail_levels_show_groups_then_each_tool_then_every_tool_expanded() {
     );
     assert!(low.contains("Ran 2 commands"), "{low}");
     assert!(!low.contains("echo first"), "{low}");
-    // Medium: each tool on a collapsed line of its own, with its key detail.
+    // Medium: a finished group still folds to its summary (DESIGN_PLAN D06
+    // "Detail levels"); only a live group shows its tree at this level.
     a.execute("timeline.detail_cycle");
     assert_eq!(a.ui.detail, Detail::Medium);
     let medium = rows(&mut a).join("\n");
-    assert_eq!(count(&a, BlockKind::Tool), 2, "{medium}");
-    assert!(
-        medium.contains("echo first") && medium.contains("echo second"),
-        "{medium}"
-    );
-    assert!(
-        !medium.contains("first-output"),
-        "collapsed tools hide their output: {medium}"
-    );
+    assert_eq!(count(&a, BlockKind::Tool), 0, "{medium}");
+    assert!(medium.contains("Ran 2 commands"), "{medium}");
+    assert!(!medium.contains("first-output"), "{medium}");
     // High: every tool opens and shows its output.
     a.execute("timeline.detail_cycle");
     assert_eq!(a.ui.detail, Detail::High);
@@ -1308,37 +1270,19 @@ fn detail_levels_show_groups_then_each_tool_then_every_tool_expanded() {
 
 /// Usage and a model for the fixture turn, so its footer has every segment.
 fn rich_footer(a: &mut nexus_tui::app::App) {
-    use nexus_tui::api::Event;
     a.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/gpt-5".into());
     a.state.models = vec![serde_json::json!({
         "ref": "codex/gpt-5", "name": "GPT-5 Terra", "context": 400000,
         "input_cost": 1.0, "output_cost": 10.0, "cache_read_cost": 0.2
     })];
-    let first = a.messages()[0].created;
-    let events = &mut a.state.model.selected.as_mut().unwrap().events;
-    for (id, kind, data) in [
-        (
-            900,
-            "wire_request",
-            serde_json::json!({"body": {"model": "gpt-5"}}),
+    summarize(
+        a,
+        900,
+        fixture_summary(
+            "codex/gpt-5",
+            serde_json::json!({"input": 12000, "cached": 4000, "output": 2000, "reasoning": 500}),
         ),
-        (
-            901,
-            "usage",
-            serde_json::json!({"input_tokens": 12000, "cached_input_tokens": 4000,
-                               "output_tokens": 2000, "reasoning_tokens": 500}),
-        ),
-    ] {
-        events.push(Event {
-            id,
-            cursor: None,
-            seq: None,
-            time: first + 0.1,
-            kind: kind.into(),
-            session_id: Some(SESSION.into()),
-            data,
-        });
-    }
+    );
 }
 
 fn line_text(l: &nexus_tui::timeline::TLine) -> String {
@@ -1398,7 +1342,7 @@ fn an_interrupted_turn_hints_continue_and_a_failed_turn_puts_its_error_above_the
     // Interrupted: no turn_end, no later turn.
     {
         let view = a.state.model.selected.as_mut().unwrap();
-        view.events
+        view.scratch
             .retain(|e| e.kind != "turn_end" && e.kind != "done");
     }
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 100);
@@ -1416,7 +1360,7 @@ fn an_interrupted_turn_hints_continue_and_a_failed_turn_puts_its_error_above_the
         "{footer:?}"
     );
     // Failed: the first error line sits on the row above the footer.
-    a.state.model.selected.as_mut().unwrap().events.push(Event {
+    a.state.model.selected.as_mut().unwrap().scratch.push(Event {
         id: 950,
         cursor: None,
         seq: None,
@@ -1459,7 +1403,7 @@ fn a_folded_group_still_shows_edits_and_failures() {
             {"type":"tool_result","call_id":"c3","output":"old text not found","is_error":true},
             {"type":"tool_result","call_id":"c4","output":"boom","is_error":true}]}
     ])).unwrap();
-    a.state.model.selected.as_mut().unwrap().events.clear();
+    a.state.model.selected.as_mut().unwrap().scratch.clear();
     let text = nexus_tui::timeline::build(&a, &a.theme, 0, 100)
         .lines
         .iter()
@@ -1505,7 +1449,7 @@ fn members_carry_verb_glyphs_and_the_status_glyph_replaces_them() {
             {"type":"tool_result","call_id":"c5","output":"x","is_error":false},
             {"type":"tool_result","call_id":"c6","output":"boom","is_error":true}]}
     ])).unwrap();
-    a.state.model.selected.as_mut().unwrap().events.clear();
+    a.state.model.selected.as_mut().unwrap().scratch.clear();
     let member_rows = |a: &nexus_tui::app::App| -> Vec<String> {
         let t = build(a, &a.theme, 0, 100);
         t.blocks
@@ -1555,7 +1499,7 @@ fn reasoning_rows_follow_d07() {
             {"type":"text","text":"between"},
             {"type":"reasoning","summary":""}]}
     ])).unwrap();
-    a.state.model.selected.as_mut().unwrap().events.clear();
+    a.state.model.selected.as_mut().unwrap().scratch.clear();
     let t = build(&a, &a.theme, 0, 100);
     let rows: Vec<String> = t
         .blocks
@@ -1564,6 +1508,13 @@ fn reasoning_rows_follow_d07() {
         .map(|b| line_text(&t.lines[b.start]))
         .collect();
     assert_eq!(rows.len(), 2, "{rows:?}");
+    // Activity rows sit at the two-cell activity indent.
+    assert!(
+        rows.iter()
+            .all(|r| r.starts_with("  ") && !r.starts_with("   ")),
+        "{rows:?}"
+    );
+    let rows: Vec<&str> = rows.iter().map(|r| r.trim_start()).collect();
     assert!(
         rows[0].starts_with("▸ Thought · Looking for where the manifest is parsed."),
         "{:?}",
@@ -1588,10 +1539,10 @@ fn reasoning_rows_follow_d07() {
         .find(|b| b.key == "reason:a:0")
         .unwrap()
         .start;
-    assert_eq!(line_text(&t.lines[at]), "▾ Thought");
+    assert_eq!(line_text(&t.lines[at]), "  ▾ Thought");
     assert_eq!(
         line_text(&t.lines[at + 1]),
-        "  │ Looking for where the manifest is parsed."
+        "    │ Looking for where the manifest is parsed."
     );
     // The italic preview is muted.
     let preview = &build(&a, &a.theme, 0, 100);
@@ -1634,8 +1585,10 @@ fn the_header_says_what_the_session_is_doing() {
     let mut a = app();
     assert!(!draw(&mut a, 120, 36).1[0].contains("working"));
     busy(&mut a);
+    // The header omits the busy label and elapsed time (nexus-tui README);
+    // `Working` lives by the composer instead.
     let head = draw(&mut a, 120, 36).1[0].clone();
-    assert!(head.contains("working"), "{head}");
+    assert!(!head.to_lowercase().contains("working"), "{head}");
     assert!(!head.contains("running"), "{head}");
     // A pending approval wins over running.
     a.state.model.approvals.insert(
@@ -1982,27 +1935,25 @@ fn shell_and_error_previews_are_limited_and_error_text_is_neutral() {
 
 #[test]
 fn only_shell_tool_rows_show_tool_duration() {
-    use nexus_tui::api::Event;
     use nexus_tui::timeline::{build, BlockKind};
     let mut a = app();
     calls(&mut a, &[("bash", Some("ok")), ("read", Some("ok"))]);
-    let events = &mut a.state.model.selected.as_mut().unwrap().events;
-    for (id, time, kind, call) in [
-        (10, 10.0, "tool_start", "c0"),
-        (11, 12.0, "tool_end", "c0"),
-        (12, 13.0, "tool_start", "c1"),
-        (13, 16.0, "tool_end", "c1"),
-    ] {
-        events.push(Event {
-            id,
-            cursor: None,
-            seq: None,
-            time,
-            kind: kind.into(),
-            session_id: Some(SESSION.into()),
-            data: serde_json::json!({"call":{"id":call}}),
-        });
-    }
+    // Timings come from the stored turn's `tools`.
+    let turn: nexus_tui::api::TurnSummary = serde_json::from_value(serde_json::json!({
+        "id": "trn_t", "status": "completed", "started": 1.0, "finished": 17.0, "start_seq": 0,
+        "steps": 2, "stop": "end_turn", "ended": {"stop": "end_turn", "steps": 2},
+        "requests": [], "tools": [
+            {"call_id": "c0", "name": "bash", "state": "inserted", "started": 10.0, "finished": 12.0, "is_error": false},
+            {"call_id": "c1", "name": "read", "state": "inserted", "started": 13.0, "finished": 16.0, "is_error": false}
+        ]
+    }))
+    .unwrap();
+    a.state
+        .model
+        .selected
+        .as_mut()
+        .unwrap()
+        .upsert_turn(turn, 17.0);
     a.ui.timeline_open.insert("group:tool:c0".into(), true);
     let timeline = build(&a, &a.theme, 0, 120);
     let line = |key: &str| {
@@ -2046,4 +1997,311 @@ fn streaming_text_aligns_with_the_finished_assistant_message() {
     };
     assert_eq!(col("Streaming"), col("Hello"));
     assert_eq!(col("second line"), col("Hello"));
+}
+
+// -- turn summaries (TURN_SUMMARY_PLAN 5.1) -------------------------------------
+
+/// Two prompts, each answered: `u1`/`a1` (seqs 1, 2) and `u2`/`a2` (3, 4).
+fn two_turns(a: &mut nexus_tui::app::App) {
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.messages = serde_json::from_value(serde_json::json!([
+        {"id":"u1", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"first question"}]},
+        {"id":"a1", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":[{"type":"text","text":"first answer"}]},
+        {"id":"u2", "session_id":SESSION, "seq":3, "created":3.0, "role":"user", "parts":[{"type":"text","text":"second question"}]},
+        {"id":"a2", "session_id":SESSION, "seq":4, "created":4.0, "role":"assistant", "parts":[{"type":"text","text":"second answer"}]}
+    ]))
+    .unwrap();
+    view.scratch.clear();
+}
+
+fn stored(v: serde_json::Value) -> nexus_tui::api::TurnSummary {
+    serde_json::from_value(v).unwrap()
+}
+
+/// The second prompt's turn: `start_seq` 2, one request for `a2`.
+fn second_turn(usage: serde_json::Value, attempts: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "id": "trn_2", "status": "completed", "started": 3.0, "finished": 4.5, "start_seq": 2,
+        "steps": 1, "stop": "end_turn", "ended": {"stop": "end_turn", "steps": 1},
+        "error": null, "recovery": "none",
+        "requests": [{"id": "req_2", "step": 1, "status": "completed", "model": "codex/gpt-5",
+                      "started": 3.1, "finished": 4.4, "stop": "end_turn", "message_id": "a2",
+                      "usage": usage, "attempts": attempts}],
+        "tools": []
+    })
+}
+
+#[test]
+fn the_floor_row_says_older_turns_have_no_details() {
+    let mut a = app();
+    two_turns(&mut a);
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.upsert_turn(
+        stored(second_turn(
+            serde_json::json!({"input": 1000, "cached": 0, "output": 10, "reasoning": 0}),
+            serde_json::json!([]),
+        )),
+        5.0,
+    );
+    view.floor = Some(3);
+    let t = nexus_tui::timeline::build(&a, &a.theme, 0, 200);
+    let text: Vec<String> = t.lines.iter().map(line_text).collect();
+    let floor = text
+        .iter()
+        .position(|r| r.contains("the turns above have no recorded details"))
+        .unwrap_or_else(|| panic!("floor row: {text:#?}"));
+    let first = text
+        .iter()
+        .position(|r| r.contains("first answer"))
+        .unwrap();
+    let second = text
+        .iter()
+        .position(|r| r.contains("second question"))
+        .unwrap();
+    assert!(
+        first < floor && floor < second,
+        "between the turns: {text:#?}"
+    );
+    // The first turn's footer comes before the row; it has no token figures.
+    let footers: Vec<&String> = text
+        .iter()
+        .filter(|r| r.trim_start().starts_with("Build"))
+        .collect();
+    assert_eq!(footers.len(), 2, "{text:#?}");
+    assert!(!footers[0].contains(" i "), "{}", footers[0]);
+    assert!(footers[1].contains("1.0K i"), "{}", footers[1]);
+
+    // Every message covered: no row.
+    a.state.model.selected.as_mut().unwrap().floor = None;
+    let t = nexus_tui::timeline::build(&a, &a.theme, 0, 200);
+    assert!(!t
+        .lines
+        .iter()
+        .map(line_text)
+        .any(|r| r.contains("no recorded details")));
+}
+
+#[test]
+fn unknown_usage_is_said_and_never_shown_as_zero() {
+    let mut a = app();
+    two_turns(&mut a);
+    a.state.model.selected.as_mut().unwrap().upsert_turn(
+        stored(second_turn(serde_json::Value::Null, serde_json::json!([]))),
+        5.0,
+    );
+    let t = nexus_tui::timeline::build(&a, &a.theme, 0, 200);
+    let text: Vec<String> = t.lines.iter().map(line_text).collect();
+    let footer = text
+        .iter()
+        .rfind(|r| r.trim_start().starts_with("Build"))
+        .unwrap();
+    assert!(footer.contains("usage unknown"), "{footer}");
+    assert!(
+        !footer.contains("0 i") && !footer.contains("0 o"),
+        "{footer}"
+    );
+    // The model still comes from the request.
+    assert!(footer.contains("gpt-5"), "{footer}");
+}
+
+#[test]
+fn stored_attempts_and_errors_become_retry_and_error_rows() {
+    let mut a = app();
+    two_turns(&mut a);
+    let attempts = serde_json::json!([
+        {"n": 1, "status": "failed", "delay": null, "error": "codex: HTTP 429", "usage": null},
+        {"n": 2, "status": "completed", "delay": 0.84, "error": "codex: HTTP 429",
+         "usage": {"input": 1000, "cached": 0, "output": 10, "reasoning": 0}}
+    ]);
+    let mut failed = second_turn(serde_json::Value::Null, serde_json::json!([]));
+    failed["id"] = "trn_3".into();
+    failed["status"] = "failed".into();
+    failed["ended"] = serde_json::Value::Null;
+    failed["start_seq"] = 4.into();
+    failed["started"] = 4.6.into();
+    failed["error"] =
+        serde_json::json!({"kind": "provider", "message": "codex: HTTP 500\nbody", "status": 500});
+    failed["requests"][0]["status"] = "failed".into();
+    failed["requests"][0]["message_id"] = serde_json::Value::Null;
+    failed["requests"][0]["usage"] = serde_json::Value::Null;
+    failed["requests"][0]["id"] = "req_3".into();
+    failed["requests"][0]["attempts"] = serde_json::json!([
+        {"n": 1, "status": "failed", "error": "codex: HTTP 500"},
+        {"n": 2, "status": "failed", "delay": 2.0, "error": "codex: HTTP 500"}
+    ]);
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.upsert_turn(
+        stored(second_turn(
+            serde_json::json!({"input": 1000, "cached": 0, "output": 10, "reasoning": 0}),
+            attempts,
+        )),
+        5.0,
+    );
+    view.upsert_turn(stored(failed), 6.0);
+    // The failed turn's prompt, after the second answer.
+    view.messages.push(
+        serde_json::from_value(
+            serde_json::json!({"id":"u3", "session_id":SESSION, "seq":5, "created":4.6,
+            "role":"user", "parts":[{"type":"text","text":"third question"}]}),
+        )
+        .unwrap(),
+    );
+    a.state.model.selected.as_mut().unwrap().turns[1].start_seq = 4;
+    let t = nexus_tui::timeline::build(&a, &a.theme, 0, 200);
+    let text: Vec<String> = t.lines.iter().map(line_text).collect();
+    let find = |needle: &str| {
+        text.iter()
+            .position(|r| r.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} in {text:#?}"))
+    };
+    // The retry stack sits before the answer it led to.
+    let retry = find("provider retry 1 in 0.8s");
+    assert!(text[retry].contains("codex: HTTP 429"), "{}", text[retry]);
+    assert!(text[retry + 1].contains("retry started (attempt 2)"));
+    assert!(retry < find("second answer"));
+    // The failed request ran out of retries; the turn's error follows.
+    let exhausted = find("provider retries exhausted after 2");
+    let error = find("provider: codex: HTTP 500");
+    assert!(find("third question") < exhausted && exhausted < error);
+    // The footer of the failed turn has its error above it, and no continue hint
+    // is needed for a failure that is not an interruption.
+    let footer = text
+        .iter()
+        .rposition(|r| r.trim_start().starts_with("Build"))
+        .unwrap();
+    assert!(
+        text[footer - 1].contains("codex: HTTP 500"),
+        "{:?}",
+        text[footer - 1]
+    );
+}
+
+#[test]
+fn a_turn_summary_replaces_the_running_turns_events() {
+    let mut a = app();
+    let view = a.state.model.selected.as_ref().unwrap();
+    assert!(
+        view.scratch.iter().any(|e| e.kind == "turn_end"),
+        "live events"
+    );
+    assert!(
+        !view.scratch.iter().any(|e| e.kind == "text_delta"),
+        "deltas are folded, not kept"
+    );
+    summarize(
+        &mut a,
+        900,
+        fixture_summary(
+            "codex/gpt-5",
+            serde_json::json!({"input": 2000, "cached": 1000, "output": 30, "reasoning": 0}),
+        ),
+    );
+    let view = a.state.model.selected.as_ref().unwrap();
+    assert!(view.scratch.is_empty(), "replaced by the summary");
+    assert_eq!(view.turns.len(), 1);
+    assert_eq!(view.usage.models["codex/gpt-5"].usage.input, 2000);
+    // The same summary again (a replayed event) replaces, never adds.
+    summarize(
+        &mut a,
+        901,
+        fixture_summary(
+            "codex/gpt-5",
+            serde_json::json!({"input": 2000, "cached": 1000, "output": 30, "reasoning": 0}),
+        ),
+    );
+    let view = a.state.model.selected.as_ref().unwrap();
+    assert_eq!(view.turns.len(), 1);
+    assert_eq!(view.usage.models["codex/gpt-5"].requests, 1);
+    assert_eq!(view.usage.models["codex/gpt-5"].usage.input, 2000);
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("2.0K i") && text.contains("50% c"), "{text}");
+}
+
+#[test]
+fn a_running_turn_loaded_from_history_follows_live_events_until_its_summary() {
+    let mut a = app();
+    two_turns(&mut a);
+    let mut running = second_turn(serde_json::Value::Null, serde_json::json!([]));
+    running["status"] = "running".into();
+    running["ended"] = serde_json::Value::Null;
+    running["finished"] = serde_json::Value::Null;
+    let mut messages = a.messages().to_vec();
+    messages.pop(); // the answer is still streaming
+    let h = History {
+        session_id: SESSION.into(),
+        messages,
+        turns: vec![stored(running)],
+        usage: serde_json::from_value(serde_json::json!({"since": 1.0, "models": {}})).unwrap(),
+        ..Default::default()
+    };
+    a.apply_sync(nexus_tui::sync::SyncMsg::History(Box::new(h)));
+    busy(&mut a);
+    let text = rows(&mut a).join("\n");
+    assert!(
+        !text.contains("enter continue"),
+        "running, not interrupted: {text}"
+    );
+    // The turn closes: its summary arrives with the answer saved.
+    let answer = serde_json::json!({"id": 41, "type": "message.added", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:41",
+        "data": {"id": "a2", "session_id": SESSION, "seq": 4, "created": 4.0, "role": "assistant",
+                 "parts": [{"type": "text", "text": "second answer"}]}});
+    if let Ok(nexus_tui::api::Frame::Event(e)) =
+        nexus_tui::api::Frame::from_value("message.added", None, &answer)
+    {
+        a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+    }
+    summarize(
+        &mut a,
+        42,
+        second_turn(
+            serde_json::json!({"input": 3000, "cached": 0, "output": 5, "reasoning": 0}),
+            serde_json::json!([]),
+        ),
+    );
+    let idle = serde_json::json!({"id": 43, "type": "session.status", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:43", "data": {"status": "idle", "turn_id": "trn_2"}});
+    if let Ok(nexus_tui::api::Frame::Event(e)) =
+        nexus_tui::api::Frame::from_value("session.status", None, &idle)
+    {
+        a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+    }
+    let view = a.state.model.selected.as_ref().unwrap();
+    assert_eq!(view.turns[0].status, "completed");
+    assert_eq!(view.usage.models["codex/gpt-5"].usage.input, 3000);
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("3.0K i"), "{text}");
+}
+
+#[test]
+fn turns_re_read_after_a_reconnect_replace_the_held_ones_and_their_ledger() {
+    let mut a = app();
+    two_turns(&mut a);
+    let page: nexus_tui::api::TurnPage = serde_json::from_value(serde_json::json!({
+        "turns": [second_turn(serde_json::json!({"input": 700, "cached": 0, "output": 7, "reasoning": 0}), serde_json::json!([]))],
+        "more_before": true, "more_after": false, "floor": {"seq": 3},
+        "usage": {"since": 1.0, "models": {"codex/gpt-5": {"requests": 4, "input": 9000, "cached": 0, "output": 70, "reasoning": 0}}}
+    }))
+    .unwrap();
+    a.apply_sync(nexus_tui::sync::SyncMsg::Turns {
+        session: SESSION.into(),
+        page: Box::new(page),
+    });
+    let view = a.state.model.selected.as_ref().unwrap();
+    assert!(view.scratch.is_empty(), "the page closed the running turn");
+    assert_eq!(view.floor, Some(3));
+    // The page's ledger is current: it already counts the turn it carries.
+    assert_eq!(view.usage.models["codex/gpt-5"].usage.input, 9000);
+    // The same turn arriving again as an event does not count twice.
+    summarize(
+        &mut a,
+        902,
+        second_turn(
+            serde_json::json!({"input": 700, "cached": 0, "output": 7, "reasoning": 0}),
+            serde_json::json!([]),
+        ),
+    );
+    let view = a.state.model.selected.as_ref().unwrap();
+    assert_eq!(view.usage.models["codex/gpt-5"].usage.input, 9000);
+    assert_eq!(view.turns.len(), 1);
 }

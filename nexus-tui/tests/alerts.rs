@@ -316,8 +316,14 @@ fn the_jump_pill_sits_on_the_row_above_the_composer_card_at_80x24() {
     let row = &rows[pill.y as usize];
     assert!(row.contains("new") && row.contains("end"), "{row}");
     assert!(row.contains('\u{2193}'), "{row}");
-    // the card's top edge is the next row
-    assert!(rows[pill.y as usize + 1].contains('\u{2584}'));
+    // the card follows directly: its top padding row (no `▄` edge since the
+    // padding revision, nexus-tui README), then the input
+    assert!(rows[pill.y as usize + 1].trim().is_empty(), "{rows:?}");
+    assert!(!rows[pill.y as usize + 1].contains('\u{2584}'));
+    assert!(
+        rows[pill.y as usize + 2].contains("Type a message"),
+        "{rows:?}"
+    );
     // a click jumps and follows again
     click(&mut app, pill.x + 1, pill.y);
     assert!(app.ui.scroll.follow);

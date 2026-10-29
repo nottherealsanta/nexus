@@ -1,8 +1,10 @@
 // Pure client model: a cache of what Core says (port of nexus-tui/src/reduce.rs).
 //  * A snapshot replaces everything and sets the watermark; events at or below `lastId` are duplicates.
 //  * Id gaps are never loss. Events from another generation, or before the first snapshot, need a resync.
-//  * Every event of the selected session is kept (wire events are never dropped by the client).
-import { Approval, CoreEvent, Message, Project, Question, Session, Snapshot, formatCursor, parseCursor } from "./api";
+//  * History is messages plus turn summaries (`GET …/turn`); the event log is never loaded. The
+//    selected view keeps the live events since the last `turn.summary` as scratch (deltas are
+//    folded into `streaming`, never kept), and a `turn.summary` replaces that turn's scratch.
+import { Approval, CoreEvent, Message, Project, Question, Session, Snapshot, TurnSummary, UsageLedger, formatCursor, parseCursor } from "./api";
 
 export type Applied = "applied" | "duplicate" | { resync: string };
 
@@ -11,12 +13,40 @@ export interface SelectedView {
   sessionId: string;
   messages: Message[];
   messagesMore: boolean;
-  events: CoreEvent[];
+  /** Turn summaries, oldest first (by `started`). */
+  turns: TurnSummary[];
+  /** Messages below this seq have no summary (pruned turns, or older than turn records). */
+  floor: { seq: number } | null;
+  /** The session's spend ledger as of the last `/turn` read; `null` until loaded. */
+  usage: UsageLedger | null;
+  /** The newest event id applied when `usage` was read: later live `usage` events add to it. */
+  usageMark: number;
+  /** Live events of this session since the last `turn.summary`, without deltas or wire bodies. */
+  scratch: CoreEvent[];
   loaded: boolean;
   /** The frozen starting context (`GET …/snapshot`), shown above the first turn. */
   starting: any | null;
-  /** Why the loaded diagnostics are incomplete (announced in the timeline); messages are complete. */
-  eventsGap: string | null;
+  /** Why the turn details are incomplete (announced in the timeline); messages are complete. */
+  turnsGap: string | null;
+}
+
+/** Live events never kept as scratch: deltas fold into `streaming`; raw wire traffic is the inspector's. */
+const UNKEPT = new Set(["text_delta", "reasoning_delta", "tool_args_delta", "tool_call_started", "wire_event", "wire_response", "part_done"]);
+
+/** The scratch copy of a live event: a `wire_request` keeps only its model, never the request body. */
+export function scratchOf(e: CoreEvent): CoreEvent | null {
+  if (UNKEPT.has(e.type)) return null;
+  if (e.type === "wire_request") return { ...e, data: { body: { model: e.data?.body?.model } } };
+  return e;
+}
+
+/** Insert or replace a summary by id, keeping the list ordered by start time. */
+export function upsertTurn(turns: TurnSummary[], t: TurnSummary): TurnSummary[] {
+  const rest = turns.filter((x) => x.id !== t.id);
+  let i = rest.length;
+  while (i > 0 && (rest[i - 1].started > t.started || (rest[i - 1].started === t.started && rest[i - 1].id > t.id))) i--;
+  rest.splice(i, 0, t);
+  return rest;
 }
 
 /** Snapshot rows are raw DB rows (archived 0/1, disabled_tools as JSON text); events carry API objects. */
@@ -27,33 +57,8 @@ export function normalizeSession(raw: any): Session {
   return s as Session;
 }
 
-/** Cap on retained diagnostics kept for one session (messages are never capped). */
-export const HISTORY_EVENT_CAP = 20000;
-
-export interface EventPage { events?: CoreEvent[]; floor?: number; history_truncated?: boolean }
-
-/**
- * Fold stored event pages into the newest `cap` events and a notice saying what is
- * missing: events expired by retention, events beyond the cap, or a page that failed
- * (`failed` is the last id read and the error). Keeping the newest means the kept
- * diagnostics join the live stream without a gap. Mirrors nexus-tui `fold_event_pages`.
- */
-export function foldEventPages(pages: EventPage[], failed: { after: number; error: string } | null, cap = HISTORY_EVENT_CAP): { events: CoreEvent[]; gap: string | null } {
-  let events: CoreEvent[] = [];
-  let floor = 0;
-  for (const p of pages) {
-    if (p.history_truncated) floor = Math.max(floor, p.floor ?? 0);
-    events = events.concat(p.events ?? []);
-  }
-  const notes: string[] = [];
-  if (floor > 0) notes.push(`diagnostics at or before event ${floor} expired under retention`);
-  if (events.length > cap) {
-    const dropped = events.length - cap;
-    events = events.slice(dropped);
-    notes.push(`${dropped} older diagnostics are not loaded (only the newest ${cap} are kept)`);
-  }
-  if (failed) notes.push(`diagnostics after event ${failed.after} failed to load (${failed.error}); some are missing`);
-  return { events, gap: notes.length ? `${notes.join("; ")} (messages are complete)` : null };
+function emptyView(sessionId: string, messages: Message[] = [], messagesMore = false, loaded = false): SelectedView {
+  return { sessionId, messages, messagesMore, turns: [], floor: null, usage: null, usageMark: 0, scratch: [], loaded, starting: null, turnsGap: null };
 }
 
 export class Model {
@@ -75,7 +80,7 @@ export class Model {
 
   select(id: string | null) {
     this.selectedDeleted = null;
-    this.selected = id ? { sessionId: id, messages: [], messagesMore: false, events: [], loaded: false, starting: null, eventsGap: null } : null;
+    this.selected = id ? emptyView(id) : null;
   }
 
   applySnapshot(s: Snapshot) {
@@ -95,16 +100,20 @@ export class Model {
     this.questions = new Map(s.questions.map((q) => [q.id, q]));
     this.streaming = new Map();
     if (s.selected) {
-      this.selected = { sessionId: s.selected.session_id, messages: s.selected.messages, messagesMore: s.selected.messages_more, events: [], loaded: true, starting: null, eventsGap: null };
+      this.selected = emptyView(s.selected.session_id, s.selected.messages, s.selected.messages_more, true);
     } else if (wanted && this.sessions.has(wanted)) {
-      this.selected = { sessionId: wanted, messages: [], messagesMore: false, events: [], loaded: false, starting: null, eventsGap: null };
+      this.selected = emptyView(wanted);
     } else {
       this.selected = null;
     }
   }
 
-  /** Fold a fully loaded history into the selected view (never mixes sessions). */
-  applyHistory(h: { sessionId: string; messages: Message[]; events: CoreEvent[]; starting: any | null; eventsGap: string | null }) {
+  /**
+   * Fold a fully loaded history into the selected view (never mixes sessions). Messages and
+   * summaries applied live after the fetch are kept, and so is the scratch (a live `turn.summary`
+   * already cleared it for its turn).
+   */
+  applyHistory(h: { sessionId: string; messages: Message[]; turns: TurnSummary[]; floor: { seq: number } | null; usage: UsageLedger | null; starting: any | null; turnsGap: string | null; usageMark?: number }) {
     const v = this.selected;
     if (!v || v.sessionId !== h.sessionId) return;
     // Messages applied live after the fetch are kept, ordered by seq.
@@ -117,18 +126,28 @@ export class Model {
     }
     v.messages = msgs;
     v.messagesMore = false;
-    const newest = h.events.length ? h.events[h.events.length - 1].id : 0;
-    const live = v.events.filter((e) => e.id > newest);
-    const byId = new Map<number, CoreEvent>();
-    for (const e of [...h.events, ...live]) byId.set(e.id, e);
-    v.events = [...byId.values()].sort((a, b) => a.id - b.id);
-    for (const event of v.events) {
-      if (event.type === "session.error") this.failedSessions.add(h.sessionId);
-      if (event.type === "session.status" && event.data?.status === "busy") this.failedSessions.delete(h.sessionId);
-    }
+    // A summary that arrived live is at least as new as the fetched copy.
+    let turns = [...h.turns];
+    for (const t of v.turns) turns = upsertTurn(turns, t);
+    v.turns = turns;
+    v.floor = h.floor;
+    v.usage = h.usage;
+    v.usageMark = h.usageMark ?? this.lastId;
+    const newest = turns.at(-1);
+    if (newest?.error) this.failedSessions.add(h.sessionId);
+    else if (newest) this.failedSessions.delete(h.sessionId);
     v.starting = h.starting;
-    v.eventsGap = h.eventsGap;
+    v.turnsGap = h.turnsGap;
     v.loaded = true;
+  }
+
+  /** A newer ledger (re-read after a turn closed); live usage after `mark` adds to it. */
+  applyLedger(sessionId: string, usage: UsageLedger, floor: { seq: number } | null, mark: number) {
+    const v = this.selected;
+    if (!v || v.sessionId !== sessionId) return;
+    v.usage = usage;
+    v.floor = floor;
+    v.usageMark = mark;
   }
 
   applyEvent(e: CoreEvent): Applied {
@@ -138,7 +157,16 @@ export class Model {
     if (e.id <= this.lastId) return "duplicate";
     this.lastId = e.id;
     this.reduce(e);
-    if (this.selected && e.session_id === this.selected.sessionId) this.selected.events.push(e);
+    const v = this.selected;
+    if (v && e.session_id === v.sessionId) {
+      if (e.type === "turn.summary" && e.data?.id) {
+        v.turns = upsertTurn(v.turns, e.data as TurnSummary);
+        v.scratch = [];
+      } else {
+        const kept = scratchOf(e);
+        if (kept) v.scratch.push(kept);
+      }
+    }
     return "applied";
   }
 

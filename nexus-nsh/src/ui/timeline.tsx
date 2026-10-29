@@ -9,7 +9,8 @@ import { ContextSections, disabledOf, foldedMeta, startingSections } from "./new
 import type { CtxSection } from "./newsession";
 import { byId, copyText, jump, keyLabel, run } from "../commands";
 import { contextDetail, agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
-import type { CoreEvent, Message, Part } from "../core/api";
+import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
+import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import type { IconName } from "../icons";
 import { roles, statusGlyphs } from "../gen/theme";
 
@@ -154,47 +155,80 @@ function diag(e: CoreEvent): Extract<Row, { kind: "diag" }> | null {
   }
 }
 
+/** A closed turn's retry, error and recovery rows, from its summary (never from stored events). */
+function summaryDiags(t: TurnSummary): { t: number; row: Extract<Row, { kind: "diag" }> }[] {
+  if (t.status === "running") return [];
+  const label = roles.diagnostic.label;
+  const out: { t: number; row: Extract<Row, { kind: "diag" }> }[] = [];
+  for (const r of t.requests ?? []) {
+    const attempts = r.attempts ?? [];
+    attempts.forEach((a, i) => {
+      const next = attempts[i + 1];
+      const at = a.finished ?? a.started ?? r.started ?? t.started;
+      if (next) {
+        const delay = typeof next.delay === "number" ? ` in ${fmtDuration(next.delay)}` : "";
+        out.push({ t: at, row: { key: `retry-${r.id}-${a.n}`, kind: "diag", label, text: `provider retry ${next.n}/${attempts.length}${delay}`, detail: a.error ?? undefined, tone: "warning" } });
+      } else if (i > 0 && a.status === "failed") {
+        out.push({ t: at, row: { key: `retry-${r.id}-end`, kind: "diag", label, text: "provider retries exhausted", detail: a.error ?? undefined, tone: "warning" } });
+      }
+    });
+  }
+  if (t.error) {
+    const e = t.error;
+    out.push({ t: t.finished ?? t.started, row: { key: `error-${t.id}`, kind: "diag", label, text: `${e.kind ?? "error"}: ${e.message ?? ""}`, detail: e.status ? `HTTP ${e.status}` : undefined, tone: "warning" } });
+  }
+  if (t.recovery === "done") {
+    out.push({ t: (t.finished ?? t.started) + 0.00005, row: { key: `recovered-${t.id}`, kind: "diag", label, text: `turn ${t.status}: recovered after a daemon restart`, tone: "warning" } });
+  }
+  return out;
+}
+
 type TurnMeta = {
   n: number; start: number; end: number; startTime: number; endTime: number;
   input: number; cached: number; output: number; reasoning: number; steps: number;
+  /** Finished requests that reported no usage, and requests with usage known. */
+  unknown: number; known: number;
   tools: number; models: string[]; stop?: string; error?: { kind: string; message: string };
-  endEvent: boolean; followed: boolean; running: boolean;
+  /** The turn's summaries: the loop ended it, Core's status, and whether any summary exists. */
+  endEvent: boolean; status?: string; summarized: boolean;
+  followed: boolean; running: boolean;
 };
-function turnMeta(msgs: Message[], events: CoreEvent[], busy: boolean): TurnMeta[] {
+/**
+ * One meta per user message (the turn header): the summaries of Core turns that start in its
+ * message range (continuations and notice turns join the user turn they follow), and the live
+ * scratch for the newest one.
+ */
+function turnMeta(msgs: Message[], turns: TurnSummary[], scratch: CoreEvent[], busy: boolean): TurnMeta[] {
   const starts: number[] = [];
   msgs.forEach((m, i) => { if (m.role === "user" && !NOTICE.test(text(m))) starts.push(i); });
   return starts.map((start, n) => {
     const end = n + 1 < starts.length ? starts[n + 1] : msgs.length;
     const window = msgs.slice(start, end);
+    const last = n + 1 === starts.length;
+    const group = turnsIn(turns, msgs[start].seq, last ? Infinity : msgs[starts[n + 1]].seq);
+    const reqs = groupRequests(group, last ? scratch : null);
+    const sum = sumUsage(reqs);
+    const newest = group.at(-1);
     const meta: TurnMeta = {
       n, start, end, startTime: msgs[start].created, endTime: window.length ? window[window.length - 1].created : msgs[start].created,
-      input: 0, cached: 0, output: 0, reasoning: 0, steps: 0, tools: 0, models: [], endEvent: false,
-      followed: n + 1 < starts.length, running: busy && n + 1 === starts.length,
+      input: sum.input, cached: sum.cached, output: sum.output, reasoning: sum.reasoning, unknown: sum.unknown, known: sum.known,
+      steps: 0, tools: 0, models: [], endEvent: !!newest?.ended, status: newest?.status, summarized: group.length > 0,
+      followed: !last, running: busy && last,
     };
-    const nextStart = n + 1 < starts.length ? msgs[starts[n + 1]].created : Infinity;
-    for (const e of events) {
-      if (e.time < meta.startTime || e.time > nextStart) continue;
-      const d = e.data ?? {};
-      switch (e.type) {
-        case "usage":
-          meta.input += d.input_tokens ?? 0; meta.cached += d.cached_input_tokens ?? 0;
-          meta.output += d.output_tokens ?? 0; meta.reasoning += d.reasoning_tokens ?? 0;
-          meta.endTime = Math.max(meta.endTime, e.time); break;
-        case "step_start": meta.steps += 1; break;
-        case "turn_end":
-          meta.stop = d.stop; meta.endEvent = true;
-          if (typeof d.steps === "number") meta.steps = Math.max(meta.steps, d.steps);
-          meta.endTime = Math.max(meta.endTime, e.time); break;
-        case "wire_request": {
-          const model = d.body?.model;
-          if (typeof model === "string" && !meta.models.includes(model)) meta.models.push(model);
-          break;
-        }
-        case "session.error":
-          meta.error = { kind: d.kind ?? "error", message: d.message ?? "" };
-          meta.endTime = Math.max(meta.endTime, e.time); break;
-        default: break;
-      }
+    for (const t of group) {
+      meta.steps += Math.max(t.steps ?? 0, (t.requests ?? []).length);
+      if (t.finished) meta.endTime = Math.max(meta.endTime, t.finished);
+    }
+    for (const r of reqs) {
+      const model = r.model ? bareModel(r.model) : null;
+      if (model && !meta.models.includes(model)) meta.models.push(model);
+      if (!r.running) meta.endTime = Math.max(meta.endTime, r.time);
+    }
+    if (newest?.ended?.stop) meta.stop = newest.ended.stop;
+    if (newest?.error) meta.error = { kind: String(newest.error.kind ?? "error"), message: String(newest.error.message ?? "") };
+    if (last) {
+      // The running turn's error arrives live, before its summary.
+      for (const e of scratch) if (e.type === "session.error") meta.error = { kind: e.data?.kind ?? "error", message: e.data?.message ?? "" };
     }
     const ids = new Set<string>();
     for (const m of window) for (const p of m.parts) if (p.type === "tool_call" && p.id) ids.add(p.id);
@@ -206,7 +240,8 @@ function statusOf(t: TurnMeta): TurnStatus {
   if (t.running) return "running";
   if (t.error && t.error.kind !== "interrupted") return "error";
   if (t.stop === "max_steps") return "step_limit";
-  if (t.stop || t.endEvent || t.followed) return "done";
+  // No summary (older than the floor, or not loaded): nothing says it was cut off.
+  if (t.stop || t.endEvent || t.followed || t.status === "completed" || !t.summarized) return "done";
   return "interrupted";
 }
 /** The status mark on a folded user band (no status word anywhere in the footer). */
@@ -274,14 +309,10 @@ export function buildRows(): Row[] {
   if (!sel) return [];
   const results = new Map<string, Part>();
   for (const msg of sel.messages) for (const p of msg.parts) if (p.type === "tool_result" && p.call_id) results.set(p.call_id, p);
-  const traces = new Map<string, { start?: number; end?: number }>();
-  for (const e of sel.events) {
-    if (e.type === "tool_start") traces.set(e.data?.call?.id, { ...(traces.get(e.data?.call?.id) ?? {}), start: e.time });
-    else if (e.type === "tool_end") traces.set(e.data?.call?.id, { ...(traces.get(e.data?.call?.id) ?? {}), end: e.time });
-  }
+  const traces = toolTimes(sel.turns, sel.scratch);
   const waiting = new Set([...model.approvals.values()].map((a) => a.call_id));
   const busy = viewed()?.status === "busy";
-  const metas = turnMeta(sel.messages, sel.events, busy);
+  const metas = turnMeta(sel.messages, sel.turns, sel.scratch, busy);
   const sid = sel.sessionId;
   const rows: { t: number; r: Row[] }[] = [];
 
@@ -400,11 +431,15 @@ export function buildRows(): Row[] {
         if (v?.effort) segments.push({ text: String(v.effort) });
         if (meta.tools) segments.push({ text: `${meta.tools} tool${meta.tools === 1 ? "" : "s"}` });
         segments.push({ text: fmtDuration(meta.endTime - meta.startTime) });
-        if (meta.input + meta.cached + meta.output + meta.reasoning > 0) {
+        if (meta.known > 0) {
           let tok = `${fmtCount(meta.input)} i ${fmtCount(meta.output)} o ${fmtCount(meta.reasoning)} r`;
           if (meta.input > 0) tok += ` ${Math.round(100 * meta.cached / meta.input)}% c`;
-          const tip = `input ${meta.input.toLocaleString()} · cached ${meta.cached.toLocaleString()} · output ${meta.output.toLocaleString()} · reasoning ${meta.reasoning.toLocaleString()}`;
+          let tip = `input ${meta.input.toLocaleString()} · cached ${meta.cached.toLocaleString()} · output ${meta.output.toLocaleString()} · reasoning ${meta.reasoning.toLocaleString()}`;
+          // Unknown usage is never counted as zero: the total says it is a floor.
+          if (meta.unknown) { tok += " + unknown"; tip += ` · ${meta.unknown} request${meta.unknown === 1 ? "" : "s"} reported no usage`; }
           segments.push({ text: tok, tip });
+        } else if (meta.unknown) {
+          segments.push({ text: "tokens unknown", tip: `${meta.unknown} request${meta.unknown === 1 ? "" : "s"} reported no usage` });
         }
         const status = statusOf(meta);
         const error = status === "error" ? (firstLine(meta.error?.message ?? "") || meta.error?.kind) : undefined;
@@ -415,10 +450,24 @@ export function buildRows(): Row[] {
       }
     }
   }
-  for (const e of sel.events) {
+  // Closed turns: retries and errors from their summaries. The running turn: live diagnostics
+  // (its scratch), replaced by its summary when it closes.
+  for (const t of sel.turns) for (const r of summaryDiags(t)) rows.push({ t: r.t, r: [r.row] });
+  for (const e of sel.scratch) {
     if (!DIAG_TYPES.has(e.type)) continue;
     const r = diag(e);
     if (r) rows.push({ t: e.time, r: [r] });
+  }
+  const floorAt = floorIndex(sel.messages, sel.floor);
+  if (floorAt !== null) {
+    const next = sel.messages[floorAt];
+    const prev = sel.messages[floorAt - 1];
+    rows.push({
+      t: next ? next.created - 0.0002 : (prev?.created ?? 0) + 0.0002,
+      r: [{ key: `floor-${sid}`, kind: "older", text: next
+        ? "Turns above have no details (tokens, models, timings): their records were pruned or predate turn summaries."
+        : "These turns have no details (tokens, models, timings): their records were pruned or predate turn summaries." }],
+    });
   }
   rows.sort((a, b) => a.t - b.t);
   const flat = rows.flatMap((x) => x.r);
@@ -430,7 +479,7 @@ export function buildRows(): Row[] {
   const st = model.streaming.get(sel.sessionId);
   if (st?.reasoning) flat.push({ key: "stream-r", kind: "reasoning", text: st.reasoning, open: true, running: true });
   if (st?.text) flat.push({ key: "stream-t", kind: "assistant", text: st.text, streaming: true });
-  if (sel.eventsGap) flat.unshift({ key: "older-events", kind: "older", text: `${sel.eventsGap[0].toUpperCase()}${sel.eventsGap.slice(1)}.` });
+  if (sel.turnsGap) flat.unshift({ key: "turns-gap", kind: "older", text: `${sel.turnsGap[0].toUpperCase()}${sel.turnsGap.slice(1)}.` });
   return groupActivities(flat);
 }
 
@@ -605,7 +654,7 @@ function RowView(p: { r: () => Row }) {
             </View>
           </View>
         </If>
-        <If when={r().kind === "older"}><Text class={`${T.meta} py-2`}>{(r() as any).text}</Text></If>
+        <If when={r().kind === "older"}><Text class={`${T.meta} py-2`} testID="timeline-older">{(r() as any).text}</Text></If>
       </View>
     </View>
   );

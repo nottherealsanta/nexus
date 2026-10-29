@@ -18,6 +18,36 @@ export interface CoreEvent {
   id: number; cursor?: string; seq?: number; time: number; type: string; session_id: string | null;
   data: any;
 }
+/** Token counts of one request or attempt (`GET …/turn`); `null` where it appears means unknown, never zeros. */
+export interface TokenUsage { input: number; cached: number; output: number; reasoning: number }
+export interface AttemptSummary {
+  n: number; status: string; delay: number | null; started: number | null; finished: number | null;
+  error: string | null; usage: TokenUsage | null;
+}
+export interface RequestSummary {
+  id: string; step: number; status: string; model: string | null; effort: string | null;
+  started: number | null; finished: number | null; stop: string | null; error: any;
+  message_id: string | null; usage: TokenUsage | null; reasoning_seconds: number | null;
+  attempts: AttemptSummary[];
+}
+export interface ToolSummary { call_id: string; name: string; state: string; started: number | null; finished: number | null; is_error: boolean }
+/** One turn as Core records it (also the data of the durable `turn.summary` event). */
+export interface TurnSummary {
+  id: string; status: "running" | "completed" | "failed" | "interrupted" | string;
+  started: number; finished: number | null;
+  /** The last message seq before the turn: its messages have a higher seq. */
+  start_seq: number; steps: number; stop: string | null;
+  ended: { stop: string; steps: number } | null;
+  error: { kind?: string; message?: string; status?: number | null; [k: string]: unknown } | null;
+  recovery: string; requests: RequestSummary[]; tools: ToolSummary[];
+}
+/** The session's spend ledger per model; it outlives pruned turns. */
+export interface UsageLedger { since: number | null; models: Record<string, TokenUsage & { requests: number }> }
+export interface TurnPage {
+  turns: TurnSummary[]; more_before: boolean; more_after: boolean;
+  /** Messages with a lower seq have no summary; `null` when every message is covered. */
+  floor: { seq: number } | null; usage: UsageLedger;
+}
 export interface Watermark { generation: string; head: number; floor: number; head_cursor: string }
 export interface Snapshot {
   watermark: Watermark; projects: Project[]; sessions: Session[];
@@ -31,7 +61,7 @@ export interface Info {
 
 export const CLIENT_VERSION = "0.10.0";
 /** The API version this client was written against (same convention as nexus-tui). */
-export const CLIENT_API = { major: 1, minor: 1 };
+export const CLIENT_API = { major: 1, minor: 2 };
 
 export interface ApiVersion { major: number; minor: number }
 

@@ -91,8 +91,8 @@ pub struct Timeline {
 /// Frames a finished group's glyph flashes the accent (DESIGN_PLAN.md D06).
 pub const FLASH_FRAMES: usize = 6;
 
-/// Turn facts gathered from messages and the durable diagnostics that follow
-/// them (usage, steps, model, end reason).
+/// Turn facts gathered from messages, the stored turns' summaries and the
+/// running turn's live events (usage, steps, model, end reason).
 #[derive(Debug, Clone, Default)]
 struct TurnMeta {
     start_msg: usize,
@@ -111,6 +111,16 @@ struct TurnMeta {
     followed: bool,
     error: Option<(String, String)>,
     end_event: bool,
+    /// The newest stored turn's status, when the turn has summaries and no
+    /// live events after them.
+    status: Option<String>,
+    /// Requests ran whose usage Core does not know (never shown as zero).
+    unknown_usage: bool,
+    effort: Option<String>,
+    /// The conversation ends with an assistant message.
+    ends_on_assistant: bool,
+    /// Live events of the running turn fall in this turn.
+    live: bool,
 }
 
 impl TurnMeta {
@@ -138,10 +148,15 @@ enum Activity<'a> {
     },
 }
 
+/// A tool call's timing and outcome: from the turn summary's `tools`, or the
+/// running turn's live `tool_start` / `tool_end`.
 #[derive(Default)]
 struct ToolTrace {
     start: Option<f64>,
     end: Option<f64>,
+    failed: bool,
+    /// The failed output a live `tool_end` carried (a summary has none; the
+    /// result message has it).
     error: Option<String>,
 }
 
@@ -164,45 +179,6 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
         turns: b.turn.map_or(0, |n| n + 1),
         live_groups: b.live_groups,
     }
-}
-
-/// Wall time per reasoning part, keyed by its summary text. Deltas are paired
-/// with the `part_done` that carries the same summary; a part whose summary
-/// arrived without deltas has no duration rather than an invented one.
-#[cfg(test)]
-fn reasoning_times(events: &[crate::api::Event]) -> HashMap<String, f64> {
-    let mut out = HashMap::new();
-    let mut start: Option<f64> = None;
-    let mut text = String::new();
-    for event in events {
-        match event.kind.as_str() {
-            "reasoning_delta" => {
-                start.get_or_insert(event.time);
-                if let Some(delta) = event.data["text"].as_str() {
-                    text.push_str(delta);
-                }
-            }
-            "part_done" => {
-                let part = &event.data["part"];
-                if part["type"] == "reasoning" {
-                    let summary = json_str(&part["summary"]);
-                    if let Some(start) = start.filter(|_| !summary.trim().is_empty()) {
-                        if summary.trim() == text.trim() {
-                            out.insert(summary, (event.time - start).max(0.0));
-                        }
-                    }
-                }
-                start = None;
-                text.clear();
-            }
-            "text_delta" | "tool_start" | "step_start" => {
-                start = None;
-                text.clear();
-            }
-            _ => {}
-        }
-    }
-    out
 }
 
 struct Builder<'a> {
@@ -275,6 +251,38 @@ pub(crate) fn local_clock(timestamp: f64) -> Option<String> {
 }
 #[cfg(not(unix))]
 pub(crate) fn local_clock(_timestamp: f64) -> Option<String> {
+    None
+}
+
+/// A stored timestamp's local date: `Oct 2`, with the year when not this year.
+#[cfg(unix)]
+pub(crate) fn local_date(timestamp: f64) -> Option<String> {
+    fn tm(t: f64) -> Option<libc::tm> {
+        if !t.is_finite() || t < 0.0 || t > libc::time_t::MAX as f64 {
+            return None;
+        }
+        let value = t as libc::time_t;
+        let mut out = std::mem::MaybeUninit::<libc::tm>::uninit();
+        // localtime_r writes `out` on success and does not use shared static storage.
+        if unsafe { libc::localtime_r(&value, out.as_mut_ptr()) }.is_null() {
+            return None;
+        }
+        Some(unsafe { out.assume_init() })
+    }
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let date = tm(timestamp)?;
+    let month = MONTHS.get(usize::try_from(date.tm_mon).ok()?)?;
+    let this_year = tm(crate::app::now_secs()).map(|now| now.tm_year);
+    Some(if this_year == Some(date.tm_year) {
+        format!("{month} {}", date.tm_mday)
+    } else {
+        format!("{month} {} {}", date.tm_mday, 1900 + date.tm_year)
+    })
+}
+#[cfg(not(unix))]
+pub(crate) fn local_date(_timestamp: f64) -> Option<String> {
     None
 }
 
@@ -364,21 +372,123 @@ enum End {
     StepLimit,
 }
 
-/// Seconds the model has been reasoning in the current step: from its first
-/// reasoning delta since the last boundary (text, tool, step or part end).
-#[cfg(test)]
-fn live_reasoning_secs(events: &[crate::api::Event], now: f64) -> Option<f64> {
-    let mut start = None;
-    for event in events {
-        match event.kind.as_str() {
-            "reasoning_delta" => {
-                start.get_or_insert(event.time);
+/// The tool result a declined approval leaves in the conversation.
+const DECLINED: &str = "the user declined this tool call";
+
+/// Index range of the messages a stored turn added: seqs after its
+/// `start_seq`, up to the next turn's.
+fn turn_messages(view: &crate::reduce::SelectedView, n: usize) -> std::ops::Range<usize> {
+    let t = &view.turns[n];
+    let next = view.turns.get(n + 1).map(|x| x.start_seq);
+    let lo = view.messages.partition_point(|m| m.seq <= t.start_seq);
+    let hi = next.map_or(view.messages.len(), |s| {
+        view.messages.partition_point(|m| m.seq <= s)
+    });
+    lo..hi.max(lo)
+}
+
+/// Rows the stored turns' summaries describe, as the live event each stands
+/// for: a retry (`retry_scheduled`, `retry_started`), retries running out
+/// (`retry_exhausted`) and the turn's error (`session.error`). Each is placed
+/// before the message of its request, or after the turn's last message.
+/// `(message index, before it, block key, event)`.
+fn summary_rows(
+    view: &crate::reduce::SelectedView,
+) -> Vec<(usize, bool, String, crate::api::Event)> {
+    let row = |kind: &str, data: Value| crate::api::Event {
+        id: 0,
+        cursor: None,
+        seq: None,
+        time: 0.0,
+        kind: kind.to_owned(),
+        session_id: Some(view.session_id.clone()),
+        data,
+    };
+    let mut out = Vec::new();
+    for (n, t) in view.turns.iter().enumerate() {
+        let range = turn_messages(view, n);
+        // After the turn's last message, or after the message before it.
+        let Some(last) = range.end.checked_sub(1) else {
+            continue;
+        };
+        for r in &t.requests {
+            let anchor = r
+                .message_id
+                .as_deref()
+                .and_then(|id| view.messages[range.clone()].iter().position(|m| m.id == id))
+                .map(|i| (range.start + i, true))
+                .unwrap_or((last, false));
+            let mut attempts: Vec<&crate::api::AttemptSummary> = r.attempts.iter().collect();
+            attempts.sort_by_key(|a| a.n);
+            for (k, pair) in attempts.windows(2).enumerate() {
+                let (prev, next) = (pair[0], pair[1]);
+                out.push((
+                    anchor.0,
+                    anchor.1,
+                    format!("diag:{}:{k}:scheduled", r.id),
+                    row(
+                        "retry_scheduled",
+                        serde_json::json!({"attempt": prev.n, "delay": next.delay.unwrap_or(0.0),
+                                           "reason": prev.error}),
+                    ),
+                ));
+                out.push((
+                    anchor.0,
+                    anchor.1,
+                    format!("diag:{}:{k}:started", r.id),
+                    row("retry_started", serde_json::json!({"attempt": next.n})),
+                ));
             }
-            "part_done" | "text_delta" | "tool_start" | "step_start" => start = None,
-            _ => {}
+            if r.status == "failed" && attempts.len() > 1 {
+                out.push((
+                    anchor.0,
+                    anchor.1,
+                    format!("diag:{}:exhausted", r.id),
+                    row(
+                        "retry_exhausted",
+                        serde_json::json!({"attempts": attempts.len(),
+                                           "reason": attempts.last().and_then(|a| a.error.clone())}),
+                    ),
+                ));
+            }
+        }
+        if let Some(err) = t
+            .error
+            .as_ref()
+            .filter(|_| matches!(t.status.as_str(), "failed" | "interrupted"))
+        {
+            out.push((
+                last,
+                false,
+                format!("diag:{}:error", t.id),
+                row("session.error", err.clone()),
+            ));
         }
     }
-    start.map(|t: f64| (now - t).max(0.0))
+    out
+}
+
+/// Where the row saying older turns have no details goes: before the first
+/// turn (a user prompt) whose messages are at or above the floor, or after
+/// the last message when none is. `None` when every loaded message is covered.
+fn floor_at(view: &crate::reduce::SelectedView) -> Option<usize> {
+    let mut floor = view.floor;
+    if view.turns_more_before {
+        // Older summaries were not loaded: the oldest loaded turn bounds them.
+        let oldest = view.turns.first().map(|t| t.start_seq + 1);
+        floor = floor.max(oldest);
+    }
+    let floor = floor?;
+    let first = view.messages.partition_point(|m| m.seq < floor);
+    if first == 0 {
+        return None;
+    }
+    let start = (first..view.messages.len())
+        .find(|&i| view.messages[i].role == "user" && !is_notice(&parts_text(&view.messages[i])));
+    match start {
+        Some(i) => Some(i),
+        None => Some(view.messages.len()),
+    }
 }
 
 impl Builder<'_> {
@@ -538,9 +648,21 @@ impl Builder<'_> {
                 }
             }
         }
-        // Tool timing from the durable stream.
+        // Tool timing and outcome: the turn summaries, then the running turn's
+        // live events.
         let mut traces: HashMap<String, ToolTrace> = HashMap::new();
-        for e in &view.events {
+        for tool in view.turns.iter().flat_map(|t| t.tools.iter()) {
+            traces.insert(
+                tool.call_id.clone(),
+                ToolTrace {
+                    start: tool.started,
+                    end: tool.finished,
+                    failed: tool.is_error,
+                    error: None,
+                },
+            );
+        }
+        for e in &view.scratch {
             if e.kind == "tool_start" {
                 let id = json_str(&e.data["call"]["id"]);
                 traces.entry(id).or_default().start = Some(e.time);
@@ -549,6 +671,7 @@ impl Builder<'_> {
                 let t = traces.entry(id).or_default();
                 t.end = Some(e.time);
                 if e.data["result"]["is_error"].as_bool().unwrap_or(false) {
+                    t.failed = true;
                     t.error = Some(json_str(&e.data["result"]["output"]));
                 }
             }
@@ -570,16 +693,17 @@ impl Builder<'_> {
             )
             .collect();
 
-        // Approval replies refer to approval IDs, not call IDs. Join the durable
-        // lifecycle records so a denial is not presented as a tool failure.
+        // Approval replies refer to approval IDs, not call IDs. Join the live
+        // lifecycle records so a denial is not presented as a tool failure; a
+        // stored turn's denial is the result the model received.
         let approval_calls: HashMap<&str, &str> = view
-            .events
+            .scratch
             .iter()
             .filter(|event| event.kind == "permission.asked")
             .filter_map(|event| Some((event.data["id"].as_str()?, event.data["call_id"].as_str()?)))
             .collect();
         self.denied = view
-            .events
+            .scratch
             .iter()
             .filter(|event| {
                 event.kind == "permission.replied"
@@ -587,11 +711,18 @@ impl Builder<'_> {
             })
             .filter_map(|event| approval_calls.get(event.data["id"].as_str()?).copied())
             .map(str::to_owned)
+            .chain(
+                results
+                    .iter()
+                    .filter(|(_, d)| d.is_error && d.output == DECLINED)
+                    .map(|(id, _)| id.clone()),
+            )
             .collect();
 
-        // Where each message was announced, so diagnostics interleave with it.
+        // Where each live message was announced, so live diagnostics
+        // interleave with it.
         let mut added_at: HashMap<&str, i64> = HashMap::new();
-        for e in &view.events {
+        for e in &view.scratch {
             if e.kind == "message.added" {
                 if let Some(id) = e.data["id"].as_str() {
                     added_at.insert(id, e.id);
@@ -609,30 +740,49 @@ impl Builder<'_> {
                 )]);
             });
         }
-        if let Some(gap) = &view.events_gap {
-            self.block("older-events", BlockKind::Older, None, false, |b| {
-                b.line(vec![Span::styled(format!("{} {gap}", b.ell()), b.meta())]);
+        if let Some(err) = &view.turns_error {
+            self.block("turns-error", BlockKind::Older, None, false, |b| {
+                b.line(vec![Span::styled(
+                    format!("{} {err} (messages are complete)", b.ell()),
+                    b.meta(),
+                )]);
             });
         }
 
         enum Item<'a> {
             Msg(&'a crate::api::Message),
             Ev(&'a crate::api::Event),
+            /// A row stored turns' summaries describe (a retry, an error).
+            Summary(&'a str, &'a crate::api::Event),
+            /// Messages above this point have no turn summary.
+            Floor,
         }
-        let mut items: Vec<(i64, usize, Item)> = Vec::new();
+        // Order: (announcing event id, slot, rank). Message i holds slot
+        // 2i+1; rows placed before it take 2i and rows after it 2i+1 with a
+        // higher rank. Live events follow by id.
+        let key_of = |i: usize| {
+            view.messages
+                .get(i)
+                .and_then(|m| added_at.get(m.id.as_str()).copied())
+                .unwrap_or(0)
+        };
+        let mut items: Vec<(i64, usize, usize, Item)> = Vec::new();
         for (i, m) in view.messages.iter().enumerate() {
-            items.push((
-                added_at.get(m.id.as_str()).copied().unwrap_or(0),
-                i,
-                Item::Msg(m),
-            ));
+            items.push((key_of(i), 2 * i + 1, 0, Item::Msg(m)));
         }
-        for (i, e) in view.events.iter().enumerate() {
+        let synthetic = summary_rows(view);
+        for (rank, (at, before, key, e)) in synthetic.iter().enumerate() {
+            let slot = if *before { 2 * at } else { 2 * at + 1 };
+            items.push((key_of(*at), slot, rank + 1, Item::Summary(key, e)));
+        }
+        if let Some(at) = floor_at(view) {
+            items.push((key_of(at), 2 * at, 0, Item::Floor));
+        }
+        let tail = 2 * view.messages.len() + 2;
+        for (i, e) in view.scratch.iter().enumerate() {
             if matches!(
                 e.kind.as_str(),
                 "message.added"
-                    | "text_delta"
-                    | "reasoning_delta"
                     | "step_start"
                     | "session.status"
                     | "session.updated"
@@ -650,23 +800,20 @@ impl Builder<'_> {
                     | "tool_start"
                     | "tool_end"
                     | "wire_request"
-                    | "wire_response"
-                    | "wire_event"
-                    | "part_done"
                     | "done"
             ) {
                 continue;
             }
-            items.push((e.id, view.messages.len() + i, Item::Ev(e)));
+            items.push((e.id, tail + i, 0, Item::Ev(e)));
         }
-        items.sort_by_key(|(k, i, _)| (*k, *i));
+        items.sort_by_key(|(k, slot, rank, _)| (*k, *slot, *rank));
 
         let mut turn_open = false;
         let mut turn_no = 0usize;
         let mut folded = false;
         let mut activity = Vec::new();
         let mut background_notices = Vec::new();
-        for (_, _, item) in &items {
+        for (_, _, _, item) in &items {
             let background = match item {
                 Item::Msg(m) if m.role == "user" => parts_text(m)
                     .trim_start()
@@ -808,8 +955,40 @@ impl Builder<'_> {
                         );
                     }
                     if !folded {
-                        self.diagnostic(e);
+                        self.diagnostic(&format!("diag:{}", e.id), e);
                     }
+                }
+                Item::Summary(key, e) => {
+                    if turn_open && !folded {
+                        self.activity_group(
+                            &mut activity,
+                            &results,
+                            &traces,
+                            &waiting,
+                            busy,
+                            false,
+                        );
+                        self.diagnostic(key, e);
+                    }
+                }
+                Item::Floor => {
+                    self.activity_group(&mut activity, &results, &traces, &waiting, busy, false);
+                    if turn_open && !folded {
+                        self.turn_footer(turn_no, &turns);
+                        self.blank();
+                    }
+                    turn_open = false;
+                    folded = false;
+                    self.turn = None;
+                    self.block("turn-floor", BlockKind::Older, None, false, |b| {
+                        b.line(vec![Span::styled(
+                            format!(
+                                "{} the turns above have no recorded details (tokens, models, timings): pruned, or older than turn records",
+                                b.ell()
+                            ),
+                            b.meta(),
+                        )]);
+                    });
                 }
             }
         }
@@ -971,10 +1150,7 @@ impl Builder<'_> {
         let warn = self.st("status.warning", CANVAS);
         self.block(key.clone(), BlockKind::Context, None, false, |b| {
             if reconstructed {
-                b.row(
-                    vec![Span::styled("reconstructed", warn)],
-                    Vec::new(),
-                );
+                b.row(vec![Span::styled("reconstructed", warn)], Vec::new());
             }
             let layout = CtxLayout {
                 width: b.bw.min(100).saturating_sub(2),
@@ -1044,14 +1220,73 @@ impl Builder<'_> {
             if let Some(last) = window.last() {
                 meta.end_time = last.created;
             }
-            // Diagnostics in the same time window.
-            for e in &view.events {
+            meta.ends_on_assistant = window.last().is_some_and(|m| m.role == "assistant");
+            // Stored turns whose first message falls in this window (a
+            // continuation or a notice turn joins the prompt's).
+            let lo = m.seq;
+            let hi = starts.get(n + 1).map_or(i64::MAX, |x| x.1.seq);
+            let stored: Vec<&crate::api::TurnSummary> = view
+                .turns
+                .iter()
+                .filter(|t| t.start_seq + 1 >= lo && t.start_seq + 1 < hi)
+                .collect();
+            let mut known = 0usize;
+            for t in &stored {
+                meta.steps += t.steps;
+                if let Some(f) = t.finished {
+                    meta.end_time = meta.end_time.max(f);
+                }
+                for r in &t.requests {
+                    match &r.usage {
+                        Some(u) => {
+                            known += 1;
+                            meta.input += u.input;
+                            meta.cached += u.cached;
+                            meta.output += u.output;
+                            meta.reasoning += u.reasoning;
+                        }
+                        // A request that failed before any response has none
+                        // to report; a completed one should have.
+                        None if r.status == "completed" => meta.unknown_usage = true,
+                        None => {}
+                    }
+                    if let Some(model) = r.model.as_deref().filter(|m| !m.is_empty()) {
+                        if !meta.models.iter().any(|x| x == model) {
+                            meta.models.push(model.to_owned());
+                        }
+                    }
+                    if r.effort.is_some() {
+                        meta.effort.clone_from(&r.effort);
+                    }
+                }
+            }
+            if let Some(last) = stored.last() {
+                if known == 0 && last.requests.iter().any(|r| r.usage.is_none()) {
+                    meta.unknown_usage = true;
+                }
+                meta.stop.clone_from(&last.stop);
+                meta.end_event = last.ended.is_some();
+                meta.error = last
+                    .error
+                    .as_ref()
+                    .filter(|_| matches!(last.status.as_str(), "failed" | "interrupted"))
+                    .map(|e| {
+                        (
+                            e["kind"].as_str().unwrap_or("error").to_owned(),
+                            e["message"].as_str().unwrap_or("").to_owned(),
+                        )
+                    });
+                meta.status = Some(last.status.clone());
+            }
+            // The running turn's live events in the same time window.
+            for e in &view.scratch {
                 if e.time < meta.start_time {
                     continue;
                 }
                 if n + 1 < starts.len() && e.time > starts[n + 1].1.created {
                     continue;
                 }
+                meta.live = true;
                 match e.kind.as_str() {
                     "usage" => {
                         meta.input += e.data["input_tokens"].as_u64().unwrap_or(0);
@@ -1060,10 +1295,14 @@ impl Builder<'_> {
                         meta.reasoning += e.data["reasoning_tokens"].as_u64().unwrap_or(0);
                         meta.end_time = meta.end_time.max(e.time);
                     }
-                    "step_start" => meta.steps += 1,
+                    "step_start" => {
+                        meta.steps += 1;
+                        meta.status = None;
+                    }
                     "turn_end" => {
                         meta.stop = e.data["stop"].as_str().map(str::to_owned);
                         meta.end_event = true;
+                        meta.status = None;
                         if let Some(s) = e.data["steps"].as_u64() {
                             if s > meta.steps {
                                 meta.steps = s;
@@ -1073,7 +1312,7 @@ impl Builder<'_> {
                     }
                     "wire_request" => {
                         if let Some(m) = e.data["body"]["model"].as_str() {
-                            if !meta.models.iter().any(|x| x == m) {
+                            if !meta.models.iter().any(|x| x.rsplit('/').next() == Some(m)) {
                                 meta.models.push(m.to_owned());
                             }
                         }
@@ -1083,6 +1322,7 @@ impl Builder<'_> {
                             e.data["kind"].as_str().unwrap_or("error").to_owned(),
                             e.data["message"].as_str().unwrap_or("").to_owned(),
                         ));
+                        meta.status = None;
                         meta.end_time = meta.end_time.max(e.time);
                     }
                     _ => {}
@@ -1254,6 +1494,19 @@ impl Builder<'_> {
         if meta.running {
             return End::Running;
         }
+        match meta.status.as_deref() {
+            Some("completed") if meta.stop.as_deref() == Some("max_steps") => {
+                return End::StepLimit
+            }
+            Some("completed") => return End::Done,
+            Some("failed") if meta.error.as_ref().is_none_or(|(k, _)| k != "interrupted") => {
+                return End::Error
+            }
+            // Interrupted, or still `running` in an idle session (a crash
+            // that recovery has not closed yet).
+            Some(_) => return End::Interrupted,
+            None => {}
+        }
         if let Some((kind, _)) = &meta.error {
             if kind != "interrupted" {
                 return End::Error;
@@ -1263,6 +1516,9 @@ impl Builder<'_> {
             Some("max_steps") => End::StepLimit,
             Some(_) if meta.error.is_none() => End::Done,
             _ if meta.end_event || meta.followed => End::Done,
+            // No record of how it ended (older than turn records): a reply
+            // ends it.
+            _ if meta.status.is_none() && !meta.live && meta.ends_on_assistant => End::Done,
             _ => End::Interrupted,
         }
     }
@@ -1308,11 +1564,15 @@ impl Builder<'_> {
         let session = self.app.viewed();
         let mut bits: Vec<String> = Vec::new();
         if !meta.models.is_empty() {
+            // A catalog name, else the bare model id (a ref's last part).
             let name = |used: &String| {
                 crate::stats::catalog_entry(&self.app.state.models, used)
                     .and_then(|m| m["name"].as_str())
                     .filter(|n| !n.is_empty())
-                    .map_or_else(|| used.clone(), str::to_owned)
+                    .map_or_else(
+                        || used.rsplit('/').next().unwrap_or(used).to_owned(),
+                        str::to_owned,
+                    )
             };
             let arrow = format!(" {} ", self.t.structure("arrow"));
             bits.push(
@@ -1329,11 +1589,14 @@ impl Builder<'_> {
                 bits.push(if short.len() > 1 { m } else { short });
             }
         }
-        if let Some(effort) = session.and_then(|s| {
-            s.extra
-                .get("effort")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
+        // The effort the turn's requests ran with, else the session's.
+        if let Some(effort) = meta.effort.clone().or_else(|| {
+            session.and_then(|s| {
+                s.extra
+                    .get("effort")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
         }) {
             if !effort.is_empty() && effort != "none" && effort != "default" {
                 bits.push(effort);
@@ -1358,6 +1621,14 @@ impl Builder<'_> {
                 ));
             }
         }
+        if meta.unknown_usage {
+            // Unknown is said, never shown as zero.
+            bits.push(if meta.has_usage() {
+                "some usage unknown".to_owned()
+            } else {
+                "usage unknown".to_owned()
+            });
+        }
         if matches!(end, End::Interrupted | End::StepLimit) {
             bits.push(if self.app.term("composer.empty").unwrap_or(false) {
                 "enter continue".to_owned()
@@ -1378,10 +1649,7 @@ impl Builder<'_> {
         let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
         let mut used = 0usize;
         if !label.is_empty() {
-            rows[0].push(Span::styled(
-                label.clone(),
-                self.t.agent_style(&agent).add_modifier(Modifier::BOLD),
-            ));
+            rows[0].push(Span::styled(label.clone(), self.t.agent_style(&agent)));
             used = width(&label);
         }
         for bit in bits {
@@ -1626,7 +1894,7 @@ impl Builder<'_> {
                 Activity::StreamingThought(_) => "Thought",
                 Activity::Tool { id, name, args } => {
                     let failure = results.get(id).is_some_and(|d| d.is_error)
-                        || traces.get(id).is_some_and(|t| t.error.is_some());
+                        || traces.get(id).is_some_and(|t| t.failed);
                     if self.denied.contains(id) {
                         denied_count += 1;
                     } else if !failure && is_edit_tool(name) {
@@ -1860,8 +2128,7 @@ impl Builder<'_> {
             }
             b.line(head);
             if open {
-                let indent =
-                    " ".repeat(ACTIVITY_INDENT + if tree.is_some() { 4 } else { 2 });
+                let indent = " ".repeat(ACTIVITY_INDENT + if tree.is_some() { 4 } else { 2 });
                 let room = b.bw.saturating_sub(indent.len() + 2).max(1);
                 for row in text::wrap(&summary, room) {
                     b.line(vec![
@@ -1909,8 +2176,7 @@ impl Builder<'_> {
             }
             b.line(head);
             if open {
-                let indent =
-                    " ".repeat(ACTIVITY_INDENT + if tree.is_some() { 4 } else { 2 });
+                let indent = " ".repeat(ACTIVITY_INDENT + if tree.is_some() { 4 } else { 2 });
                 let room = b.bw.saturating_sub(indent.len() + 2).max(1);
                 for row in text::wrap(text, room) {
                     b.line(vec![
@@ -1943,8 +2209,8 @@ impl Builder<'_> {
         let trace = traces.get(call_id);
         let is_waiting = waiting.contains_key(call_id);
         let denied = self.denied.contains(call_id);
-        let failed = !denied
-            && (done.is_some_and(|d| d.is_error) || trace.is_some_and(|t| t.error.is_some()));
+        let failed =
+            !denied && (done.is_some_and(|d| d.is_error) || trace.is_some_and(|t| t.failed));
         let busy = self.app.viewed_id().is_some_and(|id| self.app.is_busy(id));
         let running = busy && done.is_none() && !trace.is_some_and(|t| t.end.is_some());
         let duration = trace
@@ -2427,7 +2693,7 @@ impl Builder<'_> {
 
     // -- diagnostics ------------------------------------------------------------
 
-    fn diagnostic(&mut self, e: &crate::api::Event) -> bool {
+    fn diagnostic(&mut self, key: &str, e: &crate::api::Event) -> bool {
         let d = &e.data;
         let (text, detail, level) = match e.kind.as_str() {
             "session.error" => (
@@ -2440,12 +2706,19 @@ impl Builder<'_> {
                 "error",
             ),
             "retry_scheduled" => (
-                format!(
-                    "provider retry {}/{} in {:.1}s",
-                    d["attempt"].as_u64().unwrap_or(0),
-                    d["max_attempts"].as_u64().unwrap_or(0),
-                    d["delay"].as_f64().unwrap_or(0.0)
-                ),
+                match d["max_attempts"].as_u64() {
+                    Some(max) => format!(
+                        "provider retry {}/{max} in {:.1}s",
+                        d["attempt"].as_u64().unwrap_or(0),
+                        d["delay"].as_f64().unwrap_or(0.0)
+                    ),
+                    // A stored attempt does not record the retry budget.
+                    None => format!(
+                        "provider retry {} in {:.1}s",
+                        d["attempt"].as_u64().unwrap_or(0),
+                        d["delay"].as_f64().unwrap_or(0.0)
+                    ),
+                },
                 d["reason"].as_str().map(str::to_owned),
                 "warning",
             ),
@@ -2508,7 +2781,7 @@ impl Builder<'_> {
         {
             self.out.pop();
         }
-        let key = format!("diag:{}", e.id);
+        let key = key.to_owned();
         let (glyph, _label, token) = match level {
             "error" => self.t.status("error"),
             "warning" => self.t.status("interrupted"),
@@ -2981,8 +3254,7 @@ fn tool_summary(
 
 #[cfg(test)]
 mod tests {
-    use super::{band_meta, fmt_duration, live_reasoning_secs, reasoning_times};
-    use crate::api::Event;
+    use super::{band_meta, fmt_duration};
 
     #[test]
     fn durations_are_never_below_a_tenth_and_never_say_less_than_one() {
@@ -3018,73 +3290,5 @@ mod tests {
             "steer · #3 · 3:46 PM"
         );
         assert_eq!(band_meta(&["queued"], 3, None, sep), "queued · #4");
-    }
-
-    #[test]
-    fn live_thinking_time_starts_at_the_first_delta_of_the_step() {
-        let ev = |id, time, kind: &str| Event {
-            id,
-            cursor: None,
-            seq: None,
-            time,
-            kind: kind.into(),
-            session_id: None,
-            data: serde_json::Value::Null,
-        };
-        let events = vec![
-            ev(1, 10.0, "reasoning_delta"),
-            ev(2, 11.0, "part_done"),
-            ev(3, 20.0, "reasoning_delta"),
-            ev(4, 21.0, "reasoning_delta"),
-        ];
-        let secs = live_reasoning_secs(&events, 22.4).unwrap();
-        assert!((secs - 2.4).abs() < 1e-9, "{secs}");
-        assert_eq!(live_reasoning_secs(&events[..2], 30.0), None);
-    }
-
-    fn event(id: i64, time: f64, kind: &str, data: serde_json::Value) -> Event {
-        Event {
-            id,
-            cursor: None,
-            seq: None,
-            time,
-            kind: kind.into(),
-            session_id: Some("ses_test".into()),
-            data,
-        }
-    }
-
-    #[test]
-    fn reasoning_time_comes_from_its_own_deltas() {
-        let events = vec![
-            event(
-                1,
-                10.0,
-                "reasoning_delta",
-                serde_json::json!({"text": "Let me "}),
-            ),
-            event(
-                2,
-                11.0,
-                "reasoning_delta",
-                serde_json::json!({"text": "think."}),
-            ),
-            event(
-                3,
-                13.5,
-                "part_done",
-                serde_json::json!({"part": {"type": "reasoning", "summary": "Let me think."}}),
-            ),
-            // A summary with no visible deltas has no measured duration.
-            event(
-                4,
-                14.0,
-                "part_done",
-                serde_json::json!({"part": {"type": "reasoning", "summary": "Opaque."}}),
-            ),
-        ];
-        let times = reasoning_times(&events);
-        assert_eq!(times.get("Let me think."), Some(&3.5));
-        assert_eq!(times.get("Opaque."), None);
     }
 }
