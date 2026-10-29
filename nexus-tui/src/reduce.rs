@@ -290,6 +290,13 @@ impl Model {
         view.messages = messages;
         view.messages_more = false;
         view.starting = h.starting;
+        if let (Some(full), Some(row)) = (h.session, self.sessions.get_mut(&h.session_id)) {
+            for key in ["skills", "mcp"] {
+                if let Some(value) = full.extra.get(key) {
+                    row.extra.insert(key.to_owned(), value.clone());
+                }
+            }
+        }
         // Summaries that arrived live after the fetch are newer; keep them.
         let live: Vec<TurnSummary> = std::mem::take(&mut view.turns)
             .into_iter()

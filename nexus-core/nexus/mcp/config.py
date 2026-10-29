@@ -45,7 +45,12 @@ DEFAULT_SERVERS: dict[str, dict[str, Any]] = {
 def with_defaults(servers: Any) -> dict[str, Any]:
     """The configured servers, plus each default the file does not mention."""
     configured = servers if isinstance(servers, dict) else {}
-    return {**{n: dict(e) for n, e in DEFAULT_SERVERS.items() if n not in configured}, **configured}
+    merged = {n: dict(e) for n, e in DEFAULT_SERVERS.items()}
+    for name, entry in configured.items():
+        base = merged.get(name)
+        # A default the file only overrides (`enabled = true`) keeps its command.
+        merged[name] = {**base, **entry} if base and isinstance(entry, dict) and not ({"command", "url"} & entry.keys()) else entry
+    return merged
 
 
 class McpConfigError(ValueError):

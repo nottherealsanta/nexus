@@ -716,15 +716,17 @@ const TURN_PAGES: usize = 10;
 /// Messages, the starting context and every turn summary, fetched together.
 /// The event log is not read: the timeline's details come from summaries.
 async fn load_history(api: &CoreApi, sid: &str) -> Option<History> {
-    let (messages, starting, page) = tokio::join!(
+    let (messages, starting, session, page) = tokio::join!(
         api.messages(sid),
         api.snapshot_json(sid),
+        api.session(sid),
         api.turns(sid, None, None, Some(TURN_PAGE)),
     );
     let mut h = History {
         session_id: sid.to_owned(),
         messages: messages.ok()?,
         starting: starting.ok(),
+        session: session.ok(),
         ..Default::default()
     };
     match page {

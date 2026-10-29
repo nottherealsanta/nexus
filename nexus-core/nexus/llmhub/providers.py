@@ -13,6 +13,7 @@ Credentials are not here: `make()` takes a header source from `nexus.llmhub.auth
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Literal
@@ -84,12 +85,28 @@ if os.environ.get("NEXUS10_DEV", "").lower() in {"1", "true", "yes", "on"}:
     )
 
 
+def copilot_uses_responses(model: str | None) -> bool:
+    """Copilot serves its GPT models on `/responses` only (`/chat/completions` answers
+    `unsupported_api_for_model`). models.dev marks those with `provider.npm = @ai-sdk/openai`."""
+    if not model:
+        return False
+    try:
+        from .catalog import cache_path
+
+        entry = json.loads(cache_path().read_text())["github-copilot"]["models"][model]
+        return (entry.get("provider") or {}).get("npm") == "@ai-sdk/openai"
+    except (OSError, ValueError, KeyError, TypeError):
+        return model.startswith(("gpt-5.", "gpt-6", "grok-", "mai-"))
+
+
 def make(provider_id: str, auth: HeaderSource, model: str | None = None) -> Provider:
     info = PROVIDERS[provider_id]
     if info.dialect == "scripted":
         from ..mock.provider import MockProvider
 
         return MockProvider(model or info.default_model)
+    if provider_id == "copilot" and copilot_uses_responses(model):
+        return ResponsesProvider(info.id, info.base_url, auth, ResponsesQuirks(initiator_header=True))
     if isinstance(info.quirks, ResponsesQuirks):
         return ResponsesProvider(info.id, info.base_url, auth, info.quirks)
     return ChatProvider(info.id, info.base_url, auth, info.quirks)

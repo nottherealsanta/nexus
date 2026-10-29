@@ -60,6 +60,7 @@ class ResponsesQuirks:
     replay_raw: bool = False  # send this provider's own output items back verbatim
     prompt_cache_key: bool = False  # send the conversation id as `prompt_cache_key`
     session_header: str | None = None  # header that carries the conversation id
+    initiator_header: bool = False  # Copilot: `x-initiator: user|agent` per request
 
 
 # -- Request ----------------------------------------------------------------
@@ -253,6 +254,9 @@ class ResponsesProvider:
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if self._quirks.session_header and req.conversation_id:
             headers[self._quirks.session_header] = req.conversation_id[:CACHE_KEY_MAX]
+        if self._quirks.initiator_header:
+            last = req.messages[-1].role if req.messages else "user"
+            headers["x-initiator"] = "user" if last == "user" else "agent"
         headers.update(await self._auth.headers())
         yield WireRequest("POST", url, redact_headers(headers), body)
 

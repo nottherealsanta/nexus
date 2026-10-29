@@ -120,6 +120,11 @@ _KEYED = ("/prompt", "/continue")
 Handler = Callable[[Request], Awaitable[Response]]
 
 
+def _missing(exc: ValueError) -> NotFound | None:
+    """A path that does not exist is a 404, not a bad request."""
+    return NotFound(str(exc)) if isinstance(exc.__cause__, FileNotFoundError) else None
+
+
 def _error(status: int, message: str) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=status)
 
@@ -654,11 +659,17 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
 
     async def project_files(request: Request) -> Response:
         from nexus import files
-        return JSONResponse(await files.list_directory(file_root(request), request.query_params.get("path", "")))
+        try:
+            return JSONResponse(await files.list_directory(file_root(request), request.query_params.get("path", "")))
+        except ValueError as exc:
+            raise (_missing(exc) or exc) from exc
 
     async def project_file(request: Request) -> Response:
         from nexus import files
-        return JSONResponse(files.read_file(file_root(request), request.query_params.get("path", "")))
+        try:
+            return JSONResponse(files.read_file(file_root(request), request.query_params.get("path", "")))
+        except ValueError as exc:
+            raise (_missing(exc) or exc) from exc
 
     async def project_file_search(request: Request) -> Response:
         from nexus import files

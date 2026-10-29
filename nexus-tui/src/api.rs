@@ -334,6 +334,8 @@ pub struct History {
     pub session_id: String,
     pub messages: Vec<Message>,
     pub starting: Option<Value>,
+    /// The full session row; snapshot rows omit `skills` and `mcp`.
+    pub session: Option<Session>,
     /// Oldest to newest. Empty when the request failed (`turns_error`).
     pub turns: Vec<TurnSummary>,
     /// Older turns exist that were not loaded (the page cap was reached).

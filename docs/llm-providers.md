@@ -340,5 +340,5 @@ services were intentionally not carried over.
 ## Not verified
 
 * Whether every Codex-listed model id is served by the Codex backend.
-* Whether some Copilot GPT models require Responses instead of Chat.
+* Copilot GPT models: the catalog (`provider.npm = @ai-sdk/openai`) routes them to `{base}/responses`, with `x-initiator`, and no encrypted-reasoning replay yet (`providers.copilot_uses_responses`). Verified live with `gpt-6-luna` (2026-10-29); other families stay on Chat.
 * Which models of each provider understand images; Nexus sends them to any model.
