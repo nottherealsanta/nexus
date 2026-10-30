@@ -97,7 +97,7 @@ click still activates timeline controls; scrolling cancels an in-progress drag.
 `scripts/nexus` is a development launcher for the whole repo. Install it once:
 
 ```sh
-ln -sfn ~/repos/nexus10/scripts/nexus ~/.local/bin/nexus
+ln -sfn ~/repos/nexus/scripts/nexus ~/.local/bin/nexus
 ```
 
 Then, from any directory:

@@ -1,6 +1,6 @@
 # Nexus 0.10: released (v0.10.0); what remains
 
-Goal: merge branch `nexus10` into `main` and publish 0.10.0. Current behavior is in [docs/README.md](docs/README.md); historical porting decisions are in the [porting ledger](docs/porting-ledger.md). Old Nexus (`~/repos/nexus`, branch `nexus01`) is reference only.
+Goal (done 2026-10-30): merge branch `nexus10` into `main` and publish 0.10.0. The development checkout is now `~/repos/nexus` (on `main`); old Nexus is `~/repos/nexus-old` (branch `nexus01`). Current behavior is in [docs/README.md](docs/README.md); historical porting decisions are in the [porting ledger](docs/porting-ledger.md). Old Nexus (`~/repos/nexus`, branch `nexus01`) is reference only.
 
 Preserve the visible, ordered context timeline, announce clipping, keep task tools separate from Nexus control, and do not rewrite context already sent to a provider. State is in `~/.nexus` after `nexus migrate`; never run it against the real home from a session.
 
@@ -57,7 +57,7 @@ Still to do: decide whether `nexus update` should install, not only report; remo
 ### 4. CI and CD (NSH skipped for now)
 **NSH is skipped in CI and in the release build for now** (`if: false` on the `nsh` job in `ci.yml` and the `nsh-web` job in `build-artifacts.yml`; `ci-ok` treats a skipped job as passing). The pinned-`nsh` setup action (`.github/actions/setup-nsh`) stays in the repo for when it is re-enabled; its first runs took over 17 minutes because `nsh`'s release profile is fat LTO (now turned off in CI) and nothing was cached. Consequence: a release has no `nexus-web.tar.gz` until NSH is back, and the `nsh` type check and web build run only on a developer's machine.
 
-Adapted from old Nexus (`~/repos/nexus/.github/workflows`): `ci.yml` (`changes`, `lint`, `core` on macOS and Ubuntu 24.04, `tui` on macOS and Ubuntu 22.04 with ALSA headers, `nsh`, and `ci-ok`, the one required check), `build-artifacts.yml` (TUI binaries for four platforms, the NSH web bundle, the Core wheel), `release.yml` (release-please, then attach artifacts, `install.sh` and `SHA256SUMS`; no PyPI publish), `pr-title.yml`.
+Adapted from old Nexus (`~/repos/nexus-old/.github/workflows`): `ci.yml` (`changes`, `lint`, `core` on macOS and Ubuntu 24.04, `tui` on macOS and Ubuntu 22.04 with ALSA headers, `nsh`, and `ci-ok`, the one required check), `build-artifacts.yml` (TUI binaries for four platforms, the NSH web bundle, the Core wheel), `release.yml` (release-please, then attach artifacts, `install.sh` and `SHA256SUMS`; no PyPI publish), `pr-title.yml`.
 
 First runs on `main` (2026-10-30; `core` is green on both OSes after the fix, `lint` was always green), and what was done:
 1. `core`: one failure on both OSes, `test_claude.py`, because the runners have no Claude Code and my test assumed one. Fixed in the test (it names a stand-in CLI).

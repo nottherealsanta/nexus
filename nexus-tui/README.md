@@ -4,7 +4,7 @@ The Ratatui terminal client for Nexus Core (Rust). It speaks only the Core HTTP
 API (`/api/*` plus the `/api/event` stream, see `../docs/api.md`) and never
 reads Nexus state files, SQLite or provider credentials. The one file it owns in
 the Nexus home is its own preferences file, `tui.json` (see Preferences below). Old Nexus's client in
-`~/repos/nexus/rust/tui` is reference.
+`~/repos/nexus-old/rust/tui` is reference.
 
 **Status (PLAN.md Steps 12.3 and most of 12.4):** the keyboard-first shell is
 usable against a real Core: workspace header, both sidebars, session view, waiting

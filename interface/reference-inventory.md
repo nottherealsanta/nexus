@@ -1,6 +1,6 @@
 # Reference inventory: old Nexus TUI (Step 12.1, item 2)
 
-Read-only review of `~/repos/nexus/rust/` and `~/repos/nexus/docs/ratatui-parity.md`
+Read-only review of `~/repos/nexus-old/rust/` and `~/repos/nexus-old/docs/ratatui-parity.md`
 (branch `nexus01`). `~/.nexus` was not read. Old Nexus's AGENTS.md, host bridge
 (`bridge.rs`, snapshot JSON, Python-owned data), config (`config.rs`, `tui.json`)
 and state model do not apply: in the old design Python built every datum and Rust
@@ -8,7 +8,7 @@ only placed, painted and hit-tested it. The new TUI talks to the Core HTTP API
 and owns its own view state, so only the **rendering, geometry, input and widget
 code** transfers.
 
-Paths are relative to `~/repos/nexus/rust/` unless they start with `docs/`.
+Paths are relative to `~/repos/nexus-old/rust/` unless they start with `docs/`.
 Sizes are line counts. "Copy" means copy deliberately with attribution in the new
 file header (`Adapted from old Nexus <path>`) and a docs/porting-ledger.md row if
 behavior changes. Nothing here has been copied yet.

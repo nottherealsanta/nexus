@@ -1,10 +1,11 @@
 # AGENTS.md
 
-This branch (`nexus10`, Nexus 0.10) rebuilds Nexus from the provider wire up. **Read [PLAN.md](PLAN.md)
+This repository (`main`, Nexus 0.10) rebuilds Nexus from the provider wire up. **Read [PLAN.md](PLAN.md)
 first** for outstanding work; see [docs/porting-ledger.md](docs/porting-ledger.md)
 for deliberate changes from old Nexus.
 
-- Old Nexus is reference only: branch `nexus01`, checkout `~/repos/nexus`. Copy
+- Old Nexus is reference only: branch `nexus01` (also tag `v0.7.2`), checked out at `~/repos/nexus-old`
+  (`git worktree add ~/repos/nexus-old nexus01`). Copy
   code from it deliberately, and add a row in docs/porting-ledger.md when you change a
   behavior. Its AGENTS.md and docs do not apply here.
 - Keep the context visible: wire events are never dropped, and clipping is announced.
