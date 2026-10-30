@@ -35,6 +35,7 @@ gold = "#c9a94a"
 primary   = "#e6e7e8"   # titles, user and agent text, tool names
 secondary = "#a4a9ae"   # tool arguments, summaries, labels
 muted     = "#868c93"   # metadata, counts, key hints, timestamps, reasoning
+faint     = "#6f757c"   # unit suffixes (i, o, r, c), quieter than their counts
 
 [dark.border]
 default = "#2a2a2a"     # hairlines and dividers (decorative)
@@ -82,6 +83,7 @@ gold = "#735d0c"
 primary   = "#1f2124"
 secondary = "#4f555b"
 muted     = "#5c636a"
+faint     = "#7f868d"   # unit suffixes (i, o, r, c), quieter than their counts
 
 [light.border]
 default = "#d4d5d2"
@@ -190,6 +192,7 @@ style = ""
 "text.primary" = 254
 "text.secondary" = 248
 "text.muted" = 246
+"text.faint" = 243
 "border.default" = 236
 "border.strong" = 239
 "border.focus" = 179
@@ -224,6 +227,7 @@ style = ""
 "text.primary" = 235
 "text.secondary" = 238
 "text.muted" = 240
+"text.faint" = 244
 "border.default" = 188
 "border.strong" = 250
 "border.focus" = 94
@@ -258,6 +262,7 @@ style = ""
 "text.primary" = "default"
 "text.secondary" = "white"
 "text.muted" = "bright_black"
+"text.faint" = "bright_black"
 "border.default" = "bright_black"
 "border.strong" = "bright_black"
 "border.focus" = "yellow"
@@ -292,6 +297,7 @@ style = ""
 "text.primary" = "default"
 "text.secondary" = "bright_black"
 "text.muted" = "bright_black"
+"text.faint" = "bright_black"
 "border.default" = "white"
 "border.strong" = "white"
 "border.focus" = "red"
@@ -321,7 +327,7 @@ style = ""
 # ---------------------------------------------------------------- monochrome
 # Only bold, dim, reverse, underline. No colour, no italic, no background.
 # Meaning that colour carried moves to glyph + label + prefix, which every
-# mode shows anyway. text.muted is the only dim text; titles are bold.
+# mode shows anyway. text.muted and text.faint are dim; titles are bold.
 [monochrome.tokens]
 "surface.canvas" = []
 "surface.panel" = []
@@ -330,6 +336,7 @@ style = ""
 "text.primary" = []
 "text.secondary" = []
 "text.muted" = ["dim"]
+"text.faint" = ["dim"]
 "border.default" = ["dim"]
 "border.strong" = []
 "border.focus" = ["bold"]

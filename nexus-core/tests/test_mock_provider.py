@@ -106,7 +106,7 @@ async def main():
     runtime=Runtime(store,Bus(),"mock/parallel_subagents")
     project=runtime.open_project(os.environ["WORKSPACE"])
     session=runtime.create_session(project,title=None,model="mock/parallel_subagents",permission="allow",agent="orchestrate")
-    runtime.prompt(session.id,"Exercise parallel child sessions.")
+    runtime.prompt(session.id,"Exercise parallel sub agents.")
     await runtime.turns[session.id]
     messages=store.messages(session.id)
     assert any("mock verdict — parallel-subagents: 2/2 checks passed" in "".join(p.text for p in item.message.parts if hasattr(p,"text")) for item in messages if item.message.role=="assistant")

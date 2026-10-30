@@ -24,7 +24,7 @@ def test_mode_is_enforced():
     found = agents.load(None)
     with pytest.raises(ValueError, match="cannot run as a root session; allowed: build, orchestrate"):
         found.get("scout", child=False)
-    with pytest.raises(ValueError, match="cannot run as a child session"):
+    with pytest.raises(ValueError, match="cannot run as a sub agent"):
         found.get("orchestrate", child=True)
     assert found.get("build", child=True).name == "build"
 

@@ -1110,7 +1110,7 @@ class Store:
         return list(seen.values())[:limit]
 
     def _backfill_prompt_history(self) -> None:
-        """Old user messages that are not notices; child sessions are prompted by their parent."""
+        """Old user messages that are not notices; sub agents are prompted by their parent."""
         rows = self.db.execute(
             "select m.session_id, m.parts, m.created from message m join session s on s.id = m.session_id"
             " where m.role = 'user' and s.parent_id is null order by m.created, m.seq").fetchall()

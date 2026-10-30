@@ -406,6 +406,12 @@ fn activity_groups_respect_text_and_child_boundaries_and_preserve_details() {
     let expanded = build(&a, &a.theme, 0, 100);
     assert!(expanded.blocks.iter().any(|b| b.key == "tool:c1"));
     assert!(expanded.blocks.iter().any(|b| b.key == "reason:a:1"));
+    let thought = expanded
+        .blocks
+        .iter()
+        .find(|b| b.key == "reason:a:1")
+        .unwrap();
+    assert!(line_text(&expanded.lines[thought.start]).contains("◇ Thought"));
     assert!(expanded.blocks.iter().any(|b| b.key == "tool:c2"));
 }
 
@@ -903,7 +909,7 @@ fn verb_groups_cover_every_tool_family_and_name_unknown_tools() {
 }
 
 #[test]
-fn working_shimmer_peaks_in_secondary_grey() {
+fn working_shimmer_peaks_in_primary_grey() {
     use nexus_tui::timeline::{build, BlockKind};
     let mut a = app();
     calls(&mut a, &[("bash", None)]);
@@ -911,7 +917,7 @@ fn working_shimmer_peaks_in_secondary_grey() {
     let mut options = a.theme.opts;
     options.reduced_motion = false;
     a.theme = a.theme.with(options);
-    let peak = a.theme.fg("text.secondary").fg;
+    let peak = a.theme.fg("text.primary").fg;
     let seen = (0..54).any(|frame| {
         let t = build(&a, &a.theme, frame, 100);
         let group = t
@@ -924,7 +930,7 @@ fn working_shimmer_peaks_in_secondary_grey() {
             .iter()
             .any(|s| s.style.fg == peak)
     });
-    assert!(seen, "the highlight reaches secondary grey");
+    assert!(seen, "the highlight reaches primary grey");
     // Reduced motion stays static.
     options.reduced_motion = true;
     a.theme = a.theme.with(options);
@@ -1124,13 +1130,57 @@ fn the_turn_footer_shows_usage_without_cost() {
     );
     let text = rows(&mut a).join("\n");
     assert!(
-        text.contains("100K i") && text.contains("10.0K o") && text.contains("50% c"),
+        text.contains("100Ki") && text.contains("10.0Ko") && text.contains("50%c"),
         "{text}"
     );
     assert!(text.contains("Build"), "right-aligned agent lead: {text}");
-    let footer = text.lines().find(|line| line.contains("100K i")).unwrap();
+    let footer = text.lines().find(|line| line.contains("100Ki")).unwrap();
     assert!(!footer.contains('$'), "{footer}");
     assert!(!footer.contains('▪'), "{footer}");
+}
+
+#[test]
+fn the_turn_footers_usage_units_are_fainter_than_their_counts() {
+    use nexus_tui::timeline::build;
+    let mut a = app();
+    a.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/gpt-5".into());
+    a.state.models = vec![serde_json::json!({
+        "ref": "codex/gpt-5", "context": 400000,
+        "input_cost": 1.0, "output_cost": 10.0, "cache_read_cost": 0.2
+    })];
+    summarize(
+        &mut a,
+        900,
+        fixture_summary(
+            "codex/gpt-5",
+            serde_json::json!({"input": 100000, "cached": 50000, "output": 10000, "reasoning": 0}),
+        ),
+    );
+    let t = build(&a, &a.theme, 0, 200);
+    let footer = t
+        .lines
+        .iter()
+        .find(|l| line_text(l).contains("100Ki"))
+        .expect("footer");
+    let faint = a.theme.fg("text.faint").fg;
+    let muted = a.theme.fg("text.muted").fg;
+    let units: Vec<_> = footer
+        .spans
+        .iter()
+        .filter(|s| matches!(s.content.as_ref(), "i" | "o" | "r" | "c"))
+        .collect();
+    assert_eq!(units.len(), 4, "i, o, r and c: {:?}", footer.spans);
+    for unit in units {
+        assert_eq!(unit.style.fg, faint, "unit {unit:?}");
+    }
+    for value in ["100K", "10.0K", "0", "50%"] {
+        let span = footer
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == value)
+            .unwrap_or_else(|| panic!("{value:?} in {:?}", footer.spans));
+        assert_eq!(span.style.fg, muted, "count {span:?}");
+    }
 }
 
 #[test]
@@ -1365,7 +1415,7 @@ fn the_footer_is_right_aligned_and_wraps_from_the_left_at_every_width() {
     use unicode_width::UnicodeWidthStr;
     let mut a = app();
     rich_footer(&mut a);
-    for (page, wraps) in [(60usize, true), (120, false), (200, false)] {
+    for (page, wraps) in [(55usize, true), (60, false), (120, false), (200, false)] {
         let t = nexus_tui::timeline::build(&a, &a.theme, 0, page);
         let at = t
             .lines
@@ -1381,14 +1431,7 @@ fn the_footer_is_right_aligned_and_wraps_from_the_left_at_every_width() {
         );
         assert_eq!(texts.len() > 1, wraps, "{page}: {texts:?}");
         let joined = texts.iter().map(|r| r.trim()).collect::<Vec<_>>().join(" ");
-        for part in [
-            "GPT-5 Terra",
-            "3 tools",
-            "12.0K i",
-            "33% c",
-            "2.0K o",
-            "500 r",
-        ] {
+        for part in ["GPT-5 Terra", "3 tools", "12.0Ki", "33%c", "2.0Ko", "500r"] {
             if part == "3 tools" {
                 continue; // the fixture turn has no tools
             }
@@ -1406,7 +1449,7 @@ fn the_footer_is_right_aligned_and_wraps_from_the_left_at_every_width() {
 }
 
 #[test]
-fn an_interrupted_turn_hints_continue_and_a_failed_turn_puts_its_error_above_the_footer() {
+fn an_interrupted_turn_has_no_continue_hint_and_a_failed_turn_puts_its_error_above_the_footer() {
     use nexus_tui::api::Event;
     let mut a = app();
     let first = a.messages()[0].created;
@@ -1423,8 +1466,8 @@ fn an_interrupted_turn_hints_continue_and_a_failed_turn_puts_its_error_above_the
         .find(|r| r.trim_start().starts_with("Build"))
         .expect("footer");
     assert!(
-        footer.trim_end().ends_with("enter continue"),
-        "an empty composer hints enter: {footer:?}"
+        !footer.contains("enter continue") && !footer.contains("/continue"),
+        "the footer carries no continue hint: {footer:?}"
     );
     assert!(
         !footer.contains("interrupted") && !footer.contains('◼'),
@@ -1482,10 +1525,8 @@ fn a_folded_group_still_shows_edits_and_failures() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        text.contains("Read 1 file")
-            && text.contains("Edited 2 files")
-            && text.contains("Ran 1 command"),
-        "file changes are their own group: {text}"
+        text.contains("Read 1 file, edited 2 files, ran 1 command"),
+        "edits share the group with reads and commands: {text}"
     );
     assert!(
         text.contains("+1 \u{2212}2"),
@@ -1633,6 +1674,15 @@ fn tool_detail_is_the_old_box_with_a_raw_toggle() {
         .map(line_text)
         .collect();
     assert!(rows[0].trim_start().starts_with("┌ $ Shell"), "{rows:?}");
+    let name = t.lines[tool.start]
+        .spans
+        .iter()
+        .find(|s| s.content == "Shell")
+        .unwrap();
+    assert!(!name
+        .style
+        .add_modifier
+        .contains(ratatui::style::Modifier::BOLD));
     assert!(
         rows[0].contains("raw"),
         "raw toggle on the head row: {rows:?}"
@@ -2139,8 +2189,8 @@ fn the_floor_row_says_older_turns_have_no_details() {
         .filter(|r| r.trim_start().starts_with("Build"))
         .collect();
     assert_eq!(footers.len(), 2, "{text:#?}");
-    assert!(!footers[0].contains(" i "), "{}", footers[0]);
-    assert!(footers[1].contains("1.0K i"), "{}", footers[1]);
+    assert!(!footers[0].contains("1.0Ki"), "{}", footers[0]);
+    assert!(footers[1].contains("1.0Ki"), "{}", footers[1]);
 
     // Every message covered: no row.
     a.state.model.selected.as_mut().unwrap().floor = None;
@@ -2167,10 +2217,7 @@ fn unknown_usage_is_said_and_never_shown_as_zero() {
         .rfind(|r| r.trim_start().starts_with("Build"))
         .unwrap();
     assert!(footer.contains("usage unknown"), "{footer}");
-    assert!(
-        !footer.contains("0 i") && !footer.contains("0 o"),
-        "{footer}"
-    );
+    assert!(!footer.contains("0i") && !footer.contains("0o"), "{footer}");
     // The model still comes from the request.
     assert!(footer.contains("gpt-5"), "{footer}");
 }
@@ -2285,7 +2332,7 @@ fn a_turn_summary_replaces_the_running_turns_events() {
     assert_eq!(view.usage.models["codex/gpt-5"].requests, 1);
     assert_eq!(view.usage.models["codex/gpt-5"].usage.input, 2000);
     let text = rows(&mut a).join("\n");
-    assert!(text.contains("2.0K i") && text.contains("50% c"), "{text}");
+    assert!(text.contains("2.0Ki") && text.contains("50%c"), "{text}");
 }
 
 #[test]
@@ -2341,7 +2388,7 @@ fn a_running_turn_loaded_from_history_follows_live_events_until_its_summary() {
     assert_eq!(view.turns[0].status, "completed");
     assert_eq!(view.usage.models["codex/gpt-5"].usage.input, 3000);
     let text = rows(&mut a).join("\n");
-    assert!(text.contains("3.0K i"), "{text}");
+    assert!(text.contains("3.0Ki"), "{text}");
 }
 
 #[test]

@@ -721,7 +721,7 @@ def test_parent_and_child_recover_independently(tmp_path):
         assert not any(e["type"] == "session.notified" for e in rt.store.events(parent.id, limit=5000))
         assert not any(e["type"] == "session.notified" for e in rt.store.events(child.id, limit=5000))
         # The child's recovery notice never becomes the parent's context.
-        assert not any("child session" in text for text in texts(rt.store, parent.id))
+        assert not any("sub agent" in text for text in texts(rt.store, parent.id))
     finally:
         rt.store.close()
 

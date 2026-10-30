@@ -134,7 +134,7 @@ high shows a split diff at 200 columns and a unified one at 120 and below. The s
 also gives the right sidebar its content: `nexus-demo` is a Git repo with uncommitted
 changes (modified, untracked and deleted files, so GIT lists them and the diff view
 has rows); the session has a `usage` event (CONTEXT shows the meter and the share of
-the window); and its `session` tool call launched a child session (the `↳` count).
+the window); and its `session` tool call launched a sub agent (the `↳` count).
 The composer's `╱` meter and `48.2K · 5%` show because the seed writes a placeholder
 codex sign-in (the Core lists only connected providers' models, and the window comes
 from that list) and ends the seeded turn on an assistant reply (otherwise the composer

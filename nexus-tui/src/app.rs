@@ -264,7 +264,7 @@ pub struct WaitItem {
     pub kind: WaitKind,
     pub id: String,
     pub session_id: String,
-    /// The title of the child session it waits in, when not the viewed one.
+    /// The title of the sub agent it waits in, when not the viewed one.
     pub child: Option<String>,
 }
 
@@ -492,6 +492,8 @@ pub struct Ui {
     pub search: Option<(String, Vec<Value>)>,
     /// An older page of messages is being read.
     pub loading_older: bool,
+    /// A session whose automatic older-page read failed; it is not retried until Enter asks.
+    pub older_failed: Option<String>,
     pub wait_idx: usize,
     /// The highlighted choice of the focused approval card (0 allow once, 1 allow for session, 2 deny, 3 deny with a note).
     pub wait_choice: usize,
@@ -673,6 +675,7 @@ impl App {
                 wait_idx: 0,
                 wait_choice: 0,
                 loading_older: false,
+                older_failed: None,
                 search: None,
                 wait_seen: HashMap::new(),
                 wait_shown: None,
@@ -2352,7 +2355,17 @@ impl App {
             }
             PaletteMode::Agents => {
                 let current = self.current_agent();
+                let mode = if self.viewed().is_some_and(|s| s.parent_id.is_some()) {
+                    "subagent"
+                } else {
+                    "primary"
+                };
                 for (i, a) in self.state.agents.iter().enumerate() {
+                    if !matches!(a["mode"].as_str(), Some("all"))
+                        && a["mode"].as_str() != Some(mode)
+                    {
+                        continue;
+                    }
                     let name = a["name"].as_str().unwrap_or("");
                     let Some(score) = fuzzy(&q, name) else {
                         continue;
@@ -2729,10 +2742,12 @@ impl App {
     pub fn current_agent(&self) -> String {
         self.viewed().map_or_else(
             || {
+                // Core's plan knows the configured default agent; the client does not.
                 self.ui
                     .draft
                     .agent
                     .clone()
+                    .or_else(|| self.draft_plan("agent"))
                     .unwrap_or_else(|| "build".into())
             },
             |s| s.agent.clone(),
@@ -2743,7 +2758,14 @@ impl App {
     /// empty when it follows the agent's or provider's default.
     pub fn current_effort(&self) -> String {
         self.viewed().map_or_else(
-            || self.ui.draft.effort.clone().unwrap_or_default(),
+            || {
+                self.ui
+                    .draft
+                    .effort
+                    .clone()
+                    .or_else(|| self.draft_session_field("effort"))
+                    .unwrap_or_default()
+            },
             |s| {
                 s.extra
                     .get("effort")
@@ -2760,6 +2782,9 @@ impl App {
         if session.is_none() {
             if let Some(m) = self.ui.draft.model.as_deref().filter(|m| !m.is_empty()) {
                 return m.to_owned();
+            } // What the session will be created with, including the configured default model.
+            if let Some(m) = self.draft_session_field("model") {
+                return m;
             }
         }
         let agent = session.map_or_else(
@@ -3965,6 +3990,7 @@ impl App {
                     .and_then(|v| v.messages.first().map(|m| (v.session_id.clone(), m.seq)));
                 if let (Some((session, before)), false) = (first, self.ui.loading_older) {
                     self.ui.loading_older = true;
+                    self.ui.older_failed = None;
                     self.api(ApiCall::OlderMessages { session, before });
                 }
             }
@@ -4121,7 +4147,7 @@ impl App {
             "Delete \"{}\"{}?",
             s.title,
             if n > 0 {
-                format!(" and its {n} child session(s)")
+                format!(" and its {n} sub agent(s)")
             } else {
                 String::new()
             }
@@ -4796,6 +4822,7 @@ impl App {
                     self.state.model.prepend_messages(session, messages, more);
                 }
             } else if let Err(error) = done.result {
+                self.ui.older_failed = Some(session.clone());
                 self.toast(
                     Level::Error,
                     format!("Older messages failed to load: {error}"),
@@ -5364,6 +5391,18 @@ impl App {
         Some(body)
     }
 
+    /// A top-level string of Core's plan for the draft (`agent`, `model`).
+    fn draft_plan(&self, key: &str) -> Option<String> {
+        let v = self.draft_context()?[key].as_str()?;
+        (!v.is_empty()).then(|| v.to_owned())
+    }
+
+    /// A field the session would be created with (`model`, `effort`): set by the draft, the config or neither.
+    fn draft_session_field(&self, key: &str) -> Option<String> {
+        let v = self.draft_context()?["session"][key].as_str()?;
+        (!v.is_empty()).then(|| v.to_owned())
+    }
+
     /// One list (`tools`, `skills`, `mcp`) of Core's plan for the draft; empty until Core answers.
     pub fn draft_values(&self, key: &str) -> Vec<Value> {
         self.draft_context()
@@ -5382,6 +5421,15 @@ impl App {
     pub fn tick(&mut self, now: Instant) -> bool {
         self.clock = now;
         let mut changed = false;
+        // A running session shows everything: its older pages load without Enter.
+        let auto_older = self.state.model.selected.as_ref().is_some_and(|v| {
+            v.messages_more
+                && self.is_busy(&v.session_id)
+                && self.ui.older_failed.as_deref() != Some(v.session_id.as_str())
+        });
+        if auto_older && !self.ui.loading_older {
+            self.execute("turn.load_older");
+        }
         if let Some(body) = self.draft_request() {
             if self.ui.draft_asked.as_ref() != Some(&body) {
                 self.ui.draft_asked = Some(body.clone());
@@ -6104,6 +6152,16 @@ impl App {
                 return self.scroll_timeline(if name == "pageup" { -page } else { page });
             }
             _ => {}
+        }
+        if self.ui.focus == Focus::Composer
+            && matches!(name.as_str(), "up" | "down")
+            && self.composer_ref().expanded_text().is_empty()
+            && self
+                .ask_current()
+                .is_some_and(|c| !c.options().is_empty() && !c.draft.sent)
+        {
+            self.ui.focus = Focus::Waiting;
+            return self.ask_key(&ev, &name);
         }
         match self.ui.focus {
             Focus::Composer => self.composer_key(&ev, &name),

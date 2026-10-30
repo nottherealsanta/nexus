@@ -88,6 +88,9 @@ def main(path):
             for s in surfaces:
                 for tk in ("text.primary", "text.secondary", "text.muted"):
                     check(f"{p} {tk} on {s}", cc[tk], cc[s], tmin)
+                # Unit suffixes and other de-emphasised labels: quieter than muted,
+                # so they are held to the mark floor rather than the text floor.
+                check(f"{p} text.faint on {s}", cc["text.faint"], cc[s], nmin)
                 for mk in ("border.focus", "interactive.accent", "interactive.focus",
                            "status.success", "status.warning", "status.error", "status.info"):
                     check(f"{p} {mk} on {s}", cc[mk], cc[s], nmin)

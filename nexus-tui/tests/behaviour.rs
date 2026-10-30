@@ -90,12 +90,21 @@ fn model_agent_and_effort_pickers_use_core_catalog_data() {
         agents: vec![
             serde_json::json!({"name": "build", "source": "builtin", "mode": "all"}),
             serde_json::json!({"name": "scout", "source": "builtin", "mode": "subagent"}),
+            serde_json::json!({"name": "custom", "source": "project", "mode": "primary"}),
         ],
         source: "models.dev".into(),
         default_model: "codex/gpt-6.1-terra".into(),
     });
     let items = a.palette_items();
-    assert!(items.iter().any(|i| i.label == "scout"), "agents listed");
+    assert!(items.iter().any(|i| i.label == "build"));
+    assert!(items.iter().any(|i| i.label == "custom"));
+    assert!(!items.iter().any(|i| i.label == "scout"));
+    a.state.model.sessions.get_mut(SESSION).unwrap().parent_id = Some("parent".into());
+    let items = a.palette_items();
+    assert!(items.iter().any(|i| i.label == "build"));
+    assert!(items.iter().any(|i| i.label == "scout"));
+    assert!(!items.iter().any(|i| i.label == "custom"));
+    assert_eq!(a.state.agents.len(), 3, "the shared catalog remains intact");
     a.execute("model.change");
     let items = a.palette_items();
     // the model's name on the left, its provider on the right (nexus-tui README)
@@ -1868,4 +1877,27 @@ fn a_new_session_keeps_the_drafts_tools_until_its_snapshot_loads() {
         data: Ok(serde_json::json!({"tools": ["read", "skill"]})),
     });
     assert!(a.context_items().iter().any(|item| item.key == "skill"));
+}
+
+#[test]
+fn the_draft_shows_the_model_core_will_create_the_session_with() {
+    let mut a = nexus_tui::app::App::new(
+        nexus_tui::state::AppState::new(),
+        nexus_tui::theme::Theme::new(opts(Mode::Dark, Tier::TrueColor)),
+        (120, 36),
+    );
+    a.state.apply(nexus_tui::sync::SyncMsg::Snapshot {
+        snapshot: Box::new(common::snapshot()),
+        cause: nexus_tui::sync::ResyncCause::Initial,
+    });
+    let Some(request) = a.draft_request() else {
+        return;
+    };
+    a.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({"agent": "plan", "session": {"model": "codex/configured", "effort": "high"}})),
+    });
+    assert_eq!(a.effective_model(None), "codex/configured");
+    assert_eq!(a.current_agent(), "plan");
+    assert_eq!(a.current_effort(), "high");
 }

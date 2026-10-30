@@ -388,7 +388,7 @@ Scenarios are in `nexus/mock/scenarios/`; the catalogue contains `hello`,
 `bash_wait`, `cancel`, `parallel_tools`, `question`, `streaming_rich`, `stress`,
 `tool_marathon`, `provider_failure`, `parallel_subagents` and `context_pressure`.
 `parallel_subagents` requires the `orchestrate` agent, which has the `session`
-control tool; child sessions receive their own scripted reply. Tools run through
+control tool; sub agents receive their own scripted reply. Tools run through
 the normal workspace tool layer. `tool_marathon` creates and
 edits `mock-output.md` in the selected workspace, so run it in a disposable
 workspace. `provider_failure` exercises the normal retry path; `cancel` parks

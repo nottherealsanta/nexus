@@ -15,8 +15,8 @@ in the palette and F1, and stop appears in the composer. Existing sessions
 show their branch and linked-worktree marker from Core below the composer; a
 project with no session shows its own branch. The composer is a soft card
 (half-row `▄`/`▀` edges in the panel colour; `─` rules in mono and ASCII) whose
-control row shows the agent in its colour, the catalog model name and provider,
-a pending model change, effort, and on the right the `╱` meter with
+control row shows the agent in its colour, the catalog model name (or a pending
+model change), effort, provider, and on the right the `╱` meter with
 `82.0K · 41%`, explained on hover.
 The first row is a band on the chrome surface (`surface.sidebar`, shared
 with both sidebars; no rules between them, a `│` edge only in ANSI-16 and
@@ -41,7 +41,9 @@ Working shimmering), the top edge, the input at three cells in, a blank row, the
 control row, the bottom edge and the strip. The control row sheds effort, then
 the provider, then the meter as the column narrows; while busy its right side
 reads `esc stop` instead of the meter. The focus bar at the card's left edge is
-drawn only in ANSI-16 and mono.
+drawn only in ANSI-16 and mono. Pending inputs appear in a padded card above the
+composer, marked `Q` for queued messages or `S` for steers; a held queue is
+marked `Q held`.
 The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`): the viewed tab is bold on the page surface, the others muted on the band, a child session shows `root › child` with clickable earlier crumbs. `alt+d`
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high
@@ -103,7 +105,6 @@ page, at most 10 pages) and keeps them in `SelectedView::turns`:
 | Composer context and the sidebar's Used | the newest request with usage (`usage.input`) |
 | Header "(next call)" model | the newest request's `model` |
 | Sidebar Tokens and Cost | the session ledger (`usage`), which survives pruned turns; a `Since <date>` row when it began after the session |
-| "enter continue" | the newest turn's `status` |
 
 A stored turn covers the messages with `seq` after its `start_seq`; a prompt's
 timeline turn gathers every stored turn that starts inside it (continuations,
@@ -177,7 +178,7 @@ diff is refused while the text is unsaved.
 **K5-K11 client parts.** The session switcher (`ctrl+k`) also lists sessions whose user messages
 match (Core's `/api/search`) after the title matches, with the snippet in the hint column. A
 session opens with its newest 200 messages; Enter on `older messages are not loaded` (or the
-palette's Load older turns) reads the page before the oldest. The approval card offers `y` allow
+palette's Load older turns) reads the page before the oldest. A running session loads every older page on its own, and pages already read stay cached across snapshot resyncs. The approval card offers `y` allow
 once, `a` allow for the session, `n` deny, `d` deny with the composer's text as the note.
 Choosing a model or agent for an existing session first asks `…/switch-cost` and confirms when
 the cache would be lost. `/usage` shows plan limits (`GET /api/usage`). A tool result's images
@@ -227,9 +228,9 @@ focus). When its text has scrolled off the top, `sticky.rs` pins a copy under
 the header (three rows at most, a `░` shade row with `↑ N lines of this turn
 above`); the next band pushes it up and a click scrolls back. The turn footer is
 the right-aligned `▪ Agent · models · effort · tools · duration · tokens · cost`
-row with no end status: an interrupted turn adds `/continue` (`enter continue`
-with an empty composer), a failed turn puts its first error line (`✕`) above.
-Durations read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Activity groups fold to
+row with no end status or continue hint: a failed turn puts its first error line
+(`✕`) above, and the usage units (`i`, `o`, `r`, `c`) are fainter than their
+counts. Durations read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Activity groups fold to
 `Read 2 files, ran 1 command` with `+N −M` and `✕ N failed`; a live group is
 `Working` (shimmer) over its newest five members and `… N earlier`, and its glyph
 flashes the accent for six frames when it finishes (not with reduced motion).
@@ -240,7 +241,8 @@ the old box (`┌ │ ╰` in `border.strong`): the command's first two rows, th
 eight output rows behind `↑ N earlier lines · enter show all` (a diff or the raw
 view keeps a head and a tail), and a `raw` toggle on the head row. `o`, or Enter
 on the open tool, shows all; `r` raw and `i` inspector work on a focused tool.
-Reasoning reads `▸ Thought · preview` (no duration, see Interface notes) and
+Reasoning reads `▸ Thought · preview` (or `◇ Thought` within an activity tree,
+ASCII `o Thought`; no duration, see Interface notes) and
 stays open with its live text while it streams. The header status reads
 `◆ waiting for you` or `✕ offline`; it has no busy state.
 

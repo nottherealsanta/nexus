@@ -257,6 +257,11 @@ impl Model {
             .selected
             .as_ref()
             .and_then(|v| v.starting.clone().map(|st| (v.session_id.clone(), st)));
+        // Older pages already read stay cached: the snapshot only carries the newest messages.
+        let cached = self
+            .selected
+            .as_ref()
+            .map(|v| (v.session_id.clone(), v.messages.clone(), v.messages_more));
         self.selected = match (s.selected, wanted) {
             (Some(sel), _) => Some(SelectedView {
                 session_id: sel.session_id,
@@ -270,6 +275,19 @@ impl Model {
             }),
             _ => None,
         };
+        if let (Some(view), Some((id, old, old_more))) = (self.selected.as_mut(), cached) {
+            if view.session_id == id {
+                if let Some(floor) = view.messages.first().map(|m| m.seq) {
+                    let mut older: Vec<Message> =
+                        old.into_iter().filter(|m| m.seq < floor).collect();
+                    if !older.is_empty() {
+                        older.append(&mut view.messages);
+                        view.messages = older;
+                        view.messages_more = old_more;
+                    }
+                }
+            }
+        }
         if let (Some(view), Some((id, starting))) = (self.selected.as_mut(), kept) {
             if view.session_id == id {
                 view.starting = Some(starting);

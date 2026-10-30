@@ -335,7 +335,7 @@ function partView(p, childByCall) {
     return h("div", { class: "card tool" }, h("span", { class: "label" }, "tool call"), h("span", { class: "name" }, p.name), " ", h("span", { class: "note mono" }, p.id),
       p.name === "code" ? h("div", {}, S.events.filter((e) => e.type === "code.call" && e.data.parent_call_id === p.id)
         .map((e) => jsonBlock(`${e.data.kernel_id} · In [${e.data.cell}] · ${e.data.index}. ${e.data.tool} · ${e.data.error ? "error" : "ok"}`, e.data))) : null,
-      child ? h("div", {}, "→ child session ", h("a", { onclick: () => select(child.id) }, `${child.title} (${child.agent})`)) : null,
+      child ? h("div", {}, "→ sub agent ", h("a", { onclick: () => select(child.id) }, `${child.title} (${child.agent})`)) : null,
       args && typeof args === "object" ? kv("args", ...Object.entries(args).flatMap(([k, v]) => [k, h("pre", {}, typeof v === "string" ? v : pretty(v))]))
         : h("div", { class: "err" }, "arguments are not a JSON object: ", h("pre", {}, p.arguments)));
   }

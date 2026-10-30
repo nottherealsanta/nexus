@@ -218,7 +218,9 @@ estimate.
 - **Older messages (K6).** A session opens with its newest 200 messages (`message?limit=200`);
   when more exist the timeline starts with `Older messages are not loaded` and a Load older
   messages button (`turn.load_older`, also in the palette) that reads the page before the oldest
-  loaded message.
+  loaded message. A running session loads every older page by itself (so the row does not show
+  there); pages already read stay cached across a resync. A failed page toasts and is not retried
+  automatically; the button retries.
 - **Approvals (K7).** See the waiting card above.
 - **Cache warning (K9).** Choosing a model or agent for an existing session asks
   `…/switch-cost` first; when `cache_lost` it confirms with the reasons and the cached token count.

@@ -18,10 +18,10 @@ use crate::theme::Theme;
 
 const CANVAS: &str = "surface.canvas";
 const PANEL: &str = "surface.panel";
-const SIDEBAR: &str = "surface.sidebar";
 const PRIMARY: &str = "text.primary";
 const SECONDARY: &str = "text.secondary";
 const MUTED: &str = "text.muted";
+const FAINT: &str = "text.faint";
 const ACCENT: &str = "interactive.accent";
 /// Assistant prose starts 3 cells in, aligned with the user text after the
 /// fold marker and its space (DESIGN_PLAN.md D04).
@@ -79,7 +79,7 @@ pub struct Block {
     pub toggle: bool,
     /// When set, this block's default depends on its live state.
     pub default_open: Option<bool>,
-    /// Child session to open, or message ID to copy for a turn/user block.
+    /// Sub agent to open, or message ID to copy for a turn/user block.
     pub target: Option<String>,
     /// A tool whose detail is longer than the head and tail the UI shows.
     pub clipped: bool,
@@ -952,16 +952,6 @@ impl Builder<'_> {
                                 }
                             }
                             "reasoning" => {
-                                if ends_with_edit(&activity) {
-                                    self.activity_group(
-                                        &mut activity,
-                                        &results,
-                                        &traces,
-                                        &waiting,
-                                        busy,
-                                        false,
-                                    );
-                                }
                                 activity.push(Activity::Thought(m, pi, p));
                             }
                             "tool_call" => {
@@ -978,19 +968,6 @@ impl Builder<'_> {
                                     );
                                     self.child_card(&call_id, &json_str(&p["arguments"]), &results);
                                 } else {
-                                    // File changes are their own group, apart from reads and commands.
-                                    if !activity.is_empty()
-                                        && ends_with_edit(&activity) != is_edit_tool(&name)
-                                    {
-                                        self.activity_group(
-                                            &mut activity,
-                                            &results,
-                                            &traces,
-                                            &waiting,
-                                            busy,
-                                            false,
-                                        );
-                                    }
                                     activity.push(Activity::Tool {
                                         id: call_id,
                                         name,
@@ -1059,9 +1036,6 @@ impl Builder<'_> {
             .map(|s| s.reasoning.as_str())
             .filter(|text| !text.trim().is_empty())
         {
-            if ends_with_edit(&activity) {
-                self.activity_group(&mut activity, &results, &traces, &waiting, busy, false);
-            }
             activity.push(Activity::StreamingThought(reasoning));
         }
         self.activity_group(&mut activity, &results, &traces, &waiting, busy, true);
@@ -1621,9 +1595,10 @@ impl Builder<'_> {
     }
 
     /// The turn footer (DESIGN_PLAN.md D05): right-aligned
-    /// `Agent · models · effort · tools · duration · tokens`, with no
-    /// end status. An interrupted turn adds the `/continue` hint after it, a
-    /// failed turn puts the first line of its error on the row above.
+    /// `Agent · models · effort · tools · duration · tokens`, with no end
+    /// status or continue hint; a failed turn puts the first line of its error
+    /// on the row above. The usage unit suffixes (`i`, `o`, `r`, `c`) are
+    /// fainter than their counts.
     fn turn_footer(&mut self, n: usize, turns: &[TurnMeta]) {
         let Some(meta) = turns.get(n) else { return };
         let end = self.turn_end(meta);
@@ -1631,7 +1606,9 @@ impl Builder<'_> {
             return;
         }
         let session = self.app.viewed();
-        let mut bits: Vec<String> = Vec::new();
+        let value = self.meta();
+        let faint = self.st(FAINT, CANVAS);
+        let mut bits: Vec<Vec<Span<'static>>> = Vec::new();
         if !meta.models.is_empty() {
             // A catalog name, else the bare model id (a ref's last part).
             let name = |used: &String| {
@@ -1644,18 +1621,22 @@ impl Builder<'_> {
                     )
             };
             let arrow = format!(" {} ", self.t.structure("arrow"));
-            bits.push(
+            bits.push(vec![Span::styled(
                 meta.models
                     .iter()
                     .map(name)
                     .collect::<Vec<_>>()
                     .join(&arrow),
-            );
+                value,
+            )]);
         } else if let Some(m) = session.and_then(|s| s.model.clone()) {
             let short = m.rsplit('/').next().unwrap_or(&m).to_owned();
             if m != "default" && !m.is_empty() {
                 // A ref is `provider/model`; a lone bare id stays as it is.
-                bits.push(if short.len() > 1 { m } else { short });
+                bits.push(vec![Span::styled(
+                    if short.len() > 1 { m } else { short },
+                    value,
+                )]);
             }
         }
         // The effort the turn's requests ran with, else the session's.
@@ -1668,42 +1649,47 @@ impl Builder<'_> {
             })
         }) {
             if !effort.is_empty() && effort != "none" && effort != "default" {
-                bits.push(effort);
+                bits.push(vec![Span::styled(effort, value)]);
             }
         }
         if meta.tools > 0 {
-            bits.push(format!(
-                "{} tool{}",
-                meta.tools,
-                if meta.tools == 1 { "" } else { "s" }
-            ));
+            bits.push(vec![Span::styled(
+                format!(
+                    "{} tool{}",
+                    meta.tools,
+                    if meta.tools == 1 { "" } else { "s" }
+                ),
+                value,
+            )]);
         }
-        bits.push(fmt_duration(meta.duration()));
+        bits.push(vec![Span::styled(fmt_duration(meta.duration()), value)]);
         if meta.has_usage() {
-            bits.push(format!("{} i", fmt_count(meta.input)));
-            bits.push(format!("{} o", fmt_count(meta.output)));
-            bits.push(format!("{} r", fmt_count(meta.reasoning)));
+            let count = |n: u64, unit: &'static str| {
+                vec![Span::styled(fmt_count(n), value), Span::styled(unit, faint)]
+            };
+            bits.push(count(meta.input, "i"));
+            bits.push(count(meta.output, "o"));
+            bits.push(count(meta.reasoning, "r"));
             if meta.input > 0 {
-                bits.push(format!(
-                    "{:.0}% c",
-                    100.0 * meta.cached as f64 / meta.input as f64
-                ));
+                bits.push(vec![
+                    Span::styled(
+                        format!("{:.0}%", 100.0 * meta.cached as f64 / meta.input as f64),
+                        value,
+                    ),
+                    Span::styled("c", faint),
+                ]);
             }
         }
         if meta.unknown_usage {
             // Unknown is said, never shown as zero.
-            bits.push(if meta.has_usage() {
-                "some usage unknown".to_owned()
-            } else {
-                "usage unknown".to_owned()
-            });
-        }
-        if matches!(end, End::Interrupted | End::StepLimit) {
-            bits.push(if self.app.term("composer.empty").unwrap_or(false) {
-                "enter continue".to_owned()
-            } else {
-                "/continue".to_owned()
-            });
+            bits.push(vec![Span::styled(
+                if meta.has_usage() {
+                    "some usage unknown".to_owned()
+                } else {
+                    "usage unknown".to_owned()
+                },
+                value,
+            )]);
         }
         let agent = session.map(|s| s.agent.clone()).unwrap_or_default();
         let label: String = agent
@@ -1722,17 +1708,17 @@ impl Builder<'_> {
             used = width(&label);
         }
         for bit in bits {
-            let w = width(&bit);
+            let w: usize = bit.iter().map(|s| width(s.content.as_ref())).sum();
             let row = rows.last_mut().expect("a row");
             if row.is_empty() {
-                row.push(Span::styled(bit, self.meta()));
                 used = w;
+                row.extend(bit);
             } else if used + sep_w + w <= self.bw {
-                row.push(Span::styled(sep.clone(), self.meta()));
-                row.push(Span::styled(bit, self.meta()));
+                row.push(Span::styled(sep.clone(), value));
                 used += sep_w + w;
+                row.extend(bit);
             } else {
-                rows.push(vec![Span::styled(bit, self.meta())]);
+                rows.push(bit);
                 used = w;
             }
         }
@@ -2184,7 +2170,7 @@ impl Builder<'_> {
                     b.frame,
                     true,
                     b.meta(),
-                    b.secondary(),
+                    b.primary(),
                 ));
             } else if !running && order == ["Edited file"] {
                 // `Edited 7 files`: the count in white.
@@ -2280,6 +2266,18 @@ impl Builder<'_> {
                     prefix.clone(),
                     if tree.is_some() { tree_style } else { muted },
                 ),
+                Span::styled(
+                    if tree.is_some() {
+                        if b.t.opts.ascii {
+                            "o "
+                        } else {
+                            "◇ "
+                        }
+                    } else {
+                        ""
+                    },
+                    muted,
+                ),
                 Span::styled(label.clone(), muted.add_modifier(Modifier::BOLD)),
             ];
             if !open {
@@ -2332,6 +2330,18 @@ impl Builder<'_> {
             };
             let mut head = vec![
                 Span::styled(prefix, if tree.is_some() { tree_style } else { muted }),
+                Span::styled(
+                    if tree.is_some() {
+                        if b.t.opts.ascii {
+                            "o "
+                        } else {
+                            "◇ "
+                        }
+                    } else {
+                        ""
+                    },
+                    muted,
+                ),
                 Span::styled(label, muted.add_modifier(Modifier::BOLD)),
             ];
             if !open {
@@ -2501,7 +2511,7 @@ impl Builder<'_> {
             let mut left = vec![
                 Span::styled(format!("  {prefix} "), prefix_style),
                 Span::styled(format!("{glyph} "), glyph_style),
-                Span::styled(verb.to_owned(), b.primary().add_modifier(Modifier::BOLD)),
+                Span::styled(verb.to_owned(), b.primary()),
             ];
             if !arg.is_empty() {
                 left.push(Span::styled(format!("  {arg}"), b.secondary()));
@@ -2742,24 +2752,6 @@ impl Builder<'_> {
                     .any(|w| w.session_id == c.id)
         });
         let busy = child.as_ref().is_some_and(|c| self.app.is_busy(&c.id));
-        let failed = done.is_some_and(|d| d.is_error);
-        let (glyph, tok) = if waits {
-            (self.t.status("waiting").0, "interactive.accent")
-        } else if busy {
-            (self.t.spinner(self.frame), PRIMARY)
-        } else if failed {
-            (self.t.status("error").0, "status.error")
-        } else if done.is_some() || child.is_some() {
-            (self.t.dots_full(), "status.success")
-        } else {
-            (self.t.spinner(self.frame), PRIMARY)
-        };
-        let background = a["wait"].as_bool() == Some(false);
-        let rail = self.t.role_rail_style("child_card");
-        let st = self.t.role_style("child_card");
-        let heavy = self.t.structure("rail_heavy").to_owned();
-        let bg = self.t.role("child_card").bg.clone();
-        let bgst = self.st(&bg, &bg);
         let key = format!("child:{call_id}");
         let child_id = child.as_ref().map(|c| c.id.clone());
         let title = if title.is_empty() {
@@ -2788,44 +2780,71 @@ impl Builder<'_> {
             if c.created > 0.0 {
                 bits.push(fmt_duration(end - c.created));
             }
-            if !busy {
-                if let Some(t) = c
-                    .extra
-                    .get("tokens")
-                    .and_then(Value::as_u64)
-                    .filter(|t| *t > 0)
-                {
-                    bits.push(format!("{} tokens", crate::paint::compact(t)));
-                }
-            }
             bits.join(&sep)
         });
+        let primary = self.st(PRIMARY, CANVAS);
+        let secondary = self.st(SECONDARY, CANVAS);
         let mut head = vec![
-            Span::styled(heavy.clone(), rail),
-            Span::styled(format!(" {glyph} "), self.st(tok, PANEL)),
+            Span::raw("  "),
             Span::styled(
                 crate::text::capitalize(&agent),
-                self.st(PRIMARY, PANEL)
-                    .patch(self.t.agent_style(&agent))
-                    .add_modifier(Modifier::BOLD),
+                primary.patch(self.t.agent_style(&agent)),
             ),
         ];
         if !title.is_empty() {
             head.push(Span::styled(
                 format!(" {}", truncate(&title, 48, self.ell())),
-                self.st(SECONDARY, PANEL),
+                secondary,
             ));
         }
-        if background {
+        if a["wait"].as_bool() == Some(false) {
             head.push(Span::raw(" "));
-            head.push(Span::styled(" Background ", self.st(SECONDARY, SIDEBAR)));
+            head.push(Span::styled(
+                " Background ",
+                self.st(SECONDARY, "surface.sidebar"),
+            ));
         }
-        let right = if waits {
-            vec![Span::styled("waiting for input", self.st(tok, PANEL))]
-        } else if failed {
-            vec![Span::styled("failed", self.st(tok, PANEL))]
+        // The last line: the outcome and the start of what the subagent returned.
+        let result = |out: &str| -> String {
+            let line = out
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("Sub agent"))
+                .unwrap_or("");
+            truncate(line, 60, self.ell())
+        };
+        let outcome = if let Some(d) = done {
+            let text = if d.is_error {
+                let line = d
+                    .output
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("");
+                let line = line.split_once("failed:").map_or(line, |(_, r)| r).trim();
+                truncate(line, 60, self.ell())
+            } else {
+                result(&d.output)
+            };
+            let label = if d.is_error { "failed" } else { "done" };
+            if text.is_empty() {
+                label.to_owned()
+            } else {
+                format!("{label} {text}")
+            }
+        } else if waits {
+            "waiting for input".into()
+        } else if busy {
+            "running…".into()
         } else {
-            Vec::new()
+            String::new()
+        };
+        let plain = |text: String, style: Style| TLine {
+            spans: vec![Span::raw("  "), Span::styled(text, style)],
+            bg: None,
+            rail: None,
+            focus: false,
+            context_section: None,
+            context_items: Vec::new(),
         };
         self.block(
             key.clone(),
@@ -2834,70 +2853,18 @@ impl Builder<'_> {
             child_id.is_some(),
             |b| {
                 b.out.push(TLine {
-                    spans: {
-                        let mut s = head.clone();
-                        let lw: usize = s.iter().map(|x| width(x.content.as_ref())).sum();
-                        let rw: usize = right.iter().map(|x| width(x.content.as_ref())).sum();
-                        if lw + rw < b.bw {
-                            s.push(Span::raw(" ".repeat(b.bw - lw - rw)));
-                            s.extend(right.clone());
-                        } else {
-                            s.push(Span::raw(" "));
-                            s.extend(right.clone());
-                        }
-                        s
-                    },
-                    bg: Some(bgst),
+                    spans: head.clone(),
+                    bg: None,
                     rail: None,
                     focus: false,
                     context_section: None,
                     context_items: Vec::new(),
                 });
                 if !meta.is_empty() {
-                    b.out.push(TLine {
-                        spans: vec![
-                            Span::styled(format!("{heavy}   "), rail),
-                            Span::styled(meta.clone(), st),
-                        ],
-                        bg: Some(bgst),
-                        rail: None,
-                        focus: false,
-                        context_section: None,
-                        context_items: Vec::new(),
-                    });
+                    b.out.push(plain(meta.clone(), secondary));
                 }
-                let body = if let Some(d) = done {
-                    let lines: Vec<&str> =
-                        d.output.lines().filter(|l| !l.trim().is_empty()).collect();
-                    if d.is_error {
-                        format!("✕ {}", lines.first().copied().unwrap_or("failed"))
-                    } else {
-                        lines.iter().take(3).cloned().collect::<Vec<_>>().join("\n")
-                    }
-                } else if waits {
-                    "waiting for input".into()
-                } else if busy {
-                    "running…".into()
-                } else {
-                    "starting…".into()
-                };
-                if !body.is_empty() {
-                    for row in text::wrap(&body, b.bw.saturating_sub(2))
-                        .into_iter()
-                        .take(4)
-                    {
-                        b.out.push(TLine {
-                            spans: vec![
-                                Span::styled(format!("{heavy} "), rail),
-                                Span::styled(row, st),
-                            ],
-                            bg: Some(bgst),
-                            rail: None,
-                            focus: false,
-                            context_section: None,
-                            context_items: Vec::new(),
-                        });
-                    }
+                if !outcome.is_empty() {
+                    b.out.push(plain(outcome.clone(), secondary));
                 }
             },
         );
@@ -3354,10 +3321,6 @@ fn strip_inline(s: &str) -> String {
 
 fn is_edit_tool(name: &str) -> bool {
     matches!(name, "edit" | "patch" | "write")
-}
-
-fn ends_with_edit(activity: &[Activity<'_>]) -> bool {
-    matches!(activity.last(), Some(Activity::Tool { name, .. }) if is_edit_tool(name))
 }
 
 fn diff_counts(args: &str) -> Option<(usize, usize)> {

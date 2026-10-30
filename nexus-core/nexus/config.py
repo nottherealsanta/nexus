@@ -24,6 +24,7 @@ from .paths import home
 # increments can extend this inventory without changing the file format.
 DEFAULTS: dict[str, dict[str, Any]] = {
     "defaults": {"model": "", "effort": "", "agent": "", "permission": "allow"},
+    "agents": {"models": {}, "fallbacks": {}},
     "tools": {"disabled": [], "permission": {}},
     "context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]},
     "ui": {"detail": "medium", "reduced_motion": False},
@@ -37,6 +38,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 SCHEMA: dict[str, dict[str, Any]] = {
     "ui.detail": {"type": "string", "enum": ["low", "medium", "high"]},
     "ui.reduced_motion": {"type": "boolean"},
+    "agents.models": {"type": "object", "description": "per-child-agent equally weighted default model refs"},
+    "agents.fallbacks": {"type": "object", "description": "per-child-agent ordered fallback model refs"},
     "defaults.model": {"type": "string"},
     "defaults.effort": {"type": "string"},
     "defaults.agent": {"type": "string"},
@@ -63,6 +66,24 @@ SCHEMA: dict[str, dict[str, Any]] = {
 
 
 def _valid(section: str, key: str, value: Any) -> bool:
+    if section == "agents" and key in ("models", "fallbacks"):
+        from .llmhub.hub import split_ref
+        if not isinstance(value, dict) or len(value) > 200:
+            return False
+        for name, refs in value.items():
+            if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9_-]+", name):
+                return False
+            if not isinstance(refs, list) or not 1 <= len(refs) <= 20 or not all(isinstance(ref, str) for ref in refs):
+                return False
+            if len(set(refs)) != len(refs):
+                return False
+            try:
+                for ref in refs:
+                    if "/" not in ref or not split_ref(ref)[1].strip() or ref != ref.strip():
+                        return False
+            except ValueError:
+                return False
+        return True
     if section == "ui":
         return (isinstance(value, bool) if key == "reduced_motion"
                 else isinstance(value, str) and value in ("low", "medium", "high"))

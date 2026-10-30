@@ -212,7 +212,7 @@ describe("shell", () => {
   });
 
   test("pre-session picker choices and slash commands become creation fields", async () => {
-    const created = { ...snapshot.sessions[0], id: "ses_new", title: "Drafted session", agent: "plan", model: "codex/gpt-5", effort: "high" };
+    const created = { ...snapshot.sessions[0], id: "ses_new", title: "Drafted session", agent: "review", model: "codex/gpt-5", effort: "high" };
     const app = await open("./App.tsx", {
       network: {
         "POST */api/session": { body: created },
@@ -225,7 +225,7 @@ describe("shell", () => {
         ...core(),
         "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000, efforts: ["low", "medium", "high"] }] } },
         "GET */api/model/default": { body: { model: "codex/gpt-5" } },
-        "GET */api/agent*": { body: { agents: [{ name: "build", source: "builtin" }, { name: "plan", source: "builtin" }] } },
+        "GET */api/agent*": { body: { agents: [{ name: "build", source: "builtin", mode: "all" }, { name: "plan", source: "builtin", mode: "subagent" }, { name: "review", source: "project", mode: "primary" }] } },
       },
       width: 1024, height: 768, platform: "web",
     });
@@ -237,8 +237,9 @@ describe("shell", () => {
     };
     await slash("/agent");
     await app.waitFor("id:picker");
+    expect(app.shows("text:plan")).toBe(false);
     await app.press("id:pick-1");
-    await app.waitFor("text:The new session will use agent plan");
+    await app.waitFor("text:The new session will use agent review");
     await slash("/model");
     await app.waitFor("id:picker");
     await app.press("id:pick-0");
@@ -249,14 +250,14 @@ describe("shell", () => {
     await app.press("id:send");
     await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/api/session")));
     const request = app.requests().find((r) => r.method === "POST" && r.url.endsWith("/api/session")) as any;
-    expect(request.body).toEqual({ project: "prj_1", agent: "plan", model: "codex/gpt-5", effort: "high" });
+    expect(request.body).toEqual({ project: "prj_1", agent: "review", model: "codex/gpt-5", effort: "high" });
   });
 
   test("settings sections follow the manifest order", async () => {
     const app = await open("./App.tsx", { network: core(), width: 1024, height: 768, platform: "web" });
     await app.keyboard.press(`${mod}+,`);
     await app.waitFor("id:settings");
-    const expected = (manifest.settings.section as readonly { label: string }[]).map((s) => s.label);
+    const expected = (manifest.settings.section as readonly { id: string; label: string }[]).filter((s) => s.id !== "models").map((s) => s.label);
     const shown = app.texts().filter((t) => expected.includes(t));
     expect(shown.slice(0, expected.length)).toEqual(expected);
     expect(expected[0]).toBe("Appearance");
@@ -923,42 +924,30 @@ describe("sidebar row menus", () => {
 });
 
 describe("Core-backed settings values", () => {
-  test("shows the default model and catalog, refreshes, and opens model and agent pickers", async () => {
+  test("shows provider connections and child agent model pools", async () => {
     const app = await open("./App.tsx", {
       network: {
         ...core(),
         "GET */api/model": { body: { source: "fixture catalog", models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000 }] } },
         "GET */api/model/default": { body: { model: "codex/gpt-5" } },
-        "GET */api/config": { body: { revision: "rev1", values: { defaults: { model: "codex/gpt-5", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
+        "GET */api/config": { body: { revision: "rev1", values: { agents: { models: { plan: ["codex/gpt-5"] }, fallbacks: { plan: ["codex/gpt-4"] } }, defaults: { model: "codex/gpt-5", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
         "PATCH */api/config": { body: { revision: "rev2", values: { defaults: { model: "", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
-        "GET */api/agent*": { body: { agents: [{ name: "build", source: "builtin" }, { name: "plan", source: "builtin" }] } },
+        "GET */api/provider": { body: [{ id: "codex", label: "Codex", connected: true }, { id: "groq", label: "Groq", connected: false }] },
+        "GET */api/agent*": { body: { agents: [{ name: "build", mode: "all", source: "builtin" }, { name: "plan", mode: "subagent", source: "builtin" }] } },
       },
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("text:demo");
     await app.press("id:open-settings");
-    await app.press("id:section-models");
-    await app.waitFor("text:1 models · fixture catalog");
-    expect(app.shows("id:setting-models.default")).toBe(true);
-    expect(app.texts().join("\n").includes("codex/gpt-5")).toBe(true);
-    await app.press("id:edit-models.default");
-    await app.waitFor("id:picker");
-    await app.press("id:pick-0");
-    await app.waitUntil(() => app.requests().some((r) => r.method === "PATCH" && r.url.endsWith("/api/config")));
-    expect(app.texts().join("\n").includes("Core has no default setting for this yet")).toBe(false);
-    const before = app.requests().filter((r) => r.method === "GET" && r.url.endsWith("/api/model")).length;
-    await app.press("id:setting-model-refresh");
-    await app.waitUntil(() => app.requests().filter((r) => r.method === "GET" && r.url.endsWith("/api/model")).length > before);
-    await app.waitFor("text:Model catalog refreshed"); // the list re-renders with the new catalog; press after it settles
-    await app.press("id:setting-model-catalog");
-    await app.waitFor("id:picker");
-    expect(app.texts().join("\n").includes("GPT-5")).toBe(true);
-    await app.keyboard.press("escape");
+    expect(app.shows("id:section-models")).toBe(false);
+    await app.press("id:section-providers");
+    await app.waitFor("id:provider-codex");
+    expect(app.texts().includes("Connected")).toBe(true);
+    expect(app.texts().includes("Not connected")).toBe(true);
     await app.press("id:section-agents");
-    await app.waitFor("text:build, plan");
-    await app.press("id:setting-agents-list");
-    await app.waitFor("id:picker");
-    expect(app.texts().join("\n").includes("Change agent")).toBe(true);
+    await app.waitFor("id:agent-models-plan");
+    expect(app.texts().join("\n").includes("codex/gpt-5 · 100%")).toBe(true);
+    expect(app.texts().join("\n").includes("1. codex/gpt-4")).toBe(true);
   });
 });
 

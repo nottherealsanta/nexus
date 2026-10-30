@@ -31,7 +31,7 @@ turns of every descendant session. A tool call left without a result gets an
 
 Session trees: an agent whose file lists `control: [session]` gets the
 `session` tool, but only in a root session (children never get it, so trees
-are one level deep). The tool starts a child session in the same directory,
+are one level deep). The tool starts a sub agent in the same directory,
 with `launched_by: "agent"`, `parent_id` and `parent_call_id` set. With
 `wait: true` the tool returns the child's answer. With `wait: false` it returns
 at once, and the answer is delivered to the parent when the child finishes: it
@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
@@ -95,6 +96,7 @@ from .loop import (
     NO_USER_MESSAGE,
     Agent,
     MessageAdded,
+    ModelFallback,
     NoUserMessage,
     RetryExhausted,
     RetryScheduled,
@@ -535,7 +537,7 @@ class Runtime:
         return ToolSpec(
             name="session",
             description=(
-                "Launch a subagent: start a child session that runs one of the agents listed in the system prompt's "
+                "Launch a subagent: start a sub agent that runs one of the agents listed in the system prompt's "
                 "tools section on a complete prompt. wait=true (default) returns its answer; wait=false returns at "
                 "once and the answer arrives as a message when it finishes. The first successful call also exposes "
                 "the `message_session` tool, which sends a further message to a child you launched: a steer while it "
@@ -547,7 +549,7 @@ class Runtime:
                     "agent": {"type": "string", "enum": [a["name"] for a in child_agents], "description": "Which agent runs the child"},
                     "prompt": {"type": "string", "description": "The complete task for the child"},
                     "wait": {"type": "boolean", "description": "Block until the child answers (default true)"},
-                    "title": {"type": "string", "description": "Short title for the child session"},
+                    "title": {"type": "string", "description": "Short title for the sub agent"},
                 },
                 "required": ["agent", "prompt"],
             },
@@ -555,7 +557,7 @@ class Runtime:
 
     def _session_guidance(self, child_agents: list[dict[str, Any]]) -> str:
         return (
-            "This is how subagents are launched: another agent works on a prompt in this directory, in a child session "
+            "This is how subagents are launched: another agent works on a prompt in this directory, in a sub agent "
             "the user can open. It does not see this conversation, so give it a complete prompt. `wait=true` returns "
             "its answer; `wait=false` lets you continue, and the answer arrives as a message when it finishes. Your "
             "first call also exposes `message_session`, to steer a working child or send a follow-up to a finished "
@@ -568,14 +570,14 @@ class Runtime:
         return {
             "name": agent_files.MESSAGE_TOOL,
             "description": (
-                "Send a message to a child session you launched with `session`. If the child is working, the message "
+                "Send a message to a sub agent you launched with `session`. If the child is working, the message "
                 "reaches it before its next model call (a steer). If it is idle, the message starts a new turn on its "
                 "existing conversation. Returns at once; the child's answer arrives as a message when it finishes."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "session": {"type": "string", "description": "Id of a child session this session launched"},
+                    "session": {"type": "string", "description": "Id of a sub agent this session launched"},
                     "message": {"type": "string", "description": "What to tell the child"},
                 },
                 "required": ["session", "message"],
@@ -810,7 +812,7 @@ class Runtime:
             root = self._root(parent)
             raise Conflict(
                 f"session {parent.id} is archived; unarchive its root tree (session {root.id}) "
-                "before creating a child session"
+                "before creating a sub agent"
             )
         if parent is None:
             defaults = ConfigFile().read()["values"]
@@ -874,6 +876,15 @@ class Runtime:
         model, permission, effort, agent = plan["model"], plan["permission"], plan["effort"], plan["agent"]
         disabled_tools, directory, snapshot = plan["disabled_tools"], plan["directory"], plan["snapshot"]
         parent = plan["parent"]
+        if parent is not None and model is None:
+            settings = ConfigFile().read()["values"]["agents"]
+            pool = settings["models"].get(agent, [])
+            if pool:
+                model = secrets.choice(pool)
+            fallbacks = settings["fallbacks"].get(agent, [])
+            if fallbacks:
+                primary = model or snapshot["agent"].get("model") or self.default_model
+                snapshot["model_fallbacks"] = {"primary": primary, "models": [ref for ref in fallbacks if ref != primary]}
         session = self.store.create_session(project, title=title or "New session", agent=agent, model=model or "",
                                             permission=permission or "allow", effort=effort or None, parent=parent,
                                             parent_call_id=parent_call_id, launched_by=launched_by,
@@ -1383,7 +1394,7 @@ class Runtime:
         if session.parent_id is not None:
             root = self._root(session)
             raise ValueError(
-                f"session {session_id} is a child session; archive and unarchive operate on a whole tree: "
+                f"session {session_id} is a sub agent; archive and unarchive operate on a whole tree: "
                 f"use its root session {root.id}"
             )
         ids = self.store.tree_ids(session_id)
@@ -1537,7 +1548,8 @@ class Runtime:
         skills, servers = self._switches(snapshot, set(disabled))
         return body | budget(body, window, None) | {"model": ref, "agent": plan["agent"], "parts": parts,
                                                     "snapshot": snapshots.summary(snapshot), "tool_info": info,
-                                                    "tools": list(snapshot["tools"]), "skills": skills, "mcp": servers}
+                                                    "tools": list(snapshot["tools"]), "skills": skills, "mcp": servers,
+                                                    "session": {"model": plan["model"], "effort": plan["effort"]}}
 
     # -- one-request helpers: titles, /btw, handoff (PLAN K1-K3) ----------------
 
@@ -1692,14 +1704,19 @@ class Runtime:
         """Rebind explicit changes at dispatch boundaries, never within a running call."""
         self._apply_pending_directory(session_id)  # a queued move lands between calls, not inside one
         updated = self._agent(self.session(session_id), refresh=False)
-        for name in ("provider", "model", "workspace", "tools", "instructions", "reasoning_effort", "approve",
-                     "files", "cwd_changed"):
+        for name in ("provider", "model", "model_ref", "fallback_models", "workspace", "tools", "instructions", "reasoning_effort", "approve",
+                     "files", "cwd_changed", "render"):
             setattr(active, name, getattr(updated, name))
 
     def _agent(self, session: Session, *, refresh: bool = True) -> Agent:
         snapshot = self.snapshot_for(session)
         spec = snapshot["agent"]
-        provider, model = provider_for(self.resolve_model(session, spec)[0])
+        ref = self.resolve_model(session, spec)[0]
+        provider, model = provider_for(ref)
+        fallback_config = snapshot.get("model_fallbacks") or {}
+        sequence = [fallback_config.get("primary"), *(fallback_config.get("models") or [])]
+        remaining = sequence[sequence.index(ref) + 1:] if ref in sequence else []
+        fallback_models = [(item, *provider_for(item)) for item in remaining if item and item != ref]
         names = self.effective_tool_names(snapshot, session)
         definitions = snapshot["tool_definitions"]
         missing = [n for n in names if n not in definitions]
@@ -1835,6 +1852,7 @@ class Runtime:
             files=files,
             cwd_changed=cwd_changed,
             retry_policy=self.retry_policy,
+            model_ref=ref, fallback_models=fallback_models,
             hooks=self._hook_runner(session, workspace),
             render=lambda message: self.render_media(message, model),
         )
@@ -1977,7 +1995,7 @@ class Runtime:
         except (OSError, ValueError) as exc:
             raise ToolError(f"skill {name!r}: {exc}") from exc
 
-    # -- child sessions --------------------------------------------------------
+    # -- sub agents --------------------------------------------------------
 
     def _session_tool(self, parent: Session) -> Tool:
         # The live view, used by inspection. Turns use the session snapshot instead.
@@ -1992,7 +2010,7 @@ class Runtime:
     async def _launch(self, parent_id: str, args: dict[str, Any], call_id: str | None) -> str:
         parent = self.session(parent_id)
         if parent.parent_id is not None:
-            raise ToolError("child sessions cannot start sessions")
+            raise ToolError("sub agents cannot start sessions")
         prompt = args.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise ToolError("prompt must be a non-empty string")
@@ -2013,7 +2031,7 @@ class Runtime:
             self.notify[child.id] = parent.id
         self.prompt(child.id, prompt)
         if not wait:
-            return (f"Started child session {child.id} (agent {child.agent}). Its answer will arrive as a message when it "
+            return (f"Started sub agent {child.id} (agent {child.agent}). Its answer will arrive as a message when it "
                     "finishes; continue with other work meanwhile." + exposed)
         task = self.turns[child.id]
         try:
@@ -2054,15 +2072,15 @@ class Runtime:
             raise ToolError("message must be a non-empty string")
         child_id = args.get("session")
         if not isinstance(child_id, str) or not child_id:
-            raise ToolError("session must be the id of a child session you launched")
+            raise ToolError("session must be the id of a sub agent you launched")
         child = self.store.session(child_id)
         if child is None or child.parent_id != parent_id:
-            raise ToolError(f"{child_id} is not a child session of this session; message only children you launched")
+            raise ToolError(f"{child_id} is not a sub agent of this session; message only children you launched")
         # The answer comes back as a notification, as for `wait: false`.
         if child_id in self.turns:
             self.notify[child_id] = parent_id
             self.inboxes.setdefault(child_id, []).append(message)
-            return (f"Message queued for child session {child_id} (agent {child.agent}), which is working; it sees it "
+            return (f"Message queued for sub agent {child_id} (agent {child.agent}), which is working; it sees it "
                     "before its next model call. Its answer will arrive as a message when it finishes.")
         try:
             self._check_turn_start(child)
@@ -2070,7 +2088,7 @@ class Runtime:
             raise ToolError(str(exc)) from exc
         self.notify[child_id] = parent_id
         self.prompt(child_id, message)
-        return (f"Child session {child_id} (agent {child.agent}) was idle; started a new turn with your message. Its "
+        return (f"Sub agent {child_id} (agent {child.agent}) was idle; started a new turn with your message. Its "
                 "answer will arrive as a message when it finishes.")
 
     def _escalate(self, child: Session, args: dict[str, Any]) -> str:
@@ -2102,7 +2120,7 @@ class Runtime:
     def _child_report(self, child_id: str) -> str:
         child = self.session(child_id)
         if child_id in self.errors:
-            return (f"Child session {child_id} (agent {child.agent}) failed: {self.errors[child_id]}"
+            return (f"Sub agent {child_id} (agent {child.agent}) failed: {self.errors[child_id]}"
                     + self._attention(child_id))
         answer = ""
         for stored in reversed(self.store.messages(child_id)):
@@ -2112,7 +2130,7 @@ class Runtime:
                     break
         if len(answer) > CHILD_RESULT_CHARS:
             answer = answer[:CHILD_RESULT_CHARS] + f"\n[… answer clipped at {CHILD_RESULT_CHARS} of {len(answer)} characters]"
-        return (f"Child session {child_id} (agent {child.agent}) finished.\n\n{answer or '(no text answer)'}"
+        return (f"Sub agent {child_id} (agent {child.agent}) finished.\n\n{answer or '(no text answer)'}"
                 + self._attention(child_id))
 
     def _deliver(self, child_id: str) -> None:
@@ -2120,7 +2138,7 @@ class Runtime:
         parent_id = self.notify.pop(child_id, None)
         if parent_id is None or self.store.session(parent_id) is None:
             return
-        notice = f"[Notification: child session finished]\n{self._child_report(child_id)}"
+        notice = f"[Notification: sub agent finished]\n{self._child_report(child_id)}"
         self.bus.publish("session.notified", {"from": child_id, "text": notice}, session_id=parent_id)
         self._notify(parent_id, notice)
 
@@ -2354,6 +2372,25 @@ class Runtime:
                         # The failed attempt is closed by the ProviderError handler;
                         # `event.attempt_id` is only an event correlation id.
                         pass
+                    elif isinstance(event, ModelFallback):
+                        if self._model_ref(session_id) != event.previous:
+                            raise ValueError("model changed while the fallback was being selected")
+                        if active_request is not None:
+                            self.store.fail_request(active_request, {"kind": "provider", "message": event.reason},
+                                                    reasoning_seconds=clock.seconds())
+                        if active_attempt is not None:
+                            self.store.finish_attempt(active_attempt, "failed", error=event.reason)
+                        self.store.update_session(session_id, model=event.model)
+                        self.bus.publish("session.updated", self.session_json(self.session(session_id)), session_id=session_id)
+                        self.vision[agent.model] = await self.image_input(event.model)
+                        agent.render = lambda message: self.render_media(message, agent.model)
+                        active_request = self.store.start_request(turn_id, session_id, step, model=event.model,
+                                                                  effort=agent.reasoning_effort)["id"]
+                        active_attempt = f"{active_request}:1"
+                        self.store.start_attempt(turn_id, session_id, active_request, active_attempt, 1)
+                        self.store.mark_attempt_started(active_attempt)
+                        request_parts = []
+                        clock = ReasoningClock()
                     data = to_json(event)
                     self.bus.publish(data["type"], data, session_id=session_id)
             self.store.finish_turn(turn_id, "completed", steps=step)

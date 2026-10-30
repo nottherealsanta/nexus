@@ -2,8 +2,8 @@
 // alerts (toasts + banner history), and view state (layout, tabs, centre view, overlays).
 import { Storage, computed, signal, windowSize } from "nsh";
 import { Model, normalizeSession } from "./core/reduce";
-import { Banner, ConnectionState, Sync, SyncHost } from "./core/sync";
-import { Compat, Info, Session } from "./core/api";
+import { Banner, ConnectionState, MESSAGE_PAGE, Sync, SyncHost } from "./core/sync";
+import { Compat, Info, Message, Session } from "./core/api";
 import { ApiError, request } from "./core/transport";
 import { emptyGlobalToastState, globalEventToast } from "./skills-mcp";
 import { receiveVoiceProgress } from "./voice-state";
@@ -300,13 +300,41 @@ export const openAlert = (t: Toast) => { alertDetail.set(t); dismissToast(t.id);
 export const dismissToast = (id: number) => { toasts.update((l) => l.filter((x) => x.id !== id)); timed.delete(id); startTimers(); };
 
 // --- sync ---------------------------------------------------------------------------------
+let loadingOlder = false;
+const olderFailed = new Set<string>();
+/** The page of messages before the oldest loaded one (`turn.load_older`); `manual` retries a session that failed. */
+export async function loadOlderMessages(manual = false) {
+  const sel = model.selected;
+  const first = sel?.messages[0];
+  if (!sel || !first || loadingOlder) return;
+  loadingOlder = true;
+  try {
+    const page = await request<{ messages: Message[]; more: boolean }>("GET", `/api/session/${sel.sessionId}/message`, { query: { limit: MESSAGE_PAGE, before: first.seq } });
+    olderFailed.delete(sel.sessionId);
+    model.prependMessages(sel.sessionId, page.messages, page.more);
+    bump();
+  } catch (e) {
+    olderFailed.add(sel.sessionId);
+    toast("error", `Older messages failed to load: ${e instanceof ApiError ? e.message : String(e)}`);
+  }
+  loadingOlder = false;
+  if (!manual) autoLoadOlder();
+}
+/** A running session shows everything: its older pages load by themselves (an idle one waits for the button). */
+function autoLoadOlder() {
+  const sel = model.selected;
+  if (!sel || !sel.loaded || !sel.messagesMore || loadingOlder || olderFailed.has(sel.sessionId)) return;
+  if (!model.running.has(sel.sessionId)) return;
+  void loadOlderMessages();
+}
+
 const host: SyncHost = {
   model,
   canStart: true,
   setConnection(c) { connection.set(c); },
   setInfo(i, c) { info.set(i); compat.set(c); },
   addBanner(b) { banners.update((l) => [...l.filter((x) => x.kind !== b.kind), b]); },
-  changed() { bump(); reconcileSelection(); },
+  changed() { bump(); reconcileSelection(); autoLoadOlder(); },
   snapshotApplied() { reconcileSelection(); void loadConfig().catch(() => {}); },
   configChanged() { void loadConfig().catch(() => {}); },
   contextChanged(id) { void loadContext(id).catch(() => {}); },

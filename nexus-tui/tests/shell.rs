@@ -471,13 +471,13 @@ fn composer_uses_latest_usage_and_catalog_window() {
     summarize(&mut app, 100, turn);
     let (_, rows) = draw(&mut app, 160, 48);
     let all = joined(&rows);
-    assert!(all.contains("Example Model codex"), "{all}");
+    assert!(all.contains("Example Model default codex"), "{all}");
     assert!(all.contains("10.0K \u{b7} 5.0%"), "{all}");
     app.state.models.clear();
     let (_, rows) = draw(&mut app, 160, 48);
     let all = joined(&rows);
     assert!(
-        all.contains("example codex") && all.contains("10.0K"),
+        all.contains("example default codex") && all.contains("10.0K"),
         "{all}"
     );
     assert!(!all.contains("5%"), "no window, no share: {all}");
@@ -504,7 +504,7 @@ fn composer_capitalises_the_agent_and_shows_price_tier_occupancy() {
     let (_, rows) = draw(&mut app, 160, 48);
     let row = rows
         .iter()
-        .find(|row| row.contains("Example Model codex"))
+        .find(|row| row.contains("Example Model default codex"))
         .expect("composer control row");
     assert!(row.contains("Orchestrate"), "{row}");
     assert!(!row.contains("orchestrate"), "{row}");
@@ -2145,7 +2145,7 @@ fn sidebar_icons_sit_in_the_band_over_the_sidebar() {
 }
 
 #[test]
-fn a_viewed_subagent_keeps_the_root_tab_and_shows_the_strip() {
+fn a_viewed_subagent_keeps_the_root_tab_and_names_itself_below() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
     let mut parent = app.state.model.sessions[SESSION].clone();
     parent.id = "ses_parent".into();
@@ -2163,15 +2163,18 @@ fn a_viewed_subagent_keeps_the_root_tab_and_shows_the_strip() {
     assert!(rows[0].contains("Root task"), "{:?}", rows[0]);
     assert!(!rows[0].contains("Child task"), "{:?}", rows[0]);
     assert_eq!(app.tab_ids(), vec!["ses_parent".to_string()]);
-    // the row below the tabs lists the subagent, and a click opens it
+    // the row below the tabs names the viewed subagent: agent, then title; no tabs
     assert!(rows[1].contains("Scout Child task"), "{:?}", rows[1]);
-    let hit = app
+    assert!(!rows[1].contains("Root task"), "{:?}", rows[1]);
+    assert!(app
         .hits
         .rect_of(&Target::Subagent(SESSION.into()))
-        .expect("strip entry");
-    assert_eq!(hit.y, 1);
-    app.click(Target::Subagent("ses_parent".into()));
-    assert_eq!(app.viewed_id(), Some("ses_parent"));
+        .is_none());
+    // a root session has no second row
+    app.open_session("ses_parent");
+    let (_, rows) = draw(&mut app, 160, 40);
+    assert!(!rows[1].contains("Scout"), "{:?}", rows[1]);
+    assert_eq!(app.regions.strip.height, 0);
 }
 
 // ---- the composer card (DESIGN_PLAN.md D11) ---------------------------------

@@ -122,7 +122,8 @@ iterator; they are not events.
 | `TurnEnd` | `stop`, `steps` | Last event of a turn. `stop` is the final `Done.stop`, or `"max_steps"` |
 | `RetryScheduled` | `attempt`, `next_attempt`, `attempt_id`, `delay`, `reason`, `status`, `retry_after`, `max_attempts` | A retryable pre-stream failure; the next attempt starts after `delay` seconds |
 | `RetryStarted` | `attempt`, `attempt_id` | The next provider attempt is starting |
-| `RetryExhausted` | `attempts`, `attempt_id`, `reason`, `status`, `retry_after`, `max_attempts` | No further attempt fits the policy or remaining budget; the `ProviderError` is raised next |
+| `RetryExhausted` | `attempts`, `attempt_id`, `reason`, `status`, `retry_after`, `max_attempts` | No further attempt fits the policy or remaining budget; the error ends the turn unless a fallback is available |
+| `ModelFallback` | `previous`, `model`, `reason` | A child switches to its next frozen fallback after a failure before any response stream event; a context notice follows |
 
 One turn with one tool call:
 

@@ -24,7 +24,7 @@ Follow [TURN_SUMMARY_PLAN.md](TURN_SUMMARY_PLAN.md) for the remaining real-daemo
 
 ## Providers
 
-- Verify real OpenAI and Ollama calls; add API-key entry in client Settings for the new providers and update `docs/auth.md`.
+- Verify real OpenAI and Ollama calls; add API-key entry in TUI Settings for the new providers. NSH has per-provider connection controls and key entry.
 - **J4 Anthropic:** add the Messages dialect using the Anthropic SDK as a plain client (Nexus owns the loop); preserve signed thinking blocks for lossless replay and handle cache-control breakpoints and tool-result media.
 - **J5 Gemini:** choose a dialect that preserves replayable reasoning.
 - **J6 Claude and Antigravity:** assess their fit with the one-timeline rule before porting. Use the Claude Agent SDK and the approach in https://github.com/NoeFabris/opencode-antigravity-auth rather than ZMX.
@@ -42,6 +42,9 @@ Follow [TURN_SUMMARY_PLAN.md](TURN_SUMMARY_PLAN.md) for the remaining real-daemo
 Port worktree review and integration as control commands: review against the base, merge by fast-forward or merge commit with confirmation, and remove the worktree and branch after merge. Add commands in both clients; agents get them only when granted. Consult old `nexus/agents/worktree_review.py`, `worktree_integrate.py`, `nexus/worktree_cleanup.py` and `tests/test_worktree_merge_permission.py`. Decide cleanup on archive/delete and how to leave a worktree.
 
 ## Interface
+
+Agent pickers now filter the shared catalog by root/draft or child eligibility; verify
+child-session picker navigation in the NSH browser suite once its mock stream is fixed.
 
 ### TUI
 

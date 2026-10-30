@@ -236,7 +236,7 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
 - **Agents.** An agent whose file lists `control: [session]` gets the `session`
   tool (`agent`, `prompt`, `wait`, `title`), but only in a root session. Among the
   built-ins that is `orchestrate`. A child never gets it, so trees are one level
-  deep. The tool offers only agents whose `mode` allows a child session
+  deep. The tool offers only agents whose `mode` allows a sub agent
   (built-ins: `build`, `quick`, `scout`, `plan`).
 - **Modes.** A root session may run only `primary`/`all` agents (`orchestrate`,
   `build`), and a child only `subagent`/`all` agents. Creating a session or
@@ -250,7 +250,7 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   answer goes to the parent (`session.notified`): it is added before the
   parent's next model call if the parent is busy, or it starts a new parent turn
   if the parent is idle.
-- **`escalate`.** Every child session (never a root) has `escalate {needed, why}`,
+- **`escalate`.** Every sub agent (never a root) has `escalate {needed, why}`,
   recorded in its snapshot as `escalation: true`; an agent file cannot grant it
   and a switch can turn it off. It is a control tool: it grants nothing, asks
   nobody and does not wait. It records the block (each field at most 600

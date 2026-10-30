@@ -19,8 +19,9 @@ adapters a header source; adapters never see stored credentials
 
 Both clients offer provider sign-in and sign-out in Settings. Device flows use
 `POST /api/provider/{id}/login`; instructions arrive through `provider.login`
-events and `GET` on the same path reports progress. OpenCode accepts an API key
-through a masked input. `DELETE` cancels a pending flow and signs out. Keys are
+events and `GET` on the same path reports progress. NSH shows connection status
+and actions per provider, with masked key entry for OpenCode, OpenAI, Groq and
+NVIDIA; Ollama uses its local connection method. `DELETE` cancels a pending flow and signs out. Keys are
 never included in progress events. See [Configuration](config.md).
 
 ## The shared interface

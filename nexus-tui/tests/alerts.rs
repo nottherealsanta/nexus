@@ -132,11 +132,13 @@ fn question_card_marks_single_and_multiple_choice_and_offers_free_text() {
     let all = joined(&rows);
     assert!(all.contains("Nexus asks"), "{all}");
     assert!(all.contains("question 1 of 2"), "{all}");
-    assert!(all.contains("( ) 1 PostgreSQL"), "{all}");
+    assert!(all.contains("1 PostgreSQL"), "{all}");
+    assert!(!all.contains("( )"), "{all}");
+    assert!(!all.contains("waiting on you · 0:00"), "{all}");
     assert!(all.contains("Or type your own answer"), "{all}");
     // pad, head, sub, blank, question, 2 options, blank, field, blank, hint, pad
     assert_eq!(app.regions.waiting.height, 12);
-    press(&mut app, &["alt+w", "down", "enter"]);
+    press(&mut app, &["down", "enter"]);
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     assert!(all.contains("Extras?"), "{all}");

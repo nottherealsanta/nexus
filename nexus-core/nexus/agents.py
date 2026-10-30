@@ -17,7 +17,7 @@ You review code. Point out bugs and risks; do not edit files.
 ```
 
 `mode` says where an agent may run: `primary` only as a root session (started
-by a user), `subagent` only as a child session, `all` in both. The daemon refuses
+by a user), `subagent` only as a sub agent, `all` in both. The daemon refuses
 a session whose agent's mode does not fit.
 
 The file name is the agent's name (`review.md` → `review`). Agents load from
@@ -61,7 +61,7 @@ CONTROL_TOOLS = ("session",)  # the control tools an agent file may grant
 # Every control tool, whether granted by an agent or always available: none of these
 # is ever bound inside a `code` cell.
 MESSAGE_TOOL = "message_session"  # exposed to a session by its first `session` call, never granted by an agent file
-ESCALATE_TOOL = "escalate"  # every child session has it; a root session never does; never granted by an agent file
+ESCALATE_TOOL = "escalate"  # every sub agent has it; a root session never does; never granted by an agent file
 NEXUS_CONTROL_TOOLS = ("session", MESSAGE_TOOL, ESCALATE_TOOL, "expose_workspace_tools", "change_session_directory", "worktree")
 
 
@@ -93,9 +93,9 @@ class AgentSet:
             raise ValueError(f"unknown agent {name!r}; available: {', '.join(sorted(self.agents))}")
         agent = self.agents[name]
         if child is not None and not fits(agent, child=child):
-            where = "a child" if child else "a root"
+            where = "a sub agent" if child else "a root session"
             allowed = ", ".join(a.name for a in self.agents.values() if fits(a, child=child))
-            raise ValueError(f"agent {name!r} (mode {agent.mode}) cannot run as {where} session; allowed: {allowed}")
+            raise ValueError(f"agent {name!r} (mode {agent.mode}) cannot run as {where}; allowed: {allowed}")
         return agent
 
     def allowed(self, *, child: bool) -> list[AgentDef]:

@@ -449,7 +449,7 @@ async def test_child_question_belongs_to_the_child_and_its_tree(tmp_path, monkey
             break
         await asyncio.sleep(0.01)
     else:
-        raise AssertionError("the child session was not created")
+        raise AssertionError("the sub agent was not created")
     [child] = children
     pending = await _pending(rt, child["id"])
     assert pending["session_id"] == child["id"] and pending["call_id"] == "kid-ask"

@@ -10,6 +10,18 @@ apply these values; explicit creation fields override them, and existing
 sessions keep their frozen configuration. Child sessions retain inheritance.
 Other plan items add their own operational settings as those features land.
 
+`[agents.models]` maps each child-capable agent name to a non-empty list of
+unique `provider/model` refs, for example `scout = ["codex/example", "copilot/example"]`.
+A new child without an explicit model samples its agent's list uniformly once;
+the selected ref is stored on the child and does not change when config changes.
+An omitted agent retains its agent-file or daemon default. `[agents.fallbacks]`
+uses the same format for an ordered list of fallback refs. A new child's fallback
+list is frozen at creation and is ignored when an explicit model is supplied.
+After retries, a failed request can switch to the next fallback only before any
+response stream event; partial responses are never replayed automatically. The
+switch and a notice in the model's context are visible, and the new model remains
+the child's model. NSH Settings edits both lists for the current project's agents.
+
 `GET /api/config` returns `{revision, values, defaults, schema, errors}`.
 `PATCH /api/config` accepts `{expected_revision, set: {"defaults.model":
 "codex/example"}, unset: []}`. Stale revisions return 409. Daemon patches are

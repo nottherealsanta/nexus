@@ -1,4 +1,4 @@
-import { loadFiles } from "./store";
+import { loadFiles, loadOlderMessages } from "./store";
 import type { UsageProvider } from "./store";
 // Command registry built from interface/manifest.toml (generated to src/gen/manifest.ts).
 // Ids, titles, keys, `when` rules, reasons and placements come from the manifest; this file
@@ -126,20 +126,6 @@ async function showUsage() {
   } catch (e) { usageDialog.set(null); toast("error", `Plan limits failed to load: ${e instanceof ApiError ? e.message : String(e)}`); }
 }
 
-let loadingOlder = false;
-/** `turn.load_older`: the page of messages before the oldest loaded one. */
-async function loadOlderMessages() {
-  const sel = model.selected;
-  const first = sel?.messages[0];
-  if (!sel || !first || loadingOlder) return;
-  loadingOlder = true;
-  try {
-    const page = await request<{ messages: Message[]; more: boolean }>("GET", `/api/session/${sel.sessionId}/message`, { query: { limit: MESSAGE_PAGE, before: first.seq } });
-    model.prependMessages(sel.sessionId, page.messages, page.more);
-    bump();
-  } catch (e) { toast("error", `Older messages failed to load: ${e instanceof ApiError ? e.message : String(e)}`); }
-  loadingOlder = false;
-}
 const on = (id: string, run: Handler["run"], mutates = false) => handlers.set(id, { run, mutates });
 
 /** Copies text to the system clipboard and confirms it (the timeline's message copy). */
@@ -483,7 +469,7 @@ function closeEditor() {
 }
 on("editor.close", closeEditor);
 on("app.usage", () => void showUsage());
-on("turn.load_older", () => { void loadOlderMessages(); });
+on("turn.load_older", () => { void loadOlderMessages(true); });
 on("project.switch", () => tab("projects"));
 on("project.add", () => addProjectOpen.set(true), true);
 on("project.remove", () => askRemoveProject());
@@ -623,7 +609,8 @@ on("model.change", () => void pickOne("Change model", async () => {
 }));
 on("agent.change", () => void pickOne("Change agent", async () => {
   const res = await request<any>("GET", "/api/agent", { query: { project: viewed()?.project_id ?? currentProject() ?? undefined } });
-  return ((res.agents ?? []) as any[]).map((a) => ({
+  const mode = viewed()?.parent_id ? "subagent" : "primary";
+  return ((res.agents ?? []) as any[]).filter((a) => a.mode === "all" || a.mode === mode).map((a) => ({
     id: a.name,
     label: a.name,
     hint: [a.source, a.mode].filter(Boolean).join(" · "),

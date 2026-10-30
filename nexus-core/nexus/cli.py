@@ -551,7 +551,7 @@ async def _chat_line(client: Client, session: dict[str, Any], text: str,
         if name:
             session = await client.call("POST", f"/api/session/{session['id']}/agent", {"agent": name})
         else:
-            await _agent_list(client, session["directory"])
+            await _agent_list(client, session["directory"], child=bool(session.get("parent_id")))
         print(f"{DIM}{_describe(session)}{RESET}")
         return session, True
     await _send(client, session["id"], text, renderer)
@@ -596,9 +596,11 @@ def _describe(session: dict[str, Any]) -> str:
     return f"agent {session['agent']} · {session['model']} ({session['model_source']}){effort}{off}"
 
 
-async def _agent_list(client: Client, directory: str) -> None:
+async def _agent_list(client: Client, directory: str, *, child: bool | None = None) -> None:
     found = await client.call("GET", "/api/agent", directory=directory)
     for a in found["agents"]:
+        if child is not None and a["mode"] not in ("all", "subagent" if child else "primary"):
+            continue
         prefs = " ".join(f"{k}={a[k]}" for k in ("model", "effort", "steps") if a[k])
         tools = ",".join(a["tools"]) if a["tools"] is not None else "all"
         print(f"{BOLD}{a['name']:<12}{RESET} {DIM}{a['source']:<8} tools {tools:<16} {prefs}{RESET}\n  {a['description']}")

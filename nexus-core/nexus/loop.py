@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from .hooks import HookOutcome, HookRunner
 from .llmhub import Provider
+from .llmhub.auth import AuthError, CredentialError
 from .llmhub.types import (
     Done,
     Event,
@@ -121,6 +122,13 @@ class RetryExhausted:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelFallback:
+    previous: str
+    model: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class HookFired:
     """A command hook ran. An execution detail; only what it adds to context becomes a message."""
 
@@ -135,7 +143,7 @@ class HookFired:
 
 
 LoopEvent = (Event | StepStart | ToolStart | ToolEnd | MessageAdded | TurnEnd | RetryScheduled | RetryStarted
-             | RetryExhausted | HookFired)
+             | RetryExhausted | ModelFallback | HookFired)
 TurnInput = str | Message | NoUserMessage
 Approve = Callable[[ToolCall, dict[str, Any]], Awaitable[bool]]
 Inbox = Callable[[], list[str]]  # notices to add (as a user message) before the next model call
@@ -178,6 +186,8 @@ class Agent:
         hooks: HookRunner | None = None,
         turn_id: str | None = None,
         render: Callable[[Message], Message] | None = None,
+        fallback_models: list[tuple[str, Provider, str]] | None = None,
+        model_ref: str = "",
     ) -> None:
         self.hooks = hooks
         self.render: Callable[[Message], Message] | None = render  # fills tool images' bytes for the provider
@@ -185,6 +195,9 @@ class Agent:
         self._hook_notes: list[str] = []
         self.provider = provider
         self.model = model
+        self.model_ref = model_ref
+        self.fallback_models = list(fallback_models or [])
+        self._stream_received = False
         self.workspace = workspace
         self.tools = {tool.spec.name: tool for tool in tools}
         self.instructions = instructions or default_instructions(workspace)
@@ -266,12 +279,25 @@ class Agent:
             yield StepStart(step)
             parts: list[Part] = []
             stop = "other"
-            async for event in self._stream_with_retry():
-                if isinstance(event, PartDone):
-                    parts.append(event.part)
-                elif isinstance(event, Done):
-                    stop = event.stop
-                yield event
+            while True:
+                try:
+                    async for event in self._stream_with_retry():
+                        if isinstance(event, PartDone):
+                            parts.append(event.part)
+                        elif isinstance(event, Done):
+                            stop = event.stop
+                        yield event
+                    break
+                except (ProviderError, AuthError, CredentialError) as error:
+                    if self._stream_received or not self.fallback_models:
+                        raise
+                    ref, provider, model = self.fallback_models.pop(0)
+                    previous = self.model_ref
+                    self.provider, self.model, self.model_ref = provider, model, ref
+                    yield ModelFallback(previous, ref, str(error))
+                    yield self._add(Message("user", (Text(
+                        f"[Nexus notice: model fallback] {previous} failed before a response; "
+                        f"continuing with {ref}."),)))
             yield self._add(Message("assistant", tuple(parts)))
             calls = [p for p in parts if isinstance(p, ToolCall)]
             if not calls:
@@ -324,6 +350,7 @@ class Agent:
         assistant message is appended).
         """
         policy = self.retry_policy
+        self._stream_received = False
         request = self.request()  # freeze model, tools and context across backoff
         started = self._retry_clock()
         failed = 0
@@ -334,6 +361,7 @@ class Agent:
                 async for event in self.provider.stream(request):
                     if not isinstance(event, (WireRequest, WireResponse)):
                         received = True
+                        self._stream_received = True
                     yield event
                 return
             except ProviderError as error:

@@ -14,20 +14,21 @@ import type { VoiceTarget } from "../voice-state";
 
 interface Row { id: string; label: string; kind: string; scope: string; clients?: string; default?: unknown; options?: string[]; command?: string; note?: string; unavailable_reason?: string }
 interface Section { id: string; label: string; unavailable_reason?: string; row?: Row[] }
-const sections = (manifest.settings.section as unknown as Section[]);
+const sections = (manifest.settings.section as unknown as Section[]).filter((section) => section.id !== "models");
 
 const data = signal<{ providers: any[] | null; models: any | null; modelDefault: string | null; agents: any | null }>({ providers: null, models: null, modelDefault: null, agents: null });
-const keyEntry = signal(false);
+const keyEntry = signal<{ id: string; label: string } | null>(null);
 const providerKey = signal("");
 let loaded = false;
 export function loadSettingsData() {
   if (!config()) void loadConfig().catch(() => {});
+  const p = currentProject();
+  data.update((d) => ({ ...d, agents: null }));
+  request<any>("GET", "/api/agent", { query: { project: p ?? undefined } }).then((r) => { if (currentProject() === p) data.update((d) => ({ ...d, agents: r })); }).catch(() => {});
+  void loadProviders().then((providers) => data.update((d) => ({ ...d, providers }))).catch(() => {});
   if (loaded) return; loaded = true;
-  void loadProviders().then((p) => data.update((d) => ({ ...d, providers: p })));
   request<any>("GET", "/api/model").then((r) => data.update((d) => ({ ...d, models: r }))).catch(() => {});
   request<any>("GET", "/api/model/default").then((r) => data.update((d) => ({ ...d, modelDefault: r.model }))).catch(() => {});
-  const p = currentProject();
-  request<any>("GET", "/api/agent", { query: { project: p ?? undefined } }).then((r) => data.update((d) => ({ ...d, agents: r }))).catch(() => {});
 }
 
 function Seg(p: { options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string }) {
@@ -185,6 +186,100 @@ function McpToolsLimit() {
   );
 }
 
+function refreshProviderModels() {
+  void request<any>("GET", "/api/model").then((models) => data.update((d) => ({ ...d, models }))).catch(() => {});
+}
+
+async function providerAction(p: any) {
+  if (!p.connected && ["opencode", "openai", "groq", "nvidia"].includes(p.id)) {
+    providerKey.set(""); keyEntry.set({ id: p.id, label: p.label ?? p.id }); return;
+  }
+  try {
+    if (p.connected) {
+      await request("DELETE", `/api/provider/${p.id}/login`);
+      const providers = await loadProviders();
+      data.update((d) => ({ ...d, providers }));
+      refreshProviderModels();
+      toast("success", `${p.label} signed out`);
+      return;
+    }
+    await request("POST", `/api/provider/${p.id}/login`, { body: { method: p.id === "ollama" ? "local" : "device" } });
+    toast("info", `Starting ${p.label} sign-in…`);
+    let previous = "";
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const state = await request<any>("GET", `/api/provider/${p.id}/login`);
+      if (state.message && state.message !== previous) { previous = state.message; toast(state.status === "failed" ? "error" : "info", state.message); }
+      if (state.status !== "pending") {
+        if (state.status === "connected") {
+          const providers = await loadProviders();
+          data.update((d) => ({ ...d, providers }));
+          refreshProviderModels();
+          toast("success", `${p.label} connected`);
+        }
+        break;
+      }
+    }
+  } catch (e) { toast("error", e instanceof Error ? e.message : String(e)); }
+}
+
+function ProvidersPage() {
+  return <View class="gap-1" testID="providers-page">
+    <Text class={T.meta}>Connect a provider to use its models.</Text>
+    <If when={!data().providers}><Text class={T.meta}>Loading providers…</Text></If>
+    <Each of={data().providers ?? []} key={(p: any) => p.id}>{(p) =>
+      <View class="flex-row items-center gap-3 px-3 py-2" testID={`provider-${p().id}`}>
+        <View class="flex-1"><Text class="text-[14px] text-foreground">{p().label ?? p().id}</Text><Text class={T.meta}>{p().connected ? "Connected" : "Not connected"}</Text></View>
+        <If when={p().id !== "mock"}><Btn label={p().connected ? "Disconnect" : "Connect"} disabled={!live()} onPress={() => void providerAction(p())} testID={`provider-action-${p().id}`} /></If>
+      </View>
+    }</Each>
+  </View>;
+}
+
+function AgentModelsPage() {
+  const agents = () => (data().agents?.agents ?? []).filter((a: any) => a.mode === "all" || a.mode === "subagent");
+  const pool = (name: string): string[] => config()?.values?.agents?.models?.[name] ?? [];
+  const save = (name: string, refs: string[]) => {
+    const models = { ...(config()?.values?.agents?.models ?? {}) };
+    if (refs.length) models[name] = refs; else delete models[name];
+    void patchConfig("agents.models", models);
+  };
+  const fallbacks = (name: string): string[] => config()?.values?.agents?.fallbacks?.[name] ?? [];
+  const saveFallbacks = (name: string, refs: string[]) => {
+    const values = { ...(config()?.values?.agents?.fallbacks ?? {}) };
+    if (refs.length) values[name] = refs; else delete values[name];
+    void patchConfig("agents.fallbacks", values);
+  };
+  return <View class="gap-3" testID="agent-models-page">
+    <Text class={T.meta}>For each new subagent, one default model is chosen at random with equal probability. Without a selection, the agent's own model or the daemon default is used.</Text>
+    <If when={!data().agents}><Text class={T.meta}>Loading agents…</Text></If>
+    <Each of={data().agents?.problems ?? []} key={(problem: any) => JSON.stringify(problem)}>{(problem) => <Text class={T.meta}>{typeof problem() === "string" ? problem() : JSON.stringify(problem())}</Text>}</Each>
+    <Each of={agents()} key={(a: any) => a.name}>{(a) => <View class="gap-2 rounded-(--radius) border border-border p-3" testID={`agent-models-${a().name}`}>
+      <Text class="text-[14px] font-medium text-foreground">{a().name}</Text>
+      <Text class={T.meta}>{a().description}</Text>
+      <If when={!pool(a().name).length}><Text class={T.meta}>Using agent or daemon default</Text></If>
+      <Each of={pool(a().name)} key={(ref) => ref}>{(ref) => <View class="flex-row items-center gap-2">
+        <Text class="flex-1 text-[13px] text-foreground-secondary">{ref()} · {(100 / pool(a().name).length).toFixed(pool(a().name).length === 3 ? 1 : 0)}%</Text>
+        <Btn label="Remove" disabled={!live()} onPress={() => save(a().name, pool(a().name).filter((v) => v !== ref()))} testID={`agent-model-remove-${a().name}-${ref()}`} />
+      </View>}</Each>
+      <Btn label="Add default model" disabled={!live() || !data().models} testID={`agent-model-add-${a().name}`} onPress={() => {
+        const options = (data().models?.models ?? []).filter((item: any) => item.ref && !pool(a().name).includes(item.ref));
+        picker.set({ title: `Default models for ${a().name}`, items: options.map((item: any) => ({ id: item.ref, label: item.ref, run: async () => { picker.set(null); save(a().name, [...pool(a().name), item.ref]); } })) });
+      }} />
+      <Text class={T.meta}>Fallbacks are tried in order after a failure before response output.</Text>
+      <Each of={fallbacks(a().name)} key={(ref) => ref}>{(ref) => <View class="flex-row items-center gap-2">
+        <Text class="flex-1 text-[13px] text-foreground-secondary">{fallbacks(a().name).indexOf(ref()) + 1}. {ref()}</Text>
+        <Btn label="Move up" disabled={!live() || fallbacks(a().name).indexOf(ref()) === 0} onPress={() => { const refs = [...fallbacks(a().name)]; const i = refs.indexOf(ref()); if (i > 0) { [refs[i - 1], refs[i]] = [refs[i], refs[i - 1]]; saveFallbacks(a().name, refs); } }} />
+        <Btn label="Remove" disabled={!live()} onPress={() => saveFallbacks(a().name, fallbacks(a().name).filter((v) => v !== ref()))} />
+      </View>}</Each>
+      <Btn label="Add fallback model" disabled={!live() || !data().models} testID={`agent-fallback-add-${a().name}`} onPress={() => {
+        const options = (data().models?.models ?? []).filter((item: any) => item.ref && !fallbacks(a().name).includes(item.ref));
+        picker.set({ title: `Fallback models for ${a().name}`, items: options.map((item: any) => ({ id: item.ref, label: item.ref, run: async () => { picker.set(null); saveFallbacks(a().name, [...fallbacks(a().name), item.ref]); } })) });
+      }} />
+    </View>}</Each>
+  </View>;
+}
+
 function control(r: Row): JSX.Element {
   const target = voiceTarget(r.id);
   if (target && (r.id.endsWith("_model"))) {
@@ -212,34 +307,7 @@ function control(r: Row): JSX.Element {
     return <Seg label="Timeline detail" options={r.options ?? ["low", "medium", "high"]} value={timelineDetail()} disabled={false}
       onPick={(v) => setTimelineDetail(v as "low" | "medium" | "high")} />;
   }
-  if (r.id === "providers.sign_in" || r.id === "providers.sign_out") return <Btn label={r.label} onPress={() => {
-    const signOut = r.id === "providers.sign_out";
-    const providers = (data().providers ?? []).filter((p: any) => signOut ? p.connected : !p.connected);
-    picker.set({ title: r.label, items: providers.map((p: any) => ({ id: p.id, label: p.label ?? p.id, run: async () => {
-      picker.set(null);
-      if (!signOut && p.id === "opencode") { providerKey.set(""); keyEntry.set(true); return; }
-      try {
-        if (signOut) {
-          await request("DELETE", `/api/provider/${p.id}/login`);
-          data.update((d) => ({ ...d, providers: (d.providers ?? []).map((v: any) => v.id === p.id ? { ...v, connected: false } : v) }));
-          toast("success", `${p.label} signed out`);
-        } else {
-          await request("POST", `/api/provider/${p.id}/login`, { body: { method: "device" } });
-          toast("info", `Starting ${p.label} sign-in…`);
-          let previous = "";
-          for (;;) {
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-            const state = await request<any>("GET", `/api/provider/${p.id}/login`);
-            if (state.message && state.message !== previous) { previous = state.message; toast(state.status === "failed" ? "error" : "info", state.message); }
-            if (state.status !== "pending") {
-              if (state.status === "connected") { toast("success", `${p.label} signed in`); data.update((d) => ({ ...d, providers: (d.providers ?? []).map((v: any) => v.id === p.id ? { ...v, connected: true } : v) })); }
-              break;
-            }
-          }
-        }
-      } catch (e) { toast("error", e instanceof Error ? e.message : String(e)); }
-    } })) });
-  }} />;
+
   if (r.id === "about.inspector") return <Btn label="Open inspector" onPress={() => { void openUrl(new URL("/inspector", import.meta.url).href).catch(() => toast("info", "Open /inspector on the host page.")); }} />;
   if (r.id === "tools.default_permission") return <Seg label={r.label} options={["allow", "ask"]} value={config()?.values?.defaults?.permission ?? "allow"} onPick={(v) => void patchConfig("defaults.permission", v)} />;
   if (r.id === "tools.defaults") {
@@ -313,13 +381,15 @@ export function SettingsView() {
           <Scroll class="flex-1 min-h-0" contentClass="pb-4 w-full">
             <Heading text={cur().label} first />
             <If when={keyEntry()}><View class="gap-2 p-3">
-              <Text class={T.sec}>OpenCode Go API key</Text>
-              <Input masked autoFocus accessibilityLabel="OpenCode API key" placeholder="API key" onChange={({ value }) => providerKey.set(value)} class="h-9 rounded-(--radius) border border-border bg-background px-3 text-foreground" />
-              <View class="flex-row gap-2"><Btn label="Sign in" onPress={() => { const key = providerKey(); providerKey.set(""); keyEntry.set(false); void request("POST", "/api/provider/opencode/login", { body: { api_key: key } }).then(async () => { const providers = await loadProviders(); data.update((d) => ({ ...d, providers })); toast("success", "OpenCode signed in"); }).catch(() => toast("error", "OpenCode sign-in failed")); }} /><Btn label="Cancel" onPress={() => { providerKey.set(""); keyEntry.set(false); }} /></View>
+              <Text class={T.sec}>{keyEntry()?.label} API key</Text>
+              <Input masked autoFocus accessibilityLabel={`${keyEntry()?.label} API key`} placeholder="API key" onChange={({ value }) => providerKey.set(value)} class="h-9 rounded-(--radius) border border-border bg-background px-3 text-foreground" />
+              <View class="flex-row gap-2"><Btn label="Sign in" onPress={() => { const key = providerKey(), provider = keyEntry(); providerKey.set(""); keyEntry.set(null); if (!provider) return; void request("POST", `/api/provider/${provider.id}/login`, { body: { api_key: key } }).then(async () => { const providers = await loadProviders(); data.update((d) => ({ ...d, providers })); refreshProviderModels(); toast("success", `${provider.label} signed in`); }).catch(() => toast("error", `${provider.label} sign-in failed`)); }} /><Btn label="Cancel" onPress={() => { providerKey.set(""); keyEntry.set(null); }} /></View>
             </View></If>
             <Each of={config()?.errors ?? []} key={(e: string) => e}>{(e) => <Text class={T.meta}>{e()}</Text>}</Each>
             <If when={cur().unavailable_reason}><View class="flex-row gap-2 items-start pt-1 pb-1"><Text class="text-[13px] text-muted-foreground">⊖</Text><Text class={`flex-1 ${T.sec}`}>{cur().unavailable_reason!}</Text></View></If>
-            <Each of={list()} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each>
+            <If when={cur().id === "providers"}><ProvidersPage /></If>
+            <If when={cur().id === "agents"}><AgentModelsPage /></If>
+            <If when={cur().id !== "providers" && cur().id !== "agents"}><Each of={list()} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each></If>
           </Scroll>
         </View>
         <ModalFooter hints="esc close" right={`Core ${info()?.version ?? "—"}`} />

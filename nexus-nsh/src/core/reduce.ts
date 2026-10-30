@@ -85,6 +85,7 @@ export class Model {
 
   applySnapshot(s: Snapshot) {
     const wanted = this.selected?.sessionId ?? null;
+    const prev = this.selected;
     this.generation = s.watermark.generation;
     this.lastId = s.watermark.head;
     this.projects = new Map(s.projects.map((p) => [p.id, p]));
@@ -101,6 +102,11 @@ export class Model {
     this.streaming = new Map();
     if (s.selected) {
       this.selected = emptyView(s.selected.session_id, s.selected.messages, s.selected.messages_more, true);
+      // Older pages already read stay cached: the snapshot only carries the newest messages.
+      const floor = this.selected.messages[0]?.seq;
+      const old = prev?.sessionId === s.selected.session_id ? prev : null;
+      const older = old && floor !== undefined ? old.messages.filter((x) => x.seq < floor) : [];
+      if (old && older.length) { this.selected.messages = [...older, ...this.selected.messages]; this.selected.messagesMore = old.messagesMore; }
     } else if (wanted && this.sessions.has(wanted)) {
       this.selected = emptyView(wanted);
     } else {
@@ -134,7 +140,9 @@ export class Model {
       msgs.splice(i, 0, m);
     }
     v.messages = msgs;
-    v.messagesMore = h.messagesMore ?? false;
+    // Older pages cached before this fetch keep their own "more".
+    const cachedOlder = h.messages.length > 0 && msgs[0].seq < h.messages[0].seq;
+    v.messagesMore = cachedOlder ? v.messagesMore : h.messagesMore ?? false;
     // A summary that arrived live is at least as new as the fetched copy.
     let turns = [...h.turns];
     for (const t of v.turns) turns = upsertTurn(turns, t);

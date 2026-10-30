@@ -44,8 +44,8 @@ describe("modal recipe (I7)", () => {
     await app.waitFor("id:settings");
     expect(app.count("id:composer-input")).toBe(1); // still mounted under the scrim
     expect(app.texts().includes("esc close")).toBe(true);
-    await app.press("id:section-models");
-    await app.waitFor("id:setting-models.default");
+    await app.press("id:section-providers");
+    await app.waitFor("id:providers-page");
     await app.keyboard.press("escape");
     expect(app.shows("id:settings")).toBe(false);
     expect(app.shows("id:composer-input")).toBe(true);

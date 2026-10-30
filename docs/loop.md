@@ -58,8 +58,11 @@ attached) for `POST …/prompt`, through the same turn lifecycle.
       and tries the frozen request again; settings changes wait for the next
       logical request. No response stream event may have been
       received yet. `RetryExhausted` says why no further attempt fits the
-      budget. `PartDone` parts are collected; the last `Done.stop` is kept
-      (default `"other"`).
+      budget. A child with frozen fallback models may then switch in order on a
+      provider or auth failure before response events: `ModelFallback` records
+      the failed request and new model, followed by a visible user-context notice.
+      No fallback occurs after partial response output. `PartDone` parts are
+      collected; the last `Done.stop` is kept (default `"other"`).
    3. Append the assistant message made of the collected parts, yield `MessageAdded`.
    4. If there are no `ToolCall` parts, yield `TurnEnd(stop, step)` and return.
    5. Otherwise run the calls one by one, in order: yield `ToolStart(call, args)`,

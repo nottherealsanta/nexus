@@ -81,7 +81,7 @@ async def test_blocking_child_answers_the_parent_tool_call(env):
         parent["id"], "c1", "agent", "helper", "Find it")
     assert (child["directory"], child["permission"]) == (parent["directory"], "allow")
     tool_output = next(t for role, t in await _texts(client, parent["id"]) if role == "tool")
-    assert tool_output.startswith(f"Child session {child['id']} (agent helper) finished.\n\n42\n\n[Nexus notice: `message_session` is now available]")
+    assert tool_output.startswith(f"Sub agent {child['id']} (agent helper) finished.\n\n42\n\n[Nexus notice: `message_session` is now available]")
     # A child never gets the session tool, even when its agent lists it.
     assert [t.name for t in providers["child"].requests[0].tools] == ["read", "grep", "glob", "ls", "bash", "bash_output", "bash_kill", "edit", "multiedit", "write", "web_search", "web_fetch", "ask", "code", "expose_workspace_tools", "escalate"]
     tree = (await client.get(f"/api/session/{child['id']}/tree")).json()
@@ -104,8 +104,8 @@ async def test_non_blocking_child_wakes_the_idle_parent(env):
     gate.set()
     await _idle(rt)
     texts = await _texts(client, parent["id"])
-    assert next(t for role, t in texts if role == "tool").startswith("Started child session")
-    notice = [t for role, t in texts if role == "user" and t.startswith("[Notification: child session finished]")]
+    assert next(t for role, t in texts if role == "tool").startswith("Started sub agent")
+    notice = [t for role, t in texts if role == "user" and t.startswith("[Notification: sub agent finished]")]
     assert notice and notice[0].endswith("found it")
     assert texts[-1] == ("assistant", "thanks")
 
@@ -125,6 +125,68 @@ async def test_interrupting_the_parent_stops_a_waiting_child(env):
     await _idle(rt)
     tool_output = next(t for role, t in await _texts(client, parent["id"]) if role == "tool")
     assert "interrupted" in tool_output
+
+
+def test_child_model_pool_is_chosen_once_and_explicit_model_wins(env, monkeypatch):
+    from nexus.config import ConfigFile
+
+    rt, _, _, workspace = env
+    config = ConfigFile()
+    config.patch(config.read()["revision"], {"agents.models": {"helper": ["codex/parent", "codex/child"]}}, [])
+    seen = []
+    monkeypatch.setattr(runtime_module.secrets, "choice", lambda pool: seen.append(list(pool)) or pool[-1])
+    project = rt.open_project(str(workspace))
+    parent = rt.create_session(project, title=None, model=None, permission=None)
+    child = rt.create_session(project, title=None, model=None, permission=None, agent="helper", parent=parent)
+    assert seen == [["codex/parent", "codex/child"]]
+    assert child.model == "codex/child"
+    assert rt.session_json(rt.session(child.id))["model"] == "codex/child"
+    explicit = rt.create_session(project, title=None, model="codex/parent", permission=None, agent="helper", parent=parent)
+    assert explicit.model == "codex/parent" and len(seen) == 1
+    assert not parent.model
+
+
+async def test_child_fallback_is_recorded_and_partial_output_is_not_retried(env):
+    from nexus.config import ConfigFile
+    from nexus.llmhub.types import ProviderError, TextDelta
+
+    rt, client, providers, workspace = env
+    config = ConfigFile()
+    config.patch(config.read()["revision"], {"agents.models": {"helper": ["codex/child"]},
+                                               "agents.fallbacks": {"helper": ["codex/parent"]}}, [])
+
+    class Failing(Scripted):
+        def __init__(self, partial):
+            super().__init__([])
+            self.partial = partial
+
+        async def stream(self, req):
+            if self.partial:
+                yield TextDelta("partial")
+            raise ProviderError("unavailable", status=400, phase="response")
+
+    providers["child"] = Failing(False)
+    providers["parent"] = Scripted([[Text("fallback answer")]])
+    project = rt.open_project(str(workspace))
+    parent = rt.create_session(project, title=None, model=None, permission=None)
+    child = rt.create_session(project, title=None, model=None, permission=None, agent="helper", parent=parent)
+    assert rt.snapshot_for(child)["model_fallbacks"]["models"] == ["codex/parent"]
+    turn_id = rt.prompt(child.id, "go")["turn_id"]
+    await _idle(rt)
+    requests = rt.store.requests_for_turn(turn_id)
+    assert [(r["model"], r["status"]) for r in requests] == [("codex/child", "failed"), ("codex/parent", "completed")]
+    assert rt.session(child.id).model == "codex/parent"
+    messages = await _texts(client, child.id)
+    assert any("model fallback" in text for _, text in messages if text)
+    assert messages[-1] == ("assistant", "fallback answer")
+    assert any("model fallback" in part.text for msg in providers["parent"].requests[0].messages for part in msg.parts if isinstance(part, Text))
+
+    providers["child"] = Failing(True)
+    child2 = rt.create_session(project, title=None, model=None, permission=None, agent="helper", parent=parent)
+    rt.prompt(child2.id, "go")
+    await _idle(rt)
+    assert rt.session(child2.id).model == "codex/child"
+    assert len(providers["parent"].requests) == 1
 
 
 async def test_events_for_a_session_include_its_children(env):
@@ -147,7 +209,7 @@ async def test_only_orchestrate_offers_the_tool_and_only_child_agents_are_listed
     # Root sessions may only run primary/all agents; children only subagent/all.
     assert (await client.post("/api/session", json={"directory": str(workspace), "agent": "scout"})).status_code == 400
     bad_child = await client.post("/api/session", json={"parent": orchestrate.id, "agent": "orchestrate"})
-    assert bad_child.status_code == 400 and "cannot run as a child" in bad_child.json()["error"]
+    assert bad_child.status_code == 400 and "cannot run as a sub agent" in bad_child.json()["error"]
     assert (await client.post(f"/api/session/{build['id']}/agent", json={"agent": "plan"})).status_code == 400
 
 
@@ -245,10 +307,10 @@ async def test_message_session_follows_up_an_idle_child_and_rejects_others(env):
 
     parent_texts = await _texts(client, parent["id"])
     tool_outputs = [t for role, t in parent_texts if role == "tool"][1:]
-    assert tool_outputs[0].startswith("ses_nope is not a child session of this session")
-    assert tool_outputs[1].startswith(f"{stranger['id']} is not a child session of this session")
+    assert tool_outputs[0].startswith("ses_nope is not a sub agent of this session")
+    assert tool_outputs[1].startswith(f"{stranger['id']} is not a sub agent of this session")
     assert "was idle; started a new turn" in tool_outputs[2]
-    assert any(role == "user" and t.startswith("[Notification: child session finished]") and t.endswith("answer two")
+    assert any(role == "user" and t.startswith("[Notification: sub agent finished]") and t.endswith("answer two")
                for role, t in parent_texts)
     child_texts = await _texts(client, child["id"])
     assert ("user", "now the second thing") in child_texts and child_texts[-1] == ("assistant", "answer two")

@@ -836,6 +836,7 @@ Deleting a project publishes one tombstone per deleted session, then
 | `question.replied` | `{id, session_id, call_id, outcome: "answered" or "cancelled", answers, reason?}` |
 | `turn.recovered` | a turn a daemon restart interrupted: its outcome, restored messages, tool classifications, cancelled waits and lost runtime state (see [Crash recovery](#crash-recovery)) |
 | `retry_scheduled` / `retry_started` / `retry_exhausted` | one provider retry transition: `{attempt, next_attempt?, attempt_id, delay?, reason, status?, retry_after?, max_attempts}` |
+| `model_fallback` | a child switched after a pre-response failure: `{previous, model, reason}`; a context message also announces the switch |
 | `log.retention` | a global retention pass: `{at, events: {removed, floor, head, protected, pinned}, turns, mutations, settings}` |
 | `session.notified` | `{from, text}`: a `wait: false` child finished, and its answer goes to this (parent) session |
 | `session.workspace_tools` | `{active, entry, tools}`: the on-demand workspace controls were activated |
@@ -1068,7 +1069,7 @@ the `/context` fields (`used`, `window`, `exact`, always false here), `model`,
 of the system prompt, tool schemas and the AGENTS.md inside the prompt) and the
 `snapshot` summary, `tool_info` (each tool's `description` and `guidance`), and
 the lists the session would start with: `tools` (names, in request order),
-`skills` and `mcp` (the session JSON's rows, with `state` and `locked`). Enabled
+`skills` and `mcp` (the session JSON's rows, with `state` and `locked`), and `session` (`model`, `effort`: what creation would store, configured defaults included; null when unset). Clients show these, not their own defaults, so the screen does not change when the session is created. Enabled
 MCP servers are connected first, as for creation. Clients draw the new-session
 context from these lists alone: they keep no tool list of their own and show
 "loading" until it answers.

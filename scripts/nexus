@@ -5,6 +5,7 @@
 #   nexus tui [flags]         launch the TUI, release build (flags: --dark, --light,
 #                             --256, --debug for a debug binary, ...)
 #   nexus build [--debug]     sync Core, build the TUI (release) and the NSH web app
+#                             (after `nexus voice init`, syncs keep the voice extra)
 #   nexus web [flags]         serve the NSH web app and open it
 #   nexus restart             restart the Core daemon
 #   nexus stop                stop the Core daemon
@@ -50,12 +51,26 @@ ensure_home() {
   chmod 700 "$HOME_DIR"
 }
 
+# `nexus voice init` remembers the environment it installed into in
+# $NEXUS10_HOME/voice.json. Keep that environment's optional `voice` extra in
+# every sync, so a build or a daemon restart never prunes the runtime again.
+CORE_EXTRA=()
+voice_initialised() {
+  local marker="$HOME_DIR/voice.json"
+  [ -f "$marker" ] || return 1
+  [ -d "$CORE/.venv" ] || return 1
+  grep -qF "\"environment\": \"$(cd "$CORE/.venv" && pwd -P)\"" "$marker"
+}
+if voice_initialised; then CORE_EXTRA=(--extra voice); fi
+
 core() {
-  (cd "$CORE" && uv run nexus "$@")
+  (cd "$CORE" && uv run ${CORE_EXTRA[@]+"${CORE_EXTRA[@]}"} nexus "$@")
 }
 
 core_cmd() {
-  printf 'uv run --project %s nexus' "$CORE"
+  local extra=""
+  if [ "${#CORE_EXTRA[@]}" -gt 0 ]; then extra="--extra voice "; fi
+  printf 'uv run --project %s %snexus' "$CORE" "$extra"
 }
 
 ensure_uv() {
@@ -101,7 +116,7 @@ build_all() {
   ensure_npm
   ensure_nsh
   printf '› Core dependencies\n'
-  (cd "$CORE" && uv sync)
+  (cd "$CORE" && uv sync ${CORE_EXTRA[@]+"${CORE_EXTRA[@]}"})
   printf '› TUI\n'
   if [ "$release" = 1 ]; then
     (cd "$TUI" && cargo build --release)
@@ -162,7 +177,7 @@ check_all() {
   ensure_npm
   ensure_nsh
   printf '› Core tests\n'
-  (cd "$CORE" && uv run pytest -q && uv run ruff check nexus tests)
+  (cd "$CORE" && uv run ${CORE_EXTRA[@]+"${CORE_EXTRA[@]}"} pytest -q && uv run ${CORE_EXTRA[@]+"${CORE_EXTRA[@]}"} ruff check nexus tests)
   printf '› TUI tests and lints\n'
   (cd "$TUI" && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check)
   printf '› Shared interface checks\n'
@@ -175,7 +190,7 @@ test_all() {
   ensure_uv
   ensure_cargo
   printf '› Core tests\n'
-  (cd "$CORE" && uv run pytest -q)
+  (cd "$CORE" && uv run ${CORE_EXTRA[@]+"${CORE_EXTRA[@]}"} pytest -q)
   printf '› TUI tests\n'
   (cd "$TUI" && cargo test)
 }

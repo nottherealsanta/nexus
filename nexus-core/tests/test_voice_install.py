@@ -20,7 +20,21 @@ def test_init_installs_into_this_environment(monkeypatch, capsys):
     assert "stt:" in capsys.readouterr().out
 
 
-def test_init_reports_failure(monkeypatch):
+def test_init_remembers_the_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path))
+    monkeypatch.setattr(install, "requirements", lambda: ["numpy>=1.26"])
+    monkeypatch.setattr(install.subprocess, "run", lambda cmd, check: type("R", (), {"returncode": 0})())
+    assert not install.initialised()
+    assert install.init() == 0
+    assert install.initialised()
+    remembered = install.marker().read_text()
+    assert install.environment() in remembered
+    assert install.sys.executable in remembered
+
+
+def test_init_reports_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path))
     monkeypatch.setattr(install, "requirements", lambda: ["x"])
     monkeypatch.setattr(install.subprocess, "run", lambda cmd, check: type("R", (), {"returncode": 3})())
     assert install.init() == 3
+    assert not install.initialised()

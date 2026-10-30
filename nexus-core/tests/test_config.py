@@ -16,6 +16,18 @@ def test_defaults_and_invalid_keys(tmp_path: Path) -> None:
     assert result["errors"] == ["defaults.permission: invalid value"]
 
 
+def test_agent_model_pools_round_trip_and_validation(tmp_path: Path) -> None:
+    config = ConfigFile(tmp_path / "config.toml")
+    models = {"scout": ["codex/one", "copilot/two"]}
+    result = config.patch(config.read()["revision"], {"agents.models": models}, [])
+    assert result["values"]["agents"]["models"] == models
+    for bad in ({"scout": []}, {"scout": ["codex/one", "codex/one"]},
+                {"scout": ["unknown/model"]}, {"scout": ["codex/"]}, {"Bad Name": ["codex/x"]}):
+        with pytest.raises(ValueError):
+            config.patch(config.read()["revision"], {"agents.models": bad}, [])
+    assert config.read()["values"]["agents"]["models"] == models
+
+
 def test_patch_preserves_comments_and_rejects_stale_revision(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text('# keep me\n[defaults]\nmodel = "old" # model comment\n')

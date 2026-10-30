@@ -593,7 +593,7 @@ fn heights(app: &App, w: u16) -> Heights {
             + if app.pending_inputs().is_empty() {
                 0
             } else {
-                app.pending_inputs().len().min(4) as u16 + 1
+                app.pending_inputs().len().min(4) as u16 + 2
             }
             + if app.composer_ref().images.is_empty() {
                 0
@@ -606,8 +606,8 @@ fn heights(app: &App, w: u16) -> Heights {
         waiting,
         composer,
         strip: u16::from(
-            app.viewed_root()
-                .is_some_and(|r| !app.subagents_of(&r).is_empty()),
+            app.viewed_id()
+                .is_some_and(|id| app.viewed_root().is_some_and(|r| r != id)),
         ),
     }
 }
@@ -792,7 +792,7 @@ fn draw_crumb(cx: &Cx, buf: &mut Buffer, tr: Rect) {
 /// The session tabs (DESIGN_PLAN.md D02): `{glyph} {title} ×` per open
 /// session. The viewed tab is bold primary on the page surface so it reads as
 /// joined to the page below; the others are muted on the chrome band. `+` ends
-/// the strip. A viewed child session shows `root › child`. The run status sits
+/// the strip. A viewed sub agent shows `root › child`. The run status sits
 /// at the centre column's right edge.
 fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
     let a = cx.app;
@@ -1040,66 +1040,40 @@ fn header_status(cx: &Cx) -> Option<(String, Style)> {
 // banner and toasts
 // ============================================================================
 
-/// The subagent strip under the tabs: the root and each subagent session of
-/// the viewed tree, the viewed one lifted onto the page surface. A subagent
-/// reads `{dots} {Agent} {title}`; the dots spin while it works and fill once
-/// it is done.
-fn draw_subagents(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
+/// The subagent line under the tabs, shown only while a subagent is viewed:
+/// `{Agent} {title}` with the agent's colour. A root session has no such line.
+fn draw_subagents(cx: &Cx, buf: &mut Buffer, r: Rect, _hits: &mut HitMap) {
     if r.height == 0 {
         return;
     }
     let a = cx.app;
-    let (Some(root), Some(viewed)) = (a.viewed_root(), a.viewed_id()) else {
+    let Some(s) = a.viewed_id().and_then(|id| a.state.model.sessions.get(id)) else {
         return;
     };
     let row = Rect::new(r.x, r.y, r.width, 1);
-    clear(buf, row, cx.st(MUTED, SIDEBAR));
-    let mut entries: Vec<(String, String, String)> = Vec::new();
-    if let Some(s) = a.state.model.sessions.get(&root) {
-        entries.push((s.id.clone(), "\u{25c6}".into(), s.title.clone()));
-    }
-    for s in a.subagents_of(&root) {
-        let glyph = if a.is_busy(&s.id) {
-            cx.t.spinner(a.frame)
-        } else {
-            cx.t.dots_full()
-        };
-        let agent = crate::text::capitalize(&s.agent);
-        entries.push((
-            s.id.clone(),
-            glyph.to_owned(),
-            format!("{agent} {}", s.title),
-        ));
-    }
-    let max = (r.width as usize / entries.len().max(1)).clamp(10, 30);
-    let mut x = r.x + 1;
-    for (id, glyph, label) in entries {
-        let active = id == viewed;
-        let bg = if active { CANVAS } else { SIDEBAR };
-        let label = truncate(label.trim_end(), max, cx.ell());
-        let w = (width(&label) + 4) as u16;
-        if x + w > r.right() {
-            put(buf, x, r.y, cx.ell(), cx.st(MUTED, SIDEBAR), 1);
-            break;
-        }
-        let rect = Rect::new(x, r.y, w, 1);
-        let base = cx.st(if active { PRIMARY } else { MUTED }, bg);
-        clear(buf, rect, base);
-        let gs = if a.is_busy(&id) {
-            cx.st(PRIMARY, bg)
-        } else {
-            cx.st(MUTED, bg)
-        };
-        put(buf, x + 1, r.y, &glyph, gs, 1);
-        let style = if active {
-            base.add_modifier(Modifier::BOLD)
-        } else {
-            base
-        };
-        put(buf, x + 3, r.y, &label, style, w.saturating_sub(4));
-        hits.add(rect, Target::Subagent(id));
-        x += w + 1;
-    }
+    clear(buf, row, cx.st(MUTED, CANVAS));
+    let agent = crate::text::capitalize(&s.agent);
+    let x = put(
+        buf,
+        r.x + 1,
+        r.y,
+        &agent,
+        cx.st(PRIMARY, CANVAS).patch(cx.t.agent_style(&s.agent)),
+        row.width.saturating_sub(1),
+    );
+    let title = truncate(
+        &s.title,
+        (row.right().saturating_sub(x + 1)) as usize,
+        cx.ell(),
+    );
+    put(
+        buf,
+        x + 1,
+        r.y,
+        &title,
+        cx.st(SECONDARY, CANVAS),
+        row.right().saturating_sub(x + 1),
+    );
 }
 
 fn draw_banner(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
@@ -4455,7 +4429,11 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 }
             }
             WRow::Sub => {
-                let mut sub = format!("waiting on you{}{}", cx.sep(), mmss(a.wait_secs(&w.id)));
+                let mut sub = if a.ask_current().is_some() {
+                    "waiting on you".to_string()
+                } else {
+                    format!("waiting on you{}{}", cx.sep(), mmss(a.wait_secs(&w.id)))
+                };
                 if let Some(c) = a.ask_current().filter(|c| c.total > 1) {
                     sub.push_str(&format!(
                         "{}question {} of {}",
@@ -4518,14 +4496,17 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     continue;
                 };
                 let on = c.draft.chosen.contains(i);
-                let mark = match (c.multiple(), on) {
-                    (true, true) => "[x]",
-                    (true, false) => "[ ]",
-                    (false, true) => "(*)",
-                    (false, false) => "( )",
-                };
                 let label = json_str(&o["label"]);
-                let line = format!("{mark} {} {}", (i + 1) % 10, label.trim_matches('"'));
+                let mark = if c.multiple() {
+                    if on {
+                        "[x] "
+                    } else {
+                        "[ ] "
+                    }
+                } else {
+                    ""
+                };
+                let line = format!("{mark}{} {}", (i + 1) % 10, label.trim_matches('"'));
                 let mut st = cx.st(SECONDARY, PANEL);
                 if *i == c.draft.cursor {
                     band_row(buf, y, PRIMARY);
@@ -4906,9 +4887,10 @@ fn draw_working(cx: &Cx, buf: &mut Buffer, start: u16, y: u16, end: u16) {
 fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let inputs = cx.app.pending_inputs();
     let count = inputs.len().min(4);
-    let extra = if count == 0 { 0 } else { (count + 1) as u16 }.min(r.height.saturating_sub(8));
+    let extra = if count == 0 { 0 } else { (count + 2) as u16 }.min(r.height.saturating_sub(8));
+    let extra = if extra < 3 { 0 } else { extra };
     if extra > 0 {
-        let visible = (extra - 1) as usize;
+        let visible = (extra - 2) as usize;
         let selected = cx
             .app
             .ui
@@ -4924,22 +4906,9 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             .viewed_id()
             .and_then(|id| cx.app.state.inputs.get(id))
             .is_some_and(|v| v["held"] == true);
-        let heading = if held {
-            "Queue held · enter steer · tab queue · n send next"
-        } else {
-            "Pending · enter steer · tab queue"
-        };
         // One filled card, aligned with the composer panel below it.
         let card = Rect::new(r.x + 2, r.y, r.width.saturating_sub(4), extra);
         clear(buf, card, cx.st(MUTED, PANEL));
-        put(
-            buf,
-            card.x + 2,
-            r.y,
-            heading,
-            cx.st(MUTED, PANEL),
-            card.width.saturating_sub(4),
-        );
         for (line, (idx, item)) in inputs
             .iter()
             .enumerate()
@@ -4956,9 +4925,11 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 .next()
                 .unwrap_or("");
             let mode = if item["mode"] == "steer" {
-                "steer"
+                "S"
+            } else if held {
+                "Q held"
             } else {
-                "queued"
+                "Q"
             };
             let selected = cx.app.ui.pending_selected == Some(idx);
             let label = format!(
@@ -5140,7 +5111,6 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             cx.t.structure("arrow"),
             model_name
         ),
-        None if provider_on && !model_id.is_empty() => format!("{model_name} {provider}"),
         None => model_name.clone(),
     };
     let effort_owned = a.current_effort();
@@ -5188,7 +5158,12 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         let left_width = width(&agent_label)
             + 1
             + width(&model_label)
-            + if effort_on { 1 + width(effort) } else { 0 };
+            + if effort_on { 1 + width(effort) } else { 0 }
+            + if provider_on && pending.is_none() && !model_id.is_empty() {
+                1 + width(&provider)
+            } else {
+                0
+            };
         if left_width + 2 + right_width(meter_on) <= avail {
             break;
         }
@@ -5196,7 +5171,6 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             effort_on = false;
         } else if provider_on && pending.is_none() && !model_id.is_empty() {
             provider_on = false;
-            model_label = model_name.clone();
         } else if meter_on {
             meter_on = false;
         } else {
@@ -5292,10 +5266,19 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 Modifier::empty(),
                 SECONDARY,
             ),
+            (
+                provider.clone(),
+                Target::ComposerModel,
+                Modifier::empty(),
+                MUTED,
+            ),
         ];
         let mut first = true;
         for (index, (label, target, modifier, token)) in fields.into_iter().enumerate() {
             if index == 2 && !effort_on {
+                continue;
+            }
+            if index == 3 && (!provider_on || pending.is_some() || model_id.is_empty()) {
                 continue;
             }
             if x >= selector_end {
@@ -5330,13 +5313,6 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 cx.st(token, PANEL).add_modifier(modifier)
             };
             x = put(buf, x, cy, &label, style, room);
-            if index == 1 && provider_on && pending.is_none() && !model_id.is_empty() {
-                // The provider trails the model name, muted.
-                let name_end = start + width(&model_name).min((x - start) as usize) as u16;
-                for px in name_end..x {
-                    buf[(px, cy)].set_fg(cx.t.fg(MUTED).fg.unwrap_or_default());
-                }
-            }
             if x > start {
                 hits.add(Rect::new(start, cy, x - start, 1), target);
             }

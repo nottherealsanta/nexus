@@ -1,11 +1,11 @@
-"""Parallel child sessions adapted from old Nexus parallel_subagents."""
+"""Parallel sub agents adapted from old Nexus parallel_subagents."""
 
 from ..checks import no_unexpected_errors, tool_called
 from ..dsl import Scenario, call, calls, say, verdict
 
 SCENARIO = Scenario(
     "parallel_subagents",
-    "Launches two child sessions in parallel",
+    "Launches two sub agents in parallel",
     {
         "main": [
             calls(
@@ -16,10 +16,10 @@ SCENARIO = Scenario(
             verdict(
                 "parallel-subagents",
                 [tool_called("session", 2), no_unexpected_errors()],
-                intro="Both child sessions returned their reports.",
+                intro="Both sub agents returned their reports.",
             ),
         ],
         "child": [say("The README describes this project; inspection completed.")],
     },
-    prompt="Exercise parallel child sessions.",
+    prompt="Exercise parallel sub agents.",
 )

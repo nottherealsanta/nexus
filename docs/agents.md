@@ -20,13 +20,13 @@ You review code. Point out bugs and risks; do not edit files.
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `description` | string, required | What the agent is for. Shown in lists, and later used to pick an agent for a child session. |
-| `mode` | `primary`, `subagent`, `all` | Where the agent may run: `primary` only as a root session, `subagent` only as a child session, `all` both. Enforced when a session is created or its agent is changed. Default `all`. |
+| `description` | string, required | What the agent is for. Shown in lists, and later used to pick an agent for a sub agent. |
+| `mode` | `primary`, `subagent`, `all` | Where the agent may run: `primary` only as a root session, `subagent` only as a sub agent, `all` both. Enforced when a session is created or its agent is changed. Default `all`. |
 | `color` | colour name or `#rrggbb` | A hint for clients (agent chips and tabs). Served by `/api/agent`; not part of the prompt. |
 | `model` | `provider/model` | Used when the session has no model of its own. |
 | `effort` | string | Used when the session has no effort of its own. |
 | `tools` | list of tool names | The only tools the model is offered. Omit it for every tool. An unknown name makes session creation fail with a clear error. |
-| `control` | list | Control tools an agent may grant explicitly: only `session` today, which starts child sessions. Never implied: omitting `tools` does not grant it. Ignored in child sessions. The workspace controls are not granted here: new sessions always start with the `expose_workspace_tools` entry point (see below). |
+| `control` | list | Control tools an agent may grant explicitly: only `session` today, which starts sub agents. Never implied: omitting `tools` does not grant it. Ignored in sub agents. The workspace controls are not granted here: new sessions always start with the `expose_workspace_tools` entry point (see below). |
 | `steps` | 1–500 | Max model calls per turn. |
 | `permission` | map `rule: ask \| deny` | Rules that narrow what the user's config allows: `"bash(git push*)": deny`, `web_fetch: ask`. `allow` is refused here, since an agent never widens. Frozen into the session snapshot. See [tools.md](tools.md#permission-rules). |
 
@@ -130,22 +130,25 @@ otherwise the first loaded agent allowed as a root is used (normally
   switched off; activating it adds `change_session_directory` and `worktree`
   for subsequent calls. Disabled tools are absent from the stored definitions,
   the request schemas and the system prompt's `# Tools` section.
-- **model** = the session's model if the user set one, else the agent's frozen
-  `model`, else the daemon's default. **effort** works the same way, ending
-  with the provider's default.
+- **model** = the session's model if the user set one. For a new child with no
+  explicit model, a configured `agents.models` pool for its agent is sampled
+  uniformly once and stored as the session model. Without a pool, the agent's
+  frozen `model` or the daemon's default is used. Root sessions do not use
+  these pools. **effort** uses the session's value, then the agent's, then the
+  provider's default.
 - **steps** = the agent's frozen `steps`, or 50.
 
 ## Built-in agents
 
 | Agent | Mode | Tools | For |
 | --- | --- | --- | --- |
-| `orchestrate` | primary | read, bash, code + `session` | Breaks a task down, delegates it to child sessions, checks the results, reports. The only agent with the `session` tool. Its prompt says not to edit files. |
+| `orchestrate` | primary | read, bash, code + `session` | Breaks a task down, delegates it to sub agents, checks the results, reports. The only agent with the `session` tool. Its prompt says not to edit files. |
 | `build` (default) | all | all | The grunt work: writes and edits code, runs and checks it. Prompt adapted from OpenCode's GPT system prompt (MIT; see `builtin_agents/NOTICE`). |
 | `quick` | subagent | all (effort low, 20 steps) | Small self-contained tasks whose details the parent should not carry in its context. Returns only what the parent needs. |
 | `scout` | subagent | read, bash | Reads the material and returns a context brief: answer, relevant files with line ranges and quotes, how they fit, gotchas, what was checked, open questions. |
 | `plan` | subagent | all | Designs a change. Its prompt allows writing Markdown plan files only, never code. This is advice in the prompt, not enforced by the harness. |
 
-So a root session runs `orchestrate` or `build`, and a child session runs
+So a root session runs `orchestrate` or `build`, and a sub agent runs
 `build`, `quick`, `scout` or `plan`. Prompts are advice: bash is not sandboxed,
 so "read-only" (`scout`) and "Markdown only" (`plan`) rest on the prompt.
 Granting `bash` also grants the `bash_output` and `bash_kill` companions for
@@ -171,6 +174,12 @@ nexus agent plan                # one agent's settings and full prompt
 nexus run --agent plan "…"      # new session with that agent
 nexus chat                      # then: /agent plan, /agent (list), /model default
 ```
+
+The `/agent` list in chat and the NSH and TUI agent pickers show agents eligible
+for the current session: `primary` or `all` for roots and drafts, `subagent` or
+`all` for children. Custom agents are included by mode. The standalone `nexus
+agent` command and API catalog still list all agents and problems; Core enforces
+eligibility when creating or switching a session.
 
 API: `GET /api/agent?directory=…`, `GET /api/agent/{name}`,
 `POST /api/session {agent}`, `POST /api/session/{id}/agent {agent}`
@@ -244,7 +253,7 @@ reload the same way ([tools.md](tools.md#user-tools)).
 
 `bash` brings `bash_output` and `bash_kill` with it, unless they are switched
 off individually, so a background command can always be read and stopped. They
-are task tools, not control tools; a child session sees its tree's jobs.
+are task tools, not control tools; a sub agent sees its tree's jobs.
 
 ## Not yet
 

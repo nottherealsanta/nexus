@@ -36,9 +36,10 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   scrolled off, a copy is pinned under the header (three rows at most, then a `░`
   shade row in `border.strong` with `↑ N lines of this turn above`), pushed up by
   the next band. The turn footer is one muted right-aligned row,
-  `▪ Agent · models · effort · tools · duration · tokens · cost`, with no rule
-  and no end status (an interrupted turn adds `/continue`, a failed one a `✕`
-  error row above). Durations read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Consecutive activity folds into a verb
+  `▪ Agent · models · effort · tools · duration · tokens · cost`, with no rule,
+  no end status and no continue hint (a failed one puts a `✕` error row above);
+  the usage units (`i`, `o`, `r`, `c`) are fainter than their counts. Durations
+  read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Consecutive activity folds into a verb
   group; a live group is `Working` (old Nexus's soft shimmer) over its newest five
   members in a `├─`/`╰─` tree, a finished one a count by verb with `+N −M` and
   failures that stay visible. Members lead with a verb glyph (`[glyphs.verb]` in

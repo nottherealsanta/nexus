@@ -580,7 +580,7 @@ def markdown_export(view: ExportView) -> Iterator[str]:
         yield (f"- Event retention: earlier diagnostic events expired at floor {view.boundary.floor}; "
                "the JSON event log starts after that boundary. Messages and snapshots are complete.\n")
     yield (
-        "\nThe export is read-only. A child session's conversation is its own context and appears in "
+        "\nThe export is read-only. A sub agent's conversation is its own context and appears in "
         "its own section, never inside its parent's messages. Provider stream deltas live in the JSON "
         "export's event log; this transcript shows stored messages. No additional clipping is applied: "
         "existing clip notices are reproduced as stored.\n\n"

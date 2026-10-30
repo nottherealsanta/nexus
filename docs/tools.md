@@ -465,7 +465,7 @@ Run a command with `/bin/bash -c` in the workspace.
 
 A background job runs in the caller's directory in its own process group,
 independent of the turn and of any code cell. It is owned by the session tree
-that started it: inside a child session, `bash_output` and `bash_kill` see the
+that started it: inside a sub agent, `bash_output` and `bash_kill` see the
 tree's jobs, not another tree's.
 
 * `bash_output {job_id, offset?, limit?}` returns status (`running`, `done`,
@@ -598,7 +598,9 @@ refused. After writing, the observation is dropped. No approval is requested.
 ## ask
 
 `ask {questions: [...]}` asks the user one or more questions and waits for the
-answers. It is a task tool, not a control tool and not an approval.
+answers. It is a task tool, not a control tool and not an approval. In the TUI,
+use up/down and Enter to choose an option; for multiple choices, use Space to
+toggle each option before Enter. The question card does not show an elapsed timer.
 
 ```jsonc
 // arguments
@@ -680,7 +682,7 @@ to the asking session and tool call. Endpoints:
 `POST /api/session/{id}/question/{qid}` ([api.md](api.md#endpoints)). The CLI
 shows the questions, collects answers and submits them; the inspector shows the
 request, reply or cancellation, and pending status. Child questions belong to the
-child session and appear on its parent's descendant event stream.
+sub agent and appear on its parent's descendant event stream.
 
 Granted like any task tool: `ask` is in `DEFAULT_TOOLS`, so an agent that omits
 `tools` gets it, while an explicit list or a session switch controls it. A session
