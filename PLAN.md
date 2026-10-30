@@ -6,7 +6,7 @@ Preserve the visible, ordered context timeline, announce clipping, keep task too
 
 ## Where things stand (2026-10-30)
 
-- `main` and `origin/main` are old Nexus 0.7.2 (PyPI `nexus-harness`). `nexus01` is pushed (2026-10-30) at that commit plus one backup commit holding old Nexus's 18 uncommitted local changes (`c3f1848`); `~/repos/nexus` is now checked out on `nexus01`. `nexus10` is 113 commits ahead of it, so the merge can be a fast-forward. The tree layout is entirely different (`nexus-core/`, `nexus-tui/`, `nexus-nsh/` replace `nexus/` and `rust/`), so `main` stops being old Nexus the moment it moves.
+- `main` and `origin/main` are old Nexus 0.7.2 (PyPI `nexus-harness`). `nexus01` is pushed (2026-10-30) at that commit plus one backup commit holding old Nexus's 18 uncommitted local changes (`c3f1848`); `~/repos/nexus` is now checked out on `nexus01`. `nexus10` has its own root commit and shares no history with `main` (corrected 2026-10-30; an earlier version of this plan called it a fast-forward). A plain push would need a force-push, so the merge is `git merge --allow-unrelated-histories -s ours origin/main` on `nexus10`: the tree stays exactly `nexus10`'s, old `main` becomes the second parent, and `git push origin nexus10:main` is then a fast-forward. Branch protection on `main` is off (the one ruleset is disabled), so no PR is required. The tree layout is entirely different (`nexus-core/`, `nexus-tui/`, `nexus-nsh/` replace `nexus/` and `rust/`), so `main` stops being old Nexus the moment it moves.
 - Release gate O1 to O4 are done (kernel helper, migration backup and recovery, `nexus migrate`, device logins). O5 and O6 are below.
 - CI and release workflows are written in `.github/workflows/` (adapted from old Nexus) but have never run. Release-please files: `release-please-config.json`, `.release-please-manifest.json`.
 - About 55 files are modified and uncommitted, plus `migrate.py` and three test files. Nothing below can land until they are committed.
@@ -89,7 +89,7 @@ Remaining:
 
 ### 6. Merge
 1. `nexus01` (pushed) and the `v0.7.2` tag are the old line. Old Nexus users on PyPI keep `nexus-harness 0.7.2`; say so in the release notes and README, since `main` no longer contains that code.
-2. Rebase `nexus10` on `main` (no divergence today), open the PR, wait for `ci-ok`, then merge. Prefer a fast-forward or a merge commit that keeps the 113 commits; do not squash them.
+2. Merge with the `ours` strategy as above (no rebase: the histories are unrelated), push to `main` directly or through a PR, and wait for `ci-ok`. Do not squash the 116 commits. The push to `main` also starts `release.yml`, whose release-please job opens the 0.10.0 release PR (the app secrets are set); nothing is published until that PR is merged.
 3. Update `AGENTS.md`, `README`, `docs/development.md` and `docs/porting-ledger.md`: `nexus10` and `nexus01` references become `main`; old Nexus is `nexus01`.
 4. Merge the release-please PR; confirm the release has the binaries, the web bundle, the wheel, `install.sh` and `SHA256SUMS`; run the installer from the published release on macOS and Linux.
 5. Remove `nexus-design-mockup/`, drop `release-as` from the config, and bump to 0.10.1-dev.
