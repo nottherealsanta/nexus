@@ -1,8 +1,21 @@
-# Nexus 0.10: merge to `main` and release 0.10.0
+# Nexus 0.10: released (v0.10.0); what remains
 
 Goal: merge branch `nexus10` into `main` and publish 0.10.0. Current behavior is in [docs/README.md](docs/README.md); historical porting decisions are in the [porting ledger](docs/porting-ledger.md). Old Nexus (`~/repos/nexus`, branch `nexus01`) is reference only.
 
 Preserve the visible, ordered context timeline, announce clipping, keep task tools separate from Nexus control, and do not rewrite context already sent to a provider. State is in `~/.nexus` after `nexus migrate`; never run it against the real home from a session.
+
+## Released: v0.10.0 (2026-10-30)
+
+Nexus 0.10.0 is published: https://github.com/nottherealsanta/nexus/releases/tag/v0.10.0. `main` is Nexus 0.10 (old Nexus 0.7.2 is the second parent of the merge, branch `nexus01` and tag `v0.7.2`). The release has the TUI binary for macOS arm64 and x86_64 and Linux x86_64 and aarch64, the Core wheel and sdist, `install.sh` and `SHA256SUMS`. The README's one-line install was run against the real release on macOS arm64 (`nexus` reported `v0.10.0`).
+
+What the release does **not** have, by decision:
+- **No web client.** NSH is skipped in CI and in the release build (step 4), so `nexus web` needs a checkout. Re-enable `nsh` in `ci.yml` and `nsh-web` in `build-artifacts.yml` once the pinned build is fast and proven; the installer picks up `nexus-web.tar.gz` automatically when a release has one.
+- **No real-provider check** for OpenAI and Ollama, and no `nexus migrate` run on a copy of a real old home: both were left out of the release on purpose.
+- **No platform matrix** beyond macOS arm64 and Debian 13 x86_64 ([TODO.md](TODO.md)).
+
+`release-as` was removed from `release-please-config.json` after the release, so the next release PR follows the commit messages (a `feat` bumps the minor version while the major is 0).
+
+The sections below are the record of the release steps and the backlog that remains.
 
 ## Where things stand (2026-10-30)
 
