@@ -804,7 +804,7 @@ wheels = [
 
 [[package]]
 name = "nexus10"
-version = "0.10.0.dev0"
+version = "0.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },

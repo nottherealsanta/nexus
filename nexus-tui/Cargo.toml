@@ -1,6 +1,6 @@
 [package]
 name = "nexus-tui"
-version = "0.10.0-dev.0"
+version = "0.10.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Nexus 0.10 terminal client (Ratatui). Speaks only the Core HTTP API."
