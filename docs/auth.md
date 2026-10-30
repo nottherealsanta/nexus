@@ -7,7 +7,7 @@ adapters a header source; adapters never see stored credentials
 | File | Role |
 | --- | --- |
 | `auth/__init__.py` | `SIGN_INS = {"codex", "copilot", "grok", "opencode"}` |
-| `auth/store.py` | `CredentialStore`: `~/.nexus10/auth.json` |
+| `auth/store.py` | `CredentialStore`: `~/.nexus/auth.json` |
 | `auth/device.py` | RFC 8628 device flow (copilot, grok) |
 | `auth/codex.py` | ChatGPT OAuth: browser PKCE and device code |
 | `auth/copilot.py` | GitHub.com device sign-in |
@@ -127,6 +127,14 @@ contain no whitespace. `$OPENCODE_API_KEY` is used when set (a stored key wins i
 both exist) and nothing is stored for it. Headers: `authorization: Bearer <key>`,
 `user-agent: nexus/0.10`.
 
+## claude
+
+Methods: `cli`. `llmhub/auth/claude.py` never reads token files; the CLI owns the credential store. Signed in means
+`claude auth status --json` reports `loggedIn: true` with `authMethod: claude.ai` (a subscription; an API-key login does not
+count). The answer is cached for 30 s because `connected()` asks often. The CLI is the user's own Claude Code (`$NEXUS10_CLAUDE_CLI`, else `claude` on `PATH`, else its usual install
+locations); Nexus does not ship it, and without it the provider is not connected and `login` says Claude Code is not installed. `login` runs `claude auth login --claudeai` and passes the first URL it prints to the client
+(`Open <url> to sign in to Claude.`); `logout` runs `claude auth logout`. `nexus login claude` works from a terminal.
+
 ## device flow (`device.py`)
 
 `device_flow(...)` runs RFC 8628 end to end and returns the token response.
@@ -140,9 +148,9 @@ both exist) and nothing is stored for it. Headers: `authorization: Bearer <key>`
   raise "denied"; `expired_token` raises "code expired".
 * Deadline: the server's `expires_in` clamped to 60 to 1800 s (default 900).
 
-## Storage: `~/.nexus10/auth.json`
+## Storage: `~/.nexus/auth.json`
 
-`$NEXUS10_HOME` overrides `~/.nexus10` (`paths.home()`). One JSON object, one
+`$NEXUS10_HOME` overrides `~/.nexus` (`paths.home()`; see [migrating](development.md#migrating-to-nexus)). One JSON object, one
 entry per provider id.
 
 | Entry | Stored | Never stored |
@@ -178,3 +186,11 @@ so a refresh does read, token request and write inside the lock:
 Writes in `login` and `logout` also hold the lock. `read()` alone does not.
 
 Not verified: `nexus login copilot|grok|opencode` end to end (PLAN.md, step 3).
+
+## Tests
+
+`tests/test_device_logins.py` plays GitHub, auth.x.ai, the Copilot API and the provider endpoints
+through `httpx.MockTransport`: the copilot and grok device flows (pending, `slow_down`, denied, expired,
+timeout), copilot's plan check, grok's refresh rotation and CLI-version requirement, the opencode key
+paste, the `login`/`status`/`logout` commands, and the credential headers on each provider's first
+request. Approving a real device code is manual.

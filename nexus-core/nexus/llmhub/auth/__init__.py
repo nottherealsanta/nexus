@@ -8,6 +8,7 @@ Every sign-in has the same shape: `methods`, `async login(method, notify)`,
 from __future__ import annotations
 
 from .api_key import ApiKeyAuth, api_key_auth
+from .claude import ClaudeAuth
 from .codex import CodexAuth
 from .copilot import CopilotAuth
 from .errors import AuthError
@@ -18,6 +19,7 @@ from .store import CredentialError, CredentialStore
 
 SIGN_INS = {
     "codex": CodexAuth,
+    "claude": ClaudeAuth,
     "copilot": CopilotAuth,
     "grok": GrokAuth,
     "opencode": OpenCodeAuth,
@@ -27,4 +29,4 @@ SIGN_INS = {
     "ollama": OllamaAuth,
 }
 
-__all__ = ["SIGN_INS", "ApiKeyAuth", "AuthError", "CodexAuth", "CopilotAuth", "CredentialError", "CredentialStore", "GrokAuth", "OllamaAuth", "OpenCodeAuth"]
+__all__ = ["SIGN_INS", "ApiKeyAuth", "AuthError", "ClaudeAuth", "CodexAuth", "CopilotAuth", "CredentialError", "CredentialStore", "GrokAuth", "OllamaAuth", "OpenCodeAuth"]

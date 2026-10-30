@@ -10,6 +10,7 @@ and a table that says which provider speaks which, with what quirks.
 | `llmhub/types.py` | Conversation parts, `Request`, stream events |
 | `llmhub/providers.py` | `PROVIDERS` table and `make(provider_id, auth, model=None)` |
 | `mock/` | Dev-only scripted provider and scenarios (`NEXUS10_DEV=1`; [scenarios](#offline-mock-provider)) |
+| `llmhub/claude.py`, `llmhub/_claude_worker.py` | Claude through the Agent SDK (`claude`; [below](#claude-agent-sdk)) |
 | `llmhub/responses.py` | OpenAI Responses dialect (codex, grok) and `ResponsesQuirks` |
 | `llmhub/chat.py` | OpenAI Chat Completions dialect (copilot, opencode) and `ChatQuirks` |
 | `llmhub/sse.py` | Server-sent events parser |
@@ -27,6 +28,7 @@ Adapters never read stored credentials. They take a header source
 | `mock` | Offline mock | scripted | — | `mock://<scenario>` | built in |
 | `codex` | ChatGPT (Codex) | responses | `https://chatgpt.com/backend-api/codex` | `{base}/responses` | `openai` |
 | `grok` | xAI (SuperGrok) | responses | `https://cli-chat-proxy.grok.com/v1` | `{base}/responses` | `xai` |
+| `claude` | Claude (Agent SDK) | agent-sdk | — (the user's own Claude Code) | `SDK claude-agent-sdk://query` | `anthropic` |
 | `copilot` | GitHub Copilot | chat | `https://api.githubcopilot.com` | `{base}/chat/completions` | `github-copilot` |
 | `opencode` | OpenCode Go | chat | `https://opencode.ai/zen/go/v1` | `{base}/chat/completions` | `opencode-go` |
 | `openai` | OpenAI (API key) | responses | `https://api.openai.com/v1` | `{base}/responses` | `openai` |
@@ -267,6 +269,69 @@ there is no encrypted content). Reasoning from any other provider is dropped.
 * The parser records the field name the host used (the first one seen in the
   stream) in `Reasoning.raw = {"field": ...}`. If the host sent no reasoning, no
   Reasoning part exists.
+
+## Claude Agent SDK
+
+`claude` (models from models.dev `anthropic`, sign-in by the user's Claude Code, [auth.md](auth.md#claude)) uses
+`claude-agent-sdk` as a plain client. Nexus owns the loop. Each request runs `nexus.llmhub._claude_worker` in its own
+process (`python -I -m`, own process group, environment reduced to the OS basics: no API keys, tokens or `PYTHONPATH`;
+8 MiB bounds; 600 s timeout). The worker starts the SDK with no built-in tools, no hooks, no project settings and no session
+persistence. Nexus tools are offered as SDK MCP tools whose handlers only record the call; the worker returns at the first
+tool call, before the SDK can treat it as a result, and Nexus approves and runs it like any other. The next request carries
+the real result in the history.
+
+`provider.body(request)` is the wire request (`WireRequest("SDK", "claude-agent-sdk://query", {}, body)`):
+
+```json
+{
+  "model": "claude-haiku-5-5",
+  "system": "<agent prompt>\n\nYou are the model in the Nexus harness. ...",
+  "history": [{"role": "user", "content": [{"type": "text", "text": "..."}]},
+              {"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "read", "input": {"path": "a"}}]},
+              {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "...", "is_error": false}]}],
+  "tools": [{"name": "read", "description": "...", "input_schema": {"...": "..."}}],
+  "schema": {"...": "structured output: {text, tool_calls[{name, arguments}]}"},
+  "sdk_adds": {"...": "what the CLI adds itself, see below"},
+  "effort": "high"
+}
+```
+
+The reply is one `WireEvent("result", ...)` followed by `TextDelta`, `ToolCallStarted`, `ToolArgsDelta`, `PartDone`, `Usage` and
+`Done`. The whole batch is validated before any call is exposed: only offered tool names, at most 32 calls, arguments a JSON
+object. `Usage.input_tokens` is the SDK's `input + cache_read + cache_creation`; `cached_input_tokens` is `cache_read`.
+
+Limits, each visible rather than hidden:
+
+| Limit | Behaviour |
+| --- | --- |
+| No streaming | The reply is buffered; text arrives as one delta when the request ends |
+| Text only | A user or tool-result image makes the request fail with "the Agent SDK takes text only", before anything is sent |
+| No thinking | The SDK returns none, and reasoning parts in the history are not sent |
+| Extra framing | The CLI adds text Nexus does not write; see below. `Usage` reports what was billed |
+| Errors | A failed worker gives `ProviderError` with the SDK's stderr tail (bounded) in `body`, kept in the daemon log; never a token |
+
+What the CLI adds, measured 2026-10-30 (CLI 2.1.285) by pointing it at a local server that logged its requests, and listed in
+the body under `sdk_adds`:
+
+| Added | Size | Can it be turned off? |
+| --- | --- | --- |
+| A second, hidden model request per query that titles the session, with the whole history in it | about 1k tokens, plus a second call | Yes: the worker sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
+| System lines before yours: a billing header and "You are a Claude agent, built on Anthropic's Claude Agent SDK." | about 40 tokens | No |
+| A `StructuredOutput` tool carrying the reply schema; each Nexus tool is renamed `mcp__nexus__<name>` | about 230 tokens, 72 per extra tool | No |
+| A `<system-reminder>` at the start of the first user message with the signed-in account's email address | about 90 tokens | No |
+| An `# Environment` message: working directory, platform, shell, OS version, model, today's date and a token budget | about 100 tokens | No; the worker runs in an empty `$NEXUS10_HOME/claude-sdk` so the directory shown is not a project |
+| The API's own tool-use scaffold whenever tools are present, and about 420 tokens of fixed overhead that no capture explains | about 450 + 420 | No |
+
+Measured input totals for `claude-haiku-5-5`: no tools and no schema 421 tokens; one tool and the reply schema 1,099; five
+tools 1,387. A real two-message conversation with one tool reads about 1.3k. The email and environment text are sent to
+Anthropic, the provider you signed in to, but they are in the model's context and not in Nexus's timeline.
+
+**Claude Code is the user's to install.** Nexus does not ship it. The SDK is built from source (`[tool.uv] no-binary-package` in
+`pyproject.toml`, 560 KB) because its platform wheels each carry a 223 MB copy of Claude Code; `cli_path()` finds
+`$NEXUS10_CLAUDE_CLI`, else `claude` on `PATH`, else `~/.local/bin/claude`, `~/.claude/local/claude`, `/usr/local/bin/claude` or
+`/opt/homebrew/bin/claude`. Without one the provider is not connected and a request fails with "Claude Code is not installed";
+nothing else changes. The SDK needs Claude Code 2.0.0 or newer and wants 2.1.248 or newer. What the CLI adds depends on its
+version: the table above is from 2.1.285; a turn measured on 2.1.314 read about 175 tokens more.
 
 ## Streaming
 

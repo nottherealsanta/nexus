@@ -4,6 +4,7 @@ quirks as data (PLAN.md step 3).
 | id       | dialect   | endpoint                              | models.dev id  |
 | -------- | --------- | ------------------------------------- | -------------- |
 | codex    | responses | chatgpt.com/backend-api/codex         | openai         |
+| claude   | agent-sdk | Claude Agent SDK (local CLI)          | anthropic      |
 | grok     | responses | cli-chat-proxy.grok.com/v1            | xai            |
 | copilot  | chat      | api.githubcopilot.com                 | github-copilot |
 | opencode | chat      | opencode.ai/zen/go/v1 (OpenCode Go)   | opencode-go    |
@@ -31,10 +32,10 @@ from .responses import HeaderSource, ResponsesProvider, ResponsesQuirks
 class ProviderInfo:
     id: str
     label: str
-    dialect: Literal["responses", "chat", "scripted"]
+    dialect: Literal["responses", "chat", "agent-sdk", "scripted"]
     base_url: str
     catalog_id: str  # provider id on models.dev
-    quirks: ResponsesQuirks | ChatQuirks
+    quirks: ResponsesQuirks | ChatQuirks | None
     verified: bool  # a live multi-step tool turn has run through this adapter
 
 
@@ -47,6 +48,10 @@ PROVIDERS: dict[str, ProviderInfo] = {
         "openai",
         ResponsesQuirks(encrypted_reasoning=True, replay_raw=True, prompt_cache_key=True, session_header="session_id"),
         verified=True,
+    ),
+    "claude": ProviderInfo(
+        "claude", "Claude (Agent SDK)", "agent-sdk", "claude-agent-sdk://", "anthropic", None,
+        verified=False,
     ),
     "grok": ProviderInfo(
         "grok",
@@ -125,6 +130,10 @@ def make(provider_id: str, auth: HeaderSource, model: str | None = None) -> Prov
         from ..mock.provider import MockProvider
 
         return MockProvider(model or "hello")
+    if info.dialect == "agent-sdk":
+        from .claude import ClaudeProvider
+
+        return ClaudeProvider()
     if provider_id == "copilot" and copilot_uses_responses(model):
         return ResponsesProvider(info.id, info.base_url, auth, ResponsesQuirks(initiator_header=True, vision_header=True))
     if isinstance(info.quirks, ResponsesQuirks):
