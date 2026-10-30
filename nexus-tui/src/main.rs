@@ -225,6 +225,7 @@ async fn run(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let mut dirty = true;
+    let mut program_status = nexus_tui::program_status::Tracker::default();
     'main: loop {
         if dirty {
             terminal.draw(|f| render::render(f, &mut app))?;
@@ -240,7 +241,18 @@ async fn run(
                 None => break 'main,
             },
             msg = handle.messages.recv() => match msg {
-                Some(m) => app.apply_sync(m),
+                Some(m) => {
+                    let snapshot = matches!(&m, sync::SyncMsg::Snapshot { .. });
+                    let event = match &m {
+                        sync::SyncMsg::Event(event) if event.id > app.state.model.last_id => Some(event.clone()),
+                        _ => None,
+                    };
+                    app.apply_sync(m);
+                    if snapshot { program_status.snapshot(); }
+                    if let Some(event) = event.filter(|event| app.state.model.last_id == event.id) {
+                        program_status.event(&event);
+                    }
+                },
                 None => break 'main,
             },
             Some((key, image)) = image_rx.recv() => app.apply_image_paste(key, image),
@@ -269,13 +281,16 @@ async fn run(
             }
             _ = tick.tick() => dirty = app.tick(Instant::now()),
         }
+        nexus_tui::program_status::emit(program_status.reconcile(&app.state));
         app.persist_prefs();
         for effect in std::mem::take(&mut app.effects) {
             match effect {
                 Effect::Quit => break 'main,
                 Effect::Suspend => {
+                    nexus_tui::program_status::emit(program_status.release());
                     term::suspend(&mut terminal)?;
                     app.set_size(terminal.size()?.width, terminal.size()?.height);
+                    nexus_tui::program_status::emit(program_status.reconcile(&app.state));
                 }
                 Effect::OpenEditor(path) => {
                     let editor = std::env::var("VISUAL")
@@ -287,8 +302,10 @@ async fn run(
                                 .filter(|value| !value.is_empty())
                         })
                         .unwrap_or_else(|| "vi".into());
+                    nexus_tui::program_status::emit(program_status.release());
                     term::run_external(&mut terminal, &editor, &path)?;
                     app.set_size(terminal.size()?.width, terminal.size()?.height);
+                    nexus_tui::program_status::emit(program_status.reconcile(&app.state));
                 }
                 Effect::Sync(c) => {
                     let _ = handle.commands.send(c);

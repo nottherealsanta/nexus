@@ -106,6 +106,24 @@ Tuning (all optional, read at daemon start):
 | `NEXUS10_KEEP_TURNS` | 200 | Recent turns kept per session |
 | `NEXUS10_MUTATION_RETENTION_DAYS` | 7 | Idempotency-key lifetime after resolution |
 
+## Terminal program status
+
+The interactive TUI reports active sessions to supporting terminals using
+[OSC 7501](https://www.superlogical.com/rex/docs/build/program-status). Running
+sessions report `working`; pending approvals and questions report `blocked`
+with the corresponding kind. A live turn summary reports `done`, `error`, or
+`idle` for a completed, failed, or interrupted turn. Session titles are included;
+messages are generic and do not contain prompts or tool arguments. Each session
+uses its own `nexus/<session-id>` record. Unrecognized OSC sequences can be
+ignored by the terminal, and the existing notification setting is independent.
+
+The TUI clears its transient records on exit, suspension, external-editor
+handoff, or loss of connection; completed and failed records survive normal
+exit. After reconnect, the TUI rebuilds active records from the snapshot but
+does not reconstruct past outcomes, which the snapshot does not include. It
+also removes records for deleted or archived sessions. Reports are best effort;
+terminal support has not been verified in a live Rex session.
+
 ## Visual review of the TUI
 
 The Sessions sidebar's scope control shows its current project/all-projects
