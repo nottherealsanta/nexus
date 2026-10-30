@@ -10,6 +10,12 @@ agents.** Keep this in mind for every change: show everything that matters
 (every parameter, every output), labelled and readable, never a raw JSON dump,
 and never hide information from the user that the agent can see.
 
+One of the core ideas of Nexus is to present context very well to the user: **the
+context-line / timeline of what the user sees and what the agent sees are the same.**
+Nothing is in the agent's context that the user can't find in the timeline, and the
+timeline never shows history as context after the agent has stopped seeing it (for
+example, a full context hands off to a new session instead of being compacted silently).
+
 **`docs/` is the source of truth** for how Nexus is built and why: architecture,
 every subsystem, and the design decisions. Start at [docs/README.md](docs/README.md)
 (a "find it by task" index), then open the doc for the area you are changing.

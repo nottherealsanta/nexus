@@ -431,7 +431,7 @@ class SessionOpen(msgspec.Struct, tag=True, frozen=True):
 class SessionWorktreeList(msgspec.Struct, tag=True, frozen=True):
     """List the project's Nexus worktrees (and the main checkout) from one session's view.
 
-    The same bounded rows the model sees from ``worktree_list``; read-only.
+    The same bounded rows the model sees from ``checkout status``; read-only.
     """
 
     session: str

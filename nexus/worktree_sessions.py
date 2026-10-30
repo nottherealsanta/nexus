@@ -165,7 +165,7 @@ class SessionWorktrees:
         if record is None or record.lifecycle != "active":
             names = ", ".join(r.name for r in self.project_records()) or "none yet"
             raise ValueError(f'No Nexus worktree named {to!r} in this project. Use "main" or one of: {names}. '
-                             "Call worktree_list to see them.")
+                             "Call checkout with action \"status\" to see them.")
         return record
 
     def _present_count(self):
@@ -188,7 +188,7 @@ class SessionWorktrees:
             text += (" Merged worktrees whose checkouts can be cleaned up: " + ", ".join(merged[:16]) +
                      ". Move into one of them to reuse it, or ask the user to remove checkouts from /worktrees.")
         else:
-            text += " None is merged yet. Continue in an existing worktree (worktree_move) or ask the user to remove one."
+            text += " None is merged yet. Continue in an existing worktree (checkout switch) or ask the user to remove one."
         return text
 
     def is_project_branch(self, branch) -> bool:
@@ -362,59 +362,78 @@ class SessionWorktrees:
             "present": self._present_count(),
         }
 
+    def _written_paths(self, handle, root):
+        """Paths this session wrote in ``root`` by successful tool calls (write receipts), since its last promotion.
+
+        Read on the event loop (the handle's events); unlike ``_owned_changes`` it never raises and
+        proves nothing about file contents: it only tells ``checkout status`` which changes are this
+        session's.
+        """
+        display = root.to_data(self.runtime.workspace)["path_display"]
+        successful = {(e.turn, e.data.get("tool_use_id")) for e in handle.events if e.type == "tool.result" and not e.data.get("is_error")}
+        paths: set[str] = set()
+        for event in handle.events:
+            if event.type == "worktree.promoted":
+                paths.clear()
+            elif (event.type == "worktree.file_written" and (event.turn, event.data.get("call_id")) in successful
+                    and event.data.get("owner_session") == handle.id and event.data.get("root_display") == display):
+                path = event.data.get("path")
+                if isinstance(path, str):
+                    paths.add(path)
+        return frozenset(paths)
+
+    def checkout_status(self, session, occupancy, written):
+        """``list`` plus ``here``: this session's checkout, who else is in it, and whose changes are uncommitted there.
+
+        ``written`` is ``_written_paths`` (read on the loop); this runs Git and belongs on a worker
+        thread. Bounded: 20 other sessions, 200 paths per side with the full counts kept.
+        """
+        state = self.list(session, occupancy)
+        root = self.runtime.session_root(session)
+        key = "main" if root.kind == "main" else root.worktree_id if root.kind == "worktree" else ""
+        row = next((item for item in state["worktrees"] if item.get("current")), None) or {}
+        here = {
+            "kind": root.kind,
+            "checkout": "main checkout" if root.kind == "main" else (f"worktree {root.path.name}" if root.kind == "worktree" else "external checkout"),
+            "branch": row.get("branch") or (self._main_branch() if root.kind == "main" else getattr(root, "branch", "")),
+            "others": [item for item in occupancy.get(key, []) if item["id"] != session][:20] if key else [],
+            "unmerged_commits": int(row.get("unmerged_commits") or 0),
+        }
+        try:
+            dirty = self._dirty_paths(root.path)
+        except Exception:
+            here["changes_unknown"] = True
+        else:
+            here["mine"] = sorted(redact_secrets(path)[:1024] for path in dirty & written)[:200]
+            here["not_mine"] = sorted(redact_secrets(path)[:1024] for path in dirty - written)[:200]
+            here["mine_count"] = len(dirty & written)
+            here["not_mine_count"] = len(dirty - written)
+        if root.kind == "worktree":
+            from .context.parts import render_worktree_merge_steps
+            here["merge_steps"] = render_worktree_merge_steps(
+                main=str(self.runtime.workspace), branch=root.branch, base=self._base_branch(root) or root.base_ref,
+                shared=bool(here["others"]))
+        state["here"] = here
+        return state
+
     def environment_facts(self, session_id):
-        """Labelled facts for the model's ``<session_worktree>`` block (every Git session)."""
+        """Fixed facts for the model's ``<session_worktree>`` block (every Git session unless ``checkout = "off"``).
+
+        The block sits in the cached system prompt, so these facts never depend on where the
+        session is or who else is working (plan.md §9): the main checkout directory and the
+        checkout policy only. Live facts come from ``checkout status`` and the move notice.
+        """
         if not self.is_git:
+            return ()
+        policy = self.policy().checkout
+        if policy == "off":
             return ()
         handle = self.handle(session_id)
         if getattr(handle, "kind", None) == "manager" or getattr(handle, "_kind", None) == "manager":
             return ()
-        root = self.runtime.session_root(session_id)
-        if root.kind == "external":
+        if self.runtime.session_root(session_id).kind == "external":
             return ()
-        from .agents.session_worktrees import status_counts
-        main_dirty = _dirty_total(status_counts(self.runtime.workspace))
-        occupancy = self.occupancy()
-        key = "main" if root.kind == "main" else root.worktree_id
-        facts = [
-            ("Current root", "main checkout" if root.kind == "main" else f"worktree {root.path.name}"),
-            ("Main checkout directory", str(self.runtime.workspace)),
-            ("Main checkout branch", self._main_branch() or "(detached)"),
-            ("Main checkout changes", f"dirty ({main_dirty} changed files)" if main_dirty else "clean"),
-            ("Other sessions in the main checkout", self._sessions_text([i for i in occupancy.get("main", []) if i["id"] != session_id])),
-        ]
-        if root.kind == "worktree":
-            facts += [
-                ("Worktree name", root.path.name),
-                ("Worktree directory", str(root.path)),
-                ("Worktree branch", root.branch),
-                ("Base branch", self._base_branch(root) or root.base_ref),
-                ("Base commit", root.base_sha),
-            ]
-            try:
-                record = self.service.get_worktree(root.worktree_id, root=self.registry, parent_workspace=self.runtime.workspace)
-                state = self._merge_state(record)
-                if state["merged"] and state["has_work"]:
-                    text = "merged into " + (self._base_branch(root) or "its base")
-                elif state["has_work"]:
-                    text = f"unmerged ({state['unmerged_commits']} commits not in {self._base_branch(root) or 'its base'})"
-                else:
-                    text = "no commits of its own yet"
-                dirty = _dirty_total(status_counts(root.path))
-                facts += [("Worktree state", text),
-                          ("Worktree changes", f"dirty ({dirty} changed files)" if dirty else "clean")]
-            except Exception:
-                facts.append(("Worktree state", "unavailable"))
-            facts.append(("Other sessions in this worktree", self._sessions_text(
-                [i for i in occupancy.get(key, []) if i["id"] != session_id])))
-        last = next((e for e in reversed(handle.events) if e.type == "worktree.moved"), None)
-        if last is not None:
-            data = last.data
-            line = f"{data.get('action', 'move')} to {data.get('to_name', '?')} from {data.get('from_name', '?')}"
-            if data.get("reason"):
-                line += f": {redact_secrets(str(data['reason']))[:200]}"
-            facts.append(("Last move", line))
-        return tuple(facts)
+        return (("Main checkout directory", str(self.runtime.workspace)), ("Checkout policy", policy))
 
     def status(self, session):
         """Projection for the host: current root, Git state, setup trust."""
@@ -583,7 +602,7 @@ class SessionWorktrees:
     async def commit(self, handle, turn_id, *, message=None, paths=None, agent="root", by="harness"):
         root = self.runtime.session_root(handle.id)
         if root.kind != "worktree":
-            raise ValueError("Only a Nexus worktree can be committed; create one with worktree_create")
+            raise ValueError("Only a Nexus worktree can be committed; create one with checkout isolate")
         if self.runtime.session_has_active_jobs(handle.id):
             payload = {"reason": "git_error", "detail": "Background shell jobs are running; finish them before committing"}
             self._event(handle, "worktree.commit_skipped", payload)
@@ -993,7 +1012,7 @@ class SessionWorktrees:
                 return
         shown = ", ".join(sorted(dirty)[:5]) + (f" and {len(dirty) - 5} more" if len(dirty) > 5 else "")
         raise ValueError(f"Worktree {root.path.name} has uncommitted changes ({shown}). "
-                         "Commit them with worktree_commit (or git), then retry the move.")
+                         "Commit them with checkout commit (or git), then retry the move.")
 
     async def _validate(self, handle, request, *, in_turn, turn_id=""):
         if not self.is_git:
@@ -1041,10 +1060,22 @@ class SessionWorktrees:
         self._moves[handle.id] = request
         self._emit(handle, "worktree.move_requested", {"request_id": ctx.call_id, "action": action, "to": request["to"],
             "name": request["name"], "base": request["base"], "reason": redact_secrets(request["reason"])}, ctx.turn_id)
-        target = "a new worktree" if action == "create" else ("the main checkout" if request["to"] == "main" else f"worktree {request['to']}")
-        return (f"move: queued\ntarget: {target}\nreason: {request['reason']}\n"
-                "The move happens after this step. Do not run tools that depend on the new directory in the same step; "
-                "other tool calls of this step still run in the old directory.")
+        if action == "create":
+            target = f"a new worktree{' named ' + request['name'] if request['name'] else ''}"
+            directory = "given in the notice after this step (the checkout is created then)"
+        elif request["to"] == "main":
+            target, directory = "the main checkout", f"`{self.runtime.workspace}`"
+        else:
+            target = f"worktree {request['to']}"
+            try:
+                directory = f"`{(await self._thread(handle.id, self._find_record, request['to'])).path}`"
+            except Exception:
+                directory = "given in the notice after this step"
+        return (f"move: queued\ntarget: {target}\nnew working directory: {directory}\nreason: {request['reason']}\n"
+                "The move happens after this step: other tool calls of this step still run in the old directory, so do "
+                "not run tools that depend on the new one in the same step. From the next step on, file edits, reads by "
+                "relative path and shell commands run in the new working directory; the workspace line in your system "
+                "prompt is the project's main checkout and does not follow moves.")
 
     async def move_session(self, session, to, *, reason="", action="move", name="", base="", continuation=""):
         """Idle-only entry (user override from the host): validate and apply now."""
@@ -1216,7 +1247,8 @@ class SessionWorktrees:
             handle.enqueue(request["continuation"], origin={"kind": "promote", "request_id": request_id})
         try:
             if in_turn:
-                self._model_notice(handle, self._move_text(root, action, left_name, source, left_state, reason, owned, excluded), turn_id)
+                self._model_notice(handle, self._move_text(root, action, left_name, source, left_state, reason, owned, excluded,
+                                                          session=handle.id), turn_id)
                 if root.kind == "worktree":
                     await self._turn_started(handle, root, turn_id)
             elif owned or excluded:
@@ -1250,7 +1282,7 @@ class SessionWorktrees:
         if result.get("kind") == "committed":
             self._commit_event(handle, result, seq=seq, agent="root", turn_id=turn_id)
 
-    def _move_text(self, root, action, left_name, source, left_state, reason, owned, excluded):
+    def _move_text(self, root, action, left_name, source, left_state, reason, owned, excluded, *, session=""):
         sha = (root.base_sha or "")[:7]
         if root.kind == "main":
             text = f"Working directory is now the main checkout (`{root.path}`)."
@@ -1274,7 +1306,15 @@ class SessionWorktrees:
                 text += f" Worktree {left_name} stays unmerged (branch `{source.branch}`)."
         if reason:
             text += f" Reason: {redact_secrets(reason)[:300]}"
-        return text + " Tool calls and shell commands now run there."
+        text += (f" From now on, file edits, reads by relative path and shell commands run in `{root.path}`. The "
+                 "workspace line in your system prompt is the project's main checkout and does not follow moves; this "
+                 "notice is your working directory.")
+        if root.kind == "worktree":
+            from .context.parts import render_worktree_merge_steps
+            others = self._others_in(session, root.worktree_id) if session else []
+            text += "\n\n" + render_worktree_merge_steps(main=str(self.runtime.workspace), branch=root.branch,
+                                                          base=self._base_branch(root) or root.base_ref, shared=bool(others))
+        return text
 
     async def _return_landed(self, handle, root):
         """Return only a clean, landed, idle session; never discard local work."""
@@ -1381,24 +1421,29 @@ class SessionWorktrees:
     # -- model tools ----------------------------------------------------------
 
     def tools(self, session):
-        if not self.is_git:
+        if not self.is_git or self.policy().checkout == "off":
             return ()
         handle = self.handle(session)
         if getattr(handle, "kind", None) == "manager" or getattr(handle, "_kind", None) == "manager":
             return ()
-        from .tools.builtin.worktree import build_worktree_tools
-        in_worktree = self.runtime.session_root(session).kind == "worktree"
+        from .tools.builtin.worktree import build_checkout_tools
 
         def check(ctx):
             if ctx.session_id != session:
                 raise ValueError("Session worktree tools cannot act for another session")
 
-        async def listing(args, ctx):
+        async def status(args, ctx):
             check(ctx)
-            return await self._thread(session, self.list, session, self.occupancy(fresh=True))
+            handle = self.handle(session)
+            root = self.runtime.session_root(session)
+            return await self._thread(session, self.checkout_status, session, self.occupancy(fresh=True),
+                                      self._written_paths(handle, root))
 
         async def commit(args, ctx):
             check(ctx)
+            if self.runtime.session_root(session).kind != "worktree":
+                raise ValueError("commit works only in a worktree and you are in the main checkout; "
+                                 "isolate first, or commit here with git")
             guard = self.runtime.session_path_guard(session)
             paths = args.get("paths")
             if paths is not None:
@@ -1415,7 +1460,7 @@ class SessionWorktrees:
             check(ctx)
             return await self.request_move(ctx, action="move", reason=args["reason"], to=args["to"])
 
-        return build_worktree_tools(listing, commit, create, move, in_worktree=in_worktree)
+        return build_checkout_tools(status, commit, create, move)
 
     # -- recovery ---------------------------------------------------------------
 

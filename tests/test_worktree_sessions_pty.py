@@ -38,7 +38,7 @@ CHILD = textwrap.dedent('''
             worktrees=WorktreesSection()))
         provider = ScriptedProvider(
             text_response('Session root ready'),
-            tool_response(('create-call', 'worktree_create', {'reason': 'write the result file in isolation'})),
+            tool_response(('create-call', 'checkout', {'action': 'isolate', 'reason': 'write the result file in isolation'})),
             tool_response(('write-call', 'write', {'path': 'session-result.txt', 'content': 'created in session root\\n'})),
             text_response('Worktree write complete'))
         def factory(workspace, **kwargs):

@@ -1214,8 +1214,12 @@ _NEVER_ASK_TOOLS = frozenset({"question"})
 _ALWAYS_ALLOWED_TOOLS = frozenset({"escalate"})
 #: Worktree tools only create or switch checkouts in Nexus-owned space and both
 #: can be undone, so they never ask (docs/security.md). An explicit ``deny`` rule
-#: still wins.
+#: still wins. ``checkout`` is the current tool: its permission key is the action,
+#: and only the actions below skip the ask (``commit`` follows the normal rules).
+#: The legacy names stay listed for old logs and configs.
 _WORKTREE_TOOLS = frozenset({"worktree_list", "worktree_create", "worktree_move"})
+_CHECKOUT_TOOL = "checkout"
+_CHECKOUT_NEVER_ASK = frozenset({"status", "isolate", "switch"})
 #: Families whose mode fallback is ``ask`` even under ``mode = "allow"``: reading
 #: another session's context is the sensitive path. Deny rules, grants and
 #: explicit allow rules still come first; ``mode = "deny"`` still denies.
@@ -1594,7 +1598,7 @@ class PermissionEngine:
                 "Landing a Nexus worktree branch with git merge --ff-only", suggestions,
             )
 
-        if public_name in _WORKTREE_TOOLS:
+        if public_name in _WORKTREE_TOOLS or (public_name == _CHECKOUT_TOOL and key in _CHECKOUT_NEVER_ASK):
             return self._verdict(
                 call, spec, key, Outcome.ALLOW, None, "worktree",
                 "Worktree tools only create or switch Nexus-owned checkouts", suggestions,

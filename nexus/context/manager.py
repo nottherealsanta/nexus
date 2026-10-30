@@ -1072,8 +1072,11 @@ class ContextManager:
         )
         environment = self._environment
         if environment is None:
+            # The project root, not the session root: the environment part is in the
+            # cached system prompt, so a checkout move must not rewrite it (plan.md §9).
+            # The move result and notice at the tail carry the new working directory.
             environment = capture_environment(
-                context_workspace, profile=self._profile(config)
+                self.workspace, profile=self._profile(config)
             )
         provider, model = self._reference(config)
         return AssemblyEnvironment(

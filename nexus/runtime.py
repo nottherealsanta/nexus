@@ -138,6 +138,7 @@ from .session.records import MessageRecord
 from .tools.builtin._job_recovery import OWNERS_DIRNAME
 from .tools.builtin._jobs import JobRegistry
 from .tools.builtin.question import ANSWER_WINDOW_S
+from .tools.builtin.worktree import LEGACY_WORKTREE_TOOL_NAMES, WORKTREE_TOOL_NAMES
 from .session.context_authz import ContextDenied
 from .tools.bundles import MANAGER_PROFILE, MANAGER_TOOL_NAMES, get_profile
 from .tools.manager import ToolManager
@@ -4865,7 +4866,7 @@ class Runtime:
     def list_session_worktrees(self, session):
         """The project's Nexus worktrees and main checkout as seen from ``session`` (read-only, bounded).
 
-        The same rows the model gets from ``worktree_list``: per worktree name, branch, base,
+        The same rows the model gets from ``checkout status``: per worktree name, branch, base,
         dirty, merged/unmerged, the sessions in it and the current marker.
         """
         return self._session_worktrees.list(session)
@@ -4873,7 +4874,7 @@ class Runtime:
     async def move_session_worktree(self, session, to, reason=""):
         """Move an idle session to ``"main"`` or an existing worktree by name (user override).
 
-        The agent's own moves go through ``worktree_move`` and apply mid-turn at a step boundary.
+        The agent's own moves go through ``checkout`` (isolate, switch) and apply mid-turn at a step boundary.
         """
         return await self._session_worktrees.move_session(session, to, reason=reason)
 
@@ -6947,7 +6948,7 @@ class Runtime:
         """
         if self._agents is None:
             return None
-        root_worktree_tools = {"worktree_list", "worktree_create", "worktree_move", "worktree_commit"}
+        root_worktree_tools = WORKTREE_TOOL_NAMES | LEGACY_WORKTREE_TOOL_NAMES
         parent_tools = tuple(name for name in parent_tools if name not in root_worktree_tools)
         if catalog is not None:
             catalog = tuple(tool for tool in catalog if tool.name not in root_worktree_tools)

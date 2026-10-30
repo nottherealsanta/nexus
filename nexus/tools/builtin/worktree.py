@@ -1,13 +1,28 @@
-"""Session worktree tools, bound to narrow Runtime callbacks (agent-managed worktrees plan §3.3).
+"""The session ``checkout`` tool, bound to narrow Runtime callbacks (agent-managed worktrees plan §3.3).
 
-This module owns only model-facing schemas, argument bounds and result text.
+One tool replaces ``worktree_list``, ``worktree_create``, ``worktree_move`` and
+``worktree_commit`` (plan.md §9a): ``checkout`` takes an ``action``:
+
+- ``status``: where this session works, who else is in that checkout, which
+  uncommitted files there are this session's and which are not, and every
+  worktree of the project. Read-only.
+- ``isolate``: create a worktree and move this session into it.
+- ``switch``: move to ``main`` or an existing worktree.
+- ``commit``: commit in the current worktree (refused in the main checkout).
+
+The schema and description never depend on where the session is, so a move
+never changes the tool definitions already sent to the provider (the cached
+prefix stays valid); where the session is comes back in results and notices.
+
+This module owns only the model-facing schema, argument bounds and result text.
 Git, path checks, durable event emission and root transitions stay behind the
-callbacks captured by :func:`build_worktree_tools`; no Runtime is exposed.
+callbacks captured by :func:`build_checkout_tools`; no Runtime is exposed.
 
-``worktree_list``, ``worktree_create`` and ``worktree_move`` only create or
-switch checkouts in Nexus-owned space, so the permission engine never asks for
-them. Create and move return at once; the move is applied at the next step
-boundary of the running turn.
+``status``, ``isolate`` and ``switch`` only read or switch checkouts in
+Nexus-owned space, so the permission engine never asks for them (the
+permission key is the action); ``commit`` follows the normal rules. Isolate and
+switch return at once; the move is applied at the next step boundary of the
+running turn.
 """
 from __future__ import annotations
 
@@ -19,99 +34,96 @@ from ...errors import ToolError
 from ...ext.quarantine import sanitize_text
 from ..spec import RegisteredTool, ToolContext, ToolExecutionResult, ToolSpec
 
-__all__ = ["WORKTREE_TOOL_NAMES", "build_worktree_tools", "format_worktree_list"]
+__all__ = [
+    "CHECKOUT_ACTIONS", "CHECKOUT_NEVER_ASK_ACTIONS", "CHECKOUT_TOOL_NAME", "LEGACY_WORKTREE_TOOL_NAMES",
+    "WORKTREE_TOOL_NAMES", "build_checkout_tools", "format_checkout_status", "format_worktree_list",
+]
 
 Callback = Callable[..., ToolExecutionResult | str | Awaitable[ToolExecutionResult | str]]
 
+CHECKOUT_TOOL_NAME = "checkout"
+#: Every action, in the order the schema lists them.
+CHECKOUT_ACTIONS = ("status", "isolate", "switch", "commit")
+#: Actions that only read or switch Nexus-owned checkouts: the permission engine never asks.
+CHECKOUT_NEVER_ASK_ACTIONS = frozenset({"status", "isolate", "switch"})
 #: Every worktree tool the Runtime may add to a root session.
-WORKTREE_TOOL_NAMES = frozenset({"worktree_list", "worktree_create", "worktree_move", "worktree_commit"})
+WORKTREE_TOOL_NAMES = frozenset({CHECKOUT_TOOL_NAME})
+#: The four tools ``checkout`` replaced; still kept out of subagent catalogs and
+#: recognised in old session logs, never offered to a model.
+LEGACY_WORKTREE_TOOL_NAMES = frozenset({"worktree_list", "worktree_create", "worktree_move", "worktree_commit"})
 
-_LIST_SCHEMA: dict[str, Any] = {
-    "type": "object", "properties": {}, "additionalProperties": False,
-}
-_COMMIT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "message": {"type": "string", "minLength": 1, "maxLength": 4000},
-        "paths": {"type": "array", "maxItems": 500, "items": {"type": "string", "maxLength": 4096}},
-    },
-    "required": ["message"], "additionalProperties": False,
-}
-_CREATE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
-        "name": {"type": "string", "minLength": 1, "maxLength": 60},
-        "base": {"type": "string", "minLength": 1, "maxLength": 200},
-    },
-    "required": ["reason"], "additionalProperties": False,
-}
-_MOVE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "to": {"type": "string", "minLength": 1, "maxLength": 200},
-        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
-    },
-    "required": ["to", "reason"], "additionalProperties": False,
+#: Fields each action reads; any other supplied field is ignored.
+_ACTION_FIELDS: dict[str, tuple[str, ...]] = {
+    "status": (),
+    "isolate": ("reason", "name", "base"),
+    "switch": ("to", "reason"),
+    "commit": ("message", "paths"),
 }
 
 _MOVE_WARNING = (
-    "The move happens after this step. Do not run tools that depend on the new directory in the "
+    "A move happens after the current step: do not run tools that depend on the new directory in the "
     "same step; other tool calls of this step still run in the old directory."
 )
 
-_LIST_SPEC = ToolSpec(
-    name="worktree_list",
-    description=(
-        "List the project's Git worktrees: the main checkout and every Nexus worktree (name, branch, "
-        "base, dirty, merged or unmerged, the sessions in each, last activity), marking where you are. "
-        "Call it before worktree_create to continue an existing worktree when the work belongs there. "
-        "This tool only reads repository state."
-    ),
-    input_schema=_LIST_SCHEMA,
-    bundle="task",
-    mutates=False,
-    concurrency="parallel",
-)
-_COMMIT_SPEC = ToolSpec(
-    name="worktree_commit",
-    description=(
-        "Commit selected changes in the worktree you are in. Omit paths to commit all changes. "
-        "Nexus adds its session, turn and agent trailers; supplied Nexus-* trailers are removed."
-    ),
-    input_schema=_COMMIT_SCHEMA,
-    bundle="task",
-    mutates=True,
-    concurrency="exclusive",
-    permission_key=lambda _args: "worktree_commit",
-)
-_CREATE_SPEC = ToolSpec(
-    name="worktree_create",
-    description=(
-        "Create a new Git worktree (branch nexus/wt/<name>) and move this session into it. Changed files "
-        "you wrote in the main checkout are carried over. From a worktree, the new one branches from the "
-        "updated base and the current worktree is left as it is (commit first). `name` is optional "
-        "(letters, digits, '-', '_'); `base` defaults to the current base branch. " + _MOVE_WARNING
-    ),
-    input_schema=_CREATE_SCHEMA,
-    bundle="task",
-    mutates=True,
-    concurrency="exclusive",
-    permission_key=lambda _args: "worktree_create",
-)
-_MOVE_SPEC = ToolSpec(
-    name="worktree_move",
-    description=(
-        "Move this session to the main checkout (`to` = \"main\") or to an existing Nexus worktree (`to` = its "
-        "name from worktree_list), whoever created it and whoever else is in it. Leaving a worktree needs its "
-        "changes committed; unmerged commits are fine and the branch is kept. " + _MOVE_WARNING
-    ),
-    input_schema=_MOVE_SCHEMA,
-    bundle="task",
-    mutates=True,
-    concurrency="exclusive",
-    permission_key=lambda _args: "worktree_move",
-)
+
+def _schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": list(CHECKOUT_ACTIONS)},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 500,
+                       "description": "isolate, switch: why (shown to the user)"},
+            "name": {"type": "string", "minLength": 1, "maxLength": 60,
+                     "description": "isolate: worktree name (letters, digits, '-', '_'); optional"},
+            "base": {"type": "string", "minLength": 1, "maxLength": 200,
+                     "description": "isolate: base branch; defaults to the current base"},
+            "to": {"type": "string", "minLength": 1, "maxLength": 200,
+                   "description": "switch: \"main\" or a worktree name from status"},
+            "message": {"type": "string", "minLength": 1, "maxLength": 4000,
+                        "description": "commit: the commit message"},
+            "paths": {"type": "array", "maxItems": 500, "items": {"type": "string", "maxLength": 4096},
+                      "description": "commit: paths to commit; omit to commit all changes"},
+        },
+        "required": ["action"], "additionalProperties": False,
+    }
+
+
+def _description() -> str:
+    return (
+        "Where this session works: the main checkout or a Git worktree of the project. Actions:\n"
+        "- status: your checkout, the other sessions in it (and whether they are active), which uncommitted "
+        "files there are yours and which are not, and every worktree of the project. Read-only.\n"
+        "- isolate {reason, name?, base?}: create a worktree (branch nexus/wt/<name>) and move into it. Files you "
+        "wrote in the main checkout are carried over. From a worktree, the new one branches from the updated base "
+        "and the current one is left as it is (commit first).\n"
+        "- switch {to, reason}: move to \"main\" or an existing worktree by its name from status. Leaving a "
+        "worktree needs its changes committed; unmerged commits are fine and the branch is kept.\n"
+        "- commit {message, paths?}: commit in the worktree you are in (not available in the main checkout); omit "
+        "paths to commit everything. Nexus adds its session, turn and agent trailers.\n"
+        "After a move, the result and a notice give your new working directory: from then on file edits, relative "
+        "paths and shell commands run there.\n"
+        "When to isolate: before your first edit when another active session is in your checkout; for changes "
+        "across files, refactors, dependency or build changes, experiments, or work the user may want to review "
+        "or throw away as a unit. Stay for questions, reading, reviews, running commands and small edits the user "
+        "asked for directly. Call status when unsure. " + _MOVE_WARNING
+    )
+
+
+def _spec() -> ToolSpec:
+    return ToolSpec(
+        name=CHECKOUT_TOOL_NAME,
+        description=_description(),
+        input_schema=_schema(),
+        bundle="task",
+        mutates=True,
+        concurrency="exclusive",
+        permission_key=lambda args: _action_key(args),
+    )
+
+
+def _action_key(args: Mapping[str, Any]) -> str:
+    action = args.get("action") if isinstance(args, Mapping) else None
+    return action if isinstance(action, str) and action in CHECKOUT_ACTIONS else "unknown"
 
 
 def _error(message: str) -> ToolExecutionResult:
@@ -205,43 +217,69 @@ def format_worktree_list(state: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-async def _call(callback: Callback | None, args: dict[str, Any], ctx: ToolContext, name: str) -> ToolExecutionResult:
+def _names(items: object, limit: int = 10) -> str:
+    rows = [str(item) for item in items] if isinstance(items, (list, tuple)) else []
+    shown = ", ".join(sanitize_text(row, limit=200) for row in rows[:limit])
+    return shown + (f", +{len(rows) - limit} more" if len(rows) > limit else "")
+
+
+def format_checkout_status(state: Mapping[str, Any]) -> str:
+    """Labelled fields for ``checkout status``: this session's checkout first, then every worktree."""
+    here = state.get("here") if isinstance(state.get("here"), Mapping) else {}
+    others = [item for item in here.get("others") or [] if isinstance(item, Mapping)]
+    active = [item for item in others if item.get("active")]
+    mine = here.get("mine") or []
+    not_mine = here.get("not_mine") or []
+    lines = [
+        f"you are in: {sanitize_text(str(here.get('checkout') or state.get('current', '?')), limit=200)}"
+        f" (branch {sanitize_text(str(here.get('branch') or '(detached)'), limit=200)})",
+        f"other sessions here: {_sessions(others)}",
+    ]
+    if here.get("changes_unknown"):
+        lines.append("uncommitted changes here: unknown (git status failed)")
+    elif not mine and not not_mine:
+        lines.append("uncommitted changes here: none")
+    else:
+        lines.append(f"uncommitted changes here: {here.get('mine_count', len(mine))} written by you, "
+                     f"{here.get('not_mine_count', len(not_mine))} not yours")
+        if mine:
+            lines.append(f"  yours: {_names(mine)}")
+        if not_mine:
+            lines.append(f"  not yours: {_names(not_mine)}")
+    if active:
+        lines.append(f"note: {len(active)} other active session{'s' if len(active) != 1 else ''} in this checkout; "
+                     "isolate before editing unless the user wants the changes here.")
+    if here.get("kind") == "worktree" and here.get("unmerged_commits"):
+        lines.append(f"note: this worktree has {here['unmerged_commits']} commits not in its base.")
+    lines += ["", format_worktree_list(state)]
+    return "\n".join(lines)
+
+
+async def _call(callback: Callback | None, args: dict[str, Any], ctx: ToolContext, action: str) -> ToolExecutionResult:
+    label = f"checkout {action}"
     if callback is None:
-        return _error(f"{name}: this operation is unavailable for this session")
+        return _error(f"{label}: this action is unavailable for this session")
     try:
         result = callback(args, ctx)
         if inspect.isawaitable(result):
             result = await result
     except ToolError as exc:
-        return _error(f"{name}: {sanitize_text(str(exc), limit=500)}")
+        return _error(f"{label}: {sanitize_text(str(exc), limit=500)}")
     except Exception as exc:  # noqa: BLE001 - a callback failure is model-visible
-        return _error(f"{name}: {sanitize_text(f'{type(exc).__name__}: {exc}', limit=500)}")
+        return _error(f"{label}: {sanitize_text(f'{type(exc).__name__}: {exc}', limit=500)}")
     if isinstance(result, ToolExecutionResult):
         return result
     if isinstance(result, str):
         return ToolExecutionResult.text(sanitize_text(result, limit=16_000))
     if isinstance(result, Mapping):
-        if name == "worktree_list":
-            return ToolExecutionResult.text("\n".join(sanitize_text(line, limit=1000).replace(" ← you are here", "  ← you are here") for line in format_worktree_list(result).splitlines())[:16_000])
+        if action == "status":
+            return ToolExecutionResult.text("\n".join(sanitize_text(line, limit=1000).replace(" ← you are here", "  ← you are here") for line in format_checkout_status(result).splitlines())[:16_000])
         lines = _mapping_lines(result)
         text = "\n".join(sanitize_text(line, limit=1000) for line in lines[:200])
         if len(lines) > 200:
             text += f"\n… {len(lines) - 200} more fields omitted"
-        return ToolExecutionResult.text(text or f"{name}: completed")
-    return _error(f"{name}: the bound operation returned an unsupported result")
-
-
-def _checked_commit(args: dict[str, Any]) -> str | None:
-    message = args.get("message")
-    paths = args.get("paths")
-    if not isinstance(message, str) or not message.strip() or len(message) > 4000 or "\x00" in message:
-        return "worktree_commit requires a non-empty message of at most 4,000 characters"
-    if paths is not None and (
-        not isinstance(paths, list) or len(paths) > 500
-        or any(not isinstance(path, str) or len(path) > 4096 or "\x00" in path for path in paths)
-    ):
-        return "worktree_commit paths must contain at most 500 bounded path strings"
-    return None
+        return ToolExecutionResult.text(text or f"{label}: completed")
+    return _error(f"{label}: the bound operation returned an unsupported result")
 
 
 def _bounded(args: dict[str, Any], key: str, limit: int, *, required: bool) -> str | None:
@@ -253,53 +291,49 @@ def _bounded(args: dict[str, Any], key: str, limit: int, *, required: bool) -> s
     return None
 
 
-def _checked_create(args: dict[str, Any]) -> str | None:
-    problem = _bounded(args, "reason", 500, required=True) or _bounded(args, "name", 60, required=False) \
-        or _bounded(args, "base", 200, required=False)
-    return f"worktree_create: {problem}" if problem else None
+def _checked(action: str, args: dict[str, Any]) -> str | None:
+    if action == "isolate":
+        problem = _bounded(args, "reason", 500, required=True) or _bounded(args, "name", 60, required=False) \
+            or _bounded(args, "base", 200, required=False)
+    elif action == "switch":
+        problem = _bounded(args, "to", 200, required=True) or _bounded(args, "reason", 500, required=True)
+    elif action == "commit":
+        message, paths = args.get("message"), args.get("paths")
+        if not isinstance(message, str) or not message.strip() or len(message) > 4000 or "\x00" in message:
+            problem = "commit requires a non-empty message of at most 4,000 characters"
+        elif paths is not None and (
+            not isinstance(paths, list) or len(paths) > 500
+            or any(not isinstance(path, str) or len(path) > 4096 or "\x00" in path for path in paths)
+        ):
+            problem = "paths must contain at most 500 bounded path strings"
+        else:
+            problem = None
+    else:
+        problem = None
+    return f"checkout {action}: {problem}" if problem else None
 
 
-def _checked_move(args: dict[str, Any]) -> str | None:
-    problem = _bounded(args, "to", 200, required=True) or _bounded(args, "reason", 500, required=True)
-    return f"worktree_move: {problem}" if problem else None
-
-
-def build_worktree_tools(
-    listing: Callback,
+def build_checkout_tools(
+    status: Callback,
     commit: Callback | None,
-    create: Callback | None,
-    move: Callback | None,
-    *,
-    in_worktree: bool,
+    isolate: Callback | None,
+    switch: Callback | None,
 ) -> tuple[RegisteredTool, ...]:
-    """Build capabilities for one session, capturing only operation callbacks.
+    """Build the one ``checkout`` capability for one session, capturing only operation callbacks.
 
-    List, create and move are available to every root session of a Git project;
-    commit only while the session is in a worktree. Create and move are queued
-    by the Runtime and applied at the next step boundary. None of these asks for
-    permission (the permission engine allows them by name; deny rules still win).
+    The same definition is offered wherever the session is (the prompt-cache rule);
+    the commit callback refuses outside a worktree. Isolate and switch are queued
+    by the Runtime and applied at the next step boundary. Each callback gets only
+    the fields its action reads.
     """
+    callbacks: dict[str, Callback | None] = {"status": status, "isolate": isolate, "switch": switch, "commit": commit}
 
-    async def list_run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
-        return await _call(listing, args, ctx, "worktree_list")
+    async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
+        action = args.get("action") if isinstance(args, Mapping) else None
+        if not isinstance(action, str) or action not in CHECKOUT_ACTIONS:
+            return _error(f"checkout: action must be one of {', '.join(CHECKOUT_ACTIONS)}")
+        selected = {key: args[key] for key in _ACTION_FIELDS[action] if key in args}
+        invalid = _checked(action, selected)
+        return _error(invalid) if invalid else await _call(callbacks[action], selected, ctx, action)
 
-    async def create_run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
-        invalid = _checked_create(args)
-        return _error(invalid) if invalid else await _call(create, args, ctx, "worktree_create")
-
-    async def move_run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
-        invalid = _checked_move(args)
-        return _error(invalid) if invalid else await _call(move, args, ctx, "worktree_move")
-
-    tools = [
-        RegisteredTool(spec=_LIST_SPEC, run=list_run, origin="builtin"),
-        RegisteredTool(spec=_CREATE_SPEC, run=create_run, origin="builtin"),
-        RegisteredTool(spec=_MOVE_SPEC, run=move_run, origin="builtin"),
-    ]
-    if in_worktree:
-        async def commit_run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
-            invalid = _checked_commit(args)
-            return _error(invalid) if invalid else await _call(commit, args, ctx, "worktree_commit")
-
-        tools.append(RegisteredTool(spec=_COMMIT_SPEC, run=commit_run, origin="builtin"))
-    return tuple(tools)
+    return (RegisteredTool(spec=_spec(), run=run, origin="builtin"),)

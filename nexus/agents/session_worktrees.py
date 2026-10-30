@@ -875,7 +875,7 @@ def get_worktree(record_id: str, *, root: str | Path, parent_workspace: str | Pa
 
 
 def find_worktree(parent_workspace: str | Path, name: str, *, root: str | Path) -> SessionWorktreeRecord:
-    """Look a project worktree up by the name ``worktree_list`` shows."""
+    """Look a project worktree up by the name ``checkout status`` shows."""
     validate_session_name(name)
     return get_worktree(_WT_PREFIX + name, root=root, parent_workspace=parent_workspace)
 

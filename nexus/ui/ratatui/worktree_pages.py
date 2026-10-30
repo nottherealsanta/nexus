@@ -39,7 +39,7 @@ def _row_label(row):
 
 class WorktreePages:
     async def worktrees_page(self):
-        """``/worktrees``: the project's worktrees as the agent's ``worktree_list`` sees them."""
+        """``/worktrees``: the project's worktrees as the agent's ``checkout status`` sees them."""
         session = self.shell.controller.session
         result = await self.client.list_session_worktrees(session)
         state = result.state or {}

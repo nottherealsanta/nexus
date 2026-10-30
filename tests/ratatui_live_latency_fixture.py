@@ -66,7 +66,7 @@ async def main(count, scenario="stream"):
                     subprocess.run(["git", *args], cwd=root/"workspace", check=True, capture_output=True)
                 # Exercise the actual first-message tool path, not a reentrant
                 # promote call inside start_turn's already-held session lock.
-                provider._scripts = [tool_response(("create", "worktree_create", {"reason": "latency fixture", "name": "first"})), text_response("MESSAGE_DONE")]
+                provider._scripts = [tool_response(("create", "checkout", {"action": "isolate", "reason": "latency fixture", "name": "first"})), text_response("MESSAGE_DONE")]
         source=[event for event in _seed_events("reference") if event.turn=="reference-2"]
         for index in range(count):
             for original in source:

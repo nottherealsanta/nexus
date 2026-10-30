@@ -1070,6 +1070,11 @@ class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """``[worktrees]``: bounded worktree creation and setup policy (the agent decides when to use one)."""
 
     base: str = "current"
+    #: Who decides when a session changes checkout (plan.md §9): ``agent`` (the agent
+    #: decides from the guidance), ``ask`` (the guidance tells the agent to ask the user
+    #: with the question tool first; nothing enforces it) or ``off`` (no ``checkout`` tool
+    #: and no guidance block). Only guidance changes between ``agent`` and ``ask``.
+    checkout: Literal["agent", "ask", "off"] = "agent"
     auto_remove_clean: bool = False
     remove_after_landing: bool = True
     max_worktrees: int = 16
@@ -1087,6 +1092,8 @@ class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     submodules: Literal["none", "top", "recursive"] = "none"
 
     def __post_init__(self) -> None:
+        if self.checkout not in {"agent", "ask", "off"}:
+            raise ValueError("worktrees.checkout must be 'agent', 'ask' or 'off'")
         if type(self.remove_after_landing) is not bool:
             raise ValueError("worktrees.remove_after_landing must be true or false")
         if type(self.auto_remove_clean) is not bool:
