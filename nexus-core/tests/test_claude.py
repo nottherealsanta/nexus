@@ -169,6 +169,7 @@ def test_provider_reports_a_worker_error_with_wire_events(monkeypatch):
         sys_exec = _sys.executable
         real = asyncio.create_subprocess_exec
         monkeypatch.setenv("ANTHROPIC_API_KEY", "secret")
+        monkeypatch.setenv("NEXUS10_CLAUDE_CLI", "/usr/bin/true")  # the provider needs some Claude Code to exist; the worker is faked
         monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
         seen = []
         with pytest.raises(ProviderError, match="nope"):

@@ -6,10 +6,11 @@ Preserve the visible, ordered context timeline, announce clipping, keep task too
 
 ## Where things stand (2026-10-30)
 
-- `main` and `origin/main` are old Nexus 0.7.2 (PyPI `nexus-harness`). `nexus01` is pushed (2026-10-30) at that commit plus one backup commit holding old Nexus's 18 uncommitted local changes (`c3f1848`); `~/repos/nexus` is now checked out on `nexus01`. `nexus10` has its own root commit and shares no history with `main` (corrected 2026-10-30; an earlier version of this plan called it a fast-forward). A plain push would need a force-push, so the merge is `git merge --allow-unrelated-histories -s ours origin/main` on `nexus10`: the tree stays exactly `nexus10`'s, old `main` becomes the second parent, and `git push origin nexus10:main` is then a fast-forward. Branch protection on `main` is off (the one ruleset is disabled), so no PR is required. The tree layout is entirely different (`nexus-core/`, `nexus-tui/`, `nexus-nsh/` replace `nexus/` and `rust/`), so `main` stops being old Nexus the moment it moves.
-- Release gate O1 to O4 are done (kernel helper, migration backup and recovery, `nexus migrate`, device logins). O5 and O6 are below.
-- CI and release workflows are written in `.github/workflows/` (adapted from old Nexus) but have never run. Release-please files: `release-please-config.json`, `.release-please-manifest.json`.
-- About 55 files are modified and uncommitted, plus `migrate.py` and three test files. Nothing below can land until they are committed.
+- **Merged.** `main` is now Nexus 0.10 (`e2c6cd2`, pushed directly, no PR; branch protection is off). `nexus10` shared no history with `main`, so the merge used `-s ours` and keeps old Nexus 0.7.2 as the second parent: no force-push, and nothing was lost. Old Nexus is also branch `nexus01` (pushed, plus one backup commit of its uncommitted local work) and tag `v0.7.2`.
+- Release gate O1 to O4 are done. O5 (platform matrix) and O6 (release-download install) are open.
+- **CI ran for the first time on that push** (run 41073305862): `lint` passed; five jobs failed for three reasons, listed in step 4. Release-please ran and opened PR #97 "release 0.10.0"; do not merge it until CI is green. Stale release PRs from old Nexus remain open (#95 "release 0.8.0", #70): close them.
+- **`install.sh` on `main` changed meaning.** Old Nexus's installer was fetched with `curl .../main/install.sh | sh`; that URL now serves the from-checkout installer, so the old one-line install no longer works. Fix before announcing: either keep a compatible script at that path or point the docs at the release asset.
+- The Claude provider works in the real TUI (a Claude Haiku 5.5 turn, 2026-10-30). It showed **14.7K input tokens for "hi there" against a ~3.9K starting-context estimate**: find where the other ~10K comes from (a stale daemon, the CLI 2.1.314 additions, or the tool schemas), because the context meter should match what the model receives.
 
 ### Linux check (Debian 13 x86_64, 2026-10-30, a scratch folder on the build box, since deleted)
 
@@ -50,17 +51,18 @@ Linux needs, in the installer's checks and in `docs/development.md`: `pkg-config
 - reject unsupported platforms with a diagnostic; do not install `nsh` for a release install (the web bundle is prebuilt);
 - add an `install` workflow (clean runner, rerun is an idempotent upgrade, `nexus update`) and a nightly check of the published script; old Nexus's `install.yml` is the model. `nexus update` currently only reports; decide whether 0.10.0 installs updates.
 
-### 4. CI and CD (written, not yet exercised)
-Adapted from old Nexus (`~/repos/nexus/.github/workflows`):
-- `ci.yml`: `changes` (skips release-only PRs), `lint` (ruff, manifest and theme checks, `cargo fmt --check`, `uv build`), `core` (pytest on macOS and Ubuntu 24.04), `tui` (cargo test + release build on macOS and Ubuntu 22.04 with ALSA headers), `nsh` (check, host tests, build), and `ci-ok`, the one required check.
-- `build-artifacts.yml` (reusable): TUI binaries for `ubuntu-22.04`, `ubuntu-22.04-arm`, `macos-15`, `macos-15-intel`; the NSH web bundle; the Core wheel and sdist.
-- `release.yml`: release-please opens a release PR on every push to `main`; merging it tags `v0.10.0`, builds, and attaches the artifacts, `install.sh` and `SHA256SUMS` to the GitHub release. **No PyPI publish**: old Nexus published `nexus-harness`, and 0.10 is not packaged that way.
-- `pr-title.yml`: copied unchanged.
+### 4. CI and CD (first run: red)
+Adapted from old Nexus (`~/repos/nexus/.github/workflows`): `ci.yml` (`changes`, `lint`, `core` on macOS and Ubuntu 24.04, `tui` on macOS and Ubuntu 22.04 with ALSA headers, `nsh`, and `ci-ok`, the one required check), `build-artifacts.yml` (TUI binaries for four platforms, the NSH web bundle, the Core wheel), `release.yml` (release-please, then attach artifacts, `install.sh` and `SHA256SUMS`; no PyPI publish), `pr-title.yml`.
+
+First run on `main` (2026-10-30), and what was done:
+1. `core`: one failure on both OSes, `test_claude.py`, because the runners have no Claude Code and my test assumed one. Fixed in the test (it names a stand-in CLI).
+2. `tui`: `agent_and_model_chosen_before_a_session_exists_go_into_its_creation` failed on both OSes (and before this work). The agent picker filters by `mode` and the fixture's agents had none. Fixed in the test (`"mode": "primary"`). The TUI tests then pass.
+3. `nsh`: `npm run check` fails with type errors (`numberOfLines`, `userSelect`, `objectFit`, `pointerEvents` unknown in style types) in `src/ui/timeline.tsx`, `usage.tsx` and others. **Cause: the developer's `nsh` is a source build of 0.3.0 (`09c1632`, in `~/.nsh/source`); the published release v0.3.0 (`76fa8a7`, the latest) lacks those properties.** The web bundle therefore builds only with the dev `nsh`. Open: build `nsh` from `09c1632` in CI and in `build-artifacts.yml` (pinned by commit), or wait for a release that has them and pin that. Until then the `nsh` job and the release's web bundle cannot pass.
 
 Before relying on them:
-1. Push the branch and let `ci.yml` run on a PR into a scratch branch; fix whatever the runners find (the NSH job and the Ubuntu jobs have never run on GitHub).
+1. Push the fixes and rerun `ci.yml` until `ci-ok` is green; the Ubuntu core and TUI jobs now have a baseline, the NSH job does not.
 2. Set the repository's required check to `ci-ok`, and confirm the `RELEASE_APP_ID` variable and `RELEASE_APP_PRIVATE_KEY` secret exist for the release-please app token (the old workflow used them).
-3. `nsh` is pinned to `v0.3.0` (decided). The workflows install it with `curl https://nsh.dev/install.sh`; `install.sh` still says `npm install -g nsh`, so make the from-checkout path use the same source and version.
+3. `nsh`: see item 3 above; `install.sh` still says `npm install -g nsh`, so make the from-checkout path use the same source and version.
 4. Release-please: `release-as: 0.10.0` is set so the first release is 0.10.0 whatever the commit history says; remove it afterwards. The manifest starts at `0.7.2` (old Nexus's last release); the changelog will include every commit since `v0.7.2` unless `bootstrap-sha` is set. Verify the `extra-files` updaters against a dry run, and bump the three versions (`0.10.0.dev0`, `0.10.0-dev.0`, `nsh.json` `0.10.0`) consistently.
 5. Dry-run the release with `workflow_dispatch` on a pre-release tag before the real one.
 

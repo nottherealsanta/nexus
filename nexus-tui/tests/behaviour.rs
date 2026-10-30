@@ -1527,8 +1527,8 @@ fn agent_and_model_chosen_before_a_session_exists_go_into_its_creation() {
     let mut a = app();
     a.state.model.select(None);
     a.state.agents = vec![
-        serde_json::json!({"name": "build", "source": "builtin"}),
-        serde_json::json!({"name": "plan", "source": "builtin"}),
+        serde_json::json!({"name": "build", "source": "builtin", "mode": "primary"}),
+        serde_json::json!({"name": "plan", "source": "builtin", "mode": "primary"}),
     ];
     a.state.models = vec![serde_json::json!({"ref": "codex/gpt-5", "name": "GPT-5"})];
     a.composer().set_text("/agent");
