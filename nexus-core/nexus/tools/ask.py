@@ -92,9 +92,4 @@ async def unbound(args: dict[str, Any], ctx: ToolContext) -> str:
     raise ToolError("ask requires the daemon's question registry")
 
 
-TOOL = Tool(
-    SPEC,
-    unbound,
-    "Ask the user one or more questions and wait for the answers; give each a stable id, with options when the "
-    "choices are known. This is not an approval request. The answer is a JSON object keyed by question id.",
-)
+TOOL = Tool(SPEC, unbound)

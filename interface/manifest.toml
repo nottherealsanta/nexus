@@ -360,13 +360,6 @@ clients = "both"
 command = "app.sign_out"
 
 [[settings.section.row]]
-id = "providers.default_model"
-label = "Provider default model"
-kind = "choice"
-scope = "core"
-clients = "both"
-
-[[settings.section.row]]
 id = "providers.add_custom"
 label = "Add OpenAI-compatible provider"
 kind = "action"
@@ -377,14 +370,6 @@ unavailable_reason = "Core does not support custom providers yet."
 [[settings.section]]
 id = "models"
 label = "Models"
-
-[[settings.section.row]]
-id = "models.default"
-label = "Default model"
-kind = "choice"
-scope = "core"
-clients = "both"
-command = "model.change"
 
 [[settings.section.row]]
 id = "models.default_effort"

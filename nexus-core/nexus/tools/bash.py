@@ -133,8 +133,10 @@ TOOL = Tool(
     ToolSpec(
         name="bash",
         description=(
-            "Run a bash command in the workspace directory. stdout and stderr are combined. No stdin. "
-            "There is no default time limit; pass timeout (seconds) to bound it. "
+            "Run a bash command. It starts in the workspace directory, so do not `cd` there first. stdout and "
+            "stderr are combined; there is no stdin. Use it for git, tests, linters and builds, and for "
+            "anything the other tools cannot do; use `read`, `grep`, `glob`, `ls`, `edit` and `patch` rather than "
+            "cat, sed, rg, find or redirects. There is no default time limit; pass timeout (seconds) to bound it. "
             "background=true returns a job id immediately; read it with bash_output and stop it with bash_kill."
         ),
         parameters={
@@ -148,10 +150,6 @@ TOOL = Tool(
         },
     ),
     run,
-    guidance="Run a shell command in the workspace (stdout and stderr combined, no stdin). There is no default time "
-             "limit; pass a timeout to bound it, or use background=true for a long command and read it with "
-             "bash_output. Use it to inspect the project (ls, rg, git) and to check your work with its tests, "
-             "linters and builds.",
 )
 
 OUTPUT_TOOL = Tool(
@@ -172,8 +170,6 @@ OUTPUT_TOOL = Tool(
         },
     ),
     unbound_output,
-    guidance="Read a background bash job started with bash background=true: status, exit code and output. "
-             "Page with offset and limit.",
 )
 
 KILL_TOOL = Tool(
@@ -183,5 +179,4 @@ KILL_TOOL = Tool(
         parameters={"type": "object", "properties": {"job_id": {"type": "string"}}, "required": ["job_id"]},
     ),
     unbound_kill,
-    guidance="Stop a background bash job started with bash background=true.",
 )

@@ -1223,9 +1223,9 @@ impl CoreApi {
         self.http.get("/api/model", &[]).await
     }
 
-    /// Core's default model reference (`{model}`), used when a session sets none.
-    pub async fn default_model(&self) -> Result<Value, Error> {
-        self.http.get("/api/model/default", &[]).await
+    /// The model last selected anywhere (`{model, source}`), what a new session starts with; empty when none was ever chosen.
+    pub async fn last_model(&self) -> Result<Value, Error> {
+        self.http.get("/api/model/last", &[]).await
     }
 
     /// Agents available to a project (`{agents, problems}`).

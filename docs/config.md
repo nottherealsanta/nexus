@@ -4,10 +4,13 @@ Core reads `$NEXUS10_HOME/config.toml` (normally `~/.nexus10/config.toml`).
 A missing file uses defaults. Invalid keys fall back independently and appear
 in the API's `errors`; malformed TOML is never overwritten by a patch.
 
-The initial inventory is `defaults.model`, `defaults.effort`, `defaults.agent`,
+The initial inventory is `defaults.effort`, `defaults.agent`,
 `defaults.permission` (`allow` or `ask`) and `tools.disabled`. New root sessions
 apply these values; explicit creation fields override them, and existing
 sessions keep their frozen configuration. Child sessions retain inheritance.
+`defaults.model` is deprecated and is not edited in Settings: with no model ever selected, a value there
+(or `$NEXUS_MODEL`) is the starting model of a new session and of a session stored before models were
+remembered; the first model the user selects replaces it as the new-session starting point.
 Other plan items add their own operational settings as those features land.
 
 `[agents.models]` maps each child-capable agent name to a non-empty list of
@@ -23,8 +26,8 @@ switch and a notice in the model's context are visible, and the new model remain
 the child's model. NSH Settings edits both lists for the current project's agents.
 
 `GET /api/config` returns `{revision, values, defaults, schema, errors}`.
-`PATCH /api/config` accepts `{expected_revision, set: {"defaults.model":
-"codex/example"}, unset: []}`. Stale revisions return 409. Daemon patches are
+`PATCH /api/config` accepts `{expected_revision, set: {"defaults.effort":
+"high"}, unset: []}`. Stale revisions return 409. Daemon patches are
 serialized, preserve comments, and replace the file atomically using a private
 temporary file. `config.changed` announces writes and outside edits detected
 by the daemon's two-second poll. Both clients reload Settings on that event.

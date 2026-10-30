@@ -10,6 +10,10 @@ Preserve the visible, ordered context timeline, announce clipping, keep task too
 
 Follow [TURN_SUMMARY_PLAN.md](TURN_SUMMARY_PLAN.md) for the remaining real-daemon checks, documentation and step 9 (live partials and ephemeral deltas). Preserve durable `input.*` events and the ordering of delivered steers; a steer is not a new turn. The TUI benchmark is in [docs/turn-summary-benchmark.md](docs/turn-summary-benchmark.md).
 
+## Settings: Providers and Agents pages
+
+Follow [SETTINGS_PLAN.md](SETTINGS_PLAN.md): replace the Providers, Models and Agents sections with two drill-in pages in both clients; skip disconnected providers when sampling subagent model pools.
+
 ## Steer, queue and prompt history
 
 - Add NSH browser coverage for Enter/Tab and the pending-input stack after fixing the mock stream (see Browser tests). Review the steer/queue implementation.
@@ -31,6 +35,8 @@ Follow [TURN_SUMMARY_PLAN.md](TURN_SUMMARY_PLAN.md) for the remaining real-daemo
 - Each provider needs wire fixtures, provider/auth documentation and a verified real call. Group OpenAI-compatible providers where possible.
 
 ## Context and sessions
+
+- Model memory (no default model) is in core, TUI and NSH; check it in a real daemon with both clients: a draft with no model asks for one (Core's draft-context request returns 400 "no model selected", so the starting-context preview is empty until one is chosen: consider a provider-independent estimate), a remembered model whose provider is signed out is shown and not replaced, and a session stored before the change that holds no model starts from the seed. The TUI test `agent_and_model_chosen_before_a_session_exists_go_into_its_creation` already failed before this change.
 
 - Allow `/btw` during a running turn in both clients; add NSH browser coverage for opening the original session from a handoff.
 - Return per-section starting-context detail text from Core for session drafts.

@@ -85,18 +85,12 @@ from `providers.make(provider_id, SIGN_INS[provider_id]())`.
 `hub.connected()` lists provider ids (in table order) whose sign-in reports
 `logged_in()`.
 
-## Default model
+## No default model
 
-`cli._default_model()`, used when `--model` is not given:
-
-1. `$NEXUS_MODEL`, used as given (it goes through `split_ref`, so a bare id means codex).
-2. Otherwise, over the connected providers: `codex` if connected, else the first
-   connected one, and the result is `"{provider}/{default_model}"`.
-3. If nothing is connected, `codex` is assumed (the run then fails with a "not
-   logged in" `AuthError`).
-
-Defaults come from the provider table: codex `gpt-6.1-terra`, grok `grok-4.7`,
-copilot `claude-sonnet-5`, opencode `kimi-k3`.
+There is no default model and no provider fallback. A new root session starts with the model the user last
+selected ([daemon.md](daemon.md#model-selection)); with none remembered it has none, and clients show "Select
+a model". The provider table's `default_model` (codex `gpt-6.1-terra`, grok `grok-4.7`, copilot
+`claude-sonnet-5`, opencode `kimi-k3`) is only a suggestion for the model picker.
 
 The chosen model id is not checked against the catalog; the provider rejects an
 unknown one.

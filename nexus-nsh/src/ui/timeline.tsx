@@ -8,7 +8,7 @@ import { DiffView } from "./diff";
 import { ContextSections, disabledOf, foldedMeta, startingSections } from "./newsession";
 import type { CtxSection } from "./newsession";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
-import { contextDetail, agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
+import { contextDetail, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
 import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import type { IconName } from "../icons";
@@ -113,9 +113,7 @@ function fmtCount(n: number): string {
 function bareModel(ref: string): string { return ref.split("/").at(-1) ?? ref; }
 function effectiveModelRef(): string {
   const s = viewed();
-  if (s?.model) return String(s.model);
-  const agent = agentCatalog().agents.find((a) => a.name === (s?.agent ?? "build"));
-  return agent?.model || defaultModel();
+  return s?.model ? String(s.model) : "";
 }
 function catalogModel(ref: string, matchBareId = false): any | undefined {
   const models = modelCatalog();

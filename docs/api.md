@@ -36,7 +36,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/artifact/{id}` | | the stored bytes, served as an attachment with the stored media type ([Artifacts](#artifacts-k8)) |
 | GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, default_model, connected, verified}]` |
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
-| GET | `/api/model/default` | | `{model}` |
+| GET | `/api/model/last` | `?project=`, `?agent=` | `{model, source}`: the model a new session for this agent starts with: `agent` (last selected for it in the project), `last` (last selected anywhere) or `none` with `""` ([daemon.md](daemon.md#model-selection)) |
 | GET | `/api/agent` | `?project=` or `?directory=` | `{agents: [Agent], problems: [{path, error}]}` |
 | (session JSON) | | | also `skills: [{name, description, scope, state, locked}]` and `mcp: [{server, tools, state, locked, error}]`: what the starting-context header switches ([tools.md](tools.md#skills-and-the-skill-tool), [mcp.md](mcp.md)) |
 | GET | `/api/skill` | `?project=` or `?directory=` | `{skills: [{name, description, scope, path, sha256, allowed_tools, warnings}], problems: [{path, error, kind}]}` ([tools.md](tools.md#skills-and-the-skill-tool)) |
@@ -68,7 +68,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | DELETE | `/api/session/{id}` | | 204; interrupts a running turn first |
 | POST | `/api/session/{id}/archive` | | `Session` for the whole root tree; idempotent |
 | POST | `/api/session/{id}/unarchive` | | `Session` for the whole root tree; idempotent |
-| POST | `/api/session/{id}/model` | `{model}`; `""` returns to the agent's or default model | `Session` |
+| POST | `/api/session/{id}/model` | `{model}`; `""` returns to the agent's own model (400 when it names none); a non-empty ref is remembered | `Session` |
 | POST | `/api/session/{id}/agent` | `{agent}` | `Session` |
 | GET | `/api/session/{id}/switch-cost` | `?model=`, `?agent=` | `{cache_lost, reasons, cached_tokens, input_tokens}`: ask before switching ([Cache warning](#cache-warning-k9)) |
 | GET | `/api/session/{id}/usage` | | the session's spend ledger `{since, models}` (also in `/turn`) |
@@ -113,7 +113,7 @@ Configuration patch paths and polling behavior are described in [config.md](conf
 // Session
 {"id": "ses_…", "project_id": "prj_…", "directory": "/abs/path", "title": "…", "agent": "build",
  "parent_id": null, "parent_call_id": null, "launched_by": "user", "children": ["ses_…"],  // who launched whom; a child row also has "tokens" (input + output spent)
- "model": "codex/gpt-6.1-terra", "model_source": "default",   // session | agent | default
+ "model": "codex/gpt-6.1-terra", "model_source": "session",   // session | agent | parent | none (default: only before models were remembered)
  "effort": "high", "effort_source": "agent",                    // session | agent | provider
  "tools": ["read", "edit", "write", "ask", "code", "expose_workspace_tools"], "disabled_tools": ["bash"],
  "workspace": {"entry": true, "active": false},   // on-demand control state
@@ -1067,7 +1067,7 @@ does, and returns the request its first turn would send, with nothing stored:
 the `/context` fields (`used`, `window`, `exact`, always false here), `model`,
 `agent`, `parts` (`instructions`, `tools`, `instruction_file`, estimated tokens
 of the system prompt, tool schemas and the AGENTS.md inside the prompt) and the
-`snapshot` summary, `tool_info` (each tool's `description` and `guidance`), and
+`snapshot` summary, `tool_info` (each tool's `description`), and
 the lists the session would start with: `tools` (names, in request order),
 `skills` and `mcp` (the session JSON's rows, with `state` and `locked`), and `session` (`model`, `effort`: what creation would store, configured defaults included; null when unset). Clients show these, not their own defaults, so the screen does not change when the session is created. Enabled
 MCP servers are connected first, as for creation. Clients draw the new-session

@@ -946,18 +946,11 @@ impl App {
                 .map(|d| d["tool_info"][item.key.as_str()].clone())
                 .filter(|d| !d.is_null())
         });
-        let mut text = def
+        let text = def
             .as_ref()
             .and_then(|d| d["description"].as_str())
             .unwrap_or("No description loaded yet.")
             .to_owned();
-        if let Some(g) = def
-            .as_ref()
-            .and_then(|d| d["guidance"].as_str())
-            .filter(|g| !g.is_empty())
-        {
-            text.push_str(&format!("\n\nGuidance: {g}"));
-        }
         Some((format!("Tool · {}", item.key), text))
     }
 
@@ -2777,12 +2770,13 @@ impl App {
     }
 
     /// The model reference a session runs with: its own, else the agent
-    /// file's, else Core's default. Empty only before the catalog loads.
+    /// file's. A draft with neither shows the last model selected anywhere.
+    /// Empty when none was ever chosen: the interface asks for one.
     pub fn effective_model(&self, session: Option<&crate::api::Session>) -> String {
         if session.is_none() {
             if let Some(m) = self.ui.draft.model.as_deref().filter(|m| !m.is_empty()) {
                 return m.to_owned();
-            } // What the session will be created with, including the configured default model.
+            } // What the session will be created with, including the model remembered for this agent.
             if let Some(m) = self.draft_session_field("model") {
                 return m;
             }
@@ -2809,7 +2803,16 @@ impl App {
             .find(|a| a["name"].as_str() == Some(agent.as_str()))
             .and_then(|a| a["model"].as_str())
             .filter(|m| !m.is_empty())
-            .map_or_else(|| self.state.default_model.clone(), str::to_owned)
+            .map_or_else(
+                || {
+                    if session.is_none() {
+                        self.state.last_model.clone()
+                    } else {
+                        String::new()
+                    }
+                },
+                str::to_owned,
+            )
     }
 
     /// Open a picker and ask the supervisor for fresh catalog data.
@@ -4515,7 +4518,7 @@ impl App {
         }
         // Model names and the default model come with the catalog; ask once
         // the workspace is known so the composer never says "default".
-        if snapshot && self.state.models.is_empty() && self.state.default_model.is_empty() {
+        if snapshot && self.state.models.is_empty() && self.state.last_model.is_empty() {
             self.effects
                 .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
         }
@@ -6655,7 +6658,7 @@ impl App {
                     }
                 }
             }
-            _ => edit_buffer(self.composer(), ev, name, false),
+            _ => edit_composer(self.composer(), ev, name),
         }
     }
 
@@ -7350,8 +7353,6 @@ impl App {
             id,
             "providers.sign_in"
                 | "providers.sign_out"
-                | "models.default"
-                | "providers.default_model"
                 | "models.default_effort"
                 | "agents.default_root"
                 | "tools.default_permission"
@@ -7480,11 +7481,7 @@ impl App {
                     }
                 }
             }
-            "models.default"
-            | "providers.default_model"
-            | "models.default_effort"
-            | "agents.default_root"
-            | "tools.default_permission" => {
+            "models.default_effort" | "agents.default_root" | "tools.default_permission" => {
                 let key = match row.id.as_str() {
                     "models.default_effort" => "effort",
                     "agents.default_root" => "agent",
@@ -7651,9 +7648,7 @@ impl App {
                 options.reduced_motion = !options.reduced_motion;
                 self.theme = self.theme.with(options);
             }
-            "models.default"
-            | "providers.default_model"
-            | "models.default_effort"
+            "models.default_effort"
             | "agents.default_root"
             | "tools.default_permission"
             | "appearance.sidebar"
@@ -8570,6 +8565,17 @@ fn message_text(m: &Message) -> String {
         .map(|p| p["text"].as_str().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn edit_composer(buf: &mut Composer, ev: &KeyEvent, name: &str) {
+    let name = match name {
+        "ctrl+left" => "home",
+        "ctrl+right" => "end",
+        "ctrl+shift+left" => "shift+home",
+        "ctrl+shift+right" => "shift+end",
+        _ => name,
+    };
+    edit_buffer(buf, ev, name, false);
 }
 
 /// Shared single-line/multi-line text editing keys.

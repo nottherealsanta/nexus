@@ -250,7 +250,7 @@ The right sidebar's Session
 info totals turns, calls, tools by name, tokens, a context bar against the
 model's window and the catalog cost. Right-click (or `m`) on a sidebar row opens
 its action menu; the Projects tab ends with `+ Add project` (an inline path
-field) and removal asks first. Settings shows the default model, catalog size
+field) and removal asks first. Settings shows the catalog size
 and source and the loaded agents, and says why rows that need a Core setting
 cannot change.
 

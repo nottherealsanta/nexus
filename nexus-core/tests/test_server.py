@@ -70,7 +70,7 @@ async def test_projects_are_unique_by_path_and_own_sessions(setup):
     assert first["id"] == again["id"] and first["name"] == "proj"
     session = (await client.post("/api/session", json={"project": first["id"]})).json()
     assert (session["directory"], session["agent"], session["model"], session["model_source"], session["status"], session["permission"]) == (
-        str(workspace.resolve()), "build", "scripted/m", "default", "idle", "allow")
+        str(workspace.resolve()), "build", "scripted/m", "session", "idle", "allow")
     listed = (await client.get("/api/session", params={"directory": str(workspace)})).json()
     assert [s["id"] for s in listed] == [session["id"]]
     assert (await client.post("/api/project", json={"path": str(workspace / "missing")})).status_code == 400
@@ -104,7 +104,7 @@ async def test_write_in_workspace_needs_no_permission_and_saves_messages(setup):
     assert messages[1]["parts"][0] == {"type": "tool_call", "id": "c1", "name": "write", "arguments": '{"path": "x.txt", "content": "hi"}', "origin": None, "raw": None}
     assert (await client.get(f"/api/session/{session['id']}")).json()["title"] == "make x.txt"
     context = (await client.get(f"/api/session/{session['id']}/context")).json()
-    assert (context["model"], context["messages"], context["tools"]) == ("m", 4, ["read", "grep", "glob", "ls", "bash", "bash_output", "bash_kill", "edit", "multiedit", "write", "web_search", "web_fetch", "ask", "code", "expose_workspace_tools"])
+    assert (context["model"], context["messages"], context["tools"]) == ("m", 4, ["read", "grep", "glob", "ls", "bash", "bash_output", "bash_kill", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code", "expose_workspace_tools"])
     assert context["instructions"].startswith("You are an AI agent running in Nexus") and "# Environment" in context["instructions"]
 
 
@@ -144,8 +144,8 @@ async def test_project_agent_sets_prompt_tools_model_and_effort(setup):
     context = (await client.get(f"/api/session/{session['id']}/context")).json()
     assert (context["model"], context["tools"], context["effort"]) == ("big", ["read", "expose_workspace_tools"], "high")
     instructions = context["instructions"]
-    assert instructions.startswith("You review code.\n\n# Tools\nThese are the only tools in this session:\n- `read`: ")
-    assert "`bash`" not in instructions and "`write`" not in instructions
+    assert instructions.startswith("You review code.\n\n# Environment\n")
+    assert "# Tools" not in instructions and "`bash`" not in instructions
 
     session = (await client.post(f"/api/session/{session['id']}/model", json={"model": "scripted/small"})).json()
     assert (session["model"], session["model_source"]) == ("scripted/small", "session")
@@ -288,7 +288,7 @@ async def test_disabled_tools_roundtrip_and_context(setup):
         'directory': str(workspace), 'disabled_tools': ['bash', 'write', 'bash']})).json()
     sid = session['id']
     assert session['disabled_tools'] == ['bash', 'write']
-    assert session['tools'] == ['read', 'grep', 'glob', 'ls', 'edit', 'multiedit', 'web_search', 'web_fetch', 'ask', 'code', 'expose_workspace_tools']
+    assert session['tools'] == ['read', 'grep', 'glob', 'ls', 'edit', 'patch', 'web_search', 'web_fetch', 'ask', 'code', 'expose_workspace_tools']
     assert rt.store.session(sid).disabled() == {'bash', 'write'}
     context = (await client.get(f'/api/session/{sid}/context')).json()
     assert context['tools'] == session['tools']

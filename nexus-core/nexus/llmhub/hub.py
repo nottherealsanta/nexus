@@ -2,32 +2,19 @@
 
 The only module that knows both, and the entry point the rest of core uses.
 `connected()` lists providers with stored credentials; `provider_for("grok/grok-4.7")`
-returns the provider and the bare model id; `default_model()` picks the model a
-new session uses.
+returns the provider and the bare model id. There is no default model: the one a session
+uses is the user's last selection (see `Runtime.remembered_model`).
 """
 
 from __future__ import annotations
-
-import os
 
 from . import Provider
 from .auth import SIGN_INS
 from .providers import PROVIDERS, make
 
-MODEL_ENV = "NEXUS_MODEL"
-
 
 def connected() -> list[str]:
     return [pid for pid in PROVIDERS if pid == "mock" or SIGN_INS[pid]().logged_in()]
-
-
-def default_model() -> str:
-    """`$NEXUS_MODEL`, else codex's default when connected, else the first connected provider's."""
-    if os.environ.get(MODEL_ENV):
-        return os.environ[MODEL_ENV]
-    ids = [pid for pid in connected() if PROVIDERS[pid].default_model] or ["codex"]
-    provider = "codex" if "codex" in ids else ids[0]
-    return f"{provider}/{PROVIDERS[provider].default_model}"
 
 
 def split_ref(ref: str) -> tuple[str, str]:

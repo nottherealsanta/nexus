@@ -53,8 +53,10 @@ the latest GitHub release and never installs.
     controls available. `directory_change` is the pending move while a running
     turn has not reached a safe boundary yet.
   - `agent`: default `build`.
-  - `model`: `provider/model`, if the user chose one. Otherwise the agent's
-    preference applies, then the daemon default.
+  - `model`: `provider/model`. There is no default model ([Model selection](#model-selection)): a root
+    session stores the model it starts with, an agent's own `model` applies while the session holds none,
+    and a subagent without either inherits its parent's. `""` with `model_source: "none"` means none was ever
+    chosen; starting a turn then fails with 400 "no model selected".
   - `permission`: `ask` or `allow` (default). An older database is upgraded once
     on open (migration `default_tool_allow_v1`): every stored `ask`, children
     included, becomes `allow` and its `revision` increases. An `ask` set after
@@ -97,6 +99,31 @@ the latest GitHub release and never installs.
   sessions, snapshots, observations, execution records and session events.
   Archiving only changes one `archived` column on every session in the tree; it
   deletes nothing.
+
+## Model selection
+
+Nexus has no default model. It remembers the user's selections in the `preference` table: `model.last` (the last model
+selected anywhere) and `model.agent.<project>.<agent>` (the last selected for that agent in that project). A selection
+is a model chosen with `POST /api/session` (`model`), `POST /api/session/{id}/model` or `PATCH` on a root session; a
+subagent's model, a handoff continuation and an inherited model are not selections.
+
+A new root session resolves its model in this order and **stores** it, so the session keeps it for life:
+
+1. the `model` in the request;
+2. the agent's own `model` (kept as `model_source: "agent"` until the session switches away from that agent);
+3. the model last selected for this agent in this project;
+4. the model last selected anywhere;
+5. none: the session is created with `model: ""`, and `POST .../prompt` and `.../continue` return 400
+   "no model selected; choose one first".
+
+`GET /api/model/last?project=&agent=` returns steps 3 to 5 for a draft. An installation that never selected a
+model starts from a seed: `$NEXUS_MODEL`, else the deprecated `defaults.model` ([config.md](config.md)); a session
+stored before this change keeps that seed too. Nothing replaces a remembered model that has become unavailable (a
+provider signed out, a model gone): clients show the state and ask for another choice.
+
+Switching agents never changes a session's model. A session that was running its agent's pinned model stores it first.
+A subagent without an explicit model, a configured `[agents.models]` pool or a pinning agent inherits its parent's
+current model.
 
 ## Durable event log
 
@@ -268,8 +295,8 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
 - **`message_session`.** The first successful `session` call also exposes
   `message_session {session, message}` to the calling session, once, recorded
   in its snapshot as `messaging: {activated: true}` and announced with
-  `session.message_tool`. That call's result carries the new tool's description
-  and guidance; later requests include its schema. It messages only a direct
+  `session.message_tool`. That call's result carries the new tool's description;
+  later requests include its schema. It messages only a direct
   child of the calling session (any other id is a tool error). A working child gets the message before its next model call
   (a steer); an idle child starts a new turn on its existing conversation. The
   call returns at once and the child's answer comes back as a `session.notified`

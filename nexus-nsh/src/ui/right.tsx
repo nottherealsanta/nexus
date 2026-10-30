@@ -3,7 +3,7 @@ import { Scroll, Text, View } from "nsh";
 import { IconButton, Status, T, relTime, midTruncate } from "./kit";
 import { manifest } from "../gen/manifest";
 import { run } from "../commands";
-import { agentCatalog, contextBudget, defaultModel, gitStatus, m, model, modelCatalog, viewed } from "../store";
+import { contextBudget, gitStatus, m, model, modelCatalog, viewed } from "../store";
 import { agentColor } from "../agent-color";
 import type { SelectedView } from "../core/reduce";
 import { latestUsage, ledgerTotals, unknownRequests } from "../core/turns";
@@ -45,9 +45,7 @@ function catalogModel(ref: string, models: any[]): any | undefined {
   return models.find((entry) => entry.ref === ref || String(entry.ref ?? "").split("/").at(-1) === bare);
 }
 function effectiveModel(session: any): string {
-  if (typeof session.model === "string" && session.model && session.model !== "default") return session.model;
-  const agent = agentCatalog().agents.find((item) => item.name === session.agent);
-  return agent?.model || defaultModel();
+  return typeof session.model === "string" ? session.model : "";
 }
 /**
  * Session totals: turns and tools from the messages; tokens, calls and cost from Core's spend

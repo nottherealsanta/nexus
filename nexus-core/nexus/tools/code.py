@@ -23,5 +23,4 @@ async def unbound(args: dict[str, Any], ctx: ToolContext) -> str:
     raise ToolError("code requires a daemon kernel registry")
 
 
-TOOL = Tool(SPEC, unbound, "Persistent Python cells; await your granted task tools with keyword arguments. "
-            "Use asyncio.gather for parallel calls and print or return only useful results. Variables are shared by the session tree.")
+TOOL = Tool(SPEC, unbound)

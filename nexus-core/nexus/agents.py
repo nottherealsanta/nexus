@@ -30,11 +30,11 @@ three places, and a later one replaces an earlier one with the same name:
 A file that fails to parse is reported in `problems`; it is never silently
 skipped.
 
-The system prompt is built by `render_prompt()`: the body, with `{{tools}}`
-replaced by a tools section that describes only the tools this session has
-(each tool's `guidance`), plus an environment block. A body without
-`{{tools}}` gets the section appended. Agent bodies should not name tools
-outside that section, so turning a tool off removes every description of it.
+The system prompt is built by `render_prompt()`: the body plus an environment
+block. It does not list tools: each tool is described once, by its definition
+in the request. A session with no tools gets one line saying so. A leftover
+`{{tools}}` placeholder in a body is removed. Agent bodies should not name
+tools, so turning a tool off removes every description of it.
 The whole prompt is visible in a session's context (`GET …/context`).
 """
 from __future__ import annotations
@@ -212,18 +212,15 @@ def _stamps(directory: Path) -> list[tuple[str, int, int]]:
 TOOLS_PLACEHOLDER = "{{tools}}"
 
 
-def tools_section(tools: list[tuple[str, str]]) -> str:
-    """`# Tools` for exactly these (name, guidance) pairs."""
+NO_TOOLS = "No tools are available in this session. Answer from the conversation alone."
+
+
+def render_prompt(agent: AgentDef, tools: list[str], workspace: Path) -> str:
+    body = agent.prompt
+    if TOOLS_PLACEHOLDER in body:
+        body = re.sub(r"\n{3,}", "\n\n", body.replace(TOOLS_PLACEHOLDER, "")).strip()
     if not tools:
-        return "# Tools\nNo tools are available in this session. Answer from the conversation alone."
-    lines = ["# Tools", "These are the only tools in this session:"]
-    lines += [f"- `{name}`: {guidance}" if guidance else f"- `{name}`" for name, guidance in tools]
-    return "\n".join(lines)
-
-
-def render_prompt(agent: AgentDef, tools: list[tuple[str, str]], workspace: Path) -> str:
-    section = tools_section(tools)
-    body = agent.prompt.replace(TOOLS_PLACEHOLDER, section) if TOOLS_PLACEHOLDER in agent.prompt else f"{agent.prompt}\n\n{section}"
+        body = f"{body}\n\n{NO_TOOLS}"
     return (
         f"{body}\n\n# Environment\n"
         f"Workspace: {workspace}\n"

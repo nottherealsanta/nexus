@@ -16,7 +16,7 @@ interface Row { id: string; label: string; kind: string; scope: string; clients?
 interface Section { id: string; label: string; unavailable_reason?: string; row?: Row[] }
 const sections = (manifest.settings.section as unknown as Section[]).filter((section) => section.id !== "models");
 
-const data = signal<{ providers: any[] | null; models: any | null; modelDefault: string | null; agents: any | null }>({ providers: null, models: null, modelDefault: null, agents: null });
+const data = signal<{ providers: any[] | null; models: any | null; agents: any | null }>({ providers: null, models: null, agents: null });
 const keyEntry = signal<{ id: string; label: string } | null>(null);
 const providerKey = signal("");
 let loaded = false;
@@ -28,7 +28,6 @@ export function loadSettingsData() {
   void loadProviders().then((providers) => data.update((d) => ({ ...d, providers }))).catch(() => {});
   if (loaded) return; loaded = true;
   request<any>("GET", "/api/model").then((r) => data.update((d) => ({ ...d, models: r }))).catch(() => {});
-  request<any>("GET", "/api/model/default").then((r) => data.update((d) => ({ ...d, modelDefault: r.model }))).catch(() => {});
 }
 
 function Seg(p: { options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string }) {
@@ -92,7 +91,7 @@ async function refreshCatalog() {
 }
 
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["providers.sign_in", "providers.sign_out", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.default_permission", "models.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove"]);
+const WIRED = new Set(["providers.sign_in", "providers.sign_out", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "about.inspector", "providers.list", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.default_permission", "models.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove"]);
 
 function voiceTarget(id: string): VoiceTarget | null {
   if (id.startsWith("dictation.stt_")) return "stt";
@@ -312,9 +311,9 @@ function control(r: Row): JSX.Element {
   if (r.id === "tools.default_permission") return <Seg label={r.label} options={["allow", "ask"]} value={config()?.values?.defaults?.permission ?? "allow"} onPick={(v) => void patchConfig("defaults.permission", v)} />;
   if (r.id === "tools.defaults") {
     const disabled: string[] = config()?.values?.tools?.disabled ?? [];
-    return <View class="gap-1">{["read", "grep", "glob", "ls", "bash", "edit", "multiedit", "write", "web_search", "web_fetch", "ask", "code"].map((name) => <Button testID={`default-tool-${name}`} onPress={() => void patchConfig("tools.disabled", disabled.includes(name) ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={`${disabled.includes(name) ? "off" : "on"} · ${name}`} /></Button>)}</View>;
+    return <View class="gap-1">{["read", "grep", "glob", "ls", "bash", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code"].map((name) => <Button testID={`default-tool-${name}`} onPress={() => void patchConfig("tools.disabled", disabled.includes(name) ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={`${disabled.includes(name) ? "off" : "on"} · ${name}`} /></Button>)}</View>;
   }
-  const paths: Record<string, string> = { "providers.default_model": "model", "models.default": "model", "models.default_effort": "effort", "agents.default_root": "agent" };
+  const paths: Record<string, string> = { "models.default_effort": "effort", "agents.default_root": "agent" };
   if (paths[r.id]) {
     const key = paths[r.id];
     const value = config()?.values?.defaults?.[key] || "automatic";

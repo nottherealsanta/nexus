@@ -93,7 +93,7 @@ fn model_agent_and_effort_pickers_use_core_catalog_data() {
             serde_json::json!({"name": "custom", "source": "project", "mode": "primary"}),
         ],
         source: "models.dev".into(),
-        default_model: "codex/gpt-6.1-terra".into(),
+        last_model: "codex/gpt-6.1-terra".into(),
     });
     let items = a.palette_items();
     assert!(items.iter().any(|i| i.label == "build"));
@@ -1216,6 +1216,22 @@ fn composer_moves_and_selects_by_word() {
     assert_eq!(a.composer_ref().selected_text().as_deref(), Some("two "));
     typing(&mut a, "new ");
     assert_eq!(a.composer_ref().text(), "one new three");
+}
+
+#[test]
+fn composer_ctrl_arrows_move_and_select_to_line_edges() {
+    let mut a = app();
+    a.composer().set_text("first line\nsecond line\nthird line");
+    press(&mut a, &["up", "ctrl+left", "ctrl+shift+right"]);
+    assert_eq!(
+        a.composer_ref().selected_text().as_deref(),
+        Some("second line")
+    );
+    press(&mut a, &["ctrl+right", "ctrl+shift+left"]);
+    assert_eq!(
+        a.composer_ref().selected_text().as_deref(),
+        Some("second line")
+    );
 }
 
 #[test]

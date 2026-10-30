@@ -1353,6 +1353,27 @@ fn draw_left(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         Tab::Files => draw_files(cx, buf, body, focused, hits),
         Tab::Projects => draw_projects(cx, buf, body, focused, hits),
     }
+    if a.ui.tab == Tab::Sessions && body.width >= 8 && body.height >= 3 {
+        let scope = Rect::new(body.right() - 3, body.y, 2, 1);
+        if cx.hovered(scope) {
+            let label = if a.ui.scope_all {
+                "All projects · switch scope"
+            } else {
+                "Current project · switch scope"
+            };
+            let w = (width(label) as u16 + 2).min(body.width);
+            let tip = Rect::new(body.right() - w, body.y + 1, w, 1);
+            clear(buf, tip, cx.st(PRIMARY, RAISED));
+            put(
+                buf,
+                tip.x + 1,
+                tip.y,
+                label,
+                cx.st(PRIMARY, RAISED),
+                w.saturating_sub(2),
+            );
+        }
+    }
 }
 
 /// The sidebar tab icons, in manifest order: a row at the top of the full
@@ -1404,7 +1425,7 @@ fn draw_tab_icons(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     for (tab, rect, _, glyph) in tab_icons(cx, r) {
         let active = a.ui.tab == tab;
         let mut style = if active {
-            cx.st(PRIMARY, SIDEBAR).add_modifier(Modifier::BOLD)
+            cx.st(PRIMARY, SIDEBAR)
         } else {
             cx.st(MUTED, SIDEBAR)
         };
@@ -1650,7 +1671,7 @@ fn session_place(cx: &Cx, s: &crate::api::Session) -> String {
 fn draw_files(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitMap) {
     let a = cx.app;
     let mut top = r.y;
-    // D16: the root header, `SIDE-PROJECT` bold and `⌥ main` muted at the
+    // The root header has the project name in bold and `⌥ main` muted at the
     // right. With several checkouts it switches between them.
     if let Some(h) = a.files_header() {
         let row = Rect::new(r.x, r.y, r.width, 1);
@@ -1678,7 +1699,7 @@ fn draw_files(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitM
             buf,
             x,
             r.y,
-            &truncate(&h.name.to_uppercase(), room, cx.ell()),
+            &truncate(&h.name, room, cx.ell()),
             cx.st(PRIMARY, SIDEBAR).add_modifier(Modifier::BOLD),
             room as u16,
         );
@@ -2369,12 +2390,12 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                 hits.add(rr, Target::NewSession);
             }
             SRow::Project(i) => {
-                let name = entries[i].project.as_deref().unwrap_or("").to_uppercase();
+                let name = entries[i].project.as_deref().unwrap_or("");
                 put(
                     buf,
                     rr.x + 2,
                     y,
-                    &truncate(&name, rr.width.saturating_sub(4) as usize, cx.ell()),
+                    &truncate(name, rr.width.saturating_sub(4) as usize, cx.ell()),
                     muted.add_modifier(Modifier::BOLD),
                     rr.width.saturating_sub(3),
                 );
@@ -5766,16 +5787,11 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
             format!("pid {}{}{}", c.pid, cx.sep(), c.home)
         })),
         "keybindings.list" => Some("enter".into()),
-        "models.default"
-        | "providers.default_model"
-        | "models.default_effort"
-        | "agents.default_root"
-        | "tools.default_permission" => {
+        "models.default_effort" | "agents.default_root" | "tools.default_permission" => {
             let key = match row.id.as_str() {
-                "models.default_effort" => "effort",
                 "agents.default_root" => "agent",
                 "tools.default_permission" => "permission",
-                _ => "model",
+                _ => "effort",
             };
             Some(
                 a.state
@@ -6994,6 +7010,10 @@ fn draw_help(cx: &Cx, buf: &mut Buffer, area: Rect, top: usize, hits: &mut HitMa
         (
             "alt+left/right".into(),
             "Move by word; Shift selects".into(),
+        ),
+        (
+            "ctrl+left/right".into(),
+            "Move to line start/end; Shift selects".into(),
         ),
     ]);
     rows.push(("f6 / shift+f6".into(), "Cycle focus between panes".into()));

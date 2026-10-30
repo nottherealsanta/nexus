@@ -1,4 +1,4 @@
-"""grep, glob, ls and multiedit: confinement, .gitignore, clipping notices, read observations."""
+"""grep, glob, ls: confinement, .gitignore, clipping notices, read observations."""
 from __future__ import annotations
 
 import contextlib
@@ -11,7 +11,6 @@ from nexus.tools import DEFAULT_TOOLS, ToolContext, ToolError
 from nexus.tools.glob import run as glob
 from nexus.tools.grep import run as grep
 from nexus.tools.ls import run as ls
-from nexus.tools.multiedit import run as multiedit
 from nexus.tools.walk import glob_match
 
 
@@ -43,7 +42,7 @@ def git(root, *args):
 
 def test_registered_with_the_other_task_tools():
     names = [tool.spec.name for tool in DEFAULT_TOOLS]
-    assert {"grep", "glob", "ls", "multiedit"} <= set(names)
+    assert {"grep", "glob", "ls", "patch"} <= set(names)
     assert names[-1] == "code"
 
 
@@ -66,6 +65,13 @@ async def test_grep_path_glob_literal_and_no_match(ctx, engine):
     assert await grep({"pattern": "nothing-here"}, ctx) == "no matches"
 
 
+async def test_grep_searches_a_single_file(ctx, engine):
+    out = await grep({"pattern": "needle", "path": "src/a.py"}, ctx)
+    assert out.splitlines() == ["src/a.py:2:needle = 1"]
+    assert await grep({"pattern": "needle", "path": "src/a.py", "regex": False}, ctx) == "src/a.py:2:needle = 1"
+    assert await grep({"pattern": "absent", "path": "notes.md"}, ctx) == "no matches"
+
+
 async def test_grep_announces_clipping(ctx, engine):
     (ctx.workspace / "many.txt").write_text("hit\n" * 10)
     out = await grep({"pattern": "hit", "max_matches": 3}, ctx)
@@ -78,8 +84,8 @@ async def test_grep_announces_clipping(ctx, engine):
 async def test_grep_refuses_bad_input(ctx, engine):
     with pytest.raises(ToolError, match="outside the workspace"):
         await grep({"pattern": "x", "path": ".."}, ctx)
-    with pytest.raises(ToolError, match="not a directory"):
-        await grep({"pattern": "x", "path": "notes.md"}, ctx)
+    with pytest.raises(ToolError, match="does not exist"):
+        await grep({"pattern": "x", "path": "nope.md"}, ctx)
     with pytest.raises(ToolError):
         await grep({"pattern": "("}, ctx)
     with pytest.raises(ToolError, match="non-empty"):
@@ -150,7 +156,7 @@ async def test_ls_announces_clipping(ctx):
 
 
 class Guard:
-    """Records what multiedit asks of the session's read observations."""
+    """Records what a file tool asks of the session's read observations."""
 
     def __init__(self, error=None):
         self.error, self.required, self.forgotten = error, [], []
@@ -166,36 +172,3 @@ class Guard:
 
     def forget(self, paths):
         self.forgotten.extend(paths)
-
-
-async def test_multiedit_applies_in_order_and_needs_a_complete_read(ctx):
-    target = ctx.workspace / "m.txt"
-    target.write_text("alpha\nbeta\nalpha\n")
-    guard = Guard()
-    guarded = ToolContext(ctx.workspace, files=guard)
-    out = await multiedit({"path": "m.txt", "edits": [
-        {"old_string": "alpha", "new_string": "one", "replace_all": True},
-        {"old_string": "one\nbeta", "new_string": "two"}]}, guarded)
-    assert out == "edited m.txt (2 edits, 3 replacements)"
-    assert target.read_text() == "two\none\n"
-    assert guard.required == [("m.txt", True)] and guard.forgotten == [target]
-
-
-async def test_multiedit_is_all_or_nothing(ctx):
-    target = ctx.workspace / "m.txt"
-    target.write_text("alpha\nbeta\nalpha\n")
-    for edits, message in [
-        ([{"old_string": "beta", "new_string": "b"}, {"old_string": "zzz", "new_string": "q"}], "edit 1.*not found"),
-        ([{"old_string": "alpha", "new_string": "a"}], "occurs 2 times"),
-        ([], "non-empty"),
-        ([{"old_string": "a", "new_string": "a"}], "identical"),
-    ]:
-        with pytest.raises(ToolError, match=message):
-            await multiedit({"path": "m.txt", "edits": edits}, ToolContext(ctx.workspace, files=Guard()))
-        assert target.read_text() == "alpha\nbeta\nalpha\n"
-    with pytest.raises(ToolError, match="not been read"):
-        await multiedit({"path": "m.txt", "edits": [{"old_string": "beta", "new_string": "b"}]},
-                        ToolContext(ctx.workspace, files=Guard("m.txt has not been read in this session")))
-    assert target.read_text() == "alpha\nbeta\nalpha\n"
-    with pytest.raises(ToolError, match="outside the workspace"):
-        await multiedit({"path": "../x", "edits": [{"old_string": "a", "new_string": "b"}]}, ctx)

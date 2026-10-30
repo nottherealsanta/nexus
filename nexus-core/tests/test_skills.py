@@ -159,7 +159,7 @@ async def test_index_in_the_prompt_and_the_tool_loads_the_body(env):
     (folder / "references" / "env.md").write_text("ENV DOC")
     session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
     context = (await client.get(f"/api/session/{session['id']}/context")).json()
-    assert "`deploy`: Ship the app. Use when deploying." in context["instructions"]
+    assert "`deploy`: Ship the app. Use when deploying." in rt.store.snapshot(session["id"])["tool_definitions"]["skill"]["description"]
     assert "skill" in [t["name"] for t in context["tools"]]
     listed = (await client.get("/api/skill", params={"directory": str(workspace)})).json()
     assert [s["name"] for s in listed["skills"]] == ["deploy"]
@@ -183,8 +183,8 @@ async def test_switched_off_skill_is_not_in_the_index_and_is_refused(env):
     write_skill(root, "keep")
     write_skill(root, "drop")
     made = (await client.post("/api/session", json={"directory": str(workspace), "disabled_tools": ["skill:drop"]})).json()
-    context = (await client.get(f"/api/session/{made['id']}/context")).json()
-    assert "`keep`" in context["instructions"] and "`drop`" not in context["instructions"]
+    listing = rt.store.snapshot(made["id"])["tool_definitions"]["skill"]["description"]
+    assert "`keep`" in listing and "`drop`" not in listing
     await _ask(rt, client, provider, made["id"], [[ToolCall("c1", "skill", json.dumps({"name": "drop"}))], [Text("ok")]])
     (result,) = tool_results((await client.get(f"/api/session/{made['id']}/message")).json())
     assert "switched off" in result

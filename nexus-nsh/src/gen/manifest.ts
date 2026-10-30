@@ -460,13 +460,6 @@ export const manifest = {
       "command": "app.sign_out"
      },
      {
-      "id": "providers.default_model",
-      "label": "Provider default model",
-      "kind": "choice",
-      "scope": "core",
-      "clients": "both"
-     },
-     {
       "id": "providers.add_custom",
       "label": "Add OpenAI-compatible provider",
       "kind": "action",
@@ -480,14 +473,6 @@ export const manifest = {
     "id": "models",
     "label": "Models",
     "row": [
-     {
-      "id": "models.default",
-      "label": "Default model",
-      "kind": "choice",
-      "scope": "core",
-      "clients": "both",
-      "command": "model.change"
-     },
      {
       "id": "models.default_effort",
       "label": "Default effort",

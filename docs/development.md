@@ -108,6 +108,10 @@ Tuning (all optional, read at daemon start):
 
 ## Visual review of the TUI
 
+The Sessions sidebar's scope control shows its current project/all-projects
+scope on hover; clicking it switches scope. Project names in Sessions and Files
+retain their original casing.
+
 `nexus-tui --dump-frame` renders the real shell against a real Core with no TTY.
 Besides text frames it can press keys through the app's own key handling and
 write colour SVGs:
@@ -191,7 +195,7 @@ posting, renders the turn (including questions and approvals), and accepts
 | `test_responses.py` | Responses dialect: request body, replay rules, event parsing |
 | `test_chat.py` | Chat dialect: request body, reasoning fields, event parsing |
 | `test_catalog.py` | models.dev filtering and `ModelInfo` |
-| `test_tools.py` | read, bash, edit (replacement and patch), write |
+| `test_tools.py` | read, bash, edit, patch, write |
 | `test_ask.py` | ask contract and validation, pending/reply API, cancellation, snapshots, nested code questions |
 | `test_eventlog.py` | durable ids and generations, cursors and resync errors, replay/live boundary and paging, filtering and tombstones, overflow, persistence failure, migration, HTTP framing via raw ASGI |
 | `test_recovery.py` | crash windows (accepted turn, interrupted stream, saved/started/finished/inserted tools, mixed batches, waits, code/kernels/jobs), parent/child and archive recovery, recovery interrupted at every step, repeated startup, migration, durable replay, no provider/tool calls, isolated subprocess restart |

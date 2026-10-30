@@ -120,8 +120,8 @@ pub struct AppState {
     pub models: Vec<serde_json::Value>,
     pub agents: Vec<serde_json::Value>,
     pub catalog_source: String,
-    /// Core's default model reference, shown wherever a session sets none.
-    pub default_model: String,
+    /// The model last selected anywhere (Core's `/api/model/last`), what a new session starts with; empty when none was chosen.
+    pub last_model: String,
     pub config: Option<serde_json::Value>,
     pub context: std::collections::BTreeMap<String, serde_json::Value>,
     /// Core's starting context for the newest draft it was asked about: the request and its answer.
@@ -158,7 +158,7 @@ impl Default for AppState {
             models: Vec::new(),
             agents: Vec::new(),
             catalog_source: String::new(),
-            default_model: String::new(),
+            last_model: String::new(),
             config: None,
             context: std::collections::BTreeMap::new(),
             draft_context: None,
@@ -228,14 +228,12 @@ impl AppState {
                 models,
                 agents,
                 source,
-                default_model,
+                last_model,
             } => {
                 self.models = models;
                 self.agents = agents;
                 self.catalog_source = source;
-                if !default_model.is_empty() {
-                    self.default_model = default_model;
-                }
+                self.last_model = last_model;
             }
             // The app owns completion replies.
             SyncMsg::Completion { .. } => {}

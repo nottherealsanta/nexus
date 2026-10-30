@@ -15,7 +15,7 @@ const network = (extra: Record<string, unknown> = {}) => ({
   "GET */api/snapshot*": { body: snapshot },
   "GET */api/event*": { body: sse(connected), headers: { "content-type": "text/event-stream" } },
   "GET */api/provider": { body: [] },
-  "GET */api/model/default": { body: { model: "scripted/m" } },
+  "GET */api/model/last*": { body: { model: "scripted/m" } },
   "GET */api/model*": { body: { source: "t", models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000 }], model: "scripted/m" } },
   "GET */api/agent*": { body: { agents: [{ name: "build", source: "builtin" }], problems: [] } },
   "GET */api/skill*": { body: { skills: [], problems: [] } },

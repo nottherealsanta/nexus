@@ -46,7 +46,7 @@ TOOL = Tool(
     ToolSpec(
         name="glob",
         description="List files and directories whose path matches a shell glob such as `src/**/*.py`. "
-                    "Paths are relative to the workspace; results are sorted.",
+                    "Paths are relative to the workspace; results are sorted. Respects .gitignore and skips hidden files.",
         parameters={
             "type": "object",
             "properties": {
@@ -59,5 +59,4 @@ TOOL = Tool(
         },
     ),
     run,
-    guidance="Find files by name with a shell glob (`**/*.py`). Respects .gitignore and skips hidden files.",
 )

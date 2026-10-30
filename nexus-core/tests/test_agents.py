@@ -61,20 +61,21 @@ def test_unknown_agent_names_the_options():
         agents.load(None).get("nope")
 
 
-@pytest.mark.parametrize("body", ["Before\n{{tools}}\nAfter", "No placeholder."])
-def test_render_prompt_uses_actual_tools(tmp_path, body):
+@pytest.mark.parametrize("body", ["Before\n\n{{tools}}\n\nAfter", "Before\n\nAfter"])
+def test_render_prompt_does_not_list_tools(tmp_path, body):
     from dataclasses import replace
 
     agent = replace(agents.load(None).get("build"), prompt=body)
-    rendered = agents.render_prompt(agent, [("read", "Read files.")], tmp_path)
-    assert "{{tools}}" not in rendered and rendered.count("# Tools") == 1
-    assert "- `read`: Read files." in rendered and "`bash`" not in rendered
+    rendered = agents.render_prompt(agent, ["read"], tmp_path)
+    assert "{{tools}}" not in rendered and "# Tools" not in rendered
+    assert rendered.startswith("Before\n\nAfter\n\n# Environment\n")
     assert f"Workspace: {tmp_path}" in rendered
+    assert "No tools are available" not in rendered
     assert "No tools are available" in agents.render_prompt(agent, [], tmp_path)
 
 
 def test_builtin_bodies_do_not_describe_tools():
     for agent in agents.load(None).agents.values():
-        assert "{{tools}}" in agent.prompt
+        assert "{{tools}}" not in agent.prompt
         for name in ("read", "bash", "bash_output", "bash_kill", "edit", "write", "ask", "code", "session"):
             assert f"`{name}`" not in agent.prompt

@@ -13,7 +13,7 @@ the tool call in the parent that started it. Deleting a session deletes its
 descendants.
 
 `session_snapshot` stores the JSON configuration a session froze at creation:
-the agent, rendered prompt, tool descriptions/guidance, child catalog and the
+the agent, rendered prompt, tool descriptions, child catalog and the
 session's `AGENTS.md` record (`nexus/snapshot.py`). `event` is the durable event
 log: every published event, in publish order, so the inspector can show any past
 session down to the raw wire traffic and a client can reconnect from a cursor.

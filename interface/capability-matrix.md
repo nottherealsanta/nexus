@@ -385,11 +385,11 @@ Dictation, Keybindings, Notifications, About.
 | ST2 | Providers: list with connected state | API ready | `GET /api/provider` (`id`, `label`, `dialect`, `connected`, `verified`, `default_model`) | |
 | ST3 | Providers: account, expiry | Core work | 12a Settings over the API | Not returned |
 | ST4 | Providers: sign in (browser/device), sign out | API ready | `POST/GET/DELETE /api/provider/{id}/login` | Device flows and OpenCode API key |
-| ST5 | Providers: default model per provider | Core work | 12a Settings over the API | `default_model` is read-only from the provider table |
+| ST5 | Providers: default model per provider | Removed | | There is no default model; `default_model` in the provider table is only a picker suggestion |
 | ST6 | Providers: add OpenAI-compatible endpoint | Deferred | INTERFACE_PLAN "when Core supports custom providers" | Only four subscription providers now |
 | ST7 | Models: catalog list | API ready | `GET /api/model[?provider=]` (`source`, models with `efforts`, `context`, costs, price `tiers`) | Lists only connected providers |
 | ST8 | Models: catalog refresh | Core work | 12a? | `catalog.load(refresh=True)` is not reachable over HTTP |
-| ST9 | Models: default model and effort (read, write) | API ready | `GET/PATCH /api/config` | Defaults affect new root sessions |
+| ST9 | Models: last selected model (read) and default effort (read, write) | API ready | `GET /api/model/last[?project=&agent=]`, `GET/PATCH /api/config` | A new root session starts with the model last selected for its agent in the project, else the last selected anywhere, else none ([daemon.md](../docs/daemon.md#model-selection)) |
 | ST10 | Agents: loaded agents, source, path, problems | API ready | `GET /api/agent[?project=]` (`agents`, `problems`) | Gap: `mode` missing |
 | ST11 | Agents: open agent file in editor | Core work | 12a Files and git | Local clients could open the path externally |
 | ST12 | Agents: default root agent (write) | API ready | `GET/PATCH /api/config` | `defaults.agent` |

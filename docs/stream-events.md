@@ -238,13 +238,13 @@ loss.
 
 `session.workspace_tools` records that the on-demand workspace tools were
 activated: `{active: true, entry, tools}`. It is stored in the session's event
-log; the tool result (or the API notice) holds the definitions and guidance.
+log; the tool result (or the API notice) holds the definitions.
 
 `session.escalated` records a child's `escalate` call: `{needed, why, parent_id}`.
 
 `session.message_tool` records that `message_session` was exposed by a session's
 first `session` call: `{active: true, tools}`. It happens once per session; the
-call's tool result holds the description and guidance.
+call's tool result holds the description.
 
 `session.directory_changed` records an applied move: `from`, `to`, `branch`,
 `repository`, `worktree`, `source` (`tool` or `api`), `project_id`, the

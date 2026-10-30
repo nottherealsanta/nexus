@@ -23,7 +23,7 @@ You review code. Point out bugs and risks; do not edit files.
 | `description` | string, required | What the agent is for. Shown in lists, and later used to pick an agent for a sub agent. |
 | `mode` | `primary`, `subagent`, `all` | Where the agent may run: `primary` only as a root session, `subagent` only as a sub agent, `all` both. Enforced when a session is created or its agent is changed. Default `all`. |
 | `color` | colour name or `#rrggbb` | A hint for clients (agent chips and tabs). Served by `/api/agent`; not part of the prompt. |
-| `model` | `provider/model` | Used when the session has no model of its own. |
+| `model` | `provider/model` | A pin: a new root session with this agent starts with it (otherwise it starts with the remembered model, see [daemon.md](daemon.md#model-selection)); a subagent without a configured pool uses it. |
 | `effort` | string | Used when the session has no effort of its own. |
 | `tools` | list of tool names | The only tools the model is offered. Omit it for every tool. An unknown name makes session creation fail with a clear error. |
 | `control` | list | Control tools an agent may grant explicitly: only `session` today, which starts sub agents. Never implied: omitting `tools` does not grant it. Ignored in sub agents. The workspace controls are not granted here: new sessions always start with the `expose_workspace_tools` entry point (see below). |
@@ -62,11 +62,11 @@ The snapshot contains:
   steps, declared tools and control tools), its source (`builtin`, `global`,
   `project`), absolute path, file fingerprint (`sha256:…`) and prompt body;
 - the ordered tool list, with each enabled tool's request description, JSON
-  parameters and `guidance`; a switched-off tool has none of these. A new
+  and parameters; a switched-off tool has none of these. A new
   session's list ends with `expose_workspace_tools`; its workspace state
   (`{"entry": true, "activated": false}`) is stored beside it;
 - the child-agent catalog (name, description, mode, source, path and
-  fingerprint) used by the `session` tool's enum and guidance;
+  fingerprint) used by the `session` tool's enum and description;
 - the rendered agent prompt and the final `system_prompt` sent as the provider's
   `instructions`, including the linked `AGENTS.md` section;
 - the instruction-file record (path, status, content, bytes and hash), the
@@ -120,21 +120,22 @@ A session has one `agent`. The default is `build` when its mode allows a root;
 otherwise the first loaded agent allowed as a root is used (normally
 `orchestrate`). At creation:
 
-- **instructions** = the agent's body with `{{tools}}` replaced by guidance for
-  its actual tools, plus an environment block (workspace, date), then the
-  instruction-file section. This is rendered once and frozen.
+- **instructions** = the agent's body, plus an environment block (workspace,
+  date), then the instruction-file section (`AGENTS.md`, always last). The
+  prompt does not list tools; each tool is described once, by its definition in
+  the request. This is rendered once and frozen.
   `GET /api/session/{id}/context` shows the full text.
 - **tools** = the agent's `tools`, or all task tools, minus the session's
   `disabled_tools`; explicitly granted control tools follow the same switch. A
   new session also gets the `expose_workspace_tools` entry point unless it is
   switched off; activating it adds `change_session_directory` and `worktree`
   for subsequent calls. Disabled tools are absent from the stored definitions,
-  the request schemas and the system prompt's `# Tools` section.
+  the request schemas.
 - **model** = the session's model if the user set one. For a new child with no
   explicit model, a configured `agents.models` pool for its agent is sampled
   uniformly once and stored as the session model. Without a pool, the agent's
-  frozen `model` or the daemon's default is used. Root sessions do not use
-  these pools. **effort** uses the session's value, then the agent's, then the
+  frozen `model` applies, else the parent's model is inherited. Root sessions
+  do not use these pools. **effort** uses the session's value, then the agent's, then the
   provider's default.
 - **steps** = the agent's frozen `steps`, or 50.
 
@@ -155,9 +156,15 @@ Granting `bash` also grants the `bash_output` and `bash_kill` companions for
 background jobs (the table lists only the frontmatter tools).
 
 The session JSON reports the result and where it came from: `model` and
-`model_source` (`session`, `agent` or `default`), and `effort` and
+`model_source` (`session`, `agent`, `parent` or `none`; `default` only for a
+session stored before models were remembered), and `effort` and
 `effort_source` (`session`, `agent` or `provider`). Setting the model to `""`
-(`/model default` in chat) returns to the agent's choice.
+(`/model default` in chat) returns to the agent's own model and is refused (400)
+when the agent names none.
+
+An agent's `model` applies only while the session holds none (a session created
+with a pinning agent). Switching that session to another agent first stores the
+model it was running with, so a session never changes model by changing agent.
 
 Approval is a session setting (`permission`), not an agent setting: read,
 `bash_output`, `bash_kill`, `ask`, `edit`, `write` and the outer `code` call
@@ -192,13 +199,13 @@ tools are excluded. Session trees share a default kernel. See
 [tools.md](tools.md#ask) and [tools.md](tools.md#code). A question is not an
 approval and never grants a tool.
 
-## Tool guidance and session switches
+## Tool descriptions and session switches
 
-Put `{{tools}}` in the body where the generated `# Tools` section should appear.
-Without a placeholder, the section is appended. With no tools, it explicitly
-says none are available. Keep agent bodies tool-agnostic: naming tools elsewhere
-would leave stale advice when those tools are disabled. Custom bodies are not
-rewritten beyond the placeholder.
+Tools are described only by their definitions (description and JSON schema) in
+the request. The prompt has no `# Tools` section and agent bodies need no
+`{{tools}}` placeholder; a leftover placeholder is removed. A session with no
+tools gets one line saying so. Keep agent bodies tool-agnostic: naming tools
+would leave stale advice when those tools are disabled.
 
 The `session` tool is how subagents are launched. Its first successful call also
 exposes `message_session` to that session (once, kept in the snapshot's
@@ -206,7 +213,7 @@ exposes `message_session` to that session (once, kept in the snapshot's
 one ([daemon.md](daemon.md#session-trees-who-launched-whom)). The `session` tool's
 description says so.
 
-The `session` tool's guidance and `agent` enum are part of the snapshot: they
+The `session` tool's description (which lists the child agents) and `agent` enum are part of the snapshot: they
 come from the child-capable agents loaded when that parent session was created.
 A new parent picks up added agents, description changes and mode changes; an
 existing parent keeps its catalog. If an existing parent names a child agent
@@ -220,14 +227,14 @@ configuration it started with. Disabling a tool removes it from the next request
 schemas, from the nested functions inside code cells, and from the stored tool
 definitions. The frozen system prompt is not rewritten: the daemon appends a
 `[Nexus notice: tool availability changed]` message to the conversation. It
-names the tools now available (with their guidance), the tools switched off, and
+names the tools now available (with their descriptions), the tools switched off, and
 says the notice is authoritative where the frozen prompt mentions an old tool.
 Clearing a switch adds the tool's definition back and uses the same notice.
 
 Workspace controls are on demand. A new session's prompt and request contain
 only `expose_workspace_tools`; `change_session_directory` and `worktree` are
 absent. The model calls the entry point when it needs them, and the tool result
-contains both descriptions, schemas and guidance. Their executable schemas are
+contains both descriptions and schemas. Their executable schemas are
 added to the next request and persisted with the snapshot, so activation
 survives turns and restarts. Existing snapshots are not changed; activate an
 older session explicitly with `POST /api/session/{id}/workspace-tools` or

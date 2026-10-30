@@ -8,7 +8,7 @@ import { manifest } from "./gen/manifest";
 import {
   editFile, fileDirty, openFile, reloadFile, saveFile,
   pendingInputs, contextDetail, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
-  agentCatalog, beginOwnSkillInstall, currentWorktree, defaultModel, draft, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
+  agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
@@ -635,7 +635,7 @@ on("model.effort", () => void pickOne("Reasoning effort", async () => {
   const cat = await request<any>("GET", "/api/model");
   const chosenAgent = s?.agent ?? sessionDraft().agent ?? "build";
   const agentModel = agentCatalog().agents.find((a) => a.name === chosenAgent)?.model;
-  const selectedModel = s?.model || sessionDraft().model || agentModel || defaultModel();
+  const selectedModel = s ? s.model : sessionDraft().model || agentModel || rememberedModel(currentProject(), chosenAgent);
   const cur = (cat.models ?? []).find((m: any) => m.ref === selectedModel);
   const efforts: string[] = cur?.efforts?.length ? cur.efforts : ["low", "medium", "high"];
   const apply = async (effort: string) => {

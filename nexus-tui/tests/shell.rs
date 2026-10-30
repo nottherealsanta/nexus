@@ -1988,7 +1988,7 @@ fn projects_can_be_added_and_removed_from_the_sidebar() {
 #[test]
 fn settings_shows_what_core_reports_and_refuses_what_it_cannot_change() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
-    app.state.default_model = "codex/gpt-5".into();
+    app.state.last_model = "codex/gpt-5".into();
     app.state.catalog_source = "cache (5 min old)".into();
     app.state.models = vec![serde_json::json!({"ref": "codex/gpt-5"})];
     app.state.agents = vec![

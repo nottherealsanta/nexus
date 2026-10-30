@@ -1,27 +1,28 @@
 # Tools
 
 `nexus/tools/` holds the twelve task tools (read, grep, glob, ls, bash, edit,
-multiedit, write, web_search, web_fetch, ask, code) and the two companion tools for background bash. They act on the workspace, except `ask`, which asks the user a
+patch, write, web_search, web_fetch, ask, code) and the two companion tools for background bash. They act on the workspace, except `ask`, which asks the user a
 question and returns the answer as data. Changing Nexus itself (session,
 workspace, worktree, model) is never a task tool; it is the control plane
 (PLAN.md, "Task tools vs. control"). The workspace controls in this document are
 control tools: they are defined in `nexus/workspace.py`, executed by the daemon,
 and are not part of `DEFAULT_TOOLS` or `nexus/tools/`.
 
-`DEFAULT_TOOLS = (read, grep, glob, ls, bash, edit, multiedit, write, web_search, web_fetch, ask, code)`.
+`DEFAULT_TOOLS = (read, grep, glob, ls, bash, edit, patch, write, web_search, web_fetch, ask, code)`.
 `BASH_JOB_TOOLS = (bash_output, bash_kill)` is granted with `bash` (unless
 disabled individually), because a background command needs a way to be read and
 stopped. Agents may also name a job tool explicitly; disabling `bash` removes
 the automatic pair. A `Tool` is a `ToolSpec` (name, description and JSON schema,
 what the model sees) plus `async run(args, ctx)` that returns text or raises
-`ToolError`, plus `guidance`: short system-prompt advice rendered only when the
-tool is available. `ToolContext` holds the `workspace` path, the model call id, the session's file
+`ToolError`. The spec is the only place a tool is described: the system prompt
+does not list tools, so each tool is described once, in the request, and a
+disabled tool is described nowhere. `ToolContext` holds the `workspace` path, the model call id, the session's file
 guard and whether the result is model-visible.
 
 | File | Role |
 | --- | --- |
 | `tools/base.py` | `Tool`, `ToolContext`, `ToolError`, `resolve()`, `clip()` |
-| `tools/read.py`, `bash.py`, `edit.py`, `multiedit.py`, `write.py` | Workspace tools |
+| `tools/read.py`, `bash.py`, `edit.py`, `patch.py`, `write.py` | Workspace tools |
 | `tools/web_search.py`, `web_fetch.py`, `_html_markdown.py`, `net.py` | Web tools, the HTML-to-Markdown converter and the public-only HTTP client |
 | `tools/grep.py`, `glob.py`, `ls.py`, `walk.py`, `_grep_scan.py` | Search and listing tools, the shared walk and the fallback scan worker |
 | `tools/ask.py`, `questions.py` | `ask` spec and the validated question/reply contract |
@@ -49,10 +50,10 @@ web_fetch = "ask"
 ```
 
 * **Key.** The pattern is matched against the call's key: `bash`, the command;
-  `read`, `grep`, `glob`, `ls`, `edit`, `write`, `multiedit`, the path (relative
+  `read`, `grep`, `glob`, `ls`, `edit`, `patch`, `write`, the path (relative
   to the session directory with `..` and symlinks resolved, or absolute when
   outside it; a missing `grep`/`glob`/`ls` path is the workspace, `.`); an
-  `edit` patch has one key per file it touches; `web_fetch`, the URL without
+  `patch` has one key per file it touches (an `edit(...)` rule governs `patch` too); `web_fetch`, the URL without
   credentials, query or fragment and with a lowercased host; `web_search`, the
   query with spaces collapsed. Every other tool has no key, so only a bare
   `tool` rule matches it. `tool` may be a glob (`mcp__github__*`). In a pattern
@@ -161,7 +162,7 @@ change a file between the in-process check and the write; the hash detects a
 change up to that point, but the lock does not control other processes.
 
 **Session snapshot.** Each session stores the descriptions, JSON schemas and
-guidance of the tools it was created with ([agents.md](agents.md#session-snapshots)).
+of the tools it was created with ([agents.md](agents.md#session-snapshots)).
 Execution is rebound by name through the registry on each turn. A tool disabled
 at creation is absent from the stored definitions, the provider request and the
 system prompt. A later switch removes or adds the definition for subsequent
@@ -196,7 +197,7 @@ never ask for approval or an `ask` question.
   activates them explicitly (also for a reconstructed old session).
 - The first call sets `workspace.activated` in the session snapshot, adds both
   definitions to the stored tool definitions and returns both **descriptions,
-  JSON schemas and guidance** as its model-visible result. The next provider
+  JSON schemas** as its model-visible result. The next provider
   request carries both schemas. Printing definitions alone would not make them
   callable.
 - Activation is **idempotent**: a second call changes nothing and returns one
@@ -350,8 +351,9 @@ unless `include_hidden`, and the walk stops at 50,000 entries (announced).
 
 ### `grep {pattern, path?, glob?, regex?, case_insensitive?, include_hidden?, max_matches?}`
 
-Lines are `path:line:text`, sorted by path, with paths relative to the workspace
-(so they can go straight into `read`). `regex` defaults to true; `max_matches`
+`path` is a directory or a single file (default: the workspace); a missing path
+is an error. Lines are `path:line:text`, sorted by path, with paths relative to
+the workspace (so they can go straight into `read`). `regex` defaults to true; `max_matches`
 defaults to 100 and is capped at 2000, after which `[showing the first N
 matches; there are more …]` is added. A line over 2000 characters is cut and
 marked. `no matches` is the empty result. Files over 2 MiB and binary files
@@ -374,17 +376,6 @@ One directory as it is on disk (it does not apply `.gitignore`). Directories end
 in `/`, a symlink in `@` (`@ -> target` only when the target is inside the
 workspace). At most 1000 entries, then a clip notice. An empty directory returns
 `(empty directory)`.
-
-## multiedit
-
-`multiedit {path, edits: [{old_string, new_string, replace_all?}]}` applies the
-edits in order to the progressively edited text of one file and writes once; if
-any edit is invalid (not found, ambiguous without `replace_all`, identical,
-malformed) nothing is written. Because positions in intermediate text do not map
-to the lines the model read, it needs a **complete** observation of the current
-revision (like overwrite), not just coverage of the touched lines. It runs under
-the same mutation lock as `edit`, drops the file's observation after writing,
-and is auto-approved inside the session directory.
 
 ## web_search
 
@@ -503,10 +494,12 @@ daemon token is), but the tools refuse another tree's job id.
 
 ## edit
 
-Change existing files. The mode depends on the arguments: if `patch` is present
-and not `null`, it is a patch; otherwise a replacement.
+`edit` and `patch` are two tools. `edit` replaces exact text in one file;
+`patch` changes several places or files at once. `edit` takes no `patch`
+argument (it says to use the `patch` tool), and `multiedit` no longer exists:
+several replacements in one file are a patch with several hunks.
 
-### Replacement
+### `edit`
 
 | Parameter | Type | Meaning |
 | --- | --- | --- |
@@ -521,11 +514,11 @@ does not exist. Result: `edited <path> (N replacement[s])`. Before writing, the
 session needs coverage of every original line an occurrence touches; with
 `replace_all` that means all occurrences. No approval is requested.
 
-### Patch (`apply_patch` format)
+### `patch` (`apply_patch` format)
 
 | Parameter | Type | Meaning |
 | --- | --- | --- |
-| `patch` | string | The patch text; use instead of the three replacement parameters |
+| `patch` (required) | string | The patch text |
 
 This is the Codex `apply_patch` format that GPT models are trained on.
 
@@ -786,7 +779,7 @@ A user tool is a Python file in `~/.nexus10/tools/` or `<project>/.agents/tools/
 NAME = "hello"                # optional; the file name by default (a-z, 0-9, _)
 DESCRIPTION = "Greet someone."
 PARAMETERS = {"type": "object", "properties": {"who": {"type": "string"}}, "required": ["who"]}
-GUIDANCE = "Use to say hello."   # optional, one line for the prompt's tools section
+GUIDANCE = "Use to say hello."   # optional; appended to the description
 TIMEOUT = 30                     # optional seconds, at most 600 (default 60)
 
 def run(args):                   # or `async def`; returns text
@@ -837,8 +830,8 @@ Instructions…  (bundled files: scripts/…, references/…)
   rejected. A skill is turned away only for no frontmatter block, no
   description, an invalid name, more than 256 KiB, or invalid UTF-8; the file
   is a `problems` row (`kind: "error"`).
-- **Progressive disclosure.** The session's frozen prompt lists
-  `` `name`: description `` lines in the `skill` tool's guidance. `skill {name}`
+- **Progressive disclosure.** The `skill` tool's description lists
+  `` `name`: description `` lines for the skills the session started with. `skill {name}`
   returns the body inside `<skill …>`, plus the bundled files it may read;
   `skill {name, resource}` returns one file under `scripts/` or `references/`
   as text. Nothing is run. Resources resolve fail-closed: no absolute paths,

@@ -29,20 +29,16 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": (
             "Make the workspace control tools available: moving this session's working directory, and listing, "
             "creating or deleting Git worktrees. Call it when the task needs work in a different directory or a "
-            "worktree. It adds their definitions and guidance to this conversation and to the next request; it does "
+            "worktree. It adds their definitions to this conversation and to the next request; it does "
             "not move the session, change files or ask the user."
         ),
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        "guidance": (
-            "Call once when the task needs a different working directory or a Git worktree. It makes those control "
-            "tools callable; it does not move the session, change files or ask for approval."
-        ),
     },
     CHANGE_DIRECTORY: {
         "name": CHANGE_DIRECTORY,
         "description": (
             "Move this session's working directory to an existing directory. Subsequent tool and model calls "
-            "resolve from the new directory, and that directory's AGENTS.md is loaded as forward guidance. It "
+            "resolve from the new directory, and that directory's AGENTS.md arrives as forward context. It "
             "does not create a worktree or move files, and it never rewrites the frozen system prompt."
         ),
         "parameters": {
@@ -56,10 +52,6 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
             "required": ["directory"],
             "additionalProperties": False,
         },
-        "guidance": (
-            "Move the session to an existing directory. Paths in later calls resolve from there; the destination's "
-            "AGENTS.md arrives as forward context. It creates nothing and changes no files."
-        ),
     },
     WORKTREE: {
         "name": WORKTREE,
@@ -89,16 +81,12 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
             "required": ["action"],
             "additionalProperties": False,
         },
-        "guidance": (
-            "List, create or delete Git worktrees. create only makes the worktree; the session stays where it is "
-            "until change_session_directory. delete refuses the main checkout, dirty worktrees and worktrees in use."
-        ),
     },
 }
 
 
 def definition(name: str) -> dict[str, Any]:
-    """A snapshot-shaped tool definition (name, description, parameters, guidance)."""
+    """A snapshot-shaped tool definition (name, description, parameters)."""
     return dict(_DEFINITIONS[name])
 
 
@@ -108,8 +96,7 @@ def _render_definition(name: str) -> str:
     return (
         f"### `{item['name']}`\n"
         f"{item['description']}\n"
-        f"Parameters:\n{parameters}\n"
-        f"Guidance: {item['guidance']}"
+        f"Parameters:\n{parameters}"
     )
 
 

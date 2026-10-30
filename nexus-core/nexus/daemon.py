@@ -47,13 +47,13 @@ def _write_info(data: dict[str, Any]) -> None:
 def serve(port: int | None = None) -> None:
     import uvicorn
 
-    from .llmhub.hub import default_model
+    from .config import ConfigFile
     from .server import build_app, make_runtime
 
     port = port or int(os.environ.get("NEXUS_PORT") or DEFAULT_PORT)
     url = f"http://127.0.0.1:{port}"
     token = secrets.token_urlsafe(32)
-    app = build_app(make_runtime(default_model()), token=token, url=url)
+    app = build_app(make_runtime(os.environ.get("NEXUS_MODEL") or ConfigFile().read()["values"]["defaults"]["model"]), token=token, url=url)
     _write_info({"url": url, "pid": os.getpid(), "token": token, "started": time.time()})
     try:
         uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", timeout_graceful_shutdown=5)

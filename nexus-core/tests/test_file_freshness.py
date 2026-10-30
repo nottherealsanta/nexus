@@ -55,7 +55,7 @@ def edit(call_id, path, old, new):
 
 
 def patch(call_id, text):
-    return ToolCall(call_id, "edit", json.dumps({"patch": text}))
+    return ToolCall(call_id, "patch", json.dumps({"patch": text}))
 
 
 def write(call_id, path, content):
@@ -201,6 +201,7 @@ async def test_partial_reads_only_authorize_the_lines_they_show(env):
     ])
     unseen, seen = _results(rt, session.id)[-2:]
     assert unseen.is_error and "line 9 was not read intact" in unseen.output
+    assert "Next: read path='ten.txt' offset=7 limit=5" in unseen.output  # the call that fixes it
     assert seen.output == "edited ten.txt (1 replacement)"
     text = target.read_text()
     assert text.startswith("LINE ONE\n") and "line 9\n" in text

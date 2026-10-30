@@ -44,7 +44,8 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
 TOOL = Tool(
     ToolSpec(
         name="ls",
-        description="List one directory in sorted order. Directories end in `/`, symlinks in `@`.",
+        description="List one directory in sorted order. Directories end in `/`, symlinks in `@`. "
+                    "To search below a directory use `glob` or `grep`.",
         parameters={
             "type": "object",
             "properties": {
@@ -54,5 +55,4 @@ TOOL = Tool(
         },
     ),
     run,
-    guidance="List a directory (`ls`); use `glob` or `grep` to search below it.",
 )

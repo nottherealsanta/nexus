@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from ..llmhub.types import ToolSpec
-from .base import Tool, ToolContext, ToolError, clip
-from .walk import glob_match, pattern_error, resolve_dir, walk
+from .base import Tool, ToolContext, ToolError, clip, resolve
+from .walk import glob_match, pattern_error, walk
 
 DEFAULT_MATCHES = 100
 MAX_MATCHES = 2000
@@ -52,7 +52,9 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
         except re.error as exc:
             if not shutil.which("rg"):  # with rg the pattern is rg syntax, so only rg can judge it
                 raise ToolError(f"invalid pattern: {exc}") from exc
-    root = resolve_dir(ctx, args.get("path"))
+    root = resolve(ctx, args.get("path") or ".")  # a directory, or a single file
+    if not root.exists():
+        raise ToolError(f"{args.get('path')} does not exist")
     workspace = ctx.workspace.resolve()
     options = {"regex": regex, "ignore_case": bool(args.get("case_insensitive")),
                "hidden": bool(args.get("include_hidden")), "glob": file_glob}
@@ -81,7 +83,7 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
 async def _rg(workspace: Path, root: Path, pattern: str, limit: int, *, regex: bool, ignore_case: bool,
               hidden: bool, glob: str | None) -> tuple[list[tuple[str, int, str]], bool]:
     command = ["rg", "--null", "--no-heading", "--line-number", "--color", "never", "--sort", "path",
-               "--max-filesize", "2M", "--max-columns", str(MAX_LINE_CHARS), "--max-columns-preview", "--no-messages"]
+               "--max-filesize", "2M", "--max-columns", str(MAX_LINE_CHARS), "--max-columns-preview", "--no-messages", "--with-filename"]
     if not regex:
         command.append("--fixed-strings")
     if ignore_case:
@@ -124,12 +126,15 @@ async def _rg(workspace: Path, root: Path, pattern: str, limit: int, *, regex: b
 
 async def _python(workspace: Path, root: Path, pattern: str, limit: int, *, regex: bool, ignore_case: bool,
                   hidden: bool, glob: str | None) -> tuple[list[tuple[str, int, str]], bool]:
-    entries, _ = await walk(workspace, root, include_hidden=hidden)
-    prefix = root.relative_to(workspace).as_posix()
-    prefix = "" if prefix == "." else prefix + "/"
-    names = [rel for rel, is_dir in entries
-             if not is_dir and (glob is None or glob_match(rel.removeprefix(prefix), glob)
-                                or ("/" not in glob and glob_match(rel.rsplit("/", 1)[-1], glob)))]
+    if root.is_file():
+        names = [root.relative_to(workspace).as_posix()]
+    else:
+        entries, _ = await walk(workspace, root, include_hidden=hidden)
+        prefix = root.relative_to(workspace).as_posix()
+        prefix = "" if prefix == "." else prefix + "/"
+        names = [rel for rel, is_dir in entries
+                 if not is_dir and (glob is None or glob_match(rel.removeprefix(prefix), glob)
+                                    or ("/" not in glob and glob_match(rel.rsplit("/", 1)[-1], glob)))]
     request = json.dumps({"pattern": pattern, "regex": regex, "ignore_case": ignore_case,
                           "files": names, "limit": limit})
     process = await asyncio.create_subprocess_exec(
@@ -156,12 +161,13 @@ TOOL = Tool(
     ToolSpec(
         name="grep",
         description="Search file contents for text or a regular expression. Returns `path:line:text` matches, "
-                    "sorted by path. Respects .gitignore; skips binary and hidden files.",
+                    "sorted by path. Respects .gitignore; skips binary and hidden files. A match is not a read: read the "
+                    "file before you change it.",
         parameters={
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "Text or regular expression."},
-                "path": {"type": "string", "description": "Directory to search under. Default: the workspace."},
+                "path": {"type": "string", "description": "Directory or single file to search. Default: the workspace."},
                 "glob": {"type": "string", "description": "Only search files matching this glob, e.g. `*.py`."},
                 "regex": {"type": "boolean", "description": "Treat pattern as a regular expression. Default true."},
                 "case_insensitive": {"type": "boolean", "description": "Default false."},
@@ -172,5 +178,4 @@ TOOL = Tool(
         },
     ),
     run,
-    guidance="Search file contents (`grep`). A match is not a read: read the file before you change it.",
 )

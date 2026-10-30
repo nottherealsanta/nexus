@@ -68,7 +68,8 @@ def _record(ctx: ToolContext, path: Any, data: bytes, *, lines: int, ranges: lis
 TOOL = Tool(
     ToolSpec(
         name="read",
-        description="Read a text file (with line numbers) or list a directory. Paths are relative to the workspace.",
+        description="Read a text file (with line numbers) or list a directory. Paths are relative to the workspace. "
+                    "Use `offset` and `limit` for large files. Read a file before you change it.",
         parameters={
             "type": "object",
             "properties": {
@@ -80,6 +81,4 @@ TOOL = Tool(
         },
     ),
     run,
-    guidance="Read a text file with line numbers (use `offset` and `limit` for large files), or list a directory. "
-             "Read a file before you change it.",
 )

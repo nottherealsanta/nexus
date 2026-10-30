@@ -9,7 +9,7 @@ and stores all of it as JSON next to the session (`session_snapshot` in
 edited, added or deleted agent file and an edited `AGENTS.md` only affect new
 sessions.
 
-The snapshot is deliberately serializable: tool descriptions and guidance are
+The snapshot is deliberately serializable: tool descriptions are
 records, not Python callables. The runtime rebinds each stored name to its
 execution function through the existing tool registry (`nexus/tools/`).
 
@@ -164,12 +164,11 @@ def agent_summary(agent: Any) -> dict[str, Any]:
 
 
 def tool_record(tool: Any) -> dict[str, Any]:
-    """A tool's request schema and system-prompt guidance, as plain JSON."""
+    """A tool's request schema, as plain JSON."""
     return {
         "name": tool.spec.name,
         "description": tool.spec.description,
         "parameters": tool.spec.parameters,
-        "guidance": tool.guidance,
     }
 
 

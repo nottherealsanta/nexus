@@ -132,7 +132,7 @@ async def test_agents_md_changes_affect_new_sessions_only_and_absence_is_explici
     before = await _context(client, first["id"])
     assert "# Instructions file" in before["instructions"]
     assert "Use tabs in this workspace." in before["instructions"]
-    assert before["instructions"].index("# Instructions file") > before["instructions"].index("# Tools")
+    assert before["instructions"].index("# Instructions file") > before["instructions"].index("# Environment")
 
     (workspace / "AGENTS.md").write_text("Use spaces now.\n")
     assert (await _context(client, first["id"]))["instructions"] == before["instructions"]
@@ -225,7 +225,7 @@ async def test_root_and_child_snapshots_are_independent(env):
     child = (await client.post("/api/session", json={"parent": parent["id"], "agent": "helper"})).json()
     parent_before = await _context(client, parent["id"])
     child_before = await _context(client, child["id"])
-    assert "`helper`: Helper one" in parent_before["instructions"]
+    assert "`helper`: Helper one" in next(t for t in parent_before["tools"] if t["name"] == "session")["description"]
     assert "Help one." in child_before["instructions"]
 
     _agent_file(files, "helper", "Help two.\n\n{{tools}}", description="Helper two", mode="subagent")
@@ -239,9 +239,8 @@ async def test_root_and_child_snapshots_are_independent(env):
     parent2 = (await client.post("/api/session", json={
         "directory": str(workspace), "agent": "orchestrate", "permission": "allow"})).json()
     child2 = (await client.post("/api/session", json={"parent": parent2["id"], "agent": "helper"})).json()
-    parent2_context = await _context(client, parent2["id"])
-    assert "`helper`: Helper two" in parent2_context["instructions"]
-    assert "`extra`: Extra agent" in parent2_context["instructions"]
+    session_tool = rt.store.snapshot(parent2["id"])["tool_definitions"]["session"]["description"]
+    assert "`helper`: Helper two" in session_tool and "`extra`: Extra agent" in session_tool
     assert "Help two." in (await _context(client, child2["id"]))["instructions"]
 
     # A parent that names a deleted child agent gets a clear error and no silent substitute.
@@ -517,7 +516,7 @@ async def test_running_tool_finishes_but_next_tool_uses_updated_switches(env, mo
         await release.wait()
         return "read finished"
 
-    registry["read"] = Tool(registry["read"].spec, blocked_read, registry["read"].guidance)
+    registry["read"] = Tool(registry["read"].spec, blocked_read)
     monkeypatch.setattr(rt, "_registry", lambda: registry)
     sid = (await client.post("/api/session", json={
         "directory": str(workspace), "permission": "allow"})).json()["id"]

@@ -49,7 +49,8 @@ def _write(display: str, path: Any, content: str, existed: bool) -> str:
 TOOL = Tool(
     ToolSpec(
         name="write",
-        description="Create a file, or replace a file's entire contents. Prefer `edit` for changes to existing files.",
+        description="Create a file, or replace a file's entire contents. An existing file must be read completely "
+                    "first; prefer `edit` or `patch` for changes to existing files.",
         parameters={
             "type": "object",
             "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
@@ -57,5 +58,4 @@ TOOL = Tool(
         },
     ),
     run,
-    guidance="Create a new file, or replace a file's entire contents. An existing file must be read completely first.",
 )

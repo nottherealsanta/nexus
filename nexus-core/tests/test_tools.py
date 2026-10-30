@@ -5,6 +5,7 @@ import pytest
 from nexus.tools import ToolContext, ToolError
 from nexus.tools.bash import run as bash
 from nexus.tools.edit import run as edit
+from nexus.tools.patch import run as patch_tool
 from nexus.tools.read import run as read
 from nexus.tools.write import run as write
 
@@ -60,7 +61,7 @@ async def test_patch_add_update_move_delete(ctx):
         "*** Delete File: gone.txt\n"
         "*** End Patch"
     )
-    out = await edit({"patch": patch}, ctx)
+    out = await patch_tool({"patch": patch}, ctx)
     assert out.splitlines() == ["added new.txt (1 lines)", "updated keep.py (1 hunks)", "updated old.txt → moved.txt (1 hunks)", "deleted gone.txt"]
     assert (ctx.workspace / "keep.py").read_text() == "def f():\n    return 1\n\ndef g():\n    return 2\n"
     assert (ctx.workspace / "moved.txt").read_text() == "a\nc\n"
@@ -70,5 +71,19 @@ async def test_patch_add_update_move_delete(ctx):
 async def test_failed_patch_writes_nothing(ctx):
     patch = "*** Begin Patch\n*** Add File: a.txt\n+x\n*** Update File: missing.txt\n@@\n-y\n+z\n*** End Patch\n"
     with pytest.raises(ToolError):
-        await edit({"patch": patch}, ctx)
+        await patch_tool({"patch": patch}, ctx)
     assert not (ctx.workspace / "a.txt").exists()
+
+
+async def test_edit_and_patch_are_separate_tools(ctx):
+    from nexus.tools import DEFAULT_TOOLS
+    from nexus.tools.edit import TOOL as EDIT
+    from nexus.tools.patch import TOOL as PATCH
+
+    assert [t.spec.name for t in DEFAULT_TOOLS if t.spec.name in ("edit", "patch", "multiedit")] == ["edit", "patch"]
+    assert EDIT.spec.parameters["required"] == ["path", "old_string", "new_string"]
+    assert "patch" not in EDIT.spec.parameters["properties"]
+    assert PATCH.spec.parameters["required"] == ["patch"]
+    (ctx.workspace / "f.py").write_text("x = 1\n")
+    with pytest.raises(ToolError, match="use the `patch` tool"):
+        await edit({"patch": "*** Begin Patch\n*** End Patch"}, ctx)

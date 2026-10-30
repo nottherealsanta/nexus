@@ -148,7 +148,7 @@ async def test_new_session_gets_the_tool_and_a_running_one_keeps_its_code(env):
     listed = (await client.get("/api/extension", params={"directory": str(workspace)})).json()
     assert [t["name"] for t in listed["tools"]] == ["hello"] and listed["problems"] == []
     context = (await client.get(f"/api/session/{first['id']}/context")).json()
-    assert "hello" in [t["name"] for t in context["tools"]] and "Use to say hello." in context["instructions"]
+    assert "hello" in [t["name"] for t in context["tools"]] and "Use to say hello." in rt.store.snapshot(first["id"])["tool_definitions"]["hello"]["description"]
 
     (tools / "hello.py").write_text(hello("2"))
     second = (await client.post("/api/session", json={"directory": str(workspace)})).json()

@@ -35,7 +35,7 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET/PATCH/DELETE | /api/session/{id} | one session; PATCH `{agent?, title?, model?, permission?, effort?}` |
 | POST | /api/session/{id}/archive | archive the whole root tree (child ids get 400) |
 | POST | /api/session/{id}/unarchive | unarchive the whole root tree |
-| POST | /api/session/{id}/model | `{model}`; `""` returns to the agent's or default model |
+| POST | /api/session/{id}/model | `{model}`; `""` returns to the agent's own model (400 if it names none) |
 | POST | /api/session/{id}/agent | `{agent}` |
 | POST | /api/session/{id}/workspace-tools | activate the two workspace control tools (idempotent) |
 | POST | /api/session/{id}/directory | `{directory}`; 200 applied or 202 pending while a call runs |
@@ -545,8 +545,11 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         out = [to_json(m) | {"ref": m.ref} for pid in connected() if not wanted or pid == wanted for m in await catalog.list_models(data, pid)]
         return JSONResponse({"source": source, "models": out})
 
-    async def default_model(request: Request) -> Response:
-        return JSONResponse({"model": runtime.default_model})
+    async def last_model(request: Request) -> Response:
+        """The model a new session for this project and agent starts with: `{model, source}` (`""`/`none` when never chosen)."""
+        query = request.query_params
+        ref, source = runtime.remembered_model(query.get("project"), query.get("agent"))
+        return JSONResponse({"model": ref, "source": source})
 
     def agent_json(agent: Any, *, prompt: bool) -> dict[str, Any]:
         data = {k: getattr(agent, k) for k in ("name", "description", "source", "path", "mode", "color", "model", "effort", "tools", "steps")}
@@ -906,6 +909,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             session = await runtime.create_session_ready(
                 target, title=body.get("title"), model=body.get("model"), permission=body.get("permission"),
                 effort=body.get("effort"), agent=body.get("agent"), parent=parent, disabled_tools=body.get("disabled_tools"))
+            if parent is None and body.get("model"):
+                runtime.remember_model(session.project_id, session.agent, body["model"])
             return JSONResponse(runtime.session_json(session))
         archived = _archive_filter(request)
         if request.query_params.get("parent"):
@@ -925,7 +930,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             expected = _expected_revision(request, body)
             if expected is not None:
                 fields["expected_revision"] = expected
-            return JSONResponse(runtime.session_json(runtime.update_session(sid, **fields)))
+            session = runtime.update_session(sid, **fields)
+            if body.get("model"):
+                runtime.remember_model(session.project_id, session.agent, body["model"])
+            return JSONResponse(runtime.session_json(session))
         if request.method == "DELETE":
             body = await _body(request)
             await runtime.delete_session(sid, drop_inputs=body.get("drop_inputs") is True)
@@ -985,7 +993,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         expected = _expected_revision(request, body)
         if expected is not None:
             fields["expected_revision"] = expected
-        return JSONResponse(runtime.session_json(runtime.update_session(p(request, "id"), **fields)))
+        session = runtime.update_session(p(request, "id"), **fields)
+        if body["model"]:
+            runtime.remember_model(session.project_id, session.agent, body["model"])
+        return JSONResponse(runtime.session_json(session))
 
     async def session_switch_cost(request: Request) -> Response:
         query = request.query_params
@@ -1267,7 +1278,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/usage", route(provider_limits)),
         Route("/api/session/{id}/usage", route(session_usage_totals)),
         Route("/api/model", route(models)),
-        Route("/api/model/default", route(default_model)),
+        Route("/api/model/last", route(last_model)),
         Route("/api/snapshot", route(snapshot)),
         Route("/api/agent", route(agent_list)),
         Route("/api/agent/{name}", route(agent_one)),
@@ -1354,7 +1365,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     return Starlette(routes=routes, lifespan=lifespan)
 
 
-def make_runtime(default_model: str, store: Store | None = None) -> Runtime:
-    runtime = Runtime(store or Store(), Bus(), default_model)
+def make_runtime(seed_model: str = "", store: Store | None = None) -> Runtime:
+    runtime = Runtime(store or Store(), Bus(), seed_model)
     runtime.recover()  # finish before the app can accept a request
     return runtime

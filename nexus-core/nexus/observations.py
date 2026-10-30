@@ -209,20 +209,23 @@ class FileGuard:
         if observation is None:
             raise ToolError(
                 f"{display} has not been read in this session; read it before changing it "
-                f"(resolved path: {key})")
+                f"(resolved path: {key}). Next: read path={display!r}")
         if observation.revision != revision:
             raise ToolError(
                 f"{display} changed since this session read it; read it again before changing it "
-                f"(resolved path: {key})")
+                f"(resolved path: {key}). Next: read path={display!r}")
         if complete and not observation.complete:
             raise ToolError(
                 f"{display} was not read completely in this session; read the whole file before "
-                f"overwriting, deleting or moving it (resolved path: {key})")
+                f"overwriting, deleting or moving it (resolved path: {key}). Next: read path={display!r} "
+                f"until it reports the whole file (a line over 2,000 characters or output over 30,000 characters "
+                f"is not covered; use offset and limit)")
         for start, end in affected:
             if not observation.covers(start, end):
                 span = f"line {start}" if start == end else f"lines {start}–{end}"
                 verb = "was" if start == end else "were"
                 raise ToolError(
                     f"{display} {span} {verb} not read intact in this session; read the affected "
-                    f"lines again before changing them (resolved path: {key})")
+                    f"lines again before changing them (resolved path: {key}). Next: read path={display!r} "
+                    f"offset={max(1, start - 2)} limit={end - start + 5}")
         return observation

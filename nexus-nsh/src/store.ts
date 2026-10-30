@@ -19,7 +19,8 @@ export const info = signal<Info | null>(null);
 export const userHome = signal("");
 export const modelCatalog = signal<any[]>([]);
 export const catalogSource = signal("");
-export const defaultModel = signal("");
+/** What a new session starts with, by `project|agent`: the user's last selection from `/api/model/last`. There is no default model. */
+const remembered = signal<Record<string, string>>({});
 export const config = signal<any | null>(null);
 export type LearnChecklist = {
   fetch_id: string;
@@ -166,7 +167,7 @@ export const m = (): Model => { rev(); return model; };
 
 // --- catalog and location data ---------------------------------------------------------------
 let modelsAsked = false;
-let defaultAsked = false;
+const rememberedAsked = new Set<string>();
 const agentCache = new Map<string, any[]>();
 const agentRequests = new Set<string>();
 const sessionWorktreeRequests = new Set<string>();
@@ -176,14 +177,23 @@ const projectWorktreeSeq = new Map<string, number>();
 /** The session directory each session's worktree listing was requested for. */
 const worktreeDirectories = new Map<string, string>();
 
+/** The model a new session for this project and agent starts with, or "" when none was ever selected. Asks Core once per key; `refresh` asks again. */
+export function rememberedModel(project: string | null | undefined, agent: string, refresh = false): string {
+  const key = `${project ?? ""}|${agent}`;
+  if (refresh || !rememberedAsked.has(key)) {
+    rememberedAsked.add(key);
+    const query = new URLSearchParams({ agent, ...(project ? { project } : {}) });
+    void request<any>("GET", `/api/model/last?${query}`)
+      .then((r) => remembered.update((all) => ({ ...all, [key]: r.model ?? "" })))
+      .catch(() => { rememberedAsked.delete(key); });
+  }
+  return remembered()[key] ?? "";
+}
+
 export function loadComposerData(project = currentProject()) {
   if (!modelsAsked) {
     modelsAsked = true;
     void reloadModelCatalog().catch(() => { modelsAsked = false; });
-  }
-  if (!defaultAsked) {
-    defaultAsked = true;
-    void request<any>("GET", "/api/model/default").then((r) => defaultModel.set(r.model ?? "")).catch(() => { defaultAsked = false; });
   }
   const key = project ?? "";
   if (agentCache.has(key)) {

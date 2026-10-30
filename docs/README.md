@@ -12,7 +12,7 @@ doc and the code disagree, the code wins: fix the doc.
 | [turn-summary-benchmark.md](turn-summary-benchmark.md) | TUI turn-summary load measurement |
 | [config.md](config.md) | Configuration file primitives (in progress) |
 | [auth.md](auth.md) | Sign-in flows, `auth.json`, locking, refresh-token rotation |
-| [models.md](models.md) | models.dev catalog, cache, filters, `provider/model` refs, default model |
+| [models.md](models.md) | models.dev catalog, cache, filters, `provider/model` refs |
 | [stream-events.md](stream-events.md) | Conversation types, provider stream events, loop events, JSON codec |
 | [tools.md](tools.md) | read, bash (background jobs too), edit, write, ask (questions), code and kernels; workspace controls (expose, directory moves, worktrees); parameters, bounds, confinement, approval, read freshness |
 | [hooks.md](hooks.md) | Command hooks in `config.toml`: events, decisions, limits, what reaches the context |
@@ -35,7 +35,7 @@ doc and the code disagree, the code wins: fix the doc.
 | Header redaction or provider error handling | [llm-providers.md](llm-providers.md) |
 | `nexus login`, tokens, `auth.json`, refresh-token rotation | [auth.md](auth.md) |
 | The grok client version requirement | [auth.md](auth.md) |
-| `nexus models`, the model list, `--model`, `$NEXUS_MODEL` | [models.md](models.md) |
+| `nexus models`, the model list, `--model`, `$NEXUS_MODEL` (seed only) | [models.md](models.md), [daemon.md](daemon.md#model-selection) |
 | Message and part types, `raw` and `origin` | [stream-events.md](stream-events.md) |
 | JSON encoding of messages and events | [stream-events.md](stream-events.md) |
 | A tool's parameters, limits or path rules | [tools.md](tools.md) |

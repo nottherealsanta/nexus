@@ -7,7 +7,7 @@ import { Button } from "nsh/base";
 import { Btn, FOCUS, T, midTruncate } from "./kit";
 import { run, byId, keyLabel, toggleDraftInventory, toggleSessionInventory } from "../commands";
 import {
-  contextDetail, agentCatalog, currentProject, defaultModel, info, draftContext, draftContextKey, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, projectWorktrees, sessionDraft, startingInventory, userHome, worktreeForDirectory,
+  contextDetail, agentCatalog, currentProject, info, rememberedModel, draftContext, draftContextKey, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, projectWorktrees, sessionDraft, startingInventory, userHome, worktreeForDirectory,
 } from "../store";
 import { agentColor } from "../agent-color";
 import { request } from "../core/transport";
@@ -141,7 +141,7 @@ export function startingSections(s: any, off: string[], inventory?: { skills?: S
     },
     {
       key: "tools", title: "Tools", tokens: toolTokens || undefined, meta: `${names.length} tools · ${names.filter((n) => !off.includes(n)).length} on`,
-      body: { kind: "grid", items: names.map((n) => ({ name: n, on: !off.includes(n) })) }, detail: schemaText ? `Stored tool definitions (including guidance; definitions may change during a session):\n\n${JSON.stringify(schemas, null, 2)}` : names.join("\n") || "No tool definitions were recorded.",
+      body: { kind: "grid", items: names.map((n) => ({ name: n, on: !off.includes(n) })) }, detail: schemaText ? `Stored tool definitions (definitions may change during a session):\n\n${JSON.stringify(schemas, null, 2)}` : names.join("\n") || "No tool definitions were recorded.",
     },
   ];
   sections.push(...inventorySections(sessionInventoryRows(inventory?.skills ?? s.skills ?? [], inventory?.mcp ?? s.mcp ?? [], off)));
@@ -288,9 +288,9 @@ export function NewSessionView() {
     ensure(p.id, agentName());
   });
   effect(() => { const p = project(); if (p) loadDraftContext(p.id); });
-  const modelRef = () => sessionDraft().model || agent()?.model || defaultModel();
+  const modelRef = () => sessionDraft().model || agent()?.model || rememberedModel(currentProject(), agentName());
   const modelEntry = () => modelCatalog().find((e) => e.ref === modelRef());
-  const modelName = () => { const r = modelRef(); return r ? (modelEntry()?.name || r.split("/").at(-1) || r) : "default"; };
+  const modelName = () => { const r = modelRef(); return r ? (modelEntry()?.name || r.split("/").at(-1) || r) : "Select a model"; };
   const provider = () => { const r = modelRef(); return r ? (modelEntry()?.provider || r.split("/")[0]) : ""; };
   const window = () => { const c = Number(modelEntry()?.context); return Number.isFinite(c) && c > 0 ? c : undefined; };
   const fullPath = () => {

@@ -83,7 +83,7 @@ async def test_blocking_child_answers_the_parent_tool_call(env):
     tool_output = next(t for role, t in await _texts(client, parent["id"]) if role == "tool")
     assert tool_output.startswith(f"Sub agent {child['id']} (agent helper) finished.\n\n42\n\n[Nexus notice: `message_session` is now available]")
     # A child never gets the session tool, even when its agent lists it.
-    assert [t.name for t in providers["child"].requests[0].tools] == ["read", "grep", "glob", "ls", "bash", "bash_output", "bash_kill", "edit", "multiedit", "write", "web_search", "web_fetch", "ask", "code", "expose_workspace_tools", "escalate"]
+    assert [t.name for t in providers["child"].requests[0].tools] == ["read", "grep", "glob", "ls", "bash", "bash_output", "bash_kill", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code", "expose_workspace_tools", "escalate"]
     tree = (await client.get(f"/api/session/{child['id']}/tree")).json()
     assert tree["id"] == parent["id"] and [c["id"] for c in tree["children"]] == [child["id"]]
 
@@ -143,7 +143,7 @@ def test_child_model_pool_is_chosen_once_and_explicit_model_wins(env, monkeypatc
     assert rt.session_json(rt.session(child.id))["model"] == "codex/child"
     explicit = rt.create_session(project, title=None, model="codex/parent", permission=None, agent="helper", parent=parent)
     assert explicit.model == "codex/parent" and len(seen) == 1
-    assert not parent.model
+    assert parent.model == "scripted/parent"  # a root session stores the model it starts with
 
 
 async def test_child_fallback_is_recorded_and_partial_output_is_not_retried(env):
@@ -221,12 +221,12 @@ async def test_dynamic_child_guidance_and_default_root(env):
     assert 'build' not in [a.name for a in rt.agents(str(workspace)).allowed(child=False)]
     tool = rt._session_tool(rt.session(parent['id']))
     assert 'build' in tool.spec.parameters['properties']['agent']['enum']
-    assert '`helper`: Helps' in tool.guidance and '`build`: Custom builder' in tool.guidance
-    assert tool.guidance in rt._agent(rt.session(parent['id'])).instructions
+    assert '`helper`: Helps' in tool.spec.description and '`build`: Custom builder' in tool.spec.description
+
     patched = (await client.patch(f"/api/session/{parent['id']}", json={'disabled_tools': ['session']})).json()
     assert 'session' not in patched['tools']
     # The starting prompt is frozen; the switch is forward guidance and a request-schema change instead.
-    assert 'Child agents:' in rt._agent(rt.session(parent['id'])).instructions
+    assert 'Agents:' not in rt._agent(rt.session(parent['id'])).instructions
     messages = (await client.get(f"/api/session/{parent['id']}/message")).json()
     notice = next(p['text'] for m in messages for p in m['parts'] if 'tool availability changed' in (p.get('text') or ''))
     assert '`session`' in notice and 'starting system prompt is frozen' in notice
@@ -353,8 +353,9 @@ async def test_escalate_is_offered_to_children_only_and_is_a_control_tool(env):
     child = (await client.post("/api/session", json={"parent": parent["id"], "agent": "helper"})).json()
     assert "escalate" not in parent["tools"] and child["tools"][-1] == "escalate"
     child_prompt = rt.store.snapshot(child["id"])["system_prompt"]
-    assert "`escalate`" in child_prompt and "never route around a refusal" in child_prompt
-    assert "`escalate`" not in rt.store.snapshot(parent["id"])["system_prompt"]
+    assert "`escalate`" not in child_prompt
+    assert "escalate" in rt.store.snapshot(child["id"])["tool_definitions"]
+    assert "escalate" not in rt.store.snapshot(parent["id"])["tool_definitions"]
     # It can be switched off per session like any tool.
     off = (await client.patch(f"/api/session/{child['id']}", json={"disabled_tools": ["escalate"]})).json()
     assert "escalate" not in off["tools"]

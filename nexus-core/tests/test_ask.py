@@ -102,7 +102,8 @@ async def test_free_text_single_select_multi_select_and_multiple_questions(env):
     sid = session["id"]
     assert "ask" in session["tools"]
     context = (await client.get(f"/api/session/{sid}/context")).json()
-    assert "ask" in context["tools"] and "`ask`" in context["instructions"]
+    assert "ask" in context["tools"] and "# Tools" not in context["instructions"]
+    assert "Ask the user" in rt.store.snapshot(sid)["tool_definitions"]["ask"]["description"]
 
     await client.post(f"/api/session/{sid}/prompt", json={"text": "help me"})
     pending = await _pending(rt, sid)

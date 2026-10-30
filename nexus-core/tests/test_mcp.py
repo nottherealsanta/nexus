@@ -200,7 +200,7 @@ async def test_session_searches_and_calls_through_the_two_proxy_tools(env):
     sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
     context = (await client.get(f"/api/session/{sid}/context")).json()
     assert {"mcp_tool_search", "mcp_call"} <= {t["name"] for t in context["tools"]}
-    assert state(rt.mcp) == "connected" and "fx/echo: Echo the text back" in context["instructions"]  # online before the session starts
+    assert state(rt.mcp) == "connected" and "fx/echo: Echo the text back" in rt.store.snapshot(sid)["tool_definitions"]["mcp_tool_search"]["description"]  # online before the session starts
     results = await _run(rt, client, provider, sid, [
         [ToolCall("c1", "mcp_tool_search", json.dumps({"query": "echo text"}))],
         [ToolCall("c2", "mcp_call", json.dumps({"tool": "fx/echo", "arguments": {"text": "hello"}}))],
@@ -274,14 +274,14 @@ async def test_names_mode_lists_tools_until_the_limit_then_only_servers(env):
     rt, client, _provider, workspace, home = env
     write_config(home)
     first = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
-    prompt = (await client.get(f"/api/session/{first}/context")).json()["instructions"]
+    prompt = rt.store.snapshot(first)["tool_definitions"]["mcp_tool_search"]["description"]
     assert "fx/echo: Echo the text back" in prompt and "fx/write_note:" in prompt and "input_schema" not in prompt
     set_modes(home, "max_listed_tools = 3\n")  # the fixture has 5 tools
     second = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
-    prompt = (await client.get(f"/api/session/{second}/context")).json()["instructions"]
+    prompt = rt.store.snapshot(second)["tool_definitions"]["mcp_tool_search"]["description"]
     assert "fx (5 tools)" in prompt and "fx/echo:" not in prompt and "more than 3" in prompt
     # the first session is frozen: a config change does not touch it
-    assert (await client.get(f"/api/session/{first}/context")).json()["instructions"].count("fx/echo:") == 1
+    assert rt.store.snapshot(first)["tool_definitions"]["mcp_tool_search"]["description"].count("fx/echo:") == 1
     await rt.shutdown()
 
 
@@ -290,7 +290,7 @@ async def test_full_definitions_mode_puts_every_schema_in_the_prompt(env):
     write_config(home)
     set_modes(home, "full_definitions = true\nmax_listed_tools = 1\n")  # the limit does not apply to this mode
     sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
-    prompt = (await client.get(f"/api/session/{sid}/context")).json()["instructions"]
+    prompt = rt.store.snapshot(sid)["tool_definitions"]["mcp_tool_search"]["description"]
     assert '"tool": "fx/echo"' in prompt and '"tool": "fx/write_note"' in prompt and '"input_schema"' in prompt
     assert "may_change_state" in prompt
     await rt.shutdown()

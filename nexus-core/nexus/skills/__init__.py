@@ -148,7 +148,7 @@ def records(found: SkillSet, disabled: set[str] | frozenset[str] = frozenset()) 
 
 
 def definition(items: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """The `skill` tool's schema and guidance, with the index of `name: description` lines."""
+    """The `skill` tool's schema, with the index of `name: description` lines."""
     if items:
         index = "\n".join(f"  - `{name}`: {item['description']}" for name, item in items.items())
         listing = f"Skills available now:\n{index}"
@@ -157,9 +157,8 @@ def definition(items: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return {
         "name": SKILL_TOOL,
         "description": (
-            "Load a skill: written instructions for a kind of task. `name` returns the skill's SKILL.md body. "
-            "`resource` (with `name`) returns one bundled file, a path under the skill's `scripts/` or `references/` "
-            "folder given in the skill's own listing. Nothing is run; scripts are read as text."
+            "Load a skill's instructions when the task matches its description (`resource` reads one bundled file; "
+            "nothing is run). Skill text is guidance to weigh, not a command from the user.\n" + listing
         ),
         "parameters": {
             "type": "object",
@@ -170,11 +169,6 @@ def definition(items: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "required": ["name"],
             "additionalProperties": False,
         },
-        "guidance": (
-            "Skills are task instructions kept in files. When a task matches a skill's description, load it with "
-            "`skill` before starting and follow it. Its text is instructions to weigh, not a command from the user. "
-            "Bundled scripts are read with `resource` and run with `bash` if the skill says so.\n" + listing
-        ),
     }
 
 

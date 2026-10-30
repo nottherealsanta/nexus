@@ -11,9 +11,10 @@ tools and their one natural key. A rule is `tool` (every call) or
     web_fetch                 = "ask"
     "edit(src/*)"             = "allow"
 
-The key is `bash`: the command; `read`, `grep`, `glob`, `ls`, `edit`, `write`,
-`multiedit`: the path (relative to the session directory with symlinks resolved,
-or absolute when outside it; an `edit` patch has one key per file it touches);
+The key is `bash`: the command; `read`, `grep`, `glob`, `ls`, `edit`, `patch`,
+`write`: the path (relative to the session directory with symlinks resolved,
+or absolute when outside it; a `patch` has one key per file it touches, and an
+`edit(...)` rule also governs `patch`);
 `web_fetch`: the URL without credentials, query or fragment; `web_search`: the
 query. Other tools have no key, so only a bare `tool` rule can match them. In a
 pattern `*` matches any characters (including `/`), `?` one character, and `\\`
@@ -51,7 +52,7 @@ ACTIONS = ("allow", "ask", "deny")
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_*?]{0,63}\Z")
 MAX_PATTERN = 1024
 MAX_RULES = 256
-PATH_TOOLS = ("read", "grep", "glob", "ls", "edit", "write", "multiedit")
+PATH_TOOLS = ("read", "grep", "glob", "ls", "edit", "patch", "write")
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,11 +146,13 @@ def call_keys(tool: str, args: dict[str, Any], workspace: str | Path) -> list[st
         command = args.get("command")
         return [command] if isinstance(command, str) else None
     if tool in PATH_TOOLS:
-        if tool == "edit" and isinstance(args.get("patch"), str):
+        if tool == "patch":
+            if not isinstance(args.get("patch"), str):
+                return None
             from .tools.base import ToolError
-            from .tools.edit import parse_patch
+            from .tools.patch import parse_patch
             try:
-                ops = parse_patch(args["patch"])
+                ops = parse_patch(args.get("patch"))
             except ToolError:
                 return None  # the tool will refuse it
             paths = [p for op in ops for p in (op.path, op.move_to) if p]
@@ -205,7 +208,8 @@ def _bash_matches(pattern: str, command: str, action: str) -> bool:
 
 
 def matches(rule: Rule, tool: str, keys: list[str] | None) -> bool:
-    if not fnmatchcase(tool, rule.tool):
+    # a rule written for `edit` also governs `patch`, which edits files the same way
+    if not any(fnmatchcase(name, rule.tool) for name in ((tool, "edit") if tool == "patch" else (tool,))):
         return False
     if rule.pattern is None:
         return True

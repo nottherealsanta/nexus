@@ -22,7 +22,7 @@ const network = {
   "GET */api/snapshot*": { body: snapshot },
   "GET */api/event*": { body: sse(connected), headers: { "content-type": "text/event-stream" } },
   "GET */api/provider": { body: [] },
-  "GET */api/model/default": { body: { model: "scripted/m" } },
+  "GET */api/model/last*": { body: { model: "scripted/m" } },
   "GET */api/model*": { body: { source: "t", models: [], model: "scripted/m" } },
   "GET */api/agent*": { body: { agents: [], problems: [] } },
   "GET */api/skill*": { body: { skills: [], problems: [] } },

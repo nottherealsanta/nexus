@@ -89,7 +89,7 @@ pub enum SyncMsg {
         agents: Vec<Value>,
         source: String,
         /// Core's default model reference (`provider/id`), empty if unknown.
-        default_model: String,
+        last_model: String,
     },
     Files {
         project: String,
@@ -484,14 +484,14 @@ pub async fn run(
         // A request received while reconnecting must not be stranded until a
         // later command arrives on the live stream.
         if let Some(project) = cx.catalog.take() {
-            if let Some((models, agents, source, default_model)) =
+            if let Some((models, agents, source, last_model)) =
                 load_catalog(&api, project.as_deref()).await
             {
                 if !cx.send(SyncMsg::Catalog {
                     models,
                     agents,
                     source,
-                    default_model,
+                    last_model,
                 }) {
                     return;
                 }
@@ -711,8 +711,8 @@ async fn load_catalog(
             }
         }
     }
-    let default_model = api
-        .default_model()
+    let last_model = api
+        .last_model()
         .await
         .ok()
         .and_then(|v| v["model"].as_str().map(str::to_owned))
@@ -733,7 +733,7 @@ async fn load_catalog(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
-        default_model,
+        last_model,
     ))
 }
 
@@ -1057,8 +1057,8 @@ async fn stream(
                         load_context(cx, api).await;
                         load_draft(cx, api).await;
                         if let Some(project) = cx.catalog.take() {
-                            if let Some((models, agents, source, default_model)) = load_catalog(api, project.as_deref()).await {
-                                if !cx.send(SyncMsg::Catalog { models, agents, source, default_model }) {
+                            if let Some((models, agents, source, last_model)) = load_catalog(api, project.as_deref()).await {
+                                if !cx.send(SyncMsg::Catalog { models, agents, source, last_model }) {
                                     return StreamEnd::Stop;
                                 }
                             }

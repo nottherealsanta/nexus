@@ -5,7 +5,7 @@ import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, fo
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
-  agentCatalog, contextBudget, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model, modelCatalog, tick,
+  agentCatalog, contextBudget, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, modelCatalog, tick,
   projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
@@ -123,10 +123,10 @@ export function Composer() {
     m();
     const s = ses();
     const chosen = !s ? sessionDraft().model : undefined;
-    if (s?.model) return String(s.model);
+    if (s) return s.model ? String(s.model) : "";
     if (chosen) return chosen;
     const entry = agentCatalog().agents.find((a) => a.name === agent());
-    return entry?.model || defaultModel();
+    return entry?.model || rememberedModel(currentProject(), agent());
   };
   const modelParts = () => {
     const ref = modelRef();

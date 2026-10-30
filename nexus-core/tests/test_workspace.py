@@ -21,7 +21,7 @@ from nexus.store import Store
 from nexus.tools import Tool, ToolError
 
 TOKEN = "t0ken"
-TASK_TOOLS = ["read", "grep", "glob", "ls", "bash", "bash_output", "bash_kill", "edit", "multiedit", "write", "web_search", "web_fetch", "ask", "code"]
+TASK_TOOLS = ["read", "grep", "glob", "ls", "bash", "bash_output", "bash_kill", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code"]
 
 
 class Scripted:
@@ -148,7 +148,7 @@ async def test_workspace_tools_are_hidden_until_exposed_and_then_callable(env):
     context = await _context(env.client, sid)
     names = [t["name"] for t in context["tools"]]
     assert names == TASK_TOOLS + ["expose_workspace_tools"]
-    assert "`expose_workspace_tools`" in context["instructions"]
+    assert "`expose_workspace_tools`" not in context["instructions"]
     assert "`change_session_directory`" not in context["instructions"]
     assert "`worktree`" not in context["instructions"]
     assert session["workspace"] == {"entry": True, "active": False}
@@ -171,7 +171,7 @@ async def test_workspace_tools_are_hidden_until_exposed_and_then_callable(env):
     messages = await _messages_of(env.client, sid)
     activation = next(output for output in _texts(messages) if "workspace control tools activated" in (output or ""))
     assert "### `change_session_directory`" in activation and "Parameters:" in activation
-    assert "### `worktree`" in activation and "Guidance:" in activation
+    assert "### `worktree`" in activation
     assert "List, create or delete" in activation
 
     refreshed = (await env.client.get(f"/api/session/{sid}")).json()
@@ -290,7 +290,7 @@ async def test_directory_change_waits_for_the_running_call_and_rebinds_later_cal
         await release.wait()
         return "read finished"
 
-    registry["read"] = Tool(original.spec, blocked_read, original.guidance)
+    registry["read"] = Tool(original.spec, blocked_read)
     monkeypatch.setattr(env.rt, "_registry", lambda: registry)
 
     env.provider.replies = [

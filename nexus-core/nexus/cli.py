@@ -540,7 +540,7 @@ async def _chat_line(client: Client, session: dict[str, Any], text: str,
         if ref:
             session = await client.call("POST", f"/api/session/{session['id']}/model",
                                         {"model": "" if ref == "default" else ref})
-        print(f"{DIM}{_describe(session)}  (/model default follows the agent){RESET}")
+        print(f"{DIM}{_describe(session)}  (/model default returns to the agent's own model){RESET}")
         return session, True
     if text == "/tools":
         off = ", ".join(session["disabled_tools"]) or "none"
@@ -593,7 +593,8 @@ async def _chat(args: argparse.Namespace, renderer: Renderer) -> None:
 def _describe(session: dict[str, Any]) -> str:
     effort = f" effort {session['effort']} ({session['effort_source']})" if session["effort"] else ""
     off = f" · off: {','.join(session['disabled_tools'])}" if session["disabled_tools"] else ""
-    return f"agent {session['agent']} · {session['model']} ({session['model_source']}){effort}{off}"
+    model = f"{session['model']} ({session['model_source']})" if session["model"] else "no model: choose one with --model or /model provider/model"
+    return f"agent {session['agent']} · {model}{effort}{off}"
 
 
 async def _agent_list(client: Client, directory: str, *, child: bool | None = None) -> None:

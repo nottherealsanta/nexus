@@ -102,11 +102,19 @@ def test_path_keys_resolve_traversal_and_symlinks(tmp_path):
 def test_edit_patch_has_a_key_per_file():
     patch = "*** Begin Patch\n*** Update File: src/a.py\n@@\n-x\n+y\n*** Add File: secret/b.txt\n+z\n*** End Patch"
     deny = rules(**{"edit(secret/*)": "deny"})
-    assert verdict("edit", {"patch": patch}, deny)[0] == "deny"  # one denied file denies the patch
+    assert verdict("patch", {"patch": patch}, deny)[0] == "deny"  # one denied file denies the patch
     allow = rules(**{"edit(src/*)": "allow"})
-    assert verdict("edit", {"patch": patch}, allow) is None  # allow needs every file
+    assert verdict("patch", {"patch": patch}, allow) is None  # allow needs every file
     assert verdict("edit", {"path": "src/a.py", "old_string": "a", "new_string": "b"}, allow)[0] == "allow"
-    assert verdict("edit", {"patch": "garbage"}, deny) is None
+    assert verdict("patch", {"patch": "garbage"}, deny) is None
+
+
+def test_an_edit_rule_also_governs_patch_but_not_the_reverse():
+    patch = "*** Begin Patch\n*** Update File: secret/a.py\n@@\n-x\n+y\n*** End Patch"
+    assert verdict("patch", {"patch": patch}, rules(**{"edit(secret/*)": "deny"}))[0] == "deny"
+    assert verdict("patch", {"patch": patch}, rules(edit="ask"))[0] == "ask"
+    assert verdict("edit", {"path": "secret/a.py", "old_string": "a", "new_string": "b"},
+                   rules(**{"patch(secret/*)": "deny"})) is None
 
 
 def test_web_keys_never_carry_credentials_query_or_fragment():
