@@ -41,7 +41,9 @@ Not required for 0.10.0 now. The matrix, the Linux requirements and the decision
 - reject unsupported platforms with a diagnostic; do not install `nsh` for a release install (the web bundle is prebuilt);
 - add an `install` workflow (clean runner, rerun is an idempotent upgrade, `nexus update`) and a nightly check of the published script; old Nexus's `install.yml` is the model. `nexus update` currently only reports; decide whether 0.10.0 installs updates.
 
-### 4. CI and CD (first run: red)
+### 4. CI and CD (NSH skipped for now)
+**NSH is skipped in CI and in the release build for now** (`if: false` on the `nsh` job in `ci.yml` and the `nsh-web` job in `build-artifacts.yml`; `ci-ok` treats a skipped job as passing). The pinned-`nsh` setup action (`.github/actions/setup-nsh`) stays in the repo for when it is re-enabled; its first runs took over 17 minutes because `nsh`'s release profile is fat LTO (now turned off in CI) and nothing was cached. Consequence: a release has no `nexus-web.tar.gz` until NSH is back, and the `nsh` type check and web build run only on a developer's machine.
+
 Adapted from old Nexus (`~/repos/nexus/.github/workflows`): `ci.yml` (`changes`, `lint`, `core` on macOS and Ubuntu 24.04, `tui` on macOS and Ubuntu 22.04 with ALSA headers, `nsh`, and `ci-ok`, the one required check), `build-artifacts.yml` (TUI binaries for four platforms, the NSH web bundle, the Core wheel), `release.yml` (release-please, then attach artifacts, `install.sh` and `SHA256SUMS`; no PyPI publish), `pr-title.yml`.
 
 First runs on `main` (2026-10-30; `core` is green on both OSes after the fix, `lint` was always green), and what was done:

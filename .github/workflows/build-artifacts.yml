@@ -13,6 +13,7 @@ permissions:
   contents: read
 jobs:
   nsh-web:
+    if: false   # NSH skipped for now (PLAN.md step 4); the release has no web bundle until this is re-enabled
     runs-on: macos-15
     timeout-minutes: 45
     steps:

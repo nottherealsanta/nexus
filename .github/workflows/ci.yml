@@ -98,7 +98,7 @@ jobs:
       - run: cargo build --release --locked --manifest-path nexus-tui/Cargo.toml
   nsh:              # type-check and build the web bundle; browser tests wait for the mock-stream fix (PLAN.md)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: false   # NSH skipped for now (PLAN.md step 4): the pinned nsh build is too slow and unproven on a runner
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
