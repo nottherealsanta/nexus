@@ -1,0 +1,67 @@
+name: build artifacts
+# Reusable: builds the release artifacts for one ref. Called by release.yml.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ''
+      runners:
+        type: string
+        default: '["ubuntu-22.04", "ubuntu-22.04-arm", "macos-15", "macos-15-intel"]'
+permissions:
+  contents: read
+jobs:
+  nsh-web:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: "${{ inputs.ref }}"}
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm, cache-dependency-path: nexus-nsh/package-lock.json}
+      - name: Install NSH toolchain
+        run: |
+          rustup target add wasm32-unknown-unknown
+          curl -fsSL https://nsh.dev/install.sh -o "$RUNNER_TEMP/install-nsh.sh"
+          NSH_VERSION=v0.3.0 sh "$RUNNER_TEMP/install-nsh.sh"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: npm ci && npm run build
+        working-directory: nexus-nsh
+      - run: tar -C nexus-nsh/dist -czf nexus-web.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with: {name: nexus-web, path: nexus-web.tar.gz, if-no-files-found: error}
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: "${{ inputs.ref }}"}
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv build
+        working-directory: nexus-core
+      - uses: actions/upload-artifact@v4
+        with: {name: nexus-core, path: "nexus-core/dist/*", if-no-files-found: error}
+  tui:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(inputs.runners) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: "${{ inputs.ref }}"}
+      - name: ALSA headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libasound2-dev
+      - run: cargo build --release --locked --manifest-path nexus-tui/Cargo.toml
+      - name: Smoke test, the binary starts
+        run: nexus-tui/target/release/nexus-tui --help
+      - name: Name the binary for its platform
+        run: |
+          os=$(uname -s | tr A-Z a-z); arch=$(uname -m)
+          cp nexus-tui/target/release/nexus-tui "nexus-tui-$os-$arch"
+          echo "ASSET=nexus-tui-$os-$arch" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with: {name: "tui-${{ matrix.runner }}", path: "${{ env.ASSET }}", if-no-files-found: error}

@@ -1,0 +1,77 @@
+name: release
+# Releases are driven by release-please: every push to main updates one "release PR";
+# merging it tags vX.Y.Z and creates the GitHub release. This workflow then builds the
+# TUI binaries, the NSH web bundle and the Core wheel/sdist and attaches them with
+# SHA256SUMS and install.sh. Nothing ships until that PR is merged. Nothing is
+# published to PyPI.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Re-attach assets to an existing tag (e.g. v0.10.0) whose build failed"
+        required: true
+concurrency:
+  group: release
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      # A PR opened with the default GITHUB_TOKEN does not start other workflows,
+      # so the release PR would never get its ci-ok check. Use the app token.
+      - id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - id: rp
+        uses: googleapis/release-please-action@v5
+        with:
+          token: ${{ steps.app.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+  build:
+    needs: release-please
+    if: >-
+      always() &&
+      (needs.release-please.outputs.created == 'true' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/build-artifacts.yml
+    with:
+      ref: ${{ needs.release-please.outputs.tag || inputs.tag }}
+  attach:
+    needs: [release-please, build]
+    if: >-
+      always() &&
+      needs.build.result == 'success' &&
+      (needs.release-please.outputs.created == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write     # upload release assets
+    env:
+      TAG: ${{ needs.release-please.outputs.tag || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: "${{ env.TAG }}"}
+      - name: Tag matches the Core version
+        run: |
+          v=$(python3 -c 'import tomllib;print(tomllib.load(open("nexus-core/pyproject.toml","rb"))["project"]["version"])')
+          [ "v$v" = "$TAG" ] || { echo "tag $TAG != nexus-core $v"; exit 1; }
+      - uses: actions/download-artifact@v4
+        with: {path: dist, merge-multiple: true}
+      - name: Attach installer, checksums and artifacts to the release
+        run: |
+          cp install.sh dist/
+          (cd dist && sha256sum * > SHA256SUMS)
+          gh release upload "$TAG" dist/* --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

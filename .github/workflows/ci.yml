@@ -1,0 +1,133 @@
+name: ci
+on:
+  pull_request:
+    paths-ignore: ["**.md", "docs/**", "artifacts/**"]
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**", "artifacts/**"]
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  changes:          # release-only PRs skip everything heavy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with: {fetch-depth: 0}
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          code=true
+          if [ "$EVENT" = pull_request ]; then
+            files=$(git diff --name-only "$BASE" "$HEAD")
+            # A release-please PR touches only CHANGELOG.md, the manifest and the version
+            # lines of the files named in release-please-config.json. Nothing there can
+            # break tests. Any other changed line keeps the jobs on.
+            release_only=true
+            for f in $files; do
+              case "$f" in
+                CHANGELOG.md|.release-please-manifest.json) ;;
+                nexus-core/pyproject.toml|nexus-core/uv.lock|nexus-tui/Cargo.toml|nexus-tui/Cargo.lock|nexus-nsh/nsh.json)
+                  other=$(git diff -U0 "$BASE" "$HEAD" -- "$f" | grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' | grep -Ev '^[+-] *(version = |"version": )' || true)
+                  [ -z "$other" ] || release_only=false ;;
+                *) release_only=false ;;
+              esac
+            done
+            if [ -n "$files" ] && [ "$release_only" = true ]; then code=false; fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+  lint:             # fast-fail, independent of the tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with: {enable-cache: true, cache-dependency-glob: nexus-core/uv.lock}
+      - run: uv run --project nexus-core --locked ruff check nexus-core/nexus nexus-core/tests
+      - run: python3 interface/check_manifest.py
+      - run: python3 interface/check_theme.py
+      - run: cargo fmt --check --manifest-path nexus-tui/Cargo.toml
+      - run: uv build --project nexus-core    # packaging check
+  core:             # Python tests, macOS and Linux
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with: {enable-cache: true, cache-dependency-glob: nexus-core/uv.lock}
+      - run: uv sync --locked
+        working-directory: nexus-core
+      - run: uv run pytest -q --durations=25
+        working-directory: nexus-core
+        env:
+          NEXUS10_HOME: ${{ runner.temp }}/nexus-home
+  tui:              # Rust client. Linux builds on 22.04 so the release binary needs glibc 2.35 at most.
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04]
+    steps:
+      - uses: actions/checkout@v7
+      # rodio -> cpal -> alsa-sys needs pkg-config and the ALSA headers on Linux.
+      # Without them `cargo build` fails in alsa-sys's build script.
+      - name: ALSA headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libasound2-dev
+      - uses: Swatinem/rust-cache@v2.8.0
+        with: {workspaces: nexus-tui}
+      - run: cargo test --locked --manifest-path nexus-tui/Cargo.toml
+      - run: cargo build --release --locked --manifest-path nexus-tui/Cargo.toml
+  nsh:              # type-check and build the web bundle; browser tests wait for the mock-stream fix (PLAN.md)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm, cache-dependency-path: nexus-nsh/package-lock.json}
+      - name: Install NSH toolchain
+        run: |
+          rustup target add wasm32-unknown-unknown
+          curl -fsSL https://nsh.dev/install.sh -o "$RUNNER_TEMP/install-nsh.sh"
+          NSH_VERSION=v0.3.0 sh "$RUNNER_TEMP/install-nsh.sh"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: npm ci
+        working-directory: nexus-nsh
+      - run: npm run check
+        working-directory: nexus-nsh
+      - run: npm run test:host
+        working-directory: nexus-nsh
+      - run: npm run build
+        working-directory: nexus-nsh
+  ci-ok:            # the one required status check; its name never changes with the matrix
+    if: always()
+    needs: [changes, lint, core, tui, nsh]    # a skipped job is not a failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      # Allow-list, not deny-list: anything but success/skipped fails the gate.
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needs: $RESULTS"
+          for r in $RESULTS; do case "$r" in success|skipped) ;; *) exit 1 ;; esac; done
