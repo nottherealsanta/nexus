@@ -37,7 +37,7 @@ nexus web                  # the browser client
 nexus doctor               # check the install
 ```
 
-The `claude` provider drives your own [Claude Code](https://claude.com/product/claude-code) through the Agent SDK. Install Claude
+The `claude` provider drives your own Claude Code through the Agent SDK. Install Claude
 Code and sign in with `claude auth login` first; Nexus does not ship it.
 
 ## Documentation
