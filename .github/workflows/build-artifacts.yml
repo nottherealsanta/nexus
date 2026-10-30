@@ -20,12 +20,7 @@ jobs:
         with: {ref: "${{ inputs.ref }}"}
       - uses: actions/setup-node@v4
         with: {node-version: "22", cache: npm, cache-dependency-path: nexus-nsh/package-lock.json}
-      - name: Install NSH toolchain
-        run: |
-          rustup target add wasm32-unknown-unknown
-          curl -fsSL https://nsh.dev/install.sh -o "$RUNNER_TEMP/install-nsh.sh"
-          NSH_VERSION=v0.3.0 sh "$RUNNER_TEMP/install-nsh.sh"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-nsh
       - run: npm ci && npm run build
         working-directory: nexus-nsh
       - run: tar -C nexus-nsh/dist -czf nexus-web.tar.gz .

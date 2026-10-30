@@ -1,0 +1,37 @@
+name: Set up nsh
+description: >-
+  Build nsh from a pinned commit and put it on PATH. The published v0.3.0 predates style
+  properties the app uses (numberOfLines, userSelect, objectFit, pointerEvents), so the
+  release cannot type-check or build it. Replace with a release once one has them.
+inputs:
+  commit:
+    description: Full SHA of longbridge/nsh to build
+    default: 09c16321c09c938ffcc2c5703ed18befb8c0338c
+runs:
+  using: composite
+  steps:
+    - id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.nsh
+        key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ inputs.commit }}
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        COMMIT: ${{ inputs.commit }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$HOME/.nsh" && cd "$HOME/.nsh"
+        git init -q source && cd source
+        git remote add origin https://github.com/longbridge/nsh.git
+        git fetch -q --depth 1 origin "$COMMIT"
+        git checkout -q --detach FETCH_HEAD
+        # Same layout as `nsh.dev/install.sh --source`: the checkout stays next to bin/ so the CLI can build its runtimes.
+        cargo build --release --locked -p nsh-cli
+        mkdir -p ../bin
+        ln -sf "$PWD/target/release/nsh" ../bin/nsh
+    - shell: bash
+      run: |
+        rustup target add wasm32-unknown-unknown
+        echo "$HOME/.nsh/bin" >> "$GITHUB_PATH"
+        "$HOME/.nsh/bin/nsh" -V

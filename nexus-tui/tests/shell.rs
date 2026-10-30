@@ -473,13 +473,13 @@ fn composer_uses_latest_usage_and_catalog_window() {
     summarize(&mut app, 100, turn);
     let (_, rows) = draw(&mut app, 160, 48);
     let all = joined(&rows);
-    assert!(all.contains("Example Model default codex"), "{all}");
+    assert!(all.contains("Example Model codex \u{b7} default"), "{all}");
     assert!(all.contains("10.0K \u{b7} 5.0%"), "{all}");
     app.state.models.clear();
     let (_, rows) = draw(&mut app, 160, 48);
     let all = joined(&rows);
     assert!(
-        all.contains("example default codex") && all.contains("10.0K"),
+        all.contains("example codex \u{b7} default") && all.contains("10.0K"),
         "{all}"
     );
     assert!(!all.contains("5%"), "no window, no share: {all}");
@@ -506,7 +506,7 @@ fn composer_capitalises_the_agent_and_shows_price_tier_occupancy() {
     let (_, rows) = draw(&mut app, 160, 48);
     let row = rows
         .iter()
-        .find(|row| row.contains("Example Model default codex"))
+        .find(|row| row.contains("Example Model codex \u{b7} default"))
         .expect("composer control row");
     assert!(row.contains("Orchestrate"), "{row}");
     assert!(!row.contains("orchestrate"), "{row}");
@@ -734,8 +734,8 @@ fn file_actions_copy_mention_and_switch_the_root() {
     );
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
-    // D16: the root header is the checkout name in capitals, then its branch
-    assert!(all.contains("\u{25be} WS"), "{all}");
+    // D16: the root header is the checkout name as written, then its branch
+    assert!(all.contains("\u{25be} ws"), "{all}");
     assert!(all.contains("\u{2325} feature"), "{all}");
     assert!(app.hits.rect_of(&Target::FilesRoot).is_some());
     app.effects.clear();
@@ -2590,7 +2590,7 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
             text[first]
         );
         assert!(text[first + 1].trim().is_empty(), "{w}");
-        assert!(text[first + 2].trim_end().ends_with('X') && text[first + 2].starts_with("  X"));
+        assert!(text[first + 2].trim_end().ends_with('x') && text[first + 2].starts_with("  x"));
         let title = &text[first + 3];
         let detail = &text[first + 4];
         assert!(text[first + 5].trim().is_empty(), "spacer {w}");
@@ -3249,7 +3249,7 @@ fn the_files_root_header_and_indent_guides_follow_d16() {
         .iter()
         .find(|r| r.contains("\u{2325} trunk"))
         .expect("root header");
-    let name = app.files_header().unwrap().name.to_uppercase();
+    let name = app.files_header().unwrap().name;
     assert!(head.contains(&name), "{head:?}");
     assert!(
         col_of(head, "\u{2325}") > col_of(head, &name) + name.len(),

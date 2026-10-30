@@ -16,7 +16,7 @@ show their branch and linked-worktree marker from Core below the composer; a
 project with no session shows its own branch. The composer is a soft card
 (half-row `▄`/`▀` edges in the panel colour; `─` rules in mono and ASCII) whose
 control row shows the agent in its colour, the catalog model name (or a pending
-model change), effort, provider, and on the right the `╱` meter with
+model change), provider, effort, and on the right the `╱` meter with
 `82.0K · 41%`, explained on hover.
 The first row is a band on the chrome surface (`surface.sidebar`, shared
 with both sidebars; no rules between them, a `│` edge only in ANSI-16 and

@@ -7,10 +7,10 @@ Preserve the visible, ordered context timeline, announce clipping, keep task too
 ## Where things stand (2026-10-30)
 
 - **Merged.** `main` is now Nexus 0.10 (`e2c6cd2`, pushed directly, no PR; branch protection is off). `nexus10` shared no history with `main`, so the merge used `-s ours` and keeps old Nexus 0.7.2 as the second parent: no force-push, and nothing was lost. Old Nexus is also branch `nexus01` (pushed, plus one backup commit of its uncommitted local work) and tag `v0.7.2`.
-- Release gate O1 to O4 are done. O5 (platform matrix) and O6 (release-download install) are open.
-- **CI ran for the first time on that push** (run 41073305862): `lint` passed; five jobs failed for three reasons, listed in step 4. Release-please ran and opened PR #97 "release 0.10.0"; do not merge it until CI is green. Stale release PRs from old Nexus remain open (#95 "release 0.8.0", #70): close them.
+- Release gate O1 to O4 are done. O5 (platform matrix) is deferred to [TODO.md](TODO.md); O6 (release-download install) is open.
+- **CI** first ran on the merge push (run 41073305862). After fixes: `lint` and `core` pass on macOS and Ubuntu; the five stale `nexus-tui/tests/shell.rs` tests are updated and the TUI tests pass locally; the `nsh` job now builds a pinned `nsh` (step 4). The next push shows whether `ci-ok` is green. Release-please opened PR #97 "release 0.10.0"; do not merge it until CI is green. Stale PRs from old Nexus are still open and should be closed: #95 (release 0.8.0 for the old `nexus-harness` component) and #70 (an empty commit that triggered an old patch release); closing them was blocked by the permission classifier in the session, so close them by hand.
 - **`install.sh` on `main` changed meaning.** Old Nexus's installer was fetched with `curl .../main/install.sh | sh`; that URL now serves the from-checkout installer, so the old one-line install no longer works. Fix before announcing: either keep a compatible script at that path or point the docs at the release asset.
-- The Claude provider works in the real TUI (a Claude Haiku 5.5 turn, 2026-10-30). It showed **14.7K input tokens for "hi there" against a ~3.9K starting-context estimate**: find where the other ~10K comes from (a stale daemon, the CLI 2.1.314 additions, or the tool schemas), because the context meter should match what the model receives.
+- The Claude provider works in the real TUI (a Claude Haiku 5.5 turn, 2026-10-30). Open question, kept in [TODO.md](TODO.md): 14.7K input tokens for "hi there" against a ~3.9K starting-context estimate.
 
 ### Linux check (Debian 13 x86_64, 2026-10-30, a scratch folder on the build box, since deleted)
 
@@ -31,18 +31,8 @@ Preserve the visible, ordered context timeline, announce clipping, keep task too
 3. Run `nexus check` locally (Core, TUI, lints, manifest/theme checks, NSH checks).
 4. Fix the NSH mock event stream (it ends and puts the app in reconnecting state) and rerun the browser suite; the recorded run had 13 failures, so do not assume they are unrelated. `nsh test --target web` needs an explicit Playwright Chromium path on this machine. If the fix does not land, record the failing tests as known and keep the suite out of `ci-ok`.
 
-### 2. Platform matrix (O5)
-Cells to fill, each with install, `nexus doctor`, daemon start, TUI against the daemon, NSH web, a scripted turn and a Monty kernel run:
-
-| Platform | Status |
-| --- | --- |
-| macOS arm64 | development machine; run the full list once from a clean `$NEXUS10_HOME` |
-| macOS x86_64 | not run |
-| Linux x86_64 glibc | Core and TUI done (above); NSH, `install.sh`, a live daemon + TUI session and kernels remaining |
-| Linux aarch64 glibc | supported: the release builds a binary on `ubuntu-22.04-arm`; run the same checks as x86_64 on real hardware or a runner before release |
-| Alpine/musl | not supported at 0.10.0: `install.sh` rejects it with a clear message (decided; old Nexus did the same for musl x86_64). Revisit after release |
-
-Linux needs, in the installer's checks and in `docs/development.md`: `pkg-config`, ALSA headers (`libasound2-dev` / `alsa-lib-devel` / `alsa-lib-dev`), a C toolchain, `git`, `uv`, Rust, Node 22 and `nsh`. Release TUI binaries are built on Ubuntu 22.04 (glibc 2.35) so older distributions can run them. The Monty kernel launcher uses `/usr/bin/env`; confirm the path on Linux (tests passed here, but the scrubbed-environment worker, forced worker crashes and cold start are not covered).
+### 2. Platform matrix (O5): deferred
+Not required for 0.10.0 now. The matrix, the Linux requirements and the decisions are in [TODO.md](TODO.md). Decided already: musl is unsupported (`install.sh` rejects it with a clear message) and Linux aarch64 glibc is supported through the release build.
 
 ### 3. Installation (O6)
 `install.sh` today builds from a checkout (`uv tool install`, `cargo build --release`, `npm run build`) and requires `nsh` via npm. For 0.10.0, add release-download installation:
@@ -56,8 +46,8 @@ Adapted from old Nexus (`~/repos/nexus/.github/workflows`): `ci.yml` (`changes`,
 
 First runs on `main` (2026-10-30; `core` is green on both OSes after the fix, `lint` was always green), and what was done:
 1. `core`: one failure on both OSes, `test_claude.py`, because the runners have no Claude Code and my test assumed one. Fixed in the test (it names a stand-in CLI).
-2. `tui`: `agent_and_model_chosen_before_a_session_exists_go_into_its_creation` failed on both OSes (and before this work): the agent picker filters by `mode` and the fixture's agents had none. Fixed in the test (`"mode": "primary"`). That failure had hidden later test binaries; the second run (54c0c0b) shows **five failing tests in `nexus-tui/tests/shell.rs`, on macOS, Ubuntu and locally**: `composer_capitalises_the_agent_and_shows_price_tier_occupancy` (line 510), `composer_uses_latest_usage_and_catalog_window` (476), `file_actions_copy_mention_and_switch_the_root` (738), `session_rows_follow_d03_at_sidebar_widths_22_28_and_34` (2593) and `the_files_root_header_and_indent_guides_follow_d16` (3253). Their expectations predate recent UI work (the right-hand SESSION panel, the workspace header, the composer control row). Each needs a decision, test or UI, so none has been edited. `cargo test --no-fail-fast` shows them all; every other binary passes (alerts, behaviour, mutations, sync, timeline, lib).
-3. `nsh`: `npm run check` fails with type errors (`numberOfLines`, `userSelect`, `objectFit`, `pointerEvents` unknown in style types) in `src/ui/timeline.tsx`, `usage.tsx` and others. **Cause: the developer's `nsh` is a source build of 0.3.0 (`09c1632`, in `~/.nsh/source`); the published release v0.3.0 (`76fa8a7`, the latest) lacks those properties.** The web bundle therefore builds only with the dev `nsh`. Open: build `nsh` from `09c1632` in CI and in `build-artifacts.yml` (pinned by commit), or wait for a release that has them and pin that. Until then the `nsh` job and the release's web bundle cannot pass.
+2. `tui`: `agent_and_model_chosen_before_a_session_exists_go_into_its_creation` failed on both OSes (and before this work): the agent picker filters by `mode` and the fixture's agents had none. Fixed in the test (`"mode": "primary"`). That failure had hidden later test binaries; the second run (54c0c0b) shows **five failing tests in `nexus-tui/tests/shell.rs`, on macOS, Ubuntu and locally**: `composer_capitalises_the_agent_and_shows_price_tier_occupancy` (line 510), `composer_uses_latest_usage_and_catalog_window` (476), `file_actions_copy_mention_and_switch_the_root` (738), `session_rows_follow_d03_at_sidebar_widths_22_28_and_34` (2593) and `the_files_root_header_and_indent_guides_follow_d16` (3253). Their expectations predated intended UI changes: the composer row reads `model provider · effort`, and project and checkout names keep their original casing (`docs/development.md`). All five tests were updated to match (and the TUI README's row order), and `cargo test` passes in full. `cargo test --no-fail-fast` shows them all; every other binary passes (alerts, behaviour, mutations, sync, timeline, lib).
+3. `nsh`: `npm run check` fails with type errors (`numberOfLines`, `userSelect`, `objectFit`, `pointerEvents` unknown in style types) in `src/ui/timeline.tsx`, `usage.tsx` and others. Cause: the developer's `nsh` is a source build of 0.3.0 (`09c1632`, in `~/.nsh/source`); the published release v0.3.0 (`76fa8a7`, the latest) lacks those properties. Fix in place, not yet proven on a runner: `.github/actions/setup-nsh` builds `nsh` from the pinned commit (same layout as `nsh.dev/install.sh --source`, cached by commit) and both workflows use it. Replace the pin with a release once one has the properties. Note that nsh publishes prebuilt binaries only for macOS arm64 and Linux x86_64.
 
 Before relying on them:
 1. Push the fixes and rerun `ci.yml` until `ci-ok` is green; the Ubuntu core and TUI jobs now have a baseline, the NSH job does not.
@@ -74,7 +64,7 @@ Before relying on them:
 
 ### 5b. Claude Agent SDK (blocking)
 
-Landed 2026-10-30 (uncommitted): provider `claude` in `nexus-core/nexus/llmhub/claude.py` and `_claude_worker.py`, sign-in in `auth/claude.py`, `claude-agent-sdk==0.2.162` in `pyproject.toml`, 17 tests in `tests/test_claude.py` (full suite: 795 passed), docs in `docs/llm-providers.md` and `docs/auth.md`, a ledger row. Design and limits are in [docs/llm-providers.md](docs/llm-providers.md#claude-agent-sdk). A real request through the provider with `claude-haiku-5-5` ran a tool turn and a final-answer turn correctly (both cost about $0.01). The SDK is used as a plain client; Nexus owns the loop.
+Landed 2026-10-30 (committed): provider `claude` in `nexus-core/nexus/llmhub/claude.py` and `_claude_worker.py`, sign-in in `auth/claude.py`, `claude-agent-sdk==0.2.162` in `pyproject.toml`, 17 tests in `tests/test_claude.py` (full suite: 795 passed), docs in `docs/llm-providers.md` and `docs/auth.md`, a ledger row. Design and limits are in [docs/llm-providers.md](docs/llm-providers.md#claude-agent-sdk). A real request through the provider with `claude-haiku-5-5` ran a tool turn and a final-answer turn correctly (both cost about $0.01). The SDK is used as a plain client; Nexus owns the loop.
 
 Findings to act on:
 - Hidden context, found and measured (details in [docs/llm-providers.md](docs/llm-providers.md#claude-agent-sdk)): the CLI made a second hidden request per query to title the session, with the whole history in it. Fixed in the worker with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. It still adds, and cannot be told not to: two system lines, a `StructuredOutput` tool, the account's **email address** in the first user message, and an `# Environment` message (cwd, platform, shell, OS version, date). The worker now runs in an empty `$NEXUS10_HOME/claude-sdk`, which cut a real turn from 1,766 to 1,259 input tokens. These are listed in the wire request (`sdk_adds`) but not yet in the clients' starting-context view: decide whether to show them there, and whether sending the email is acceptable (it goes to Anthropic, the account's own provider). The 420 tokens of fixed overhead is unexplained.
@@ -83,7 +73,7 @@ Findings to act on:
 
 Remaining:
 1. Say in Settings/docs which Claude Code version is needed (2.1.248 or newer) and show "Claude Code is not installed" on the Providers page when `cli_path()` is empty. Hidden additions vary with the user's CLI version (about 175 more tokens on 2.1.314 than on 2.1.285), so record the CLI version in the wire request.
-2. Run both clients against a real daemon: the Providers page shows "Claude (Agent SDK)", connect opens the URL, a session with a Claude model streams one buffered reply, a tool turn and an interrupt. Both clients post the provider's first method (`cli`); the pending row shows the message with the URL.
+2. Done 2026-10-30: a Claude Haiku 5.5 session ran in the real TUI (Providers page, connect, a buffered reply). Not re-checked in NSH.
 3. Show the limits in the timeline: a "buffered, no thinking" note for a Claude model and a clear failure for images (the error text exists; check how each client renders it).
 4. Plan-limit usage through the CLI (`-p /usage`, a local command that makes no model request) in `provider_usage.py` and `/api/usage`.
 5. Interrupts: confirm cancelling a turn kills the worker's process group and the CLI child.
