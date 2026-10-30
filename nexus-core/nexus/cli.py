@@ -25,6 +25,7 @@ import json
 import os
 import re
 import select
+import shutil
 import signal
 import sys
 import tempfile
@@ -907,9 +908,38 @@ def _doctor(as_json: bool) -> int:
     return 1 if any(r["status"] == "fail" for r in rows) else 0
 
 
+def _tui_path() -> str | None:
+    """The terminal client: `nexus-tui` on PATH, else where `install.sh` puts it ($PREFIX/bin, default ~/.local/bin)."""
+    found = shutil.which("nexus-tui")
+    if found:
+        return found
+    candidate = Path(os.environ.get("PREFIX") or Path.home() / ".local") / "bin" / "nexus-tui"
+    return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
+
+
+def _launch_tui(flags: list[str]) -> int:
+    """Replace this process with the TUI, which starts Core itself (`nexus daemon start`) when it is not running."""
+    tui = _tui_path()
+    if tui is None:
+        print("nexus: the terminal client (nexus-tui) is not installed. Install a release with install.sh, "
+              "or build it with `cargo build --release` in nexus-tui/.", file=sys.stderr)
+        return 1
+    os.environ.setdefault("NEXUS_TUI_LAUNCH_DIR", os.getcwd())  # the TUI opens the directory you launched from
+    me = shutil.which("nexus")
+    if me and " " not in me:
+        os.environ.setdefault("NEXUS_TUI_CORE_CMD", me)  # the TUI's command is split on spaces
+    sys.stdout.flush()
+    os.execv(tui, [tui, *flags])
+    return 0  # not reached
+
+
 def main(argv: list[str] | None = None) -> int:
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if not raw or raw[0] == "tui":  # plain `nexus` opens the terminal client
+        return _launch_tui(raw[1:])
     parser = argparse.ArgumentParser(prog="nexus")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("tui", help="open the terminal client (also what plain `nexus` does); flags go to nexus-tui")
 
     config = sub.add_parser("config", help="configuration utilities")
     config.add_argument("action", choices=["import-mcp"])

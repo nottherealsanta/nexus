@@ -53,7 +53,8 @@ nexus/
   daemon.py          serve, start, stop, discovery via daemon.json — docs/daemon.md
   inspector/         index.html: the session inspector page — docs/inspector.md
   client.py          HTTP client for the API, used by the CLI
-  cli.py             local: login | logout | status | models | migrate | serve | daemon
+  cli.py             plain `nexus` (or `nexus tui [flags]`) execs the installed nexus-tui
+                     local: login | logout | status | models | migrate | serve | daemon
                      daemon clients: project | session | workspace | run | chat
 tests/               offline tests (test_server.py drives the API with a scripted provider)
 ```
