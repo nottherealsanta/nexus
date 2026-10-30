@@ -117,7 +117,7 @@ Then, from any directory:
 | `nexus fmt` | `cargo fmt` and regenerate the shared NSH files |
 | `nexus doctor` | Versions and paths, then Core's `nexus doctor` rows |
 | `nexus update` | Compares with the latest GitHub release; reports only |
-| `./install.sh` | Installs the `nexus` uv tool, `nexus-tui` and the NSH bundle under `$PREFIX` (default `~/.local`); `--uninstall` removes them and never touches `$NEXUS10_HOME` |
+| `./install.sh` | In a checkout, builds and installs the `nexus` uv tool (Claude's SDK built from source, so no bundled CLI), `nexus-tui` and the NSH bundle under `$PREFIX` (default `~/.local`); `--release [vX.Y.Z]` installs a GitHub release instead; `--uninstall` removes them and never touches `$NEXUS10_HOME`. Without a checkout (`curl -LsSf https://github.com/nottherealsanta/nexus/releases/latest/download/install.sh \| sh`) it installs the latest release: it downloads the Core wheel, the TUI binary for this platform and the web bundle if the release has one, checks each against the release's `SHA256SUMS`, then installs. It is POSIX `sh`; Alpine/musl is refused. `NEXUS_RELEASE_BASE` points it at a mirror or a `file://` directory (how it is tested) |
 | `nexus core <args>` | Core CLI explicitly |
 
 Anything not listed is passed to the Core CLI, so `nexus login codex`,

@@ -7,7 +7,7 @@ Preserve the visible, ordered context timeline, announce clipping, keep task too
 ## Where things stand (2026-10-30)
 
 - **Merged.** `main` is now Nexus 0.10 (`e2c6cd2`, pushed directly, no PR; branch protection is off). `nexus10` shared no history with `main`, so the merge used `-s ours` and keeps old Nexus 0.7.2 as the second parent: no force-push, and nothing was lost. Old Nexus is also branch `nexus01` (pushed, plus one backup commit of its uncommitted local work) and tag `v0.7.2`.
-- Release gate O1 to O4 are done. O5 (platform matrix) is deferred to [TODO.md](TODO.md); O6 (release-download install) is open.
+- Release gate O1 to O4 are done. O5 (platform matrix) is deferred to [TODO.md](TODO.md); O6 (release-download install) is written and tested against a local release (step 3).
 - **CI** first ran on the merge push (run 41073305862). After fixes: `lint` and `core` pass on macOS and Ubuntu; the five stale `nexus-tui/tests/shell.rs` tests are updated and the TUI tests pass locally; the `nsh` job now builds a pinned `nsh` (step 4). The next push shows whether `ci-ok` is green. Release-please opened PR #97 "release 0.10.0"; do not merge it until CI is green. Stale PRs from old Nexus are still open and should be closed: #95 (release 0.8.0 for the old `nexus-harness` component) and #70 (an empty commit that triggered an old patch release); closing them was blocked by the permission classifier in the session, so close them by hand.
 - **`install.sh` on `main` changed meaning.** Old Nexus's installer was fetched with `curl .../main/install.sh | sh`; that URL now serves the from-checkout installer, so the old one-line install no longer works. Fix before announcing: either keep a compatible script at that path or point the docs at the release asset.
 - The Claude provider works in the real TUI (a Claude Haiku 5.5 turn, 2026-10-30). Open question, kept in [TODO.md](TODO.md): 14.7K input tokens for "hi there" against a ~3.9K starting-context estimate.
@@ -34,12 +34,12 @@ Preserve the visible, ordered context timeline, announce clipping, keep task too
 ### 2. Platform matrix (O5): deferred
 Not required for 0.10.0 now. The matrix, the Linux requirements and the decisions are in [TODO.md](TODO.md). Decided already: musl is unsupported (`install.sh` rejects it with a clear message) and Linux aarch64 glibc is supported through the release build.
 
-### 3. Installation (O6)
-`install.sh` today builds from a checkout (`uv tool install`, `cargo build --release`, `npm run build`) and requires `nsh` via npm. For 0.10.0, add release-download installation:
-- download `nexus-tui-<os>-<arch>`, `nexus-web.tar.gz` and the Core wheel from the GitHub release, verify against `SHA256SUMS`, and install with `uv tool install <wheel>`;
-- keep the from-checkout path behind a flag;
-- reject unsupported platforms with a diagnostic; do not install `nsh` for a release install (the web bundle is prebuilt);
-- add an `install` workflow (clean runner, rerun is an idempotent upgrade, `nexus update`) and a nightly check of the published script; old Nexus's `install.yml` is the model. `nexus update` currently only reports; decide whether 0.10.0 installs updates.
+### 3. Installation (O6): written, untested against a real release
+`install.sh` is POSIX `sh` and has two modes ([docs/development.md](docs/development.md#shortcuts)): from a checkout it builds from source as before (and builds the Claude SDK from source so no 223 MB CLI is installed); without one, or with `--release [tag]`, it downloads the Core wheel, the TUI binary for the platform and the web bundle if the release has one, verifies each against the release's `SHA256SUMS`, and installs. It rejects musl, unknown platforms and any checksum mismatch before installing anything, and a rerun is an upgrade. The old one-line URL (`.../raw/.../main/install.sh | sh`) now runs this script, so it works once a release exists.
+
+Tested 2026-10-30 on macOS arm64 against a local `file://` release built from this tree (`NEXUS_RELEASE_BASE`): piped and file forms, `--release vX`, a tampered wheel, a platform with no build, no release, rerun, uninstall, `nexus doctor` after install. Not tested: a real GitHub release, Linux (x86_64 or aarch64), or the web bundle from CI (NSH is skipped, so a release has none and the installer says `nexus web` needs a checkout).
+
+Still to do: run it once against the pre-release in step 4's dry run on macOS and Linux; decide whether `nexus update` should install, not only report; remove the `npm install -g nsh` requirement of the source path once the NSH pin is settled.
 
 ### 4. CI and CD (NSH skipped for now)
 **NSH is skipped in CI and in the release build for now** (`if: false` on the `nsh` job in `ci.yml` and the `nsh-web` job in `build-artifacts.yml`; `ci-ok` treats a skipped job as passing). The pinned-`nsh` setup action (`.github/actions/setup-nsh`) stays in the repo for when it is re-enabled; its first runs took over 17 minutes because `nsh`'s release profile is fat LTO (now turned off in CI) and nothing was cached. Consequence: a release has no `nexus-web.tar.gz` until NSH is back, and the `nsh` type check and web build run only on a developer's machine.
