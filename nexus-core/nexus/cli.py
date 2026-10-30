@@ -41,6 +41,8 @@ from .llmhub import catalog
 from .llmhub.auth import SIGN_INS, AuthError, CredentialError
 from .llmhub.hub import connected
 from .llmhub.providers import PROVIDERS
+from .migrate import MigrationError
+from .paths import HomeNotMigrated
 
 DISPLAY_RESULT_LINES = 40
 WIRE_TYPES = {"wire_request", "wire_response", "wire_event"}
@@ -826,6 +828,27 @@ async def _login(args: argparse.Namespace) -> None:
     print(f"Logged in to {args.provider} ({PROVIDERS[args.provider].label}).")
 
 
+def _migrate(yes: bool) -> int:
+    from . import migrate
+
+    def confirm(plan: migrate.Plan) -> bool:
+        print(migrate.describe(plan))
+        if yes:
+            return True
+        if not sys.stdin.isatty():
+            raise MigrationError("confirmation needs a terminal; pass --yes to proceed")
+        return input("Proceed? [y/N] ").strip().lower() in ("y", "yes")
+
+    done = migrate.migrate(confirm)
+    if not done.needed:
+        print(f"{done.target} is already set up for Nexus 0.10.")
+        return 0
+    print(f"Done. Nexus 0.10 now uses {done.target}.")
+    if done.aside_to:
+        print(f"Old Nexus's data is kept at {done.aside_to}.")
+    return 0
+
+
 def _tokens(value: Any) -> str:
     if not isinstance(value, (int, float)):
         return "?"
@@ -899,6 +922,8 @@ def main(argv: list[str] | None = None) -> int:
     logout = sub.add_parser("logout", help="forget a provider's stored credentials")
     logout.add_argument("provider", choices=list(PROVIDERS))
     sub.add_parser("status", help="which providers are connected")
+    migrate = sub.add_parser("migrate", help="make ~/.nexus Nexus 0.10's home: move old Nexus aside, adopt ~/.nexus10")
+    migrate.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     models = sub.add_parser("models", help="models available on connected providers (models.dev)")
     models.add_argument("provider", nargs="?", choices=list(PROVIDERS))
     models.add_argument("--all", action="store_true", help="also list providers that are not connected")
@@ -971,6 +996,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "logout":
             SIGN_INS[args.provider]().logout()
             print(f"Logged out of {args.provider}.")
+        elif args.command == "migrate":
+            return _migrate(args.yes)
         elif args.command == "status":
             live = set(connected())
             for pid, info in PROVIDERS.items():
@@ -1018,7 +1045,7 @@ def main(argv: list[str] | None = None) -> int:
                 wire_file = stack.enter_context(open(args.wire_file, "a")) if args.wire_file else None
                 renderer = Renderer(wire=args.wire, wire_file=wire_file)
                 asyncio.run(_chat(args, renderer) if args.command == "chat" else _run(args, renderer))
-    except (AuthError, CredentialError, ApiError, ValueError, TypeError, OSError) as exc:
+    except (AuthError, CredentialError, ApiError, HomeNotMigrated, MigrationError, ValueError, TypeError, OSError) as exc:
         print(f"{RED}{exc}{RESET}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

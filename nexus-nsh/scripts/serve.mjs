@@ -21,9 +21,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(args.port ?? process.env.NEXUS_NSH_PORT ?? 4820);
 const staticDir = path.resolve(here, "..", args.static ?? "dist/Nexus");
 const upstream = args.upstream ? new URL(args.upstream) : null;
-const nexusHome = path.resolve(process.env.NEXUS10_HOME ?? path.join(os.homedir(), ".nexus10"));
-if (nexusHome === path.join(os.homedir(), ".nexus") || nexusHome.startsWith(path.join(os.homedir(), ".nexus") + path.sep)) {
-  console.error("refusing to use ~/.nexus (old Nexus); set NEXUS10_HOME");
+const userHome = os.homedir();
+const defaultHome = path.join(userHome, ".nexus");
+const nexusHome = path.resolve(process.env.NEXUS10_HOME ?? defaultHome);
+// ~/.nexus is Nexus 0.10's only once Core has marked it (`nexus migrate`); until then it is old Nexus's,
+// or a pre-release ~/.nexus10 is waiting to move in. A machine with neither is fresh: Core creates it.
+if ((nexusHome === defaultHome || nexusHome.startsWith(defaultHome + path.sep)) && !fs.existsSync(path.join(defaultHome, ".nexus10-home")) && (fs.existsSync(defaultHome) || fs.existsSync(path.join(userHome, ".nexus10")))) {
+  console.error(`${defaultHome} is not set up for Nexus 0.10 (it holds old Nexus or a pre-release home); run \`nexus migrate\``);
   process.exit(2);
 }
 const coreCmd = (process.env.NEXUS_NSH_CORE_CMD ?? "nexus").split(" ");

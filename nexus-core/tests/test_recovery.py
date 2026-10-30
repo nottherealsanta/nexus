@@ -11,7 +11,6 @@ import asyncio
 import json
 import os
 import socket
-import sqlite3
 import subprocess
 import sys
 import time
@@ -840,47 +839,6 @@ def test_repeated_startup_appends_no_duplicate_context_or_events(tmp_path):
             again.store.close()
 
 
-def test_migration_from_the_current_schema_keeps_history(tmp_path):
-    workspace = tmp_path / "proj"
-    workspace.mkdir()
-    crash = Crash(tmp_path / "nexus.db", workspace)
-    session = crash.session()
-    turn = crash.turn(session)
-    request = crash.request(turn)
-    user = crash.store.append_message(session.id, Message("user", (Text("before"),)))
-    crash.store.link_message_event(user.id, crash.event(session, "message.added", message_json(user))["id"])
-    assistant = crash.store.save_assistant_message(
-        session.id, Message("assistant", (Text("answer"),)), turn_id=turn["id"], request_id=request["id"])
-    crash.store.link_message_event(assistant.id, crash.event(session, "message.added", message_json(assistant))["id"])
-    generation = crash.store.log_generation()
-    message_ids = [m.id for m in crash.store.messages(session.id)]
-    event_ids = [e["id"] for e in crash.store.events(session.id, limit=5000)]
-    # Simulate the schema before this increment.
-    crash.store.db.execute("drop table turn_attempt")
-    crash.store.db.execute("drop table turn_tool")
-    crash.store.db.execute("drop table turn_request")
-    crash.store.db.execute("drop table turn")
-    crash.store.db.execute("drop index if exists message_event")
-    crash.store.db.execute("alter table message drop column event_id")
-    crash.store.db.commit()
-    crash.close()
-
-    store = Store(tmp_path / "nexus.db")
-    try:
-        assert store.log_generation() == generation
-        assert [m.id for m in store.messages(session.id)] == message_ids
-        assert [e["id"] for e in store.events(session.id, limit=5000)] == event_ids
-        assert store.unfinished_turns() == []
-        rt = Runtime(remembering(store, "scripted/m"), Bus())
-        rt.recover()
-        assert rt.recovered == []
-        # No invented execution state, no rewritten context.
-        assert [m.id for m in store.messages(session.id)] == message_ids
-        assert [e["id"] for e in store.events(session.id, limit=5000)] == event_ids
-    finally:
-        store.close()
-
-
 def test_legacy_dangling_context_is_labelled_unknown_once(tmp_path):
     workspace = tmp_path / "proj"
     workspace.mkdir()
@@ -1148,39 +1106,3 @@ async def test_permission_storage_failure_does_not_release_tool(tmp_path, monkey
         future.cancel()
         store.close()
 
-
-def test_message_link_migration_rolls_back_column_with_legacy_markers(tmp_path, monkeypatch):
-    path = tmp_path / "nexus.db"
-    store = Store(path)
-    store.db.execute("drop index message_event")
-    store.db.execute("alter table message drop column event_id")
-    store.db.commit()
-    store.close()
-    connect = sqlite3.connect
-    opened = []
-
-    def failing_connect(*args, **kwargs):
-        connection = connect(*args, **kwargs)
-        opened.append(connection)
-
-        def authorize(action, table, column, database, trigger):
-            if action == sqlite3.SQLITE_UPDATE and table == "message" and column == "event_id":
-                return sqlite3.SQLITE_DENY
-            return sqlite3.SQLITE_OK
-
-        connection.set_authorizer(authorize)
-        return connection
-
-    with monkeypatch.context() as patch:
-        patch.setattr(sqlite3, "connect", failing_connect)
-        with pytest.raises(sqlite3.DatabaseError):
-            Store(path)
-    for connection in opened:
-        connection.close()
-    check = connect(path)
-    try:
-        assert "event_id" not in {row[1] for row in check.execute("pragma table_info(message)")}
-    finally:
-        check.close()
-    store = Store(path)
-    store.close()

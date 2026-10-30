@@ -24,7 +24,11 @@ pub const SETTLE_FRAMES: u8 = 3;
 const MAX_SAMPLES: usize = MAX_SECONDS * TARGET_RATE as usize;
 const LEVEL_WINDOW: usize = TARGET_RATE as usize / 20;
 const CUE_RATE: u32 = 44_100;
-const CUE_NOTES: [(&str, [f32; 2]); 2] = [("start", [660.0, 880.0]), ("stop", [880.0, 587.0])];
+const CUE_NOTES: [(&str, [f32; 2]); 3] = [
+    ("start", [660.0, 880.0]),
+    ("stop", [880.0, 587.0]),
+    ("loading", [440.0, 440.0]),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Phase {
@@ -277,6 +281,10 @@ pub enum CaptureEvent {
         generation: u64,
     },
     Failed {
+        generation: u64,
+        message: String,
+    },
+    CueWarning {
         generation: u64,
         message: String,
     },
@@ -537,18 +545,19 @@ fn cue_pcm(kind: &str) -> Vec<f32> {
         .collect()
 }
 
-fn play_cue(kind: &str, wait: bool) {
+fn play_cue(kind: &str, wait: bool) -> Result<(), String> {
     if std::env::var("NEXUS_VOICE_SOUNDS")
         .ok()
         .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "off" | "0" | "false"))
     {
-        return;
+        return Ok(());
     }
-    let samples = cue_pcm(kind);
+    let mut samples = vec![0.0; CUE_RATE as usize / 4];
+    samples.extend(cue_pcm(kind));
     let task = thread::spawn(move || {
-        let Ok(mut sink) = rodio::DeviceSinkBuilder::open_default_sink() else {
-            return;
-        };
+        let mut sink = rodio::DeviceSinkBuilder::from_default_device()
+            .and_then(|builder| builder.open_sink_or_fallback())
+            .map_err(|error| format!("Could not open the audio output device: {error:?}"))?;
         // The default drop notice goes to stderr and would paint over the TUI.
         sink.log_on_drop(false);
         let player = rodio::Player::connect_new(sink.mixer());
@@ -560,10 +569,20 @@ fn play_cue(kind: &str, wait: bool) {
         while !player.empty() {
             thread::sleep(Duration::from_millis(10));
         }
+        // The mixer can consume the queue before the device has played its buffer.
+        thread::sleep(Duration::from_millis(250));
+        Ok(())
     });
     if wait {
-        let _ = task.join();
+        task.join()
+            .unwrap_or_else(|_| Err("Audio output thread failed".into()))
+    } else {
+        Ok(())
     }
+}
+
+pub fn play_loading_cue() {
+    let _ = play_cue("loading", false);
 }
 
 fn capture(
@@ -572,7 +591,12 @@ fn capture(
     events: mpsc::UnboundedSender<CaptureEvent>,
 ) {
     // Play the start cue before opening the microphone so the tone is never recorded.
-    play_cue("start", true);
+    if let Err(message) = play_cue("start", true) {
+        let _ = events.send(CaptureEvent::CueWarning {
+            generation,
+            message,
+        });
+    }
     let (audio_tx, audio_rx) = std_mpsc::channel();
     let opened = open_input(audio_tx);
     let (stream, sample_rate, channels) = match opened {
@@ -661,7 +685,7 @@ fn capture(
             }
             Ok(Control::Cancel) => {
                 drop(stream);
-                play_cue("stop", false);
+                let _ = play_cue("stop", false);
                 let _ = events.send(CaptureEvent::Cancelled { generation });
                 return;
             }
@@ -684,7 +708,7 @@ fn finish_capture(
     let seconds = recorder.seconds();
     let wav = recorder.wav();
     drop(stream);
-    play_cue("stop", false);
+    let _ = play_cue("stop", false);
     let _ = events.send(CaptureEvent::Stopped {
         generation,
         seconds,
@@ -868,6 +892,15 @@ mod tests {
             assert!(samples.first().is_some_and(|sample| sample.abs() < 1e-5));
             assert!(samples.last().is_some_and(|sample| sample.abs() < 1e-5));
             assert!(samples.iter().any(|sample| sample.abs() > 0.1));
+        }
+    }
+
+    #[test]
+    #[ignore = "plays through the default audio output"]
+    fn plays_dictation_cues_on_real_output() {
+        for cue in ["loading", "start", "stop"] {
+            play_cue(cue, true).expect("audio output should be available");
+            thread::sleep(Duration::from_millis(500));
         }
     }
 

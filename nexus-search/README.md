@@ -1,16 +1,15 @@
 # Nexus Search
 
-Local SearXNG deployment for the planned Core `web_search` tool. Adapted from
-`../nexus/websearch/`; Core integration is tracked in PLAN.md Step 11a.
+Local SearXNG deployment for the Core `web_search` tool. Adapted from
+`../nexus/websearch/`.
 Default endpoint: `http://127.0.0.1:18765/search`.
 
 Run either Docker or Apple container, not both on the same port. The Docker
-Compose path was smoke-tested on 2026-10-29: the container starts and
-`/search?format=json` returns results. The Apple `container` path has not been
-tried here. `latest` is a bootstrap default; the tested image was
+Compose path was smoke-tested on 2026-10-29; the Apple `container` path was
+smoke-tested on 2026-10-30 with CLI 1.6.1 on Apple silicon. Both started and
+returned JSON search results. Both paths default to the tested image
 `searxng/searxng@sha256:eb2a404db174d33a04cd9f2e519bcae2ca722a58923510652cc1314be94e8e63`
-(created 2026-09-29). Set `SEARXNG_IMAGE` to that digest, or a newer tested one,
-before release (PLAN.md O6).
+(created 2026-09-29). Set `SEARXNG_IMAGE` to override it with another tested image.
 
 ## Configuration
 
@@ -55,9 +54,14 @@ container run --detach --name nexus-search \
   --env SEARXNG_BASE_URL=http://127.0.0.1:18765/ \
   --env "SEARXNG_SECRET=$SEARXNG_SECRET" \
   --volume "$PWD/searxng:/etc/searxng" \
-  "${SEARXNG_IMAGE:-docker.io/searxng/searxng:latest}"
+  "${SEARXNG_IMAGE:-docker.io/searxng/searxng@sha256:eb2a404db174d33a04cd9f2e519bcae2ca722a58923510652cc1314be94e8e63}"
 container logs nexus-search
 ```
+
+On first startup, the service may prompt to install its recommended kernel.
+SearXNG can take a few seconds to initialize; requests may fail until its worker
+starts. The Apple mount reported `chown` permission warnings in the smoke test,
+but the service started and returned results.
 
 Stop/remove:
 

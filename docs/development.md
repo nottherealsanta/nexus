@@ -36,9 +36,10 @@ nexus/
   loop.py            the agent loop
   codec.py           JSON encoding of messages and events
   config.py          TOML config, schema, revision-checked patches and MCP import
-  paths.py           home(): $NEXUS10_HOME or ~/.nexus10
+  paths.py           home(): $NEXUS10_HOME or ~/.nexus (marker-checked)
+  migrate.py         `nexus migrate`: old ~/.nexus aside, ~/.nexus10 in
   export.py          read-only session/tree exports: Markdown and JSON
-  store.py           SQLite: projects, sessions, messages, observations, turn lifecycle, mutation journal, durable event log (~/.nexus10/nexus.db)
+  store.py           SQLite: projects, sessions, messages, observations, turn lifecycle, mutation journal, durable event log (~/.nexus/nexus.db)
   bus.py             in-process event bus; persists before publishing, bounded per subscriber
   eventlog.py        log generation, cursors, session filtering, atomic replay-to-live stream
   retention.py       bounded event/lifecycle retention and the retention floor
@@ -52,12 +53,29 @@ nexus/
   daemon.py          serve, start, stop, discovery via daemon.json — docs/daemon.md
   inspector/         index.html: the session inspector page — docs/inspector.md
   client.py          HTTP client for the API, used by the CLI
-  cli.py             local: login | logout | status | models | serve | daemon
+  cli.py             local: login | logout | status | models | migrate | serve | daemon
                      daemon clients: project | session | workspace | run | chat
 tests/               offline tests (test_server.py drives the API with a scripted provider)
 ```
 
-State lives in `~/.nexus10` (`$NEXUS10_HOME`). Never touch `~/.nexus` (old Nexus).
+State lives in `~/.nexus` (`$NEXUS10_HOME`), once it is migrated (below). Use a scratch `$NEXUS10_HOME` for tests and experiments.
+
+### Migrating to `~/.nexus`
+
+Before 0.10.0, 0.10 builds kept state in `~/.nexus10` and old Nexus owned `~/.nexus`. A home is
+Nexus 0.10's when it holds the `.nexus10-home` marker file. Until `~/.nexus` has one, Core,
+the TUI, the NSH host and the launcher refuse to use it (and a pre-release `~/.nexus10` is not
+used silently either); each says to run `nexus migrate`. That command:
+
+1. Stops if a daemon is running from either directory (its `daemon.json` pid is alive).
+2. Prints what it will do and asks, or proceeds with `--yes`; with no terminal it refuses without `--yes`.
+3. Renames old Nexus's `~/.nexus` to `~/.nexus.old-<YYYYmmdd-HHMMSS>` (never deleted) and
+   `~/.nexus10` to `~/.nexus`. Both are renames in `$HOME`, so nothing is copied.
+
+The marker is written into `~/.nexus10` before the rename, so a crash never leaves a 0.10 home that
+looks like old Nexus: either run `nexus migrate` again, or it is done. If the second rename fails,
+old Nexus is put back. A machine with neither directory gets a fresh marked `~/.nexus` on first
+use. A `$NEXUS10_HOME` elsewhere is used as given, with no marker.
 
 ## Shortcuts
 
@@ -65,6 +83,10 @@ In the TUI composer, Ctrl or Alt plus Left/Right moves by word; adding Shift
 selects. Cmd plus Left/Right moves to the line edge, with Shift selecting;
 Home/End and Shift+Home/End also work. Cmd shortcuts require a terminal that
 forwards Super-modified arrow keys to applications.
+
+The TUI wraps interactive redraws in synchronized-update sequences so supporting
+terminals show each completed frame instead of intermediate cursor movements.
+Terminals without support ignore the sequences and draw normally.
 
 In the TUI timeline, drag over visible text to select it; releasing the mouse
 copies the selected screen cells via OSC 52. Selection is limited to the
@@ -100,7 +122,7 @@ Then, from any directory:
 
 Anything not listed is passed to the Core CLI, so `nexus login codex`,
 `nexus chat`, `nexus session list` and similar commands work unchanged. The
-launcher honours `NEXUS10_HOME`; it refuses `~/.nexus`.
+launcher honours `NEXUS10_HOME`; it refuses an unmigrated `~/.nexus`.
 
 Tuning (all optional, read at daemon start):
 
@@ -133,7 +155,7 @@ handoff, or loss of connection; completed and failed records survive normal
 exit. After reconnect, the TUI rebuilds active records from the snapshot but
 does not reconstruct past outcomes, which the snapshot does not include. It
 also removes records for deleted or archived sessions. Reports are best effort;
-terminal support has not been verified in a live Rex session.
+terminal support has not been verified in a live terminal.
 
 ## Visual review of the TUI
 
@@ -226,8 +248,9 @@ posting, renders the turn (including questions and approvals), and accepts
 | `test_catalog.py` | models.dev filtering and `ModelInfo` |
 | `test_tools.py` | read, bash, edit, patch, write |
 | `test_ask.py` | ask contract and validation, pending/reply API, cancellation, snapshots, nested code questions |
-| `test_eventlog.py` | durable ids and generations, cursors and resync errors, replay/live boundary and paging, filtering and tombstones, overflow, persistence failure, migration, HTTP framing via raw ASGI |
-| `test_recovery.py` | crash windows (accepted turn, interrupted stream, saved/started/finished/inserted tools, mixed batches, waits, code/kernels/jobs), parent/child and archive recovery, recovery interrupted at every step, repeated startup, migration, durable replay, no provider/tool calls, isolated subprocess restart |
+| `test_store_version.py` | schema version gate: new, current, earlier, unreadable, empty and newer files; a backup per replacement; a failed build or swap leaves the old database in place |
+| `test_eventlog.py` | durable ids and generations, cursors and resync errors, replay/live boundary and paging, filtering and tombstones, overflow, persistence failure, HTTP framing via raw ASGI |
+| `test_recovery.py` | crash windows (accepted turn, interrupted stream, saved/started/finished/inserted tools, mixed batches, waits, code/kernels/jobs), parent/child and archive recovery, recovery interrupted at every step, repeated startup, durable replay, no provider/tool calls, isolated subprocess restart |
 | `test_continuation.py` | manual continuation: exact first request with no synthetic user message, provider failure/interrupt/recovery, completed and unknown tools, new tool calls, settings and directory, busy/archived/empty/unknown errors, parent/child independence, provenance and crash-during-continuation recovery, reconciliation idempotency, CLI slash/standalone and subscription ordering |
 | `test_mutations.py` | keyed acceptance/replay, duplicate requests, crash-before-journal unknown outcomes, deleted targets and revision preconditions |
 | `test_retry.py` | pre-stream retry policy, attempt records, backoff cancellation, frozen requests and no tool replay |

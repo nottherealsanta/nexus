@@ -14,8 +14,6 @@ import pytest
 from conftest import remembering
 
 from nexus import runtime as runtime_module
-from nexus.bus import Bus
-from nexus.codec import to_json
 from nexus.llmhub.types import (
     Done,
     PartDone,
@@ -26,7 +24,6 @@ from nexus.llmhub.types import (
     TextDelta,
     ToolCall,
     Usage,
-    WireRequest,
 )
 from nexus.server import build_app, make_runtime
 from nexus.store import USAGE_COLUMNS, Store
@@ -270,59 +267,6 @@ def _old_schema(store: Store) -> None:
     store.db.execute("alter table turn drop column ended")
     store.db.execute("drop table session_usage")
     store.db.commit()
-
-
-def test_backfill_fills_unambiguous_requests_once_and_leaves_the_rest_unknown(tmp_path):
-    workspace = tmp_path / "proj"
-    workspace.mkdir()
-    db = tmp_path / "nexus.db"
-    store = Store(db)
-    bus = Bus()
-    bus.attach(store)
-    project, _ = store.project_for_path(str(workspace))
-    session = store.create_session(project, title="t", agent="build")
-    turn = store.start_turn(session.id)
-
-    def publish(event):
-        data = to_json(event)
-        bus.publish(data["type"], data, session_id=session.id)
-
-    one = store.start_request(turn["id"], session.id, 1)
-    store.start_attempt(turn["id"], session.id, one["id"], "a1", 1)
-    store.start_attempt(turn["id"], session.id, one["id"], "a2", 2)
-    publish(WireRequest("POST", "https://x", {}, {"model": "gpt-x", "reasoning": {"effort": "medium"}}))
-    publish(Usage(100, 10, 20, 5))
-    two = store.start_request(turn["id"], session.id, 2)
-    publish(WireRequest("POST", "https://x", {}, {"model": "gpt-x", "reasoning_effort": "low"}))
-    publish(Usage(1, 0, 1, 0))
-    publish(Usage(2, 0, 1, 0))  # two reports in one range: ambiguous
-    three = store.start_request(turn["id"], session.id, 3)  # no events at all
-    _old_schema(store)
-    store.close()
-
-    store = Store(db)
-    try:
-        first, second, third = (store.request(r["id"]) for r in (one, two, three))
-        assert (first["model"], first["effort"]) == ("gpt-x", "medium")
-        assert first["usage"] == {"input": 100, "cached": 10, "output": 20, "reasoning": 5}
-        attempts = {a["id"]: a for a in store.attempts_for_turn(turn["id"])}
-        assert attempts["a2"]["input_tokens"] == 100 and attempts["a1"]["input_tokens"] is None
-        assert (second["model"], second["effort"], second["usage"]) == ("gpt-x", "low", None)
-        assert (third["model"], third["effort"], third["usage"]) == (None, None, None)
-        assert store.turn(turn["id"])["ended"] is None
-        ledger = store.session_usage(session.id)
-        assert ledger["models"] == {"gpt-x": {"requests": 1, "input": 100, "cached": 10, "output": 20,
-                                              "reasoning": 5}}
-        assert ledger["since"] == first["started"]
-    finally:
-        store.close()
-
-    again = Store(db)  # the columns exist now: no second backfill, no doubled ledger
-    try:
-        assert again.session_usage(session.id) == ledger
-        assert again.request(one["id"])["usage"] == first["usage"]
-    finally:
-        again.close()
 
 
 def test_new_database_has_the_columns_and_runs_no_backfill(tmp_path):

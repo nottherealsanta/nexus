@@ -107,18 +107,12 @@ def _texts(messages):
     return [value for value in values if value is not None]
 
 
-def test_migration_and_restart_persistence(tmp_path):
+def test_archive_persists_across_restart(tmp_path):
     path = tmp_path / "nexus.db"
     store = Store(path)
     project, _ = store.project_for_path(str(tmp_path))
     session = store.create_session(project, title="old session", agent="build")
     store.append_message(session.id, Message("user", (Text("hello"),)))
-    store.close()
-
-    # A database from before archiving opens with every session live.
-    store = Store(path)
-    assert store.session(session.id).archived == 0
-    store.db.execute("alter table session drop column archived")
     store.close()
 
     store = Store(path)

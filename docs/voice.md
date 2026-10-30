@@ -37,8 +37,9 @@ global `voice.progress` event with `model: "stt"`, `state`, `bytes_done`,
 reporting `ready`. The worker writes to the standard HF cache, not a Nexus model
 directory.
 
-The Bark engine is not imported or loaded at daemon startup. First transcription
-loads it from local snapshots using `local_files_only=True`; inference is
+The Bark engine is not imported or loaded at daemon startup. `POST /api/voice/stt/prepare`
+loads it from local snapshots before capture; transcription also loads it on demand
+using `local_files_only=True`. Inference is
 serialized on one worker thread. After 10 idle minutes the engine is closed.
 Errors include 409 `voice_busy`/`voice_model_not_cached` and 422
 `voice_dependency_missing`/`voice_model_invalid`/`voice_load_failed`.
@@ -68,12 +69,17 @@ ignored test (`cargo test --lib speaks_a_real_answer -- --ignored`, with
 
 `/voice`, `Ctrl+D` or `Ctrl+X V` (`voice.dictate`) checks `GET /api/voice`. If the model is
 absent a consent modal (repo, size) comes first, then `POST /api/voice/stt/download` with
-progress; `runtime_missing` and `unsupported` show the status error as a toast. Otherwise
-`nexus-tui/src/dictation.rs` captures with `cpal` on its own thread, downmixes and resamples
-to 16 kHz mono PCM16, plays start and stop cues, shows a blinking red square left of the agent name, and sends
+progress; `runtime_missing` and `unsupported` show the status error as a toast. The TUI
+prepares the model before capture, playing a repeating tone while a cold model loads.
+`nexus-tui/src/dictation.rs` then captures with `cpal` on its own thread, downmixes and resamples
+to 16 kHz mono PCM16, plays start and stop cues, shows a blinking red square only during capture, and sends
 paced `?partial=1` previews (at least 0.4 s of new audio apart) that appear inside the
 composer at the cursor where recording began. Enter stops and sends; Esc stops and keeps the
 words (Esc while transcribing discards them); typing stops the capture and the key applies.
+Cues use the default output device, trying its supported formats if its default format fails;
+if the device cannot be opened, a warning appears and dictation still works. Set
+`NEXUS_VOICE_SOUNDS=off` to silence TUI cues. To exercise the actual output device, run
+`cargo test --lib plays_dictation_cues_on_real_output -- --ignored` in `nexus-tui`.
 Real microphone capture is not yet checked.
 
 ## NSH (browser and desktop)
@@ -92,7 +98,9 @@ A mic button in the composer and `voice.dictate` (`nexus-nsh/src/dictation.ts`,
 ScriptProcessor fallback), encode a 16 kHz mono PCM16 WAV in the page and post it through
 the same-origin API path. Live previews are paced like the TUI's. Enter or Stop inserts the
 final transcript as editable draft text without sending; Esc cancels. A missing model asks
-for consent before the download and shows progress in the composer; a denied microphone is
+for consent before the download and shows progress in the composer. Before capture, the
+client prepares the model, playing a gentle repeating tone while a cold model loads; rising
+and falling tones mark capture starting and stopping. A denied microphone is
 a toast. Not yet checked in a browser.
 
 ## Installing the runtime

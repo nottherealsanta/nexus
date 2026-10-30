@@ -611,56 +611,6 @@ async def test_stored_paging_and_export_ids_are_unchanged(env):
 # -- migration ----------------------------------------------------------------
 
 
-async def test_the_previous_event_schema_migrates_without_losing_ids(tmp_path):
-    path = tmp_path / "old.db"
-    raw = sqlite3.connect(path)
-    raw.executescript("""
-        create table event (
-          id integer primary key autoincrement,
-          session_id text not null references session(id) on delete cascade,
-          seq integer not null, time real not null, type text not null, data text not null
-        );
-        create index event_session on event(session_id, id);
-        insert into event (id, session_id, seq, time, type, data)
-          values (7, 'ses_old', 3, 1.0, 'probe', '{"n": 1}');
-    """)
-    raw.commit()
-    raw.close()
-
-    store = Store(path)
-    generation = store.log_generation()
-    assert generation.startswith("log_")
-    rows = store.replay(0, store.log_head(), 10)
-    assert [(row["id"], row["session_id"], row["data"]) for row in rows] == [(7, "ses_old", {"n": 1})]
-    assert store.log_floor() == 0
-
-    stored = store.append_event({"seq": 4, "time": 2.0, "type": "project.deleted",
-                                 "session_id": None, "data": {"id": "prj_x"}})
-    assert stored == 8  # the autoincrement sequence continued past the preserved ids
-    store.close()
-    assert Store(path).log_generation() == generation
-
-
-async def test_migration_keeps_deleted_high_watermark(tmp_path):
-    path = tmp_path / "deleted.db"
-    raw = sqlite3.connect(path)
-    raw.executescript("""
-        create table event (
-          id integer primary key autoincrement, session_id text not null,
-          seq integer not null, time real not null, type text not null, data text not null
-        );
-        insert into event values (900, 'gone', 1, 1, 'probe', '{}');
-        delete from event;
-    """)
-    raw.close()
-    store = Store(path)
-    try:
-        assert store.append_event({"session_id": None, "seq": 1, "time": 1,
-                                   "type": "project.deleted", "data": {}}) == 901
-    finally:
-        store.close()
-
-
 async def test_empty_query_cursor_is_invalid_even_with_valid_header(env):
     status, _, body = await asgi_get(env.app, "/api/event", query=f"token={TOKEN}&cursor=",
                                    headers=[("last-event-id", cursor_of(env.store, 0))])

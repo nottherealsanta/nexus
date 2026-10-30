@@ -684,29 +684,6 @@ async def test_image_labels_are_stored_in_attachment_order(setup):
         ('[Image A]', 'first.png'), ('[Image B]', 'second.png')]
 
 
-def test_existing_permissions_migrate_once_and_explicit_ask_survives(tmp_path):
-    db = tmp_path / 'permissions.db'
-    store = Store(db)
-    project, _ = store.project_for_path(str(tmp_path))
-    parent = store.create_session(project, title='parent', agent='build', permission='ask')
-    child = store.create_session(project, title='child', agent='build', permission='ask', parent=parent)
-    with store.db:
-        store.db.execute("delete from migration where name = 'default_tool_allow_v1'")
-    store.close()
-
-    store = Store(db)
-    assert store.session(parent.id).permission == 'allow'
-    assert store.session(child.id).permission == 'allow'
-    assert store.session(parent.id).revision == parent.revision + 1
-    store.update_session(parent.id, permission='ask')
-    store.close()
-
-    store = Store(db)
-    assert store.session(parent.id).permission == 'ask'
-    assert store.session(child.id).permission == 'allow'
-    store.close()
-
-
 async def _summary_events(client, session_id):
     events = (await client.get(f"/api/session/{session_id}/event", params={"type": "turn.summary"})).json()
     return [e["data"] for e in events["events"]]

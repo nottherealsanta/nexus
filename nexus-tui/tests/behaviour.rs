@@ -1033,7 +1033,51 @@ fn stt_ready_progress_wins_a_race_with_the_status_request() {
     assert_eq!(a.ui.dictation.phase, Phase::Starting);
     assert!(a
         .effects
+        .contains(&Effect::Api(ApiCall::VoicePrepare { generation })));
+    assert!(a.effects.contains(&Effect::DictationLoadingCue(true)));
+    assert!(!a
+        .effects
         .contains(&Effect::Dictation(CaptureCommand::Start { generation })));
+}
+
+#[test]
+fn dictation_prepares_before_capture_and_ignores_cancelled_loads() {
+    for (state, cold) in [("ready", true), ("loaded", false)] {
+        let mut a = app();
+        let generation = a.ui.dictation.begin(SESSION.to_owned());
+        a.apply_done(ActionDone {
+            call: ApiCall::VoiceStatus { generation },
+            result: Ok(Done {
+                voice: Some(serde_json::json!({"stt": {"state": state}})),
+                ..Done::default()
+            }),
+        });
+        assert_eq!(a.ui.dictation.phase, Phase::Starting);
+        assert_eq!(a.effects.contains(&Effect::DictationLoadingCue(true)), cold);
+        assert!(a
+            .effects
+            .contains(&Effect::Api(ApiCall::VoicePrepare { generation })));
+        assert!(!a
+            .effects
+            .contains(&Effect::Dictation(CaptureCommand::Start { generation })));
+        a.effects.clear();
+        a.apply_done(ActionDone {
+            call: ApiCall::VoicePrepare { generation },
+            result: Ok(Done::default()),
+        });
+        assert!(a.effects.contains(&Effect::DictationLoadingCue(false)));
+        assert!(a
+            .effects
+            .contains(&Effect::Dictation(CaptureCommand::Start { generation })));
+
+        a.effects.clear();
+        a.ui.dictation.cancel();
+        a.apply_done(ActionDone {
+            call: ApiCall::VoicePrepare { generation },
+            result: Ok(Done::default()),
+        });
+        assert!(a.effects.is_empty());
+    }
 }
 
 #[test]
@@ -1506,6 +1550,36 @@ fn agent_and_model_chosen_before_a_session_exists_go_into_its_creation() {
             if fields["agent"] == "plan" && fields["model"] == "codex/gpt-5"
     )));
     assert_eq!(a.ui.draft, Default::default(), "the draft is spent");
+}
+
+#[test]
+fn the_model_picker_opens_once_when_no_model_was_ever_chosen() {
+    let catalog = |last_model: &str| nexus_tui::sync::SyncMsg::Catalog {
+        models: vec![serde_json::json!({"ref": "codex/gpt-5", "name": "GPT-5"})],
+        agents: vec![serde_json::json!({"name": "build", "source": "builtin"})],
+        source: "models.dev".into(),
+        last_model: last_model.into(),
+        providers: vec![],
+        problems: vec![],
+    };
+    let models_open = |a: &App| {
+        matches!(
+            a.ui.overlay.as_ref().map(|o| &o.kind),
+            Some(OverlayKind::Palette(p)) if p.mode == nexus_tui::ui::PaletteMode::Models
+        )
+    };
+    let mut a = app();
+    a.state.model.select(None);
+    a.apply_sync(catalog(""));
+    assert!(models_open(&a), "asks for a model first");
+    press(&mut a, &["esc"]);
+    a.apply_sync(catalog(""));
+    assert!(!models_open(&a), "a dismissed prompt does not come back");
+
+    let mut a = app();
+    a.state.model.select(None);
+    a.apply_sync(catalog("codex/gpt-5"));
+    assert!(!models_open(&a), "a remembered model is not asked again");
 }
 
 #[test]

@@ -38,7 +38,7 @@ The file name is the agent name (`review.md` → `review`: lowercase letters,
 digits, `-` and `_`). A later source replaces an earlier one with the same name:
 
 1. **built-in:** `nexus-core/nexus/builtin_agents/*.md`
-2. **global:** `~/.nexus10/agents/*.md`
+2. **global:** `~/.nexus/agents/*.md`
 3. **project:** `<project>/.agents/agents/*.md`
 
 Files are read when a session is created. An edit, addition or deletion applies

@@ -69,6 +69,9 @@ pub enum ApiCall {
     VoiceStatus {
         generation: u64,
     },
+    VoicePrepare {
+        generation: u64,
+    },
     /// Settings refresh, separate from the generation-guarded dictation check.
     VoiceSettingsStatus {
         generation: u64,
@@ -247,6 +250,7 @@ impl ApiCall {
             ApiCall::Btw { .. } => "",
             ApiCall::SpeakStop => "Stopped speaking",
             ApiCall::VoiceStatus { .. }
+            | ApiCall::VoicePrepare { .. }
             | ApiCall::VoiceSettingsStatus { .. }
             | ApiCall::VoiceTranscribe { .. } => "",
             ApiCall::VoiceDownload { .. } => "Voice model download started",
@@ -627,6 +631,19 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         }
         ApiCall::VoiceStatus { .. } => {
             done.voice = Some(api.http.get("/api/voice", &[]).await.map_err(e)?);
+        }
+        ApiCall::VoicePrepare { .. } => {
+            api.http
+                .call(
+                    reqwest::Method::POST,
+                    "/api/voice/stt/prepare",
+                    &[],
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .map_err(e)?;
         }
         ApiCall::VoiceSettingsStatus { .. } => {
             done.voice = Some(api.http.get("/api/voice", &[]).await.map_err(e)?);

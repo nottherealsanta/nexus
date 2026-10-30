@@ -17,7 +17,7 @@ parser.add_argument("--since", type=float, help="only calls from the last DAYS d
 parser.add_argument("--errors", type=int, default=0, help="also show the N most recent error messages")
 args = parser.parse_args()
 
-home = Path(os.environ.get("NEXUS10_HOME", Path.home() / ".nexus10"))
+home = Path(os.environ.get("NEXUS10_HOME", Path.home() / ".nexus"))
 db = sqlite3.connect(f"file:{home / 'nexus.db'}?mode=ro", uri=True)
 where = "where started >= ?" if args.since else ""
 params = (time.time() - args.since * 86400,) if args.since else ()

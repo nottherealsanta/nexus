@@ -350,7 +350,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | --- | --- | --- | --- | --- |
 | H1 | Read `GET /api/info` on connect | API ready | `{name, version, pid, home, url, log, retention, retry, idempotency}` | |
 | H2 | API version compare (major halt, minor warn) | Core work | 12a Version handshake | Not in `/api/info` |
-| H3 | Find or start the daemon | API ready | `~/.nexus10/daemon.json` (`url`, `pid`, `token`, `started`) trusted after `GET /api/info`; `nexus daemon start`; log `~/.nexus10/logs/daemon.log` | Local bootstrap only. A browser cannot read `daemon.json` or spawn (12.5 item 5) |
+| H3 | Find or start the daemon | API ready | `~/.nexus/daemon.json` (`url`, `pid`, `token`, `started`) trusted after `GET /api/info`; `nexus daemon start`; log `~/.nexus/logs/daemon.log` | Local bootstrap only. A browser cannot read `daemon.json` or spawn (12.5 item 5) |
 | H4 | Authenticated SSE | API ready | `GET /api/event` with `Authorization: Bearer`; `?token=` for `EventSource` | |
 | H5 | Reconnect with cursor, atomic replay-to-live, dedupe by `id` | API ready | `?cursor=<generation>:<id>` or `Last-Event-ID`; first frame `server.connected` | |
 | H6 | Resync on `history_unavailable`, `cursor_generation`, `cursor_ahead`, `bus.overflow` | API ready | `GET /api/snapshot` then resubscribe from `watermark.head_cursor` | Filtered-stream gaps are normal |

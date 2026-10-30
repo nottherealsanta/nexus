@@ -1,6 +1,6 @@
 services:
   searxng:
-    image: ${SEARXNG_IMAGE:-searxng/searxng:latest}
+    image: ${SEARXNG_IMAGE:-searxng/searxng@sha256:eb2a404db174d33a04cd9f2e519bcae2ca722a58923510652cc1314be94e8e63}
     restart: unless-stopped
     ports:
       - "127.0.0.1:18765:8080"

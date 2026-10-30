@@ -297,7 +297,8 @@ export function NewSessionView() {
   const window = () => { const c = Number(modelEntry()?.context); return Number.isFinite(c) && c > 0 ? c : undefined; };
   const fullPath = () => {
     const p = project(); if (!p) return "";
-    const home = (userHome() || ((info()?.home ?? "").endsWith("/.nexus10") ? (info()!.home as string).slice(0, -9) : "")).replace(/\/$/, "");
+    const stateHome = info()?.home ?? "";
+    const home = (userHome() || (/\/\.nexus(10)?$/.test(stateHome) ? stateHome.replace(/\/\.nexus(10)?$/, "") : "")).replace(/\/$/, "");
     return home && (p.path === home || p.path.startsWith(`${home}/`)) ? `~${p.path.slice(home.length)}` : p.path;
   };
   const preview = () => {

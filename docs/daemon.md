@@ -1,6 +1,6 @@
 # Daemon, projects and sessions
 
-Nexus Core runs as one background daemon per Nexus home (`~/.nexus10`). The
+Nexus Core runs as one background daemon per Nexus home (`~/.nexus`). The
 daemon owns projects, sessions, turns, Monty kernels, background bash jobs,
 tool approvals, pending questions, workspace control operations, session
 archiving, pending directory moves and startup recovery, and exposes them over
@@ -27,13 +27,13 @@ Hugging Face cache, and `rg`. It exits 1 on any FAIL and never starts the daemon
 loads a model or downloads. `nexus update` compares `/api/info`'s version with
 the latest GitHub release and never installs.
 
-- **Discovery.** While it runs, the daemon writes `~/.nexus10/daemon.json` (0600)
+- **Discovery.** While it runs, the daemon writes `~/.nexus/daemon.json` (0600)
   with `{url, pid, token, started}` and removes it on exit. A client trusts the
   file only after `GET /api/info` answers with the token.
 - **Token.** A new random token is made on each start. It keeps other local
   users and web pages off the loopback port.
 - **Port.** `$NEXUS_PORT`, default 4747, bound to 127.0.0.1 only.
-- **Logs.** `~/.nexus10/logs/daemon.log`.
+- **Logs.** `~/.nexus/logs/daemon.log`.
 - **Same code.** The background daemon runs `python -m nexus serve` with the
   same interpreter as the client that started it.
 
@@ -57,10 +57,7 @@ the latest GitHub release and never installs.
     session stores the model it starts with, an agent's own `model` applies while the session holds none,
     and a subagent without either inherits its parent's. `""` with `model_source: "none"` means none was ever
     chosen; starting a turn then fails with 400 "no model selected".
-  - `permission`: `ask` or `allow` (default). An older database is upgraded once
-    on open (migration `default_tool_allow_v1`): every stored `ask`, children
-    included, becomes `allow` and its `revision` increases. An `ask` set after
-    that is kept across restarts.
+  - `permission`: `ask` or `allow` (default).
   - `effort`: reasoning effort, or none for the provider's default.
   - `title`: set from the first prompt (`Image` for an image-only prompt).
   - `archived`: whether this session's whole tree is archived. Archive state is
@@ -79,10 +76,10 @@ the latest GitHub release and never installs.
   The image bytes are stored in the message row, so they survive restarts,
   continuation, export and replay to any provider. The prompt route accepts
   bodies up to 12 MiB; every other route keeps 1 MiB.
-- **Storage.** SQLite at `~/.nexus10/nexus.db` (WAL). Tables: `project`,
+- **Storage.** SQLite at `~/.nexus/nexus.db` (WAL). Tables: `project`,
   `session`, `session_snapshot`, `message`, `event`, `file_observation`, `turn`,
   `turn_request`, `turn_tool`, `turn_attempt`, `session_usage`, `mutation`,
-  `preference`, `migration` and `log`.
+  `preference` and `log`.
   `session_snapshot` is
   the JSON configuration frozen for one session; `event` is the durable event
   log, in publish order (see [Durable event log](#durable-event-log)); `log`
@@ -93,7 +90,19 @@ the latest GitHub release and never installs.
   lifecycle ([Crash recovery](#crash-recovery)) and, with `session_usage`, the
   turn summaries ([Turn summaries](#turn-summaries-and-the-spend-ledger));
   `preference` holds machine-wide name/value settings (`Store.preference`,
-  `set_preference`); `migration` names one-time data upgrades already applied.
+  `set_preference`).
+  The file's `PRAGMA user_version` is the schema version (`store.SCHEMA_VERSION`).
+  There are no in-place migrations: `prepare_database` runs before the database
+  opens, and a file with another version (an earlier release, no version at all,
+  or an unreadable file) is renamed with its `-wal` and `-shm` files to
+  `nexus.db.v<version>-<YYYYmmdd-HHMMSS>.bak` (`v0` for none, `vunreadable`), and
+  a new database starts in its place; the old one is never read. The new
+  database is built and integrity-checked as `nexus.db.new` first, so a failure
+  at any step puts the old files back and leaves the database as it was.
+  `Store.backup` holds the backup path (also logged as a warning) when one was
+  made. An empty file is replaced without a backup; a database with a *newer*
+  version is refused (`StoreError`) and left alone. Backups are never deleted;
+  a release that changes `SCHEMA` raises `SCHEMA_VERSION`.
   A `message` row also records the id of the `message.added` event that announced it.
   Deleting a project or session deletes everything under it, including its child
   sessions, snapshots, observations, execution records and session events.
@@ -135,9 +144,7 @@ id into a cursor, `<generation>:<id>`, and serves the reconnect stream.
   reports it with the current head and the retention floor.
 - **Ordering and ids.** `event.id` is a never-reused autoincrement row id, so
   ordering is publish order and ids survive restarts. The bus `seq` is only the
-  current daemon's counter and is not a cursor. An old database is migrated in
-  place on open: the event table is rebuilt to allow `session_id: null` while
-  every row id is preserved (and the autoincrement sequence continues).
+  current daemon's counter and is not a cursor.
 - **Globals and deletion.** Session events are deleted with their session. Global
   events are stored with `session_id: null`: project create/update/delete and a
   minimal `session.deleted` tombstone (`{"id": "ses_…"}`). Deleting a session or
@@ -393,16 +400,9 @@ as `floor.seq`. `session_usage` references only the session, so totals survive
 turn pruning and event retention and go only with the session. Event retention
 removes raw wire traffic and deltas; it no longer takes a turn's footer data.
 
-**Upgrade.** The migration that adds these columns backfills once, in the same
-transaction, from the events still retained: a request whose range (after its
-`event_after`, up to the next request's) holds exactly one `usage` event gets
-that usage on the request and its last attempt; the model is the bare id from
-its first `wire_request` body and effort its reasoning effort. Anything else
-stays unknown. The ledger is seeded from the filled requests.
-
 **Recovery.** A running turn with `ended` set had finished from the loop's
 point of view, so startup recovery closes it as `completed` without reading the
-event log; only a turn left open by a daemon from before the column falls back
+event log; only a turn left open with `ended` unset falls back
 to the log's `turn_end` event ([Crash recovery](#crash-recovery)).
 
 ## Crash recovery
@@ -577,7 +577,7 @@ unarchive command.
 ## Kernels
 
 `nexus/kernels.py` owns a lazy Monty pool and up to eight persistent kernels,
-shared by session tree or explicit id. They outlive sessions. Deleting a kernel
+shared by session tree or explicit id. Workers start through a launcher that clears their environment and working directory. They outlive sessions. Deleting a kernel
 stops it; daemon shutdown stops any running cell and closes every worker and the
 pool. Kernels do not survive a daemon restart; startup recovery reports the loss
 when it reconciles a turn that used code, and never invents kernel state. See
@@ -687,8 +687,7 @@ Recovery delivery review: closing a turn leaves its recovery marker pending
 until normal final cleanup is announced. Final idle events carry the turn id,
 so startup closes a crash in that interval without duplicating the idle event.
 An approval reply is committed before releasing its waiting tool; a persistence
-failure leaves the tool waiting. The message-link migration adds its column and
-marks legacy rows in one explicit transaction.
+failure leaves the tool waiting.
 
 
 Continuation delivery review: execution evidence is linked to its saved assistant

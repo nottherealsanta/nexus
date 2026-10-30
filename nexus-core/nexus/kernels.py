@@ -1,6 +1,7 @@
 """Daemon-owned persistent Monty kernels (PLAN.md step 8).
 
-No mounts or OS handler. Each cell binds host tools to its caller, even when
+No mounts or OS handler. Workers run through a launcher that scrubs their environment and
+working directory. Each cell binds host tools to its caller, even when
 sandbox code saves a host-function reference from an earlier caller's cell.
 Nested calls run as their own tasks so a timeout or interrupt stops them (and
 their commands) before the cell is reported and the kernel is discarded; each
@@ -13,12 +14,17 @@ import asyncio
 import contextlib
 import json
 import math
+import shlex
+import shutil
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from pydantic_monty import AsyncMonty, MontyCrashedError, MontyDisconnectError, MontyError
+from pydantic_monty._binary import find_monty_binary
 
 from .llmhub.types import ToolCall
 from .store import new_id
@@ -29,6 +35,22 @@ MAX_CALLS = 64
 MAX_CELLS = 100  # retained metadata; cell numbers keep increasing
 LIMITS = {"max_feed_duration_secs": 10, "max_memory": 64 * 1024 * 1024,
           "max_recursion_depth": 200, "max_suspensions": MAX_CALLS * 4}
+
+
+def write_launcher(directory: Path, binary: str) -> Path:
+    """A helper that starts the Monty worker with an empty environment in an empty directory.
+
+    The pool spawns workers with the daemon's environment (API keys, tokens) and working
+    directory and offers no option to change either, so it is pointed at this script instead.
+    """
+    (directory / "cwd").mkdir(exist_ok=True)
+    launcher = directory / "monty"
+    launcher.write_text(f"#!/bin/sh\ncd {shlex.quote(str(directory / 'cwd'))} || exit 1\n"
+                        f"exec /usr/bin/env -i {shlex.quote(binary)} \"$@\"\n")
+    launcher.chmod(0o700)
+    return launcher
+
+
 Approve = Callable[[ToolCall, dict[str, Any]], Awaitable[bool]]
 Publish = Callable[[str, dict[str, Any]], None]
 
@@ -59,6 +81,7 @@ class Kernel:
 class Kernels:
     def __init__(self) -> None:
         self.pool: Any = None
+        self.helper_dir: Path | None = None
         self.items: dict[str, Kernel] = {}
         self.main: dict[str, str] = {}
         self.creation_lock = asyncio.Lock()
@@ -78,7 +101,10 @@ class Kernels:
             if len(self.items) >= MAX_KERNELS:
                 raise ToolError(f"live kernel limit ({MAX_KERNELS}) reached; delete a kernel first")
             if self.pool is None:
-                self.pool = AsyncMonty(min_processes=0, max_processes=MAX_KERNELS, request_timeout=None)
+                self.helper_dir = Path(tempfile.mkdtemp(prefix="nexus-monty-"))
+                launcher = write_launcher(self.helper_dir, find_monty_binary())
+                self.pool = AsyncMonty(binary_path=launcher, min_processes=0, max_processes=MAX_KERNELS,
+                                       request_timeout=None)
                 await self.pool.__aenter__()
             worker = self.pool.checkout(limits=LIMITS)
             await worker.__aenter__()
@@ -126,6 +152,9 @@ class Kernels:
             pool, self.pool = self.pool, None
             with contextlib.suppress(Exception):
                 await pool.__aexit__(None, None, None)
+        if self.helper_dir is not None:
+            shutil.rmtree(self.helper_dir, ignore_errors=True)
+            self.helper_dir = None
 
     async def run(self, args: dict[str, Any], *, root: str, caller: str, ctx: ToolContext,
                   tools: list[Tool], approve: Approve, publish: Publish) -> str:

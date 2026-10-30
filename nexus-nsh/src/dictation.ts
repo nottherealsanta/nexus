@@ -308,13 +308,59 @@ function addSamples(current: Capture, incoming: Float32Array) {
 
 function readyState(state: string): boolean { return state === "ready" || state === "loaded"; }
 
-function beginCapture(insert: (text: string) => void, expectedGeneration: number) {
+function cue(frequencies: number[]) {
+  try {
+    const root = globalThis as unknown as { AudioContext?: new () => any; webkitAudioContext?: new () => any };
+    const Context = root.AudioContext ?? root.webkitAudioContext;
+    if (!Context) return;
+    const context = new Context();
+    const now = context.currentTime;
+    frequencies.forEach((frequency, index) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const start = now + index * 0.12;
+      oscillator.frequency.value = frequency;
+      oscillator.type = "sine";
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.08, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.11);
+      oscillator.connect(gain).connect(context.destination);
+      oscillator.start(start);
+      oscillator.stop(start + 0.12);
+    });
+    setTimeout(() => void context.close().catch(() => {}), frequencies.length * 120 + 100);
+  } catch { /* Audio cues are optional. */ }
+}
+
+function beginCapture(insert: (text: string) => void, expectedGeneration: number, loaded = false) {
   void (async () => {
+    let loadingCue: ReturnType<typeof setInterval> | undefined;
     try {
+      if (!loaded) {
+        cue([440]);
+        loadingCue = setInterval(() => {
+          if (generation !== expectedGeneration || dictationPhase() !== "requesting") {
+            clearInterval(loadingCue);
+          } else cue([440]);
+        }, 1500);
+      }
+      try {
+        await request("POST", "/api/voice/stt/prepare");
+      } finally {
+        if (loadingCue) clearInterval(loadingCue);
+      }
+      if (generation !== expectedGeneration || dictationPhase() !== "requesting") return;
       const opened = await openRecorder((samples) => {
         const current = capture;
         if (current && current.generation === expectedGeneration) addSamples(current, samples);
       });
+      if (generation !== expectedGeneration || dictationPhase() !== "requesting") {
+        await opened.recorder.stop();
+        return;
+      }
+      cue([660, 880]);
+      // Let the cue and the recorder's buffered tail pass before accepting samples.
+      await sleep(350);
       if (generation !== expectedGeneration || dictationPhase() !== "requesting") {
         await opened.recorder.stop();
         return;
@@ -388,7 +434,7 @@ async function waitForDownload(insert: (text: string) => void, expectedGeneratio
       if (readyState(model.state)) {
         move("ready");
         voiceDownloadProgress.set(null);
-        beginCapture(insert, expectedGeneration);
+        beginCapture(insert, expectedGeneration, model.state === "loaded");
         return;
       }
       if (model.state === "error" || model.state === "unsupported" || model.state === "runtime_missing") {
@@ -420,7 +466,7 @@ export function startDictation(insert: (text: string) => void) {
       const stt = status.stt;
       if (readyState(stt.state)) {
         move("request");
-        beginCapture(insert, expectedGeneration);
+        beginCapture(insert, expectedGeneration, stt.state === "loaded");
       } else if (stt.state === "absent") {
         move("consent");
         confirmDialog.set({
@@ -463,6 +509,7 @@ export async function stopDictation() {
   move("stop");
   current.active = false;
   await stopRecorder(current);
+  cue([660, 440]);
   if (previewInFlight) await previewInFlight.catch(() => {});
   if (current.cancelled || current.generation !== generation || dictationPhase() !== "stopping") return;
   const duration = current.sampleCount / current.sampleRate;
@@ -508,10 +555,11 @@ export function cancelDictation() {
   const current = capture;
   generation++;
   if (current) {
+    const wasActive = current.active;
     current.active = false;
     current.cancelled = true;
     current.finalController?.abort();
-    void stopRecorder(current);
+    void stopRecorder(current).then(() => { if (wasActive) cue([660, 440]); });
   }
   if (phase === "checking" || phase === "consent" || phase === "downloading" || phase === "requesting") move("cancel");
   else if (phase === "recording" || phase === "stopping") move("cancel");

@@ -1,6 +1,6 @@
 # MCP
 
-Servers are configured in `~/.nexus10/config.toml` as `[mcp.servers.<name>]`
+Servers are configured in `~/.nexus/config.toml` as `[mcp.servers.<name>]`
 (one file, PLAN.md P1; no `mcp.json`, no per-project servers) and reached by the
 model through two proxy tools (`mcp_tool_search`, `mcp_call`). `nexus-core/nexus/mcp/`, using the `mcp` SDK.
 
@@ -61,7 +61,7 @@ Verified 2026-10-29 against the pinned version: 16 tools discovered, and
   not in newer protocol versions) and a transport error ends the connection at once. A failed
   server is not retried for 5, 15, 30, then 60 s unless the user restarts it
   (`POST /api/mcp/{name}/restart`); a new session retries after that delay.
-- **stderr** of a stdio server goes to `~/.nexus10/logs/mcp/<server>.log` (the name with
+- **stderr** of a stdio server goes to `~/.nexus/logs/mcp/<server>.log` (the name with
   anything but letters, digits and `_` turned into `_`; truncated when over 1 MiB at the next
   start), never into context.
 

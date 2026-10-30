@@ -255,6 +255,15 @@ mod tests {
     }
 
     #[test]
+    fn close_slash_resolves_to_tab_close() {
+        let m = Manifest::load();
+        assert_eq!(
+            m.slash("close").map(|c| c.id.as_str()),
+            Some("session.tab_close")
+        );
+    }
+
+    #[test]
     fn manifest_parses_with_the_checker_invariants() {
         let m = Manifest::load();
         assert_eq!(m.manifest_version, 1);

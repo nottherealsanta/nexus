@@ -10,7 +10,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 
 - **Base URL.** `http://127.0.0.1:4747` (`$NEXUS_PORT`). Loopback only.
 - **Auth.** `Authorization: Bearer <token>`, with the token read from
-  `~/.nexus10/daemon.json` (mode 0600). `GET /api/event` also accepts
+  `~/.nexus/daemon.json` (mode 0600). `GET /api/event` also accepts
   `?token=` for browser `EventSource`. A missing or wrong token gets 401.
 - **Bodies.** JSON objects, at most 1 MiB; prompt requests allow 12 MiB for inline image data.
 - **Errors.** `{"error": "..."}` with 400 (bad input), 401, 404 (unknown id),
@@ -49,6 +49,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/extension` | `?project=` or `?directory=` | `{tools: [{name, description, scope, path, sha256, timeout}], problems: [{path, error}]}`: user tools ([tools.md](tools.md#user-tools)) |
 | GET | `/api/voice` | | `{stt, tts}` status; never loads or downloads a model ([voice.md](voice.md#status)) |
 | POST | `/api/voice/transcribe` | raw mono 16 kHz PCM16 WAV; `?partial=1` | `{text}`; 409 `voice_busy` for an overlapping preview; transcript is not sent to a model ([voice.md](voice.md#speech-to-text)) |
+| POST | `/api/voice/stt/prepare` | empty | Load the cached STT engine before recording; returns `{state: "loaded"}` or a voice error |
 | POST | `/api/voice/stt/download` | empty | 202 `{state: "downloading", bytes_done, bytes_total, error}`; explicit consent to download pinned weights ([voice.md](voice.md#speech-to-text)) |
 | POST | `/api/voice/tts/download` | empty | 202 `{state: "downloading"}`; consented download of `[speech] tts_model`; progress is `voice.progress` with `target: "tts"` and the state shows in `GET /api/voice` |
 | DELETE | `/api/voice/{stt or tts}` | | removes the configured model repo from the HF cache; 409 while downloading or playing; `{repo, freed, ...status}` |
@@ -916,7 +917,7 @@ during recovery does not duplicate a result, notice, cancellation or
    `question.replied`/`outcome: "cancelled"`; its answer can no longer arrive.
 
 ```sh
-TOKEN=$(jq -r .token ~/.nexus10/daemon.json)
+TOKEN=$(jq -r .token ~/.nexus/daemon.json)
 curl -N "http://127.0.0.1:4747/api/event?token=$TOKEN"           # watch everything
 curl -H "authorization: Bearer $TOKEN" -X POST -d '{"path":"."}' http://127.0.0.1:4747/api/project
 ```
@@ -1041,11 +1042,6 @@ turn. Images become ordered `image` parts alongside the user text, stored in
 SQLite with their bytes for reload, continuation, export and provider replay.
 They are not workspace files or ephemeral browser URLs.
 
-On the first startup after the allow-by-default upgrade, previously stored
-`ask` permissions are changed to `allow` for existing sessions and children.
-This one-time migration increments their revisions; an explicit `ask` set after
-the migration remains in effect across restarts.
-
 ## Configuration, provider login and context budget
 
 See [Configuration](config.md) for the config revision/patch contract and the
@@ -1145,7 +1141,7 @@ refusal the model reads: `the user declined this tool call: <note>`. Both show i
 
 ### Artifacts (K8)
 
-Media a session produced is stored once per content in `~/.nexus10/artifacts/<sha256>` with a row per session in
+Media a session produced is stored once per content in `~/.nexus/artifacts/<sha256>` with a row per session in
 `artifact` (id, media type, name, size, source). Today the source is an MCP `image` or `audio` result: the tool
 result names the artifact. An image (PNG, JPEG, GIF, WebP) also reaches the model beside the text, in each dialect's
 tool-result item ([llm-providers.md](llm-providers.md#tool-result-media)); for a model without image input the result

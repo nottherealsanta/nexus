@@ -1,7 +1,7 @@
-"""User tools: Python files in `~/.nexus10/tools/` and `<project>/.agents/tools/`.
+"""User tools: Python files in `~/.nexus/tools/` and `<project>/.agents/tools/`.
 
 ```python
-# ~/.nexus10/tools/hello.py
+# ~/.nexus/tools/hello.py
 NAME = "hello"                       # optional; the file name by default
 DESCRIPTION = "Greet someone."       # required
 PARAMETERS = {"type": "object", "properties": {"who": {"type": "string"}}, "required": ["who"]}

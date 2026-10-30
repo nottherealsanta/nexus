@@ -103,6 +103,22 @@ class VoiceManager:
     def error(self) -> str | None:
         return self._download_error or self._last_error
 
+    async def prepare(self) -> None:
+        """Load the cached model before microphone capture begins."""
+        if self._closed:
+            raise VoiceError("voice_unavailable", "Voice input is unavailable")
+        if self.downloading or self._pending >= MAX_PENDING:
+            raise VoiceError("voice_busy", "Voice is busy")
+        self._pending += 1
+        try:
+            async with self._lock:
+                self._cancel_idle()
+                await self._ensure_engine()
+        finally:
+            self._pending -= 1
+            if self._pending == 0 and self.loaded and not self._closed:
+                self._schedule_unload()
+
     async def transcribe(self, wav: bytes, *, partial: bool = False) -> TranscribeResult:
         """Validate and transcribe a WAV; partial previews never wait behind work."""
         from .audio import VoiceAudioError, parse_wav

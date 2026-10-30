@@ -525,7 +525,7 @@ function LocationStrip() {
   const path = () => {
     const dir = directory();
     const stateHome = info()?.home ?? "";
-    const home = userHome() || (stateHome.endsWith("/.nexus10") ? stateHome.slice(0, -9) : "");
+    const home = userHome() || (/\/\.nexus(10)?$/.test(stateHome) ? stateHome.replace(/\/\.nexus(10)?$/, "") : "");
     const short = home && (dir === home || dir.startsWith(`${home.replace(/\/$/, "")}/`)) ? `~${dir.slice(home.replace(/\/$/, "").length)}` : dir;
     return midTruncate(short, isNarrow() ? 32 : 54);
   };

@@ -746,8 +746,12 @@ names (up to 200) and returns type and repr previews (200 characters); Monty
 has no `globals()`/`dir()`. This is an approximate listing, not a full Python
 namespace inspector. Full cell history remains in session event logs.
 
-Version 1 runs Monty's worker pool from the daemon; workers inherit its
-environment. A scrubbed helper process remains required before 0.10.0.
+The pool is started with `binary_path` set to a per-daemon launcher script
+(`nexus-monty-*` in the system temp dir, mode 0700, removed at shutdown). It
+`cd`s into an empty directory and runs the worker under `env -i`, so workers
+never see the daemon's API keys, tokens or working directory. The worker still
+has the daemon's uid and no OS-level sandbox (no seccomp or `sandbox-exec`);
+containment rests on Monty having no filesystem, network or OS handler.
 
 ### Live parent/child smoke test
 
@@ -777,7 +781,7 @@ characters. External processes and other daemons remain outside these checks.
 
 ## User tools
 
-A user tool is a Python file in `~/.nexus10/tools/` or `<project>/.agents/tools/`
+A user tool is a Python file in `~/.nexus/tools/` or `<project>/.agents/tools/`
 (the project's replaces a global one of the same name). `nexus/extensions.py`.
 
 ```python

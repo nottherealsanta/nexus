@@ -387,11 +387,11 @@ async def test_old_schema_migration_preserves_messages_and_is_stable(env):
     await _idle(rt, sid)
     assert len((await client.get(f"/api/session/{sid}/message")).json()) == 2
 
-    # Simulate the schema from before session snapshots existed.
+    # Simulate a session stored before snapshots existed.
     path = store.path
     await rt.shutdown()
     with store.db:
-        store.db.execute("drop table session_snapshot")
+        store.db.execute("delete from session_snapshot")
     store.close()
 
     _agent_file(files, "build", "After upgrade.\n\n{{tools}}")

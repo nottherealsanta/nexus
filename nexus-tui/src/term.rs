@@ -10,8 +10,8 @@ use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
-    LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, BeginSynchronizedUpdate,
+    EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute};
 use ratatui::backend::CrosstermBackend;
@@ -52,6 +52,17 @@ pub fn enter() -> io::Result<Term> {
     Terminal::new(CrosstermBackend::new(io::stdout()))
 }
 
+/// Present a frame atomically in terminals that support synchronized updates.
+pub fn synchronized_update<W: Write>(
+    out: &mut W,
+    draw: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    execute!(out, BeginSynchronizedUpdate)?;
+    let result = draw();
+    let end = execute!(out, EndSynchronizedUpdate);
+    result.and(end)
+}
+
 /// Restore the terminal. Idempotent and best effort: it is called from the
 /// panic hook, error paths and `Drop`.
 pub fn leave() {
@@ -64,6 +75,7 @@ pub fn leave() {
     }
     let _ = execute!(
         out,
+        EndSynchronizedUpdate,
         DisableBracketedPaste,
         DisableMouseCapture,
         LeaveAlternateScreen,
@@ -145,7 +157,15 @@ impl Drop for Guard {
 
 #[cfg(test)]
 mod tests {
-    use super::notify_sequence;
+    use super::{notify_sequence, synchronized_update};
+
+    #[test]
+    fn synchronized_update_ends_even_on_draw_error() {
+        let mut output = Vec::new();
+        let result = synchronized_update(&mut output, || Err(std::io::Error::other("draw")));
+        assert!(result.is_err());
+        assert_eq!(output, b"\x1b[?2026h\x1b[?2026l");
+    }
 
     #[test]
     fn osc9_is_the_default() {

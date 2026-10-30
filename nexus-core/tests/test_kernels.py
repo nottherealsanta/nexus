@@ -1,9 +1,10 @@
 """Real Monty workers: persistence, caller isolation, cancellation and limits."""
 import asyncio
+import subprocess
 
 import pytest
 
-from nexus.kernels import Kernels
+from nexus.kernels import Kernels, write_launcher
 from nexus.llmhub.types import ToolSpec
 from nexus.tools import DEFAULT_TOOLS, Tool, ToolContext, ToolError
 
@@ -193,3 +194,21 @@ async def test_memory_limit_and_live_kernel_cap(kernels, tmp_path, monkeypatch):
     with pytest.raises(ToolError, match="MemoryError|memory"):
         await run(kernels, tmp_path, "x = 'a' * 100000000", kernel_id=k.id)
     assert k.id not in kernels.items
+
+
+async def test_pool_uses_launcher_and_shutdown_removes_it(kernels, tmp_path):
+    await run(kernels, tmp_path, "1")
+    helper = kernels.helper_dir
+    assert helper is not None and (helper / "monty").stat().st_mode & 0o777 == 0o700
+    await kernels.shutdown()
+    assert not helper.exists()
+
+
+def test_launcher_clears_environment_and_directory(tmp_path, monkeypatch):
+    fake = tmp_path / "fake"
+    fake.write_text("#!/bin/sh\nenv\npwd\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("NEXUS_TEST_SECRET", "leak")
+    out = subprocess.run([write_launcher(tmp_path, str(fake))], capture_output=True, text=True, check=True).stdout
+    assert "NEXUS_TEST_SECRET" not in out
+    assert out.strip().splitlines()[-1].endswith("/cwd")

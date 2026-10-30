@@ -1381,6 +1381,7 @@ export const manifest = {
    "id": "session.tab_close",
    "title": "Close tab",
    "category": "session",
+   "slash": "close",
    "keys": {
     "tui": "alt+x",
     "nsh": "alt+x"

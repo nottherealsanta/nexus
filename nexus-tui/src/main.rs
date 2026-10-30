@@ -221,6 +221,7 @@ async fn run(
     let (capture_tx, mut capture_rx) =
         mpsc::unbounded_channel::<nexus_tui::dictation::CaptureEvent>();
     let mut capture: Option<nexus_tui::dictation::CaptureHandle> = None;
+    let mut loading_cue: Option<tokio::task::JoinHandle<()>> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(125));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -228,7 +229,9 @@ async fn run(
     let mut program_status = nexus_tui::program_status::Tracker::default();
     'main: loop {
         if dirty {
-            terminal.draw(|f| render::render(f, &mut app))?;
+            term::synchronized_update(&mut std::io::stdout(), || {
+                terminal.draw(|f| render::render(f, &mut app)).map(|_| ())
+            })?;
         }
         dirty = true;
         tokio::select! {
@@ -270,6 +273,7 @@ async fn run(
                     | nexus_tui::dictation::CaptureEvent::Preview { generation, .. }
                     | nexus_tui::dictation::CaptureEvent::Stopped { generation, .. }
                     | nexus_tui::dictation::CaptureEvent::Cancelled { generation }
+                    | nexus_tui::dictation::CaptureEvent::CueWarning { generation, .. }
                     | nexus_tui::dictation::CaptureEvent::Failed { generation, .. } => *generation,
                 };
                 app.apply_capture_event(event);
@@ -336,6 +340,19 @@ async fn run(
                         }
                     }
                 },
+                Effect::DictationLoadingCue(start) => {
+                    if let Some(task) = loading_cue.take() {
+                        task.abort();
+                    }
+                    if start {
+                        loading_cue = Some(tokio::spawn(async {
+                            loop {
+                                nexus_tui::dictation::play_loading_cue();
+                                tokio::time::sleep(Duration::from_millis(1500)).await;
+                            }
+                        }));
+                    }
+                }
                 Effect::PasteImage(key) => {
                     let tx = image_tx.clone();
                     tokio::spawn(async move {
@@ -368,6 +385,9 @@ async fn run(
             generation: handle.generation(),
         });
         handle.join();
+    }
+    if let Some(task) = loading_cue {
+        task.abort();
     }
     let _ = handle.commands.send(sync::Command::Shutdown);
     Ok(())

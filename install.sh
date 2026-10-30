@@ -22,7 +22,7 @@ case "${1:-}" in
     rm -f "$BIN/nexus-tui"
     rm -rf "$WEB"
     printf 'Removed the nexus10 tool, %s/nexus-tui and %s.\nYour data in %s is untouched.\n' \
-      "$BIN" "$WEB" "${NEXUS10_HOME:-$HOME/.nexus10}"
+      "$BIN" "$WEB" "${NEXUS10_HOME:-$HOME/.nexus}"
     exit 0 ;;
   "") ;;
   *) die "unknown argument $1" ;;
@@ -34,7 +34,7 @@ need npm
 need nsh "npm install -g nsh"
 
 printf '› Core (uv tool)\n'
-uv tool install --force --reinstall "$ROOT/nexus-core"
+uv tool install --force --reinstall --no-binary-package claude-agent-sdk "$ROOT/nexus-core"
 
 printf '› TUI\n'
 (cd "$ROOT/nexus-tui" && cargo build --release)

@@ -9,6 +9,7 @@
 #   nexus web [flags]         serve the NSH web app and open it
 #   nexus restart             restart the Core daemon
 #   nexus stop                stop the Core daemon
+#   nexus migrate             make ~/.nexus the Nexus 0.10 home (asks first; see docs/development.md)
 #   nexus status              Core daemon and provider status
 #   nexus ps                  Core daemon status only
 #   nexus logs                follow the Core daemon log
@@ -37,14 +38,19 @@ ROOT="$(cd "$(dirname "$source_file")/.." && pwd)"
 CORE="$ROOT/nexus-core"
 TUI="$ROOT/nexus-tui"
 NSH="$ROOT/nexus-nsh"
-HOME_DIR="${NEXUS10_HOME:-$HOME/.nexus10}"
+HOME_DIR="${NEXUS10_HOME:-$HOME/.nexus}"
 
 die() { printf 'nexus: %s\n' "$*" >&2; exit 1; }
 
 ensure_home() {
+  # ~/.nexus is Nexus 0.10's only once Core has marked it (`nexus migrate`). A machine with neither it
+  # nor a pre-release ~/.nexus10 is fresh; Core creates and marks the directory itself.
   case "$HOME_DIR" in
     "$HOME/.nexus"|"$HOME/.nexus/"*)
-      die "refusing to use ~/.nexus (old Nexus); set NEXUS10_HOME"
+      if [ ! -f "$HOME/.nexus/.nexus10-home" ] && { [ -e "$HOME/.nexus" ] || [ -e "$HOME/.nexus10" ]; }; then
+        die "$HOME/.nexus is not set up for Nexus 0.10 (old Nexus or a pre-release home); run: nexus migrate"
+      fi
+      return 0
       ;;
   esac
   mkdir -p "$HOME_DIR"

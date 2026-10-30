@@ -43,35 +43,50 @@ impl DaemonInfo {
     }
 }
 
-/// `$NEXUS10_HOME`, else `~/.nexus10`. Refuses old Nexus's `~/.nexus` and anything inside it.
+/// `$NEXUS10_HOME`, else `~/.nexus`. `~/.nexus` (or anything inside it) is used only once it
+/// carries Core's marker; until `nexus migrate` has run it is old Nexus's, or a pre-release
+/// `~/.nexus10` is waiting to move in.
 pub fn home() -> Result<PathBuf, String> {
     let home_dir = std::env::var_os("HOME").map(PathBuf::from);
-    resolve_home(
+    let path = resolve_home(
         std::env::var_os("NEXUS10_HOME").map(PathBuf::from),
-        home_dir,
-    )
+        home_dir.clone(),
+    )?;
+    if let Some(h) = home_dir {
+        check_migrated(&path, &h)?;
+    }
+    Ok(path)
 }
+
+pub const MARKER: &str = ".nexus10-home";
 
 pub fn resolve_home(
     override_dir: Option<PathBuf>,
     home_dir: Option<PathBuf>,
 ) -> Result<PathBuf, String> {
-    let path = match override_dir.filter(|p| !p.as_os_str().is_empty()) {
+    Ok(match override_dir.filter(|p| !p.as_os_str().is_empty()) {
         Some(p) => expand_tilde(&p, home_dir.as_deref()),
         None => home_dir
             .as_deref()
             .ok_or("cannot find the home directory; set NEXUS10_HOME")?
-            .join(".nexus10"),
-    };
-    let old = home_dir.as_deref().map(|h| h.join(".nexus"));
-    let inside_old = old.as_deref().is_some_and(|o| path.starts_with(o));
-    if inside_old || path.file_name().is_some_and(|n| n == ".nexus") {
-        return Err(format!(
-            "{} is old Nexus's state directory; Nexus 0.10 uses ~/.nexus10",
-            path.display()
-        ));
+            .join(".nexus"),
+    })
+}
+
+/// Refuse `<user home>/.nexus` until it is Nexus 0.10's. A machine with neither it nor
+/// `~/.nexus10` is fresh: Core creates and marks the directory on first start.
+pub fn check_migrated(path: &Path, user_home: &Path) -> Result<(), String> {
+    let default = user_home.join(".nexus");
+    if !path.starts_with(&default) || default.join(MARKER).is_file() {
+        return Ok(());
     }
-    Ok(path)
+    if !default.exists() && !user_home.join(".nexus10").exists() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} is not set up for Nexus 0.10 (it holds old Nexus or a pre-release home); run `nexus migrate`",
+        default.display()
+    ))
 }
 
 fn expand_tilde(path: &Path, home_dir: Option<&Path>) -> PathBuf {
@@ -167,7 +182,7 @@ mod tests {
         let h = Some(PathBuf::from("/Users/a"));
         assert_eq!(
             resolve_home(None, h.clone()).unwrap(),
-            PathBuf::from("/Users/a/.nexus10")
+            PathBuf::from("/Users/a/.nexus")
         );
         assert_eq!(
             resolve_home(Some("/x/y".into()), h.clone()).unwrap(),
@@ -179,16 +194,40 @@ mod tests {
         );
         assert_eq!(
             resolve_home(Some("".into()), h.clone()).unwrap(),
-            PathBuf::from("/Users/a/.nexus10")
+            PathBuf::from("/Users/a/.nexus")
         );
-        assert!(resolve_home(Some("~/.nexus".into()), h.clone()).is_err());
-        assert!(resolve_home(Some("~/.nexus/v10".into()), h.clone()).is_err());
-        assert!(resolve_home(Some("/Users/a/.nexus/sub/x".into()), h.clone()).is_err());
         assert_eq!(
-            resolve_home(Some("/Users/a/.nexus10/x".into()), h.clone()).unwrap(),
-            PathBuf::from("/Users/a/.nexus10/x")
+            resolve_home(Some("~/.nexus".into()), h.clone()).unwrap(),
+            PathBuf::from("/Users/a/.nexus")
         );
         assert!(resolve_home(None, None).is_err());
+    }
+
+    #[test]
+    fn default_home_needs_core_marker() {
+        let root = std::env::temp_dir().join(format!("nexus-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let default = root.join(".nexus");
+
+        // Fresh machine: nothing to protect.
+        assert!(check_migrated(&default, &root).is_ok());
+        // Old Nexus: refused, including paths inside it.
+        std::fs::create_dir(&default).unwrap();
+        assert!(check_migrated(&default, &root)
+            .unwrap_err()
+            .contains("nexus migrate"));
+        assert!(check_migrated(&default.join("sub"), &root).is_err());
+        // Elsewhere is never checked.
+        assert!(check_migrated(&root.join("scratch"), &root).is_ok());
+        // Marked: used.
+        std::fs::write(default.join(MARKER), "{}").unwrap();
+        assert!(check_migrated(&default, &root).is_ok());
+        // A waiting pre-release home blocks an absent ~/.nexus.
+        std::fs::remove_dir_all(&default).unwrap();
+        std::fs::create_dir(root.join(".nexus10")).unwrap();
+        assert!(check_migrated(&default, &root).is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

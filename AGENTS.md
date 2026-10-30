@@ -15,7 +15,7 @@ for deliberate changes from old Nexus.
 - Task tools (`nexus-core/nexus/tools/`) act on the workspace. Changes to Nexus state
   (session, workspace, worktree, model) belong to the control plane, never a task
   tool; the model reaches control only through exposed control tools.
-- State lives in `~/.nexus10` (`$NEXUS10_HOME`). Never touch `~/.nexus`.
+- State lives in `~/.nexus` (`$NEXUS10_HOME`) once `nexus migrate` has marked it; until then `~/.nexus` is old Nexus's and `~/.nexus10` a pre-release home. Never run `nexus migrate` against the real home from an agent session, and use a scratch `$NEXUS10_HOME` for tests.
 - Update PLAN.md when a step lands or a decision changes.
 
 The Python core is `nexus-core/` (a uv project: `pyproject.toml`, `uv.lock`,

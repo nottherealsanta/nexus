@@ -9,7 +9,7 @@ and `cli.py` turn a `provider/model` reference into a provider and a model id.
 | Item | Value |
 | --- | --- |
 | URL | `https://models.dev/api.json` |
-| Cache file | `~/.nexus10/cache/models.dev.json` (`$NEXUS10_HOME/cache/...`) |
+| Cache file | `~/.nexus/cache/models.dev.json` (`$NEXUS10_HOME/cache/...`) |
 | TTL | 24 h (`TTL_S`), measured from the file's mtime |
 | Download limits | 30 s total, 10 s connect, 64 MiB (`MAX_BYTES`) |
 
@@ -93,7 +93,8 @@ from `providers.make(provider_id, SIGN_INS[provider_id]())`.
 
 There is no default model and no provider fallback. A new root session starts with the model the user last
 selected ([daemon.md](daemon.md#model-selection)); with none remembered it has none, and clients show "Select
-a model". Providers carry no suggested model either; pickers list the catalog.
+a model". The TUI opens its model picker by itself, once per launch, when the catalog arrives with models and
+the new-session view has none; dismissing it keeps the composer's "Select a model". Providers carry no suggested model either; pickers list the catalog.
 
 The chosen model id is not checked against the catalog; the provider rejects an
 unknown one.

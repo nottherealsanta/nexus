@@ -42,6 +42,8 @@ never zero.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 import secrets
 import sqlite3
@@ -150,6 +152,7 @@ create table if not exists message (
   parts text not null,
   created real not null,
   event_id integer,
+  delivery text,
   unique (session_id, seq)
 );
 create table if not exists prompt_history (
@@ -250,7 +253,108 @@ create table if not exists turn_tool (
   primary key (turn_id, call_id)
 );
 create index if not exists turn_tool_call on turn_tool(session_id, call_id);
+create index if not exists session_continued on session(continued_from);
+create index if not exists session_parent on session(parent_id);
+create index if not exists message_event on message(event_id);
 """
+
+
+SCHEMA_VERSION = 1  # bump on any change to SCHEMA; there are no in-place migrations
+
+log = logging.getLogger(__name__)
+
+
+class StoreError(RuntimeError):
+    """The database cannot be opened without risking its contents."""
+
+
+def _sidecars(path: Path) -> list[Path]:
+    return [path.with_name(path.name + suffix) for suffix in ("-wal", "-shm")]
+
+
+def _stored_version(path: Path) -> int | None:
+    """`user_version` of a database that holds tables; None when it is empty; raises if unreadable."""
+    probe = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        tables = probe.execute("select count(*) from sqlite_master").fetchone()[0]
+        return probe.execute("pragma user_version").fetchone()[0] if tables else None
+    finally:
+        probe.close()
+
+
+def _backup_path(path: Path, version: int | str) -> Path:
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    candidate = path.with_name(f"{path.name}.v{version}-{stamp}.bak")
+    n = 1
+    while candidate.exists():
+        n += 1
+        candidate = path.with_name(f"{path.name}.v{version}-{stamp}-{n}.bak")
+    return candidate
+
+
+def _build_fresh(path: Path) -> None:
+    """Create a complete, versioned database at `path` and close it (no WAL files are left)."""
+    for leftover in (path, *_sidecars(path)):
+        leftover.unlink(missing_ok=True)
+    db = sqlite3.connect(path)
+    try:
+        db.execute("pragma journal_mode = wal")
+        db.executescript(SCHEMA)
+        db.execute(f"pragma user_version = {SCHEMA_VERSION}")
+        db.commit()
+        if db.execute("pragma quick_check").fetchone()[0] != "ok":
+            raise StoreError(f"new database failed its integrity check: {path}")
+    finally:
+        db.close()
+
+
+def prepare_database(path: Path) -> Path | None:
+    """Make `path` a database of the current schema; return where the old one was kept, if any.
+
+    A database from another schema version is never migrated or read. It is
+    moved, with its WAL files, to `<name>.v<version>-<timestamp>.bak` (a rename,
+    so nothing is rewritten) and a new database starts in its place. The new
+    database is built and checked beside the old one first, so a failure at any
+    step leaves the old database where it was. A database from a newer Nexus is
+    left alone and refused.
+    """
+    exists = path.exists() and path.stat().st_size > 0
+    try:
+        version = _stored_version(path) if exists else None
+        label: int | str = version if version is not None else 0
+    except sqlite3.DatabaseError:
+        version, label = -1, "unreadable"
+    if version == SCHEMA_VERSION:
+        return None
+    if version is not None and version > SCHEMA_VERSION:
+        raise StoreError(f"{path} has schema version {version}; this Nexus reads version {SCHEMA_VERSION}")
+    building = path.with_name(path.name + ".new")
+    try:
+        _build_fresh(building)
+        if version is None:  # missing, or empty with no tables: nothing to keep
+            for leftover in _sidecars(path):
+                leftover.unlink(missing_ok=True)
+            os.replace(building, path)
+            return None
+        backup = _backup_path(path, label)
+        moved: list[tuple[Path, Path]] = []
+        try:
+            for source in (path, *_sidecars(path)):
+                if source.exists():
+                    target = backup.with_name(backup.name + source.name[len(path.name):])
+                    os.replace(source, target)
+                    moved.append((source, target))
+            os.replace(building, path)
+        except BaseException:
+            for source, target in reversed(moved):  # put the old database back
+                os.replace(target, source)
+            raise
+    finally:
+        for leftover in (building, *_sidecars(building)):
+            leftover.unlink(missing_ok=True)
+    log.warning("database schema %s is not version %s: kept it as %s and started a new database",
+                label, SCHEMA_VERSION, backup)
+    return backup
 
 
 def new_id(prefix: str) -> str:
@@ -339,6 +443,7 @@ class Store:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or home() / "nexus.db"
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.backup: Path | None = prepare_database(self.path)
         self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("pragma journal_mode = wal")
@@ -346,196 +451,14 @@ class Store:
         self.db.execute("pragma synchronous = normal")  # WAL + normal: safe across crashes, fast per-event commits
         self._pins: dict[int, tuple[int, int]] = {}
         self._pin_seq = 0
-        had_turn = self.db.execute(
-            "select 1 from sqlite_master where type = 'table' and name = 'turn'").fetchone() is not None
-        self.db.executescript(SCHEMA)
-        columns = {r["name"] for r in self.db.execute("pragma table_info(session)")}
-        if "effort" not in columns:  # databases from before effort existed
-            self.db.execute("alter table session add column effort text")
-        if "agent" not in columns:  # databases from before agents existed
-            self.db.execute("alter table session add column agent text not null default 'build'")
-        if "parent_id" not in columns:  # databases from before session trees existed
-            self.db.execute("alter table session add column parent_id text references session(id) on delete cascade")
-            self.db.execute("alter table session add column parent_call_id text")
-            self.db.execute("alter table session add column launched_by text not null default 'user'")
-        if "disabled_tools" not in columns:  # databases from before per-session tool switches
-            self.db.execute("alter table session add column disabled_tools text not null default '[]'")
-        if "archived" not in columns:  # databases from before session archiving: existing sessions stay live
-            self.db.execute("alter table session add column archived integer not null default 0")
-        if "revision" not in columns:  # databases from before expected-revision preconditions
-            self.db.execute("alter table session add column revision integer not null default 1")
-        if "continued_from" not in columns:  # databases from before handoff (PLAN K1)
-            self.db.execute("alter table session add column continued_from text")
-        self.db.execute("create index if not exists session_continued on session(continued_from)")
-        # Older sessions defaulted to asking for tool approval. Apply the new
-        # default once, including descendants; later explicit choices survive.
-        with self.db:
-            self.db.execute("create table if not exists migration (name text primary key)")
-            applied = self.db.execute(
-                "insert or ignore into migration (name) values (?)", ("default_tool_allow_v1",))
-            if applied.rowcount:
-                self.db.execute("update session set permission = 'allow', revision = revision + 1 "
-                                "where permission = 'ask'")
-        with self.db:  # one-time: sessions from before prompt history keep what the user typed
-            if self.db.execute("insert or ignore into migration (name) values ('prompt_history_v1')").rowcount:
-                self._backfill_prompt_history()
-        with self.db:  # one-time: titles and user messages that predate the search index
-            if self.db.execute("insert or ignore into migration (name) values ('search_index_v1')").rowcount:
-                self._backfill_search()
-        project_columns = {r["name"] for r in self.db.execute("pragma table_info(project)")}
-        if "revision" not in project_columns:
-            self.db.execute("alter table project add column revision integer not null default 1")
-        message_columns = {r["name"] for r in self.db.execute("pragma table_info(message)")}
-        if "delivery" not in message_columns:
-            self.db.execute("alter table message add column delivery text")
-        if "event_id" not in message_columns:  # databases from before recovery: old messages have no link
-            with self.db:
-                self.db.execute("begin immediate")  # the column and legacy marker must land together
-                self.db.execute("alter table message add column event_id integer")
-                # Mark existing history as pre-link so recovery never republishes it.
-                self.db.execute("update message set event_id = -1")
-        elif not had_turn:  # an intermediate database with the column: its history also predates linking
-            with self.db:
-                self.db.execute("update message set event_id = -1 where event_id is null")
-        with self.db:
-            self.db.execute("create index if not exists message_event on message(event_id)")
-        turn_columns = {r["name"] for r in self.db.execute("pragma table_info(turn)")}
-        if turn_columns and "start_seq" not in turn_columns:
-            with self.db:
-                self.db.execute("alter table turn add column start_seq integer not null default 0")
-        tool_columns = {r["name"] for r in self.db.execute("pragma table_info(turn_tool)")}
-        if tool_columns and "media" not in tool_columns:
-            self.db.execute("alter table turn_tool add column media text")
-        if "message_id" not in tool_columns:
-            self.db.execute("alter table turn_tool add column message_id text")
-        self.db.execute("create index if not exists session_parent on session(parent_id)")
-        self._migrate_event_log()
-        self._migrate_usage()
         self._generation = self._ensure_log()
-
-    def _migrate_usage(self) -> None:
-        """Add model, effort, usage and reasoning time to requests, and `turn.ended`.
-
-        Runs its backfill only in the transaction that adds the columns, so it
-        runs once (TURN_SUMMARY_PLAN.md 4.9).
-        """
-        request_columns = {r["name"] for r in self.db.execute("pragma table_info(turn_request)")}
-        attempt_columns = {r["name"] for r in self.db.execute("pragma table_info(turn_attempt)")}
-        turn_columns = {r["name"] for r in self.db.execute("pragma table_info(turn)")}
-        wanted_request = ("model text", "effort text", *(f"{c} integer" for c in USAGE_COLUMNS),
-                          "reasoning_seconds real")
-        missing_request = [c for c in wanted_request if c.split()[0] not in request_columns]
-        missing_attempt = [f"{c} integer" for c in USAGE_COLUMNS if c not in attempt_columns]
-        if not missing_request and not missing_attempt and "ended" in turn_columns:
-            return
-        with self.db:
-            self.db.execute("begin immediate")  # the columns and their backfill land together
-            for column in missing_request:
-                self.db.execute(f"alter table turn_request add column {column}")
-            for column in missing_attempt:
-                self.db.execute(f"alter table turn_attempt add column {column}")
-            if "ended" not in turn_columns:
-                self.db.execute("alter table turn add column ended text")
-            if "input_tokens" not in request_columns:
-                self._backfill_usage()
-
-    def _backfill_usage(self) -> None:
-        """Fill old requests' usage, model and effort from the events that remain.
-
-        A request's events are those after its `event_after` up to the next
-        request's `event_after` in the same session. Exactly one `usage` event
-        there fills the request and its last attempt; zero or several leave them
-        unknown. `model` is the bare id from the first `wire_request` body (the
-        provider is not in the body). The ledger is seeded from what was filled.
-        """
-        rows = self.db.execute(
-            "select id, session_id, event_after from turn_request order by session_id, event_after, started, id"
-        ).fetchall()
-        by_session: dict[str, list[sqlite3.Row]] = {}
-        for row in rows:
-            by_session.setdefault(row["session_id"], []).append(row)
-        for session_id, requests in by_session.items():
-            events = self.db.execute(
-                "select id, type, data from event where session_id = ? and id > ?"
-                " and type in ('usage', 'wire_request') order by id",
-                (session_id, requests[0]["event_after"])).fetchall()
-            for index, request in enumerate(requests):
-                low = request["event_after"]
-                high = requests[index + 1]["event_after"] if index + 1 < len(requests) else None
-                inside = [e for e in events if e["id"] > low and (high is None or e["id"] <= high)]
-                usages = [json.loads(e["data"]) for e in inside if e["type"] == "usage"]
-                wires = [json.loads(e["data"]) for e in inside if e["type"] == "wire_request"]
-                body = (wires[0].get("body") if wires else None) or {}
-                model = body.get("model") if isinstance(body.get("model"), str) else None
-                reasoning = body.get("reasoning") if isinstance(body.get("reasoning"), dict) else {}
-                effort = body.get("reasoning_effort") or reasoning.get("effort")
-                self.db.execute(
-                    "update turn_request set model = coalesce(model, ?), effort = coalesce(effort, ?) where id = ?",
-                    (model, effort if isinstance(effort, str) else None, request["id"]))
-                if len(usages) != 1:
-                    continue
-                values = tuple(int(usages[0].get(c) or 0) for c in USAGE_COLUMNS)
-                sets = ", ".join(f"{c} = ?" for c in USAGE_COLUMNS)
-                self.db.execute(f"update turn_request set {sets} where id = ?", (*values, request["id"]))
-                self.db.execute(
-                    f"update turn_attempt set {sets} where id = (select id from turn_attempt where request_id = ?"
-                    " order by attempt desc, started desc limit 1)", (*values, request["id"]))
-        self.db.execute(
-            "insert into session_usage (session_id, model, requests, input_tokens, cached_input_tokens,"
-            " output_tokens, reasoning_tokens, since)"
-            " select session_id, coalesce(model, ?), count(*), sum(input_tokens), sum(cached_input_tokens),"
-            " sum(output_tokens), sum(reasoning_tokens), min(started) from turn_request"
-            " where input_tokens is not null group by session_id, coalesce(model, ?)"
-            " on conflict(session_id, model) do nothing",
-            (UNKNOWN_MODEL, UNKNOWN_MODEL))
-
-    def _migrate_event_log(self) -> None:
-        """Make session_id nullable so global lifecycle events and tombstones can be logged.
-
-        The event table is rebuilt in place, preserving every row id (a cursor must
-        keep working after an upgrade) and the autoincrement sequence.
-        """
-        columns = {r["name"]: r for r in self.db.execute("pragma table_info(event)")}
-        if not columns["session_id"]["notnull"]:
-            return
-        sequence = self.db.execute("select seq from sqlite_sequence where name = 'event'").fetchone()
-        previous_highest = sequence[0] if sequence else 0
-        self.db.execute("pragma foreign_keys = off")
-        try:
-            with self.db:
-                self.db.execute("begin immediate")  # include DDL in the rollback boundary
-                self.db.execute("drop index if exists event_session")
-                self.db.execute("alter table event rename to event_old")
-                self.db.execute(
-                    "create table event ("
-                    " id integer primary key autoincrement,"
-                    " session_id text references session(id) on delete cascade,"
-                    " seq integer not null, time real not null, type text not null, data text not null)"
-                )
-                self.db.execute(
-                    "insert into event (id, session_id, seq, time, type, data)"
-                    " select id, session_id, seq, time, type, data from event_old"
-                )
-                self.db.execute("drop table event_old")
-                self.db.execute("create index if not exists event_session on event(session_id, id)")
-                highest = max(previous_highest, self.db.execute("select coalesce(max(id), 0) from event").fetchone()[0])
-                if self.db.execute("select seq from sqlite_sequence where name = 'event'").fetchone() is None:
-                    self.db.execute("insert into sqlite_sequence (name, seq) values ('event', ?)", (highest,))
-                else:
-                    self.db.execute("update sqlite_sequence set seq = ? where name = 'event'", (highest,))
-        finally:
-            self.db.execute("pragma foreign_keys = on")
 
     def _ensure_log(self) -> str:
         """This database's log generation; created once and kept across restarts."""
-        columns = {r["name"] for r in self.db.execute("pragma table_info(log)")}
-        if columns and "head_high" not in columns:
-            self.db.execute("alter table log add column head_high integer not null default 0")
-        if columns:
-            with self.db:
-                self.db.execute(
-                    "update log set head_high = max(head_high, (select coalesce(max(id), 0) from event))"
-                    " where id = 1")
+        with self.db:
+            self.db.execute(
+                "update log set head_high = max(head_high, (select coalesce(max(id), 0) from event))"
+                " where id = 1")
         row = self.db.execute("select generation from log where id = 1").fetchone()
         if row is None:
             highest = self.db.execute("select coalesce(max(id), 0) from event").fetchone()[0]
@@ -1073,12 +996,6 @@ class Store:
             self.db.execute("insert into search_index (text, session_id, message_id, kind) values (?, ?, null, 'title')",
                             (title, session_id))
 
-    def _backfill_search(self) -> None:
-        for r in self.db.execute("select id, title from session").fetchall():
-            self._index_title(r["id"], r["title"])
-        for r in self.db.execute("select id, session_id, parts from message where role = 'user' order by created, seq").fetchall():
-            self._index_message(r["session_id"], r["id"], message_from_json({"role": "user", "parts": json.loads(r["parts"])}))
-
     def search(self, q: str, *, project_id: str | None = None, archived: str = "include",
                limit: int = 30) -> list[dict[str, Any]]:
         """Sessions whose title or user messages match every word of `q` (each as a prefix), best first.
@@ -1108,17 +1025,6 @@ class Store:
             elif r["kind"] == "title" and hit["kind"] != "title":
                 hit.update(kind="title", message_id=None, snippet=r["snippet"])
         return list(seen.values())[:limit]
-
-    def _backfill_prompt_history(self) -> None:
-        """Old user messages that are not notices; sub agents are prompted by their parent."""
-        rows = self.db.execute(
-            "select m.session_id, m.parts, m.created from message m join session s on s.id = m.session_id"
-            " where m.role = 'user' and s.parent_id is null order by m.created, m.seq").fetchall()
-        for r in rows:
-            text, images = self._prompt_text(message_from_json({"role": "user", "parts": json.loads(r["parts"])}))
-            if (text or images) and not text.startswith(self.NOTICE_PREFIXES):
-                self.db.execute("insert into prompt_history (session_id, text, image_count, created) values (?, ?, ?, ?)",
-                                (r["session_id"], text, images, r["created"]))
 
     @staticmethod
     def _prompt_text(message: Message) -> tuple[str, int]:

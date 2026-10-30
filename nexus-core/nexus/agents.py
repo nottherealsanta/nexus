@@ -24,7 +24,7 @@ The file name is the agent's name (`review.md` → `review`). Agents load from
 three places, and a later one replaces an earlier one with the same name:
 
 1. built-in: `nexus/builtin_agents/*.md` (shipped with core)
-2. global: `<home>/agents/*.md` (`~/.nexus10/agents`)
+2. global: `<home>/agents/*.md` (`~/.nexus/agents`)
 3. project: `<project>/.agents/agents/*.md`
 
 A file that fails to parse is reported in `problems`; it is never silently

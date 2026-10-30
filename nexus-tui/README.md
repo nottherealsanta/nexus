@@ -341,7 +341,7 @@ Environment:
 
 | Variable | Meaning |
 | --- | --- |
-| `NEXUS10_HOME` | Nexus home (default `~/.nexus10`). `~/.nexus` is refused. |
+| `NEXUS10_HOME` | Nexus home (default `~/.nexus`). The default is refused until `nexus migrate` has marked it (old Nexus or a pre-release `~/.nexus10` is there). |
 | `NEXUS_TUI_CORE_CMD` | Command that runs the Core CLI, default `nexus`. Used as `<cmd> daemon start`, for example `uv run --project ../nexus-core nexus`. |
 | `NEXUS_TUI_NO_START` | If set, never start Core; report offline instead. |
 

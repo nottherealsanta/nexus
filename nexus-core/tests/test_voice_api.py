@@ -77,6 +77,29 @@ async def setup(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_prepare_loads_without_transcribing(setup) -> None:
+    _, client, voice, engine = setup
+    response = await client.post("/api/voice/stt/prepare")
+    assert response.status_code == 200 and response.json() == {"state": "loaded"}
+    assert voice.loaded
+    assert not engine.started.is_set()
+
+
+@pytest.mark.asyncio
+async def test_prepare_reports_missing_model_without_loading(setup, monkeypatch) -> None:
+    _, client, voice, _ = setup
+
+    def missing():
+        raise FileNotFoundError
+
+    monkeypatch.setattr(voice.store, "verified_paths", missing)
+    response = await client.post("/api/voice/stt/prepare")
+    assert response.status_code == 409
+    assert response.json()["code"] == "voice_model_not_cached"
+    assert not voice.loaded and not voice.busy
+
+
+@pytest.mark.asyncio
 async def test_transcribe_returns_editable_text_and_never_sends_it(setup) -> None:
     _, client, voice, _ = setup
     response = await client.post("/api/voice/transcribe", content=silence(0.3))

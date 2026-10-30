@@ -1,6 +1,6 @@
 # Configuration
 
-Core reads `$NEXUS10_HOME/config.toml` (normally `~/.nexus10/config.toml`).
+Core reads `$NEXUS10_HOME/config.toml` (normally `~/.nexus/config.toml`).
 A missing file uses defaults. Invalid keys fall back independently and appear
 in the API's `errors`; malformed TOML is never overwritten by a patch.
 

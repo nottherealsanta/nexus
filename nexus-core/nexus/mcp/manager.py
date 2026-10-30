@@ -7,7 +7,7 @@ A server that dies never fails a turn: its tools return an error result and an
 `mcp.failed` event is published. A failed connect is not retried for a growing
 delay (5 s up to 60 s) unless the user restarts it.
 
-stderr of a stdio server goes to `~/.nexus10/logs/mcp/<server>.log` (bounded,
+stderr of a stdio server goes to `~/.nexus/logs/mcp/<server>.log` (bounded,
 truncated when it grows past 1 MiB at the next start), never into context.
 
 Adapted from old Nexus `nexus/mcp/manager.py` (the immutable snapshots,

@@ -18,6 +18,8 @@ conflict within one `key_context` per client, `when` terms from the vocabulary,
 placements, categories and statuses, the exact settings section order, unique
 settings row ids, the navigation anchors and every cross reference to a command.
 
+`/close` closes the current session tab without archiving or deleting the session.
+
 ## Schema
 
 `[vocabulary]` declares the allowed `terms`, `placements`, `statuses` and

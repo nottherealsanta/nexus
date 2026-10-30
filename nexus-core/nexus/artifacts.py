@@ -1,6 +1,6 @@
 """Durable storage for media a session produced: an MCP image, a fetched picture (PLAN K8).
 
-Bytes live once per content in `~/.nexus10/artifacts/<sha256>`; the `artifact` table says which session
+Bytes live once per content in `~/.nexus/artifacts/<sha256>`; the `artifact` table says which session
 made each one, so deleting the session removes its records and any file no record still names. Artifacts
 are served by `GET /api/artifact/{id}`; they are never inlined into the stored context, which keeps
 the timeline small and the wire events unclipped.

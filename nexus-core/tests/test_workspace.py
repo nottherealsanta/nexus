@@ -546,7 +546,7 @@ async def test_directory_move_before_an_old_session_is_reconstructed_keeps_the_o
     path = env.store.path
     await env.rt.shutdown()
     with env.store.db:
-        env.store.db.execute("drop table session_snapshot")
+        env.store.db.execute("delete from session_snapshot")
     env.store.close()
     destination = env.tmp_path / "before-reconstruction"
     destination.mkdir()
@@ -829,7 +829,7 @@ async def test_older_sessions_keep_their_snapshot_until_explicit_activation(env)
     path = env.store.path
     await env.rt.shutdown()
     with env.store.db:
-        env.store.db.execute("drop table session_snapshot")
+        env.store.db.execute("delete from session_snapshot")
     env.store.close()
 
     store = Store(path)

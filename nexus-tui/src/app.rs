@@ -33,6 +33,7 @@ pub enum Effect {
     Sync(SyncCommand),
     Api(ApiCall),
     Dictation(crate::dictation::CaptureCommand),
+    DictationLoadingCue(bool),
     Copy(String),
     PasteImage(String),
     /// Suspend the TUI, open this path in `$VISUAL`/`$EDITOR`, and resume.
@@ -588,6 +589,8 @@ pub struct Ui {
     pub inventories: HashMap<String, ProjectInventory>,
     /// The last draft-context request sent to Core; a changed draft asks again.
     pub draft_asked: Option<Value>,
+    /// The model picker was opened unprompted because no model was ever chosen; once per launch.
+    pub model_prompted: bool,
     /// A `/learn` install is in flight, so its early `skills.changed` event is quiet.
     pub learn_install_pending: bool,
     /// Ignore the matching `skills.changed` event after this client's successful install.
@@ -758,6 +761,7 @@ impl App {
                 launch_new: false,
                 inventories: HashMap::new(),
                 draft_asked: None,
+                model_prompted: false,
                 learn_install_pending: false,
                 learn_suppress_until: None,
                 last_skills_changed_toast: None,
@@ -3136,7 +3140,7 @@ impl App {
         self.api(ApiCall::VoiceStatus { generation });
     }
 
-    fn start_capture(&mut self) {
+    fn start_capture(&mut self, loaded: bool) {
         if self.ui.dictation.phase != crate::dictation::Phase::Starting {
             let Some(phase) = self
                 .ui
@@ -3148,11 +3152,20 @@ impl App {
             };
             self.ui.dictation.phase = phase;
         }
-        self.launch_capture();
+        self.prepare_capture(loaded);
+    }
+
+    fn prepare_capture(&mut self, loaded: bool) {
+        self.ui.dictation.download = None;
+        if !loaded {
+            self.effects.push(Effect::DictationLoadingCue(true));
+        }
+        self.api(ApiCall::VoicePrepare {
+            generation: self.ui.dictation.generation,
+        });
     }
 
     fn launch_capture(&mut self) {
-        self.ui.dictation.download = None;
         self.effects
             .push(Effect::Dictation(crate::dictation::CaptureCommand::Start {
                 generation: self.ui.dictation.generation,
@@ -3183,6 +3196,7 @@ impl App {
 
     fn cancel_dictation(&mut self) {
         let generation = self.ui.dictation.generation;
+        self.effects.push(Effect::DictationLoadingCue(false));
         if matches!(
             self.ui.dictation.phase,
             crate::dictation::Phase::Starting
@@ -3244,7 +3258,7 @@ impl App {
             return;
         };
         self.ui.dictation.phase = phase;
-        self.launch_capture();
+        self.prepare_capture(false);
     }
 
     fn apply_voice_progress(&mut self, data: &Value) {
@@ -3287,7 +3301,7 @@ impl App {
         if state == "ready" && self.ui.dictation.phase == crate::dictation::Phase::Checking {
             // The status GET can race the completion event: honor a ready event
             // seen while this dictation's status request is pending.
-            self.start_capture();
+            self.start_capture(false);
             return;
         }
         if self.ui.dictation.phase != crate::dictation::Phase::Downloading {
@@ -3326,6 +3340,7 @@ impl App {
             CaptureEvent::Started { generation }
             | CaptureEvent::Cancelled { generation }
             | CaptureEvent::Failed { generation, .. }
+            | CaptureEvent::CueWarning { generation, .. }
             | CaptureEvent::Level { generation, .. }
             | CaptureEvent::Preview { generation, .. }
             | CaptureEvent::Stopped { generation, .. } => *generation,
@@ -3383,6 +3398,7 @@ impl App {
                 }
             }
             CaptureEvent::Cancelled { .. } => self.cancel_dictation(),
+            CaptureEvent::CueWarning { message, .. } => self.toast(Level::Warning, message),
             CaptureEvent::Failed { message, .. } => {
                 self.ui.dictation.cancel();
                 self.toast(Level::Error, message);
@@ -4648,6 +4664,7 @@ impl App {
             _ => None,
         };
         let turn_closed = matches!(&msg, SyncMsg::Event(e) if e.kind == "turn.summary");
+        let catalog = matches!(&msg, SyncMsg::Catalog { .. });
         let file_read = matches!(&msg, SyncMsg::Files { file: true, .. });
         self.state.apply(msg);
         // Launched from a directory: open it as a project (Core reuses one at the same path).
@@ -4668,6 +4685,18 @@ impl App {
         if snapshot && self.state.models.is_empty() && self.state.last_model.is_empty() {
             self.effects
                 .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
+        }
+        // Nothing was ever chosen (Core refuses a draft without a model): ask first.
+        if catalog
+            && !self.ui.model_prompted
+            && self.ui.overlay.is_none()
+            && self.ui.view == View::Session
+            && self.viewed().is_none()
+            && !self.state.models.is_empty()
+            && self.effective_model(None).is_empty()
+        {
+            self.ui.model_prompted = true;
+            self.open_palette(PaletteMode::Models);
         }
         if self.state.events_applied > applied_before {
             if let Some((kind, data)) = global_event {
@@ -4804,6 +4833,24 @@ impl App {
         match done.call.clone() {
             ApiCall::VoiceStatus { generation } => {
                 self.apply_voice_status(generation, done.result);
+                return;
+            }
+            ApiCall::VoicePrepare { generation } => {
+                if generation == self.ui.dictation.generation
+                    && self.ui.dictation.phase == crate::dictation::Phase::Starting
+                {
+                    self.effects.push(Effect::DictationLoadingCue(false));
+                    match done.result {
+                        Ok(_) => self.launch_capture(),
+                        Err(error) => {
+                            self.ui.dictation.phase = crate::dictation::Phase::Idle;
+                            self.toast(
+                                Level::Error,
+                                format!("Voice model loading failed: {error}"),
+                            );
+                        }
+                    }
+                }
                 return;
             }
             ApiCall::VoiceSettingsStatus { generation } => {
@@ -5226,7 +5273,7 @@ impl App {
             }
         };
         match status["state"].as_str().unwrap_or("error") {
-            "ready" | "loaded" => self.start_capture(),
+            "ready" | "loaded" => self.start_capture(status["state"].as_str() == Some("loaded")),
             "absent" => {
                 if let Some(phase) = self.ui.dictation.phase.transition(Transition::StatusAbsent) {
                     self.ui.dictation.phase = phase;
@@ -8712,7 +8759,10 @@ impl App {
                     }
                 }
                 let inner = crate::render::composer_inner(
-                    self.regions.composer,
+                    crate::render::composer_without_pending(
+                        self.regions.composer,
+                        self.pending_inputs().len(),
+                    ),
                     !self.composer_ref().images.is_empty(),
                 );
                 if self.ui.overlay.is_none()
@@ -8785,7 +8835,10 @@ impl App {
                 }
                 if let Some((start, top)) = self.ui.composer_drag {
                     let inner = crate::render::composer_inner(
-                        self.regions.composer,
+                        crate::render::composer_without_pending(
+                            self.regions.composer,
+                            self.pending_inputs().len(),
+                        ),
                         !self.composer_ref().images.is_empty(),
                     );
                     let row = ev
@@ -9430,6 +9483,7 @@ impl ActionDone {
             ApiCall::Btw { .. } => "Side question failed",
             ApiCall::SpeakStop => "Stop failed",
             ApiCall::VoiceStatus { .. } => "Voice status failed",
+            ApiCall::VoicePrepare { .. } => "Voice model loading failed",
             ApiCall::VoiceSettingsStatus { .. } => "Voice status failed",
             ApiCall::VoiceDownload { .. } => "Voice model download failed",
             ApiCall::VoiceModel { operation, .. } => match operation {

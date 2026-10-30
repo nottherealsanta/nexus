@@ -694,6 +694,13 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             return voice_error(exc)
         return JSONResponse({"text": result.text})
 
+    async def voice_stt_prepare(request: Request) -> Response:
+        try:
+            await voice.prepare()
+        except VoiceError as exc:
+            return voice_error(exc)
+        return JSONResponse({"state": "loaded"})
+
     async def voice_stt_download(request: Request) -> Response:
         try:
             state = await voice.start_download(lambda data: runtime.bus.publish("voice.progress", data))
@@ -1305,6 +1312,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/extension", route(extension_list)),
         Route("/api/voice", route(voice_status)),
         Route("/api/voice/transcribe", route(voice_transcribe), methods=["POST"]),
+        Route("/api/voice/stt/prepare", route(voice_stt_prepare), methods=["POST"]),
         Route("/api/voice/stt/download", route(voice_stt_download), methods=["POST"]),
         Route("/api/voice/tts/download", route(voice_tts_download), methods=["POST"]),
         Route("/api/voice/{target}", route(voice_remove), methods=["DELETE"]),

@@ -1,7 +1,7 @@
 # Turn summary: TUI load measurement
 
 
-One seeded session in a throwaway home (never `~/.nexus10`): 40 turns, 160
+One seeded session in a throwaway home (never `~/.nexus`): 40 turns, 160
 messages, 30 616 events (11 600 `text_delta`, 3 200 `reasoning_delta`,
 14 800 `wire_event`, 84 `wire_request` carrying the conversation, 80 `usage`,
 tool, retry and lifecycle events; every tenth turn retried, every seventh tool

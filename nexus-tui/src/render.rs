@@ -546,7 +546,10 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
     if app.ui.focus != Focus::Composer || !app.writable() {
         return None;
     }
-    let inner = composer_inner(g.composer, !app.composer_ref().images.is_empty());
+    let inner = composer_inner(
+        composer_without_pending(g.composer, app.pending_inputs().len()),
+        !app.composer_ref().images.is_empty(),
+    );
     let (rows, (cr, cc)) = app.composer_view().layout(inner.width as usize);
     let input_height = inner.height as usize;
     let first = app.ui.composer_drag.map_or_else(
@@ -584,6 +587,33 @@ pub(crate) fn composer_inner(r: Rect, images: bool) -> Rect {
         r.width.saturating_sub(10),
         r.height.saturating_sub(6),
     )
+}
+
+pub(crate) fn composer_without_pending(r: Rect, count: usize) -> Rect {
+    let extra = if count == 0 {
+        0
+    } else {
+        (count.min(4) + 2) as u16
+    }
+    .min(r.height.saturating_sub(8));
+    let extra = if extra < 3 { 0 } else { extra };
+    Rect::new(r.x, r.y + extra, r.width, r.height.saturating_sub(extra))
+}
+
+#[cfg(test)]
+mod composer_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn pending_cards_shift_the_input_and_respect_small_terminals() {
+        let r = Rect::new(10, 20, 80, 14);
+        assert_eq!(composer_inner(composer_without_pending(r, 0), false).y, 22);
+        assert_eq!(composer_inner(composer_without_pending(r, 1), false).y, 25);
+        assert_eq!(composer_inner(composer_without_pending(r, 8), false).y, 28);
+        assert_eq!(composer_inner(composer_without_pending(r, 1), true).y, 27);
+        let short = Rect::new(0, 0, 80, 10);
+        assert_eq!(composer_without_pending(short, 1), short);
+    }
 }
 
 fn composer_content(r: Rect) -> Rect {
@@ -4923,9 +4953,8 @@ fn draw_working(cx: &Cx, buf: &mut Buffer, start: u16, y: u16, end: u16) {
 
 fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let inputs = cx.app.pending_inputs();
-    let count = inputs.len().min(4);
-    let extra = if count == 0 { 0 } else { (count + 2) as u16 }.min(r.height.saturating_sub(8));
-    let extra = if extra < 3 { 0 } else { extra };
+    let composer = composer_without_pending(r, inputs.len());
+    let extra = composer.y - r.y;
     if extra > 0 {
         let visible = (extra - 2) as usize;
         let selected = cx
@@ -4990,7 +5019,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             );
         }
     }
-    let r = Rect::new(r.x, r.y + extra, r.width, r.height.saturating_sub(extra));
+    let r = composer;
     if r.height < 8 || r.width < 8 {
         return;
     }
