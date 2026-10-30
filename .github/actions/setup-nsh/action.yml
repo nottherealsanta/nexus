@@ -33,5 +33,11 @@ runs:
     - shell: bash
       run: |
         rustup target add wasm32-unknown-unknown
+        # nsh compiles C (zstd) for the wasm bundle. Apple's clang has no wasm32 backend, Homebrew's LLVM does.
+        if [ "$RUNNER_OS" = macOS ]; then
+          brew install llvm
+          echo "CC_wasm32_unknown_unknown=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "AR_wasm32_unknown_unknown=$(brew --prefix llvm)/bin/llvm-ar" >> "$GITHUB_ENV"
+        fi
         echo "$HOME/.nsh/bin" >> "$GITHUB_PATH"
         "$HOME/.nsh/bin/nsh" -V
