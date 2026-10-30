@@ -9,6 +9,17 @@ on:
       runners:
         type: string
         default: '["ubuntu-22.04", "ubuntu-22.04-arm", "macos-15", "macos-15-intel"]'
+  # A dry run: build everything for a ref without tagging or releasing, then download the workflow artifacts.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or SHA to build (default: the ref the run is started on)"
+        type: string
+        default: ''
+      runners:
+        description: "JSON list of runners"
+        type: string
+        default: '["ubuntu-22.04", "ubuntu-22.04-arm", "macos-15", "macos-15-intel"]'
 permissions:
   contents: read
 jobs:
