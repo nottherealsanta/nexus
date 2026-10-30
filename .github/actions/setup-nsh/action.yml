@@ -11,7 +11,7 @@ runs:
   using: composite
   steps:
     - id: cache
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: ~/.nsh
         key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ inputs.commit }}
@@ -19,6 +19,11 @@ runs:
       shell: bash
       env:
         COMMIT: ${{ inputs.commit }}
+        # nsh's release profile is fat LTO with one codegen unit, which makes this build very slow. CI does not need the
+        # last few percent of speed from the CLI, so turn it off.
+        CARGO_PROFILE_RELEASE_LTO: "off"
+        CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        CARGO_PROFILE_RELEASE_DEBUG: "0"
       run: |
         set -euo pipefail
         mkdir -p "$HOME/.nsh" && cd "$HOME/.nsh"
@@ -30,14 +35,29 @@ runs:
         cargo build --release --locked -p nsh-cli
         mkdir -p ../bin
         ln -sf "$PWD/target/release/nsh" ../bin/nsh
+    # Save right after the build, so a failure in a later step does not throw it away (the default post-step save
+    # only runs when the whole job succeeds).
+    - if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.nsh
+        key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ inputs.commit }}
     - shell: bash
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+        HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        HOMEBREW_NO_ENV_HINTS: "1"
       run: |
         rustup target add wasm32-unknown-unknown
         # nsh compiles C (zstd) for the wasm bundle. Apple's clang has no wasm32 backend, Homebrew's LLVM does.
         if [ "$RUNNER_OS" = macOS ]; then
-          brew install llvm
-          echo "CC_wasm32_unknown_unknown=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
-          echo "AR_wasm32_unknown_unknown=$(brew --prefix llvm)/bin/llvm-ar" >> "$GITHUB_ENV"
+          prefix="$(brew --prefix llvm 2>/dev/null || true)"
+          if [ ! -x "$prefix/bin/clang" ]; then
+            brew install llvm
+            prefix="$(brew --prefix llvm)"
+          fi
+          echo "CC_wasm32_unknown_unknown=$prefix/bin/clang" >> "$GITHUB_ENV"
+          echo "AR_wasm32_unknown_unknown=$prefix/bin/llvm-ar" >> "$GITHUB_ENV"
         fi
         echo "$HOME/.nsh/bin" >> "$GITHUB_PATH"
         "$HOME/.nsh/bin/nsh" -V
