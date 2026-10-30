@@ -3,8 +3,8 @@
     "theme": {
       "font-sans": "system-ui, sans-serif",
       "font-mono": "Monaspace Argon, ui-monospace, monospace",
-      "radius": "6px",
-      "radius-card": "10px"
+      "radius": "0px",
+      "radius-card": "2px"
     },
     "light": {
       "background": "#f7f7f5",

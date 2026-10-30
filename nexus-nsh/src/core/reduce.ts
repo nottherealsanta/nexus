@@ -4,6 +4,9 @@
 //  * History is messages plus turn summaries (`GET …/turn`); the event log is never loaded. The
 //    selected view keeps the live events since the last `turn.summary` as scratch (deltas are
 //    folded into `streaming`, never kept), and a `turn.summary` replaces that turn's scratch.
+//  * Views of recently viewed sessions stay in `cached` and keep taking their sessions' events,
+//    so switching back shows them at once; selecting one still reloads its history, which
+//    merges into what is held.
 import { Approval, CoreEvent, Message, Project, Question, Session, Snapshot, TurnSummary, UsageLedger, formatCursor, parseCursor } from "./api";
 
 export type Applied = "applied" | "duplicate" | { resync: string };
@@ -61,6 +64,9 @@ function emptyView(sessionId: string, messages: Message[] = [], messagesMore = f
   return { sessionId, messages, messagesMore, turns: [], floor: null, usage: null, usageMark: 0, scratch: [], loaded, starting: null, turnsGap: null };
 }
 
+/** Views kept besides the selected one. */
+export const VIEW_CACHE = 8;
+
 export class Model {
   generation: string | null = null;
   lastId = 0;
@@ -73,14 +79,28 @@ export class Model {
   questions = new Map<string, Question>();
   streaming = new Map<string, Streaming>();
   selected: SelectedView | null = null;
+  /** Views of recently viewed sessions, most recent first, at most `VIEW_CACHE`. */
+  cached: SelectedView[] = [];
   /** Set when the selected session was deleted by an event. */
   selectedDeleted: string | null = null;
 
   cursor(): string | null { return this.generation ? formatCursor(this.generation, this.lastId) : null; }
 
+  /** Show `id`: its cached view if one is held, else an empty one. The view left behind is cached. */
   select(id: string | null) {
     this.selectedDeleted = null;
-    this.selected = id ? emptyView(id) : null;
+    if ((this.selected?.sessionId ?? null) === id) return;
+    const old = this.selected;
+    if (old) this.cached = [old, ...this.cached.filter((v) => v.sessionId !== old.sessionId)].slice(0, VIEW_CACHE);
+    const at = id ? this.cached.findIndex((v) => v.sessionId === id) : -1;
+    this.selected = !id ? null : at >= 0 ? this.cached.splice(at, 1)[0] : emptyView(id);
+  }
+
+  /** The selected or a cached view of `id`. */
+  viewOf(id: string | null | undefined): SelectedView | null {
+    if (!id) return null;
+    if (this.selected?.sessionId === id) return this.selected;
+    return this.cached.find((v) => v.sessionId === id) ?? null;
   }
 
   applySnapshot(s: Snapshot) {
@@ -100,6 +120,10 @@ export class Model {
     this.approvals = new Map(s.approvals.map((a) => [a.id, a]));
     this.questions = new Map(s.questions.map((q) => [q.id, q]));
     this.streaming = new Map();
+    // Cached views may have missed events; selecting one reloads its history. Their live
+    // scratch has gaps, so it goes, as the selected view's does.
+    this.cached = this.cached.filter((v) => this.sessions.has(v.sessionId));
+    for (const v of this.cached) v.scratch = [];
     if (s.selected) {
       this.selected = emptyView(s.selected.session_id, s.selected.messages, s.selected.messages_more, true);
       // Older pages already read stay cached: the snapshot only carries the newest messages.
@@ -116,22 +140,23 @@ export class Model {
 
   /** Older messages (`turn.load_older`) go before the loaded ones; duplicates are dropped by id. */
   prependMessages(sessionId: string, older: Message[], more: boolean) {
-    const v = this.selected;
-    if (!v || v.sessionId !== sessionId) return;
+    const v = this.viewOf(sessionId);
+    if (!v) return;
     const have = new Set(v.messages.map((x) => x.id));
     v.messages = [...older.filter((x) => !have.has(x.id)), ...v.messages].sort((a, b) => a.seq - b.seq);
     v.messagesMore = more;
   }
 
   /**
-   * Fold a fully loaded history into the selected view (never mixes sessions). Messages and
-   * summaries applied live after the fetch are kept, and so is the scratch (a live `turn.summary`
-   * already cleared it for its turn).
+   * Fold a fully loaded history into the selected or a cached view (never mixes sessions).
+   * Messages and summaries applied live after the fetch are kept, and so is the scratch (a live
+   * `turn.summary` already cleared it for its turn).
    */
   applyHistory(h: { sessionId: string; messages: Message[]; messagesMore?: boolean; turns: TurnSummary[]; floor: { seq: number } | null; usage: UsageLedger | null; starting: any | null; turnsGap: string | null; usageMark?: number }) {
-    const v = this.selected;
-    if (!v || v.sessionId !== h.sessionId) return;
-    // Messages applied live after the fetch are kept, ordered by seq.
+    const v = this.viewOf(h.sessionId);
+    if (!v) return;
+    // Messages held but not fetched are kept, ordered by seq: ones applied live after the
+    // fetch, and older pages a cached view already read.
     const msgs = [...h.messages];
     for (const m of v.messages) {
       if (msgs.some((x) => x.id === m.id)) continue;
@@ -143,9 +168,14 @@ export class Model {
     // Older pages cached before this fetch keep their own "more".
     const cachedOlder = h.messages.length > 0 && msgs[0].seq < h.messages[0].seq;
     v.messagesMore = cachedOlder ? v.messagesMore : h.messagesMore ?? false;
-    // A summary that arrived live is at least as new as the fetched copy.
+    // A summary that arrived live is at least as new as the fetched copy, unless the held one
+    // is still running and the fetch read it closed (a cached view missed the summary).
     let turns = [...h.turns];
-    for (const t of v.turns) turns = upsertTurn(turns, t);
+    for (const t of v.turns) {
+      const fetched = turns.find((x) => x.id === t.id);
+      if (fetched && t.status === "running" && fetched.status !== "running") continue;
+      turns = upsertTurn(turns, t);
+    }
     v.turns = turns;
     v.floor = h.floor;
     v.usage = h.usage;
@@ -160,8 +190,8 @@ export class Model {
 
   /** A newer ledger (re-read after a turn closed); live usage after `mark` adds to it. */
   applyLedger(sessionId: string, usage: UsageLedger, floor: { seq: number } | null, mark: number) {
-    const v = this.selected;
-    if (!v || v.sessionId !== sessionId) return;
+    const v = this.viewOf(sessionId);
+    if (!v) return;
     v.usage = usage;
     v.floor = floor;
     v.usageMark = mark;
@@ -174,8 +204,8 @@ export class Model {
     if (e.id <= this.lastId) return "duplicate";
     this.lastId = e.id;
     this.reduce(e);
-    const v = this.selected;
-    if (v && e.session_id === v.sessionId) {
+    const v = this.viewOf(e.session_id);
+    if (v) {
       if (e.type === "turn.summary" && e.data?.id) {
         v.turns = upsertTurn(v.turns, e.data as TurnSummary);
         v.scratch = [];
@@ -233,8 +263,9 @@ export class Model {
         const id = m.session_id || sid || "";
         if (id && this.selected?.sessionId !== id) this.unreadSessions.add(id);
         if (m.role === "assistant") this.streaming.delete(id);
-        if (this.selected && this.selected.sessionId === id && !this.selected.messages.some((x) => x.id === m.id)) {
-          const msgs = this.selected.messages;
+        const v = this.viewOf(id);
+        if (v && !v.messages.some((x) => x.id === m.id)) {
+          const msgs = v.messages;
           let i = msgs.length;
           while (i > 0 && msgs[i - 1].seq > m.seq) i--;
           msgs.splice(i, 0, m);
@@ -254,7 +285,7 @@ export class Model {
       case "permission.replied": this.approvals.delete(d.id); break;
       case "question.asked": this.questions.set(d.id, d as Question); break;
       case "question.replied": this.questions.delete(d.id); break;
-      default: break; // wire/tool/diagnostic events only land in the selected view
+      default: break; // wire/tool/diagnostic events only land in the session's views
     }
   }
 
@@ -264,6 +295,7 @@ export class Model {
     this.unreadSessions.delete(id);
     for (const [k, a] of this.approvals) if (a.session_id === id) this.approvals.delete(k);
     for (const [k, q] of this.questions) if (q.session_id === id) this.questions.delete(k);
+    this.cached = this.cached.filter((v) => v.sessionId !== id);
     if (this.selected?.sessionId === id) { this.selected = null; this.selectedDeleted = id; }
   }
 

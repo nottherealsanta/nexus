@@ -4,7 +4,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// Canonical name of a key event, or `None` for releases and unnamed keys.
-/// Modifier order is `ctrl alt shift`, then the key; `shift` is implicit in
+/// Modifier order is `cmd ctrl alt shift`, then the key; `shift` is implicit in
 /// printable characters.
 pub fn name(ev: &KeyEvent) -> Option<String> {
     if ev.kind == KeyEventKind::Release {
@@ -108,10 +108,10 @@ fn parse_token(token: &str) -> Result<Vec<KeyEvent>, String> {
     let mut mods = KeyModifiers::NONE;
     let mut rest = token;
     for (prefix, m) in [
+        ("cmd+", KeyModifiers::SUPER),
         ("ctrl+", KeyModifiers::CONTROL),
         ("alt+", KeyModifiers::ALT),
         ("shift+", KeyModifiers::SHIFT),
-        ("cmd+", KeyModifiers::SUPER),
     ] {
         if let Some(r) = rest.strip_prefix(prefix).filter(|r| !r.is_empty()) {
             mods |= m;

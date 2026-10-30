@@ -16,7 +16,7 @@ workspace session tabs, new-session view, timeline, waiting card, composer,
 settings navigation, alerts, notifications and connection states are usable
 against a real Core. Tabs show running, unread, failed and idle state; they
 switch, rename and close without deleting sessions. The timeline has starting
-context, Markdown (prose 15/24; fenced code is a panel card with the language and
+context, Markdown (prose 15/24 in Monaspace Argon; fenced code is a panel card with the language and
 a Copy button; inline code is 13 px Monaspace on the panel), and three detail levels: activity groups collapsed in low,
 individual collapsed tools in medium, and expanded tools in high. Each user
 message is the turn's header: a full-width raised card (`#n · time` on the right,
@@ -33,6 +33,13 @@ the icon while running, failed or waiting), and a member's output sits in a
 a 2 px rule; a thought with no tool beside it is a single `Thought · preview` row, never a group. High-detail output keeps the first 30 and last 20 lines;
 clipping is announced and the show-all control restores the whole inspection
 output.
+
+User-message text and assistant prose use Monaspace Argon by default, as do
+code and tool output. NSH imports the bundled regular, medium and bold faces so
+the packaged app registers them before rendering; the surrounding chrome keeps
+its system font. Child cards label background calls, distinguish failed and
+running status, and allow the full tool result to be expanded without navigating
+away from the parent session.
 
 Selecting a session loads, after the bounded snapshot view, every message, the
 frozen starting context and the turn summaries with the session's spend ledger
@@ -53,6 +60,14 @@ scratch fills in the running turn, joining a summary loaded mid-turn by step, an
 that exist only as live events (directory moves, child notices, cancelled waits)
 show while the session stays open; their messages carry them after a reload.
 
+Session views are cached. The views of the last 8 sessions left behind stay in
+`Model.cached` and keep taking their sessions' events, so switching back shows the
+timeline at once while its history reloads and merges in (held messages and older
+pages stay; a held turn still running gives way to a fetched closed one). A resync
+keeps cached views of sessions that still exist and drops their scratch. Context
+reads (`GET …/context`) run one at a time per session; requests made meanwhile
+coalesce into one more read.
+
 The waiting card (D14) is docked above the composer in its 760 px column: a 3 px accent
 rail, `◆ Allow bash?` (`Nexus asks` for a question), `waiting on you · 0:42` counted from
 when the client first saw the request, the parameter table (at most six rows), for edit,
@@ -69,17 +84,22 @@ with its card.
 The chrome follows D02. The 44 px header band and both sidebars sit on `bg-sidebar`
 (the chrome surface) with no edge rules; the centre is `bg-background` (the canvas). The
 header is three slots that match the sidebars (264 px, the centre, 300 px when the right
-sidebar is docked). Over the docked left sidebar its left slot holds the 32 px toggle and
+sidebar is docked). Controls have square corners and cards use a subtle 2 px radius;
+round indicators and meters retain their shape. The new-session starting-context card is centered in the same column as the composer; the timeline context header is centered within its card.
+Over the docked left sidebar its left slot holds the 32 px toggle and
 the Sessions, Files and Projects icons (they follow the sidebar's open state; narrow, they
-are in the drawer with labels). The session tabs are 28 px with a 6 px radius, aligned with
+are in the drawer with labels). The session tabs are 28 px and square, aligned with
 the 760 px reading column: the viewed tab is on the canvas surface with primary text, the
-others are muted with a hover fill. Their × shows on hover (and on the viewed tab). The run status sits at the
+others are muted with a hover fill. Their × shows on hover (and on the viewed tab). Tabs are
+root sessions only: opening a subagent keeps its root's tab in view. Under the header a
+subagent strip names the parent, offers the back button, repeats the root breadcrumb and lists
+the root's children as focusable buttons with running, waiting, failed or completed state. The run status sits at the
 column's right edge; the bell and right toggle are at the far right. Glyphs and status
 tones come from `interface/theme.toml` (`glyphs.status`, `glyphs.attention`). The
 `border.strong` token is emitted as `border-strong` (`--border-strong`) for the decorative
 split rules and tool boxes.
 
-The composer is a card on the panel surface (12 px radius, 1 px border that turns
+The composer is a card on the panel surface (2 px radius, 1 px border that turns
 to the focus colour, 12x16 padding) with pill selectors for agent (in its colour),
 model with its muted provider, and effort. Its control row ends with the context
 meter (an 80x4 px bar in the agent colour and `82k · 41%`) and the send button.
@@ -87,9 +107,9 @@ While a session runs, a Working row above the card shows the elapsed time and
 output tokens (`Working · 12s · ↓4.1k`) with Stop. Typing `/` opens a completion
 block on the card's top edge (commands, with their key hints); `@` completes
 project paths from Core's file listing. Tab accepts, Enter runs a slash command,
-Esc closes. The project strip below the card shows the project name (bold), the
-home-shortened path, `⌥ branch`, and `checkout` or `worktree` (bold violet), with
-`ctrl+p commands` on the right when idle. Before a session exists, the agent/model/effort pickers and slash commands
+Esc closes. The location strip below the card shows the muted home-shortened path and
+branch; a linked worktree adds `⑂`. It has no project prefix, checkout label or commands
+hint. Before a session exists, the agent/model/effort pickers and slash commands
 set draft creation fields. Timeline detail is a saved NSH preference. The
 starting-context section lists the prompt, tools, instructions, skills and MCP
 servers with estimates and the catalog window share. Skills and servers have
@@ -111,7 +131,7 @@ manifest-driven session/project row menu, including confirmed project removal,
 and Projects has a trailing `+ Add project` row. Settings has Providers and
 Agents pages (a drill-in with a back link; Esc returns): provider connections
 with device codes, key entry and catalog refresh, and the default agent and effort with a line per subagent that opens its model
-and fallback lists. Worktree data is loaded for branch/location display (and read again when the
+and fallback lists. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
 session view's `directory` differs from the one it was read for, as after a move), while directory
 and worktree actions remain disabled with a reason. Kernel state is the remaining
 session-info item not reported by Core.
@@ -166,7 +186,7 @@ e2e/down.sh /tmp/nsh-e2e
 | `App.tsx` | Composition and startup (prefs, sync, keyboard bindings). |
 | `src/core/transport.ts` | Same-origin HTTP (`Idempotency-Key`, `If-Match`), errors, keyed transport retries, SSE reader. |
 | `src/core/api.ts` | Wire types (including the `/turn` page: `TurnSummary`, `RequestSummary`, `AttemptSummary`, `ToolSummary`, `UsageLedger`) and `/api/info` compatibility (accepts `"1.0"` or `{major, minor}`; the client is written against 1.2). |
-| `src/core/reduce.ts` | Pure client model: snapshot, events, dedup by durable id, history merge (messages and summaries), running-turn scratch and `turn.summary`. |
+| `src/core/reduce.ts` | Pure client model: snapshot, events, dedup by durable id, history merge (messages and summaries), running-turn scratch and `turn.summary`, cached views of recent sessions. |
 | `src/core/turns.ts` | Pure turn views: requests and usage per turn (summaries plus the running scratch), the newest known usage, ledger totals, tool timings, the floor position. |
 | `src/core/sync.ts` | Connection supervisor: handshake, snapshot, SSE resume, backoff, restart detection, history and `/turn` loading, ledger refresh. |
 | `src/store.ts` | Reactive view state: connection, model revision, drafts, overlays, alerts, prefs. |
@@ -215,7 +235,8 @@ estimate.
 
 - **Search (K5).** The sessions list asks `GET /api/search` after 150 ms (two characters or
   more) and lists the sessions whose user messages match, under their title matches, with the
-  matching snippet on the row's agent line.
+  matching snippet on the row's agent line. The search field retains its query when switching
+  sidebar tabs, matching the active filter.
 - **Older messages (K6).** A session opens with its newest 200 messages (`message?limit=200`);
   when more exist the timeline starts with `Older messages are not loaded` and a Load older
   messages button (`turn.load_older`, also in the palette) that reads the page before the oldest

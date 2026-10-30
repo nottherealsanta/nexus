@@ -6,6 +6,7 @@ with `git show fdb1860:<file>`. Add a row when a port changes behavior. This is 
 
 | Old | New | Why |
 | --- | --- | --- |
+| Old TUI selects cached transcript lines, including across scrolling, and keeps the highlight after copying | Timeline dragging copies the visible screen cells on release; scrolling cancels the drag and the highlight clears (2026-10-30) | Restore straightforward mouse selection on the new renderer; cross-scroll selection remains planned |
 | Old host folded the event log into turn views; nexus10's TUI paged up to 20 000 events on open and scanned them every frame | The TUI reads `/api/session/{id}/turn` summaries and the session ledger, never the event log; live events of the running turn are scratch until its `turn.summary` (2026-10-29) | Bounded load time and memory; details survive event retention; one source of truth (TURN_SUMMARY_PLAN.md) |
 | Clipboard images uploaded through the old host's attachment store | Local TUI clipboard reads and NSH paste events feed inline `Image` parts, with draft/timeline previews; bytes are durable in SQLite and replay in both dialects (2026-10-28) | Deliver image paste on the current API while keeping all model-visible image context available after reload |
 | Background bash completions began `[Notification: background bash …]` | Completion context begins `→ Background Shell Done: …` and renders as a plain notice in both clients (2026-10-28) | Distinguish shell completion context from user-message cards |

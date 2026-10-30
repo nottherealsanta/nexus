@@ -9,7 +9,7 @@ import {
   editFile, fileDirty, openFile, reloadFile, saveFile,
   pendingInputs, contextDetail, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
+  focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
@@ -153,12 +153,15 @@ export function newSession() {
   bump();
 }
 
-/** Header tabs contain only opened sessions; the current one is always represented. */
+/** Header tabs contain only root sessions; the viewed child keeps its root represented. */
 export function tabIds(): string[] {
   m();
-  const ids = openedTabs().filter((id) => model.sessions.has(id));
-  const selected = model.selected?.sessionId;
-  return selected && !ids.includes(selected) ? [...ids, selected] : ids;
+  const ids = openedTabs().filter((id) => {
+    const s = model.sessions.get(id);
+    return s && !s.parent_id;
+  });
+  const root = rootOf(model.selected?.sessionId);
+  return root && !ids.includes(root) ? [...ids, root] : ids;
 }
 
 export function closeTab(id: string) {
@@ -166,7 +169,7 @@ export function closeTab(id: string) {
   const at = ids.indexOf(id);
   if (at < 0) return;
   openedTabs.set(ids.filter((tab) => tab !== id));
-  if (model.selected?.sessionId !== id) return;
+  if (rootOf(model.selected?.sessionId) !== id) return;
   const next = ids[at + 1] ?? ids[at - 1];
   if (next) void selectSession(next);
   else {
@@ -178,7 +181,7 @@ export function closeTab(id: string) {
 
 export function stepTab(step: number) {
   const ids = tabIds();
-  const at = ids.indexOf(model.selected?.sessionId ?? "");
+  const at = ids.indexOf(rootOf(model.selected?.sessionId) ?? "");
   if (at < 0 || ids.length < 2) return;
   const next = ids[(at + step + ids.length) % ids.length];
   if (next !== ids[at]) void selectSession(next);
@@ -446,9 +449,10 @@ on("sidebar.tab.projects", () => tab("projects"));
 on("sidebar.focus", () => { if (isNarrow()) drawer.set("left"); else leftOpen.set(true); });
 on("composer.focus", () => focusComposer.fn());
 on("session.new", newSession);
-on("session.tab_close", () => { const id = viewed()?.id; if (id) closeTab(id); });
+on("session.tab_close", () => { const id = rootOf(viewed()?.id); if (id) closeTab(id); });
 on("session.tab_next", () => stepTab(1));
 on("session.tab_prev", () => stepTab(-1));
+on("nav.back", () => { const parent = viewed()?.parent_id; if (parent) void selectSession(parent); });
 on("timeline.detail_cycle", () => {
   const levels = ["low", "medium", "high"] as const;
   setTimelineDetail(levels[(levels.indexOf(timelineDetail()) + 1) % levels.length]);

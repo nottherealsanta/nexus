@@ -17,7 +17,7 @@ def test_builtins_parse_with_their_modes():
     assert [a.name for a in found.allowed(child=True)] == ["build", "plan", "quick", "scout"]
     # Only orchestrate can start sessions; scout is read-only.
     assert {a.name for a in found.agents.values() if a.control} == {"orchestrate"}
-    assert found.get("scout").tools == ("read", "grep", "glob", "ls", "bash", "web_search", "web_fetch") and found.get("build").tools is None
+    assert found.get("scout").tools == ("read", "grep", "glob", "ls") and found.get("build").tools is None
 
 
 def test_mode_is_enforced():

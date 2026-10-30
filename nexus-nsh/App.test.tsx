@@ -2,7 +2,7 @@
 import { describe, expect, open, test } from "nsh/test";
 import { manifest } from "./src/gen/manifest";
 import { agentSlot } from "./src/agent-color";
-import { Model, scratchOf, upsertTurn } from "./src/core/reduce";
+import { Model, VIEW_CACHE, scratchOf, upsertTurn } from "./src/core/reduce";
 import { groupRequests, latestUsage, ledgerTotals, sumUsage } from "./src/core/turns";
 import { capToolDetail, detailOf, fmtDuration } from "./src/ui/timeline";
 import { diffItems, splitRows } from "./src/ui/diff";
@@ -360,6 +360,45 @@ describe("history", () => {
     m.applyHistory({ sessionId: "ses_1", messages: [msg("m1", 1), msg("m2", 2)], turns: [turnSummary("trn_1", 0, []) as any, fetched as any], floor: null, usage: null, starting: null, turnsGap: null });
     expect(m.selected!.messages.map((x) => x.id)).toEqual(["m1", "m2", "m3"]);
     expect(m.selected!.turns.map((t) => [t.id, t.status])).toEqual([["trn_1", "completed"], ["trn_2", "completed"]]);
+  });
+
+  test("a view left behind is cached, kept current by events and restored on select", () => {
+    const m = live(new Model());
+    m.select("ses_1");
+    m.applyHistory({ sessionId: "ses_1", messages: [msg("m1", 1)], turns: [], floor: null, usage: null, starting: null, turnsGap: null });
+    m.select("ses_2");
+    expect(m.cached.map((v) => v.sessionId)).toEqual(["ses_1"]);
+    expect(m.selected!.messages).toEqual([]);
+    // Events of the cached session still reach its view.
+    m.applyEvent(ev(1, "message.added", msg("m2", 2)));
+    m.applyEvent(ev(2, "step_start", { step: 1 }));
+    m.select("ses_1");
+    expect(m.selected!.loaded).toBe(true);
+    expect(m.selected!.messages.map((x) => x.id)).toEqual(["m1", "m2"]);
+    expect(m.selected!.scratch.map((e) => e.type)).toEqual(["message.added", "step_start"]);
+    expect(m.cached.map((v) => v.sessionId)).toEqual(["ses_2"]);
+    // Re-selecting the shown session keeps its view.
+    m.select("ses_1");
+    expect(m.selected!.messages.length).toBe(2);
+  });
+
+  test("the view cache is bounded and drops deleted sessions", () => {
+    const m = live(new Model());
+    for (let n = 0; n < VIEW_CACHE + 3; n++) m.select(`ses_${n}`);
+    expect(m.cached.length).toBe(VIEW_CACHE);
+    m.select("ses_1");
+    m.select(null);
+    expect(m.cached[0].sessionId).toBe("ses_1");
+    m.applyEvent({ ...ev(1, "session.deleted", { id: "ses_1" }) });
+    expect(m.cached.some((v) => v.sessionId === "ses_1")).toBe(false);
+  });
+
+  test("history replaces a held running turn that the fetch read closed", () => {
+    const m = live(new Model());
+    m.select("ses_1");
+    m.selected!.turns = [{ ...turnSummary("trn_1", 0, []), status: "running" } as any];
+    m.applyHistory({ sessionId: "ses_1", messages: [], turns: [turnSummary("trn_1", 0, []) as any], floor: null, usage: null, starting: null, turnsGap: null });
+    expect(m.selected!.turns.map((t) => t.status)).toEqual(["completed"]);
   });
 
   test("scratch keeps live events without deltas or wire bodies; turn.summary replaces it", async () => {

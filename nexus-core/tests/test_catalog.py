@@ -40,3 +40,22 @@ def test_split_ref():
     assert split_ref("gpt-6.1-terra") == ("codex", "gpt-6.1-terra")
     with pytest.raises(ValueError):
         split_ref("nope/x")
+
+
+def test_cache_file_is_parsed_once_until_it_changes(tmp_path, monkeypatch):
+    import asyncio
+    import json
+    import os
+
+    from nexus.llmhub import catalog
+
+    path = tmp_path / "models.dev.json"
+    path.write_text(json.dumps(CATALOG))
+    monkeypatch.setattr(catalog, "cache_path", lambda: path)
+    first, source = asyncio.run(catalog.load())
+    second, _ = asyncio.run(catalog.load())
+    assert source.startswith("cache") and first is second
+    path.write_text(json.dumps({"openai": {"models": {}}}))
+    os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1_000_000))
+    third, _ = asyncio.run(catalog.load())
+    assert third is not first and third == {"openai": {"models": {}}}

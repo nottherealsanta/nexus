@@ -611,6 +611,8 @@ pub struct App {
     pub size: (u16, u16),
     pub frame: usize,
     pub mouse: Option<(u16, u16)>,
+    pub timeline_screen: Option<ratatui::buffer::Buffer>,
+    pub timeline_drag: Option<(crate::selection::Selection, Option<Target>)>,
     bindings: HashMap<(String, String), String>,
     shortcut_leader: Option<Instant>,
 }
@@ -770,6 +772,8 @@ impl App {
             size,
             frame: 0,
             mouse: None,
+            timeline_screen: None,
+            timeline_drag: None,
             bindings,
             shortcut_leader: None,
         }
@@ -3517,6 +3521,9 @@ impl App {
         let from = self.draft_key();
         self.ui.scrolls.insert(from, self.ui.scroll);
         self.state.model.select(Some(id));
+        // First, so the history load is not queued behind the other reads.
+        self.effects
+            .push(Effect::Sync(SyncCommand::Select(Some(id.to_owned()))));
         self.ui.scroll = self.ui.scrolls.get(id).copied().unwrap_or_default();
         self.ui.timeline_sel = None;
         self.ui.timeline_sel_key = None;
@@ -3537,8 +3544,6 @@ impl App {
         }
         self.ui.files_project_root = false;
         self.reset_files();
-        self.effects
-            .push(Effect::Sync(SyncCommand::Select(Some(id.to_owned()))));
         self.refresh_history();
         self.ui.view = View::Session;
         self.effects
@@ -5594,6 +5599,12 @@ impl App {
         let animated = !self.theme.opts.reduced_motion
             && (recording
                 || !self.state.model.running.is_empty()
+                || self
+                    .state
+                    .model
+                    .sessions
+                    .values()
+                    .any(|s| s.status.as_deref() == Some("busy"))
                 || !self.ui.group_flash.is_empty()
                 || matches!(
                     self.state.connection,
@@ -8662,6 +8673,44 @@ impl App {
         self.mouse = Some((ev.column, ev.row));
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if self.ui.overlay.is_none()
+                    && self.ui.dialog.is_none()
+                    && self.ui.edit.is_none()
+                    && self.blocking().is_none()
+                    && self.ui.drawer.is_none()
+                    && self.ui.view == View::Session
+                    && !self.ui.file_open
+                    && self.ui.diff_open.is_none()
+                    && contains(self.regions.timeline, ev.column, ev.row)
+                    && matches!(
+                        self.hits.at(ev.column, ev.row),
+                        Some(Target::Timeline | Target::Block(_) | Target::ContextSection(_))
+                    )
+                {
+                    if let Some(screen) = self.timeline_screen.clone() {
+                        let area = self.regions.timeline;
+                        let point = (ev.column, ev.row);
+                        let selection = crate::selection::Selection {
+                            area,
+                            screen,
+                            start: point,
+                            end: point,
+                        };
+                        self.timeline_drag =
+                            Some((selection, self.hits.at(ev.column, ev.row).cloned()));
+                        if matches!(
+                            self.ui.focus,
+                            Focus::Timeline
+                                | Focus::Sidebar
+                                | Focus::Right
+                                | Focus::ToggleLeft
+                                | Focus::ToggleRight
+                        ) {
+                            self.ui.focus = Focus::Composer;
+                        }
+                        return;
+                    }
+                }
                 let inner = crate::render::composer_inner(
                     self.regions.composer,
                     !self.composer_ref().images.is_empty(),
@@ -8730,6 +8779,10 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some((selection, _)) = self.timeline_drag.as_mut() {
+                    selection.set_end(ev.column, ev.row);
+                    return;
+                }
                 if let Some((start, top)) = self.ui.composer_drag {
                     let inner = crate::render::composer_inner(
                         self.regions.composer,
@@ -8750,6 +8803,32 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if let Some((mut selection, target)) = self.timeline_drag.take() {
+                    selection.set_end(ev.column, ev.row);
+                    if selection.dragged() {
+                        let text = selection.text();
+                        if !text.is_empty() {
+                            self.effects.push(Effect::Copy(text));
+                        }
+                    } else if let Some(target) = target {
+                        self.click(target);
+                        if self.ui.overlay.is_none()
+                            && self.ui.dialog.is_none()
+                            && self.blocking().is_none()
+                            && self.ui.view == View::Session
+                            && matches!(
+                                self.ui.focus,
+                                Focus::Timeline
+                                    | Focus::Sidebar
+                                    | Focus::Right
+                                    | Focus::ToggleLeft
+                                    | Focus::ToggleRight
+                            )
+                        {
+                            self.ui.focus = Focus::Composer;
+                        }
+                    }
+                }
                 self.ui.composer_drag = None;
                 self.ui.left_drag = false;
             }
@@ -8760,6 +8839,7 @@ impl App {
     }
 
     fn wheel(&mut self, x: u16, y: u16, delta: isize) {
+        self.timeline_drag = None;
         if self.ui.overlay.is_some() {
             return self.overlay_move(delta.signum());
         }
@@ -9436,10 +9516,10 @@ fn message_text(m: &Message) -> String {
 
 fn edit_composer(buf: &mut Composer, ev: &KeyEvent, name: &str) {
     let name = match name {
-        "ctrl+left" => "home",
-        "ctrl+right" => "end",
-        "ctrl+shift+left" => "shift+home",
-        "ctrl+shift+right" => "shift+end",
+        "cmd+left" => "home",
+        "cmd+right" => "end",
+        "cmd+shift+left" => "shift+home",
+        "cmd+shift+right" => "shift+end",
         _ => name,
     };
     edit_buffer(buf, ev, name, false);

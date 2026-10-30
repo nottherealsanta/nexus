@@ -29,6 +29,8 @@ const selected = signal(0);
 const dismissed = signal<string | null>(null);
 const atListing = signal<{ key: string; entries: FileEntry[] } | null>(null);
 let atSeq = 0;
+/** The listing being fetched: model bumps re-run the effect and must not ask again meanwhile. */
+let atAsking = "";
 const MENU_LIMIT = 10;
 
 type CompletionRow = { key: string; value: string; help: string; hint?: string; muted?: string; accept: string };
@@ -184,10 +186,14 @@ export function Composer() {
   // is exactly the recalled entry.
   const recall = signal<{ at: number; scratch: string } | null>(null);
   const recalled = () => { const r = recall(); const e = promptHistory().entries; return r && e[r.at] === text() ? r : null; };
+  // `viewed()` changes on every model bump; reload only when the project or the viewed session changes.
+  let historyKey = "";
   effect(() => {
     const project = currentProject();
-    viewed()?.id;
-    if (project) void loadPromptHistory(project).catch(() => {});
+    const key = `${project ?? ""}|${viewed()?.id ?? ""}`;
+    if (key === historyKey) return;
+    historyKey = key;
+    if (project) void loadPromptHistory(project).catch(() => { historyKey = ""; });
   });
   effect(() => {
     if (!focused() || open()) return;
@@ -220,11 +226,12 @@ export function Composer() {
     if (!c || c.kind !== "file" || !project) return;
     const session = viewed()?.id;
     const k = `${project}|${session ?? ""}|${c.dir}`;
-    if (untracked(() => atListing()?.key) === k) return;
+    if (untracked(() => atListing()?.key) === k || atAsking === k) return;
     const seq = ++atSeq;
+    atAsking = k;
+    const done = (entries: FileEntry[]) => { if (seq === atSeq) { atAsking = ""; atListing.set({ key: k, entries }); } };
     void request<{ entries: FileEntry[] }>("GET", `/api/project/${project}/files`, { query: { path: c.dir.replace(/\/$/, ""), session } })
-      .then((d) => { if (seq === atSeq) atListing.set({ key: k, entries: d.entries ?? [] }); })
-      .catch(() => { if (seq === atSeq) atListing.set({ key: k, entries: [] }); });
+      .then((d) => done(d.entries ?? []), () => done([]));
   });
 
   const agentName = () => capitalize(agent());
@@ -238,7 +245,7 @@ export function Composer() {
             const c = () => completion()!;
             const rows = () => c().rows.slice(0, MENU_LIMIT);
             return (
-              <View class="w-full bg-popover rounded-t-[10px] pt-1.5 pb-1 overflow-hidden" testID="completion" accessibilityLabel="Completion">
+              <View class="w-full bg-popover pt-1.5 pb-1 overflow-hidden" testID="completion" accessibilityLabel="Completion">
                 <Each of={rows()} key={(r) => r.key}>
                   {(r, i) => {
                     const sel = () => i() === Math.min(selected(), rows().length - 1);
@@ -300,7 +307,7 @@ export function Composer() {
             }}
             onContentSizeChange={(s) => h.set(Math.min(220, Math.max(44, Math.ceil(s.size?.height ?? (s as any).height ?? 28) + 16)))}
             style={{ height: h() }}
-            class="px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
+            class="font-mono px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
           />
           <View class="h-2" />
           <View class="flex-row items-center gap-1 min-w-0 min-h-8">
@@ -403,11 +410,11 @@ function DictationStatus() {
   );
 }
 
-/** `82k`, `11.1k`, `1.2M`: the composer's compact counts. */
+/** Compact counts for the context meter and working row. */
 function compact(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (n >= 10_000) return `${Math.round(n / 1000)}K`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}K`;
   return String(n);
 }
 function capitalize(s: string): string { return s ? `${s[0].toUpperCase()}${s.slice(1)}` : "Build"; }
@@ -537,23 +544,23 @@ function LocationStrip() {
         <If when={!!session()}>
           <Button
             disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
-            accessibilityLabel={`Directory ${path()}, unavailable: ${directoryAvailability().reason ?? ""}`}
+            accessibilityLabel={`Directory ${directory()}${directoryAvailability().ok ? "" : `, unavailable: ${directoryAvailability().reason ?? ""}`}`}
             tooltip={tooltip(directoryAvailability().reason ?? "Change session directory")}
-            class={`min-w-0 shrink rounded-(--radius) disabled:opacity-50 ${FOCUS}`}
+            class={`min-w-0 shrink rounded-(--radius) ${FOCUS}`}
           ><Text style={{ numberOfLines: 1 }} class={`${T.meta} min-w-0`}>{path()}</Text></Button>
         </If>
         <If when={!session()}><Text testID="location-directory" style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.meta}`}>{path()}</Text></If>
         <If when={!!branch()}>
-          <If when={!!session()} else={<Text style={{ numberOfLines: 1 }} class={`${T.sec} shrink`}>{`⌥ ${branch()!}`}</Text>}>
+          <If when={!!session()} else={<Text testID="location-branch" style={{ numberOfLines: 1 }} class={`${T.meta} min-w-0 shrink`}>{`⌥ ${branch()!}`}</Text>}>
             <Button
               disabled={!worktreeAvailability().ok} onPress={() => void run("session.worktrees")} testID="location-branch"
-              accessibilityLabel={`Branch ${branch()}, unavailable: ${worktreeAvailability().reason ?? ""}`}
+              accessibilityLabel={`Branch ${branch()}${worktreeAvailability().ok ? "" : `, unavailable: ${worktreeAvailability().reason ?? ""}`}`}
               tooltip={tooltip(worktreeAvailability().reason ?? "Worktree controls")}
-              class={`min-w-0 shrink rounded-(--radius) disabled:opacity-50 ${FOCUS}`}
-            ><Text style={{ numberOfLines: 1 }} class={T.sec}>{`⌥ ${branch()!}`}</Text></Button>
+              class={`min-w-0 shrink rounded-(--radius) ${FOCUS}`}
+            ><Text style={{ numberOfLines: 1 }} class={T.meta}>{`⌥ ${branch()!}`}</Text></Button>
           </If>
         </If>
-        <If when={linked()}><View testID="location-worktree" accessibilityLabel="Linked worktree"><Icon name="branch" size={14} class="tint-muted-foreground" /></View></If>
+        <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={T.meta}>⑂</Text></If>
         <View class="flex-1" />
       </View>
     </If>

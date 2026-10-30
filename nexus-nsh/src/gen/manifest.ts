@@ -1860,6 +1860,7 @@ export const manifest = {
    "id": "session.copy_id",
    "title": "Copy session id",
    "category": "copy",
+   "slash": "copy-session-id",
    "when": [
     "has_session"
    ],

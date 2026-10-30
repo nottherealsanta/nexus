@@ -428,6 +428,9 @@ impl Editor {
             self.prune_pastes();
             true
         } else {
+            // An anchor on the cursor selects nothing, but left set it would
+            // turn into a stale selection once the edit moves the cursor.
+            self.anchor = None;
             false
         }
     }
@@ -831,6 +834,20 @@ mod tests {
         assert_eq!(e.text, "one\ntwo");
         e.redo();
         assert_eq!(e.text, "Xe\ntwo");
+    }
+
+    #[test]
+    fn an_empty_selection_does_not_outlive_the_next_edit() {
+        // Alt+Backspace with nothing to delete leaves the anchor on the
+        // cursor; repeated backspaces must not see it as a selection.
+        let mut e = Editor::default();
+        e.insert("abc");
+        e.select_move(true);
+        e.backspace();
+        e.backspace();
+        e.backspace();
+        assert_eq!(e.text, "");
+        assert_eq!(e.anchor, None);
     }
 
     #[test]

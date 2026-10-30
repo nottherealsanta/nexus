@@ -29,6 +29,7 @@ pub mod prefs;
 pub mod program_status;
 pub mod reduce;
 pub mod render;
+pub mod selection;
 pub mod speech;
 pub mod state;
 pub mod stats;

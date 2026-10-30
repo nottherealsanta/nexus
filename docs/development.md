@@ -61,6 +61,17 @@ State lives in `~/.nexus10` (`$NEXUS10_HOME`). Never touch `~/.nexus` (old Nexus
 
 ## Shortcuts
 
+In the TUI composer, Ctrl or Alt plus Left/Right moves by word; adding Shift
+selects. Cmd plus Left/Right moves to the line edge, with Shift selecting;
+Home/End and Shift+Home/End also work. Cmd shortcuts require a terminal that
+forwards Super-modified arrow keys to applications.
+
+In the TUI timeline, drag over visible text to select it; releasing the mouse
+copies the selected screen cells via OSC 52. Selection is limited to the
+visible timeline, includes its displayed formatting and line breaks, and does
+not auto-scroll. The terminal must allow OSC 52 clipboard writes. A normal
+click still activates timeline controls; scrolling cancels an in-progress drag.
+
 `scripts/nexus` is a development launcher for the whole repo. Install it once:
 
 ```sh

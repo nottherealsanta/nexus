@@ -307,7 +307,7 @@ API and CLI: `GET`/`POST /api/session/{id}/worktrees`,
 
 ## read
 
-Read a text file with line numbers, or list a directory.
+Read a text file with line numbers, view an image file, or list a directory.
 
 | Parameter | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -319,6 +319,9 @@ Read a text file with line numbers, or list a directory.
   last line of a non-empty file.
 * A directory returns `"<path> is a directory (N entries):"` and the sorted
   names, directories with a trailing `/`.
+* An image file (PNG, JPEG, GIF or WebP, recognised by its bytes) is stored as a session artifact and returned to the
+  model as an image beside a one-line text, like an MCP image ([llm-providers.md](llm-providers.md)). A model without
+  image input gets the text and a "not sent" note. It records no observation, and inside a `code` cell it is an error.
 * A missing path raises an error. A file with a NUL byte in its first 8192 bytes
   is refused as binary. An empty file returns `"<path> is empty"`.
 * Lines are `{number:>6}<TAB>{text}`. A line over 2000 characters is cut and ends

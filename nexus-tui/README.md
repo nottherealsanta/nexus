@@ -95,9 +95,24 @@ delays rounded to tenths.
 The timeline is complete for one session: turn headers and footers, folding,
 collapsed reasoning, old-Nexus CommonMark text (supported Mermaid diagrams show a clickable label to copy their source; unsupported diagrams show the source), tool-specific expansion (diffs, output
 caps, raw arguments/results), child cards, context notices, diagnostics, and the
-frozen starting-context section. Selecting a session loads its full stored
-history after the bounded snapshot view: all messages, the starting-context
-snapshot and its turn summaries, fetched together. The event log is not read.
+frozen starting-context section. Selecting a session loads its stored history
+in the background while the event stream stays open: the newest messages, the
+starting-context snapshot and its turn summaries, fetched together. The event
+log is not read. A select never resyncs (no global snapshot, no stream reopen).
+
+**Session views are cached.** The views of the last 8 sessions left behind stay
+in `Model::cached` and keep taking their sessions' events, so switching back (a
+tab, a child and its parent) shows the timeline at once; the history fetched on
+select merges into it (held messages and older pages stay; a turn summary that
+closed live wins over a fetch that read it running; turns older than the
+fetched pages are not counted in the ledger twice). A resync keeps cached views
+of sessions that still exist and drops their live scratch, as it does for the
+selected view. Git and worktree reads run beside the stream, at launch too, so
+they never hold up the next switch. Context reads (`GET …/context`, rebuilt by
+Core on each `message.added`, `turn.summary` and `session.updated`) run beside it
+one at a time, and requests made meanwhile coalesce into one more read per
+session. `--bench WxH` also prints `switch_away_ms`,
+`switch_back_first_frame_ms` and `switch_back_history_ms`.
 
 **Turn details come from turn summaries** (`GET /api/session/{id}/turn`, Core
 API 1.2; TURN_SUMMARY_PLAN.md). The TUI reads every page of them on open (200 a
@@ -380,7 +395,7 @@ Lower layers know nothing of higher ones.
 | --- | --- |
 | `transport` | HTTP (bearer auth, `Idempotency-Key`, `If-Match`, raw audio bodies, error classification, keyed transport retries) and SSE (incremental parser, `Last-Event-ID`, `EventStream`), `Backoff`. No Nexus types. |
 | `api` | Typed responses and the endpoints the TUI needs; `/api/info` and the API-version check (`check_compat`); cursors; SSE `Frame` decoding; `RequestId`, `PendingMutation`, `Outcome` (done vs revision conflict). |
-| `reduce` | Pure `Model` (projects, sessions, running turns, waits, streaming text, selected session's messages, turn summaries, spend ledger and the running turn's live events): `apply_snapshot`, `apply_history`, `apply_turns`, `apply_event` (`turn.summary` replaces the scratch), dedup by durable id, generation check. |
+| `reduce` | Pure `Model` (projects, sessions, running turns, waits, streaming text, selected session's messages, turn summaries, spend ledger and the running turn's live events, plus cached views of recently viewed sessions): `apply_snapshot`, `apply_history`, `apply_turns`, `apply_event` (`turn.summary` replaces the scratch), dedup by durable id, generation check. |
 | `prefs` | `<home>/tui.json`: the TUI's own client preferences, load, atomic 0600 save, merge of changed fields. |
 | `discovery` | `daemon.json` under the Nexus home, `/api/info` verification, `nexus daemon start` bootstrap, daemon log tail. |
 | `sync` | The connection supervisor task: handshake, snapshot, SSE, reconnect with backoff, resync, restart detection. Emits `SyncMsg`, takes `Command`. |

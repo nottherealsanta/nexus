@@ -1312,6 +1312,7 @@ placement = ["palette"]
 id = "session.copy_id"
 title = "Copy session id"
 category = "copy"
+slash = "copy-session-id"
 when = ["has_session"]
 unavailable_reason = "Open a session first."
 placement = ["palette", "row_menu", "sidebar"]

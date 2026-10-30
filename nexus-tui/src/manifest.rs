@@ -246,6 +246,15 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn copy_session_id_slash_resolves() {
+        let m = Manifest::load();
+        assert_eq!(
+            m.slash("copy-session-id").map(|c| c.id.as_str()),
+            Some("session.copy_id")
+        );
+    }
+
+    #[test]
     fn manifest_parses_with_the_checker_invariants() {
         let m = Manifest::load();
         assert_eq!(m.manifest_version, 1);

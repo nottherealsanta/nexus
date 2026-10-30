@@ -148,7 +148,7 @@ otherwise the first loaded agent allowed as a root is used (normally
 | `orchestrate` | primary | read, bash, code + `session` | Breaks a task down, delegates it to sub agents, checks the results, reports. The only agent with the `session` tool. Its prompt says not to edit files. |
 | `build` (default) | all | all | The grunt work: writes and edits code, runs and checks it. Prompt adapted from OpenCode's GPT system prompt (MIT; see `builtin_agents/NOTICE`). |
 | `quick` | subagent | all (effort low, 20 steps) | Small self-contained tasks whose details the parent should not carry in its context. Returns only what the parent needs. |
-| `scout` | subagent | read, bash | Reads the material and returns a context brief: answer, relevant files with line ranges and quotes, how they fit, gotchas, what was checked, open questions. |
+| `scout` | subagent | read, grep, glob, ls | Reads the material and returns a context brief: answer, relevant files with line ranges and quotes, how they fit, gotchas, what was checked, open questions. |
 | `plan` | subagent | all | Designs a change. Its prompt allows writing Markdown plan files only, never code. This is advice in the prompt, not enforced by the harness. |
 
 So a root session runs `orchestrate` or `build`, and a sub agent runs

@@ -13,6 +13,9 @@
 //!   (`SelectedView::turns`); the event log is not loaded. Live events of the
 //!   running turn are kept as scratch until its `turn.summary` replaces them.
 //!   Deltas are folded into `Model::streaming`, never kept.
+//! * Views of recently viewed sessions stay in `Model::cached` and keep taking
+//!   their sessions' events, so switching back shows them at once; selecting
+//!   one still reloads its history, which merges into what is held.
 
 use std::collections::BTreeMap;
 
@@ -180,6 +183,9 @@ fn scratch_copy(event: &Event) -> Event {
     e
 }
 
+/// Views kept besides the selected one.
+pub const VIEW_CACHE: usize = 8;
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Model {
     pub generation: Option<String>,
@@ -193,6 +199,9 @@ pub struct Model {
     pub questions: BTreeMap<String, Question>,
     pub streaming: BTreeMap<String, Streaming>,
     pub selected: Option<SelectedView>,
+    /// Views of recently viewed sessions, most recent first, at most
+    /// `VIEW_CACHE`. Events reach them as they reach the selected view.
+    pub cached: Vec<SelectedView>,
     /// Set when the selected session was deleted by an event; the UI should
     /// say so and move on. Cleared by `select`.
     pub selected_deleted: Option<String>,
@@ -210,12 +219,40 @@ impl Model {
             .map(|g| crate::api::format_cursor(g, self.last_id))
     }
 
+    /// Show `session_id`: its cached view if one is held, else an empty one.
+    /// The view left behind is cached.
     pub fn select(&mut self, session_id: Option<&str>) {
         self.selected_deleted = None;
-        self.selected = session_id.map(|id| SelectedView {
-            session_id: id.to_owned(),
-            ..Default::default()
-        });
+        if self.selected.as_ref().map(|v| v.session_id.as_str()) == session_id {
+            return;
+        }
+        if let Some(old) = self.selected.take() {
+            self.cached.retain(|v| v.session_id != old.session_id);
+            self.cached.insert(0, old);
+            self.cached.truncate(VIEW_CACHE);
+        }
+        self.selected =
+            session_id.map(
+                |id| match self.cached.iter().position(|v| v.session_id == id) {
+                    Some(at) => self.cached.remove(at),
+                    None => SelectedView {
+                        session_id: id.to_owned(),
+                        ..Default::default()
+                    },
+                },
+            );
+    }
+
+    /// The selected or a cached view of `session_id`.
+    pub fn view_mut(&mut self, session_id: &str) -> Option<&mut SelectedView> {
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|v| v.session_id == session_id)
+        {
+            return self.selected.as_mut();
+        }
+        self.cached.iter_mut().find(|v| v.session_id == session_id)
     }
 
     /// Sessions, most recently updated first.
@@ -233,6 +270,7 @@ impl Model {
     /// `watermark.head` follow.
     pub fn apply_snapshot(&mut self, s: Snapshot) {
         let wanted = self.selected.as_ref().map(|v| v.session_id.clone());
+        let cached = std::mem::take(&mut self.cached);
         *self = Model {
             generation: Some(s.watermark.generation.clone()),
             last_id: s.watermark.head,
@@ -252,6 +290,17 @@ impl Model {
         // Pending waits come only from the snapshot: stale ones are discarded.
         self.approvals = s.approvals.into_iter().map(|a| (a.id.clone(), a)).collect();
         self.questions = s.questions.into_iter().map(|q| (q.id.clone(), q)).collect();
+        // Cached views may have missed events; selecting one reloads its
+        // history. Their live scratch has gaps, so it goes, as the selected
+        // view's does.
+        self.cached = cached
+            .into_iter()
+            .filter(|v| self.sessions.contains_key(&v.session_id))
+            .map(|mut v| {
+                v.scratch.clear();
+                v
+            })
+            .collect();
         // The frozen starting context does not change: keep it across the rebuild.
         let kept = self
             .selected
@@ -302,7 +351,7 @@ impl Model {
     /// from the live stream are kept, and duplicates are dropped by id.
     /// Older messages (`turn.load_older`) go before the loaded ones; duplicates are dropped by id.
     pub fn prepend_messages(&mut self, session: &str, older: Vec<Message>, more: bool) {
-        let Some(view) = self.selected.as_mut().filter(|v| v.session_id == session) else {
+        let Some(view) = self.view_mut(session) else {
             return;
         };
         let mut merged: Vec<Message> = older
@@ -315,14 +364,27 @@ impl Model {
         view.messages_more = more;
     }
 
-    pub fn apply_history(&mut self, h: crate::api::History) {
-        let Some(view) = self.selected.as_mut() else {
-            return;
-        };
-        if view.session_id != h.session_id {
+    pub fn apply_history(&mut self, mut h: crate::api::History) {
+        if self.view_mut(&h.session_id).is_none() {
             return;
         }
-        // Messages applied live after the fetch are kept, ordered by seq.
+        if let (Some(full), Some(row)) = (h.session.take(), self.sessions.get_mut(&h.session_id)) {
+            for key in ["skills", "mcp"] {
+                if let Some(value) = full.extra.get(key) {
+                    row.extra.insert(key.to_owned(), value.clone());
+                }
+            }
+        }
+        let Some(view) = self.view_mut(&h.session_id) else {
+            return;
+        };
+        // Messages held but not fetched are kept, ordered by seq: ones applied
+        // live after the fetch, and older pages a cached view already read.
+        let floor = h.messages.first().map(|m| m.seq);
+        let older_held = view
+            .messages
+            .iter()
+            .any(|m| floor.is_some_and(|f| m.seq < f));
         let mut messages = h.messages;
         for m in &view.messages {
             if !messages.iter().any(|x| x.id == m.id) {
@@ -331,23 +393,15 @@ impl Model {
             }
         }
         view.messages = messages;
-        view.messages_more = h.messages_more;
+        if !older_held {
+            view.messages_more = h.messages_more;
+        }
         // A failed snapshot read keeps what was loaded before.
         if h.starting.is_some() {
             view.starting = h.starting;
         }
-        if let (Some(full), Some(row)) = (h.session, self.sessions.get_mut(&h.session_id)) {
-            for key in ["skills", "mcp"] {
-                if let Some(value) = full.extra.get(key) {
-                    row.extra.insert(key.to_owned(), value.clone());
-                }
-            }
-        }
-        // Summaries that arrived live after the fetch are newer; keep them.
-        let live: Vec<TurnSummary> = std::mem::take(&mut view.turns)
-            .into_iter()
-            .filter(|t| !h.turns.iter().any(|x| x.id == t.id))
-            .collect();
+        let held = std::mem::take(&mut view.turns);
+        let oldest = h.turns.first().map(|t| (t.started, t.id.clone()));
         view.usage = h.usage;
         view.counted = h
             .turns
@@ -355,9 +409,25 @@ impl Model {
             .map(|t| (t.id.clone(), UsageLedger::of_turn(t)))
             .collect();
         view.turns = h.turns;
-        for t in live {
+        for t in held {
             let now = t.finished.unwrap_or(t.started);
-            view.upsert_turn(t, now);
+            match view.turns.iter().position(|x| x.id == t.id) {
+                // Closed live after the fetch read it running: the held one is newer.
+                Some(at) if view.turns[at].status == "running" && t.status != "running" => {
+                    view.upsert_turn(t, now);
+                }
+                Some(_) => {}
+                // Older than every fetched page: Core's ledger already counts it.
+                None if oldest.as_ref().is_some_and(|(started, id)| {
+                    (t.started, t.id.as_str()) < (*started, id.as_str())
+                }) =>
+                {
+                    view.counted.insert(t.id.clone(), UsageLedger::of_turn(&t));
+                    view.place(t);
+                }
+                // Arrived live after the fetch: newer, so it is added.
+                None => view.upsert_turn(t, now),
+            }
         }
         view.turns_more_before = h.more_before;
         view.floor = h.floor;
@@ -367,7 +437,7 @@ impl Model {
     /// Summaries re-read after a reconnect (`/turn?after=`): they replace the
     /// ones held, and the page's ledger is current for all of them.
     pub fn apply_turns(&mut self, session: &str, page: TurnPage) {
-        let Some(view) = self.selected.as_mut().filter(|v| v.session_id == session) else {
+        let Some(view) = self.view_mut(session) else {
             return;
         };
         view.usage = page.usage;
@@ -401,10 +471,13 @@ impl Model {
         }
         self.last_id = event.id;
         self.reduce(event);
-        if let (Some(view), Some(sid)) = (self.selected.as_mut(), event.session_id.as_deref()) {
-            if view.session_id == sid && keep_in_scratch(&event.kind) {
-                view.scratch.push(scratch_copy(event));
-            }
+        if let Some(view) = event
+            .session_id
+            .as_deref()
+            .filter(|_| keep_in_scratch(&event.kind))
+            .and_then(|sid| self.view_mut(sid))
+        {
+            view.scratch.push(scratch_copy(event));
         }
         Applied::Applied
     }
@@ -485,11 +558,7 @@ impl Model {
                 let Some(turn) = decode::<TurnSummary>(&e.data) else {
                     return;
                 };
-                if let Some(view) = self
-                    .selected
-                    .as_mut()
-                    .filter(|v| Some(v.session_id.as_str()) == sid.as_deref())
-                {
+                if let Some(view) = sid.as_deref().and_then(|sid| self.view_mut(sid)) {
                     view.upsert_turn(turn, e.time);
                     // The summary now holds what the running turn's events said.
                     view.scratch.clear();
@@ -513,7 +582,7 @@ impl Model {
                 if m.role == "assistant" {
                     self.streaming.remove(&sid);
                 }
-                if let Some(view) = self.selected.as_mut().filter(|v| v.session_id == sid) {
+                if let Some(view) = self.view_mut(&sid) {
                     if !view.messages.iter().any(|x| x.id == m.id) {
                         let at = view.messages.partition_point(|x| x.seq <= m.seq);
                         view.messages.insert(at, m);
@@ -566,6 +635,7 @@ impl Model {
         self.streaming.remove(id);
         self.approvals.retain(|_, a| a.session_id != id);
         self.questions.retain(|_, q| q.session_id != id);
+        self.cached.retain(|v| v.session_id != id);
         if self.selected.as_ref().is_some_and(|v| v.session_id == id) {
             self.selected = None;
             self.selected_deleted = Some(id.to_owned());
@@ -783,6 +853,189 @@ mod tests {
         m.apply_snapshot(snap);
         assert_eq!(m.sessions[SESSION].status.as_deref(), Some("busy"));
         assert_eq!(m.running[SESSION], "trn_9");
+    }
+
+    fn turn(id: &str, status: &str, started: f64, input: u64) -> TurnSummary {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "status": status, "started": started,
+            "requests": [{"id": format!("req_{id}"), "model": "codex/gpt-5", "usage": {"input": input}}],
+        }))
+        .unwrap()
+    }
+
+    fn message(id: &str, session: &str, seq: i64) -> Message {
+        serde_json::from_value(
+            serde_json::json!({"id": id, "session_id": session, "seq": seq, "role": "user"}),
+        )
+        .unwrap()
+    }
+
+    fn history(
+        session: &str,
+        messages: Vec<Message>,
+        turns: Vec<TurnSummary>,
+    ) -> crate::api::History {
+        let mut usage = UsageLedger::default();
+        for t in &turns {
+            usage.replace(&BTreeMap::new(), &UsageLedger::of_turn(t), 0.0);
+        }
+        crate::api::History {
+            session_id: session.into(),
+            messages,
+            turns,
+            usage,
+            ..Default::default()
+        }
+    }
+
+    fn event(id: i64, kind: &str, session: &str, data: Value) -> Event {
+        Event {
+            id,
+            cursor: Some(format!("log_c915bfc9b6d826c4:{id}")),
+            seq: None,
+            time: 1.0,
+            kind: kind.into(),
+            session_id: Some(session.into()),
+            data,
+        }
+    }
+
+    #[test]
+    fn a_view_left_behind_is_cached_kept_current_and_restored() {
+        let mut m = model();
+        m.apply_history(history(SESSION, vec![message("msg_1", SESSION, 1)], vec![]));
+        m.select(Some("ses_other"));
+        assert_eq!(m.cached.len(), 1);
+        assert!(m.selected.as_ref().unwrap().messages.is_empty());
+        // Events of the cached session still reach its view.
+        let added = event(
+            10,
+            "message.added",
+            SESSION,
+            serde_json::json!(
+            {"id": "msg_2", "session_id": SESSION, "seq": 2, "role": "assistant"}),
+        );
+        assert_eq!(m.apply_event(&added), Applied::Applied);
+        m.select(Some(SESSION));
+        let view = m.selected.as_ref().unwrap();
+        assert_eq!(
+            view.messages
+                .iter()
+                .map(|x| x.id.as_str())
+                .collect::<Vec<_>>(),
+            ["msg_1", "msg_2"]
+        );
+        assert_eq!(m.cached[0].session_id, "ses_other");
+        // Re-selecting the shown session keeps its view.
+        m.select(Some(SESSION));
+        assert_eq!(m.selected.as_ref().unwrap().messages.len(), 2);
+    }
+
+    #[test]
+    fn the_cache_is_bounded_and_drops_deleted_sessions() {
+        let mut m = model();
+        for n in 0..(VIEW_CACHE + 3) {
+            m.select(Some(&format!("ses_{n}")));
+        }
+        assert_eq!(m.cached.len(), VIEW_CACHE);
+        m.select(Some(SESSION));
+        m.select(None);
+        assert_eq!(m.cached[0].session_id, SESSION);
+        m.apply_event(&events(LIFECYCLE)[2]); // session.deleted
+        assert!(m.cached.iter().all(|v| v.session_id != SESSION));
+    }
+
+    #[test]
+    fn history_keeps_a_turn_closed_live_over_the_running_copy_it_read() {
+        let mut m = model();
+        m.apply_history(history(
+            SESSION,
+            vec![],
+            vec![turn("trn_1", "running", 1.0, 10)],
+        ));
+        // The summary closed live; a slower history fetch still read it running.
+        let closed = turn("trn_1", "done", 1.0, 100);
+        m.apply_event(&event(
+            10,
+            "turn.summary",
+            SESSION,
+            serde_json::json!(
+            {"id": "trn_1", "status": "done", "started": 1.0,
+             "requests": [{"id": "req_trn_1", "model": "codex/gpt-5", "usage": {"input": 100}}]}),
+        ));
+        m.apply_history(history(
+            SESSION,
+            vec![],
+            vec![turn("trn_1", "running", 1.0, 10)],
+        ));
+        let view = m.selected.as_ref().unwrap();
+        assert_eq!(view.turns, [closed]);
+        assert_eq!(view.usage.total().input, 100);
+    }
+
+    #[test]
+    fn history_does_not_count_older_held_turns_twice() {
+        let mut m = model();
+        m.apply_history(history(
+            SESSION,
+            vec![],
+            vec![
+                turn("trn_old", "done", 1.0, 5),
+                turn("trn_new", "done", 2.0, 7),
+            ],
+        ));
+        // A later fetch covers only the newest page; its ledger counts every turn.
+        let mut later = history(SESSION, vec![], vec![turn("trn_new", "done", 2.0, 7)]);
+        later.usage = m.selected.as_ref().unwrap().usage.clone();
+        m.apply_history(later);
+        let view = m.selected.as_ref().unwrap();
+        assert_eq!(
+            view.turns.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["trn_old", "trn_new"]
+        );
+        assert_eq!(view.usage.total().input, 12);
+    }
+
+    #[test]
+    fn history_keeps_older_pages_a_cached_view_already_read() {
+        let mut m = model();
+        let mut first = history(
+            SESSION,
+            vec![message("msg_1", SESSION, 1), message("msg_2", SESSION, 2)],
+            vec![],
+        );
+        first.messages_more = false;
+        m.apply_history(first);
+        let mut newest = history(SESSION, vec![message("msg_2", SESSION, 2)], vec![]);
+        newest.messages_more = true;
+        m.apply_history(newest);
+        let view = m.selected.as_ref().unwrap();
+        assert_eq!(view.messages.len(), 2);
+        assert!(!view.messages_more);
+    }
+
+    #[test]
+    fn a_snapshot_keeps_cached_views_of_existing_sessions() {
+        let mut m = model();
+        m.apply_history(history(SESSION, vec![message("msg_1", SESSION, 1)], vec![]));
+        m.selected
+            .as_mut()
+            .unwrap()
+            .scratch
+            .push(events(TURN)[0].clone());
+        m.select(Some("ses_gone"));
+        m.select(None);
+        m.apply_snapshot(serde_json::from_str(SNAPSHOT).unwrap());
+        assert_eq!(
+            m.cached
+                .iter()
+                .map(|v| v.session_id.as_str())
+                .collect::<Vec<_>>(),
+            [SESSION]
+        );
+        // Its live scratch has gaps and is gone; the messages stay.
+        assert!(m.cached[0].scratch.is_empty());
+        assert_eq!(m.cached[0].messages.len(), 1);
     }
 
     #[test]

@@ -51,5 +51,9 @@ describe("Session search (K5)", () => {
     await app.waitFor("id:session-snippet-ses_2");
     expect(app.texts().some((t) => t.includes("please carry on with the chores"))).toBe(true);
     expect(app.shows("id:session-ses_1")).toBe(false);
+    await app.press("id:tab-projects");
+    await app.press("id:tab-sessions");
+    await app.waitFor("id:session-snippet-ses_2");
+    expect(app.shows("id:session-ses_1")).toBe(false);
   });
 });

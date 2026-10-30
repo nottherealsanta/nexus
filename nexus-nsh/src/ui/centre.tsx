@@ -1,5 +1,6 @@
 import { Scroll, Text, View } from "nsh";
 import { Button } from "nsh/base";
+import { SubagentStrip } from "./header";
 import { Banners, Toasts } from "./alerts";
 import { Composer, WaitingCard } from "./composer";
 import { NewSessionView } from "./newsession";
@@ -13,6 +14,7 @@ export function Centre() {
   const base = () => (centre() === "settings" ? previousCentre() : centre());
   return (
     <View class="flex-1 min-w-0 min-h-0 bg-background" testID="centre">
+      <SubagentStrip />
       <Banners />
       <If when={centre() === "settings"}><SettingsView /></If>
       <If when={base() === "file"}><FileView /></If>

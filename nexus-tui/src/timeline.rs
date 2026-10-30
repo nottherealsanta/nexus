@@ -178,6 +178,7 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
         turn: None,
         denied: HashSet::new(),
         live_groups: Vec::new(),
+        followups: HashMap::new(),
     };
     b.run();
     Timeline {
@@ -199,6 +200,8 @@ struct Builder<'a> {
     turn: Option<usize>,
     denied: HashSet<String>,
     live_groups: Vec<String>,
+    /// Child session id -> the last `message_session` call that re-rendered its card.
+    followups: HashMap<String, String>,
 }
 
 fn json_str(v: &Value) -> String {
@@ -418,9 +421,17 @@ fn turn_messages(view: &crate::reduce::SelectedView, n: usize) -> std::ops::Rang
     let t = &view.turns[n];
     let next = view.turns.get(n + 1).map(|x| x.start_seq);
     let lo = view.messages.partition_point(|m| m.seq <= t.start_seq);
-    let hi = next.map_or(view.messages.len(), |s| {
-        view.messages.partition_point(|m| m.seq <= s)
-    });
+    // Without a later summary (the next turn is still running), the next
+    // prompt bounds it: its messages are not this turn's.
+    let hi = next.map_or_else(
+        || {
+            let from = lo + usize::from(view.messages.get(lo).is_some_and(is_turn_start));
+            (from..view.messages.len())
+                .find(|&i| is_turn_start(&view.messages[i]))
+                .unwrap_or(view.messages.len())
+        },
+        |s| view.messages.partition_point(|m| m.seq <= s),
+    );
     lo..hi.max(lo)
 }
 
@@ -866,6 +877,19 @@ impl Builder<'_> {
         let mut turn_open = false;
         let mut turn_no = 0usize;
         let mut folded = false;
+        for (_, _, _, item) in &items {
+            if let Item::Msg(m) = item {
+                for p in &m.parts {
+                    if p["type"] == "tool_call" && p["name"] == "message_session" {
+                        if let Some(child) = arg_json(&json_str(&p["arguments"]))
+                            .and_then(|a| a["session"].as_str().map(str::to_owned))
+                        {
+                            self.followups.insert(child, json_str(&p["id"]));
+                        }
+                    }
+                }
+            }
+        }
         let mut activity = Vec::new();
         let mut background_notices = Vec::new();
         for (_, _, _, item) in &items {
@@ -961,7 +985,7 @@ impl Builder<'_> {
                             "tool_call" => {
                                 let call_id = json_str(&p["id"]);
                                 let name = json_str(&p["name"]);
-                                if name == "session" {
+                                if name == "session" || name == "message_session" {
                                     self.activity_group(
                                         &mut activity,
                                         &results,
@@ -970,7 +994,12 @@ impl Builder<'_> {
                                         busy,
                                         false,
                                     );
-                                    self.child_card(&call_id, &json_str(&p["arguments"]), &results);
+                                    self.child_card(
+                                        &call_id,
+                                        &json_str(&p["arguments"]),
+                                        &results,
+                                        name == "message_session",
+                                    );
                                 } else {
                                     activity.push(Activity::Tool {
                                         id: call_id,
@@ -1759,7 +1788,7 @@ impl Builder<'_> {
     /// One muted row that opens its full text in a modal (Enter or a click).
     fn notice_row(&mut self, key: String, label: &str, full: String) {
         self.block(key, BlockKind::Notice, self.turn, false, |b| {
-            let marker = format!("{} ", b.t.fold(false));
+            let marker = format!("{}{} ", " ".repeat(ACTIVITY_INDENT), b.t.fold(false));
             let label = truncate(label, b.bw.saturating_sub(width(&marker)), b.ell());
             b.line(vec![
                 Span::styled(marker, b.meta()),
@@ -2695,7 +2724,13 @@ impl Builder<'_> {
         }
     }
 
-    fn child_card(&mut self, call_id: &str, args: &str, results: &HashMap<String, Done>) {
+    fn child_card(
+        &mut self,
+        call_id: &str,
+        args: &str,
+        results: &HashMap<String, Done>,
+        follow: bool,
+    ) {
         let a = arg_json(args).unwrap_or(Value::Null);
         let agent = a["agent"].as_str().unwrap_or("child").to_owned();
         let title = a["title"]
@@ -2703,17 +2738,43 @@ impl Builder<'_> {
             .map(str::to_owned)
             .or_else(|| a["prompt"].as_str().map(first_line))
             .unwrap_or_default();
-        let child = self
-            .app
-            .viewed_id()
-            .and_then(|parent| {
-                self.app.state.model.sessions.values().find(|s| {
-                    s.parent_id.as_deref() == Some(parent)
-                        && s.parent_call_id.as_deref() == Some(call_id)
+        let child = if follow {
+            a["session"]
+                .as_str()
+                .and_then(|id| self.app.state.model.sessions.get(id))
+                .cloned()
+        } else {
+            self.app
+                .viewed_id()
+                .and_then(|parent| {
+                    self.app.state.model.sessions.values().find(|s| {
+                        s.parent_id.as_deref() == Some(parent)
+                            && s.parent_call_id.as_deref() == Some(call_id)
+                    })
                 })
-            })
-            .cloned();
-        let done = results.get(call_id);
+                .cloned()
+        };
+        let agent = child
+            .as_ref()
+            .filter(|_| follow)
+            .map_or(agent, |c| c.agent.clone());
+        // A card is stale once a later `message_session` call shows the child
+        // again lower down: it greys out and stops animating.
+        let stale = child.as_ref().is_some_and(|c| {
+            let latest = self.followups.get(&c.id).map(String::as_str);
+            if follow {
+                latest != Some(call_id)
+            } else {
+                latest.is_some()
+            }
+        });
+        let busy = !stale && child.as_ref().is_some_and(|c| self.app.is_busy(&c.id));
+        // A background start returns at once with a start notice, not the outcome:
+        // the card follows the child session until it stops.
+        let background = follow || a["wait"].as_bool() == Some(false);
+        let done = results
+            .get(call_id)
+            .filter(|d| !(background && busy && !d.is_error));
         let waits = child.as_ref().is_some_and(|c| {
             self.app
                 .state
@@ -2729,10 +2790,9 @@ impl Builder<'_> {
                     .values()
                     .any(|w| w.session_id == c.id)
         });
-        let busy = child.as_ref().is_some_and(|c| self.app.is_busy(&c.id));
         let key = format!("child:{call_id}");
         let child_id = child.as_ref().map(|c| c.id.clone());
-        let title = if title.is_empty() {
+        let title = if title.is_empty() || follow {
             child.as_ref().map(|c| c.title.clone()).unwrap_or_default()
         } else {
             title
@@ -2762,13 +2822,23 @@ impl Builder<'_> {
         });
         let primary = self.st(PRIMARY, CANVAS);
         let secondary = self.st(SECONDARY, CANVAS);
+        let agent_style = if stale {
+            self.meta()
+        } else {
+            self.t.agent_style(&agent)
+        };
+        let secondary = if stale { self.meta() } else { secondary };
         let mut head = vec![
-            Span::raw(" "),
+            Span::raw("   "),
             Span::raw(" "),
             Span::raw(" "),
             Span::styled(
                 crate::text::capitalize(&agent),
-                primary.patch(self.t.agent_style(&agent)),
+                if stale {
+                    agent_style
+                } else {
+                    primary.patch(agent_style)
+                },
             ),
         ];
         if !title.is_empty() {
@@ -2777,22 +2847,14 @@ impl Builder<'_> {
                 secondary,
             ));
         }
-        if a["wait"].as_bool() == Some(false) {
+        if background && !follow {
             head.push(Span::raw(" "));
             head.push(Span::styled(
                 " Background ",
                 self.st(SECONDARY, "surface.sidebar"),
             ));
         }
-        // The last line: the outcome and the start of what the subagent returned.
-        let result = |out: &str| -> String {
-            let line = out
-                .lines()
-                .map(str::trim)
-                .find(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("Sub agent"))
-                .unwrap_or("");
-            truncate(line, 60, self.ell())
-        };
+        // The last line: an error, or what the child is waiting on.
         let outcome = if let Some(d) = done {
             let text = if d.is_error {
                 let line = d
@@ -2803,23 +2865,21 @@ impl Builder<'_> {
                 let line = line.split_once("failed:").map_or(line, |(_, r)| r).trim();
                 truncate(line, 60, self.ell())
             } else {
-                result(&d.output)
+                String::new()
             };
-            let label = if d.is_error { "failed" } else { "done" };
-            if text.is_empty() {
-                label.to_owned()
-            } else {
-                format!("{label} {text}")
+            // A finished card says nothing on its third row: the full dots do.
+            match (d.is_error, text.is_empty()) {
+                (false, _) => String::new(),
+                (true, true) => "failed".to_owned(),
+                (true, false) => format!("failed {text}"),
             }
         } else if waits {
             "waiting for input".into()
-        } else if busy {
-            "running…".into()
         } else {
             String::new()
         };
         let plain = |text: String, style: Style| TLine {
-            spans: vec![Span::raw("   "), Span::styled(text, style)],
+            spans: vec![Span::raw("     "), Span::styled(text, style)],
             bg: None,
             rail: None,
             focus: false,
@@ -2835,11 +2895,10 @@ impl Builder<'_> {
                 let mut spans = head.clone();
                 if busy && !waits && done.is_none() {
                     // The spinner sits in the margin, in the agent's colour.
-                    spans[1] =
-                        Span::styled(b.t.spinner(b.frame).to_owned(), b.t.agent_style(&agent));
+                    spans[1] = Span::styled(b.t.spinner(b.frame).to_owned(), agent_style);
                 } else if done.is_some() {
                     // Finished: every dot on, no animation.
-                    spans[1] = Span::styled(b.t.dots_full().to_owned(), b.t.agent_style(&agent));
+                    spans[1] = Span::styled(b.t.dots_full().to_owned(), agent_style);
                 }
                 b.out.push(TLine {
                     spans,
@@ -2930,11 +2989,6 @@ impl Builder<'_> {
                     d["from"].as_str().unwrap_or("?"),
                     d["to"].as_str().unwrap_or("?")
                 ),
-                None,
-                "info",
-            ),
-            "session.notified" => (
-                format!("child finished: {}", d["from"].as_str().unwrap_or("child")),
                 None,
                 "info",
             ),

@@ -1,16 +1,15 @@
 import type { JSX } from "nsh";
-import { List, Scroll, Text, View, signal } from "nsh";
+import { List, Scroll, Text, View, effect, signal } from "nsh";
 import { Button, ContextMenu, MenuItem, Tab, Tabs, Input } from "nsh/base";
 import { Btn, Icon, IconButton, Status, AttentionMark, T, FOCUS, relTime, abbrev, midTruncate } from "./kit";
 import { manifest } from "../gen/manifest";
 import { availability, byId, commands, keyLabel, newSession, run, toggleLeft } from "../commands";
-import { archivedFilter, centre, connection, currentProject, focusedSidebarRow, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, viewed, savePrefs, SidebarRowTarget } from "../store";
+import { archivedFilter, centre, connection, currentProject, focusedSidebarRow, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, projectWorktrees, worktreeForDirectory } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
 import { fileListing, loadFiles, showFile } from "../store";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
-import { agentColor } from "../agent-color";
 
 const TAB_ICON: Record<string, IconName> = { sessions: "sessions", files: "files", projects: "projects" };
 const tabs = manifest.navigation.left_sidebar.tab as unknown as { id: "sessions" | "files" | "projects"; label: string; command: string; order: number }[];
@@ -156,7 +155,7 @@ function SessionsTab() {
   return (
     <View class="flex-1 min-h-0">
       <View class="gap-2 p-2">
-        <Input placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class="h-8 rounded-(--radius) bg-background px-2 text-[13px] text-foreground placeholder:text-muted-foreground" />
+        <Input value={sessionQuery()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class="h-8 rounded-(--radius) bg-background px-2 text-[13px] text-foreground placeholder:text-muted-foreground" />
         <View class="flex-row items-center gap-2">
           <Button onPress={() => run("project.switch")} accessibilityLabel="Current project" class={`flex-1 min-w-0 flex-row items-center gap-1.5 rounded-(--radius) px-2 hover:bg-accent ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}>
             <Text style={{ numberOfLines: 1 }} class="flex-1 text-[13px] leading-5 font-medium text-foreground">{scopeAll() ? "All projects" : currentProject() ? projectName(currentProject()!) : "No project"}</Text>
@@ -200,6 +199,12 @@ function Chip(p: { label: string; on: boolean; onPress: () => void }) {
 
 function SessionRow(p: { s: () => Session }) {
   const s = p.s;
+  effect(() => { if (!scopeAll()) loadProjectWorktrees(s().project_id); });
+  const place = () => {
+    if (scopeAll()) return projectName(s().project_id);
+    const tree = worktreeForDirectory(s().directory, projectWorktrees()[s().project_id]);
+    return tree?.branch || (tree?.path && tree.main === false ? tree.path.replace(/\/$/, "").split("/").pop() : "") || "";
+  };
   const ref = () => ({ kind: "session" as const, id: s().id });
   const sel = () => model.selected?.sessionId === s().id && centre() === "session";
   const n = () => childCount(s().id);
@@ -233,7 +238,7 @@ function SessionRow(p: { s: () => Session }) {
             <Text class={`${T.meta} group-hover/row:opacity-0`}>{relTime(s().updated, (tick(), Date.now()))}</Text>
           </View>
           <View class="flex-row items-center gap-1 pl-[22px] h-4">
-            <Text style={{ numberOfLines: 1 }} class={`text-xs leading-4 ${agentColor(s().agent)}`}>{s().agent}</Text>
+            <If when={place()}><Text style={{ numberOfLines: 1 }} testID={`session-place-${s().id}`} class={`${T.meta} min-w-0`}>{place()}</Text></If>
             <If when={snippetOf(s().id)}>{(t) => <Text style={{ numberOfLines: 1 }} testID={`session-snippet-${s().id}`} class={`${T.meta} flex-1 min-w-0`}>{`· ${t()}`}</Text>}</If>
             <View class="flex-1" />
             <If when={n() > 0}><Text class={T.meta}>{`${n()} ↳`}</Text></If>

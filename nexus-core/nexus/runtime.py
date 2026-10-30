@@ -587,7 +587,8 @@ class Runtime:
             description=(
                 "Launch a subagent: another agent works on a prompt in this directory, in a sub agent the user can "
                 "open. It does not see this conversation, so give it a complete prompt. wait=true (default) returns "
-                "its answer; wait=false returns at once and the answer arrives as a message when it finishes. The "
+                "its answer; wait=false returns at once and the answer arrives as a message when it finishes; you may "
+                "end your turn then, and you are called again when it does, so never sleep or poll to wait. The "
                 "first successful call also exposes the `message_session` tool, which sends a further message to a "
                 "child you launched: a steer while it works, or a follow-up after it has answered. Agents:\n"
                 + "\n".join(f"  - `{a['name']}`: {a['description']}" for a in child_agents)
@@ -1894,6 +1895,7 @@ class Runtime:
             refresh=(lambda active: self._refresh_call(active, session.id)) if refresh else None,
             files=files,
             cwd_changed=cwd_changed,
+            save_media=lambda data, mime, name: self.save_artifact(session.id, data, mime, name=name, source=f"read:{name}"),
             retry_policy=self.retry_policy,
             model_ref=ref, fallback_models=fallback_models,
             hooks=self._hook_runner(session, workspace),
@@ -2071,7 +2073,8 @@ class Runtime:
         self.prompt(child.id, prompt)
         if not wait:
             return (f"Started sub agent {child.id} (agent {child.agent}). Its answer will arrive as a message when it "
-                    "finishes; continue with other work meanwhile." + exposed)
+                    "finishes and starts a new turn for you; continue with other work, or end your turn if there is none "
+                    "(do not sleep or poll)." + exposed)
         task = self.turns[child.id]
         try:
             await asyncio.shield(task)

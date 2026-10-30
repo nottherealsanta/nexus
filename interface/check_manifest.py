@@ -5,6 +5,7 @@ Usage: python3 interface/check_manifest.py [path/to/manifest.toml]
 """
 import sys
 import tomllib
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -79,8 +80,8 @@ def main() -> int:
             if n in slashes:
                 err(f"slash name {n!r} used by {slashes[n]} and {cid}")
             slashes[n] = cid
-            if not n.isalpha() or not n.islower():
-                err(f"{cid}: slash name {n!r} must be lower-case letters")
+            if not re.fullmatch(r"[a-z]+(?:-[a-z]+)*", n):
+                err(f"{cid}: slash name {n!r} must be lower-case letters separated by hyphens")
         if "slash_aliases" in c and "slash" not in c:
             err(f"{cid}: slash_aliases without slash")
         for t in c.get("when", []):

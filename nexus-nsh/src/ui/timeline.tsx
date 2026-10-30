@@ -13,10 +13,15 @@ import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import type { IconName } from "../icons";
 import { roles, statusGlyphs } from "../gen/theme";
+import "../../fonts/MonaspaceArgon-Regular.otf";
+import "../../fonts/MonaspaceArgon-Medium.otf";
+import "../../fonts/MonaspaceArgon-Bold.otf";
 
 type Tone = "info" | "accent" | "warning";
 type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
 type Diff = { add: number; del: number };
+/** Timeline metadata is Monaspace Argon like the rest of the model-visible content. */
+const META = `${T.meta} font-mono`;
 
 type Row =
   | { key: string; kind: "footer"; agent: string; segments: { text: string; tip?: string }[]; error?: string; interrupted: boolean }
@@ -31,7 +36,7 @@ type Row =
   | { key: string; kind: "notice"; text: string; label: string; tone: Tone }
   | { key: string; kind: "handoff"; from: string; summary: string; time: string }
   | { key: string; kind: "assistant"; text: string; streaming?: boolean }
-  | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean; running?: boolean }
+  | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean; running?: boolean; duration?: string }
   | {
       key: string; kind: "activity"; summary: string; items: (Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>)[];
       open: boolean; defaultOpen: boolean; failed: number; duration?: string; diff?: Diff;
@@ -44,7 +49,10 @@ type Row =
       /** Images the tool returned (K8): artifacts Core stored, shown beside the output. */
       media: { artifact: string; mime: string; name: string }[];
     }
-  | { key: string; kind: "child"; childId?: string; agent: string; title: string; status: string; tone: Tone; body: string; open: boolean }
+  | {
+      key: string; kind: "child"; childId?: string; agent: string; title: string; status: string; tone: Tone;
+      body: string; open: boolean; background: boolean; ack: boolean; meta: string;
+    }
   | { key: string; kind: "diag"; text: string; label: string; detail?: string; tone: Tone }
   | { key: string; kind: "older"; text: string; action?: "load-older" }
   | { key: string; kind: "empty" };
@@ -133,6 +141,30 @@ function clock(sec: number): string {
   return new Date(sec * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 function titleCase(s: string): string { return s.charAt(0).toUpperCase() + s.slice(1); }
+/** The TUI's delivery tags: the start of a queued turn and a steer inside one, never Core's raw enum. */
+function deliveryTags(delivery?: string | null): string[] {
+  return delivery === "steer" || delivery === "queued" ? [delivery] : [];
+}
+/** A child session's model and effort, as its card names them (`model/effort`). */
+function childModel(child: any): string {
+  const model = typeof child?.model === "string" && child.model && child.model !== "default" ? child.model : "";
+  const effort = typeof child?.effort === "string" && child.effort !== "none" && child.effort !== "default" ? child.effort : "";
+  return [model, effort].filter(Boolean).join("/");
+}
+/** Thinking seconds per assistant message: only when one completed request produced that message. */
+function thoughtSeconds(turns: TurnSummary[]): Map<string, number> {
+  const seen = new Map<string, number | null>();
+  for (const turn of turns) for (const request of turn.requests ?? []) {
+    const id = request.message_id;
+    const seconds = request.reasoning_seconds;
+    if (!id) continue;
+    const valid = request.status === "completed" && typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0;
+    seen.set(id, seen.has(id) || !valid ? null : seconds!);
+  }
+  const out = new Map<string, number>();
+  for (const [id, seconds] of seen) if (seconds !== null) out.set(id, seconds);
+  return out;
+}
 function text(m: Message): string {
   return m.parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n");
 }
@@ -314,6 +346,7 @@ export function buildRows(): Row[] {
   const waiting = new Set([...model.approvals.values()].map((a) => a.call_id));
   const busy = viewed()?.status === "busy";
   const metas = turnMeta(sel.messages, sel.turns, sel.scratch, busy);
+  const thoughts = thoughtSeconds(sel.turns);
   const sid = sel.sessionId;
   const rows: { t: number; r: Row[] }[] = [];
 
@@ -369,11 +402,18 @@ export function buildRows(): Row[] {
       }
     } else if (msg.role === "assistant") {
       if (foldedTurn) { rows.push({ t: msg.created, r: out }); continue; }
+      const reasoningParts = msg.parts.filter((p) => p.type === "reasoning").length;
       msg.parts.forEach((p, i) => {
         const key = `${msg.id}-${i}`;
         if (p.type === "text" && (p.text ?? "").trim()) out.push({ key, kind: "assistant", text: p.text ?? "" });
         else if (p.type === "reasoning") {
-          out.push({ key, kind: "reasoning", text: p.summary ?? "", encrypted: !(p.summary ?? "").trim(), open: open(`reason:${key}`, false) });
+          const summary = p.summary ?? "";
+          // One completed request reports one thinking duration; several parts share it, so none is attributed.
+          const seconds = reasoningParts === 1 && summary.trim() ? thoughts.get(msg.id) : undefined;
+          out.push({
+            key, kind: "reasoning", text: summary, encrypted: !summary.trim(), open: open(`reason:${key}`, false),
+            duration: seconds !== undefined ? fmtDuration(seconds) : undefined,
+          });
         } else if (p.type === "tool_call") {
           const id = p.id ?? key;
           if (p.name === "session") {
@@ -382,15 +422,20 @@ export function buildRows(): Row[] {
             const child = [...model.sessions.values()].find((c) => c.parent_id === sid && c.parent_call_id === id);
             const res = results.get(id);
             const waits = child ? [...model.approvals.values(), ...model.questions.values()].some((w) => w.session_id === child.id) : false;
-            const running = child ? model.running.has(child.id) : false;
-            const status = waits ? "waiting for input" : running ? "running" : res?.is_error ? "failed" : res ? "done" : "starting…";
-            const body = res ? firstLine(res.output ?? "") : waits ? "waiting for input" : running ? "running…" : "starting…";
+            const running = child ? model.running.has(child.id) || child.status === "busy" : false;
+            const failed = !!res?.is_error || !!child && (child.status === "failed" || model.failedSessions.has(child.id));
+            const background = a.wait === false;
+            // A successful background result is always a start acknowledgement, not an outcome.
+            const ack = background && !!res && !res.is_error;
+            const status = waits ? "waiting for input" : running ? "running" : failed ? "failed" : res ? (ack ? "started" : "done") : "starting…";
+            const body = res ? (res.output ?? "") : waits ? "waiting for input" : running ? "running…" : "starting…";
+            const meta = childModel(child);
             const key = `child:${id}`;
             out.push({
               key, kind: "child", childId: child?.id, agent: a.agent ?? "child",
-              title: a.title ?? firstLine(a.prompt ?? "") ?? child?.title ?? "", status,
-              tone: waits ? "accent" : running ? "info" : res?.is_error ? "warning" : "info",
-              body, open: open(key, false),
+              title: a.title || child?.title || firstLine(a.prompt ?? ""), status,
+              tone: waits ? "accent" : running ? "info" : failed ? "warning" : "info",
+              body, open: open(key, false), background, ack, meta,
             });
           } else {
             const res = results.get(id);
@@ -560,20 +605,20 @@ function RowView(p: { r: () => Row }) {
   const r = p.r;
   return (
     <View class="w-full items-center px-6" onLayout={(b: any) => reportHeight(r(), b.bounds?.size?.height ?? b.size?.height ?? 72)}>
-      <View class="w-full max-w-[760px]">
+      <View class="w-full max-w-[760px] font-mono">
         <If when={r().kind === "context"}>
           {() => {
             const c = r() as Extract<Row, { kind: "context" }>;
             const expanded = () => open(`context:${model.selected?.sessionId}`, c.open);
             return (
-              <View class="mt-5 mb-2 rounded-(--radius-card) bg-card border border-border px-2 py-1" testID="context-section">
-                <View class="w-full flex-row items-center gap-2 px-1 min-h-7" testID="context-header">
-                  <Button onPress={() => toggle(`context:${model.selected?.sessionId}`, c.open)} accessibilityLabel={expanded() ? "Collapse context" : "Expand context"} testID="context-fold" class={`rounded-(--radius) ${FOCUS}`}><Text class={T.meta}>{expanded() ? "▾" : "▸"}</Text></Button>
-                  <Button onPress={() => contextDetail.set({ title: "Context", detail: c.sections.map((s) => `${s.title}\n${s.detail}`).join("\n\n") })} accessibilityLabel="View context details" testID="context-overview" class={`flex-1 flex-row items-center gap-2 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">Context</Text><Text class={`flex-1 ${T.meta}`}>{c.meta}</Text></Button>
-                  <If when={!!c.reconstructed}><Text class="text-xs text-warning">reconstructed</Text></If>
+              <View class="mt-5 mb-2 rounded-(--radius-card) bg-card border border-border px-2 py-1 font-mono" testID="context-section">
+                <View class="w-full flex-row items-center justify-center gap-2 px-1 min-h-7" testID="context-header">
+                  <Button onPress={() => toggle(`context:${model.selected?.sessionId}`, c.open)} accessibilityLabel={expanded() ? "Collapse context" : "Expand context"} testID="context-fold" class={`rounded-(--radius) ${FOCUS}`}><Text class={META}>{expanded() ? "▾" : "▸"}</Text></Button>
+                  <Button onPress={() => contextDetail.set({ title: "Context", detail: c.sections.map((s) => `${s.title}\n${s.detail}`).join("\n\n") })} accessibilityLabel="View context details" testID="context-overview" class={`flex-row items-center gap-2 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class="text-[13px] leading-5 font-semibold text-foreground-secondary font-mono">Context</Text><Text class={META}>{c.meta}</Text></Button>
+                  <If when={!!c.reconstructed}><Text class="text-xs text-warning font-mono">reconstructed</Text></If>
                 </View>
                 <If when={expanded()}>
-                   <View class="pt-2 pl-3"><ContextSections sections={c.sections} total={c.total} estimated window={c.window} onInventoryToggle={(kind, name, locked) => { void toggleSessionInventory(kind, name, locked); }} /></View>
+                   <View class="pt-2 pl-3 font-mono"><ContextSections sections={c.sections} total={c.total} estimated window={c.window} onInventoryToggle={(kind, name, locked) => { void toggleSessionInventory(kind, name, locked); }} /></View>
                 </If>
               </View>
             );
@@ -587,43 +632,43 @@ function RowView(p: { r: () => Row }) {
             const f = r() as Extract<Row, { kind: "footer" }>;
             return (
               <View class="w-full items-end gap-0.5 pt-3 pb-1" testID="turn-footer">
-                <If when={!!f.error}><Text style={{ userSelect: "text" }} class="text-xs leading-4 text-error">{`✕ ${f.error}`}</Text></If>
+                <If when={!!f.error}><Text style={{ userSelect: "text" }} class="text-xs leading-4 text-error font-mono">{`✕ ${f.error}`}</Text></If>
                 <View class="flex-row flex-wrap justify-end items-center">
-                  <If when={!!f.agent}><Text class={`text-xs leading-4 font-semibold ${agentColor(f.agent)}`}>{titleCase(f.agent)}</Text></If>
+                  <If when={!!f.agent}><Text class={`text-xs leading-4 font-semibold font-mono ${agentColor(f.agent)}`}>{titleCase(f.agent)}</Text></If>
                   <Each of={f.segments} key={(s, i) => `${i}`}>
                     {(s) => (
-                      <Text class={T.meta} tooltip={s().tip ? <Text class="text-xs leading-4 text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{s().tip!}</Text> : undefined}>
+                      <Text class={META} tooltip={s().tip ? <Text class="text-xs leading-4 text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{s().tip!}</Text> : undefined}>
                         {` · ${s().text}`}
                       </Text>
                     )}
                   </Each>
-                  <If when={f.interrupted}><Text class="text-xs leading-4 text-warning">{" · /continue"}</Text></If>
+                  <If when={f.interrupted}><Text class="text-xs leading-4 text-warning font-mono">{" · /continue"}</Text></If>
                 </View>
               </View>
             );
           }}
         </If>
         <If when={r().kind === "handoff"}>
-          <View class="py-1"><HandoffCard r={r as any} /></View>
+          <View class="py-1 font-mono"><HandoffCard r={r as any} /></View>
         </If>
         <If when={r().kind === "notice" && (r() as any).text.startsWith("→ Background Shell Done:")}>
-          <Text style={{ userSelect: "text" }} class="text-[13px] leading-5 text-muted-foreground py-2" testID="background-shell-done">{(r() as any).text}</Text>
+          <Text style={{ userSelect: "text" }} class="text-[13px] leading-5 text-muted-foreground py-2 font-mono" testID="background-shell-done">{(r() as any).text}</Text>
         </If>
         <If when={r().kind === "notice" && !(r() as any).text.startsWith("→ Background Shell Done:")}>
-          <View class="flex-row gap-3 rounded-(--radius-card) bg-card border border-border px-3.5 py-2.5 my-1">
+          <View class="flex-row gap-3 rounded-(--radius-card) bg-card border border-border px-3.5 py-2.5 my-1 font-mono">
             <Rail color={RAIL[(r() as any).tone] ?? "bg-info"} />
             <View class="flex-1 min-w-0 gap-0.5">
-              <Text class="text-xs leading-4 font-medium text-muted-foreground">{(r() as any).label}</Text>
-              <Text style={{ userSelect: "text" }} class={T.sec}>{(r() as any).text}</Text>
+              <Text class="text-xs leading-4 font-medium text-muted-foreground font-mono">{(r() as any).label}</Text>
+              <Text style={{ userSelect: "text" }} class={`${T.sec} font-mono`}>{(r() as any).text}</Text>
             </View>
           </View>
         </If>
         <If when={r().kind === "assistant"}>
-          <View class="py-1.5" testID="msg-assistant">
+          <View class="py-1.5 pl-4" testID="msg-assistant">
             <TextView
               selectable markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
               renderCodeBlock={(block) => <CodeFence block={block} />}
-              classes={{ root: "text-[15px] leading-6 text-foreground", code: "font-mono text-[13px] rounded-[4px] bg-card text-foreground" }}
+              classes={{ root: "font-mono text-[15px] leading-6 text-foreground", code: "font-mono text-[13px] rounded-(--radius-card) bg-card text-foreground" }}
             />
           </View>
         </If>
@@ -639,40 +684,46 @@ function RowView(p: { r: () => Row }) {
         <If when={r().kind === "child"}>
           {() => {
             const c = r() as Extract<Row, { kind: "child" }>;
+            const kind = c.tone === "accent" ? "waiting" : c.status === "running" || c.status === "starting…" || c.status === "started" ? "running" : c.status === "failed" ? "error" : "done";
             return (
-              <View class="flex-row rounded-(--radius-card) bg-card border border-border overflow-hidden my-1">
+              <View class="flex-row rounded-(--radius-card) bg-card border border-border overflow-hidden my-1 font-mono">
                 <Rail color={RAIL[c.tone] ?? "bg-info"} />
                 <View class="flex-1 min-w-0 gap-1 px-3 py-2">
                   <Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId}
                     class={`flex-row items-center gap-2 rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID="child-card">
-                    <Status kind={c.tone === "accent" ? "waiting" : c.status === "running" ? "running" : "done"} />
+                    <Status kind={kind} />
                     <Text class="text-xs leading-4 text-muted-foreground">child</Text>
+                    <If when={c.background}><Text class="text-xs leading-4 text-muted-foreground">Background</Text></If>
                     <Text class={`text-[13px] leading-5 ${agentColor(c.agent)}`}>{c.agent}</Text>
                     <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.title ? `“${c.title}”` : ""}</Text>
-                    <Text class={T.meta}>{c.status}</Text>
+                    <Text testID="child-status" class={META}>{c.status}</Text>
                   </Button>
-                  <Text style={{ numberOfLines: 2 }} class={`${T.meta} pl-6`}>{c.body}</Text>
+                  <If when={!!c.meta}><Text testID="child-meta" class={`${META} pl-6`}>{c.meta}</Text></If>
+                  <Button onPress={() => toggle(c.key, false)} accessibilityLabel={open(c.key, false) ? "Collapse child result" : c.ack ? "Expand background start acknowledgement" : "Expand child result"} testID="child-result-toggle" class={`items-start pl-6 ${FOCUS}`}>
+                    <Text style={open(c.key, false) ? { userSelect: "text" } : { numberOfLines: 2 }} class={META}>{c.body}</Text>
+                    <Text class={META}>{open(c.key, false) ? "Show less" : c.ack ? "Show start" : "Show result"}</Text>
+                  </Button>
                 </View>
               </View>
             );
           }}
         </If>
         <If when={r().kind === "diag"}>
-          <View class="flex-row gap-3 rounded-(--radius-card) bg-card border border-border px-3.5 py-2.5 my-1" testID="msg-diag">
+          <View class="flex-row gap-3 rounded-(--radius-card) bg-card border border-border px-3.5 py-2.5 my-1 font-mono" testID="msg-diag">
             <Rail color={RAIL[(r() as any).tone] ?? "bg-warning"} />
             <View class="flex-1 min-w-0 gap-0.5">
-              <Text class="text-xs leading-4 font-medium text-muted-foreground">{(r() as any).label}</Text>
-              <Text style={{ userSelect: "text" }} class={T.sec}>{(r() as any).text}</Text>
-              <If when={(r() as any).detail}><Text class={T.meta}>{(r() as any).detail}</Text></If>
+              <Text class="text-xs leading-4 font-medium text-muted-foreground font-mono">{(r() as any).label}</Text>
+              <Text style={{ userSelect: "text" }} class={`${T.sec} font-mono`}>{(r() as any).text}</Text>
+              <If when={(r() as any).detail}><Text class={META}>{(r() as any).detail}</Text></If>
             </View>
           </View>
         </If>
         <If when={r().kind === "older"}>
-          <If when={(r() as any).action === "load-older"} else={<Text class={`${T.meta} py-2`} testID="timeline-older">{(r() as any).text}</Text>}>
+          <If when={(r() as any).action === "load-older"} else={<Text class={`${META} py-2`} testID="timeline-older">{(r() as any).text}</Text>}>
             <View class="flex-row items-center gap-2 py-2">
-              <Text class={T.meta} testID="timeline-older">{(r() as any).text}</Text>
+              <Text class={META} testID="timeline-older">{(r() as any).text}</Text>
               <Button onPress={() => run("turn.load_older")} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}>
-                <Text class="text-xs leading-4 text-foreground">Load older messages</Text>
+                <Text class="text-xs leading-4 text-foreground font-mono">Load older messages</Text>
               </Button>
             </View>
           </If>
@@ -688,11 +739,11 @@ function CodeFence(p: { block: TextViewCodeBlock }) {
   return (
     <View class="w-full my-3 rounded-[10px] bg-card overflow-hidden" testID="code-fence">
       <View class="flex-row items-center h-8 pl-4 pr-2 gap-2">
-        <Text class="flex-1 min-w-0 text-xs leading-4 text-muted-foreground">{p.block.language ?? ""}</Text>
+        <Text class="flex-1 min-w-0 text-xs leading-4 text-muted-foreground font-mono">{p.block.language ?? ""}</Text>
         <Button onPress={() => copyText(code(), "Copied code")} accessibilityLabel="Copy code" testID="code-copy"
           class={`flex-row items-center gap-1.5 rounded-(--radius) px-2 min-h-6 hover:bg-accent ${FOCUS}`}>
           <Icon name="copy" size={12} class="tint-muted-foreground" />
-          <Text class={T.meta}>Copy</Text>
+          <Text class={META}>Copy</Text>
         </Button>
       </View>
       <Scroll horizontal contentClass="px-4 pb-3.5">
@@ -721,14 +772,14 @@ function HandoffCard(p: { r: () => Extract<Row, { kind: "handoff" }> }) {
     <View class="w-full rounded-(--radius-card) bg-raised px-4 py-3 gap-1">
       <Button onPress={open} accessibilityLabel="Show the whole handoff summary" testID="msg-handoff" class={`w-full flex-col items-stretch gap-1 ${FOCUS}`}>
         <View class="flex-row items-center gap-3">
-          <Text class="flex-1 min-w-0 text-[14px] leading-5 font-semibold text-foreground">{`Continued from ${name()}`}</Text>
-          <Text class={T.meta}>{`handoff · ${r().time}`}</Text>
+          <Text class="flex-1 min-w-0 text-[14px] leading-5 font-semibold text-foreground font-mono">{`Continued from ${name()}`}</Text>
+          <Text class={META}>{`handoff · ${r().time}`}</Text>
         </View>
-        <Text style={{ numberOfLines: 3 }} testID="handoff-preview" class="text-[14px] leading-5 text-foreground">{lines().join("\n")}</Text>
+        <Text style={{ numberOfLines: 3 }} testID="handoff-preview" class="text-[14px] leading-5 text-foreground font-mono">{lines().join("\n")}</Text>
       </Button>
       <View class="flex-row gap-3">
-        <Button onPress={open} class={`${FOCUS}`}><Text class={T.meta}>Show all</Text></Button>
-        <If when={!!origin()}>{() => <Button onPress={() => openLinked("continued_from")} testID="handoff-open-original" class={`${FOCUS}`}><Text class={`${T.meta} underline`}>Open the original session</Text></Button>}</If>
+        <Button onPress={open} class={`${FOCUS}`}><Text class={META}>Show all</Text></Button>
+        <If when={!!origin()}>{() => <Button onPress={() => openLinked("continued_from")} testID="handoff-open-original" class={`${FOCUS}`}><Text class={`${META} underline`}>Open the original session</Text></Button>}</If>
       </View>
     </View>
   );
@@ -740,30 +791,29 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   const fold = () => toggleFold(r().turnKey);
   const copy = () => copyText(r().text, "Copied message");
   const glyph = () => turnGlyph(r().status);
-  const meta = () => `${r().delivery ? `${r().delivery} · ` : ""}#${r().n} · ${r().time}`;
+  const meta = () => [...deliveryTags(r().delivery), `#${r().n}`, r().time].join(" · ");
   return (
     <If when={r().folded} else={
       <View class="group/band w-full rounded-(--radius-card) bg-raised px-4 py-3 relative" testID="msg-user"
         onFocus={() => focusedBand.set(r().key)} onBlur={() => { if (focusedBand() === r().key) focusedBand.set(null); }}>
-        <If when={focusedBand() === r().key}>
-          {() => <View class="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-primary" />}
-        </If>
+        {/* The TUI's band rail stays visible; focus only changes its colour. */}
+        <View class={`absolute left-0 top-2 bottom-2 w-0.5 rounded-full ${focusedBand() === r().key ? "bg-primary" : "bg-border"}`} />
         <If when={!!r().images?.length}>
           <View class="flex-row flex-wrap gap-2 pb-2">
             <Each of={r().images ?? []} key={(i) => i.data_url}>
-              {(i) => <View class="gap-1"><Image src={i().data_url} style={{ width: 240, height: 180, objectFit: "contain" }} accessibilityLabel={i().name} /><Text class={T.meta}>{i().name}</Text></View>}
+              {(i) => <View class="gap-1"><Image src={i().data_url} style={{ width: 240, height: 180, objectFit: "contain" }} accessibilityLabel={i().name} /><Text class={META}>{i().name}</Text></View>}
             </Each>
           </View>
         </If>
         <View class="flex-row items-start gap-3">
-          <Text style={{ userSelect: "text" }} class="flex-1 min-w-0 text-[15px] leading-6 text-foreground">{r().text}</Text>
+          <Text style={{ userSelect: "text" }} class="flex-1 min-w-0 font-mono text-[15px] leading-6 text-foreground">{r().text}</Text>
           <View class="flex-row items-center gap-1 pt-0.5">
             {/* Hover icons: kept mounted (keyboard reachable), shown while the card is hovered or focused. */}
             <View class={`flex-row items-center ${focusedBand() === r().key ? "" : "opacity-0 group-hover/band:opacity-100"}`}>
               <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
               <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
             </View>
-            <Text class={`${T.meta} pt-1`}>{meta()}</Text>
+            <Text class={`${META} pt-1`}>{meta()}</Text>
           </View>
         </View>
       </View>
@@ -771,12 +821,12 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
       <Button onPress={fold} accessibilityLabel={`${meta()} folded, show`} testID={`msg-user-folded-${r().n}`}
         class={`w-full flex-row items-center gap-2 rounded-(--radius-card) bg-raised px-4 min-h-9 hover:bg-accent ${FOCUS}`}>
         <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
-        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[14px] leading-[22px] text-foreground">{r().text}</Text>
+        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 font-mono text-[14px] leading-[22px] text-foreground">{r().text}</Text>
         <If when={r().tools > 0 || !!r().duration}>
-          {() => <Text class={T.meta}>{[r().tools ? `${r().tools} tool${r().tools === 1 ? "" : "s"}` : "", r().duration].filter(Boolean).join(" · ")}</Text>}
+          {() => <Text class={META}>{[r().tools ? `${r().tools} tool${r().tools === 1 ? "" : "s"}` : "", r().duration].filter(Boolean).join(" · ")}</Text>}
         </If>
         <If when={!!glyph()}>{() => <Status kind={glyph()!} />}</If>
-        <Text class={T.meta}>{meta()}</Text>
+        <Text class={META}>{meta()}</Text>
       </Button>
     </If>
   );
@@ -814,8 +864,8 @@ function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void })
             <View class="w-full max-w-[760px] px-4">
               <Button onPress={() => p.scrollTo(c.band.top)} accessibilityLabel="Scroll to this message" testID="sticky-user-button"
                 class={`w-full flex-row items-center gap-3 rounded-(--radius) bg-raised border-b border-border px-3 min-h-7 hover:bg-accent ${FOCUS}`}>
-                <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.band.text}</Text>
-                <Text class={T.meta}>{`↑ ${lines} lines of this turn above`}</Text>
+                <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary font-mono">{c.band.text}</Text>
+                <Text class={META}>{`↑ ${lines} lines of this turn above`}</Text>
               </Button>
             </View>
           </View>
@@ -853,12 +903,12 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
         class={`w-full flex-row items-center gap-2 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`}>
         <Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
-        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{r().summary}</Text>
+        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary font-mono">{r().summary}</Text>
         <If when={!!r().diff}>
-          {() => <Text class={T.meta}><Text class="text-success">{`+${r().diff!.add}`}</Text>{" "}<Text class="text-error">{`−${r().diff!.del}`}</Text></Text>}
+          {() => <Text class={META}><Text class="text-success">{`+${r().diff!.add}`}</Text>{" "}<Text class="text-error">{`−${r().diff!.del}`}</Text></Text>}
         </If>
-        <If when={r().failed > 0}><Text class="text-xs leading-4 text-error">{`✕ ${r().failed} failed`}</Text></If>
-        <If when={!!r().duration}><Text class={T.meta}>{r().duration!}</Text></If>
+        <If when={r().failed > 0}><Text class="text-xs leading-4 text-error font-mono">{`✕ ${r().failed} failed`}</Text></If>
+        <If when={!!r().duration}><Text class={META}>{r().duration!}</Text></If>
       </Button>
       <If when={r().open}>
         <View class="ml-[11px]">
@@ -895,31 +945,32 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
   const x = p.x;
   const lines = () => x().text.split("\n").filter((l) => l.trim().length > 0);
   const hidden = () => Math.max(0, lines().length - 5);
+  const label = () => x().duration && !x().running ? `${roles.reasoning.label} for ${x().duration}` : roles.reasoning.label;
   return (
     <View class="py-0.5">
       <If when={x().running} else={
-        <Button onPress={() => toggle(`reason:${x().key}`, false)} testID="reasoning"
+        <Button onPress={() => toggle(`reason:${x().key}`, false)} accessibilityLabel={`${label()}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
           class={`w-full flex-row items-center gap-2 rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`}>
           <Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
-          <Text class={`text-[13px] leading-5 font-semibold text-muted-foreground`}>{roles.reasoning.label}</Text>
+          <Text class={`text-[13px] leading-5 font-semibold text-muted-foreground font-mono`}>{label()}</Text>
           <If when={!!x().encrypted}>
-            {() => <Text class="text-[13px] leading-5 italic text-muted-foreground">encrypted, replayed to the provider</Text>}
+            {() => <Text class="text-[13px] leading-5 italic text-muted-foreground font-mono">encrypted, replayed to the provider</Text>}
           </If>
           <If when={!x().encrypted}>
-            {() => <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground">{firstLine(x().text)}</Text>}
+            {() => <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground font-mono">{firstLine(x().text)}</Text>}
           </If>
         </Button>
       }>
         <View class="flex-row items-center gap-2 px-1 min-h-6" testID="reasoning">
-          <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{"Thinking…"}</Text>
+          <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary font-mono">{"Thinking…"}</Text>
         </View>
       </If>
       <If when={x().running || (x().open && !x().encrypted)}>
         <View class="ml-[7px] border-l-2 border-border pl-4 py-1">
           <If when={x().running && hidden() > 0}>
-            {() => <Text class="text-xs leading-4 text-muted-foreground">{`… ${hidden()} earlier lines`}</Text>}
+            {() => <Text class={META}>{`… ${hidden()} earlier lines`}</Text>}
           </If>
-          <Text style={{ userSelect: "text" }} class="text-[13px] leading-5 italic text-foreground-secondary">
+          <Text style={{ userSelect: "text" }} class="text-[13px] leading-5 italic text-foreground-secondary font-mono">
             {x().running ? lines().slice(-5).join("\n") : x().text}
           </Text>
         </View>
@@ -952,21 +1003,21 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
         <If when={live()} else={<Icon name={verbIcon(r().name)} size={16} class="tint-foreground-secondary" />}>
           {() => <Status kind={stateKind()} />}
         </If>
-        <Text class="min-w-[52px] text-[13px] leading-5 font-medium text-foreground">{verbLabel(r().name)}</Text>
+        <Text class="min-w-[52px] text-[13px] leading-5 font-medium text-foreground font-mono">{verbLabel(r().name)}</Text>
         <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground-secondary">{r().arg}</Text>
         <If when={r().state !== "waiting" && !!r().summary}>
-          <Text class={T.meta}><Text class={r().summary.startsWith("+") ? "text-success" : r().summary.startsWith("−") ? "text-error" : "text-muted-foreground"}>{r().summary}</Text></Text>
+          <Text class={META}><Text class={r().summary.startsWith("+") ? "text-success" : r().summary.startsWith("−") ? "text-error" : "text-muted-foreground"}>{r().summary}</Text></Text>
         </If>
-        <If when={r().state !== "waiting" && !!r().duration}><Text class={T.meta}>{r().duration!}</Text></If>
-        <If when={r().state === "waiting"}><Text class="text-[13px] text-primary">waiting</Text></If>
+        <If when={r().state !== "waiting" && !!r().duration}><Text class={META}>{r().duration!}</Text></If>
+        <If when={r().state === "waiting"}><Text class="text-[13px] text-primary font-mono">waiting</Text></If>
       </View>
       <If when={open()}>
         <View class="ml-[18px] mt-1 mb-1 rounded-(--radius) bg-card overflow-hidden">
           <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
-            <Text class="text-xs leading-4 font-semibold text-foreground">{verbLabel(r().name)}</Text>
+            <Text class="text-xs leading-4 font-semibold text-foreground font-mono">{verbLabel(r().name)}</Text>
             <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 font-mono text-xs leading-4 text-foreground-secondary">{r().arg}</Text>
             <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
-              <Text class={T.meta}>{r().raw ? "[raw]" : "raw · r"}</Text>
+              <Text class={META}>{r().raw ? "[raw]" : "raw · r"}</Text>
             </Button>
           </View>
           <Scroll class="max-h-[320px]" contentClass="px-3 py-2 gap-0.5">
@@ -981,17 +1032,17 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
           <If when={r().media.length > 0}>
             <View class="flex-row flex-wrap gap-3 px-3 pb-2" testID={`tool-media-${r().id}`}>
               <Each of={r().media} key={(x) => x.artifact}>
-                {(x) => <View class="gap-1"><Image src={`/api/artifact/${x().artifact}`} style={{ width: 320, height: 240, objectFit: "contain" }} accessibilityLabel={x().name || "image"} /><Text class={T.meta}>{x().name || x().mime}</Text></View>}
+                {(x) => <View class="gap-1"><Image src={`/api/artifact/${x().artifact}`} style={{ width: 320, height: 240, objectFit: "contain" }} accessibilityLabel={x().name || "image"} /><Text class={META}>{x().name || x().mime}</Text></View>}
               </Each>
             </View>
           </If>
           <If when={!!marker()}>
             {() => (
               <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
-                <Text class={T.meta}>{`↑ ${hidden()} earlier lines`}</Text>
+                <Text class={META}>{`↑ ${hidden()} earlier lines`}</Text>
                 <View class="flex-1" />
                 <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID={`tool-show-all-${r().id}`}>
-                  <Text class="text-[13px] leading-5 font-medium text-primary">Show all</Text>
+                  <Text class="text-[13px] leading-5 font-medium text-primary font-mono">Show all</Text>
                 </Button>
               </View>
             )}
@@ -1000,7 +1051,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
             <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
               <View class="flex-1" />
               <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`}>
-                <Text testID={`tool-show-less-${r().id}`} class={T.meta}>show less o</Text>
+                <Text testID={`tool-show-less-${r().id}`} class={META}>show less o</Text>
               </Button>
             </View>
           </If>
@@ -1049,7 +1100,7 @@ export function Timeline() {
             <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${newBelow(rows())} new`} testID="jump-latest" class={`flex-row items-center gap-1.5 rounded-full border border-border bg-popover px-3 min-h-8 shadow-md hover:bg-accent ${FOCUS}`}>
               <Text class="text-[13px] leading-5 text-foreground-secondary">↓</Text>
               <Text class="text-[13px] leading-5 text-popover-foreground">{newBelow(rows()) > 0 ? `${newBelow(rows())} new` : "latest"}</Text>
-              <Text class={T.meta}>{`· ${keyLabel(byId.get("session.jump_latest")!) ?? "end"}`}</Text>
+              <Text class={META}>{`· ${keyLabel(byId.get("session.jump_latest")!) ?? "end"}`}</Text>
             </Button>
           </View>
         </View>

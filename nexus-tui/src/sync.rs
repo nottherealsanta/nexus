@@ -135,7 +135,8 @@ pub enum SyncMsg {
 /// App -> supervisor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Include this session's bounded message view in snapshots.
+    /// View this session: load its history (in the background while the
+    /// stream is live) and include it in later snapshots. No resync.
     Select(Option<String>),
     /// Fetch a fresh snapshot (the reducer could not continue).
     Resync,
@@ -226,8 +227,13 @@ struct Ctx {
     catalog: Option<Option<String>>,
     config: bool,
     context: Option<String>,
+    /// Context reads run beside the stream, one at a time; requests made
+    /// meanwhile wait here, one per session.
+    context_reads: std::sync::Arc<std::sync::Mutex<ContextReads>>,
     draft: Option<Value>,
     inputs: Option<String>,
+    /// A selected session whose history has not been loaded yet.
+    history: Option<String>,
     config_patch: Option<(String, String, Value)>,
     worktrees: Option<String>,
     project_worktrees: Vec<String>,
@@ -254,9 +260,9 @@ impl Ctx {
             Command::Select(s) => {
                 self.context = s.clone();
                 self.inputs = s.clone();
+                self.history = s.clone();
                 self.selected = s;
                 self.newest_turn = None;
-                self.resync = Some(ResyncCause::Requested);
             }
             Command::Resync => self.resync = Some(ResyncCause::Requested),
             Command::Config => self.config = true,
@@ -339,8 +345,10 @@ pub async fn run(
         catalog: None,
         config: true,
         context: None,
+        context_reads: Default::default(),
         draft: None,
         inputs: None,
+        history: None,
         config_patch: None,
         worktrees: None,
         project_worktrees: Vec::new(),
@@ -428,6 +436,7 @@ pub async fn run(
                     // is the resume cursor.
                     if let Some(sid) = cx.selected.clone() {
                         cx.inputs = Some(sid.clone());
+                        cx.history = None;
                         if let Some(h) = load_history(&api, &sid).await {
                             cx.newest_turn = h
                                 .turns
@@ -480,8 +489,14 @@ pub async fn run(
             }
         }
 
+        // A selection made while reconnecting, with no snapshot this pass.
+        if let Some(sid) = cx.history.take() {
+            if let Some(h) = load_history(&api, &sid).await {
+                cx.send(SyncMsg::History(Box::new(h)));
+            }
+        }
         load_config(&mut cx, &api).await;
-        load_context(&mut cx, &api).await;
+        load_context(&mut cx, &api);
         load_draft(&mut cx, &api).await;
         load_inputs(&mut cx, &api).await;
         // A request received while reconnecting must not be stranded until a
@@ -502,21 +517,9 @@ pub async fn run(
                 }
             }
         }
-        if let Some(session) = cx.worktrees.take() {
-            let _ = api.worktrees(&session).await;
-        }
-        for project in std::mem::take(&mut cx.project_worktrees) {
-            let data = api
-                .project_worktrees(&project)
-                .await
-                .map_err(|e| e.to_string());
-            if !cx.send(SyncMsg::ProjectWorktrees { project, data }) {
-                return;
-            }
-        }
+        spawn_slow_reads(&mut cx, &api);
         load_skill_mcp(&mut cx, &api).await;
         load_files(&mut cx, &api).await;
-        load_git(&mut cx, &api).await;
         load_git_diff(&mut cx, &api).await;
         match stream(&mut cx, &api, &mut cursor, &mut backoff, &mut had_live).await {
             StreamEnd::Stop => return,
@@ -546,10 +549,31 @@ pub async fn run(
     }
 }
 
-async fn load_git(cx: &mut Ctx, api: &CoreApi) {
+/// Git and worktree reads take tens of ms each; they run beside the stream
+/// so the next command (often a switch, at launch too) is not held up.
+fn spawn_slow_reads(cx: &mut Ctx, api: &CoreApi) {
+    if let Some(session) = cx.worktrees.take() {
+        let api = api.clone();
+        tokio::spawn(async move {
+            let _ = api.worktrees(&session).await;
+        });
+    }
     if let Some(session) = cx.git.take() {
-        let data = api.git_status(&session).await.map_err(|e| e.to_string());
-        cx.send(SyncMsg::Git { session, data });
+        let (api, out) = (api.clone(), cx.out.clone());
+        tokio::spawn(async move {
+            let data = api.git_status(&session).await.map_err(|e| e.to_string());
+            let _ = out.send(SyncMsg::Git { session, data });
+        });
+    }
+    for project in std::mem::take(&mut cx.project_worktrees) {
+        let (api, out) = (api.clone(), cx.out.clone());
+        tokio::spawn(async move {
+            let data = api
+                .project_worktrees(&project)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = out.send(SyncMsg::ProjectWorktrees { project, data });
+        });
     }
 }
 
@@ -632,16 +656,48 @@ async fn load_inputs(cx: &mut Ctx, api: &CoreApi) {
     }
 }
 
-async fn load_context(cx: &mut Ctx, api: &CoreApi) {
-    if let Some(session) = cx.context.take() {
-        if let Ok(data) = api
-            .http
-            .get(&format!("/api/session/{session}/context"), &[])
-            .await
-        {
-            cx.send(SyncMsg::Context { session, data });
+#[derive(Default)]
+struct ContextReads {
+    running: bool,
+    waiting: Vec<String>,
+}
+
+/// Start the requested context read without waiting for it. Core builds the
+/// whole request body for one, so a burst of events coalesces into one read
+/// per session, and a switch is never held up behind them.
+fn load_context(cx: &mut Ctx, api: &CoreApi) {
+    let Some(session) = cx.context.take() else {
+        return;
+    };
+    {
+        let mut reads = cx.context_reads.lock().unwrap();
+        if reads.running {
+            if !reads.waiting.contains(&session) {
+                reads.waiting.push(session);
+            }
+            return;
         }
+        reads.running = true;
     }
+    let (api, out, reads) = (api.clone(), cx.out.clone(), cx.context_reads.clone());
+    tokio::spawn(async move {
+        let mut session = session;
+        loop {
+            if let Ok(data) = api
+                .http
+                .get(&format!("/api/session/{session}/context"), &[])
+                .await
+            {
+                let _ = out.send(SyncMsg::Context { session, data });
+            }
+            let mut r = reads.lock().unwrap();
+            if r.waiting.is_empty() {
+                r.running = false;
+                return;
+            }
+            session = r.waiting.remove(0);
+        }
+    });
 }
 
 async fn load_draft(cx: &mut Ctx, api: &CoreApi) {
@@ -1043,7 +1099,7 @@ async fn stream(
                         if matches!(e.kind.as_str(), "turn.summary" | "message.added" | "session.updated") {
                             if let Some(id) = e.session_id.as_ref().filter(|id| cx.selected.as_ref() == Some(*id)) {
                                 cx.context = Some(id.clone());
-                                load_context(cx, api).await;
+                                load_context(cx, api);
                             }
                         }
                         if e.kind == "turn.summary" && e.data["status"].as_str() != Some("running") {
@@ -1075,9 +1131,20 @@ async fn stream(
                         let was_catalog = matches!(c, Command::Config | Command::Context(_) | Command::DraftContext(_) | Command::PatchConfig { .. } | Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::SkillMcp(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
                         cx.handle(c);
                         if cx.shutdown { return StreamEnd::Stop; }
+                        // History loads beside the stream, which keeps applying
+                        // events; the reducer merges both in either order.
+                        if let Some(sid) = cx.history.take() {
+                            let (api, out) = (api.clone(), cx.out.clone());
+                            tokio::spawn(async move {
+                                if let Some(h) = load_history(&api, &sid).await {
+                                    let _ = out.send(SyncMsg::History(Box::new(h)));
+                                }
+                            });
+                        }
                         load_config(cx, api).await;
-                        load_context(cx, api).await;
+                        load_context(cx, api);
                         load_draft(cx, api).await;
+                        load_inputs(cx, api).await;
                         if let Some(project) = cx.catalog.take() {
                             if let Some((models, agents, source, last_model, providers, problems)) = load_catalog(api, project.as_deref()).await {
                                 if !cx.send(SyncMsg::Catalog { models, agents, source, last_model, providers, problems }) {
@@ -1085,19 +1152,10 @@ async fn stream(
                                 }
                             }
                         }
-                        if let Some(session) = cx.worktrees.take() {
-                            let _ = api.worktrees(&session).await;
-                        }
-                        for project in std::mem::take(&mut cx.project_worktrees) {
-                            let data = api.project_worktrees(&project).await.map_err(|e| e.to_string());
-                            if !cx.send(SyncMsg::ProjectWorktrees { project, data }) {
-                                return StreamEnd::Stop;
-                            }
-                        }
+                        spawn_slow_reads(cx, api);
                         load_skill_mcp(cx, api).await;
                         load_files(cx, api).await;
                         load_completion(cx, api).await;
-                        load_git(cx, api).await;
                         load_git_diff(cx, api).await;
                         if !was_catalog {
                             if let Some(cause) = cx.resync.take() {

@@ -9,11 +9,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..llmhub.types import ToolSpec
-from .base import MAX_OUTPUT_CHARS, Tool, ToolContext, ToolError, clip, resolve
+from ..llmhub.types import Media, ToolSpec
+from .base import MAX_OUTPUT_CHARS, Tool, ToolContext, ToolError, ToolOutput, clip, resolve
 
 DEFAULT_LIMIT = 2000
 MAX_LINE_CHARS = 2000
+_IMAGE_SIGNATURES = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"),
+                     (b"GIF87a", "image/gif"), (b"GIF89a", "image/gif"))
+
+
+def _image_mime(data: bytes) -> str | None:
+    for signature, mime in _IMAGE_SIGNATURES:
+        if data.startswith(signature):
+            return mime
+    return "image/webp" if data[:4] == b"RIFF" and data[8:12] == b"WEBP" else None
 
 
 async def run(args: dict[str, Any], ctx: ToolContext) -> str:
@@ -29,6 +38,9 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
     if not path.is_file():
         raise ToolError(f"{display} does not exist")
     data = path.read_bytes()
+    mime = _image_mime(data)
+    if mime is not None:
+        return _image(ctx, path, display, data, mime)
     if b"\x00" in data[:8192]:
         raise ToolError(f"{display} looks binary ({len(data)} bytes)")
     lines = data.decode("utf-8", "replace").splitlines()
@@ -57,6 +69,19 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
     return clip(prefix + body)
 
 
+def _image(ctx: ToolContext, path: Any, display: str, data: bytes, mime: str) -> str:
+    """An image file goes to the model as an image, stored as an artifact like any tool image."""
+    if ctx.save_media is None:
+        raise ToolError(f"{display} is an image ({mime}, {len(data)} bytes); images cannot be shown outside a session")
+    try:
+        artifact = ctx.save_media(data, mime, path.name)
+    except ValueError as exc:
+        raise ToolError(f"{display} is an image ({mime}, {len(data)} bytes) that cannot be shown: {exc}") from exc
+    prefix = f"[path: {display}]\n" if ctx.cwd_changed else ""
+    return ToolOutput(f"{prefix}[image {display} ({mime}, {len(data)} bytes) saved as artifact {artifact}]",
+                      (Media(artifact, mime, path.name),))
+
+
 def _record(ctx: ToolContext, path: Any, data: bytes, *, lines: int, ranges: list[tuple[int, int]],
             partial: list[int], clipped: bool) -> None:
     if ctx.files is None or not ctx.model_visible:
@@ -68,7 +93,7 @@ def _record(ctx: ToolContext, path: Any, data: bytes, *, lines: int, ranges: lis
 TOOL = Tool(
     ToolSpec(
         name="read",
-        description="Read a text file (with line numbers) or list a directory. Paths are relative to the workspace. "
+        description="Read a text file (with line numbers), view an image file (PNG, JPEG, GIF, WebP), or list a directory. Paths are relative to the workspace. "
                     "Use `offset` and `limit` for large files. Read a file before you change it.",
         parameters={
             "type": "object",

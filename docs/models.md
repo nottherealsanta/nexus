@@ -22,6 +22,10 @@ and `cli.py` turn a `provider/model` reference into a provider and a model id.
 | Download fails, a cache exists (any age) | Stale cache | `stale cache (N h old; download failed: ...)` |
 | Download fails, no cache | `OSError("models.dev is unreachable and there is no cache: ...")` | n/a |
 
+A cache read is parsed once and kept in memory until the file's mtime or size
+changes, so context, draft-context and image-input checks do not re-parse the
+multi-MB file on Core's event loop. Callers treat the returned catalog as read-only.
+
 Download failures that trigger the fallback: `OSError` (HTTP status >= 400, too
 large), `ValueError`, `TypeError` (not a JSON object), `httpx.HTTPError`.
 

@@ -4,16 +4,18 @@
 // prompt); an agent's description is never sent, so it is never shown here.
 import { Scroll, Text, View, effect, signal, windowSize } from "nsh";
 import { Button } from "nsh/base";
-import { Btn, FOCUS, T, midTruncate } from "./kit";
-import { run, byId, keyLabel, toggleDraftInventory, toggleSessionInventory } from "../commands";
+import { Btn, FOCUS, T } from "./kit";
+import { run, toggleDraftInventory } from "../commands";
 import {
-  contextDetail, agentCatalog, currentProject, info, rememberedModel, draftContext, draftContextKey, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, projectWorktrees, sessionDraft, startingInventory, userHome, worktreeForDirectory,
+  contextDetail, agentCatalog, currentProject, info, rememberedModel, draftContext, draftContextKey, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome,
 } from "../store";
-import { agentColor } from "../agent-color";
 import { request } from "../core/transport";
-import { Modal, ModalTitle } from "./modal";
+import { Modal } from "./modal";
 import { sessionInventoryRows } from "../skills-mcp";
 import type { InventoryKind, InventoryRow, McpEntry, SkillEntry } from "../skills-mcp";
+import "../../fonts/MonaspaceArgon-Regular.otf";
+import "../../fonts/MonaspaceArgon-Medium.otf";
+import "../../fonts/MonaspaceArgon-Bold.otf";
 
 // --- the shared section model -----------------------------------------------------------------
 export type CtxBody =
@@ -174,27 +176,27 @@ function Switch(p: { on: boolean }) {
 function Section(p: { s: CtxSection; estimated: boolean; onOpen: () => void; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
   const s = p.s;
   return (
-    <View class="rounded-(--radius-card) bg-card px-3.5 py-2.5 gap-1.5" testID={`ctx-${s.key}`}>
+    <View class="py-1 gap-1" testID={`ctx-${s.key}`}>
       <View class="flex-row items-center gap-2 min-h-5 rounded-(--radius) hover:bg-accent">
-        <Text class={`${T.meta} text-muted-foreground`}>◆</Text>
-        <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`} class={`rounded-(--radius) ${FOCUS}`}><Text class="text-[13px] leading-5 font-semibold text-foreground">{s.title}</Text></Button>
+        <Text class={`${T.meta} font-mono text-muted-foreground`}>◆</Text>
+        <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`} class={`rounded-(--radius) ${FOCUS}`}><Text class="font-mono text-[13px] leading-5 font-semibold text-foreground">{s.title}</Text></Button>
         <If when={s.tokens !== undefined}>
-          <Count text={`${p.estimated ? "~" : ""}${thousands(s.tokens ?? 0)} tok`} estimated={p.estimated} class={`${T.sec} tabular-nums`} />
+          <Count text={`${p.estimated ? "~" : ""}${thousands(s.tokens ?? 0)} tok`} estimated={p.estimated} class={`${T.sec} font-mono tabular-nums`} />
         </If>
-        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.meta}`}>{`· ${s.meta}`}</Text>
+        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.meta} font-mono`}>{`· ${s.meta}`}</Text>
       </View>
       <If when={s.body.kind === "preview" && (s.body as { text: string }).text !== ""}>
-        <Text style={{ numberOfLines: 1 }} class={`${T.meta} pl-5`} testID={`ctx-${s.key}-preview`}>{(s.body as { text: string }).text}</Text>
+        <Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono pl-5`} testID={`ctx-${s.key}-preview`}>{(s.body as { text: string }).text}</Text>
       </If>
       <If when={s.body.kind === "grid"}>
         <View class="flex-row flex-wrap pl-5" testID={`ctx-${s.key}-grid`}>
           <Each of={gridCells((s.body as { items: { name: string; on: boolean }[] }).items)} key={(c) => c.name}>
             {(c) => (
               <View class="w-1/4 pr-1.5 pb-1.5">
-                <If when={!c().more} else={<View class="h-6 justify-center px-2"><Text class={T.meta}>{c().name}</Text></View>}>
-                  <View class={`h-6 flex-row items-center gap-1.5 rounded-(--radius) bg-background px-2 ${c().on ? "" : "opacity-60"}`} testID={`ctx-chip-${c().name}`} accessibilityLabel={`${c().name} ${c().on ? "on" : "off"}`}>
+                <If when={!c().more} else={<View class="h-6 justify-center px-2"><Text class={`${T.meta} font-mono`}>{c().name}</Text></View>}>
+                  <View class={`h-6 flex-row items-center gap-1.5 px-2 ${c().on ? "" : "opacity-60"}`} testID={`ctx-chip-${c().name}`} accessibilityLabel={`${c().name} ${c().on ? "on" : "off"}`}>
                     <Switch on={c().on} />
-                    <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-xs leading-4 ${c().on ? "text-foreground-secondary" : "text-muted-foreground line-through"}`}>{c().name}</Text>
+                    <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 font-mono text-xs leading-4 ${c().on ? "text-foreground-secondary" : "text-muted-foreground line-through"}`}>{c().name}</Text>
                   </View>
                 </If>
               </View>
@@ -211,16 +213,16 @@ function Section(p: { s: CtxSection; estimated: boolean; onOpen: () => void; onI
               return (
                 <Button role="switch" selected={item().on} onPress={() => p.onInventoryToggle?.(item().kind, item().name, item().locked)}
                   accessibilityLabel={`${item().name} ${item().on ? "on" : "off"}${item().locked ? ", new session" : ""}`} testID={`ctx-${item().kind}-row-${idName}`}
-                  class={`w-full flex-row items-start gap-2 rounded-(--radius) bg-background px-2 py-1.5 hover:bg-accent ${FOCUS} ${item().locked ? "opacity-60" : ""}`}>
+                  class={`w-full flex-row items-start gap-2 rounded-(--radius) px-2 py-1 hover:bg-accent ${FOCUS} ${item().locked ? "opacity-60" : ""}`}>
                   <View class="pt-1"><Switch on={item().on} /></View>
                   <View class="flex-1 min-w-0 gap-0.5">
                     <View class="flex-row items-center gap-2">
-                      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-xs leading-4 ${item().on ? "text-foreground-secondary" : "text-muted-foreground line-through"}`}>{item().name}</Text>
-                      <If when={item().locked}><Text class="text-[10px] leading-4 text-muted-foreground">new session</Text></If>
+                      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 font-mono text-xs leading-4 ${item().on ? "text-foreground-secondary" : "text-muted-foreground line-through"}`}>{item().name}</Text>
+                      <If when={item().locked}><Text class="font-mono text-[10px] leading-4 text-muted-foreground">new session</Text></If>
                     </View>
-                    <If when={!!item().description}><Text style={{ numberOfLines: 2 }} class={T.meta}>{item().description}</Text></If>
-                    <If when={!!status()}><Text class={T.meta}>{status()}</Text></If>
-                    <If when={!!item().error}><Text style={{ numberOfLines: 2 }} class="text-xs leading-4 text-warning">{item().error}</Text></If>
+                    <If when={!!item().description}><Text style={{ numberOfLines: 2 }} class={`${T.meta} font-mono`}>{item().description}</Text></If>
+                    <If when={!!status()}><Text class={`${T.meta} font-mono`}>{status()}</Text></If>
+                    <If when={!!item().error}><Text style={{ numberOfLines: 2 }} class="font-mono text-xs leading-4 text-warning">{item().error}</Text></If>
                   </View>
                 </Button>
               );
@@ -235,7 +237,7 @@ function Section(p: { s: CtxSection; estimated: boolean; onOpen: () => void; onI
 /** A single detail dialog remains mounted even when the context section is folded. */
 export function ContextDetailModal() {
   const detail = contextDetail;
-  return <If when={detail()}>{() => <Modal width={760} label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}><ModalTitle title={detail()!.title} /><Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }} contentClass="pt-3"><Text testID="context-detail-text" style={{ userSelect: "text" }} class="text-[13px] leading-5 text-foreground">{detail()!.detail}</Text></Scroll></Modal>}</If>;
+  return <If when={detail()}>{() => <Modal width={760} label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}><View class="flex-row items-center min-h-8 gap-3"><Text class="flex-1 font-mono text-[15px] leading-5 font-semibold text-popover-foreground">{detail()!.title}</Text><Text class={`${T.meta} font-mono rounded-(--radius) bg-muted px-1.5`}>esc</Text></View><Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }} contentClass="pt-3"><Text testID="context-detail-text" style={{ userSelect: "text" }} class="font-mono text-[13px] leading-5 text-foreground">{detail()!.detail}</Text></Scroll></Modal>}</If>;
 }
 
 /** The sections and the total as text (no bar). */
@@ -243,12 +245,12 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
   const pct = () => share(p.total, p.window);
   const detail = contextDetail;
   return (
-    <View class="gap-2" testID="context-sections">
+    <View class="rounded-(--radius-card) bg-card px-3.5 py-2" testID="context-sections">
       <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => <Section s={s()} estimated={p.estimated} onOpen={() => detail.set(s())} onInventoryToggle={p.onInventoryToggle} />}</Each>
-      <View class="flex-row items-center gap-2 px-3.5 pt-1" testID="context-total">
-        <Text class="text-[13px] leading-5 font-semibold text-foreground">Context total</Text>
-        <Count text={`${p.estimated ? "~" : ""}${thousands(p.total)} tokens`} estimated={p.estimated} class="text-[13px] leading-5 text-foreground tabular-nums" />
-        <If when={!!pct()}><Text class={T.meta}>{`· ${pct()} of the window`}</Text></If>
+      <View class="flex-row items-center gap-2 pt-1" testID="context-total">
+        <Text class="font-mono text-[13px] leading-5 font-semibold text-foreground">Context total</Text>
+        <Count text={`${p.estimated ? "~" : ""}${thousands(p.total)} tokens`} estimated={p.estimated} class="font-mono text-[13px] leading-5 text-foreground tabular-nums" />
+        <If when={!!pct()}><Text class={`${T.meta} font-mono`}>{`· ${pct()} of the window`}</Text></If>
       </View>
     </View>
   );
@@ -287,19 +289,17 @@ export function NewSessionView() {
     loadStartingInventory(p.id);
     ensure(p.id, agentName());
   });
-  effect(() => { const p = project(); if (p) loadDraftContext(p.id); });
+  // `project()` changes on every model bump; the draft key decides when Core is asked again.
+  let opened = true;
+  effect(() => { const p = project(); if (p) { void loadDraftContext(p.id, opened); opened = false; } });
   const modelRef = () => sessionDraft().model || agent()?.model || rememberedModel(currentProject(), agentName());
   const modelEntry = () => modelCatalog().find((e) => e.ref === modelRef());
-  const modelName = () => { const r = modelRef(); return r ? (modelEntry()?.name || r.split("/").at(-1) || r) : "Select a model"; };
-  const provider = () => { const r = modelRef(); return r ? (modelEntry()?.provider || r.split("/")[0]) : ""; };
   const window = () => { const c = Number(modelEntry()?.context); return Number.isFinite(c) && c > 0 ? c : undefined; };
   const fullPath = () => {
     const p = project(); if (!p) return "";
     const home = (userHome() || ((info()?.home ?? "").endsWith("/.nexus10") ? (info()!.home as string).slice(0, -9) : "")).replace(/\/$/, "");
     return home && (p.path === home || p.path.startsWith(`${home}/`)) ? `~${p.path.slice(home.length)}` : p.path;
   };
-  const path = () => midTruncate(fullPath(), 48);
-  const branch = () => { const p = project(); return p ? (worktreeForDirectory(p.path, projectWorktrees()[p.id])?.branch as string | undefined) : undefined; };
   const preview = () => {
     const p = project()!;
     const answer = draftContext();
@@ -309,14 +309,6 @@ export function NewSessionView() {
       disabled_tools: sessionDraft().disabled_tools,
       file: files()[p.id] ? { path: `${fullPath().replace(/\/$/, "")}/AGENTS.md`, ...files()[p.id]! } : null,
     });
-  };
-  const hints = () => {
-    const out: { k: string; label: string }[] = [];
-    for (const [id, label] of [["agent.change", "agent"], ["model.change", "model"], ["model.effort", "effort"]]) {
-      const c = byId.get(id); const k = c ? keyLabel(c) : null;
-      if (k) out.push({ k, label });
-    }
-    return out;
   };
   return (
     <View class="flex-1 min-h-0" testID="new-session">
@@ -329,29 +321,12 @@ export function NewSessionView() {
           </View>
         </View>
       }>
-        {(p) => (
-          <Scroll class="flex-1 min-h-0" contentClass="items-center px-4 py-6">
-            <View class="w-full max-w-[760px] gap-5">
-              <View class="gap-1" testID="new-session-header">
-                <Text class="text-[18px] leading-7 font-semibold text-foreground">{`New session in ${p().name}`}</Text>
-                <View class="flex-row flex-wrap items-center gap-x-1.5" testID="new-session-line">
-                  <Text class={`text-[13px] leading-5 font-semibold ${agentColor(agentName())}`}>{agentName()}</Text>
-                  <Text class={T.meta}>·</Text>
-                  <Text class="text-[13px] leading-5 text-foreground">{modelName()}</Text>
-                  <If when={!!provider()}><Text class={T.meta}>{provider()}</Text></If>
-                  <Text class={T.meta}>·</Text>
-                  <Text class={T.sec}>{sessionDraft().effort || "default"}</Text>
-                  <Text class={T.meta}>·</Text>
-                  <Text class={T.meta}>{path()}</Text>
-                  <If when={!!branch()}><Text class={T.sec}>{`⌥ ${branch()}`}</Text></If>
-                </View>
-                <View class="flex-row flex-wrap items-center gap-x-1.5" testID="new-session-keys">
-                  <Each of={hints()} key={(h) => h.label}>
-                    {(h) => <Text class={T.meta}><Text class="font-semibold text-foreground-secondary">{h().k}</Text>{` ${h().label}`}</Text>}
-                  </Each>
-                </View>
+        {() => (
+          <Scroll class="flex-1 min-h-0">
+            <View class="w-full items-center px-4 py-6">
+              <View class="w-full max-w-[760px]">
+                <ContextSections sections={preview().sections} total={preview().total} estimated window={window()} onInventoryToggle={(kind, name, locked) => toggleDraftInventory(kind, name, locked)} />
               </View>
-              <ContextSections sections={preview().sections} total={preview().total} estimated window={window()} onInventoryToggle={(kind, name, locked) => toggleDraftInventory(kind, name, locked)} />
             </View>
           </Scroll>
         )}

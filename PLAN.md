@@ -20,7 +20,7 @@ The pages are in both clients ([config.md](docs/config.md#settings-layout)). Rem
 
 ## Steer, queue and prompt history
 
-- Add NSH browser coverage for Enter/Tab and the pending-input stack after fixing the mock stream (see Browser tests). Review the steer/queue implementation.
+- Add NSH browser coverage for Enter/Tab and the pending-input stack after fixing the mock stream (see Browser tests). The composer already steers and queues, and the timeline shows the TUI's `steer` / `queued` tags.
 - Add Ctrl+R history search in both clients; verify cross-client per-project recall after restarting both clients, including multiline drafts and images.
 
 ## Extensions, skills, MCP and hooks
@@ -40,6 +40,7 @@ The pages are in both clients ([config.md](docs/config.md#settings-layout)). Rem
 
 ## Context and sessions
 
+- Session switching is slow (2026-10-30). Fixed: Core re-parsed the 6.4 MB models.dev cache on every context, draft-context and image-input call (~300 ms on the event loop each), and NSH's new-session view asked for the draft context on every model bump, so a streaming turn kept Core at 100% CPU. The NSH composer also re-read prompt history on every bump (thousands of requests per turn), and the `@` listing asked again while a request was in flight; both are fixed. Still open: after a long streamed turn, NSH's main thread stays busy for 5-7 s rendering it (present in the committed code too), so clicks in that window wait. The TUI now caches the last 8 session views and keeps them current from the stream; select loads history in the background with no resync, and git/worktree reads no longer block a switch (`--bench`: a switch 260 → 10 ms, back to a cached view 0.8 ms to first frame). NSH caches session views the same way. Both clients now run context reads one at a time per session and coalesce the rest, and the TUI no longer reads git and worktrees inline at launch (first open ~115 → ~50 ms). Core still rebuilds the whole request body for each `GET …/context` (warm 5–12 ms for a 1.4 MB body, 30–130 ms on a session's first read) and sends all of it to clients that mostly show `used`/`window`; a Core-side cache was not added because its invalidation would have to track everything `agent.request()` reads, and a stale one would show context the model does not have. Next: a lighter context endpoint (budget only) if the cost shows up again.
 - Model memory (no default model) is in core, TUI and NSH; check it in a real daemon with both clients: a draft with no model asks for one (Core's draft-context request returns 400 "no model selected", so the starting-context preview is empty until one is chosen: consider a provider-independent estimate), a remembered model whose provider is signed out is shown and not replaced, and a session stored before the change that holds no model asks for one. The TUI test `agent_and_model_chosen_before_a_session_exists_go_into_its_creation` already failed before this change.
 
 - Allow `/btw` during a running turn in both clients; add NSH browser coverage for opening the original session from a handoff.
@@ -58,17 +59,19 @@ child-session picker navigation in the NSH browser suite once its mock stream is
 
 ### TUI
 
+- Verify Cmd+arrow composer shortcuts in a terminal that forwards Super-modified keys.
 - Add `path:line` and OSC 8 link hit regions; choose a syntax-highlighting library for the file view.
 - Fix split-diff continuation alignment (`nexus-tui/src/diff.rs`) and provide line numbers for edit/patch diffs where input lacks them.
 - Add PTY tests at 80×24 and 160×48 for anchor, follow and jump-to-latest; produce a fixed-fixture review gallery (`interface/review.md`).
+- Timeline mouse selection copies visible screen cells on release; consider selection across scrolling and copying underlying unwrapped text, and verify OSC 52 in real terminals.
 - Add failed child count, enabled/disabled tools and kernels to session info.
 - Check OSC 777 notifications in kitty (possibly OSC 99) and track focus; debounce completion requests if large workspaces make search slow.
 - Compare with old Nexus in a real terminal and review screenshots.
 
 ### NSH and shared
 
-- Finish design parity for the new-session view, files, narrow layouts and states; add sidebar search handling, per-row branch data, thought durations, message tags and live shimmer. Pin NSH, build the macOS desktop bundle and complete files, Git and worktree UI; then remove `nexus-design-mockup/`.
-- Bring subagent presentation to TUI parity: keep subagents out of root tabs, show a subagent strip and a parent card with status, agent and session name, background label, model/effort, elapsed time and completed token count; render background results clearly.
+- Finish design parity for the new-session view, files, narrow layouts and states; improve sidebar search handling and live shimmer; sidebar rows show project or branch where available. User and assistant timeline prose now uses bundled Monaspace Argon; verify native rendering and visual parity. Pin NSH, build the macOS desktop bundle and complete files, Git and worktree UI; then remove `nexus-design-mockup/`.
+- Subagent navigation now follows the TUI: root tabs exclude children, a viewed child keeps its root's tab, and the subagent strip under the header goes back to the parent and selects the root's children with running, waiting, failed or completed state (`child-navigation-parity.test.tsx`). Remaining: complete the parent card with model/effort, elapsed time and completed token count; distinguish background completion from the start result. Parent cards already show status, agent, session name and background label, and their tool results can be expanded.
 - Add Mermaid image rendering in kitty and iTerm, and NSH Mermaid using a pinned host-served bundle (no CDN).
 - Review both clients side by side in light and dark, establish large-session performance budgets and test keyboard-only paths. Decide focus-ring colour.
 

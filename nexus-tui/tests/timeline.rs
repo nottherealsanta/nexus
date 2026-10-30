@@ -20,6 +20,34 @@ fn rows(a: &mut nexus_tui::app::App) -> Vec<String> {
 }
 
 #[test]
+fn mouse_drag_selects_and_copies_timeline_text_without_activating_the_block() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use nexus_tui::app::Effect;
+    use ratatui::style::Modifier;
+
+    let mut a = app();
+    let drawn = rows(&mut a);
+    let (y, x) = drawn
+        .iter()
+        .enumerate()
+        .find_map(|(y, row)| row.find("Hello").map(|x| (y as u16, x as u16)))
+        .unwrap();
+    let mouse = |kind, column| MouseEvent {
+        kind,
+        column,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    a.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), x));
+    a.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), x + 4));
+    let (buf, _) = draw(&mut a, 120, 36);
+    assert!(buf[(x, y)].modifier.contains(Modifier::REVERSED));
+    a.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), x + 4));
+    assert!(a.effects.contains(&Effect::Copy("Hello".into())));
+    assert!(rows(&mut a).join("\n").contains("Hello"));
+}
+
+#[test]
 fn a_turn_has_a_header_content_and_a_footer() {
     let mut a = app();
     let drawn = rows(&mut a);

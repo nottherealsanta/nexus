@@ -36,7 +36,7 @@ function Seg(p: { options: string[]; value: string; onPick?: (v: string) => void
       <Each of={p.options} key={(o) => o}>
         {(o) => (
           <Button role="radio" selected={p.value === o()} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${o()}`}
-            class={`rounded-[4px] px-3 ${isNarrow() ? "min-h-10" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${FOCUS}`}>
+            class={`rounded-(--radius-card) px-3 ${isNarrow() ? "min-h-10" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${FOCUS}`}>
             <Text class={`text-[13px] leading-5 ${p.value === o() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{o()}</Text>
           </Button>
         )}

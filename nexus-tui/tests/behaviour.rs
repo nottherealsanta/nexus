@@ -1218,18 +1218,26 @@ fn composer_moves_and_selects_by_word() {
     assert_eq!(a.composer_ref().selected_text().as_deref(), Some("two "));
     typing(&mut a, "new ");
     assert_eq!(a.composer_ref().text(), "one new three");
+    let mut a = app();
+    a.composer().set_text("one two three");
+    press(&mut a, &["ctrl+shift+left"]);
+    assert_eq!(a.composer_ref().selected_text().as_deref(), Some("three"));
+    press(&mut a, &["ctrl+shift+right"]);
+    assert_eq!(a.composer_ref().selected_text(), None);
+    press(&mut a, &["ctrl+left", "ctrl+shift+right"]);
+    assert_eq!(a.composer_ref().selected_text().as_deref(), Some("three"));
 }
 
 #[test]
-fn composer_ctrl_arrows_move_and_select_to_line_edges() {
+fn composer_cmd_arrows_move_and_select_to_line_edges() {
     let mut a = app();
     a.composer().set_text("first line\nsecond line\nthird line");
-    press(&mut a, &["up", "ctrl+left", "ctrl+shift+right"]);
+    press(&mut a, &["up", "cmd+left", "cmd+shift+right"]);
     assert_eq!(
         a.composer_ref().selected_text().as_deref(),
         Some("second line")
     );
-    press(&mut a, &["ctrl+right", "ctrl+shift+left"]);
+    press(&mut a, &["cmd+right", "cmd+shift+left"]);
     assert_eq!(
         a.composer_ref().selected_text().as_deref(),
         Some("second line")

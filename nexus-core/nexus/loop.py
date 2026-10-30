@@ -179,6 +179,7 @@ class Agent:
         refresh: Callable[[Any], None] | None = None,
         files: FileGuard | None = None,
         cwd_changed: bool = False,
+        save_media: Callable[[bytes, str, str], str] | None = None,
         retry_policy: RetryPolicy | None = None,
         retry_clock: Callable[[], float] = time.monotonic,
         retry_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -211,6 +212,7 @@ class Agent:
         self.refresh = refresh
         self.files = files
         self.cwd_changed = cwd_changed
+        self.save_media = save_media
         self.retry_policy = retry_policy or RetryPolicy()
         self._retry_clock = retry_clock
         self._retry_sleep = retry_sleep
@@ -400,7 +402,8 @@ class Agent:
                 return ToolResult(call.id, str(exc), is_error=True)
         try:
             output = await tool.run(args, ToolContext(
-                self.workspace, call.id, files=self.files, cwd_changed=self.cwd_changed))
+                self.workspace, call.id, files=self.files, cwd_changed=self.cwd_changed,
+                save_media=self.save_media))
             return ToolResult(call.id, str(output), media=getattr(output, "media", ()))
         except ToolError as exc:
             return ToolResult(call.id, str(exc), is_error=True)

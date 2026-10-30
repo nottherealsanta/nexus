@@ -143,6 +143,12 @@ async fn serve(mut sock: tokio::net::TcpStream, inner: Arc<Mutex<Inner>>) {
             match path.as_str() {
                 "/api/info" => (200, "application/json", g.info.clone(), false),
                 "/api/snapshot" => (200, "application/json", g.snapshot.clone(), false),
+                p if p.starts_with("/api/session/") && p.ends_with("/message") => (
+                    200,
+                    "application/json",
+                    r#"{"messages":[],"more":false}"#.into(),
+                    false,
+                ),
                 "/api/event" => match g.scripts.pop_front() {
                     Some(Script::Close(b)) => (200, "text/event-stream", b, false),
                     Some(Script::Hold(b)) => (200, "text/event-stream", b, true),
@@ -485,19 +491,26 @@ async fn no_daemon_json_is_offline_not_a_crash() {
 }
 
 #[tokio::test]
-async fn selecting_a_session_refetches_the_snapshot_with_it() {
+async fn selecting_a_session_loads_its_history_without_a_resync() {
     let mock = Mock::start("tok").await;
     let home = temp_home("select");
     write_daemon(&home, &mock.url, 10, "tok");
     mock.script(Script::Hold(connected(3, Some(3))));
-    mock.script(Script::Hold(connected(3, Some(3))));
     let mut h = sync::spawn(config(&home));
     let (mut st, mut log) = (AppState::new(), vec![]);
     drive(&mut h, &mut st, &mut log, |s, _| s.connection.is_live()).await;
-    h.commands
-        .send(Command::Select(Some("ses_1a17de160eccc428a38".into())))
-        .unwrap();
-    drive(&mut h, &mut st, &mut log, |s, _| s.snapshots_applied == 2).await;
-    assert_eq!(mock.count("/api/snapshot"), 2);
+    let sid = "ses_1a17de160eccc428a38";
+    st.model.select(Some(sid));
+    h.commands.send(Command::Select(Some(sid.into()))).unwrap();
+    drive(&mut h, &mut st, &mut log, |_, log| {
+        log.iter()
+            .any(|m| matches!(m, SyncMsg::History(h) if h.session_id == "ses_1a17de160eccc428a38"))
+    })
+    .await;
+    // The stream stays open and no global snapshot is read again.
+    assert_eq!(mock.count("/api/snapshot"), 1);
+    assert_eq!(mock.count("/api/event"), 1);
+    assert_eq!(mock.count(&format!("/api/session/{sid}/message")), 1);
+    assert!(st.connection.is_live());
     h.commands.send(Command::Shutdown).unwrap();
 }

@@ -4,7 +4,8 @@ import { IconButton, Status, FOCUS, TONE } from "./kit";
 import { SidebarTabs, attention } from "./sidebar";
 import { byId, closeTab, keyLabel, run, rightIsOpen, rightWidthHint, tabIds } from "../commands";
 import { attention as attentionGlyph, statusGlyphs, structure } from "../gen/theme";
-import { centre, connection, drawer, isNarrow, leftOpen, m, model, unread, viewed, selectSession, width } from "../store";
+import { centre, connection, drawer, isNarrow, leftOpen, m, model, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
+import { agentColor } from "../agent-color";
 
 function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
 
@@ -16,7 +17,8 @@ function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null
 function SessionTab(p: { id: string }) {
   const session = () => { m(); return model.sessions.get(p.id); };
   const title = () => session()?.title || "Untitled";
-  const active = () => centre() !== "settings" && centre() !== "new_session" && viewed()?.id === p.id;
+  const active = () => centre() !== "settings" && centre() !== "new_session" && rootOf(viewed()?.id) === p.id;
+  const onViewedSession = () => active() && viewed()?.id === p.id;
   const status = () => {
     m();
     const waiting = attention(p.id) === "waiting" ? attentionGlyph.waiting : null;
@@ -27,7 +29,7 @@ function SessionTab(p: { id: string }) {
     return { glyph: structure.separator.unicode, tone: "text-muted-foreground", label: "idle" };
   };
   const activate = () => {
-    if (active()) void run("session.rename");
+    if (onViewedSession()) void run("session.rename");
     else void selectSession(p.id);
   };
   return (
@@ -35,7 +37,7 @@ function SessionTab(p: { id: string }) {
       class={`group/tab flex-row min-w-0 max-w-[224px] h-7 items-center rounded-(--radius) ${active() ? "bg-background" : "hover:bg-accent"}`}
     >
       <Button
-        onPress={activate} selected={active()} accessibilityLabel={`${active() ? "Rename" : "Open"} ${title()}, ${status().label}`}
+        onPress={activate} selected={active()} accessibilityLabel={`${onViewedSession() ? "Rename" : "Open"} ${title()}, ${status().label}`}
         testID={`session-tab-${p.id}`} class={`flex-row min-w-0 flex-1 items-center gap-1.5 rounded-l-(--radius) px-2.5 h-7 ${FOCUS}`}
       >
         <Text class={`shrink-0 text-[13px] leading-5 ${status().tone}`} accessibilityLabel={status().label}>{status().glyph}</Text>
@@ -66,6 +68,89 @@ function WorkspaceTabs() {
         <Text class="text-[17px] leading-5">+</Text>
       </Button>
     </View>
+  );
+}
+
+type ChildState = { glyph: string; tone: string; label: "waiting" | "running" | "failed" | "completed" };
+
+/** A subagent's own state: waits in its tree first, then its run, failure or finished turn. */
+function childState(id: string): ChildState {
+  m();
+  const session = model.sessions.get(id);
+  if (attention(id) === "waiting") return { glyph: attentionGlyph.waiting.unicode, tone: TONE[attentionGlyph.waiting.token], label: "waiting" };
+  if (session?.status === "busy" || model.running.has(id)) return { glyph: statusGlyphs.running.unicode, tone: TONE[statusGlyphs.running.token], label: "running" };
+  if (model.failedSessions.has(id) || session?.status === "failed") return { glyph: statusGlyphs.error.unicode, tone: TONE[statusGlyphs.error.token], label: "failed" };
+  return { glyph: statusGlyphs.done.unicode, tone: TONE[statusGlyphs.done.token], label: "completed" };
+}
+
+const capitalize = (text: string) => text ? `${text[0].toUpperCase()}${text.slice(1)}` : "";
+
+/**
+ * The subagent strip (TUI parity): shown under the header while a child is viewed. Its first
+ * button returns to the parent, the breadcrumb names the root the tabs stay on, and every
+ * child of that root is a focusable button with its own running, waiting, failed or
+ * completed state.
+ */
+export function SubagentStrip() {
+  const session = () => { m(); return viewed(); };
+  const chain = () => { m(); const current = session(); return current ? ancestorsOf(current.id) : []; };
+  const parent = () => { const c = chain(); return c.length > 1 ? c[c.length - 2] : null; };
+  const root = () => chain()[0] ?? null;
+  const ancestors = () => chain().slice(0, -1);
+  const children = () => { const r = root(); return r ? subagentsOf(r.id) : []; };
+  return (
+    <If when={!!parent()}>
+      <View class="w-full bg-background" testID="subagent-strip" role="toolbar" accessibilityLabel="Subagent navigation">
+        <View class="w-full max-w-[760px] mx-auto flex-row items-center gap-1.5 px-2 h-8 min-w-0">
+          <Button
+            onPress={() => { const p = parent(); if (p) void selectSession(p.id); }}
+            testID="subagent-back" accessibilityLabel={`Back to ${parent()?.title || "parent session"}`}
+            class={`shrink-0 flex-row items-center gap-1 rounded-(--radius) px-2 h-6 text-muted-foreground hover:bg-accent hover:text-foreground ${FOCUS}`}
+          >
+            <Text class="text-[13px] leading-5">←</Text>
+            <Text style={{ numberOfLines: 1 }} class="max-w-[140px] text-[13px] leading-5">{parent()?.title || "Untitled"}</Text>
+          </Button>
+          <Each of={ancestors()} key={(ancestor) => ancestor.id}>
+            {(ancestor) => (
+              <View class="min-w-0 shrink flex-row items-center gap-1">
+                <Button
+                  onPress={() => void selectSession(ancestor().id)}
+                  testID={ancestor().id === root()?.id ? "subagent-root" : `subagent-crumb-${ancestor().id}`}
+                  accessibilityLabel={`Open ${ancestor().id === root()?.id ? "root" : "ancestor"} session ${ancestor().title || "Untitled"}`}
+                  class={`min-w-0 shrink rounded-(--radius) px-1 h-6 ${FOCUS}`}
+                >
+                  <Text style={{ numberOfLines: 1 }} class="max-w-[140px] text-[13px] leading-5 text-muted-foreground">{ancestor().title || "Untitled"}</Text>
+                </Button>
+                <Text class="shrink-0 text-[13px] leading-5 text-muted-foreground" accessibilityLabel="Breadcrumb">{structure.breadcrumb.unicode}</Text>
+              </View>
+            )}
+          </Each>
+          <Text testID={`subagent-current-${session()?.id ?? ""}`} style={{ numberOfLines: 1 }} class="min-w-0 max-w-[180px] text-[13px] leading-5 font-semibold text-foreground">{session()?.title || "Untitled"}</Text>
+          <View class="mx-1 h-4 w-px shrink-0 bg-border" accessible={false} />
+          <Scroll horizontal scrollbar={false} class="flex-1 min-w-0" contentClass="flex-row items-center gap-1">
+            <Each of={children()} key={(child) => child.id}>
+              {(child) => {
+                const state = () => childState(child().id);
+                const open = () => session()?.id === child().id;
+                return (
+                  <Button
+                    onPress={() => void selectSession(child().id)} selected={open()}
+                    testID={`subagent-${child().id}`}
+                    accessibilityLabel={`${capitalize(child().agent)} ${child().title || "Untitled"}, ${state().label}${open() ? ", open" : ""}`}
+                    class={`shrink-0 flex-row items-center gap-1.5 rounded-(--radius) px-2 h-6 ${open() ? "bg-accent" : "hover:bg-accent"} ${FOCUS}`}
+                  >
+                    <Text class={`text-[13px] leading-5 ${state().tone}`} accessibilityLabel={state().label}>{state().glyph}</Text>
+                    <Text class={`text-xs leading-4 ${agentColor(child().agent)}`}>{capitalize(child().agent)}</Text>
+                    <Text style={{ numberOfLines: 1 }} class={`max-w-[180px] text-[13px] leading-5 ${open() ? "font-semibold text-foreground" : "text-foreground-secondary"}`}>{child().title || "Untitled"}</Text>
+                    <Text class="text-xs leading-4 text-muted-foreground tabular-nums">{state().label}</Text>
+                  </Button>
+                );
+              }}
+            </Each>
+          </Scroll>
+        </View>
+      </View>
+    </If>
   );
 }
 

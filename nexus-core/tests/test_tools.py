@@ -87,3 +87,26 @@ async def test_edit_and_patch_are_separate_tools(ctx):
     (ctx.workspace / "f.py").write_text("x = 1\n")
     with pytest.raises(ToolError, match="use the `patch` tool"):
         await edit({"patch": "*** Begin Patch\n*** End Patch"}, ctx)
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+
+async def test_read_returns_an_image_file_as_media(ctx):
+    (ctx.workspace / "shot.png").write_bytes(PNG)
+    saved = []
+
+    def save(data, mime, name):
+        saved.append((data, mime, name))
+        return "art_1"
+
+    out = await read({"path": "shot.png"}, ToolContext(ctx.workspace, "c1", save_media=save))
+    assert saved == [(PNG, "image/png", "shot.png")]
+    assert [(m.artifact, m.mime, m.name) for m in out.media] == [("art_1", "image/png", "shot.png")]
+    assert "art_1" in out
+
+
+async def test_read_image_without_storage_is_an_error(ctx):
+    (ctx.workspace / "shot.png").write_bytes(PNG)
+    with pytest.raises(ToolError, match="image"):
+        await read({"path": "shot.png"}, ctx)

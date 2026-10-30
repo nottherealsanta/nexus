@@ -30,7 +30,7 @@ settings row ids, the navigation anchors and every cross reference to a command.
 | `id` | Stable dotted id (`session.archive`). Never reused. |
 | `title` | Palette label, sentence case. |
 | `category` | Palette grouping. |
-| `slash` / `slash_aliases` | Composer `/name` (lower-case letters). Same command, same behavior. |
+| `slash` / `slash_aliases` | Composer `/name` (lower-case letters, optionally separated by hyphens). Same command, same behavior. |
 | `keys` | `{ tui = "ctrl+p", nsh = "cmd+p" }`. Either may be absent (unbound by default). |
 | `key_context` | Scope for key conflict checks (see `[keymap] contexts`). |
 | `when` | Availability: a list of terms, all must hold. `"!term"` negates. |

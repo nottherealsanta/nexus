@@ -183,7 +183,7 @@ does not check.
 
 ## Tool-result media
 
-A tool can return images, not just text (today: an MCP server's `image` content; the shape is general). This section
+A tool can return images, not just text (today: an MCP server's `image` content and `read` on an image file; the shape is general). This section
 is the checklist for a new dialect or provider. The design follows the MCP tools spec, where a result is an
 **ordered list of typed content items** that the client hands to the model, and what opencode does
 (`packages/ai/src/protocols/open-responses.ts`, `anthropic-messages.ts`, `openai-chat.ts`, which keep the list and

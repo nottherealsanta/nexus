@@ -58,7 +58,20 @@ export async function loadPromptHistory(project: string) {
   promptHistory.set({ project, entries });
 }
 export const contextBudget = signal<Record<string, { used: number; window: number | null; exact: boolean }>>({});
-export async function loadContext(id: string) { const data = await request<any>("GET", `/api/session/${id}/context`); contextBudget.update((all) => ({ ...all, [id]: data })); }
+// Core builds the whole request body for a context read: one runs per session at a time, and
+// requests made meanwhile coalesce into one more read, so replies also land in order.
+const contextReads = new Map<string, boolean>(); // session -> another read is wanted
+export async function loadContext(id: string) {
+  if (contextReads.has(id)) { contextReads.set(id, true); return; }
+  contextReads.set(id, false);
+  try {
+    do {
+      contextReads.set(id, false);
+      const data = await request<any>("GET", `/api/session/${id}/context`).catch(() => null);
+      if (data) contextBudget.update((all) => ({ ...all, [id]: data }));
+    } while (contextReads.get(id));
+  } finally { contextReads.delete(id); }
+}
 function applyConfig(c: any) {
   config.set(c);
   const detail = c?.values?.ui?.detail;
@@ -105,12 +118,19 @@ export const draft = signal<Record<string, string>>({});
 export const draftContext = signal<{ key: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: any[]; mcp: any[] } } | null>(null);
 let draftSeq = 0;
 export const draftContextKey = (project: string, d = sessionDraft()) => JSON.stringify([project, d.agent ?? null, d.model ?? null, d.effort ?? null, d.disabled_tools ?? null]);
-export async function loadDraftContext(project: string) {
-  const d = sessionDraft(), key = draftContextKey(project, d), seq = ++draftSeq;
+/** The draft key last asked for: the same draft is asked once, until `force` or a failure. */
+let draftAsked: string | null = null;
+export async function loadDraftContext(project: string, force = false) {
+  const d = sessionDraft(), key = draftContextKey(project, d);
+  if (!force && key === draftAsked) return;
+  draftAsked = key;
+  const seq = ++draftSeq;
   try {
     const data = await request<any>("POST", "/api/draft/context", { body: { project, agent: d.agent, model: d.model || undefined, effort: d.effort || undefined, disabled_tools: d.disabled_tools } });
     if (seq === draftSeq) draftContext.set({ key, data });
-  } catch { /* the client-side estimate stays */ }
+  } catch {
+    if (seq === draftSeq) draftAsked = null; // the client-side estimate stays; the next change asks again
+  }
 }
 export const waitIndex = signal(0);
 export const tick = signal(Date.now());
@@ -464,6 +484,10 @@ function handleGlobalEvent(e: import("./core/api").CoreEvent) {
     const project = currentProject();
     if (project) loadStartingInventory(project, true);
   }
+  if (["agents.changed", "skills.changed", "mcp.changed", "extensions.changed", "config.changed"].includes(e.type) && draftContext()) {
+    const project = currentProject();
+    if (project) void loadDraftContext(project, true);
+  }
   if (e.type === "files.changed") {
     const f = openFile();
     const d = e.data as { project_id?: string; path?: string; revision?: string };
@@ -550,9 +574,50 @@ export const viewed = (): Session | null => {
 };
 export const live = () => connection().kind === "live";
 
+/**
+ * A session and its parents, root last. A missing parent or a cycle stops the walk and
+ * treats the viewed session as its own root, so malformed data cannot hide its tab.
+ */
+function lineage(id: string | null | undefined): Session[] {
+  const start = id ? model.sessions.get(id) : undefined;
+  if (!start) return [];
+  const chain: Session[] = [];
+  const seen = new Set<string>();
+  let current = start;
+  while (true) {
+    seen.add(current.id);
+    chain.push(current);
+    if (!current.parent_id) break;
+    const parent = model.sessions.get(current.parent_id);
+    if (!parent || seen.has(parent.id)) return [start];
+    current = parent;
+  }
+  return chain;
+}
+
+/** The root of a session's tree (itself when it has no parent or its chain is malformed). */
+export function rootOf(id: string | null | undefined): string | null {
+  return lineage(id).at(-1)?.id ?? null;
+}
+
+/** A session's ancestors and itself, root first. */
+export function ancestorsOf(id: string | null | undefined): Session[] {
+  return lineage(id).reverse();
+}
+
+/** Every session below `root`, oldest first: the subagent strip's entries. */
+export function subagentsOf(root: string): Session[] {
+  const tree = model.tree(root);
+  return [...model.sessions.values()]
+    .filter((s) => s.id !== root && tree.includes(s.id))
+    .sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : 1));
+}
+
 export async function selectSession(id: string) {
   const ses = model.sessions.get(id);
-  openedTabs.update((tabs) => tabs.includes(id) ? tabs : [...tabs, id]);
+  // Subagents have no tab: opening one keeps its root's tab (TUI parity).
+  const tab = rootOf(id) ?? id;
+  openedTabs.update((tabs) => tabs.includes(tab) ? tabs : [...tabs, tab]);
   model.unreadSessions.delete(id);
   if (ses) {
     currentProject.set(ses.project_id);

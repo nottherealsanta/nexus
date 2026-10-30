@@ -567,24 +567,7 @@ async fn bench(cfg: SyncConfig, opts: Options, (w, h): (u16, u16)) -> i32 {
     };
     let rss_before = rss_kib();
     let opened = Instant::now();
-    app.open_session(&id);
-    for e in std::mem::take(&mut app.effects) {
-        if let Effect::Sync(c) = e {
-            let _ = handle.commands.send(c);
-        }
-    }
-    // Loaded when the selected session's stored history has been applied.
-    let deadline = opened + Duration::from_secs(120);
-    let mut loaded = false;
-    while !loaded && Instant::now() < deadline {
-        if let Ok(Some(m)) =
-            tokio::time::timeout(Duration::from_millis(200), handle.messages.recv()).await
-        {
-            loaded = matches!(&m, SyncMsg::History(h) if h.session_id == id);
-            app.apply_sync(m);
-        }
-    }
-    if !loaded {
+    if !open_and_load(&mut app, &mut handle, &id).await {
         eprintln!("nexus-tui: the session history did not load");
         return 1;
     }
@@ -619,8 +602,65 @@ async fn bench(cfg: SyncConfig, opts: Options, (w, h): (u16, u16)) -> i32 {
         frames.last().copied().unwrap_or(0.0),
         frames.len()
     );
+    // Switch to the next most recent session and back: the first view is
+    // cached, so it shows at once while its history reloads.
+    if let Some(other) = app
+        .state
+        .model
+        .sessions_recent()
+        .get(1)
+        .map(|s| s.id.clone())
+    {
+        let t = Instant::now();
+        if open_and_load(&mut app, &mut handle, &other).await {
+            println!("switch_away_ms {:.1}", t.elapsed().as_secs_f64() * 1000.0);
+            let t = Instant::now();
+            app.open_session(&id);
+            let shown = app
+                .state
+                .model
+                .selected
+                .as_ref()
+                .map_or(0, |v| v.messages.len());
+            let _ = render::render_buffer(&mut app, w, h);
+            println!(
+                "switch_back_first_frame_ms {:.1} (messages shown {shown})",
+                t.elapsed().as_secs_f64() * 1000.0
+            );
+            if open_and_load(&mut app, &mut handle, &id).await {
+                println!(
+                    "switch_back_history_ms {:.1}",
+                    t.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+        }
+    }
     let _ = handle.commands.send(sync::Command::Shutdown);
     0
+}
+
+/// Open `id` and apply sync messages until its stored history has been
+/// applied (at most 120 s). False when it never arrived.
+async fn open_and_load(app: &mut App, handle: &mut sync::SyncHandle, id: &str) -> bool {
+    app.open_session(id);
+    for e in std::mem::take(&mut app.effects) {
+        if let Effect::Sync(c) = e {
+            let _ = handle.commands.send(c);
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while Instant::now() < deadline {
+        if let Ok(Some(m)) =
+            tokio::time::timeout(Duration::from_millis(200), handle.messages.recv()).await
+        {
+            let loaded = matches!(&m, SyncMsg::History(h) if h.session_id == id);
+            app.apply_sync(m);
+            if loaded {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// This process's resident set size from `ps`, in KiB.

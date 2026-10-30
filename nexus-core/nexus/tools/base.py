@@ -44,6 +44,7 @@ class ToolContext:
     files: FileGuard | None = None  # the session's read observations; None outside a session
     model_visible: bool = True  # False for calls retained inside a code kernel
     cwd_changed: bool = False  # the session moved; report absolute paths and bash's cwd
+    save_media: Callable[[bytes, str, str], str] | None = None  # (bytes, mime, name) -> artifact id; None outside a session
 
 
 @dataclass(frozen=True, slots=True)

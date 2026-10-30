@@ -71,6 +71,7 @@ pub fn key(name: &str) -> KeyEvent {
             "ctrl" => KeyModifiers::CONTROL,
             "alt" => KeyModifiers::ALT,
             "shift" => KeyModifiers::SHIFT,
+            "cmd" => KeyModifiers::SUPER,
             _ => panic!("modifier {p}"),
         };
     }
@@ -107,12 +108,17 @@ pub fn typing(app: &mut App, s: &str) {
 }
 
 pub fn click(app: &mut App, x: u16, y: u16) {
-    app.handle_mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: x,
-        row: y,
-        modifiers: KeyModifiers::NONE,
-    });
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
 }
 
 /// Draw and return the buffer (for colour assertions) and its text rows.

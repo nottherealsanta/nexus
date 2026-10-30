@@ -108,6 +108,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if splash_up(app) {
         // Core is starting and nothing is loaded: the logo alone, no chrome.
         app.hits = HitMap::default();
+        app.timeline_screen = None;
+        app.timeline_drag = None;
         let a: &App = app;
         let cx = Cx {
             app: a,
@@ -130,6 +132,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Regions::compute(area, flags, |w| heights(a, w))
     };
     let mut hits = HitMap::default();
+    let mut timeline_screen = None;
     let mut metrics = (0usize, 0usize, None::<usize>);
     let timeline = {
         let a: &App = app;
@@ -195,6 +198,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             draw_file_view(&cx, buf, regions.timeline);
         } else if let Some(t) = &timeline {
             metrics = draw_timeline(&cx, buf, regions.timeline, &mut hits, t);
+            let mut screen = Buffer::empty(regions.timeline);
+            for y in regions.timeline.y..regions.timeline.bottom() {
+                for x in regions.timeline.x..regions.timeline.right() {
+                    screen[(x, y)] = buf[(x, y)].clone();
+                }
+            }
+            timeline_screen = Some(screen);
+            if let Some((selection, _)) = &a.timeline_drag {
+                if selection.dragged() && selection.area == regions.timeline {
+                    selection.highlight(buf);
+                }
+            }
         }
         draw_waiting(&cx, buf, regions.waiting, &mut hits);
         draw_composer(&cx, buf, regions.composer, &mut hits);
@@ -284,6 +299,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         frame.set_cursor_position(p);
     }
     app.hits = hits;
+    app.timeline_screen = timeline_screen;
     app.regions = regions;
     app.ui.timeline_total = metrics.0;
     app.ui.timeline_height = metrics.1;
@@ -7181,11 +7197,11 @@ fn draw_help(cx: &Cx, buf: &mut Buffer, area: Rect, top: usize, hits: &mut HitMa
         ),
         ("ctrl+x shift+n".into(), "Notifications".into()),
         (
-            "alt+left/right".into(),
+            "alt/ctrl+left/right".into(),
             "Move by word; Shift selects".into(),
         ),
         (
-            "ctrl+left/right".into(),
+            "cmd+left/right".into(),
             "Move to line start/end; Shift selects".into(),
         ),
     ]);

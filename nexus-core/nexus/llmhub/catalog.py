@@ -74,12 +74,27 @@ async def _download() -> dict[str, Any]:
     return data
 
 
+# The parsed cache file, keyed by path, mtime and size. Parsing the multi-MB file
+# takes hundreds of milliseconds on the event loop, and context, draft context and
+# image checks all read it; callers treat the returned catalog as read-only.
+_parsed: tuple[tuple[str, int, int], dict[str, Any]] | None = None
+
+
+def _read_cache(path: Path) -> dict[str, Any]:
+    global _parsed
+    st = path.stat()
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if _parsed is None or _parsed[0] != key:
+        _parsed = (key, json.loads(path.read_bytes()))
+    return _parsed[1]
+
+
 async def load(*, refresh: bool = False) -> tuple[dict[str, Any], str]:
     path = cache_path()
     age = time.time() - path.stat().st_mtime if path.exists() else None
     if not refresh and age is not None and age < TTL_S:
         try:
-            return json.loads(path.read_bytes()), f"cache ({int(age // 60)} min old)"
+            return _read_cache(path), f"cache ({int(age // 60)} min old)"
         except ValueError:
             age = None  # corrupt cache: download instead
     try:
