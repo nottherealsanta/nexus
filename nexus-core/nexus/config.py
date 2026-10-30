@@ -23,7 +23,7 @@ from .paths import home
 # Only settings whose semantics are already defined here are exposed. Later
 # increments can extend this inventory without changing the file format.
 DEFAULTS: dict[str, dict[str, Any]] = {
-    "defaults": {"model": "", "effort": "", "agent": "", "permission": "allow"},
+    "defaults": {"effort": "", "agent": "", "permission": "allow"},
     "agents": {"models": {}, "fallbacks": {}},
     "tools": {"disabled": [], "permission": {}},
     "context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]},
@@ -38,9 +38,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 SCHEMA: dict[str, dict[str, Any]] = {
     "ui.detail": {"type": "string", "enum": ["low", "medium", "high"]},
     "ui.reduced_motion": {"type": "boolean"},
-    "agents.models": {"type": "object", "description": "per-child-agent equally weighted default model refs"},
+    "agents.models": {"type": "object", "description": "per-child-agent model refs; a new subagent picks one with equal probability"},
     "agents.fallbacks": {"type": "object", "description": "per-child-agent ordered fallback model refs"},
-    "defaults.model": {"type": "string"},
     "defaults.effort": {"type": "string"},
     "defaults.agent": {"type": "string"},
     "defaults.permission": {"type": "string", "enum": ["allow", "ask"]},
@@ -108,12 +107,6 @@ def _valid(section: str, key: str, value: Any) -> bool:
             return False
         if key == "permission":
             return value in ("allow", "ask")
-        if key == "model" and value:
-            from .llmhub.hub import split_ref
-            try:
-                split_ref(value)
-            except ValueError:
-                return False
         return True
     if section in ("voice", "speech"):
         return isinstance(value, str) and bool(re.fullmatch(r"[\w.-]+/[\w.-]+", value))

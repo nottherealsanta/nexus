@@ -115,6 +115,12 @@ export async function loadDraftContext(project: string) {
 export const waitIndex = signal(0);
 export const tick = signal(Date.now());
 export const settingsSection = signal<string | null>(null);
+/** The Settings page drilled into (a manifest section with `page = true`), or null for the section list. */
+export const settingsPage = signal<string | null>(null);
+/** The last `provider.login` state per provider: pending sign-ins show their code and link on the provider's row. */
+export const providerLogins = signal<Record<string, { status: string; message?: string | null; verification_uri?: string | null; user_code?: string | null }>>({});
+/** Bumped by `agents.changed` and provider changes so open Settings pages reload. */
+export const settingsReload = signal(0);
 export const themeChoice = signal<"system" | "light" | "dark">("system");
 export const prefs = signal<Record<string, boolean | number | string>>({});
 export type TimelineDetail = "low" | "medium" | "high";
@@ -347,6 +353,14 @@ const host: SyncHost = {
   changed() { bump(); reconcileSelection(); autoLoadOlder(); },
   snapshotApplied() { reconcileSelection(); void loadConfig().catch(() => {}); },
   configChanged() { void loadConfig().catch(() => {}); },
+  settingsEvent(e) {
+    if (e.type === "provider.login") {
+      const d = e.data as { provider: string; status: string };
+      providerLogins.update((all) => ({ ...all, [d.provider]: d }));
+      if (d.status === "pending") return;
+    }
+    settingsReload.update((n) => n + 1);
+  },
   contextChanged(id) { void loadContext(id).catch(() => {}); },
   inputsChanged(id) { void loadInputs(id).catch(() => {}); },
   handoffEvent(e) {

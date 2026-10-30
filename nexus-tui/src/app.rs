@@ -5,7 +5,7 @@
 //! Everything user-visible about a command comes from the manifest; a command is
 //! offered only when it is wired here (`WIRED`) and its `when` terms hold.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -288,6 +288,54 @@ pub enum SettingsItem {
     },
 }
 
+/// How a line on a Settings page is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Muted,
+    Secondary,
+    Warning,
+    Error,
+}
+
+/// One line of a Settings page (Providers, Agents): headings and notes, and
+/// the selectable items that act.
+#[derive(Debug, Clone)]
+pub enum PageLine {
+    Heading(String),
+    /// A heading with muted detail on the right (an agent's source and tools).
+    Title(String, String),
+    Text(String, Tone),
+    Item {
+        label: String,
+        value: String,
+        tone: Tone,
+        action: PageAction,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum PageAction {
+    RefreshModels,
+    Connect(String),
+    Disconnect(String),
+    CancelLogin(String),
+    CopyCode(String),
+    /// A manifest row drawn on the page (default agent and effort, unavailable rows).
+    Setting(Box<crate::manifest::Row>),
+    /// A ref in an agent's model list (`fallback` false) or fallback list.
+    Ref {
+        agent: String,
+        fallback: bool,
+        model: String,
+    },
+    Add {
+        agent: String,
+        fallback: bool,
+    },
+    /// Open one subagent's page (its models and fallbacks).
+    OpenAgent(String),
+}
+
 /// Which Git group a changed-file row belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitGroup {
@@ -472,6 +520,15 @@ pub struct Ui {
     pub pending_selected: Option<usize>,
     pub settings_row: usize,
     pub settings_search: Composer,
+    /// The Settings page drilled into (`providers`, `agents`) and its selected item.
+    pub settings_page: Option<String>,
+    pub settings_page_row: usize,
+    /// The Agents page row to return to from a subagent's page.
+    pub settings_page_back: usize,
+    /// The last `provider.login` state per provider: a pending sign-in shows its code on the Providers page.
+    pub provider_logins: BTreeMap<String, Value>,
+    /// The agent list a model chosen in the palette is added to: (agent, fallback).
+    pub pool_pick: Option<(String, bool)>,
     pub overlay: Option<Overlay>,
     pub dialog: Option<Dialog>,
     pub dictation: crate::dictation::DictationUi,
@@ -657,6 +714,11 @@ impl App {
                 pending_selected: None,
                 settings_row: 0,
                 settings_search: Composer::new(),
+                settings_page: None,
+                settings_page_row: 0,
+                settings_page_back: 0,
+                provider_logins: BTreeMap::new(),
+                pool_pick: None,
                 overlay: None,
                 dialog: None,
                 dictation: crate::dictation::DictationUi::default(),
@@ -2346,6 +2408,36 @@ impl App {
                     ));
                 }
             }
+            PaletteMode::PoolModels => {
+                let have = self
+                    .ui
+                    .pool_pick
+                    .as_ref()
+                    .map(|(agent, fallback)| self.agent_refs(agent, *fallback))
+                    .unwrap_or_default();
+                for (i, m) in self.state.models.iter().enumerate() {
+                    let r = m["ref"].as_str().unwrap_or_default();
+                    if r.is_empty() || have.iter().any(|h| h == r) {
+                        continue;
+                    }
+                    let Some(score) =
+                        fuzzy(&q, r).or_else(|| fuzzy(&q, m["name"].as_str().unwrap_or("")))
+                    else {
+                        continue;
+                    };
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::PoolModel(r.to_owned()),
+                            label: r.to_owned(),
+                            hint: m["name"].as_str().unwrap_or_default().to_owned(),
+                            category: "model".into(),
+                            reason: None,
+                        },
+                    ));
+                }
+            }
             PaletteMode::Agents => {
                 let current = self.current_agent();
                 let mode = if self.viewed().is_some_and(|s| s.parent_id.is_some()) {
@@ -2588,7 +2680,7 @@ impl App {
                     let restore = self.restore_point();
                     self.ui.edit = Some(TextEdit {
                         label: "OpenCode API key".into(),
-                        target: EditTarget::ProviderKey,
+                        target: EditTarget::ProviderKey { id },
                         buf: Composer::new(),
                         restore,
                     });
@@ -2596,12 +2688,20 @@ impl App {
                     self.api(ApiCall::Provider {
                         id,
                         sign_out,
+                        method: "device".into(),
                         key: None,
                     });
                 }
             }
             PaletteKind::Session(id) => self.open_session(&id),
             PaletteKind::Project(id) => self.select_project(&id),
+            PaletteKind::PoolModel(model) => {
+                if let Some((agent, fallback)) = self.ui.pool_pick.take() {
+                    let mut refs = self.agent_refs(&agent, fallback);
+                    refs.push(model);
+                    self.patch_agent_refs(&agent, fallback, refs);
+                }
+            }
             PaletteKind::Model(model) => {
                 if let Some(s) = self.viewed() {
                     let (session, revision) = (s.id.clone(), s.revision);
@@ -3593,6 +3693,7 @@ impl App {
                     self.ui.view = View::Settings;
                     self.ui.settings_search = Composer::new();
                     self.ui.settings_row = 0;
+                    self.ui.settings_page = None;
                     self.ui.focus = Focus::Timeline;
                     self.ui.drawer = None;
                 }
@@ -3702,8 +3803,13 @@ impl App {
             "sidebar.row_menu" => self.open_palette(PaletteMode::RowMenu),
             "session.switch" => self.open_palette(PaletteMode::Sessions),
             "project.switch" => self.open_palette(PaletteMode::Projects),
-            "app.sign_in" => self.open_palette(PaletteMode::ProviderLogin),
-            "app.sign_out" => self.open_palette(PaletteMode::ProviderLogout),
+            "app.sign_in" | "app.sign_out" => {
+                if self.ui.view != View::Settings {
+                    self.execute("app.settings");
+                }
+                self.ui.settings_page = Some("providers".into());
+                self.ui.settings_page_row = 0;
+            }
             "model.change" => self.open_picker(PaletteMode::Models),
             "model.effort" => self.open_picker(PaletteMode::Efforts),
             "agent.change" => self.open_picker(PaletteMode::Agents),
@@ -4221,6 +4327,12 @@ impl App {
                         self.toast(Level::Warning, READ_ONLY);
                     }
                 }
+                Confirmed::Disconnect(id) => self.api(ApiCall::Provider {
+                    id,
+                    sign_out: true,
+                    method: String::new(),
+                    key: None,
+                }),
                 Confirmed::DownloadStt => {
                     if self.ui.dictation.phase == crate::dictation::Phase::Consent {
                         if let Some(phase) = self
@@ -4460,11 +4572,41 @@ impl App {
                 self.toast(Level::Warning, format!("Automatic handoff failed: {error}"));
             }
             if event.kind == "provider.login" {
-                if let Some(message) = event.data["message"].as_str() {
-                    self.toast(Level::Info, message.to_owned());
-                } else if let Some(status) = event.data["status"].as_str() {
-                    self.toast(Level::Info, format!("Provider sign-in: {status}"));
+                // Settings shows a pending sign-in's code on the provider's row; the rest is a toast.
+                let provider = event.data["provider"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                let status = event.data["status"].as_str().unwrap_or_default().to_owned();
+                if status == "pending" && self.ui.settings_page.as_deref() != Some("providers") {
+                    if let Some(message) = event.data["message"].as_str() {
+                        self.toast(Level::Info, message.to_owned());
+                    }
                 }
+                match status.as_str() {
+                    "connected" => self.toast(Level::Success, format!("{provider} connected")),
+                    "failed" => self.toast(
+                        Level::Error,
+                        event.data["message"]
+                            .as_str()
+                            .unwrap_or("Sign-in failed")
+                            .to_owned(),
+                    ),
+                    _ => {}
+                }
+                if status == "signed_out" {
+                    self.ui.provider_logins.remove(&provider);
+                } else {
+                    self.ui.provider_logins.insert(provider, event.data.clone());
+                }
+                if status != "pending" {
+                    self.effects
+                        .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
+                }
+            }
+            if event.kind == "agents.changed" && self.ui.view == View::Settings {
+                self.effects
+                    .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
             }
         }
         let project_before = self.current_project();
@@ -4905,6 +5047,11 @@ impl App {
                     ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. }
                 ) {
                     self.toast(Level::Success, done.call.done_label());
+                }
+                if matches!(done.call, ApiCall::Provider { .. }) {
+                    // connection state and the model list changed
+                    self.effects
+                        .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
                 }
                 if let Some(id) = r.open {
                     // events for the new session may not have arrived yet
@@ -6292,9 +6439,10 @@ impl App {
                         session: id,
                         directory: title,
                     }),
-                    EditTarget::ProviderKey => self.api(ApiCall::Provider {
-                        id: "opencode".into(),
+                    EditTarget::ProviderKey { id } => self.api(ApiCall::Provider {
+                        id,
                         sign_out: false,
+                        method: "api_key".into(),
                         key: Some(crate::actions::Secret(title)),
                     }),
                     EditTarget::TitleModels { .. } => {}
@@ -6747,6 +6895,24 @@ impl App {
                 self.open_overlay(OverlayKind::ContextDetail {
                     title: format!("Handoff from {from}"),
                     text: summary,
+                    top: 0,
+                });
+            }
+            return;
+        }
+        if b.kind == crate::timeline::BlockKind::Notice {
+            if let Some(text) = b.target.clone() {
+                let title = text
+                    .lines()
+                    .next()
+                    .unwrap_or("Notice")
+                    .trim()
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_owned();
+                self.open_overlay(OverlayKind::ContextDetail {
+                    title,
+                    text,
                     top: 0,
                 });
             }
@@ -7273,6 +7439,35 @@ impl App {
         let mut out = Vec::new();
         for section in self.manifest.settings_for_tui() {
             let section_hit = section.label.to_lowercase().contains(query);
+            if section.page {
+                // One entry opens the page; search also looks at what the page holds.
+                let hit = query.is_empty()
+                    || section_hit
+                    || section.note.to_lowercase().contains(query)
+                    || self
+                        .page_search_terms(&section)
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(query));
+                if hit {
+                    out.push(SettingsItem::Heading(section.label.clone()));
+                    out.push(SettingsItem::Row {
+                        row: Box::new(crate::manifest::Row {
+                            id: format!("{}.page", section.id),
+                            label: format!("{} \u{203a}", section.label),
+                            kind: "page".into(),
+                            scope: Some("core".into()),
+                            clients: "both".into(),
+                            default: None,
+                            options: Vec::new(),
+                            command: None,
+                            unavailable_reason: None,
+                            note: section.note.clone(),
+                        }),
+                        section_reason: section.unavailable_reason.clone(),
+                    });
+                }
+                continue;
+            }
             let rows: Vec<_> = section
                 .row
                 .iter()
@@ -7312,6 +7507,9 @@ impl App {
     /// change; Esc clears the search, then closes. Returns false for keys the
     /// shell should still handle (palette, quit).
     fn settings_key(&mut self, name: &str, code: KeyCode, mods: KeyModifiers) -> bool {
+        if self.ui.settings_page.is_some() {
+            return self.settings_page_key(name, code);
+        }
         let rows = self.settings_rows();
         let last = rows.len().saturating_sub(1);
         let sel = self.ui.settings_row.min(last);
@@ -7351,9 +7549,9 @@ impl App {
     pub fn settings_wired(id: &str) -> bool {
         matches!(
             id,
-            "providers.sign_in"
-                | "providers.sign_out"
-                | "models.default_effort"
+            "providers.page"
+                | "agents.page"
+                | "agents.default_effort"
                 | "agents.default_root"
                 | "tools.default_permission"
                 | "tools.default_read"
@@ -7375,9 +7573,6 @@ impl App {
                 | "mcp.max_listed_tools"
                 | "context.handoff_percent"
                 | "context.title_models"
-                | "models.catalog"
-                | "models.refresh"
-                | "agents.list"
                 | "dictation.stt_model"
                 | "dictation.stt_download"
                 | "dictation.stt_remove"
@@ -7414,12 +7609,7 @@ impl App {
         row: &crate::manifest::Row,
         section_reason: Option<&str>,
     ) -> Option<String> {
-        if let Some(reason) = row
-            .unavailable_reason
-            .as_deref()
-            .or(section_reason)
-            .filter(|_| !matches!(row.id.as_str(), "providers.sign_in" | "providers.sign_out"))
-        {
+        if let Some(reason) = row.unavailable_reason.as_deref().or(section_reason) {
             return Some(reason.to_owned());
         }
         if !Self::settings_wired(&row.id) {
@@ -7459,6 +7649,10 @@ impl App {
         let Some(row) = self.settings_row_at(index) else {
             return;
         };
+        self.settings_change_row(row, step);
+    }
+
+    fn settings_change_row(&mut self, row: crate::manifest::Row, step: isize) {
         match row.id.as_str() {
             id if id.starts_with("tools.default_") && id != "tools.default_permission" => {
                 let name = id.trim_start_matches("tools.default_");
@@ -7481,9 +7675,9 @@ impl App {
                     }
                 }
             }
-            "models.default_effort" | "agents.default_root" | "tools.default_permission" => {
+            "agents.default_effort" | "agents.default_root" | "tools.default_permission" => {
                 let key = match row.id.as_str() {
-                    "models.default_effort" => "effort",
+                    "agents.default_effort" => "effort",
                     "agents.default_root" => "agent",
                     "tools.default_permission" => "permission",
                     _ => "model",
@@ -7500,6 +7694,7 @@ impl App {
                         self.state
                             .agents
                             .iter()
+                            .filter(|a| a["mode"].as_str() != Some("subagent"))
                             .filter_map(|a| a["name"].as_str().map(str::to_owned)),
                     ),
                     "permission" => {
@@ -7598,9 +7793,8 @@ impl App {
                 self.ui.left_open = open;
                 self.ui.left_rail = rail;
             }
-            "keybindings.list" | "about.versions" | "about.daemon" | "models.catalog"
-            | "models.refresh" | "agents.list" => {}
-            _ => self.settings_activate(index),
+            "keybindings.list" | "about.versions" | "about.daemon" => {}
+            _ => self.settings_activate_row(row),
         }
     }
 
@@ -7637,9 +7831,19 @@ impl App {
         let Some(row) = self.settings_row_at(index) else {
             return;
         };
+        self.settings_activate_row(row);
+    }
+
+    fn settings_activate_row(&mut self, row: crate::manifest::Row) {
         match row.id.as_str() {
+            "providers.page" | "agents.page" => {
+                self.ui.settings_page = Some(row.id.trim_end_matches(".page").to_owned());
+                self.ui.settings_page_row = 0;
+                self.effects
+                    .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
+            }
             id if id.starts_with("tools.default_") && id != "tools.default_permission" => {
-                self.settings_change(index, 1)
+                self.settings_change_row(row, 1)
             }
             "appearance.theme" => self.execute("app.theme"),
             "appearance.monochrome" => self.toggle_monochrome(),
@@ -7648,14 +7852,14 @@ impl App {
                 options.reduced_motion = !options.reduced_motion;
                 self.theme = self.theme.with(options);
             }
-            "models.default_effort"
+            "agents.default_effort"
             | "agents.default_root"
             | "tools.default_permission"
             | "appearance.sidebar"
             | "notifications.terminal"
-            | "appearance.timeline_detail" => self.settings_change(index, 1),
+            | "appearance.timeline_detail" => self.settings_change_row(row, 1),
             "mcp.full_definitions" | "mcp.max_listed_tools" | "context.handoff_percent" => {
-                self.settings_change(index, 1)
+                self.settings_change_row(row, 1)
             }
             "context.title_models" => self.edit_title_models(),
             "dictation.stt_download" => self.run_command("voice.download_stt"),
@@ -7669,21 +7873,678 @@ impl App {
             "appearance.session_scope" => self.run_command("sessions.scope_toggle"),
             "appearance.show_archived" => self.run_command("sessions.archived_filter"),
             "keybindings.list" => self.execute("app.help_keys"),
-            "models.catalog" => {
-                self.execute("app.settings");
-                self.execute("model.change");
+            _ => {}
+        }
+    }
+
+    // ---- settings pages (Providers, Agents) ----------------------------------------------------
+
+    /// What settings search matches inside a page: its rows, providers, agents and refs.
+    fn page_search_terms(&self, section: &crate::manifest::Section) -> Vec<String> {
+        let mut terms: Vec<String> = section.row.iter().map(|r| r.label.clone()).collect();
+        match section.id.as_str() {
+            "providers" => terms.extend(self.state.providers.iter().flat_map(|p| {
+                [p["id"].as_str(), p["label"].as_str()]
+                    .into_iter()
+                    .flatten()
+                    .map(str::to_owned)
+            })),
+            "agents" => {
+                terms.extend(["models", "fallbacks", "subagents"].map(String::from));
+                for agent in self.subagents() {
+                    let name = agent["name"].as_str().unwrap_or_default().to_owned();
+                    terms.extend(self.agent_refs(&name, false));
+                    terms.extend(self.agent_refs(&name, true));
+                    terms.push(name);
+                }
             }
-            "models.refresh" => {
+            _ => {}
+        }
+        terms
+    }
+
+    /// Agents that can run as a subagent, in catalog order.
+    fn subagents(&self) -> Vec<&Value> {
+        self.state
+            .agents
+            .iter()
+            .filter(|a| matches!(a["mode"].as_str(), Some("subagent" | "all")))
+            .collect()
+    }
+
+    /// `[agents.models]` (or `[agents.fallbacks]`) for one agent, from the config.
+    fn agent_refs(&self, agent: &str, fallback: bool) -> Vec<String> {
+        let key = if fallback { "fallbacks" } else { "models" };
+        self.state
+            .config
+            .as_ref()
+            .and_then(|c| c["values"]["agents"][key][agent].as_array())
+            .map(|l| {
+                l.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn ref_connected(&self, model: &str) -> bool {
+        let provider = model.split_once('/').map_or("codex", |(p, _)| p);
+        self.state
+            .providers
+            .iter()
+            .any(|p| p["id"].as_str() == Some(provider) && p["connected"].as_bool() == Some(true))
+    }
+
+    fn provider_status(&self, p: &Value) -> String {
+        let id = p["id"].as_str().unwrap_or_default();
+        let connected = p["connected"].as_bool().unwrap_or(false);
+        let key = p["methods"]
+            .as_array()
+            .is_some_and(|m| m.iter().any(|v| v.as_str() == Some("api_key")));
+        let mut parts = vec![if !connected {
+            "not connected".to_owned()
+        } else if p["key_source"].as_str() == Some("env") {
+            format!("using ${}", p["key_env"].as_str().unwrap_or("key"))
+        } else {
+            "connected".to_owned()
+        }];
+        if connected {
+            let prefix = format!("{id}/");
+            let n = self
+                .state
+                .models
+                .iter()
+                .filter(|m| m["ref"].as_str().is_some_and(|r| r.starts_with(&prefix)))
+                .count();
+            parts.push(format!("{n} model{}", if n == 1 { "" } else { "s" }));
+        } else if key {
+            parts.push("API key".into());
+        }
+        if p["verified"].as_bool() == Some(false) {
+            parts.push("unverified".into());
+        }
+        parts.join(" \u{b7} ")
+    }
+
+    /// What a subagent with no models uses.
+    fn agent_default(&self, agent: &Value) -> String {
+        match agent["subagent"]["effective"]["model"]
+            .as_str()
+            .filter(|m| !m.is_empty())
+        {
+            Some(model) => format!("{model} (agent file)"),
+            None => "parent's model".into(),
+        }
+    }
+
+    /// One subagent's line on the Agents page: its models in brief, and a warning tone when some are skipped.
+    fn agent_summary(&self, agent: &Value) -> (String, Tone) {
+        let name = agent["name"].as_str().unwrap_or_default();
+        let pool = self.agent_refs(name, false);
+        let fallbacks = self.agent_refs(name, true).len();
+        let skipped = self
+            .agent_refs(name, false)
+            .iter()
+            .chain(self.agent_refs(name, true).iter())
+            .filter(|r| !self.ref_connected(r))
+            .count();
+        let mut parts = vec![match pool.len() {
+            0 => self.agent_default(agent),
+            1 => pool[0].clone(),
+            n => format!("{n} models"),
+        }];
+        if fallbacks > 0 {
+            parts.push(format!(
+                "{fallbacks} fallback{}",
+                if fallbacks == 1 { "" } else { "s" }
+            ));
+        }
+        if skipped > 0 {
+            parts.push(format!("{skipped} skipped"));
+        }
+        let tone = if skipped > 0 {
+            Tone::Warning
+        } else if pool.is_empty() {
+            Tone::Muted
+        } else {
+            Tone::Secondary
+        };
+        (parts.join(" \u{b7} "), tone)
+    }
+
+    /// The muted line above a page's key hints: the selected subagent's description, or what edits apply to.
+    pub fn settings_page_detail(&self) -> Option<String> {
+        match self.settings_page_action()? {
+            PageAction::OpenAgent(name) => self
+                .subagents()
+                .into_iter()
+                .find(|a| a["name"].as_str() == Some(name.as_str()))
+                .and_then(|a| a["description"].as_str().map(str::to_owned)),
+            PageAction::Ref { .. } | PageAction::Add { .. } => Some(
+                "Changes apply to new subagents; running ones keep what they started with.".into(),
+            ),
+            PageAction::Setting(row) => Some(row.note.clone()).filter(|n| !n.is_empty()),
+            _ => None,
+        }
+    }
+
+    /// The value on a page's entry in the section list.
+    pub fn page_summary(&self, page: &str) -> String {
+        match page {
+            "providers" => {
+                let shown: Vec<_> = self
+                    .state
+                    .providers
+                    .iter()
+                    .filter(|p| p["id"].as_str() != Some("mock"))
+                    .collect();
+                if shown.is_empty() {
+                    return "loading\u{2026}".into();
+                }
+                let on = shown
+                    .iter()
+                    .filter(|p| p["connected"].as_bool() == Some(true))
+                    .count();
+                format!("{on} of {} connected", shown.len())
+            }
+            "agents" => {
+                let subs = self.subagents();
+                let own = subs
+                    .iter()
+                    .filter(|a| {
+                        !self
+                            .agent_refs(a["name"].as_str().unwrap_or_default(), false)
+                            .is_empty()
+                    })
+                    .count();
+                format!("{} subagents \u{b7} {own} with models", subs.len())
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// The open page's lines, top to bottom.
+    pub fn settings_page_lines(&self) -> Vec<PageLine> {
+        let mut out = Vec::new();
+        let page = self.ui.settings_page.as_deref().unwrap_or_default();
+        let section = self
+            .manifest
+            .settings_for_tui()
+            .into_iter()
+            .find(|s| s.id == page);
+        let rows = section.as_ref().map(|s| s.row.clone()).unwrap_or_default();
+        let setting = |row: &crate::manifest::Row| PageLine::Item {
+            label: row.label.clone(),
+            value: String::new(),
+            tone: Tone::Secondary,
+            action: PageAction::Setting(Box::new(row.clone())),
+        };
+        if let Some(error) = &self.state.config_error {
+            out.push(PageLine::Text(error.clone(), Tone::Error));
+        }
+        match page {
+            "providers" => {
+                out.push(PageLine::Item {
+                    label: "Refresh models".into(),
+                    value: if self.state.catalog_source.is_empty() {
+                        String::new()
+                    } else {
+                        format!("catalog: {}", self.state.catalog_source)
+                    },
+                    tone: Tone::Muted,
+                    action: PageAction::RefreshModels,
+                });
+                out.push(PageLine::Heading("Providers".into()));
+                if self.state.providers.is_empty() {
+                    out.push(PageLine::Text(
+                        "Loading providers\u{2026}".into(),
+                        Tone::Muted,
+                    ));
+                }
+                for p in &self.state.providers {
+                    let Some(id) = p["id"].as_str().filter(|id| *id != "mock") else {
+                        continue;
+                    };
+                    let label = p["label"].as_str().unwrap_or(id).to_owned();
+                    let login = self.ui.provider_logins.get(id);
+                    let status = login.and_then(|l| l["status"].as_str()).unwrap_or("");
+                    let connected = p["connected"].as_bool().unwrap_or(false);
+                    let action = if connected {
+                        PageAction::Disconnect(id.into())
+                    } else if status == "pending" {
+                        PageAction::CancelLogin(id.into())
+                    } else {
+                        PageAction::Connect(id.into())
+                    };
+                    out.push(PageLine::Item {
+                        label,
+                        value: self.provider_status(p),
+                        tone: if connected {
+                            Tone::Secondary
+                        } else {
+                            Tone::Muted
+                        },
+                        action,
+                    });
+                    if status == "pending" {
+                        let login = login.expect("pending login");
+                        match login["user_code"].as_str() {
+                            Some(code) => {
+                                out.push(PageLine::Item {
+                                    label: format!("code {code}"),
+                                    value: "enter copies".into(),
+                                    tone: Tone::Warning,
+                                    action: PageAction::CopyCode(code.into()),
+                                });
+                                if let Some(url) = login["verification_uri"].as_str() {
+                                    out.push(PageLine::Text(
+                                        format!("  open {url}"),
+                                        Tone::Secondary,
+                                    ));
+                                }
+                            }
+                            None => out.push(PageLine::Text(
+                                format!(
+                                    "  {}",
+                                    login["message"]
+                                        .as_str()
+                                        .unwrap_or("starting sign-in\u{2026}")
+                                ),
+                                Tone::Muted,
+                            )),
+                        }
+                    } else if status == "failed" {
+                        let why = login
+                            .and_then(|l| l["message"].as_str())
+                            .unwrap_or("sign-in failed");
+                        out.push(PageLine::Text(format!("  {why}"), Tone::Error));
+                    }
+                }
+                for row in &rows {
+                    out.push(setting(row));
+                }
+            }
+            "agents" => {
+                for row in &rows {
+                    out.push(setting(row));
+                }
+                out.push(PageLine::Heading("Subagents".into()));
+                for problem in &self.state.agent_problems {
+                    let text = match (problem["path"].as_str(), problem["error"].as_str()) {
+                        (Some(path), Some(error)) => format!("{path}: {error}"),
+                        _ => problem.to_string(),
+                    };
+                    out.push(PageLine::Text(text, Tone::Error));
+                }
+                for agent in self.subagents() {
+                    let name = agent["name"].as_str().unwrap_or_default().to_owned();
+                    let (value, tone) = self.agent_summary(agent);
+                    out.push(PageLine::Item {
+                        label: name.clone(),
+                        value,
+                        tone,
+                        action: PageAction::OpenAgent(name),
+                    });
+                }
+            }
+            page if page.starts_with("agents/") => {
+                let name = &page["agents/".len()..];
+                let Some(agent) = self
+                    .subagents()
+                    .into_iter()
+                    .find(|a| a["name"].as_str() == Some(name))
+                else {
+                    out.push(PageLine::Text(
+                        format!("No subagent named {name}."),
+                        Tone::Error,
+                    ));
+                    return out;
+                };
+                out.push(PageLine::Text(
+                    agent["description"].as_str().unwrap_or_default().to_owned(),
+                    Tone::Muted,
+                ));
+                let pool = self.agent_refs(name, false);
+                let eligible = pool.iter().filter(|r| self.ref_connected(r)).count();
+                out.push(PageLine::Title(
+                    "Models".into(),
+                    "one picked at random".into(),
+                ));
+                if pool.is_empty() {
+                    out.push(PageLine::Text(
+                        format!("  none: {}", self.agent_default(agent)),
+                        Tone::Muted,
+                    ));
+                }
+                for model in &pool {
+                    let on = self.ref_connected(model);
+                    out.push(PageLine::Item {
+                        label: model.clone(),
+                        value: if on {
+                            format!("{:.0}%", 100.0 / eligible as f64)
+                        } else {
+                            "not connected \u{b7} skipped".into()
+                        },
+                        tone: if on { Tone::Secondary } else { Tone::Warning },
+                        action: PageAction::Ref {
+                            agent: name.to_owned(),
+                            fallback: false,
+                            model: model.clone(),
+                        },
+                    });
+                }
+                out.push(PageLine::Item {
+                    label: "+ add model".into(),
+                    value: String::new(),
+                    tone: Tone::Muted,
+                    action: PageAction::Add {
+                        agent: name.to_owned(),
+                        fallback: false,
+                    },
+                });
+                out.push(PageLine::Title(
+                    "Fallbacks".into(),
+                    "tried in order on failure".into(),
+                ));
+                for (i, model) in self.agent_refs(name, true).iter().enumerate() {
+                    let on = self.ref_connected(model);
+                    out.push(PageLine::Item {
+                        label: format!("{}. {model}", i + 1),
+                        value: if on {
+                            String::new()
+                        } else {
+                            "not connected \u{b7} skipped".into()
+                        },
+                        tone: if on { Tone::Secondary } else { Tone::Warning },
+                        action: PageAction::Ref {
+                            agent: name.to_owned(),
+                            fallback: true,
+                            model: model.clone(),
+                        },
+                    });
+                }
+                out.push(PageLine::Item {
+                    label: "+ add fallback".into(),
+                    value: String::new(),
+                    tone: Tone::Muted,
+                    action: PageAction::Add {
+                        agent: name.to_owned(),
+                        fallback: true,
+                    },
+                });
+            }
+            _ => {}
+        }
+        out
+    }
+
+    /// Indexes of the selectable lines of the open page.
+    pub fn settings_page_items(&self) -> Vec<usize> {
+        self.settings_page_lines()
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| matches!(l, PageLine::Item { .. }))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    fn settings_page_action(&self) -> Option<PageAction> {
+        let lines = self.settings_page_lines();
+        let items = self.settings_page_items();
+        let at = *items.get(self.ui.settings_page_row.min(items.len().saturating_sub(1)))?;
+        match lines.into_iter().nth(at)? {
+            PageLine::Item { action, .. } => Some(action),
+            _ => None,
+        }
+    }
+
+    /// Keys on a Settings page: arrows move, Enter acts, Left/Right change a
+    /// setting, `d` removes a model, `K`/`J` reorder fallbacks, Esc goes back.
+    fn settings_page_key(&mut self, name: &str, code: KeyCode) -> bool {
+        let last = self.settings_page_items().len().saturating_sub(1);
+        let sel = self.ui.settings_page_row.min(last);
+        let action = self.settings_page_action();
+        match name {
+            "esc" | "backspace" => {
+                self.ui.pool_pick = None;
+                if self
+                    .ui
+                    .settings_page
+                    .as_deref()
+                    .is_some_and(|p| p.starts_with("agents/"))
+                {
+                    self.ui.settings_page = Some("agents".into());
+                    self.ui.settings_page_row = self.ui.settings_page_back;
+                } else {
+                    self.ui.settings_page = None;
+                }
+            }
+            "up" | "shift+tab" => self.ui.settings_page_row = sel.saturating_sub(1),
+            "down" | "tab" => self.ui.settings_page_row = (sel + 1).min(last),
+            "pageup" => self.ui.settings_page_row = sel.saturating_sub(8),
+            "pagedown" => self.ui.settings_page_row = (sel + 8).min(last),
+            "home" => self.ui.settings_page_row = 0,
+            "end" => self.ui.settings_page_row = last,
+            "enter" => {
+                if let Some(action) = action {
+                    self.page_activate(action);
+                }
+            }
+            "left" | "right" => {
+                if let Some(PageAction::Setting(row)) = action {
+                    if let Some(why) = self.settings_reason(&row, None) {
+                        self.toast(Level::Warning, format!("{}: {why}", row.label));
+                    } else {
+                        self.settings_change_row(*row, if name == "left" { -1 } else { 1 });
+                    }
+                }
+            }
+            "d" | "delete" => {
+                if let Some(PageAction::Ref {
+                    agent,
+                    fallback,
+                    model,
+                }) = action
+                {
+                    let refs: Vec<String> = self
+                        .agent_refs(&agent, fallback)
+                        .into_iter()
+                        .filter(|r| *r != model)
+                        .collect();
+                    self.patch_agent_refs(&agent, fallback, refs);
+                }
+            }
+            _ if matches!(code, KeyCode::Char('K' | 'J'))
+                || matches!(name, "shift+up" | "shift+down") =>
+            {
+                if let Some(PageAction::Ref {
+                    agent,
+                    fallback: true,
+                    model,
+                }) = action
+                {
+                    let up = code == KeyCode::Char('K') || name == "shift+up";
+                    let mut refs = self.agent_refs(&agent, true);
+                    if let Some(i) = refs.iter().position(|r| *r == model) {
+                        let j = if up {
+                            i.checked_sub(1)
+                        } else {
+                            Some(i + 1).filter(|j| *j < refs.len())
+                        };
+                        if let Some(j) = j {
+                            refs.swap(i, j);
+                            self.patch_agent_refs(&agent, true, refs);
+                            self.ui.settings_page_row = if up {
+                                sel.saturating_sub(1)
+                            } else {
+                                (sel + 1).min(last)
+                            };
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn page_activate(&mut self, action: PageAction) {
+        match action {
+            PageAction::RefreshModels => {
                 self.effects
                     .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
                 self.toast(Level::Info, "Refreshing the model catalog");
             }
-            "agents.list" => {
-                self.execute("app.settings");
-                self.execute("agent.change");
+            PageAction::Connect(id) => {
+                let provider = self
+                    .state
+                    .providers
+                    .iter()
+                    .find(|p| p["id"].as_str() == Some(id.as_str()));
+                let methods: Vec<String> = provider
+                    .and_then(|p| p["methods"].as_array())
+                    .map(|m| {
+                        m.iter()
+                            .filter_map(|v| v.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if methods.iter().any(|m| m == "api_key") {
+                    let label = provider
+                        .and_then(|p| p["label"].as_str())
+                        .unwrap_or(&id)
+                        .to_owned();
+                    let hint = provider
+                        .and_then(|p| p["key_hint"].as_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    let restore = self.restore_point();
+                    self.ui.edit = Some(TextEdit {
+                        label: format!("{label} API key {hint}").trim_end().to_owned(),
+                        target: EditTarget::ProviderKey { id },
+                        buf: Composer::new(),
+                        restore,
+                    });
+                } else if let Some(method) = methods
+                    .iter()
+                    .find(|m| *m == "device")
+                    .or(methods.first())
+                    .cloned()
+                {
+                    self.ui
+                        .provider_logins
+                        .insert(id.clone(), json!({"status": "pending"}));
+                    self.api(ApiCall::Provider {
+                        id,
+                        sign_out: false,
+                        method,
+                        key: None,
+                    });
+                } else {
+                    self.toast(
+                        Level::Warning,
+                        format!("Sign in from a terminal: nexus login {id}"),
+                    );
+                }
             }
-            _ => {}
+            PageAction::Disconnect(id) => {
+                let users: Vec<String> = self
+                    .subagents()
+                    .iter()
+                    .filter_map(|a| a["name"].as_str())
+                    .filter(|name| {
+                        [false, true].iter().any(|f| {
+                            self.agent_refs(name, *f)
+                                .iter()
+                                .any(|r| r.split_once('/').map_or("codex", |(p, _)| p) == id)
+                        })
+                    })
+                    .map(str::to_owned)
+                    .collect();
+                if users.is_empty() {
+                    self.api(ApiCall::Provider {
+                        id,
+                        sign_out: true,
+                        method: String::new(),
+                        key: None,
+                    });
+                } else {
+                    let restore = self.restore_point();
+                    self.ui.dialog = Some(Dialog {
+                        title: format!("Disconnect {id}?"),
+                        body: vec![
+                            format!("Models from {id} are listed for {}.", users.join(", ")),
+                            "They stay in those lists and are skipped while it is not connected."
+                                .into(),
+                        ],
+                        cancel: "Cancel".into(),
+                        confirm: "Disconnect".into(),
+                        danger: true,
+                        action: Confirmed::Disconnect(id),
+                        button: 0,
+                        restore,
+                    });
+                }
+            }
+            PageAction::CancelLogin(id) => {
+                self.ui.provider_logins.remove(&id);
+                self.api(ApiCall::Provider {
+                    id,
+                    sign_out: true,
+                    method: String::new(),
+                    key: None,
+                });
+            }
+            PageAction::CopyCode(code) => {
+                self.effects.push(Effect::Copy(code));
+                self.toast(Level::Success, "Code copied");
+            }
+            PageAction::Setting(row) => {
+                if let Some(why) = self.settings_reason(&row, None) {
+                    self.toast(Level::Warning, format!("{}: {why}", row.label));
+                } else {
+                    self.settings_activate_row(*row);
+                }
+            }
+            PageAction::Ref { .. } => {
+                self.toast(Level::Info, "d removes it; K/J move a fallback");
+            }
+            PageAction::Add { agent, fallback } => {
+                self.ui.pool_pick = Some((agent, fallback));
+                self.open_palette(PaletteMode::PoolModels);
+            }
+            PageAction::OpenAgent(name) => {
+                self.ui.settings_page_back = self.ui.settings_page_row;
+                self.ui.settings_page = Some(format!("agents/{name}"));
+                self.ui.settings_page_row = 0;
+            }
         }
+    }
+
+    /// Write one agent's model or fallback list; an empty list removes the entry.
+    fn patch_agent_refs(&mut self, agent: &str, fallback: bool, refs: Vec<String>) {
+        let key = if fallback { "fallbacks" } else { "models" };
+        let Some(config) = &self.state.config else {
+            self.toast(Level::Warning, "Configuration is not loaded");
+            return;
+        };
+        let Some(revision) = config["revision"].as_str().map(str::to_owned) else {
+            return;
+        };
+        let mut all = config["values"]["agents"][key]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        if refs.is_empty() {
+            all.remove(agent);
+        } else {
+            all.insert(agent.to_owned(), json!(refs));
+        }
+        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+            revision,
+            path: format!("agents.{key}"),
+            value: Value::Object(all),
+        }));
     }
 
     fn toggle_monochrome(&mut self) {
@@ -8164,6 +9025,12 @@ impl App {
             Target::SettingsRow(i) => {
                 self.ui.settings_row = i;
                 self.settings_activate(i);
+            }
+            Target::SettingsPageRow(i) => {
+                self.ui.settings_page_row = i;
+                if let Some(action) = self.settings_page_action() {
+                    self.page_activate(action);
+                }
             }
         }
     }

@@ -3,6 +3,8 @@
 
 mod common;
 use common::*;
+use nexus_tui::actions::ApiCall;
+use nexus_tui::app::Effect;
 use nexus_tui::manifest::Manifest;
 use nexus_tui::theme::{Mode, Tier};
 use nexus_tui::ui::Target;
@@ -1185,7 +1187,9 @@ fn settings_search_filters_rows_and_esc_clears_then_closes() {
     let (_, rows) = draw(&mut app, 120, 36);
     let text = joined(&rows);
     assert!(text.contains("model"));
-    assert!(text.contains("MODELS"));
+    // Model lists live on the Agents page: its entry matches.
+    assert!(text.contains("AGENTS"), "{text}");
+    assert!(!text.contains("MODELS"));
     assert!(!text.contains("Dictation"));
     press(&mut app, &["esc"]);
     assert!(app.ui.settings_search.text().is_empty());
@@ -1988,25 +1992,66 @@ fn projects_can_be_added_and_removed_from_the_sidebar() {
 #[test]
 fn settings_shows_what_core_reports_and_refuses_what_it_cannot_change() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
-    app.state.last_model = "codex/gpt-5".into();
     app.state.catalog_source = "cache (5 min old)".into();
     app.state.models = vec![serde_json::json!({"ref": "codex/gpt-5"})];
+    app.state.providers = vec![
+        serde_json::json!({"id": "codex", "label": "Codex", "connected": true, "verified": true, "methods": ["device"]}),
+        serde_json::json!({"id": "groq", "label": "Groq", "connected": false, "verified": true, "methods": ["api_key"], "key_env": "GROQ_API_KEY"}),
+    ];
     app.state.agents = vec![
-        serde_json::json!({"name": "build"}),
-        serde_json::json!({"name": "plan"}),
+        serde_json::json!({"name": "build", "mode": "all", "description": "Builds", "source": "builtin",
+                           "subagent": {"effective": {"model": "", "source": "parent"}}}),
+        serde_json::json!({"name": "orchestrate", "mode": "primary"}),
     ];
     app.execute("app.settings");
     let (_, rows) = draw(&mut app, 120, 50);
     let all = joined(&rows);
     for needle in [
-        "codex/gpt-5",
-        "1 models",
-        "cache (5 min old)",
-        "build, plan",
+        "Providers \u{203a}",
+        "1 of 2 connected",
+        "Agents \u{203a}",
+        "1 subagents",
     ] {
         assert!(all.contains(needle), "missing {needle:?}: {all}");
     }
-    typing(&mut app, "default model");
+    // The Providers page.
+    typing(&mut app, "providers");
+    press(&mut app, &["enter"]);
+    assert_eq!(app.ui.settings_page.as_deref(), Some("providers"));
+    let all = joined(&draw(&mut app, 120, 50).1);
+    for needle in [
+        "Settings \u{203a} Providers",
+        "catalog: cache (5 min old)",
+        "Codex",
+        "connected \u{b7} 1 model",
+        "not connected \u{b7} API key",
+        "esc back",
+    ] {
+        assert!(all.contains(needle), "missing {needle:?}: {all}");
+    }
+    press(&mut app, &["esc"]);
+    assert_eq!(app.ui.settings_page, None);
+    assert_eq!(app.ui.view, nexus_tui::ui::View::Settings);
+    // The Agents page refuses a change before the configuration has loaded.
+    app.ui.settings_page = Some("agents".into());
+    app.ui.settings_page_row = 0;
+    let all = joined(&draw(&mut app, 120, 50).1);
+    for needle in [
+        "Default agent for new sessions",
+        "SUBAGENTS",
+        "build",
+        "parent's model",
+    ] {
+        assert!(all.contains(needle), "missing {needle:?}: {all}");
+    }
+    assert!(
+        !all.contains("orchestrate"),
+        "primary agents are not listed"
+    );
+    assert!(
+        !all.contains("+ add model"),
+        "model lists are on each subagent's own page"
+    );
     press(&mut app, &["enter"]);
     let toast = app
         .ui
@@ -2016,6 +2061,126 @@ fn settings_shows_what_core_reports_and_refuses_what_it_cannot_change() {
         .map(|n| n.text.clone())
         .unwrap_or_default();
     assert!(toast.contains("Configuration is not loaded"), "{toast}");
+}
+
+#[test]
+fn agent_model_lists_show_odds_skip_disconnected_and_edit_the_config() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    app.state.models = vec![
+        serde_json::json!({"ref": "codex/gpt-5"}),
+        serde_json::json!({"ref": "codex/mini"}),
+    ];
+    app.state.providers = vec![
+        serde_json::json!({"id": "codex", "label": "Codex", "connected": true, "methods": ["device"]}),
+        serde_json::json!({"id": "groq", "label": "Groq", "connected": false, "methods": ["api_key"]}),
+    ];
+    app.state.agents =
+        vec![serde_json::json!({"name": "scout", "mode": "subagent", "source": "builtin"})];
+    app.state.config = Some(serde_json::json!({"revision": "r1", "values": {
+        "defaults": {"effort": "", "agent": "", "permission": "allow"},
+        "agents": {"models": {"scout": ["codex/gpt-5", "groq/x"]}, "fallbacks": {"scout": ["codex/mini", "groq/x"]}}}}));
+    app.execute("app.settings");
+    app.ui.settings_page = Some("agents".into());
+    // One line per subagent; Enter opens its page.
+    let all = joined(&draw(&mut app, 120, 50).1);
+    assert!(
+        all.contains("2 models \u{b7} 2 fallbacks \u{b7} 2 skipped"),
+        "{all}"
+    );
+    press(&mut app, &["down", "down", "enter"]);
+    assert_eq!(app.ui.settings_page.as_deref(), Some("agents/scout"));
+    let all = joined(&draw(&mut app, 120, 50).1);
+    for needle in [
+        "Settings \u{203a} Agents \u{203a} scout",
+        "MODELS",
+        "codex/gpt-5",
+        "100%",
+        "groq/x",
+        "not connected \u{b7} skipped",
+        "1. codex/mini",
+        "2. groq/x",
+    ] {
+        assert!(all.contains(needle), "missing {needle:?}: {all}");
+    }
+    let patch = |app: &nexus_tui::app::App| {
+        app.effects.iter().rev().find_map(|e| match e {
+            Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }) => {
+                Some((path.clone(), value.clone()))
+            }
+            _ => None,
+        })
+    };
+    // Items: two models, add, two fallbacks, add.
+    app.effects.clear();
+    press(&mut app, &["d"]);
+    assert_eq!(
+        patch(&app),
+        Some((
+            "agents.models".into(),
+            serde_json::json!({"scout": ["groq/x"]})
+        ))
+    );
+    press(&mut app, &["down", "down", "down", "J"]); // the first fallback moves down
+    assert_eq!(
+        patch(&app),
+        Some((
+            "agents.fallbacks".into(),
+            serde_json::json!({"scout": ["groq/x", "codex/mini"]})
+        ))
+    );
+    // Adding opens a palette of models not yet in the list.
+    app.ui.settings_page_row = 2;
+    press(&mut app, &["enter"]);
+    let labels: Vec<String> = app.palette_items().into_iter().map(|i| i.label).collect();
+    assert_eq!(labels, ["codex/mini"]);
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        patch(&app),
+        Some((
+            "agents.models".into(),
+            serde_json::json!({"scout": ["codex/gpt-5", "groq/x", "codex/mini"]})
+        ))
+    );
+    // Esc returns to the list on the same subagent, then to Settings.
+    press(&mut app, &["esc"]);
+    assert_eq!(
+        (app.ui.settings_page.as_deref(), app.ui.settings_page_row),
+        (Some("agents"), 2)
+    );
+    press(&mut app, &["esc"]);
+    assert_eq!(app.ui.settings_page, None);
+}
+
+#[test]
+fn a_pending_device_sign_in_shows_its_code_on_the_provider_row() {
+    use nexus_tui::api::Frame;
+    use nexus_tui::sync::SyncMsg;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    app.state.providers = vec![
+        serde_json::json!({"id": "copilot", "label": "GitHub Copilot", "connected": false, "methods": ["device"]}),
+    ];
+    app.execute("app.sign_in");
+    assert_eq!(app.ui.settings_page.as_deref(), Some("providers"));
+    app.effects.clear();
+    press(&mut app, &["down", "enter"]);
+    assert!(app.effects.iter().any(|e| matches!(e,
+        Effect::Api(ApiCall::Provider { id, sign_out: false, method, .. }) if id == "copilot" && method == "device")), "{:?}", app.effects);
+    let event = serde_json::json!({"id": 300, "type": "provider.login", "cursor": "log_c915bfc9b6d826c4:300", "data": {
+        "provider": "copilot", "status": "pending", "message": "Open https://github.com/login/device and enter code AB-12",
+        "verification_uri": "https://github.com/login/device", "user_code": "AB-12"}});
+    if let Ok(Frame::Event(event)) = Frame::from_value("provider.login", None, &event) {
+        app.apply_sync(SyncMsg::Event(event));
+    }
+    let all = joined(&draw(&mut app, 120, 50).1);
+    assert!(
+        all.contains("code AB-12") && all.contains("open https://github.com/login/device"),
+        "{all}"
+    );
+    press(&mut app, &["down", "enter"]);
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Copy(code) if code == "AB-12")));
 }
 
 #[test]

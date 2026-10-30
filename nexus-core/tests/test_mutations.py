@@ -6,6 +6,7 @@ import json
 
 import httpx
 import pytest
+from conftest import remembering
 from starlette.requests import Request
 
 from nexus import runtime as runtime_module
@@ -44,7 +45,7 @@ def daemon(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     provider = Scripted()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
-    rt = make_runtime("scripted/m", Store(tmp_path / "nexus.db"))
+    rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -116,7 +117,7 @@ async def test_a_crash_between_acceptance_and_task_creation_replays_visibly(tmp_
     store = Store(db)
     (tmp_path / "proj").mkdir(exist_ok=True)
     project, _ = store.project_for_path(str(tmp_path / "proj"))
-    session = store.create_session(project, title="crash", agent="build")
+    session = store.create_session(project, title="crash", agent="build", model="scripted/m")
     key = "crash-key"
     path = f"/api/session/{session.id}/prompt"
     request = Request({"type": "http", "method": "POST", "path": path, "query_string": b"", "headers": []})
@@ -130,7 +131,7 @@ async def test_a_crash_between_acceptance_and_task_creation_replays_visibly(tmp_
 
     provider = Scripted()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
-    rt = Runtime(Store(db), Bus(), "scripted/m")
+    rt = Runtime(remembering(Store(db), "scripted/m"), Bus())
     rt.recover()
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",

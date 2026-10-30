@@ -52,15 +52,18 @@ class Tool:
     run: Callable[[dict[str, Any], ToolContext], Awaitable[str]]
 
 
-def resolve(ctx: ToolContext, path: Any) -> Path:
-    """A path inside the workspace; relative paths are relative to it."""
+def resolve(ctx: ToolContext, path: Any, *, outside: bool = False) -> Path:
+    """A path inside the workspace; relative paths are relative to it. `outside` allows any path (reads only)."""
     if not isinstance(path, str) or not path:
         raise ToolError("path must be a non-empty string")
     root = ctx.workspace.resolve()
     target = (root / path).resolve()
-    if target != root and root not in target.parents:
+    if not outside and target != root and root not in target.parents:
         raise ToolError(f"{path} is outside the workspace {root}")
     return target
+
+
+MAX_PATCH_CHARS = 1_000_000
 
 
 def clip(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
@@ -69,3 +72,11 @@ def clip(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
     head = text[: limit // 2]
     tail = text[-limit // 2 :]
     return f"{head}\n[… clipped {len(text) - limit} of {len(text)} characters …]\n{tail}"
+
+
+def line_span(text: str, start: int, end: int) -> tuple[int, int]:
+    """The 1-based lines an original `text[start:end]` touches, matching read's line numbers."""
+    prefix = text[:start]
+    first = len(prefix.splitlines()) + (1 if start == 0 or prefix.endswith(("\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")) else 0)
+    last = len(text[:end].splitlines())
+    return max(1, first), max(1, last)

@@ -108,9 +108,10 @@ newest request with known usage. A ledger that began counting well after the
 first message is labelled `Totals since …`, and requests that reported no usage
 are counted as unknown. It also counts descendant sessions. Right-click or Shift+F10 opens the
 manifest-driven session/project row menu, including confirmed project removal,
-and Projects has a trailing `+ Add project` row. Settings shows Core's default
-model, catalog and loaded agents, with model and agent pickers and catalog
-refresh. Worktree data is loaded for branch/location display (and read again when the
+and Projects has a trailing `+ Add project` row. Settings has Providers and
+Agents pages (a drill-in with a back link; Esc returns): provider connections
+with device codes, key entry and catalog refresh, and the default agent and effort with a line per subagent that opens its model
+and fallback lists. Worktree data is loaded for branch/location display (and read again when the
 session view's `directory` differs from the one it was read for, as after a move), while directory
 and worktree actions remain disabled with a reason. Kernel state is the remaining
 session-info item not reported by Core.

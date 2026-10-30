@@ -208,13 +208,15 @@ order = "newest_first"
 shows_unread_count = true
 
 # --- Settings -----------------------------------------------------------------
-# Section order is fixed (INTERFACE_PLAN.md): Appearance, Providers, Models,
-# Agents, Tools, Skills, MCP, Context, Dictation, Keybindings, Notifications,
+# Section order is fixed (INTERFACE_PLAN.md): Appearance, Providers, Agents,
+# Tools, Skills, MCP, Context, Dictation, Keybindings, Notifications,
 # About. Rows keep their relative order in both clients; client-only rows are
 # labelled by `clients` and sit inside the matching section.
 # scope: core = read/written through the Core API; client = per-client view setting.
 # kinds: choice, toggle, number, text, list, action, info, keymap.
 # A row or section with unavailable_reason is shown disabled with that reason.
+# A section with `page = true` is one entry that opens its own page (Providers,
+# Agents); its rows are drawn on that page, above the page's own content.
 
 [[settings.section]]
 id = "appearance"
@@ -334,30 +336,8 @@ command = "sessions.archived_filter"
 [[settings.section]]
 id = "providers"
 label = "Providers"
-
-[[settings.section.row]]
-id = "providers.list"
-label = "Providers"
-kind = "list"
-scope = "core"
-clients = "both"
-note = "Status, account and expiry per provider."
-
-[[settings.section.row]]
-id = "providers.sign_in"
-label = "Sign in"
-kind = "action"
-scope = "core"
-clients = "both"
-command = "app.sign_in"
-
-[[settings.section.row]]
-id = "providers.sign_out"
-label = "Sign out"
-kind = "action"
-scope = "core"
-clients = "both"
-command = "app.sign_out"
+page = true
+note = "Connection status per provider and ways to connect."
 
 [[settings.section.row]]
 id = "providers.add_custom"
@@ -368,56 +348,25 @@ clients = "both"
 unavailable_reason = "Core does not support custom providers yet."
 
 [[settings.section]]
-id = "models"
-label = "Models"
+id = "agents"
+label = "Agents"
+page = true
+note = "Default agent and effort; models and fallbacks for subagents."
 
 [[settings.section.row]]
-id = "models.default_effort"
+id = "agents.default_root"
+label = "Default agent for new sessions"
+kind = "choice"
+scope = "core"
+clients = "both"
+
+[[settings.section.row]]
+id = "agents.default_effort"
 label = "Default effort"
 kind = "choice"
 scope = "core"
 clients = "both"
 command = "model.effort"
-
-[[settings.section.row]]
-id = "models.catalog"
-label = "Model catalog"
-kind = "list"
-scope = "core"
-clients = "both"
-
-[[settings.section.row]]
-id = "models.refresh"
-label = "Refresh catalog"
-kind = "action"
-scope = "core"
-clients = "both"
-
-[[settings.section]]
-id = "agents"
-label = "Agents"
-
-[[settings.section.row]]
-id = "agents.list"
-label = "Loaded agents"
-kind = "list"
-scope = "core"
-clients = "both"
-note = "Name, mode and source (built-in, global, project)."
-
-[[settings.section.row]]
-id = "agents.default_root"
-label = "Default root agent"
-kind = "choice"
-scope = "core"
-clients = "both"
-
-[[settings.section.row]]
-id = "agents.open_file"
-label = "Open agent file in editor"
-kind = "action"
-scope = "core"
-clients = "both"
 
 [[settings.section]]
 id = "tools"

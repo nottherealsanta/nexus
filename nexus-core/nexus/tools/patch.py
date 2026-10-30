@@ -12,8 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..llmhub.types import ToolSpec
-from .base import Tool, ToolContext, ToolError, resolve
-from .edit import MAX_PATCH_CHARS, _line_span
+from .base import MAX_PATCH_CHARS, Tool, ToolContext, ToolError, line_span, resolve
 
 
 @dataclass
@@ -158,7 +157,7 @@ def _apply_hunks(path: str, text: str, hunks: list[_Hunk]) -> tuple[str, list[tu
     # Patch matching uses LF-delimited lines; read uses splitlines(), which also
     # recognizes Unicode separators. Translate coverage back to read's numbering.
     visible_spans = [
-        _line_span(text, original_offsets[first - 1], min(original_offsets[last], len(text)))
+        line_span(text, original_offsets[first - 1], min(original_offsets[last], len(text)))
         for first, last in affected if first <= last
     ]
     return "\n".join(lines) + ("\n" if trailing_newline or not lines else ""), visible_spans

@@ -210,6 +210,10 @@ def summary(snapshot: dict[str, Any]) -> dict[str, Any]:
         "granted_tools": list(snapshot["granted_tools"]),
         "child_agents": snapshot["child_agents"],
     }
+    if snapshot.get("model_pick"):
+        data["model_pick"] = snapshot["model_pick"]
+    if snapshot.get("model_fallbacks"):
+        data["model_fallbacks"] = snapshot["model_fallbacks"]
     if snapshot.get("notice"):
         data["notice"] = snapshot["notice"]
     return data

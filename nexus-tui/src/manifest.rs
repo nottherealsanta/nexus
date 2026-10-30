@@ -151,6 +151,11 @@ pub struct Section {
     pub id: String,
     pub label: String,
     pub unavailable_reason: Option<String>,
+    /// One entry that opens its own page (Providers, Agents); its rows are drawn on that page.
+    #[serde(default)]
+    pub page: bool,
+    #[serde(default)]
+    pub note: String,
     #[serde(default)]
     pub row: Vec<Row>,
 }
@@ -311,7 +316,6 @@ mod tests {
             [
                 "appearance",
                 "providers",
-                "models",
                 "agents",
                 "tools",
                 "skills",

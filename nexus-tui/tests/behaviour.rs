@@ -94,6 +94,8 @@ fn model_agent_and_effort_pickers_use_core_catalog_data() {
         ],
         source: "models.dev".into(),
         last_model: "codex/gpt-6.1-terra".into(),
+        providers: vec![],
+        problems: vec![],
     });
     let items = a.palette_items();
     assert!(items.iter().any(|i| i.label == "build"));

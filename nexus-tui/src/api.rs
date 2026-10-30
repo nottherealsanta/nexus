@@ -1223,6 +1223,11 @@ impl CoreApi {
         self.http.get("/api/model", &[]).await
     }
 
+    /// Every provider with its connection state and how to connect it (`methods`, `key_env`, `key_source`).
+    pub async fn providers(&self) -> Result<Value, Error> {
+        self.http.get("/api/provider", &[]).await
+    }
+
     /// The model last selected anywhere (`{model, source}`), what a new session starts with; empty when none was ever chosen.
     pub async fn last_model(&self) -> Result<Value, Error> {
         self.http.get("/api/model/last", &[]).await

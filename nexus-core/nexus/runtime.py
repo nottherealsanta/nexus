@@ -73,7 +73,7 @@ from .hooks import HookRunner, config_hooks
 from .kernels import Kernels
 from .llmhub import catalog
 from .llmhub.auth import AuthError, CredentialError
-from .llmhub.hub import provider_for, split_ref
+from .llmhub.hub import connected, provider_for, split_ref
 from .llmhub.types import (
     Done,
     Media,
@@ -199,14 +199,13 @@ class Runtime:
     # Titles and automatic handoffs make their own model requests; tests with scripted providers turn this off.
     background_requests = True
 
-    def __init__(self, store: Store, bus: Bus, seed_model: str = "") -> None:
+    def __init__(self, store: Store, bus: Bus) -> None:
         self.kernels = Kernels()
         self.jobs = Jobs()
         self.store = store
         from .inputs import Inputs
         self.inputs = Inputs(store)
         self.bus = bus
-        self.seed_model = seed_model  # the remembered model of an installation that never picked one (migration)
         self.turns: dict[str, asyncio.Task[None]] = {}
         self.approvals: dict[str, tuple[str, asyncio.Future[bool], dict[str, Any]]] = {}  # id -> (session, future, request)
         self.grants: dict[str, set[str]] = {}  # session -> grant keys from "allow for this session" (K7); lost on restart
@@ -428,23 +427,25 @@ class Runtime:
         return sum(m["input"] + m["output"] for m in models)
 
     @staticmethod
-    def _switches(snapshot: dict[str, Any], disabled: set[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def _switches(snapshot: dict[str, Any], disabled: set[str], *,
+                  started: bool = True) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """What the context header can switch: each skill and MCP server the session started with, and what it lacks.
 
-        `locked` means it was not on at the start, so only a new session can use it.
+        `locked` means it was not on at the start, so only a new session can use it. A draft (`started` false) has
+        not started, so what its own switches turned off stays switchable; only an unavailable server is locked.
         """
         book = snapshot.get("skills") or {}
         skills = [{"name": n, "description": r["description"], "scope": r["scope"], "locked": False,
                    "state": "off" if skill_files.DISABLED_PREFIX + n in disabled else "on"}
                   for n, r in book.get("items", {}).items()]
-        skills += [{"name": n, "description": r["description"], "scope": r["scope"], "locked": True, "state": "off"}
+        skills += [{"name": n, "description": r["description"], "scope": r["scope"], "locked": started, "state": "off"}
                    for n, r in book.get("off", {}).items()]
         mcp = snapshot.get("mcp") or {}
         servers = [{"server": n, "tools": (mcp.get("tools") or {}).get(n), "locked": False, "error": None,
                     "state": "off" if mcp_files.DISABLED_PREFIX + n in disabled else "on"} for n in mcp.get("servers", [])]
         servers += [{"server": n, "tools": None, "locked": True, "error": e, "state": "unavailable"}
                     for n, e in (mcp.get("unavailable") or {}).items()]
-        servers += [{"server": n, "tools": None, "locked": True, "error": None, "state": "off"}
+        servers += [{"server": n, "tools": None, "locked": started, "error": None, "state": "off"}
                     for n in mcp.get("off", [])]
         return skills, servers
 
@@ -466,9 +467,6 @@ class Runtime:
             ref = self.resolve_model(parent, self.snapshot_for(parent)["agent"])[0]
             if ref:
                 return ref, "parent"
-        if parent is None and self.seed_model:
-            # A session stored before models were remembered holds none; it keeps the model the installation was set up with.
-            return self.seed_model, "default"
         return "", "none"
 
     # -- remembered models -----------------------------------------------------
@@ -483,18 +481,24 @@ class Runtime:
         """`(ref, source)` a new root session starts with when nothing names a model.
 
         The model last selected for this agent in this project (`"agent"`), else the model last selected anywhere
-        (`"last"`), else none (`""`). An installation that never picked one starts from the seed (an old
-        `$NEXUS_MODEL` or `defaults.model`). A remembered ref is never replaced by another: if its provider is
-        signed out the client says so and asks for a new choice.
+        (`"last"`), else none (`""`). A remembered ref is never replaced by another: if its provider is signed out
+        the client says so and asks for a new choice.
         """
         candidates = []
         if project_id and agent:
             candidates.append(("agent", self.store.preference(self._agent_model_key(project_id, agent))))
-        candidates += [("last", self.store.preference(self.LAST_MODEL)), ("last", self.seed_model)]
+        candidates.append(("last", self.store.preference(self.LAST_MODEL)))
         for source, ref in candidates:
             if ref:
                 return ref, source
         return "", "none"
+
+    def subagent_models(self, spec: agent_files.AgentDef, values: dict[str, Any] | None = None) -> dict[str, Any]:
+        """A child-capable agent's configured pool and fallbacks, and what a new subagent uses with an empty pool:
+        the agent file's `model` (`agent`) or the parent session's model (`parent`)."""
+        settings = (values or ConfigFile().read()["values"])["agents"]
+        return {"pool": settings["models"].get(spec.name, []), "fallbacks": settings["fallbacks"].get(spec.name, []),
+                "effective": {"model": spec.model, "source": "agent"} if spec.model else {"model": "", "source": "parent"}}
 
     def remember_model(self, project_id: str, agent: str, ref: str) -> None:
         """Record an explicit selection: the last model anywhere and the last for this agent in this project."""
@@ -896,12 +900,22 @@ class Runtime:
         if parent is not None and model is None:
             settings = ConfigFile().read()["values"]["agents"]
             pool = settings["models"].get(agent, [])
-            if pool:
-                model = secrets.choice(pool)
             fallbacks = settings["fallbacks"].get(agent, [])
+            live = set(connected()) if pool or fallbacks else set()
+            if pool:
+                # Only refs whose provider is connected can be picked; the others are recorded, never silently dropped.
+                eligible = [ref for ref in pool if split_ref(ref)[0] in live]
+                model = secrets.choice(eligible) if eligible else None
+                snapshot["model_pick"] = {"pool": list(pool), "eligible": eligible, "chosen": model,
+                                          "skipped": [ref for ref in pool if ref not in eligible]}
+                if model is None:
+                    snapshot["model_pick"]["note"] = "no pool entry's provider is connected; using " + (
+                        "the agent file's model" if snapshot["agent"].get("model") else "the parent session's model")
             if fallbacks:
                 primary = model or snapshot["agent"].get("model") or self.resolve_model(parent, self.snapshot_for(parent))[0]
-                snapshot["model_fallbacks"] = {"primary": primary, "models": [ref for ref in fallbacks if ref != primary]}
+                usable = [ref for ref in fallbacks if ref != primary and split_ref(ref)[0] in live]
+                snapshot["model_fallbacks"] = {"primary": primary, "models": usable,
+                                               "skipped": [ref for ref in fallbacks if ref != primary and ref not in usable]}
         session = self.store.create_session(project, title=title or "New session", agent=agent, model=model or "",
                                             permission=permission or "allow", effort=effort or None, parent=parent,
                                             parent_call_id=parent_call_id, launched_by=launched_by,
@@ -1573,7 +1587,7 @@ class Runtime:
                  "instruction_file": estimate_tokens(file.get("content") or "")}
         info = {n: {"description": d["description"]}
                 for n, d in snapshot["tool_definitions"].items()}
-        skills, servers = self._switches(snapshot, set(disabled))
+        skills, servers = self._switches(snapshot, set(disabled), started=False)
         return body | budget(body, window, None) | {"model": ref, "agent": plan["agent"], "parts": parts,
                                                     "snapshot": snapshots.summary(snapshot), "tool_info": info,
                                                     "tools": list(snapshot["tools"]), "skills": skills, "mcp": servers,

@@ -11,6 +11,7 @@ import json
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import runtime as runtime_module
 from nexus.bus import Bus
@@ -72,7 +73,7 @@ def daemon(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     provider = Events()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
-    rt = make_runtime("scripted/m", Store(tmp_path / "nexus.db"))
+    rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})

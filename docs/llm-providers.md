@@ -22,19 +22,20 @@ Adapters never read stored credentials. They take a header source
 
 `PROVIDERS` in `providers.py` (the `mock` row is added only when `NEXUS10_DEV` is truthy):
 
-| id | Label | Dialect | Endpoint (`base_url`) | Request URL | models.dev id | Default model |
-| --- | --- | --- | --- | --- | --- | --- |
-| `mock` | Offline mock | scripted | — | `mock://<scenario>` | built in | `hello` (dev only) |
-| `codex` | ChatGPT (Codex) | responses | `https://chatgpt.com/backend-api/codex` | `{base}/responses` | `openai` | `gpt-6.1-terra` |
-| `grok` | xAI (SuperGrok) | responses | `https://cli-chat-proxy.grok.com/v1` | `{base}/responses` | `xai` | `grok-4.7` |
-| `copilot` | GitHub Copilot | chat | `https://api.githubcopilot.com` | `{base}/chat/completions` | `github-copilot` | `claude-sonnet-5` |
-| `opencode` | OpenCode Go | chat | `https://opencode.ai/zen/go/v1` | `{base}/chat/completions` | `opencode-go` | `kimi-k3` |
-| `openai` | OpenAI (API key) | responses | `https://api.openai.com/v1` | `{base}/responses` | `openai` | `gpt-6.1-terra` |
-| `groq` | Groq | chat | `https://api.groq.com/openai/v1` | `{base}/chat/completions` | `groq` | `openai/gpt-oss-120b` |
-| `nvidia` | NVIDIA | chat | `https://integrate.api.nvidia.com/v1` | `{base}/chat/completions` | `nvidia` | `openai/gpt-oss-20b` |
-| `ollama` | Ollama (local) | chat | `http://localhost:11434` (from `$OLLAMA_HOST`) | `{base}/v1/chat/completions` | none; models from `GET /api/tags` | none |
+| id | Label | Dialect | Endpoint (`base_url`) | Request URL | models.dev id |
+| --- | --- | --- | --- | --- | --- |
+| `mock` | Offline mock | scripted | — | `mock://<scenario>` | built in |
+| `codex` | ChatGPT (Codex) | responses | `https://chatgpt.com/backend-api/codex` | `{base}/responses` | `openai` |
+| `grok` | xAI (SuperGrok) | responses | `https://cli-chat-proxy.grok.com/v1` | `{base}/responses` | `xai` |
+| `copilot` | GitHub Copilot | chat | `https://api.githubcopilot.com` | `{base}/chat/completions` | `github-copilot` |
+| `opencode` | OpenCode Go | chat | `https://opencode.ai/zen/go/v1` | `{base}/chat/completions` | `opencode-go` |
+| `openai` | OpenAI (API key) | responses | `https://api.openai.com/v1` | `{base}/responses` | `openai` |
+| `groq` | Groq | chat | `https://api.groq.com/openai/v1` | `{base}/chat/completions` | `groq` |
+| `nvidia` | NVIDIA | chat | `https://integrate.api.nvidia.com/v1` | `{base}/chat/completions` | `nvidia` |
+| `ollama` | Ollama (local) | chat | `http://localhost:11434` (from `$OLLAMA_HOST`) | `{base}/v1/chat/completions` | none; models from `GET /api/tags` |
 
-`ProviderInfo` also has `verified` (a live multi-step tool turn has run through
+A provider has no default model ([models.md](models.md#no-default-model)); the mock's scripted
+scenario defaults to `hello` inside `MockProvider`. `ProviderInfo` also has `verified` (a live multi-step tool turn has run through
 the adapter). It is `True` for all four. Sign-in itself is not verified for
 copilot, grok and opencode (PLAN.md, step 3).
 
@@ -42,11 +43,11 @@ copilot, grok and opencode (PLAN.md, step 3).
 
 | id | Quirks |
 | --- | --- |
-| `codex` | `encrypted_reasoning=True`, `replay_raw=True`, `prompt_cache_key=True`, `session_header="session_id"` |
-| `grok` | `session_header="x-grok-conv-id"` (everything else off) |
-| `copilot` | `initiator_header=True` |
-| `opencode` | `session_header="x-opencode-session"` |
-| `mock` | scripted events; no auth or network (dev only) |
+| `codex` |
+| `grok` |
+| `copilot` |
+| `opencode` |
+| `mock` |
 
 ### What each quirk field does
 

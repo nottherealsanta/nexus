@@ -29,7 +29,7 @@ const ASSISTANT_INDENT: usize = 3;
 /// Activity rows (groups, thoughts, tool calls) start 2 cells in; the two cells
 /// the tool rows already spent on their box or tree glyph stay, so a group's
 /// chevron sits above its members' glyphs (user choice, 2026-10-29).
-const ACTIVITY_INDENT: usize = 2;
+const ACTIVITY_INDENT: usize = 3;
 
 pub struct TLine {
     pub spans: Vec<Span<'static>>,
@@ -211,6 +211,12 @@ fn json_str(v: &Value) -> String {
 
 fn arg_json(args: &str) -> Option<Value> {
     serde_json::from_str(args).ok()
+}
+
+/// A finished background bash job, in the current prefix or the one stored by older sessions.
+fn is_background_done(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("→ Background Shell Done:") || t.starts_with("[Notification: background bash")
 }
 
 pub(crate) fn is_notice(text: &str) -> bool {
@@ -864,9 +870,7 @@ impl Builder<'_> {
         let mut background_notices = Vec::new();
         for (_, _, _, item) in &items {
             let background = match item {
-                Item::Msg(m) if m.role == "user" => parts_text(m)
-                    .trim_start()
-                    .starts_with("→ Background Shell Done:"),
+                Item::Msg(m) if m.role == "user" => is_background_done(&parts_text(m)),
                 _ => false,
             };
             if !background && !matches!(item, Item::Ev(e) if !is_diagnostic(e)) {
@@ -1752,12 +1756,26 @@ impl Builder<'_> {
 
     // -- items -----------------------------------------------------------------
 
+    /// One muted row that opens its full text in a modal (Enter or a click).
+    fn notice_row(&mut self, key: String, label: &str, full: String) {
+        self.block(key, BlockKind::Notice, self.turn, false, |b| {
+            let marker = format!("{} ", b.t.fold(false));
+            let label = truncate(label, b.bw.saturating_sub(width(&marker)), b.ell());
+            b.line(vec![
+                Span::styled(marker, b.meta()),
+                Span::styled(label, b.meta()),
+            ]);
+        });
+        if let Some(block) = self.blocks.last_mut() {
+            block.target = Some(full);
+        }
+    }
+
     fn background_notices(&mut self, notices: &mut Vec<(String, String)>) {
         if notices.is_empty() {
             return;
         }
         let key = format!("notice:{}", notices[0].0);
-        let open = self.is_open(&key, false);
         let label = if notices.len() == 1 {
             format!("{} · show full output", first_line(&notices[0].1))
         } else {
@@ -1766,22 +1784,12 @@ impl Builder<'_> {
                 notices.len()
             )
         };
-        let st = self.t.role_style("context_notice");
-        self.block(key, BlockKind::Notice, self.turn, true, |b| {
-            let marker = format!("{} ", b.t.fold(open));
-            let label = truncate(&label, b.bw.saturating_sub(width(&marker)), b.ell());
-            b.line(vec![
-                Span::styled(marker, b.meta()),
-                Span::styled(label, b.meta()),
-            ]);
-            if open {
-                for (_, text) in notices.iter() {
-                    for row in text::wrap(text, b.bw.saturating_sub(2)) {
-                        b.line(vec![Span::raw("  "), Span::styled(row, st)]);
-                    }
-                }
-            }
-        });
+        let full = notices
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        self.notice_row(key, &label, full);
         notices.clear();
     }
 
@@ -1887,46 +1895,10 @@ impl Builder<'_> {
     }
 
     fn notice(&mut self, m: &crate::api::Message, text: &str) {
-        let key = format!("notice:{}", m.id);
-        let kind = if text.contains("recovery") {
-            "diagnostic"
-        } else if text.contains("inserted") {
-            "context_insertion"
-        } else {
-            "context_notice"
-        };
-        let st = self.t.role_style(kind);
-        let rail = self.t.role_rail_style(kind);
-        let label = self.t.role(kind).label.clone();
-        let heavy = self.t.structure("rail_heavy").to_owned();
-        let bg = self.t.role(kind).bg.clone();
-        let bgst = self.st(&bg, &bg);
-        self.block(key, BlockKind::Notice, self.turn, false, |b| {
-            b.out.push(TLine {
-                spans: vec![
-                    Span::styled(heavy.clone(), rail),
-                    Span::styled(format!(" {label}"), st.add_modifier(Modifier::BOLD)),
-                ],
-                bg: Some(bgst),
-                rail: None,
-                focus: false,
-                context_section: None,
-                context_items: Vec::new(),
-            });
-            for row in text::wrap(text, b.bw.saturating_sub(2)) {
-                b.out.push(TLine {
-                    spans: vec![
-                        Span::styled(heavy.clone(), rail),
-                        Span::styled(format!(" {row}"), st),
-                    ],
-                    bg: Some(bgst),
-                    rail: None,
-                    focus: false,
-                    context_section: None,
-                    context_items: Vec::new(),
-                });
-            }
-        });
+        let head = first_line(text);
+        let head = head.trim().trim_start_matches('[').trim_end_matches(']');
+        let label = format!("context · {head} · show details");
+        self.notice_row(format!("notice:{}", m.id), &label, text.to_owned());
     }
 
     fn assistant_block(&mut self, key: &str, text: &str, streaming: bool) {
@@ -2509,7 +2481,10 @@ impl Builder<'_> {
                 (crate::paint::verb_glyph(&name, ascii).to_owned(), b.meta())
             };
             let mut left = vec![
-                Span::styled(format!("  {prefix} "), prefix_style),
+                Span::styled(
+                    format!("{}{prefix} ", " ".repeat(ACTIVITY_INDENT)),
+                    prefix_style,
+                ),
                 Span::styled(format!("{glyph} "), glyph_style),
                 Span::styled(verb.to_owned(), b.primary()),
             ];
@@ -2589,7 +2564,10 @@ impl Builder<'_> {
                 let last = rows.len() - 1;
                 for (i, row) in rows.iter().enumerate() {
                     let rail = if i == last { &corner } else { &vbar };
-                    let mut spans = vec![Span::styled(format!("  {rail} "), strong)];
+                    let mut spans = vec![Span::styled(
+                        format!("{}{rail} ", " ".repeat(ACTIVITY_INDENT)),
+                        strong,
+                    )];
                     spans.extend(row.iter().cloned());
                     b.line(spans);
                 }
@@ -2785,7 +2763,9 @@ impl Builder<'_> {
         let primary = self.st(PRIMARY, CANVAS);
         let secondary = self.st(SECONDARY, CANVAS);
         let mut head = vec![
-            Span::raw("  "),
+            Span::raw(" "),
+            Span::raw(" "),
+            Span::raw(" "),
             Span::styled(
                 crate::text::capitalize(&agent),
                 primary.patch(self.t.agent_style(&agent)),
@@ -2839,7 +2819,7 @@ impl Builder<'_> {
             String::new()
         };
         let plain = |text: String, style: Style| TLine {
-            spans: vec![Span::raw("  "), Span::styled(text, style)],
+            spans: vec![Span::raw("   "), Span::styled(text, style)],
             bg: None,
             rail: None,
             focus: false,
@@ -2852,8 +2832,17 @@ impl Builder<'_> {
             self.turn,
             child_id.is_some(),
             |b| {
+                let mut spans = head.clone();
+                if busy && !waits && done.is_none() {
+                    // The spinner sits in the margin, in the agent's colour.
+                    spans[1] =
+                        Span::styled(b.t.spinner(b.frame).to_owned(), b.t.agent_style(&agent));
+                } else if done.is_some() {
+                    // Finished: every dot on, no animation.
+                    spans[1] = Span::styled(b.t.dots_full().to_owned(), b.t.agent_style(&agent));
+                }
                 b.out.push(TLine {
-                    spans: head.clone(),
+                    spans,
                     bg: None,
                     rail: None,
                     focus: false,

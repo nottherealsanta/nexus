@@ -35,7 +35,7 @@ doc and the code disagree, the code wins: fix the doc.
 | Header redaction or provider error handling | [llm-providers.md](llm-providers.md) |
 | `nexus login`, tokens, `auth.json`, refresh-token rotation | [auth.md](auth.md) |
 | The grok client version requirement | [auth.md](auth.md) |
-| `nexus models`, the model list, `--model`, `$NEXUS_MODEL` (seed only) | [models.md](models.md), [daemon.md](daemon.md#model-selection) |
+| `nexus models`, the model list, `--model` | [models.md](models.md), [daemon.md](daemon.md#model-selection) |
 | Message and part types, `raw` and `origin` | [stream-events.md](stream-events.md) |
 | JSON encoding of messages and events | [stream-events.md](stream-events.md) |
 | A tool's parameters, limits or path rules | [tools.md](tools.md) |

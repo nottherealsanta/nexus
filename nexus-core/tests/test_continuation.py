@@ -15,6 +15,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import cli
 from nexus import runtime as runtime_module
@@ -73,7 +74,7 @@ def env(tmp_path, monkeypatch):
     provider = Scripted()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
     store = Store(tmp_path / "nexus.db")
-    rt = make_runtime("scripted/m", store)
+    rt = make_runtime(remembering(store, "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -132,7 +133,7 @@ def _seed_crash(db: Path, workspace: Path, *, continuation=False, started_tool=F
     bus = Bus()
     bus.attach(store)
     project, _ = store.project_for_path(str(workspace))
-    session = store.create_session(project, title="crashed", agent="build")
+    session = store.create_session(project, title="crashed", agent="build", model="scripted/m")
     user = store.append_message(session.id, Message("user", (Text("run it"),)))
     event = bus.publish("message.added", message_json(user), session_id=session.id)
     store.link_message_event(user.id, event["id"])
@@ -172,7 +173,7 @@ def _seed_dangling(db: Path, workspace: Path, *, legacy: bool):
     bus = Bus()
     bus.attach(store)
     project, _ = store.project_for_path(str(workspace))
-    session = store.create_session(project, title="dangling", agent="build")
+    session = store.create_session(project, title="dangling", agent="build", model="scripted/m")
     store.append_message(session.id, Message("user", (Text("go"),)))
     call = ToolCall("c1", "bash", '{"command": "touch dangling.txt"}')
     if legacy:
@@ -303,7 +304,7 @@ async def test_continuation_after_startup_recovery_keeps_unknown_tools_uncertain
     session_id, turn_id, _, _ = _seed_crash(db, workspace, started_tool=True)
     provider = Scripted()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
-    rt = make_runtime("scripted/m", Store(db))
+    rt = make_runtime(remembering(Store(db), "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -341,7 +342,7 @@ def test_crash_during_continuation_keeps_its_link(tmp_path, monkeypatch):
     workspace.mkdir()
     db = tmp_path / "nexus.db"
     session_id, turn_id, previous_turn_id, _ = _seed_crash(db, workspace, continuation=True)
-    rt = Runtime(Store(db), Bus(), "scripted/m")
+    rt = Runtime(remembering(Store(db), "scripted/m"), Bus())
     rt.recover()
     try:
         stored = rt.store.turn(turn_id)
@@ -528,7 +529,7 @@ def test_unresolved_calls_match_results_in_conversation_order(tmp_path):
     store = Store(tmp_path / "nexus.db")
     try:
         project, _ = store.project_for_path(str(tmp_path))
-        session = store.create_session(project, title="reused", agent="build")
+        session = store.create_session(project, title="reused", agent="build", model="scripted/m")
         store.append_message(session.id, Message("user", (Text("start"),)))
         first = ToolCall("c1", "bash", '{"command": "true"}')
         store.append_message(session.id, Message("assistant", (first,)))
@@ -545,7 +546,7 @@ def test_reconciliation_preserves_a_finished_result(tmp_path):
     store = Store(tmp_path / "nexus.db")
     try:
         project, _ = store.project_for_path(str(tmp_path))
-        session = store.create_session(project, title="finished", agent="build")
+        session = store.create_session(project, title="finished", agent="build", model="scripted/m")
         store.append_message(session.id, Message("user", (Text("go"),)))
         turn = store.start_turn(session.id, data={"origin": "prompt"})
         call = ToolCall("c1", "bash", '{"command": "echo ok"}')
@@ -573,7 +574,7 @@ async def test_continuation_reconciles_unresolved_context_before_sending(tmp_pat
     provider = Scripted()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
     # No startup recovery: continuation itself must reconcile this one session.
-    rt = Runtime(Store(db), Bus(), "scripted/m")
+    rt = Runtime(remembering(Store(db), "scripted/m"), Bus())
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -690,7 +691,7 @@ def test_reused_call_id_does_not_inherit_an_older_result(tmp_path, new_record):
     store = Store(tmp_path / "nexus.db")
     try:
         project, _ = store.project_for_path(str(tmp_path))
-        session = store.create_session(project, title="reused evidence", agent="build")
+        session = store.create_session(project, title="reused evidence", agent="build", model="scripted/m")
         turn = store.start_turn(session.id)
         call = ToolCall("same", "bash", '{"command": "true"}')
         store.save_assistant_message(session.id, Message("assistant", (call,)), turn_id=turn["id"])
@@ -712,7 +713,7 @@ def test_reused_call_does_not_inherit_old_approval_denial(tmp_path):
     store = Store(tmp_path / "nexus.db")
     try:
         project, _ = store.project_for_path(str(tmp_path))
-        session = store.create_session(project, title="reused approval", agent="build")
+        session = store.create_session(project, title="reused approval", agent="build", model="scripted/m")
         bus = Bus()
         bus.attach(store)
         bus.publish("permission.asked", {"id": "old", "call_id": "same"}, session_id=session.id)

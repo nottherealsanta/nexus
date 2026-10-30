@@ -95,7 +95,7 @@ from .doctor import source_fingerprint
 from .eventlog import CursorError, Stream, format_cursor, parse_cursor
 from .inputs import InputBusy, InputNotFound
 from .llmhub import catalog
-from .llmhub.auth import SIGN_INS, AuthError, CredentialError
+from .llmhub.auth import SIGN_INS, ApiKeyAuth, AuthError, CredentialError
 from .llmhub.hub import connected
 from .llmhub.providers import PROVIDERS
 from .llmhub.types import ProviderError
@@ -401,6 +401,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
 
         def notify(message: str) -> None:
             state["message"] = message
+            # Device flows say "Open <url> and enter code <code>"; clients show both on the provider's row.
+            found = re.search(r"Open (https?://\S+) and enter code (\S+)", message)
+            if found:
+                state["verification_uri"], state["user_code"] = found.group(1), found.group(2)
             runtime.bus.publish("provider.login", dict(state))
 
         async def run() -> None:
@@ -409,9 +413,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - never leak provider failures or credentials
-                state.update(status="failed", message="Sign-in failed; retry or use the local login command.")
+                state.update(status="failed", message="Sign-in failed; retry or use the local login command.",
+                             verification_uri=None, user_code=None)
             else:
-                state.update(status="connected", message=None)
+                state.update(status="connected", message=None, verification_uri=None, user_code=None)
             runtime.bus.publish("provider.login", dict(state))
 
         login_tasks[provider] = asyncio.create_task(run())
@@ -523,11 +528,22 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                             "lifetime_seconds": runtime.mutation_lifetime},
         })
 
+    def sign_in(provider: str) -> dict[str, Any]:
+        """How a client connects this provider: its methods (no `browser`: that needs a local terminal) and, for a
+        pasted key, where to get one, its variable and whether the key in use is stored or from the environment."""
+        kind = SIGN_INS.get(provider)
+        if kind is None:
+            return {"methods": []}
+        out: dict[str, Any] = {"methods": [m for m in kind.methods if m != "browser"]}
+        if issubclass(kind, ApiKeyAuth):
+            out |= {"key_hint": kind.hint, "key_env": kind.env, "key_source": kind().key_source()}
+        return out
+
     async def providers(request: Request) -> Response:
         live = set(connected())
         return JSONResponse([
             {"id": i.id, "label": i.label, "dialect": i.dialect, "base_url": i.base_url, "catalog": i.catalog_id,
-             "default_model": f"{i.id}/{i.default_model}", "connected": i.id in live, "verified": i.verified}
+             "connected": i.id in live, "verified": i.verified} | sign_in(i.id)
             for i in PROVIDERS.values()
         ])
 
@@ -551,9 +567,11 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         ref, source = runtime.remembered_model(query.get("project"), query.get("agent"))
         return JSONResponse({"model": ref, "source": source})
 
-    def agent_json(agent: Any, *, prompt: bool) -> dict[str, Any]:
+    def agent_json(agent: Any, *, prompt: bool, values: dict[str, Any] | None = None) -> dict[str, Any]:
         data = {k: getattr(agent, k) for k in ("name", "description", "source", "path", "mode", "color", "model", "effort", "tools", "steps")}
         data["permission"] = dict(agent.permission)
+        if agent.mode in ("subagent", "all"):
+            data["subagent"] = runtime.subagent_models(agent, values)  # pool, fallbacks and what an empty pool uses
         return data | ({"prompt": agent.prompt} if prompt else {})
 
     def agent_project_path(request: Request) -> str | None:
@@ -565,7 +583,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
 
     async def agent_list(request: Request) -> Response:
         found = runtime.agents(agent_project_path(request))
-        return JSONResponse({"agents": [agent_json(a, prompt=False) for a in found.agents.values()], "problems": found.problems})
+        values = config.read()["values"]
+        return JSONResponse({"agents": [agent_json(a, prompt=False, values=values) for a in found.agents.values()],
+                             "problems": found.problems})
 
     async def extension_list(request: Request) -> Response:
         found = runtime.extensions(agent_project_path(request))
@@ -1365,7 +1385,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     return Starlette(routes=routes, lifespan=lifespan)
 
 
-def make_runtime(seed_model: str = "", store: Store | None = None) -> Runtime:
-    runtime = Runtime(store or Store(), Bus(), seed_model)
+def make_runtime(store: Store | None = None) -> Runtime:
+    runtime = Runtime(store or Store(), Bus())
     runtime.recover()  # finish before the app can accept a request
     return runtime

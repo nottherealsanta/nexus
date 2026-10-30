@@ -4,6 +4,7 @@ import json
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import runtime as runtime_module
 from nexus import skills
@@ -125,7 +126,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "userhome"))
     provider = Scripted()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
-    rt = make_runtime("scripted/m", Store(tmp_path / "nexus.db"))
+    rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "scripted/m"))
     app = build_app(rt, token="t", url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": "Bearer t"})
@@ -228,6 +229,15 @@ async def test_header_switches_inject_one_json_notice_and_only_cover_what_starte
     assert back.status_code == 200 and {x["name"]: x["state"] for x in back.json()["skills"]} == {"a": "on", "b": "off"}
     await _ask(rt, client, provider, sid, [[Text("ok")]], "again")
     assert any('{"skill_available": {"name": "a"}}' in str(m) for m in provider.requests[-1].messages)
+    await rt.shutdown()
+
+
+async def test_draft_switches_are_never_locked(env):
+    rt, client, _provider, workspace, root = env
+    write_skill(root, "a")
+    plan = (await client.post("/api/draft/context", json={"directory": str(workspace),
+                                                          "disabled_tools": ["skill:a"]})).json()
+    assert [(s["name"], s["state"], s["locked"]) for s in plan["skills"]] == [("a", "off", False)]
     await rt.shutdown()
 
 

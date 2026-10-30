@@ -6,13 +6,17 @@ The previous full plan, including completed work and original porting specificat
 
 Preserve the visible, ordered context timeline, announce clipping, keep task tools separate from Nexus control, and do not rewrite context already sent to a provider. Use `~/.nexus10`, not `~/.nexus`, until the release migration.
 
+## OSC 7501 program status
+
+The TUI emits per-session OSC 7501 records; see [docs/development.md](docs/development.md#terminal-program-status). Verify the behavior in a supporting terminal such as Rex, including reconnect, suspension and multiple simultaneous sessions.
+
 ## Turn summaries
 
 Follow [TURN_SUMMARY_PLAN.md](TURN_SUMMARY_PLAN.md) for the remaining real-daemon checks, documentation and step 9 (live partials and ephemeral deltas). Preserve durable `input.*` events and the ordering of delivered steers; a steer is not a new turn. The TUI benchmark is in [docs/turn-summary-benchmark.md](docs/turn-summary-benchmark.md).
 
 ## Settings: Providers and Agents pages
 
-Follow [SETTINGS_PLAN.md](SETTINGS_PLAN.md): replace the Providers, Models and Agents sections with two drill-in pages in both clients; skip disconnected providers when sampling subagent model pools.
+The pages are in both clients ([config.md](docs/config.md#settings-layout)). Remaining: sign in to a real device-flow provider from each client's Providers page; NSH browser coverage for key entry, the device-code row and the Agents page edits once the mock stream is fixed (see Browser tests); PTY screenshots of both pages at 80×24 and 160×48. Agent cards show the file path but cannot open it: the built-in editor reads project files only, and global and built-in agents live elsewhere.
 
 ## Steer, queue and prompt history
 
@@ -28,7 +32,7 @@ Follow [SETTINGS_PLAN.md](SETTINGS_PLAN.md): replace the Providers, Models and A
 
 ## Providers
 
-- Verify real OpenAI and Ollama calls; add API-key entry in TUI Settings for the new providers. NSH has per-provider connection controls and key entry.
+- Verify real OpenAI and Ollama calls.
 - **J4 Anthropic:** add the Messages dialect using the Anthropic SDK as a plain client (Nexus owns the loop); preserve signed thinking blocks for lossless replay and handle cache-control breakpoints and tool-result media.
 - **J5 Gemini:** choose a dialect that preserves replayable reasoning.
 - **J6 Claude and Antigravity:** assess their fit with the one-timeline rule before porting. Use the Claude Agent SDK and the approach in https://github.com/NoeFabris/opencode-antigravity-auth rather than ZMX.
@@ -36,7 +40,7 @@ Follow [SETTINGS_PLAN.md](SETTINGS_PLAN.md): replace the Providers, Models and A
 
 ## Context and sessions
 
-- Model memory (no default model) is in core, TUI and NSH; check it in a real daemon with both clients: a draft with no model asks for one (Core's draft-context request returns 400 "no model selected", so the starting-context preview is empty until one is chosen: consider a provider-independent estimate), a remembered model whose provider is signed out is shown and not replaced, and a session stored before the change that holds no model starts from the seed. The TUI test `agent_and_model_chosen_before_a_session_exists_go_into_its_creation` already failed before this change.
+- Model memory (no default model) is in core, TUI and NSH; check it in a real daemon with both clients: a draft with no model asks for one (Core's draft-context request returns 400 "no model selected", so the starting-context preview is empty until one is chosen: consider a provider-independent estimate), a remembered model whose provider is signed out is shown and not replaced, and a session stored before the change that holds no model asks for one. The TUI test `agent_and_model_chosen_before_a_session_exists_go_into_its_creation` already failed before this change.
 
 - Allow `/btw` during a running turn in both clients; add NSH browser coverage for opening the original session from a handoff.
 - Return per-section starting-context detail text from Core for session drafts.

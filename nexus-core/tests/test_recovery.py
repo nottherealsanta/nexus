@@ -19,6 +19,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import runtime as runtime_module
 from nexus.bus import Bus
@@ -93,7 +94,7 @@ class Crash:
 
 
 def restart(db: Path, model="scripted/m") -> Runtime:
-    runtime = Runtime(Store(db), Bus(), model)
+    runtime = Runtime(remembering(Store(db), model), Bus())
     runtime.recover()
     return runtime
 
@@ -775,7 +776,7 @@ def test_recovery_interrupted_midway_is_repeatable(tmp_path, point):
                        "multiple": False, "allow_free_text": True}]})
     crash.close()
 
-    rt = Runtime(Store(tmp_path / "nexus.db"), Bus(), "scripted/m")
+    rt = Runtime(remembering(Store(tmp_path / "nexus.db"), "scripted/m"), Bus())
     with pytest.raises(SimulatedCrash):
         Recovery(rt, crash_after=point).run()
     rt.store.close()
@@ -870,7 +871,7 @@ def test_migration_from_the_current_schema_keeps_history(tmp_path):
         assert [m.id for m in store.messages(session.id)] == message_ids
         assert [e["id"] for e in store.events(session.id, limit=5000)] == event_ids
         assert store.unfinished_turns() == []
-        rt = Runtime(store, Bus(), "scripted/m")
+        rt = Runtime(remembering(store, "scripted/m"), Bus())
         rt.recover()
         assert rt.recovered == []
         # No invented execution state, no rewritten context.
@@ -979,7 +980,7 @@ def test_recovery_calls_no_provider_and_runs_no_tool(tmp_path, monkeypatch):
 async def test_normal_turn_lifecycle_and_clean_interrupt_need_no_recovery(tmp_path, monkeypatch):
     workspace, provider = newcomer(tmp_path, monkeypatch)
     store = Store(tmp_path / "nexus.db")
-    rt = make_runtime("scripted/m", store)
+    rt = make_runtime(remembering(store, "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -1014,7 +1015,7 @@ async def test_normal_turn_lifecycle_and_clean_interrupt_need_no_recovery(tmp_pa
         await rt.shutdown()
         rt.store.close()
 
-    rt2 = Runtime(Store(tmp_path / "nexus.db"), Bus(), "scripted/m")
+    rt2 = Runtime(remembering(Store(tmp_path / "nexus.db"), "scripted/m"), Bus())
     try:
         rt2.recover()
         assert rt2.recovered == []
@@ -1046,7 +1047,6 @@ def test_subprocess_crash_and_restart_smoke(tmp_path):
     env.update({
         "NEXUS10_HOME": str(home),
         "NEXUS_PORT": str(port),
-        "NEXUS_MODEL": "codex/gpt-6.1-terra",
         "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
     })
 
@@ -1131,7 +1131,7 @@ def test_closed_turn_before_cleanup_is_recovered_once(tmp_path, idle_published):
 
 async def test_permission_storage_failure_does_not_release_tool(tmp_path, monkeypatch):
     store = Store(tmp_path / "nexus.db")
-    rt = Runtime(store, Bus(), "scripted/m")
+    rt = Runtime(remembering(store, "scripted/m"), Bus())
     future = asyncio.get_running_loop().create_future()
     rt.approvals["per_test"] = ("ses_test", future, {})
 

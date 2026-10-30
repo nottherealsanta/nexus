@@ -9,6 +9,7 @@ import json
 import os
 
 import pytest
+from conftest import remembering
 
 from nexus import runtime as runtime_module
 from nexus.bus import Bus
@@ -39,7 +40,7 @@ def env(tmp_path, monkeypatch):
     provider = Scripted()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
     db = tmp_path / "nexus.db"
-    rt = Runtime(Store(db), Bus(), "scripted/m")
+    rt = Runtime(remembering(Store(db), "scripted/m"), Bus())
     workspace = tmp_path / "proj"
     workspace.mkdir()
     project = rt.open_project(str(workspace))
@@ -432,7 +433,7 @@ async def test_observations_are_isolated_and_survive_a_restart(env):
     await _turn(rt, provider, session.id, [[read("r1", "kept.txt"), read("r2", "changed.txt")], [Text("read")]])
     rt.store.close()
 
-    restarted = Runtime(Store(db), Bus(), "scripted/m")
+    restarted = Runtime(remembering(Store(db), "scripted/m"), Bus())
     changed.write_text("after\n")
     provider.replies = [[edit("e1", "changed.txt", "after", "AFTER"), edit("e2", "kept.txt", "keep", "KEEP")],
                         [Text("done")]]

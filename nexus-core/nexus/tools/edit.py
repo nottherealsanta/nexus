@@ -8,20 +8,9 @@ from __future__ import annotations
 from typing import Any
 
 from ..llmhub.types import ToolSpec
-from .base import Tool, ToolContext, ToolError, resolve
-
-MAX_PATCH_CHARS = 1_000_000
-
+from .base import Tool, ToolContext, ToolError, line_span, resolve
 
 # -- Replacement ------------------------------------------------------------
-
-
-def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
-    """The 1-based lines an original `text[start:end]` touches, matching read's line numbers."""
-    prefix = text[:start]
-    first = len(prefix.splitlines()) + (1 if start == 0 or prefix.endswith(("\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")) else 0)
-    last = len(text[:end].splitlines())
-    return max(1, first), max(1, last)
 
 
 def _occurrences(text: str, old: str, limit: int | None) -> list[int]:
@@ -58,7 +47,7 @@ async def _replace(args: dict[str, Any], ctx: ToolContext) -> str:
             raise ToolError(f"old_string occurs {count} times in {display}; add context or set replace_all")
         replaced = count if args.get("replace_all") else 1
         positions = _occurrences(text, old, None if args.get("replace_all") else 1)
-        affected = [_line_span(text, at, at + len(old)) for at in positions]
+        affected = [line_span(text, at, at + len(old)) for at in positions]
         guard.require(display, path, affected=affected)
         path.write_text(text.replace(old, new, replaced))
         guard.forget([path])

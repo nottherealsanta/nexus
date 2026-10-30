@@ -9,7 +9,7 @@ import {
   editFile, fileDirty, openFile, reloadFile, saveFile,
   pendingInputs, contextDetail, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
+  focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
@@ -141,8 +141,8 @@ export function openSettings() {
   previousCentre.set(centre()); centre.set("settings"); if (isNarrow()) drawer.set(null);
   refreshVoiceOnSettingsOpen();
 }
-on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsSection.set("providers"); toast("info", "Choose Sign in in Provider settings."); }, true);
-on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsSection.set("providers"); toast("info", "Choose Sign out in Provider settings."); }, true);
+on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsSection.set("providers"); settingsPage.set("providers"); }, true);
+on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsSection.set("providers"); settingsPage.set("providers"); }, true);
 function tab(t: "sessions" | "files" | "projects") { if (t === "files") void loadFiles(); leftTab.set(t); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true); }
 
 export function newSession() {
@@ -708,6 +708,7 @@ const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d
 export function escape() {
   if (isDictationBusy()) { cancelDictation(); return "dictation"; }
   if (contextDetail()) { contextDetail.set(null); return "context_detail"; }
+  if (centre() === "settings" && settingsPage()) { settingsPage.set(settingsPage()!.includes("/") ? settingsPage()!.split("/")[0] : null); return "settings_page"; }
   for (const rule of manifest.keymap.escape as readonly { id: string; when: readonly string[]; action: string }[]) {
     if (rule.when.every(term)) {
       if (rule.id === "text_edit") { renaming.set(false); return rule.id; }

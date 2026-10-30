@@ -124,6 +124,8 @@ pub enum PaletteMode {
     Sessions,
     Projects,
     Models,
+    /// A model for an agent's list in Settings (`AppUi::pool_pick` says which).
+    PoolModels,
     Agents,
     Efforts,
     Export,
@@ -141,6 +143,7 @@ pub enum PaletteKind {
     Session(String),
     Project(String),
     Model(String),
+    PoolModel(String),
     Agent(String),
     Effort(String),
     /// (format, scope): `markdown|json`, `session|tree`.
@@ -265,6 +268,8 @@ pub enum Confirmed {
     },
     DeleteSession(String),
     RemoveProject(String),
+    /// Sign out of a provider whose models are listed for subagents.
+    Disconnect(String),
     DownloadStt,
     DownloadVoice(crate::actions::VoiceTarget),
     RemoveVoice {
@@ -298,7 +303,10 @@ pub enum EditTarget {
     },
     /// Add a project by directory path.
     AddProject,
-    ProviderKey,
+    /// A provider's API key (masked while typed).
+    ProviderKey {
+        id: String,
+    },
     /// `[context] title_models`, comma separated; empty clears the list.
     TitleModels {
         revision: String,
@@ -549,6 +557,8 @@ pub enum Target {
     CompletionRow(usize),
     /// A row of the settings list, by index into `App::settings_items`.
     SettingsRow(usize),
+    /// A selectable item on a Settings page, by position among the page's items.
+    SettingsPageRow(usize),
 }
 
 /// One row of the composer's completion popup.

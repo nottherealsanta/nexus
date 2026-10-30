@@ -119,6 +119,9 @@ pub struct AppState {
     /// Picker data, loaded on demand by the supervisor.
     pub models: Vec<serde_json::Value>,
     pub agents: Vec<serde_json::Value>,
+    /// `/api/provider` and the agent files that failed to load, for the Settings pages.
+    pub providers: Vec<serde_json::Value>,
+    pub agent_problems: Vec<serde_json::Value>,
     pub catalog_source: String,
     /// The model last selected anywhere (Core's `/api/model/last`), what a new session starts with; empty when none was chosen.
     pub last_model: String,
@@ -157,6 +160,8 @@ impl Default for AppState {
             duplicates: 0,
             models: Vec::new(),
             agents: Vec::new(),
+            providers: Vec::new(),
+            agent_problems: Vec::new(),
             catalog_source: String::new(),
             last_model: String::new(),
             config: None,
@@ -229,9 +234,13 @@ impl AppState {
                 agents,
                 source,
                 last_model,
+                providers,
+                problems,
             } => {
                 self.models = models;
                 self.agents = agents;
+                self.providers = providers;
+                self.agent_problems = problems;
                 self.catalog_source = source;
                 self.last_model = last_model;
             }

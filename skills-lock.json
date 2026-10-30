@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "statechart": {
+      "source": "cursor/plugins",
+      "sourceType": "github",
+      "skillPath": "harness/pstack/claude-code/skills/statechart/SKILL.md",
+      "computedHash": "ab7f305663449c2f6d832cd273879cee3caeebd65536fa525ccaf03eb6963374"
+    }
+  }
+}

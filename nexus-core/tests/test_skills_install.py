@@ -4,6 +4,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus.server import build_app, make_runtime
 from nexus.skills import install
@@ -81,7 +82,7 @@ async def test_remote_uses_a_shallow_clone_and_subpath(tmp_path, monkeypatch):
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("HOME", str(tmp_path / "userhome"))
-    rt = make_runtime("scripted/m", Store(tmp_path / "nexus.db"))
+    rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "scripted/m"))
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=build_app(rt, token="t", url="http://test")),
                                base_url="http://test", headers={"authorization": "Bearer t"})
     project = tmp_path / "proj"

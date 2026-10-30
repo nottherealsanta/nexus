@@ -9,6 +9,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import runtime as runtime_module
 from nexus.llmhub.types import Done, Request, Text
@@ -58,7 +59,7 @@ async def setup_inputs(tmp_path, monkeypatch):
     workspace.mkdir()
     provider = RecordedMock("hello")
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
-    runtime = make_runtime("mock/hello", Store(tmp_path / "nexus.db"))
+    runtime = make_runtime(remembering(Store(tmp_path / "nexus.db"), "mock/hello"))
     app = build_app(runtime, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
@@ -221,7 +222,7 @@ async def test_recovery_keeps_pending_input_and_converts_steer_to_held_queue(set
     runtime.store.close()
 
     recovered_store = Store(db_path)
-    replacement = make_runtime("mock/hello", recovered_store)
+    replacement = make_runtime(remembering(recovered_store, "mock/hello"))
     outcomes = replacement.recovered
     pending = replacement.inputs.list(session_id)
     assert pending[0]["id"] == item["id"] and pending[0]["mode"] == "queue"
@@ -268,7 +269,7 @@ async def test_reserved_input_cannot_be_edited_and_recovers_after_restart(tmp_pa
 
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     store = Store(tmp_path / "state.db")
-    runtime = make_runtime("codex/model", store)
+    runtime = make_runtime(remembering(store, "codex/model"))
     project = runtime.open_project(str(tmp_path))
     session = runtime.create_session(project, title=None, model=None, permission=None)
     item = runtime.inputs.add(session.id, "queue", [{"type": "text", "text": "next"}])
@@ -278,7 +279,7 @@ async def test_reserved_input_cannot_be_edited_and_recovers_after_restart(tmp_pa
     with pytest.raises(InputBusy):
         runtime.inputs.remove(session.id, item["id"])
     store.close()
-    recovered = make_runtime("codex/model", Store(tmp_path / "state.db"))
+    recovered = make_runtime(remembering(Store(tmp_path / "state.db"), "codex/model"))
     assert recovered.inputs.held(session.id)
     assert recovered.inputs.remove(session.id, item["id"])["id"] == item["id"]
 
@@ -393,14 +394,14 @@ async def test_recovery_does_not_duplicate_delivered_event_after_publish_crash(s
     db_path = runtime.store.path
     runtime.store.close()
 
-    first = make_runtime("mock/hello", Store(db_path))
+    first = make_runtime(remembering(Store(db_path), "mock/hello"))
     delivered = [event for event in first.store.events(session_id) if event["type"] == "input.delivered"]
     assert len(delivered) == 1
     row = first.store.db.execute("select event_id from pending_input where id = ?", (item["id"],)).fetchone()
     assert row["event_id"] is not None
     first.store.close()
 
-    second = make_runtime("mock/hello", Store(db_path))
+    second = make_runtime(remembering(Store(db_path), "mock/hello"))
     delivered_again = [event for event in second.store.events(session_id) if event["type"] == "input.delivered"]
     assert len(delivered_again) == 1
     second.store.close()

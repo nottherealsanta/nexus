@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import runtime as runtime_module
 from nexus.llmhub.types import Done, PartDone, Text, ToolCall
@@ -159,7 +160,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(home))
     provider = Scripted()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
-    rt = make_runtime("scripted/m", Store(tmp_path / "nexus.db"))
+    rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "scripted/m"))
     app = build_app(rt, token="t", url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": "Bearer t"})

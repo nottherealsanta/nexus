@@ -5,6 +5,7 @@ import asyncio
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import runtime as runtime_module
 from nexus.llmhub.types import Done, PartDone, ProviderError, Text, ToolCall, WireRequest
@@ -150,7 +151,7 @@ def daemon(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     provider = Scripted()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
-    rt = make_runtime("scripted/m", Store(tmp_path / "nexus.db"))
+    rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "scripted/m"))
     rt.retry_policy = RetryPolicy(max_attempts=3, base_delay=0.0, max_wait=0.0, max_elapsed=1.0)
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",

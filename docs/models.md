@@ -89,8 +89,7 @@ from `providers.make(provider_id, SIGN_INS[provider_id]())`.
 
 There is no default model and no provider fallback. A new root session starts with the model the user last
 selected ([daemon.md](daemon.md#model-selection)); with none remembered it has none, and clients show "Select
-a model". The provider table's `default_model` (codex `gpt-6.1-terra`, grok `grok-4.7`, copilot
-`claude-sonnet-5`, opencode `kimi-k3`) is only a suggestion for the model picker.
+a model". Providers carry no suggested model either; pickers list the catalog.
 
 The chosen model id is not checked against the catalog; the provider rejects an
 unknown one.

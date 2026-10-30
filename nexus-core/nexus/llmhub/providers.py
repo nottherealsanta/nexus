@@ -35,7 +35,6 @@ class ProviderInfo:
     base_url: str
     catalog_id: str  # provider id on models.dev
     quirks: ResponsesQuirks | ChatQuirks
-    default_model: str
     verified: bool  # a live multi-step tool turn has run through this adapter
 
 
@@ -47,7 +46,6 @@ PROVIDERS: dict[str, ProviderInfo] = {
         "https://chatgpt.com/backend-api/codex",
         "openai",
         ResponsesQuirks(encrypted_reasoning=True, replay_raw=True, prompt_cache_key=True, session_header="session_id"),
-        default_model="gpt-6.1-terra",
         verified=True,
     ),
     "grok": ProviderInfo(
@@ -57,7 +55,6 @@ PROVIDERS: dict[str, ProviderInfo] = {
         "https://cli-chat-proxy.grok.com/v1",
         "xai",
         ResponsesQuirks(session_header="x-grok-conv-id"),
-        default_model="grok-4.7",
         verified=True,
     ),
     "copilot": ProviderInfo(
@@ -67,7 +64,6 @@ PROVIDERS: dict[str, ProviderInfo] = {
         "https://api.githubcopilot.com",
         "github-copilot",
         ChatQuirks(initiator_header=True, vision_header=True),
-        default_model="claude-sonnet-5",
         verified=True,
     ),
     "opencode": ProviderInfo(
@@ -77,7 +73,6 @@ PROVIDERS: dict[str, ProviderInfo] = {
         "https://opencode.ai/zen/go/v1",
         "opencode-go",
         ChatQuirks(session_header="x-opencode-session"),
-        default_model="kimi-k3",
         verified=True,
     ),
     "openai": ProviderInfo(
@@ -87,27 +82,26 @@ PROVIDERS: dict[str, ProviderInfo] = {
         "https://api.openai.com/v1",
         "openai",
         ResponsesQuirks(encrypted_reasoning=True, replay_raw=True, prompt_cache_key=True),
-        default_model="gpt-6.1-terra",
         verified=False,
     ),
     "groq": ProviderInfo(
         "groq", "Groq", "chat", "https://api.groq.com/openai/v1", "groq", ChatQuirks(),
-        default_model="openai/gpt-oss-120b", verified=True,
+        verified=True,
     ),
     "nvidia": ProviderInfo(
         "nvidia", "NVIDIA", "chat", "https://integrate.api.nvidia.com/v1", "nvidia", ChatQuirks(),
-        default_model="openai/gpt-oss-20b", verified=True,
+        verified=True,
     ),
     "ollama": ProviderInfo(
         "ollama", "Ollama (local)", "chat", "http://localhost:11434", "ollama", ChatQuirks(),
-        default_model="", verified=False,
+        verified=False,
     ),
 }
 
 
 if os.environ.get("NEXUS10_DEV", "").lower() in {"1", "true", "yes", "on"}:
     PROVIDERS["mock"] = ProviderInfo(
-        "mock", "Offline mock", "scripted", "mock://", "mock", ChatQuirks(), default_model="hello", verified=True
+        "mock", "Offline mock", "scripted", "mock://", "mock", ChatQuirks(), verified=True
     )
 
 
@@ -130,7 +124,7 @@ def make(provider_id: str, auth: HeaderSource, model: str | None = None) -> Prov
     if info.dialect == "scripted":
         from ..mock.provider import MockProvider
 
-        return MockProvider(model or info.default_model)
+        return MockProvider(model or "hello")
     if provider_id == "copilot" and copilot_uses_responses(model):
         return ResponsesProvider(info.id, info.base_url, auth, ResponsesQuirks(initiator_header=True, vision_header=True))
     if isinstance(info.quirks, ResponsesQuirks):

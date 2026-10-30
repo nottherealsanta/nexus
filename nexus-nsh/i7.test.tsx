@@ -46,6 +46,9 @@ describe("modal recipe (I7)", () => {
     expect(app.texts().includes("esc close")).toBe(true);
     await app.press("id:section-providers");
     await app.waitFor("id:providers-page");
+    await app.keyboard.press("escape"); // leaves the page first
+    expect(app.shows("id:providers-page")).toBe(false);
+    expect(app.shows("id:settings")).toBe(true);
     await app.keyboard.press("escape");
     expect(app.shows("id:settings")).toBe(false);
     expect(app.shows("id:composer-input")).toBe(true);

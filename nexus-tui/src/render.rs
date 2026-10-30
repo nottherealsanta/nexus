@@ -245,7 +245,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 buf,
                 m.x,
                 m.body.y,
-                if matches!(e.target, crate::ui::EditTarget::ProviderKey) {
+                if matches!(e.target, crate::ui::EditTarget::ProviderKey { .. }) {
                     &masked
                 } else {
                     rows.first().map(String::as_str).unwrap_or("")
@@ -5177,9 +5177,13 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     };
     loop {
         let left_width = width(&agent_label)
-            + 1
+            + width(&cx.sep())
             + width(&model_label)
-            + if effort_on { 1 + width(effort) } else { 0 }
+            + if effort_on {
+                width(&cx.sep()) + width(effort)
+            } else {
+                0
+            }
             + if provider_on && pending.is_none() && !model_id.is_empty() {
                 1 + width(&provider)
             } else {
@@ -5196,7 +5200,8 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             meter_on = false;
         } else {
             // Last resort: keep the agent and the figure, shorten the model.
-            let room = avail.saturating_sub(width(&agent_label) + 1 + 2 + right_width(false));
+            let room = avail
+                .saturating_sub(width(&agent_label) + width(&cx.sep()) + 2 + right_width(false));
             model_label = match pending.as_deref() {
                 Some(used) => pending_model_label(
                     &model_name_for_id(a, used),
@@ -5207,8 +5212,12 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 ),
                 None => truncate(&model_label, room, cx.ell()),
             };
-            if width(&agent_label) + 1 + width(&model_label) + 2 + right_width(false) > avail {
-                let room = avail.saturating_sub(width(&model_label) + 1 + 2 + right_width(false));
+            if width(&agent_label) + width(&cx.sep()) + width(&model_label) + 2 + right_width(false)
+                > avail
+            {
+                let room = avail.saturating_sub(
+                    width(&model_label) + width(&cx.sep()) + 2 + right_width(false),
+                );
                 agent_label = truncate(&agent_label, room.max(1), cx.ell());
             }
             break;
@@ -5282,31 +5291,43 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 PRIMARY,
             ),
             (
-                effort.to_owned(),
-                Target::ComposerEffort,
-                Modifier::empty(),
-                SECONDARY,
-            ),
-            (
                 provider.clone(),
                 Target::ComposerModel,
                 Modifier::empty(),
                 MUTED,
             ),
+            (
+                effort.to_owned(),
+                Target::ComposerEffort,
+                Modifier::empty(),
+                SECONDARY,
+            ),
         ];
         let mut first = true;
         for (index, (label, target, modifier, token)) in fields.into_iter().enumerate() {
-            if index == 2 && !effort_on {
+            if index == 3 && !effort_on {
                 continue;
             }
-            if index == 3 && (!provider_on || pending.is_some() || model_id.is_empty()) {
+            if index == 2 && (!provider_on || pending.is_some() || model_id.is_empty()) {
                 continue;
             }
             if x >= selector_end {
                 break;
             }
             if !first {
-                x = put(buf, x, cy, " ", cx.st(MUTED, PANEL), selector_end - x);
+                let separator = if index == 1 || index == 3 {
+                    cx.sep()
+                } else {
+                    " ".to_owned()
+                };
+                x = put(
+                    buf,
+                    x,
+                    cy,
+                    &separator,
+                    cx.st(MUTED, PANEL),
+                    selector_end - x,
+                );
             }
             first = false;
             let start = x;
@@ -5787,7 +5808,9 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
             format!("pid {}{}{}", c.pid, cx.sep(), c.home)
         })),
         "keybindings.list" => Some("enter".into()),
-        "models.default_effort" | "agents.default_root" | "tools.default_permission" => {
+        "providers.page" => Some(a.page_summary("providers")),
+        "agents.page" => Some(a.page_summary("agents")),
+        "agents.default_effort" | "agents.default_root" | "tools.default_permission" => {
             let key = match row.id.as_str() {
                 "agents.default_root" => "agent",
                 "tools.default_permission" => "permission",
@@ -5803,24 +5826,6 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
                     .into(),
             )
         }
-        "models.catalog" => Some(format!(
-            "{} models{}",
-            a.state.models.len(),
-            if a.state.catalog_source.is_empty() {
-                String::new()
-            } else {
-                format!("{}{}", cx.sep(), a.state.catalog_source)
-            }
-        )),
-        "agents.list" => Some(
-            a.state
-                .agents
-                .iter()
-                .filter_map(|agent| agent["name"].as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
-        ),
-        "models.refresh" | "providers.sign_in" | "providers.sign_out" => Some("enter".into()),
         "dictation.stt_model" => Some(a.voice_info_value(crate::actions::VoiceTarget::Stt)),
         "dictation.tts_model" => Some(a.voice_info_value(crate::actions::VoiceTarget::Tts)),
         "dictation.stt_download"
@@ -5853,6 +5858,9 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
     let r = settings_box(area);
     if r.width < 20 || r.height < 8 {
         return;
+    }
+    if let Some(page) = a.ui.settings_page.as_deref() {
+        return draw_settings_page(cx, buf, area, r, page, hits);
     }
     let m = modal(cx, buf, area, r, "Settings", hits);
     let (x, w) = (m.x, m.w);
@@ -6019,6 +6027,170 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
         cx.st(MUTED, RAISED),
         width(&count) as u16,
     );
+}
+
+/// A Settings page (Providers, Agents) in the settings box: headings, notes
+/// and selectable items (label left, value right), scrolled to keep the
+/// selection in view; Esc returns to the section list.
+fn draw_settings_page(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    r: Rect,
+    page: &str,
+    hits: &mut HitMap,
+) {
+    use crate::app::{PageLine, Tone};
+    let a = cx.app;
+    let label = a
+        .manifest
+        .settings
+        .section
+        .iter()
+        .find(|s| s.id == page.split('/').next().unwrap_or(page))
+        .map_or(page.to_owned(), |s| s.label.clone());
+    let title = match page.strip_prefix("agents/") {
+        Some(agent) => format!("Settings \u{203a} Agents \u{203a} {agent}"),
+        None => format!("Settings \u{203a} {label}"),
+    };
+    let m = modal(cx, buf, area, r, &title, hits);
+    let (x, w) = (m.x, m.w);
+    let close = Rect::new(r.right().saturating_sub(5), r.y + 1, 3, 1);
+    hits.add(close, Target::SettingsEntry);
+    let lines = a.settings_page_lines();
+    let items = a.settings_page_items();
+    let sel = items
+        .get(a.ui.settings_page_row.min(items.len().saturating_sub(1)))
+        .copied();
+    // a blank line before every heading but the first line
+    let mut rows: Vec<Option<usize>> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if matches!(line, PageLine::Heading(_) | PageLine::Title(..)) && i > 0 {
+            rows.push(None);
+        }
+        rows.push(Some(i));
+    }
+    let detail = a
+        .settings_page_detail()
+        .map(|d| truncate(&d, w as usize, cx.ell()));
+    let list_end = m
+        .hint_y
+        .saturating_sub(if detail.is_some() { 2 } else { 1 });
+    let list = Rect::new(r.x, m.body.y, r.width, list_end.saturating_sub(m.body.y));
+    if let Some(detail) = &detail {
+        put(buf, x, m.hint_y - 1, detail, cx.st(MUTED, RAISED), w);
+    }
+    let h = list.height as usize;
+    let sel_row = sel
+        .and_then(|i| rows.iter().position(|l| *l == Some(i)))
+        .unwrap_or(0);
+    let top = (sel_row + 1).saturating_sub(h);
+    let tone = |t: Tone| match t {
+        Tone::Muted => MUTED,
+        Tone::Secondary => SECONDARY,
+        Tone::Warning => "status.warning",
+        Tone::Error => "status.error",
+    };
+    for (li, row) in rows.iter().enumerate().skip(top).take(h) {
+        let y = list.y + (li - top) as u16;
+        let Some(i) = row else { continue };
+        match &lines[*i] {
+            PageLine::Heading(text) => heading(cx, buf, &m, y, text),
+            PageLine::Title(text, detail) => {
+                heading(cx, buf, &m, y, text);
+                let dw = (width(detail) as u16).min(w / 2);
+                put(
+                    buf,
+                    x + w - dw,
+                    y,
+                    &truncate(detail, dw as usize, cx.ell()),
+                    cx.st(MUTED, RAISED),
+                    dw,
+                );
+            }
+            PageLine::Text(text, t) => {
+                put(
+                    buf,
+                    x,
+                    y,
+                    &truncate(text, w as usize, cx.ell()),
+                    cx.st(tone(*t), RAISED),
+                    w,
+                );
+            }
+            PageLine::Item {
+                label,
+                value,
+                tone: t,
+                action,
+            } => {
+                let selected = Some(*i) == sel;
+                let position = items.iter().position(|p| p == i).unwrap_or(0);
+                let (value, disabled) = match action {
+                    crate::app::PageAction::Setting(row) => {
+                        let reason = a.settings_reason(row, None);
+                        let shown = if reason.is_some() {
+                            "unavailable".to_owned()
+                        } else {
+                            settings_value(cx, row).0
+                        };
+                        (shown, reason.is_some())
+                    }
+                    _ => (value.clone(), false),
+                };
+                let token = if disabled { MUTED } else { PRIMARY };
+                let style = if selected {
+                    band(cx, buf, &m, y, token)
+                } else {
+                    cx.st(token, RAISED)
+                };
+                let mut vstyle = cx.st(if disabled { MUTED } else { tone(*t) }, RAISED);
+                if selected {
+                    vstyle = vstyle.add_modifier(Modifier::BOLD);
+                }
+                let lw = w.saturating_sub(2);
+                let vw = (width(&value) as u16).min(lw / 2);
+                put(
+                    buf,
+                    x + 2,
+                    y,
+                    &truncate(label, (lw - vw).saturating_sub(2) as usize, cx.ell()),
+                    style,
+                    (lw - vw).saturating_sub(2),
+                );
+                put(
+                    buf,
+                    x + w - vw,
+                    y,
+                    &truncate(&value, vw as usize, cx.ell()),
+                    vstyle,
+                    vw,
+                );
+                hits.add(
+                    Rect::new(r.x + 1, y, r.width.saturating_sub(2), 1),
+                    Target::SettingsPageRow(position),
+                );
+            }
+        }
+    }
+    let arrows = if cx.t.opts.ascii {
+        "</>"
+    } else {
+        "\u{2190}/\u{2192}"
+    };
+    let hints: Vec<(&str, &str)> = if page == "agents" {
+        vec![("enter", "open"), (arrows, "change"), ("esc", "back")]
+    } else if page.starts_with("agents/") {
+        vec![
+            ("enter", "select"),
+            ("d", "remove"),
+            ("K/J", "reorder"),
+            ("esc", "back"),
+        ]
+    } else {
+        vec![("enter", "select"), ("esc", "back")]
+    };
+    hint_row(cx, buf, &m, &hints);
 }
 
 /// One modal: the scrim over everything drawn so far, then a borderless
@@ -6551,6 +6723,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         PaletteMode::Sessions => "Search sessions · Project",
         PaletteMode::Projects => "Switch project",
         PaletteMode::Models => "Change model",
+        PaletteMode::PoolModels => "Add a model",
         PaletteMode::Agents => "Change agent",
         PaletteMode::Efforts => "Reasoning effort",
         PaletteMode::Export => "Export session",
@@ -6570,7 +6743,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
             PaletteMode::ProviderLogin | PaletteMode::ProviderLogout => "choose a provider",
             PaletteMode::Sessions => "type to find a session",
             PaletteMode::Projects => "type to find a project",
-            PaletteMode::Models => "type to filter models",
+            PaletteMode::Models | PaletteMode::PoolModels => "type to filter models",
             PaletteMode::Agents => "type to filter agents",
             PaletteMode::Efforts => "type to filter efforts",
             PaletteMode::Export => "choose a format and scope",

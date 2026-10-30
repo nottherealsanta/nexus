@@ -924,16 +924,16 @@ describe("sidebar row menus", () => {
 });
 
 describe("Core-backed settings values", () => {
-  test("shows provider connections and child agent model pools", async () => {
+  test("Providers and Agents open as pages with connections, odds and fallbacks", async () => {
     const app = await open("./App.tsx", {
       network: {
         ...core(),
         "GET */api/model": { body: { source: "fixture catalog", models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000 }] } },
         "GET */api/model/last*": { body: { model: "codex/gpt-5" } },
-        "GET */api/config": { body: { revision: "rev1", values: { agents: { models: { plan: ["codex/gpt-5"] }, fallbacks: { plan: ["codex/gpt-4"] } }, defaults: { model: "codex/gpt-5", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
-        "PATCH */api/config": { body: { revision: "rev2", values: { defaults: { model: "", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
-        "GET */api/provider": { body: [{ id: "codex", label: "Codex", connected: true }, { id: "groq", label: "Groq", connected: false }] },
-        "GET */api/agent*": { body: { agents: [{ name: "build", mode: "all", source: "builtin" }, { name: "plan", mode: "subagent", source: "builtin" }] } },
+        "GET */api/config": { body: { revision: "rev1", values: { agents: { models: { plan: ["codex/gpt-5", "groq/llama"] }, fallbacks: { plan: ["codex/gpt-4"] } }, defaults: { effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
+        "PATCH */api/config": { body: { revision: "rev2", values: { defaults: { effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
+        "GET */api/provider": { body: [{ id: "codex", label: "Codex", connected: true, verified: true, methods: ["device"] }, { id: "groq", label: "Groq", connected: false, verified: true, methods: ["api_key"], key_env: "GROQ_API_KEY", key_hint: "from console.groq.com/keys", key_source: null }] },
+        "GET */api/agent*": { body: { agents: [{ name: "build", mode: "all", source: "builtin", description: "Builds", subagent: { pool: [], fallbacks: [], effective: { model: "", source: "parent" } } }, { name: "plan", mode: "subagent", source: "builtin", description: "Plans", subagent: { pool: [], fallbacks: [], effective: { model: "", source: "parent" } } }] } },
       },
       width: 1024, height: 768, platform: "web",
     });
@@ -941,13 +941,33 @@ describe("Core-backed settings values", () => {
     await app.press("id:open-settings");
     expect(app.shows("id:section-models")).toBe(false);
     await app.press("id:section-providers");
+    await app.waitFor("id:settings-page-providers");
     await app.waitFor("id:provider-codex");
-    expect(app.texts().includes("Connected")).toBe(true);
-    expect(app.texts().includes("Not connected")).toBe(true);
+    const text = () => app.texts().join("\n");
+    expect(text().includes("Connected · 1 model")).toBe(true);
+    expect(text().includes("Not connected · API key")).toBe(true);
+    expect(text().includes("Add key")).toBe(true); // a key provider; pressing it needs a live stream (see PLAN.md, Browser tests)
+    expect(app.texts().includes("esc back")).toBe(true);
+    await app.keyboard.press("escape");
+    await app.waitFor("id:page-entry-providers");
+    expect(app.shows("id:settings")).toBe(true);
     await app.press("id:section-agents");
+    await app.waitFor("id:agent-row-plan");
+    expect(text().includes("Default agent for new sessions")).toBe(true);
+    expect(text().includes("parent's model")).toBe(true); // build has no models of its own
+    expect(text().includes("2 models · 1 fallback · 1 skipped")).toBe(true);
+    expect(app.shows("id:agent-models-plan")).toBe(false); // lists live on each subagent's page
+    await app.screenshot("/private/tmp/claude-501/-Users-santa-repos-nexus10/a98b4c5b-f494-47cf-a88b-f5f971196393/scratchpad/nsh-agents-list.png");
+    await app.press("id:agent-row-plan");
     await app.waitFor("id:agent-models-plan");
-    expect(app.texts().join("\n").includes("codex/gpt-5 · 100%")).toBe(true);
-    expect(app.texts().join("\n").includes("1. codex/gpt-4")).toBe(true);
+    await app.screenshot("/private/tmp/claude-501/-Users-santa-repos-nexus10/a98b4c5b-f494-47cf-a88b-f5f971196393/scratchpad/nsh-agent-plan.png");
+    expect(text().includes("100%")).toBe(true); // groq is not connected: codex has all the odds
+    expect(text().includes("not connected · skipped")).toBe(true);
+    expect(text().includes("1.")).toBe(true);
+    await app.keyboard.press("escape"); // back to the list, then to Settings
+    await app.waitFor("id:agent-row-plan");
+    await app.keyboard.press("escape");
+    await app.waitFor("id:page-entry-agents");
   });
 });
 

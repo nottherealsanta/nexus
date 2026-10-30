@@ -116,14 +116,12 @@ A new root session resolves its model in this order and **stores** it, so the se
 5. none: the session is created with `model: ""`, and `POST .../prompt` and `.../continue` return 400
    "no model selected; choose one first".
 
-`GET /api/model/last?project=&agent=` returns steps 3 to 5 for a draft. An installation that never selected a
-model starts from a seed: `$NEXUS_MODEL`, else the deprecated `defaults.model` ([config.md](config.md)); a session
-stored before this change keeps that seed too. Nothing replaces a remembered model that has become unavailable (a
+`GET /api/model/last?project=&agent=` returns steps 3 to 5 for a draft. Nothing replaces a remembered model that has become unavailable (a
 provider signed out, a model gone): clients show the state and ask for another choice.
 
 Switching agents never changes a session's model. A session that was running its agent's pinned model stores it first.
-A subagent without an explicit model, a configured `[agents.models]` pool or a pinning agent inherits its parent's
-current model.
+A subagent without an explicit model, a configured `[agents.models]` pool (with a connected provider) or a
+pinning agent inherits its parent's current model.
 
 ## Durable event log
 

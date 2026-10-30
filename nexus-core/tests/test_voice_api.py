@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus.server import build_app, make_runtime
 from nexus.store import Store
@@ -50,7 +51,7 @@ class FakeEngine:
 async def setup(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hf-hub"))
-    rt = make_runtime("scripted/model", Store(tmp_path / "nexus.db"))
+    rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "scripted/model"))
     engine, store = FakeEngine(), FakeStore()
 
     def download(target):

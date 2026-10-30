@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from conftest import remembering
 
 from nexus.config import ConfigConflict, ConfigFile
 
@@ -11,9 +12,9 @@ def test_defaults_and_invalid_keys(tmp_path: Path) -> None:
     assert config.read()["values"]["defaults"]["permission"] == "allow"
     path.write_text('[defaults]\nmodel = "codex/example"\npermission = 3\n')
     result = config.read()
-    assert result["values"]["defaults"]["model"] == "codex/example"
+    assert "model" not in result["values"]["defaults"]
     assert result["values"]["defaults"]["permission"] == "allow"
-    assert result["errors"] == ["defaults.permission: invalid value"]
+    assert result["errors"] == ["defaults.model: unknown setting", "defaults.permission: invalid value"]
 
 
 def test_agent_model_pools_round_trip_and_validation(tmp_path: Path) -> None:
@@ -30,21 +31,21 @@ def test_agent_model_pools_round_trip_and_validation(tmp_path: Path) -> None:
 
 def test_patch_preserves_comments_and_rejects_stale_revision(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
-    path.write_text('# keep me\n[defaults]\nmodel = "old" # model comment\n')
+    path.write_text('# keep me\n[defaults]\neffort = "low" # effort comment\n')
     config = ConfigFile(path)
     revision = config.read()["revision"]
-    config.patch(revision, {"defaults.model": "new"}, [])
+    config.patch(revision, {"defaults.effort": "high"}, [])
     assert "# keep me" in path.read_text()
-    assert "# model comment" in path.read_text()
+    assert "# effort comment" in path.read_text()
     with pytest.raises(ConfigConflict):
-        config.patch(revision, {"defaults.model": "lost"}, [])
-    assert config.read()["values"]["defaults"]["model"] == "new"
+        config.patch(revision, {"defaults.effort": "lost"}, [])
+    assert config.read()["values"]["defaults"]["effort"] == "high"
 
 
 def test_patch_validates_all_before_writing(tmp_path: Path) -> None:
     config = ConfigFile(tmp_path / "config.toml")
     with pytest.raises(ValueError):
-        config.patch(config.read()["revision"], {"defaults.model": "new", "defaults.permission": "bad"}, [])
+        config.patch(config.read()["revision"], {"defaults.effort": "new", "defaults.permission": "bad"}, [])
     assert not config.path.exists()
 
 
@@ -57,14 +58,14 @@ async def test_api_conflicts_and_notifies(tmp_path: Path, monkeypatch) -> None:
     from nexus.store import Store
 
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
-    runtime = make_runtime("example/model", Store(tmp_path / "store.db"))
+    runtime = make_runtime(remembering(Store(tmp_path / "store.db"), "example/model"))
     app = build_app(runtime, token="token", url="http://test")
     async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                  headers={"authorization": "Bearer token"}) as client:
         state = (await client.get("/api/config")).json()
         assert state["schema"]["defaults.permission"]["enum"] == ["allow", "ask"]
         sub = runtime.bus.open()
-        body = {"expected_revision": state["revision"], "set": {"defaults.model": "a"}}
+        body = {"expected_revision": state["revision"], "set": {"defaults.effort": "a"}}
         first, second = await asyncio.gather(client.patch("/api/config", json=body),
                                              client.patch("/api/config", json=body))
         assert sorted([first.status_code, second.status_code]) == [200, 409]
@@ -72,7 +73,7 @@ async def test_api_conflicts_and_notifies(tmp_path: Path, monkeypatch) -> None:
         assert event["type"] == "config.changed"
         assert event["data"]["revision"] == (await client.get("/api/config")).json()["revision"]
         config_path = tmp_path / "home" / "config.toml"
-        config_path.write_text('[defaults]\nmodel = "external"\n')
+        config_path.write_text('[defaults]\neffort = "external"\n')
         event = await asyncio.wait_for(sub.get(), 3)
         assert event["type"] == "config.changed"
         assert event["data"]["revision"] == (await client.get("/api/config")).json()["revision"]
@@ -89,7 +90,7 @@ async def test_session_defaults_and_explicit_overrides(tmp_path: Path, monkeypat
     home.mkdir()
     monkeypatch.setenv("NEXUS10_HOME", str(home))
     (home / "config.toml").write_text('[defaults]\npermission = "ask"\nagent = "orchestrate"\neffort = "high"\n[tools]\ndisabled = ["bash"]\n')
-    runtime = make_runtime("codex/model", Store(tmp_path / "store.db"))
+    runtime = make_runtime(remembering(Store(tmp_path / "store.db"), "codex/model"))
     app = build_app(runtime, token="token", url="http://test")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                  headers={"authorization": "Bearer token"}) as client:
@@ -122,14 +123,14 @@ async def test_provider_login_and_signout(tmp_path: Path, monkeypatch) -> None:
         methods = ("device",)
 
         async def login(self, method, notify):
-            notify("Open example and enter code 123")
+            notify("Open https://example.test/device and enter code AB-123")
             await done.wait()
 
         def logout(self):
             pass
 
     monkeypatch.setitem(SIGN_INS, "codex", FakeAuth)
-    runtime = make_runtime("codex/model", Store(tmp_path / "store.db"))
+    runtime = make_runtime(remembering(Store(tmp_path / "store.db"), "codex/model"))
     app = build_app(runtime, token="token", url="http://test")
     async with app.router.lifespan_context(app), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test",
@@ -138,11 +139,13 @@ async def test_provider_login_and_signout(tmp_path: Path, monkeypatch) -> None:
         assert (await client.post("/api/provider/codex/login", json={})).status_code == 202
         await asyncio.sleep(0)
         state = (await client.get("/api/provider/codex/login")).json()
-        assert state["status"] == "pending" and "123" in state["message"]
+        assert state["status"] == "pending" and "AB-123" in state["message"]
+        assert (state["verification_uri"], state["user_code"]) == ("https://example.test/device", "AB-123")
         assert (await client.post("/api/provider/codex/login", json={})).status_code == 409
         done.set()
         await asyncio.sleep(0)
-        assert (await client.get("/api/provider/codex/login")).json()["status"] == "connected"
+        done_state = (await client.get("/api/provider/codex/login")).json()
+        assert done_state["status"] == "connected" and done_state["user_code"] is None
         assert (await client.delete("/api/provider/codex/login")).status_code == 204
         assert (await client.get("/api/provider/codex/login")).json()["status"] == "idle"
 
@@ -158,7 +161,7 @@ def test_import_mcp_preserves_dialects_and_existing_file(tmp_path: Path) -> None
     source.write_text(json.dumps({"mcpServers": {"local": {"command": "foo", "env": {"TOKEN": "secret"}}},
                                   "context_servers": {"remote": {"url": "https://example.test"}}}))
     path = tmp_path / "config.toml"
-    path.write_text('# keep\n[defaults]\nmodel = "codex/m"\n')
+    path.write_text('# keep\n[defaults]\neffort = "low"\n')
     config = ConfigFile(path)
     assert import_mcp(source, config) == ["local", "remote"]
     parsed = tomlkit.parse(path.read_text())
@@ -193,3 +196,26 @@ def test_shared_ui_preferences_validate_independently(tmp_path):
     result = config.read()
     assert result["values"]["ui"] == {"detail": "medium", "reduced_motion": True}
     assert "ui.detail: invalid value" in result["errors"]
+
+
+async def test_provider_list_says_how_to_sign_in(tmp_path: Path, monkeypatch) -> None:
+    import httpx
+
+    from nexus.server import build_app, make_runtime
+    from nexus.store import Store
+
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("GROQ_API_KEY", "from-env")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    runtime = make_runtime(Store(tmp_path / "store.db"))
+    app = build_app(runtime, token="token", url="http://test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                 headers={"authorization": "Bearer token"}) as client:
+        providers = {p["id"]: p for p in (await client.get("/api/provider")).json()}
+    assert providers["codex"]["methods"] == ["device"] and "key_hint" not in providers["codex"]
+    assert providers["copilot"]["methods"] == ["device"]
+    assert providers["ollama"]["methods"] == ["local"]
+    groq = providers["groq"]
+    assert (groq["methods"], groq["key_env"], groq["key_source"], groq["connected"]) == (["api_key"], "GROQ_API_KEY", "env", True)
+    assert providers["openai"]["key_source"] is None and providers["openai"]["key_hint"].startswith("from ")
+    assert all("default_model" not in p for p in providers.values())

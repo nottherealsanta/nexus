@@ -90,7 +90,9 @@ web_fetch = "ask"
 **Workspace confinement** (`resolve`). `path` must be a non-empty string.
 Relative paths are relative to the workspace. The path is resolved (symlinks
 followed) and must be the workspace or inside it, otherwise `ToolError("... is
-outside the workspace ...")`. `read`, `edit` and `write` all use it. `bash` is
+outside the workspace ...")`. `read`, `edit` and `write` all use it, except that `read` may
+read any path outside the workspace (allowed by default; the key is the absolute path, so a rule such as
+`"read(/Users/*)" = "ask"` gates it). `bash` is
 not sandboxed: it starts in the workspace but can reach anything the user can
 (PLAN.md, known gaps).
 

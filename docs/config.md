@@ -8,22 +8,45 @@ The initial inventory is `defaults.effort`, `defaults.agent`,
 `defaults.permission` (`allow` or `ask`) and `tools.disabled`. New root sessions
 apply these values; explicit creation fields override them, and existing
 sessions keep their frozen configuration. Child sessions retain inheritance.
-`defaults.model` is deprecated and is not edited in Settings: with no model ever selected, a value there
-(or `$NEXUS_MODEL`) is the starting model of a new session and of a session stored before models were
-remembered; the first model the user selects replaces it as the new-session starting point.
 Other plan items add their own operational settings as those features land.
 
+There is no default model ([daemon.md](daemon.md#model-selection)) and no model setting: a `defaults.model`
+in the file is listed in `errors` as an unknown setting and ignored.
+
 `[agents.models]` maps each child-capable agent name to a non-empty list of
-unique `provider/model` refs, for example `scout = ["codex/example", "copilot/example"]`.
-A new child without an explicit model samples its agent's list uniformly once;
-the selected ref is stored on the child and does not change when config changes.
-An omitted agent retains its agent-file or daemon default. `[agents.fallbacks]`
+unique `provider/model` refs, for example `scout = ["codex/example", "copilot/example"]`;
+a ref naming an unknown provider is refused. A new child without an explicit
+model picks one ref uniformly from those whose provider is connected; the
+selected ref is stored on the child and does not change when config changes.
+Refs of disconnected providers are skipped, never silently: the child's snapshot
+records `model_pick` (`pool`, `eligible`, `chosen`, `skipped`, and a `note` when
+nothing was eligible), shown in the session JSON's `snapshot` summary. With no
+eligible ref, or no list, the agent file's `model` applies, else the parent's. `[agents.fallbacks]`
 uses the same format for an ordered list of fallback refs. A new child's fallback
-list is frozen at creation and is ignored when an explicit model is supplied.
+list is frozen at creation (as `model_fallbacks`, with disconnected refs under
+`skipped`) and is ignored when an explicit model is supplied.
 After retries, a failed request can switch to the next fallback only before any
 response stream event; partial responses are never replayed automatically. The
 switch and a notice in the model's context are visible, and the new model remains
-the child's model. NSH Settings edits both lists for the current project's agents.
+the child's model. Both clients edit both lists on the Settings → Agents page.
+
+## Settings layout
+
+The manifest marks Providers and Agents as page sections (`page = true`): each is
+one entry in Settings that opens its own page; Esc returns to the section list.
+
+- **Providers** lists every provider from `GET /api/provider` with its state
+  (connected, `using $KEY` when the key comes from the environment, the model
+  count, unverified) and an action that follows its `methods`: Connect starts a
+  device flow whose code and link show on the row, Add key opens a masked field,
+  Disconnect warns when agent model lists name the provider. Refresh models
+  re-reads the catalog.
+- **Agents** has "Default agent for new sessions" (`defaults.agent`) and "Default
+  effort" (`defaults.effort`), then one line per agent that can run as a
+  subagent, summarising its models (`parent's model`, one ref, or `3 models ·
+  2 fallbacks · 1 skipped`). Selecting one opens its page (Settings › Agents ›
+  name): its Models, each with its real odds over connected providers, and its
+  ordered Fallbacks.
 
 `GET /api/config` returns `{revision, values, defaults, schema, errors}`.
 `PATCH /api/config` accepts `{expected_revision, set: {"defaults.effort":

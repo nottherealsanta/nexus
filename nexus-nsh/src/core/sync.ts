@@ -57,6 +57,8 @@ export interface SyncHost {
   /** Called once a fresh snapshot is applied, so views can reload selection. */
   snapshotApplied?(): void;
   configChanged?(): void;
+  /** `provider.login` (sign-in progress, device code) and `agents.changed`, for the Settings pages. */
+  settingsEvent?(event: CoreEvent): void;
   contextChanged?(id: string): void;
   inputsChanged?(id: string): void;
   /** Global live-only notifications share the SSE cursor but never become session scratch. */
@@ -175,6 +177,7 @@ export class Sync {
       for (const ev of buf) {
         if (ev.type.startsWith("input.") && ev.session_id) h.inputsChanged?.(ev.session_id);
         if (ev.type === "config.changed") h.configChanged?.();
+        if (ev.type === "provider.login" || ev.type === "agents.changed") h.settingsEvent?.(ev);
         const r = m.applyEvent(ev);
         if (typeof r === "object") { resync = r.resync; break; }
         if (r === "applied" && (ev.type === "session.handoff" || ev.type === "session.handoff_failed")) h.handoffEvent?.(ev);

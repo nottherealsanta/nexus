@@ -82,7 +82,13 @@ is in `status.error`. The `.` row menu stays an unscrimmed popover beside its ro
 Settings is that modal, 88 cells wide: type to search, ↑/↓ to
 move, ←/→ to change a value, Enter to act, Esc to clear the search and then
 close. Sections have UPPERCASE muted headings. Rows the TUI cannot change yet are
-muted and say why on the footer line above the key hints.
+muted and say why on the footer line above the key hints. Providers and Agents
+are one entry each (`Providers ›`, with a summary) that opens a page in the
+same box (`/login` opens Providers too); Esc returns to the list. Providers:
+Enter connects (a device code shows on the row; Enter on it copies), adds a key
+or disconnects. Agents: the default agent and effort, then one line per subagent; Enter opens
+its page with its Models (and their odds) and Fallbacks, where Enter on `+ add …`
+picks a model, `d` removes one and `K`/`J` move a fallback.
 Consecutive diagnostics (a provider retry sequence) form one tight stack with
 delays rounded to tenths.
 
@@ -250,9 +256,9 @@ The right sidebar's Session
 info totals turns, calls, tools by name, tokens, a context bar against the
 model's window and the catalog cost. Right-click (or `m`) on a sidebar row opens
 its action menu; the Projects tab ends with `+ Add project` (an inline path
-field) and removal asks first. Settings shows the catalog size
-and source and the loaded agents, and says why rows that need a Core setting
-cannot change.
+field) and removal asks first. Settings shows provider connections and
+per-subagent model lists on their pages, and says why rows that need a Core
+setting cannot change.
 
 Still Step 12.4: the built-in editor, worktree management in the UI, `path:line`
 links, settings editing beyond the wired sections, and steering/queueing

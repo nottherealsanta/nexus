@@ -216,7 +216,7 @@ class ExportView:
             "project_id": row["project_id"],
             "directory": row["directory"],
             "title": row["title"],
-            "model": row["model"] or None,  # null = the agent's or the daemon default applies
+            "model": row["model"] or None,  # null = the agent's model or, for a subagent, the parent's applies
             "permission": row["permission"],
             "effort": row["effort"],
             "agent": row["agent"],

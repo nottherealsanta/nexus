@@ -540,8 +540,8 @@ fn live_group_announces_clipping_and_explicit_expansion_restores_members() {
         .collect();
     // Members hang off a `├─` / `╰─` tree; a running one shows the spinner in
     // place of its verb glyph.
-    assert!(tool_rows.first().unwrap().starts_with("  ├─ ◐ Read"));
-    assert!(tool_rows.last().unwrap().starts_with("  ╰─ ◐ Read"));
+    assert!(tool_rows.first().unwrap().starts_with("   ├─ ◐ Read"));
+    assert!(tool_rows.last().unwrap().starts_with("   ╰─ ◐ Read"));
     let tools: Vec<_> = t
         .blocks
         .iter()
@@ -1620,10 +1620,10 @@ fn reasoning_rows_follow_d07() {
         .map(|b| line_text(&t.lines[b.start]))
         .collect();
     assert_eq!(rows.len(), 2, "{rows:?}");
-    // Activity rows sit at the two-cell activity indent.
+    // Activity rows sit at the three-cell activity indent.
     assert!(
         rows.iter()
-            .all(|r| r.starts_with("  ") && !r.starts_with("   ")),
+            .all(|r| r.starts_with("   ") && !r.starts_with("    ")),
         "{rows:?}"
     );
     let rows: Vec<&str> = rows.iter().map(|r| r.trim_start()).collect();
@@ -1651,10 +1651,10 @@ fn reasoning_rows_follow_d07() {
         .find(|b| b.key == "reason:a:0")
         .unwrap()
         .start;
-    assert_eq!(line_text(&t.lines[at]), "  ▾ Thought");
+    assert_eq!(line_text(&t.lines[at]), "   ▾ Thought");
     assert_eq!(
         line_text(&t.lines[at + 1]),
-        "    │ Looking for where the manifest is parsed."
+        "     │ Looking for where the manifest is parsed."
     );
     // The italic preview is muted.
     let preview = &build(&a, &a.theme, 0, 100);
@@ -1687,10 +1687,10 @@ fn tool_detail_is_the_old_box_with_a_raw_toggle() {
         rows[0].contains("raw"),
         "raw toggle on the head row: {rows:?}"
     );
-    assert_eq!(rows[1], "  │ $ echo hello");
+    assert_eq!(rows[1], "   │ $ echo hello");
     assert_eq!(
         rows.last().unwrap(),
-        "  ╰ hello",
+        "   ╰ hello",
         "last row closes the box: {rows:?}"
     );
     let strong = a.theme.fg("border.strong").fg;
@@ -1931,7 +1931,7 @@ fn background_shell_completion_is_a_notice_without_a_user_turn() {
 }
 
 #[test]
-fn consecutive_background_completions_are_grouped_and_expand_in_order() {
+fn consecutive_background_completions_are_grouped_and_open_in_order() {
     use nexus_tui::timeline::{build, BlockKind};
     let mut a = app();
     let template = a.state.model.selected.as_ref().unwrap().messages[0].clone();
@@ -1958,15 +1958,8 @@ fn consecutive_background_completions_are_grouped_and_expand_in_order() {
         .collect();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].end - notices[0].start, 1);
-    let key = notices[0].key.clone();
-    a.ui.timeline_open.insert(key, true);
-    let timeline = build(&a, &a.theme, 0, 100);
-    let text = timeline
-        .lines
-        .iter()
-        .flat_map(|l| l.spans.iter())
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
+    // The full output lives behind the block's modal, in order.
+    let text = notices[0].target.clone().unwrap();
     assert!(text.find("output first").unwrap() < text.find("output second").unwrap());
 }
 

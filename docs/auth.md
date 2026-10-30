@@ -17,11 +17,15 @@ adapters a header source; adapters never see stored credentials
 
 ## Sign-in from clients
 
-Both clients offer provider sign-in and sign-out in Settings. Device flows use
-`POST /api/provider/{id}/login`; instructions arrive through `provider.login`
-events and `GET` on the same path reports progress. NSH shows connection status
-and actions per provider, with masked key entry for OpenCode, OpenAI, Groq and
-NVIDIA; Ollama uses its local connection method. `DELETE` cancels a pending flow and signs out. Keys are
+Both clients offer provider sign-in and sign-out on the Settings → Providers
+page ([config.md](config.md#settings-layout)). `GET /api/provider` says how each
+provider connects (`methods`) and, for API-key providers, where to get a key
+(`key_hint`), its variable (`key_env`) and whether the key in use is stored or
+from the environment (`key_source`, from `ApiKeyAuth.key_source()`). Device
+flows use `POST /api/provider/{id}/login`; the code and link arrive through
+`provider.login` events (`verification_uri`, `user_code`) and `GET` on the same
+path reports progress. API-key providers get masked key entry; Ollama uses its
+local connection method. `DELETE` cancels a pending flow and signs out. Keys are
 never included in progress events. See [Configuration](config.md).
 
 ## The shared interface

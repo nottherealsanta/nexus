@@ -8,6 +8,7 @@ import time
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import agents as agent_files
 from nexus import runtime as runtime_module
@@ -43,7 +44,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     provider = Scripted([])
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
-    rt = make_runtime("scripted/m", Store(tmp_path / "nexus.db"))
+    rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -429,7 +430,7 @@ async def test_child_question_belongs_to_the_child_and_its_tree(tmp_path, monkey
     providers = {"parent": Scripted([]), "child": Scripted([])}
     monkeypatch.setattr(runtime_module, "provider_for",
                         lambda ref: (providers[ref.partition("/")[2]], ref.partition("/")[2]))
-    rt = make_runtime("scripted/parent", Store(tmp_path / "child.db"))
+    rt = make_runtime(remembering(Store(tmp_path / "child.db"), "scripted/parent"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})

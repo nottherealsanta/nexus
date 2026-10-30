@@ -34,7 +34,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/search` | `?q=`, `?project=`, `?archived=exclude\|only\|include`, `?limit=` (1..100, default 30) | `{query, hits: [{session_id, kind: "title" or "user", message_id, snippet, rank, session}]}`: one hit per session, best first ([Search](#search-k5)) |
 | GET | `/api/usage` | | `{fetched, providers: [{id, label, plan, windows, notes, error}]}`: plan limits of signed-in codex and copilot ([Usage](#usage-k11)) |
 | GET | `/api/artifact/{id}` | | the stored bytes, served as an attachment with the stored media type ([Artifacts](#artifacts-k8)) |
-| GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, default_model, connected, verified}]` |
+| GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, connected, verified, methods}]`; `methods` are the sign-ins a client can start (`device`, `local`, `api_key`); an API-key provider adds `key_hint`, `key_env` and `key_source` (`stored`, `env` or null) |
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
 | GET | `/api/model/last` | `?project=`, `?agent=` | `{model, source}`: the model a new session for this agent starts with: `agent` (last selected for it in the project), `last` (last selected anywhere) or `none` with `""` ([daemon.md](daemon.md#model-selection)) |
 | GET | `/api/agent` | `?project=` or `?directory=` | `{agents: [Agent], problems: [{path, error}]}` |
@@ -1051,7 +1051,10 @@ the migration remains in effect across restarts.
 See [Configuration](config.md) for the config revision/patch contract and the
 provider login lifecycle. `POST /api/provider/{id}/login` returns 202 for a
 device flow, or 200 for an accepted OpenCode key. `GET` reports progress;
-`DELETE` signs out (204). Global `provider.login` events report progress.
+`DELETE` signs out (204). Global `provider.login` events report progress:
+`{provider, status, message}`, plus `verification_uri` and `user_code` while a
+device flow waits (null once it ends), so clients show the code on the
+provider's row. A key is never in an event.
 
 `GET /api/session/{id}/context` retains the provider request fields and adds
 `used`, `window` and `exact`. The newest request's measured input is used when
@@ -1069,7 +1072,7 @@ the `/context` fields (`used`, `window`, `exact`, always false here), `model`,
 of the system prompt, tool schemas and the AGENTS.md inside the prompt) and the
 `snapshot` summary, `tool_info` (each tool's `description`), and
 the lists the session would start with: `tools` (names, in request order),
-`skills` and `mcp` (the session JSON's rows, with `state` and `locked`), and `session` (`model`, `effort`: what creation would store, configured defaults included; null when unset). Clients show these, not their own defaults, so the screen does not change when the session is created. Enabled
+`skills` and `mcp` (the session JSON's rows, with `state` and `locked`; nothing the draft's own `disabled_tools` switched off is locked, since the session has not started, so only an unavailable server is), and `session` (`model`, `effort`: what creation would store, configured defaults included; null when unset). Clients show these, not their own defaults, so the screen does not change when the session is created. Enabled
 MCP servers are connected first, as for creation. Clients draw the new-session
 context from these lists alone: they keep no tool list of their own and show
 "loading" until it answers.

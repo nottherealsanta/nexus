@@ -3,6 +3,7 @@ import json
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import runtime as runtime_module
 from nexus.llmhub.types import Done, PartDone, Text, ToolCall
@@ -49,7 +50,8 @@ def env(tmp_path, monkeypatch):
         "---\ndescription: Helps\nmodel: scripted/child\ncontrol: [session]\n---\nYou help.\n")
     providers = {"parent": Scripted([]), "child": Scripted([])}
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (providers[ref.partition("/")[2]], ref.partition("/")[2]))
-    rt = make_runtime("scripted/parent", Store(tmp_path / "nexus.db"))
+    monkeypatch.setattr(runtime_module, "connected", lambda: ["codex"])
+    rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "scripted/parent"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"authorization": f"Bearer {TOKEN}"})
     return rt, client, providers, workspace
@@ -144,6 +146,55 @@ def test_child_model_pool_is_chosen_once_and_explicit_model_wins(env, monkeypatc
     explicit = rt.create_session(project, title=None, model="codex/parent", permission=None, agent="helper", parent=parent)
     assert explicit.model == "codex/parent" and len(seen) == 1
     assert parent.model == "scripted/parent"  # a root session stores the model it starts with
+
+
+def test_child_model_pool_skips_disconnected_providers_visibly(env, monkeypatch):
+    from nexus.config import ConfigFile
+
+    rt, _, _, workspace = env
+    config = ConfigFile()
+    config.patch(config.read()["revision"], {"agents.models": {"helper": ["groq/off", "codex/child"]},
+                                               "agents.fallbacks": {"helper": ["nvidia/off", "codex/parent"]}}, [])
+    seen = []
+    monkeypatch.setattr(runtime_module.secrets, "choice", lambda pool: seen.append(list(pool)) or pool[0])
+    project = rt.open_project(str(workspace))
+    parent = rt.create_session(project, title=None, model=None, permission=None)
+    child = rt.create_session(project, title=None, model=None, permission=None, agent="helper", parent=parent)
+    assert seen == [["codex/child"]] and child.model == "codex/child"
+    summary = rt.session_json(rt.session(child.id))["snapshot"]
+    assert summary["model_pick"] == {"pool": ["groq/off", "codex/child"], "eligible": ["codex/child"],
+                                     "chosen": "codex/child", "skipped": ["groq/off"]}
+    assert summary["model_fallbacks"] == {"primary": "codex/child", "models": ["codex/parent"], "skipped": ["nvidia/off"]}
+
+
+def test_child_pool_with_no_connected_provider_uses_the_agent_model(env):
+    from nexus.config import ConfigFile
+
+    rt, _, _, workspace = env
+    config = ConfigFile()
+    config.patch(config.read()["revision"], {"agents.models": {"helper": ["groq/off"]}}, [])
+    project = rt.open_project(str(workspace))
+    parent = rt.create_session(project, title=None, model=None, permission=None)
+    child = rt.create_session(project, title=None, model=None, permission=None, agent="helper", parent=parent)
+    assert child.model == ""
+    data = rt.session_json(rt.session(child.id))
+    assert (data["model"], data["model_source"]) == ("scripted/child", "agent")
+    pick = data["snapshot"]["model_pick"]
+    assert pick["chosen"] is None and pick["skipped"] == ["groq/off"] and "agent file" in pick["note"]
+
+
+async def test_agent_list_reports_subagent_models(env):
+    from nexus.config import ConfigFile
+
+    _, client, _, workspace = env
+    config = ConfigFile()
+    config.patch(config.read()["revision"], {"agents.models": {"helper": ["codex/child"]}}, [])
+    agents = (await client.get("/api/agent", params={"directory": str(workspace)})).json()["agents"]
+    by_name = {a["name"]: a for a in agents}
+    assert by_name["helper"]["subagent"] == {"pool": ["codex/child"], "fallbacks": [],
+                                             "effective": {"model": "scripted/child", "source": "agent"}}
+    assert by_name["quick"]["subagent"]["effective"] == {"model": "", "source": "parent"}
+    assert "subagent" not in by_name["orchestrate"]
 
 
 async def test_child_fallback_is_recorded_and_partial_output_is_not_retried(env):

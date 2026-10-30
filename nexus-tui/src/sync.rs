@@ -83,13 +83,16 @@ pub enum SyncMsg {
         session: String,
         page: Box<TurnPage>,
     },
-    /// Picker data: connected providers' models and the available agents.
+    /// Picker data: connected providers' models and the available agents, plus
+    /// the provider table and agent-file problems for the Settings pages.
     Catalog {
         models: Vec<Value>,
         agents: Vec<Value>,
         source: String,
-        /// Core's default model reference (`provider/id`), empty if unknown.
+        /// The model last selected anywhere (`provider/id`), empty when none was chosen.
         last_model: String,
+        providers: Vec<Value>,
+        problems: Vec<Value>,
     },
     Files {
         project: String,
@@ -484,7 +487,7 @@ pub async fn run(
         // A request received while reconnecting must not be stranded until a
         // later command arrives on the live stream.
         if let Some(project) = cx.catalog.take() {
-            if let Some((models, agents, source, last_model)) =
+            if let Some((models, agents, source, last_model, providers, problems)) =
                 load_catalog(&api, project.as_deref()).await
             {
                 if !cx.send(SyncMsg::Catalog {
@@ -492,6 +495,8 @@ pub async fn run(
                     agents,
                     source,
                     last_model,
+                    providers,
+                    problems,
                 }) {
                     return;
                 }
@@ -688,10 +693,17 @@ async fn load_config(cx: &mut Ctx, api: &CoreApi) {
     }
 }
 
-async fn load_catalog(
-    api: &CoreApi,
-    project: Option<&str>,
-) -> Option<(Vec<Value>, Vec<Value>, String, String)> {
+/// What `SyncMsg::Catalog` carries, in field order.
+type CatalogData = (
+    Vec<Value>,
+    Vec<Value>,
+    String,
+    String,
+    Vec<Value>,
+    Vec<Value>,
+);
+
+async fn load_catalog(api: &CoreApi, project: Option<&str>) -> Option<CatalogData> {
     let models = api.models().await.ok()?;
     let mut agents = api.agents(project).await.ok()?;
     // The list omits the system prompt body; the new-session context preview
@@ -734,6 +746,16 @@ async fn load_catalog(
             .unwrap_or("")
             .to_owned(),
         last_model,
+        api.providers()
+            .await
+            .ok()
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default(),
+        agents
+            .get("problems")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
     ))
 }
 
@@ -1057,8 +1079,8 @@ async fn stream(
                         load_context(cx, api).await;
                         load_draft(cx, api).await;
                         if let Some(project) = cx.catalog.take() {
-                            if let Some((models, agents, source, last_model)) = load_catalog(api, project.as_deref()).await {
-                                if !cx.send(SyncMsg::Catalog { models, agents, source, last_model }) {
+                            if let Some((models, agents, source, last_model, providers, problems)) = load_catalog(api, project.as_deref()).await {
+                                if !cx.send(SyncMsg::Catalog { models, agents, source, last_model, providers, problems }) {
                                     return StreamEnd::Stop;
                                 }
                             }

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import runtime as runtime_module
 from nexus import worktrees as worktrees_module
@@ -81,7 +82,7 @@ def env(tmp_path, monkeypatch):
     provider = Scripted()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
     store = Store(tmp_path / "nexus.db")
-    rt = make_runtime("scripted/m", store)
+    rt = make_runtime(remembering(store, "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -205,7 +206,7 @@ async def test_activation_is_idempotent_and_survives_restart(env):
     await env.rt.shutdown()
     env.store.close()
     store = Store(path)
-    rt = make_runtime("scripted/m", store)
+    rt = make_runtime(remembering(store, "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -522,7 +523,7 @@ async def test_directory_move_survives_restart(env):
     env.store.close()
 
     store = Store(path)
-    rt = make_runtime("scripted/m", store)
+    rt = make_runtime(remembering(store, "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -551,7 +552,7 @@ async def test_directory_move_before_an_old_session_is_reconstructed_keeps_the_o
     destination.mkdir()
 
     store = Store(path)
-    rt = make_runtime("scripted/m", store)
+    rt = make_runtime(remembering(store, "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -832,7 +833,7 @@ async def test_older_sessions_keep_their_snapshot_until_explicit_activation(env)
     env.store.close()
 
     store = Store(path)
-    rt = make_runtime("scripted/m", store)
+    rt = make_runtime(remembering(store, "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})

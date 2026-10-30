@@ -3,6 +3,7 @@ import asyncio
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import oneshot
 from nexus import runtime as runtime_module
@@ -54,7 +55,7 @@ async def env(tmp_path, monkeypatch):
     workspace.mkdir()
     provider = Fake()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
-    rt = make_runtime("fake/m", Store(tmp_path / "nexus.db"))
+    rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "fake/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})

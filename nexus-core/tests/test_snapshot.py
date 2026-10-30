@@ -10,6 +10,7 @@ from datetime import datetime as real_datetime
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import agents as agents_module
 from nexus import runtime as runtime_module
@@ -55,7 +56,7 @@ def env(tmp_path, monkeypatch):
     provider = Scripted()
     monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
     store = Store(tmp_path / "nexus.db")
-    rt = make_runtime("scripted/m", store)
+    rt = make_runtime(remembering(store, "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -179,7 +180,7 @@ async def test_restart_reuses_the_snapshot_even_after_file_changes(env):
     rt.store.close()
 
     store = Store(rt.store.path)
-    restarted = make_runtime("scripted/m", store)
+    restarted = make_runtime(remembering(store, "scripted/m"))
     app = build_app(restarted, token=TOKEN, url="http://test")
     client2 = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                 headers={"authorization": f"Bearer {TOKEN}"})
@@ -398,7 +399,7 @@ async def test_old_schema_migration_preserves_messages_and_is_stable(env):
 
     def restart():
         s = Store(path)
-        r = make_runtime("scripted/m", s)
+        r = make_runtime(remembering(s, "scripted/m"))
         a = build_app(r, token=TOKEN, url="http://test")
         c = httpx.AsyncClient(transport=httpx.ASGITransport(app=a), base_url="http://test",
                               headers={"authorization": f"Bearer {TOKEN}"})

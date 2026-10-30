@@ -382,10 +382,10 @@ Dictation, Keybindings, Notifications, About.
 | ID | Feature | Class | Source / step | Notes |
 | --- | --- | --- | --- | --- |
 | ST1 | Appearance: theme (light/dark/system/named), density, font and size (NSH) | Client only | | Per-client; shared token file |
-| ST2 | Providers: list with connected state | API ready | `GET /api/provider` (`id`, `label`, `dialect`, `connected`, `verified`, `default_model`) | |
+| ST2 | Providers: list with connected state | API ready | `GET /api/provider` (`id`, `label`, `dialect`, `connected`, `verified`, `methods`, key fields) | Settings → Providers page |
 | ST3 | Providers: account, expiry | Core work | 12a Settings over the API | Not returned |
 | ST4 | Providers: sign in (browser/device), sign out | API ready | `POST/GET/DELETE /api/provider/{id}/login` | Device flows and OpenCode API key |
-| ST5 | Providers: default model per provider | Removed | | There is no default model; `default_model` in the provider table is only a picker suggestion |
+| ST5 | Providers: default model per provider | Removed | | There is no default model; providers carry no suggested model |
 | ST6 | Providers: add OpenAI-compatible endpoint | Deferred | INTERFACE_PLAN "when Core supports custom providers" | Only four subscription providers now |
 | ST7 | Models: catalog list | API ready | `GET /api/model[?provider=]` (`source`, models with `efforts`, `context`, costs, price `tiers`) | Lists only connected providers |
 | ST8 | Models: catalog refresh | Core work | 12a? | `catalog.load(refresh=True)` is not reachable over HTTP |

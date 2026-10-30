@@ -31,6 +31,12 @@ class ApiKeyAuth:
     def logged_in(self) -> bool:
         return self._key() is not None
 
+    def key_source(self) -> str | None:
+        """`stored` (auth.json), `env` (`$<ENV>`, used only when nothing is stored) or None."""
+        if (self.store.read(self.provider) or {}).get("api_key"):
+            return "stored"
+        return "env" if os.environ.get(self.env) else None
+
     def logout(self) -> None:
         with self.store.locked():
             self.store.write(self.provider, None)

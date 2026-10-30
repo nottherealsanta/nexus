@@ -133,7 +133,9 @@ otherwise the first loaded agent allowed as a root is used (normally
   the request schemas.
 - **model** = the session's model if the user set one. For a new child with no
   explicit model, a configured `agents.models` pool for its agent is sampled
-  uniformly once and stored as the session model. Without a pool, the agent's
+  uniformly once, over the refs whose provider is connected, and stored as the
+  session model; skipped refs are recorded in the snapshot's `model_pick`
+  ([config.md](config.md)). Without a pool, the agent's
   frozen `model` applies, else the parent's model is inherited. Root sessions
   do not use these pools. **effort** uses the session's value, then the agent's, then the
   provider's default.
@@ -156,8 +158,7 @@ Granting `bash` also grants the `bash_output` and `bash_kill` companions for
 background jobs (the table lists only the frontmatter tools).
 
 The session JSON reports the result and where it came from: `model` and
-`model_source` (`session`, `agent`, `parent` or `none`; `default` only for a
-session stored before models were remembered), and `effort` and
+`model_source` (`session`, `agent`, `parent` or `none`), and `effort` and
 `effort_source` (`session`, `agent` or `provider`). Setting the model to `""`
 (`/model default` in chat) returns to the agent's own model and is refused (400)
 when the agent names none.
@@ -187,6 +188,11 @@ for the current session: `primary` or `all` for roots and drafts, `subagent` or
 `all` for children. Custom agents are included by mode. The standalone `nexus
 agent` command and API catalog still list all agents and problems; Core enforces
 eligibility when creating or switching a session.
+
+`GET /api/agent` adds `subagent: {pool, fallbacks, effective: {model, source}}`
+to each agent that can run as a subagent: its configured lists and what a new
+subagent uses with an empty pool (`agent`: the file's `model`; `parent`: the
+parent session's model). Settings → Agents shows them.
 
 API: `GET /api/agent?directory=…`, `GET /api/agent/{name}`,
 `POST /api/session {agent}`, `POST /api/session/{id}/agent {agent}`

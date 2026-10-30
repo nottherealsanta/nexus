@@ -17,7 +17,7 @@ MAX_LINE_CHARS = 2000
 
 
 async def run(args: dict[str, Any], ctx: ToolContext) -> str:
-    path = resolve(ctx, args.get("path"))
+    path = resolve(ctx, args.get("path"), outside=True)  # reads may leave the workspace; permission rules gate them
     display = str(path) if ctx.cwd_changed else args["path"]
     offset = int(args.get("offset") or 1)
     limit = int(args.get("limit") or DEFAULT_LIMIT)

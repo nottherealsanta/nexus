@@ -9,7 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 
 SECTION_ORDER = [
-    "appearance", "providers", "models", "agents", "tools", "skills", "mcp",
+    "appearance", "providers", "agents", "tools", "skills", "mcp",
     "context", "dictation", "keybindings", "notifications", "about",
 ]
 TABS = ["sessions", "files", "projects"]
@@ -160,8 +160,10 @@ def main() -> int:
                 err(f"settings row {rid}: bad clients")
             if "command" in r and r["command"] not in ids:
                 err(f"settings row {rid}: command {r['command']!r} unknown")
-        if not s.get("row"):
+        if not s.get("row") and not s.get("page"):
             err(f"settings section {s.get('id')}: no rows")
+        if "page" in s and not isinstance(s["page"], bool):
+            err(f"settings section {s.get('id')}: page must be a boolean")
 
     # navigation
     nav = m.get("navigation", {})

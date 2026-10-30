@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import eventlog
 from nexus.eventlog import (
@@ -36,7 +37,7 @@ TOKEN = "t0ken"
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     store = Store(tmp_path / "nexus.db")
-    rt = make_runtime("scripted/m", store)
+    rt = make_runtime(remembering(store, "scripted/m"))
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
@@ -143,7 +144,7 @@ async def test_ids_and_the_generation_survive_a_restart(env):
     assert parse_cursor(cursor, generation=generation, head=head) == first["id"]
 
     store.close()
-    restarted = make_runtime("scripted/m", Store(env.db))
+    restarted = make_runtime(remembering(Store(env.db), "scripted/m"))
     assert restarted.store.log_generation() == generation  # same database, same log
     assert restarted.store.log_head() == head
     assert any(row["id"] == first["id"] for row in restarted.store.replay(0, head, 100))
@@ -163,7 +164,7 @@ async def test_a_replaced_database_rejects_an_old_generation(env):
     session = new_session(rt, env.workspace)
     old_cursor = cursor_of(store, publish(rt, session.id, 1)["id"])
 
-    replacement = make_runtime("scripted/m", Store(env.tmp_path / "other.db"))
+    replacement = make_runtime(remembering(Store(env.tmp_path / "other.db"), "scripted/m"))
     app = build_app(replacement, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})

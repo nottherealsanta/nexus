@@ -2,6 +2,7 @@
 
 import httpx
 import pytest
+from conftest import remembering
 
 from nexus import runtime as runtime_module
 from nexus.server import build_app, make_runtime
@@ -23,8 +24,9 @@ def env(tmp_path, monkeypatch):
     (agents / "free.md").write_text("---\ndescription: d\n---\nFree.\n")
     (agents / "pinned.md").write_text("---\ndescription: d\nmodel: scripted/pin\n---\nPinned.\n")
 
-    def make(seed=""):
-        rt = make_runtime(seed, Store(tmp_path / "nexus.db"))
+    def make(last=""):
+        store = Store(tmp_path / "nexus.db")
+        rt = make_runtime(remembering(store, last) if last else store)
         app = build_app(rt, token="t", url="http://test")
         client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                    headers={"authorization": "Bearer t"})
@@ -80,7 +82,7 @@ async def test_model_switch_is_remembered_and_agent_switch_keeps_the_model(env):
 
 async def test_agent_pin_applies_until_the_session_leaves_it(env):
     make, workspace = env
-    _, client = make("scripted/seed")
+    _, client = make("scripted/last")
     session = (await client.post("/api/session", json={"directory": str(workspace), "agent": "pinned"})).json()
     assert (session["model"], session["model_source"]) == ("scripted/pin", "agent")
     session = (await client.post(f"/api/session/{session['id']}/agent", json={"agent": "orchestrate"})).json()
@@ -90,15 +92,15 @@ async def test_agent_pin_applies_until_the_session_leaves_it(env):
     assert reply.status_code == 400
 
 
-async def test_a_seed_is_used_only_until_something_is_selected(env):
+async def test_a_remembered_model_is_replaced_by_the_next_selection(env):
     make, workspace = env
-    _, client = make("scripted/seed")
+    _, client = make("scripted/last")
     project = (await client.post("/api/project", json={"path": str(workspace)})).json()["id"]
-    assert (await client.post("/api/session", json={"project": project})).json()["model"] == "scripted/seed"
+    assert (await client.post("/api/session", json={"project": project})).json()["model"] == "scripted/last"
     await client.post("/api/session", json={"project": project, "model": "scripted/picked"})
     assert (await client.post("/api/session", json={"project": project})).json()["model"] == "scripted/picked"
     # The memory is on disk: a restarted daemon still has it.
-    _, client2 = make("scripted/seed")
+    _, client2 = make()
     assert (await client2.get("/api/model/last")).json()["model"] == "scripted/picked"
 
 
@@ -113,3 +115,4 @@ async def test_subagent_inherits_the_parent_model(env):
     rt.update_session(parent.id, model="scripted/b")
     assert rt.session_json(child)["model"] == "scripted/b"
     assert rt.remembered_model(project.id, "scout") == ("", "none")  # a subagent's model is never "selected"
+

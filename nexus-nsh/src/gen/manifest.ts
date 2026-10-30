@@ -434,31 +434,9 @@ export const manifest = {
    {
     "id": "providers",
     "label": "Providers",
+    "page": true,
+    "note": "Connection status per provider and ways to connect.",
     "row": [
-     {
-      "id": "providers.list",
-      "label": "Providers",
-      "kind": "list",
-      "scope": "core",
-      "clients": "both",
-      "note": "Status, account and expiry per provider."
-     },
-     {
-      "id": "providers.sign_in",
-      "label": "Sign in",
-      "kind": "action",
-      "scope": "core",
-      "clients": "both",
-      "command": "app.sign_in"
-     },
-     {
-      "id": "providers.sign_out",
-      "label": "Sign out",
-      "kind": "action",
-      "scope": "core",
-      "clients": "both",
-      "command": "app.sign_out"
-     },
      {
       "id": "providers.add_custom",
       "label": "Add OpenAI-compatible provider",
@@ -470,58 +448,25 @@ export const manifest = {
     ]
    },
    {
-    "id": "models",
-    "label": "Models",
+    "id": "agents",
+    "label": "Agents",
+    "page": true,
+    "note": "Default agent and effort; models and fallbacks for subagents.",
     "row": [
      {
-      "id": "models.default_effort",
+      "id": "agents.default_root",
+      "label": "Default agent for new sessions",
+      "kind": "choice",
+      "scope": "core",
+      "clients": "both"
+     },
+     {
+      "id": "agents.default_effort",
       "label": "Default effort",
       "kind": "choice",
       "scope": "core",
       "clients": "both",
       "command": "model.effort"
-     },
-     {
-      "id": "models.catalog",
-      "label": "Model catalog",
-      "kind": "list",
-      "scope": "core",
-      "clients": "both"
-     },
-     {
-      "id": "models.refresh",
-      "label": "Refresh catalog",
-      "kind": "action",
-      "scope": "core",
-      "clients": "both"
-     }
-    ]
-   },
-   {
-    "id": "agents",
-    "label": "Agents",
-    "row": [
-     {
-      "id": "agents.list",
-      "label": "Loaded agents",
-      "kind": "list",
-      "scope": "core",
-      "clients": "both",
-      "note": "Name, mode and source (built-in, global, project)."
-     },
-     {
-      "id": "agents.default_root",
-      "label": "Default root agent",
-      "kind": "choice",
-      "scope": "core",
-      "clients": "both"
-     },
-     {
-      "id": "agents.open_file",
-      "label": "Open agent file in editor",
-      "kind": "action",
-      "scope": "core",
-      "clients": "both"
      }
     ]
    },

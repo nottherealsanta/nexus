@@ -21,9 +21,11 @@ impl std::fmt::Debug for Secret {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApiCall {
+    /// Connect (`method`: `device`, `local`, `api_key` with `key`) or, with `sign_out`, disconnect or cancel.
     Provider {
         id: String,
         sign_out: bool,
+        method: String,
         key: Option<Secret>,
     },
     /// Send a prompt to an existing idle session.
@@ -378,16 +380,21 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
     let key = RequestId::new();
     let mut done = Done::default();
     match call {
-        ApiCall::Provider { id, sign_out, key } => {
+        ApiCall::Provider {
+            id,
+            sign_out,
+            method: how,
+            key,
+        } => {
             let method = if *sign_out {
                 reqwest::Method::DELETE
             } else {
                 reqwest::Method::POST
             };
             let body = if let Some(key) = key {
-                json!({"api_key": key.0})
+                json!({"method": "api_key", "api_key": key.0})
             } else {
-                json!({"method": "device"})
+                json!({"method": how})
             };
             api.http
                 .call(

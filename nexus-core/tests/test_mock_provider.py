@@ -69,7 +69,7 @@ from nexus.runtime import Runtime
 from nexus.store import Store
 async def main():
     store=Store()
-    runtime=Runtime(store,Bus(),"mock/tool_marathon")
+    runtime=Runtime(store,Bus())
     project=runtime.open_project(WORKSPACE)
     session=runtime.create_session(project,title=None,model="mock/tool_marathon",permission="allow")
     runtime.prompt(session.id,"Run the tool marathon.")
@@ -103,7 +103,7 @@ from nexus.runtime import Runtime
 from nexus.store import Store
 async def main():
     store=Store()
-    runtime=Runtime(store,Bus(),"mock/parallel_subagents")
+    runtime=Runtime(store,Bus())
     project=runtime.open_project(os.environ["WORKSPACE"])
     session=runtime.create_session(project,title=None,model="mock/parallel_subagents",permission="allow",agent="orchestrate")
     runtime.prompt(session.id,"Exercise parallel sub agents.")

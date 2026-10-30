@@ -13,3 +13,9 @@ def _no_background_requests(monkeypatch):
     from nexus.runtime import Runtime
 
     monkeypatch.setattr(Runtime, "background_requests", False)
+
+
+def remembering(store, model):
+    """A store whose last selected model is `model`, so a new root session starts with it."""
+    store.set_preference("model.last", model)
+    return store
