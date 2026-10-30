@@ -121,6 +121,14 @@ install_release() {
   wheel="$(awk '{ n = $2; sub(/^\*/, "", n); if (n ~ /^nexus10-.*\.whl$/) print n }' "$WORK/SHA256SUMS" | head -n 1)"
   [ -n "$wheel" ] || die "this release has no Core wheel"
 
+  if [ "$os" = linux ]; then
+    # The TUI links the ALSA library (its audio cues); without it the binary fails with a bare linker error.
+    ldconfig_bin="$(PATH="$PATH:/sbin:/usr/sbin" command -v ldconfig || true)"
+    if [ -n "$ldconfig_bin" ] && ! "$ldconfig_bin" -p 2>/dev/null | grep -q 'libasound\.so\.2'; then
+      printf 'warning: nexus-tui needs libasound.so.2. Install it: apt install libasound2 (libasound2t64 on newer Debian and Ubuntu), or dnf install alsa-lib.\n' >&2
+    fi
+  fi
+
   step "Download and verify"
   fetch "$wheel"; verify "$wheel"
   fetch "$tui"; verify "$tui"
