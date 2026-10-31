@@ -621,7 +621,8 @@ pub struct Ui {
     pub completion: CompletionState,
     pub focus: Focus,
     pub left_open: bool,
-    /// The docked left sidebar shows one letter per session instead of rows.
+    pub last_project_session: HashMap<String, String>,
+    /// The docked left sidebar shows project initials instead of session rows.
     pub left_rail: bool,
     /// Width of the full left sidebar (dragged by its edge).
     pub left_width: u16,
@@ -863,6 +864,7 @@ impl App {
                 focus: Focus::Composer,
                 left_open: true,
                 left_rail: false,
+                last_project_session: HashMap::new(),
                 left_width: 0,
                 left_drag: false,
                 right_open: crate::layout::Breakpoint::of(size.0).right_open_by_default(),
@@ -2249,8 +2251,19 @@ impl App {
         v.into_iter().map(|p| p.id.clone()).collect()
     }
 
+    pub fn rail_project_ids(&self) -> Vec<String> {
+        let mut projects: Vec<_> = self.state.model.projects.values().collect();
+        projects.sort_by(|a, b| {
+            a.created
+                .total_cmp(&b.created)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        projects.into_iter().map(|p| p.id.clone()).collect()
+    }
+
     fn list_len(&self, tab: Tab) -> usize {
         match tab {
+            Tab::Sessions if self.ui.left_rail => self.state.model.projects.len(),
             Tab::Sessions => self.side_entries().len(),
             Tab::Projects => self.state.model.projects.len(),
             Tab::Files => self.file_rows().len(),
@@ -2938,7 +2951,7 @@ impl App {
         if tab == Tab::Files {
             self.request_files(String::new(), false);
         }
-        // The rail lists sessions only; another tab needs the full sidebar.
+        // The rail replaces the session list with projects; other tabs need full rows.
         if tab != Tab::Sessions {
             self.ui.left_rail = false;
         }
@@ -4284,6 +4297,9 @@ impl App {
         self.ui.wait_idx = 0;
         if let Some(s) = self.state.model.sessions.get(id) {
             let project = s.project_id.clone();
+            self.ui
+                .last_project_session
+                .insert(project.clone(), id.to_owned());
             self.ui.project = Some(project.clone());
             if !self.ui.inventories.contains_key(&project) {
                 self.effects
@@ -4396,6 +4412,45 @@ impl App {
     }
 
     fn sidebar_activate(&mut self, index: usize) {
+        if self.ui.left_rail && self.ui.tab == Tab::Sessions {
+            if self.edit_blocks() {
+                return;
+            }
+            if let Some(project) = self.rail_project_ids().get(index).cloned() {
+                let remembered = self
+                    .ui
+                    .last_project_session
+                    .get(&project)
+                    .and_then(|id| self.state.model.sessions.get(id))
+                    .filter(|s| s.project_id == project && !s.archived)
+                    .map(|s| s.id.clone());
+                let session = remembered.or_else(|| {
+                    self.state
+                        .model
+                        .sessions
+                        .values()
+                        .filter(|s| s.project_id == project && s.parent_id.is_none() && !s.archived)
+                        .max_by(|a, b| {
+                            a.updated
+                                .total_cmp(&b.updated)
+                                .then_with(|| a.id.cmp(&b.id))
+                        })
+                        .map(|s| s.id.clone())
+                });
+                self.select_project_quietly(&project);
+                self.ui.cursor.insert(Tab::Sessions, index);
+                self.ui.scope_all = false;
+                if let Some(id) = session {
+                    self.open_session(&id);
+                } else {
+                    self.state.model.select(None);
+                    self.ui.view = View::Session;
+                    self.effects.push(Effect::Sync(SyncCommand::Select(None)));
+                    self.after_open();
+                }
+            }
+            return;
+        }
         match self.ui.tab {
             Tab::Sessions => {
                 if let Some(e) = self.side_entries().get(index) {
@@ -4584,7 +4639,22 @@ impl App {
                 });
             }
             "project.remove" => self.ask_remove_project(),
-            "sidebar.row_menu" => self.open_palette(PaletteMode::RowMenu),
+            "sidebar.row_menu" => {
+                if self.ui.left_rail {
+                    let project = self
+                        .rail_project_ids()
+                        .get(self.cursor(Tab::Sessions))
+                        .cloned();
+                    self.ui.left_rail = false;
+                    self.ui.tab = Tab::Projects;
+                    if let Some(index) =
+                        project.and_then(|id| self.project_ids().iter().position(|p| p == &id))
+                    {
+                        self.ui.cursor.insert(Tab::Projects, index);
+                    }
+                }
+                self.open_palette(PaletteMode::RowMenu);
+            }
             "session.switch" => self.open_palette(PaletteMode::Sessions),
             "project.switch" => self.open_palette(PaletteMode::Projects),
             "app.sign_in" | "app.sign_out" => {

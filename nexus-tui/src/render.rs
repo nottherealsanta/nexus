@@ -714,7 +714,19 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
                         2,
                     );
                 }
-                put(buf, rect.x + 1, rect.y, &glyph, style, rect.width - 1);
+                let x = if cx.app.ui.left_rail && g.left.is_some() {
+                    rect.x + rect.width.saturating_sub(2) / 2
+                } else {
+                    rect.x + 1
+                };
+                put(
+                    buf,
+                    x,
+                    rect.y,
+                    &glyph,
+                    style,
+                    rect.right().saturating_sub(x),
+                );
             }
             Side::Right => {
                 let gx = rect.x + rect.width.saturating_sub(gw + 1);
@@ -1311,6 +1323,22 @@ fn draw_toasts(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
 /// The sidebar's edge column. The surface step is the edge; only where the
 /// surfaces collapse (ANSI-16, monochrome) is a `│` drawn.
 fn draw_sidebar_edge(cx: &Cx, buf: &mut Buffer, x: u16, r: Rect) {
+    if cx.app.ui.left_rail && r.width <= crate::layout::RAIL_WIDTH {
+        let canvas = cx.st(PRIMARY, CANVAS).bg.unwrap_or(Color::Reset);
+        for y in r.y..r.bottom() {
+            let from = buf[(x.saturating_sub(1), y)].bg;
+            let fade = match (from, canvas) {
+                (Color::Rgb(r, g, b), Color::Rgb(cr, cg, cb)) => Color::Rgb(
+                    ((r as u16 + cr as u16) / 2) as u8,
+                    ((g as u16 + cg as u16) / 2) as u8,
+                    ((b as u16 + cb as u16) / 2) as u8,
+                ),
+                _ => canvas,
+            };
+            put(buf, x, y, " ", Style::default().bg(fade), 1);
+        }
+        return;
+    }
     clear(
         buf,
         Rect::new(x, r.y, 1, r.height),
@@ -1517,27 +1545,27 @@ fn draw_tab_tooltip(cx: &Cx, buf: &mut Buffer, r: Rect, limit: Rect) {
     );
 }
 
-/// One rail entry: a session, or the search and new-session controls.
+/// One rail entry: a project, or the search and new-session controls.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RailItem {
     Search,
-    Session(usize),
+    Project(usize),
     New,
 }
 
-/// Rail rows: two per item, with one row between initials.
-const RAIL_ITEM: u16 = 2;
+/// Label and counters with top/bottom padding and one separating row.
+const RAIL_ITEM: u16 = 5;
 
 fn rail_layout(cx: &Cx, r: Rect) -> Vec<(RailItem, Rect)> {
     let a = cx.app;
 
-    let entries = a.side_entries();
+    let entries = a.rail_project_ids();
     let room = (r.height.saturating_sub(1) / RAIL_ITEM) as usize;
     let mut items = vec![RailItem::Search];
     let sessions = room.saturating_sub(2);
     let cursor = a.cursor(Tab::Sessions).min(entries.len().saturating_sub(1));
     let top = (cursor + 1).saturating_sub(sessions);
-    items.extend((top..entries.len()).take(sessions).map(RailItem::Session));
+    items.extend((top..entries.len()).take(sessions).map(RailItem::Project));
     if items.len() < room {
         items.push(RailItem::New);
     }
@@ -1558,20 +1586,91 @@ fn rail_layout(cx: &Cx, r: Rect) -> Vec<(RailItem, Rect)> {
         .collect()
 }
 
-fn rail_initial(title: &str) -> String {
-    title
-        .chars()
-        .find(|c| c.is_alphanumeric())
-        .map_or("·".into(), |c| c.to_uppercase().collect())
+fn rail_labels(names: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut used = std::collections::HashSet::new();
+    names
+        .into_iter()
+        .map(|name| {
+            let chars: Vec<_> = name.trim().to_uppercase().chars().collect();
+            let first = chars.first().copied().unwrap_or('·').to_string();
+            let mut label = first.clone();
+            if used.contains(&label) {
+                label = chars
+                    .iter()
+                    .skip(1)
+                    .filter(|c| c.is_alphabetic() && !"AEIOU".contains(**c))
+                    .map(|c| format!("{first}{c}"))
+                    .find(|candidate| !used.contains(candidate))
+                    .unwrap_or_else(|| {
+                        let mut n = 2;
+                        while used.contains(&format!("{first}{n}")) {
+                            n += 1;
+                        }
+                        format!("{first}{n}")
+                    });
+            }
+            used.insert(label.clone());
+            label
+        })
+        .collect()
+}
+
+fn rail_activity(a: &App, project: &str) -> (usize, f64) {
+    let mut running = 0;
+    let mut latest: f64 = 0.0;
+    for s in a
+        .state
+        .model
+        .sessions
+        .values()
+        .filter(|s| s.project_id == project)
+    {
+        if a.is_busy(&s.id) {
+            running += 1;
+        }
+        latest = latest.max(s.updated);
+    }
+    (running, latest)
+}
+
+fn rail_counts(a: &App, project: &str) -> [usize; 4] {
+    let mut counts = [0; 4];
+    for s in a
+        .state
+        .model
+        .sessions
+        .values()
+        .filter(|s| s.project_id == project && s.parent_id.is_none() && !s.archived)
+    {
+        let index = match a.session_state(&s.id) {
+            "needs input" => 0,
+            "finished" => 1,
+            "running" => 2,
+            _ => 3,
+        };
+        counts[index] += 1;
+    }
+    counts
+}
+
+fn rail_count(n: usize) -> String {
+    if n > 9 {
+        "*".to_owned()
+    } else {
+        n.to_string()
+    }
 }
 
 fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let a = cx.app;
-    let entries = a.side_entries();
-    let viewed = a.viewed_id();
+    let entries = a.rail_project_ids();
+    let labels = rail_labels(
+        entries
+            .iter()
+            .map(|id| a.state.model.projects[id].name.clone()),
+    );
     let focused = a.ui.focus == Focus::Sidebar;
     let cursor = a.cursor(Tab::Sessions);
-    let mid = r.x + r.width.saturating_sub(1) / 2;
     for (item, band) in rail_layout(cx, r) {
         let hovered = cx.hovered(band);
         let (glyph, mut style, target) = match item {
@@ -1585,95 +1684,111 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 cx.st(SECONDARY, SIDEBAR),
                 Target::NewSession,
             ),
-            RailItem::Session(i) => {
-                let Some(s) = entries
-                    .get(i)
-                    .and_then(|e| a.state.model.sessions.get(&e.id))
-                else {
+            RailItem::Project(i) => {
+                let Some(p) = entries.get(i).and_then(|id| a.state.model.projects.get(id)) else {
                     continue;
                 };
-                let selected = viewed == Some(s.id.as_str());
-                let (glyph, token) = if a.session_waiting(&s.id) {
-                    let (g, t) = cx.t.attention("waiting");
-                    (g.to_owned(), t)
-                } else if a.ui.failed_sessions.contains(&s.id) {
-                    let (g, t) = cx.t.attention("error");
-                    (g.to_owned(), t)
-                } else if a.is_busy(&s.id) && !cx.t.opts.reduced_motion {
-                    (cx.t.spinner(a.frame).to_owned(), PRIMARY)
+                let selected = a.current_project().as_deref() == Some(p.id.as_str());
+                let (running, latest) = rail_activity(a, &p.id);
+                let token = if running > 0 || (latest > 0.0 && now_secs() - latest < 3600.0) {
+                    SECONDARY
                 } else {
-                    (
-                        rail_initial(&s.title),
-                        if selected || a.ui.unread_sessions.contains(&s.id) {
-                            PRIMARY
-                        } else {
-                            MUTED
-                        },
-                    )
+                    MUTED
                 };
+                let glyph = labels[i].clone();
                 let mut style = cx.st(token, SIDEBAR);
                 if selected {
-                    style = style.add_modifier(Modifier::BOLD);
-                }
-                if focused && i == cursor {
-                    put(
-                        buf,
-                        band.x,
-                        band.y + 1,
-                        cx.t.structure("focus_bar"),
-                        cx.st("interactive.focus", SIDEBAR),
-                        1,
-                    );
+                    style = cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD);
                 }
                 (glyph, style, Target::SideRow(i))
             }
         };
         if hovered {
-            style = style.patch(cx.st(PRIMARY, SIDEBAR));
+            style = style.patch(cx.st(PRIMARY, RAISED));
         }
         if style.bg.is_some() && style.bg != cx.st(PRIMARY, SIDEBAR).bg {
-            let fill = Rect::new(
-                band.x + 1,
-                band.y,
-                band.width.saturating_sub(2),
-                band.height,
-            );
+            let fill = Rect::new(band.x, band.y, band.width, 4).intersection(r);
             clear(buf, fill, Style::default().bg(style.bg.unwrap_or_default()));
         }
-        put(buf, mid, band.y + 1, &glyph, style, 2);
+        let x = band.x + band.width.saturating_sub(1) / 2;
+        let glyph_width = (width(&glyph) as u16).min(band.right().saturating_sub(x + 1));
+        put(buf, x, band.y + 1, &glyph, style, glyph_width);
+        if let RailItem::Project(i) = item {
+            let id = &entries[i];
+            let selected = a.current_project().as_deref() == Some(id.as_str());
+            let bg = if selected || hovered { RAISED } else { SIDEBAR };
+            if selected || (focused && i == cursor) {
+                for y in band.y..(band.y + 4).min(r.bottom()) {
+                    put(
+                        buf,
+                        band.x,
+                        y,
+                        if cx.t.opts.ascii { "|" } else { "▏" },
+                        cx.st(PRIMARY, bg),
+                        1,
+                    );
+                }
+            }
+            let counts = rail_counts(a, id);
+            let tokens = [MULTI, "status.info", "status.success", PRIMARY];
+            let nonzero: Vec<_> = counts.iter().enumerate().filter(|(_, n)| **n > 0).collect();
+            let available = band.width.saturating_sub(1) as usize;
+            let gap = usize::from(nonzero.len().saturating_mul(2).saturating_sub(1) <= available);
+            let len = nonzero.len() + gap * nonzero.len().saturating_sub(1);
+            let start = band.x + 1 + available.saturating_sub(len) as u16 / 2;
+            for (position, (index, count)) in nonzero.iter().enumerate() {
+                put(
+                    buf,
+                    start + (position * (1 + gap)) as u16,
+                    band.y + 2,
+                    &rail_count(**count),
+                    cx.st(tokens[*index], bg),
+                    1,
+                );
+            }
+        }
         hits.add(band, target);
     }
 }
 
-/// The hovered rail session's title and place, drawn beside the rail over
+/// The hovered rail project's name and activity, drawn beside the rail over
 /// the centre column (after everything else, so it is on top).
 fn draw_rail_popup(cx: &Cx, buf: &mut Buffer, r: Rect, limit: Rect) {
     let a = cx.app;
-    let entries = a.side_entries();
-    let Some((RailItem::Session(i), band)) = rail_layout(cx, r)
-        .into_iter()
-        .find(|(item, band)| matches!(item, RailItem::Session(_)) && cx.hovered(*band))
-    else {
+    let entries = a.rail_project_ids();
+    let Some((RailItem::Project(i), band)) = rail_layout(cx, r).into_iter().find(|(item, band)| {
+        matches!(item, RailItem::Project(_))
+            && (cx.hovered(*band)
+                || (a.ui.focus == Focus::Sidebar
+                    && *item == RailItem::Project(a.cursor(Tab::Sessions))))
+    }) else {
         return;
     };
-    let Some(s) = entries
-        .get(i)
-        .and_then(|e| a.state.model.sessions.get(&e.id))
-    else {
+    let Some(p) = entries.get(i).and_then(|id| a.state.model.projects.get(id)) else {
         return;
     };
-    let title = if s.title.is_empty() {
-        "Untitled".to_owned()
-    } else {
-        s.title.clone()
-    };
-    let detail = session_place(cx, s);
+    let title = p.name.clone();
+    let counts = rail_counts(a, &p.id);
+    let details = [
+        format!("{} needs attention", counts[0]),
+        format!("{} finished (unread)", counts[1]),
+        format!("{} running", counts[2]),
+        format!("{} idle", counts[3]),
+    ];
     let max = limit.right().saturating_sub(r.right() + 1).min(60) as usize;
     if max < 10 {
         return;
     }
-    let w = (width(&title).max(width(&detail)) + 4).min(max) as u16;
-    let pop = Rect::new(r.right(), band.y, w, RAIL_ITEM + 1).intersection(limit);
+    let w = (width(&title).max(details.iter().map(|s| width(s)).max().unwrap_or(0)) + 4).min(max)
+        as u16;
+    let height = 7.min(limit.height);
+    let pop = Rect::new(
+        r.right(),
+        band.y.min(limit.bottom().saturating_sub(height)),
+        w,
+        height,
+    )
+    .intersection(limit);
     let bg = RAISED;
     clear(buf, pop, cx.st(PRIMARY, bg));
     put(
@@ -1684,34 +1799,21 @@ fn draw_rail_popup(cx: &Cx, buf: &mut Buffer, r: Rect, limit: Rect) {
         cx.st(PRIMARY, bg).add_modifier(Modifier::BOLD),
         w - 3,
     );
-    put(
-        buf,
-        pop.x + 2,
-        pop.y + 2,
-        &truncate(&detail, (w - 3) as usize, cx.ell()),
-        cx.st(MUTED, bg),
-        w - 3,
-    );
-}
-
-/// `project ⌥ branch` for a session row.
-fn session_place(cx: &Cx, s: &crate::api::Session) -> String {
-    let a = cx.app;
-    let project = a
-        .state
-        .model
-        .projects
-        .get(&s.project_id)
-        .map_or(s.project_id.as_str(), |p| p.name.as_str());
-    let branch = a
-        .session_worktree(s)
-        .and_then(|tree| tree["branch"].as_str())
-        .filter(|branch| !branch.is_empty());
-    let separator = if cx.t.opts.ascii { "~" } else { "⌥" };
-    branch.map_or_else(
-        || project.to_owned(),
-        |b| format!("{project} {separator} {b}"),
-    )
+    for (i, detail) in details
+        .iter()
+        .enumerate()
+        .take(pop.height.saturating_sub(2) as usize)
+    {
+        let token = [MULTI, "status.info", "status.success", PRIMARY][i];
+        put(
+            buf,
+            pop.x + 2,
+            pop.y + 2 + i as u16,
+            &truncate(detail, (w - 3) as usize, cx.ell()),
+            cx.st(token, bg),
+            w - 3,
+        );
+    }
 }
 
 fn draw_files(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitMap) {

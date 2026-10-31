@@ -2985,7 +2985,7 @@ fn the_row_menu_is_a_raised_popover_beside_the_row_and_delete_asks_to_confirm() 
 }
 
 #[test]
-fn the_rail_marks_the_open_session_with_the_selection_band() {
+fn the_rail_marks_the_open_project_with_the_selection_band() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.ui.left_width = 10;
     app.ui.left_rail = true;
@@ -2993,11 +2993,28 @@ fn the_rail_marks_the_open_session_with_the_selection_band() {
     let band = app
         .hits
         .rect_of(&Target::SideRow(0))
-        .expect("rail item for the open session");
+        .expect("rail item for the open project");
     assert_eq!(
-        Some(buf[(band.x + 1, band.y)].bg),
-        app.theme.bg("surface.sidebar").bg
+        Some(buf[(band.x + 1, band.y + 1)].bg),
+        app.theme.bg("surface.raised").bg
     );
+    app.mouse = Some((band.x + 2, band.y + 1));
+    let (buf, _) = draw(&mut app, 120, 36);
+    for y in band.y..=band.y + 3 {
+        assert_eq!(
+            Some(buf[(band.x + 1, y)].bg),
+            app.theme.bg("surface.raised").bg
+        );
+        assert_eq!(
+            Some(buf[(band.right() - 1, y)].bg),
+            app.theme.bg("surface.raised").bg
+        );
+        assert_eq!(buf[(band.x, y)].symbol(), "▏");
+        assert_eq!(
+            buf[(band.x, y)].fg,
+            app.theme.color("text.primary").unwrap()
+        );
+    }
 }
 
 // ---- DESIGN_PLAN I7: one modal recipe ----------------------------------
@@ -4092,4 +4109,152 @@ fn slash_sessions_opens_the_session_switcher() {
     press(&mut app, &["enter"]);
     assert!(app.ui.overlay.is_some(), "the switcher is open");
     assert!(app.composer_ref().text().is_empty());
+}
+
+#[test]
+fn project_rail_labels_activity_and_session_restoration() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let project_id = app.current_project().unwrap();
+    let mut project = app.state.model.projects[&project_id].clone();
+    app.state.model.projects.get_mut(&project_id).unwrap().name = "Nexus".into();
+    project.id = "second".into();
+    project.name = "Notes".into();
+    project.created += 1.0;
+    app.state.model.projects.insert(project.id.clone(), project);
+    app.ui.left_rail = true;
+    let (buf, _) = draw(&mut app, 120, 36);
+    let first = app.hits.rect_of(&Target::SideRow(0)).unwrap();
+    let second = app.hits.rect_of(&Target::SideRow(1)).unwrap();
+    let x = first.x + first.width.saturating_sub(1) / 2;
+    assert_eq!(buf[(x, first.y + 1)].symbol(), "N");
+    assert_eq!(buf[(x, second.y + 1)].symbol(), "N");
+    assert_eq!(buf[(x + 1, second.y + 1)].symbol(), "T");
+    assert_eq!(
+        buf[(x, second.y + 1)].fg,
+        app.theme.color("text.muted").unwrap()
+    );
+
+    click(&mut app, second.x + 2, second.y + 1);
+    assert_eq!(app.current_project().as_deref(), Some("second"));
+    assert_eq!(app.viewed_id(), None);
+    draw(&mut app, 120, 36);
+    click(&mut app, first.x + 2, first.y + 1);
+    assert_eq!(app.viewed_id(), Some(SESSION));
+
+    app.ui.focus = nexus_tui::ui::Focus::Sidebar;
+    app.ui.cursor.insert(nexus_tui::ui::Tab::Sessions, 0);
+    press(&mut app, &["down", "enter"]);
+    assert_eq!(app.current_project().as_deref(), Some("second"));
+    assert_eq!(app.viewed_id(), None);
+
+    let mut session = app.state.model.sessions[SESSION].clone();
+    session.id = "recent".into();
+    session.project_id = "second".into();
+    session.updated = nexus_tui::app::now_secs() - 1800.0;
+    app.state.model.sessions.insert(session.id.clone(), session);
+    app.ui.focus = nexus_tui::ui::Focus::Composer;
+    app.ui.project = Some(project_id);
+    let (buf, _) = draw(&mut app, 120, 36);
+    assert_eq!(
+        buf[(x, second.y + 1)].fg,
+        app.theme.color("text.secondary").unwrap()
+    );
+    app.state.model.sessions.get_mut("recent").unwrap().updated -= 3600.0;
+    let (buf, _) = draw(&mut app, 120, 36);
+    assert_eq!(
+        buf[(x, second.y + 1)].fg,
+        app.theme.color("text.muted").unwrap()
+    );
+}
+
+#[test]
+fn project_rail_counters_have_colors_overflow_and_hover_details() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    let template = app.state.model.sessions[SESSION].clone();
+    app.state.model.sessions.clear();
+    app.state.model.running.clear();
+    app.state.model.approvals.clear();
+    app.state.model.questions.clear();
+    app.ui.unread_sessions.clear();
+    for (kind, count) in [
+        ("attention", 10),
+        ("finished", 2),
+        ("running", 3),
+        ("idle", 4),
+    ] {
+        for n in 0..count {
+            let mut session = template.clone();
+            session.id = format!("{kind}-{n}");
+            session.parent_id = None;
+            session.archived = false;
+            match kind {
+                "attention" => {
+                    let approval = serde_json::from_value(
+                        serde_json::json!({"id": session.id, "session_id": session.id}),
+                    )
+                    .unwrap();
+                    app.state
+                        .model
+                        .approvals
+                        .insert(session.id.clone(), approval);
+                }
+                "finished" => {
+                    app.ui.unread_sessions.insert(session.id.clone());
+                }
+                "running" => {
+                    app.state
+                        .model
+                        .running
+                        .insert(session.id.clone(), "turn".into());
+                }
+                _ => {}
+            }
+            app.state.model.sessions.insert(session.id.clone(), session);
+        }
+    }
+    app.ui.left_rail = true;
+    let (buf, _) = draw(&mut app, 120, 50);
+    let band = app.hits.rect_of(&Target::SideRow(0)).unwrap();
+    let row: String = (band.x..band.right())
+        .map(|x| buf[(x, band.y + 2)].symbol())
+        .collect();
+    assert!(row.contains("*234"), "{row:?}");
+    let x = (band.x..band.right())
+        .find(|x| buf[(*x, band.y + 2)].symbol() == "*")
+        .unwrap();
+    for (offset, token) in [
+        "interactive.multi",
+        "status.info",
+        "status.success",
+        "text.primary",
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(
+            buf[(x + offset as u16, band.y + 2)].fg,
+            app.theme.color(token).unwrap()
+        );
+    }
+    app.mouse = Some((band.x + 2, band.y + 1));
+    let (buf, _) = draw(&mut app, 120, 50);
+    let screen: String = buf.content.iter().map(|cell| cell.symbol()).collect();
+    for label in [
+        "10 needs attention",
+        "2 finished (unread)",
+        "3 running",
+        "4 idle",
+    ] {
+        assert!(screen.contains(label), "missing {label}");
+    }
+    assert!(!screen.contains("means 10"));
+    let center = band.x + band.width.saturating_sub(1) / 2;
+    assert_eq!(
+        buf[(center, band.y + 1)].fg,
+        app.theme.color("text.primary").unwrap()
+    );
+    let (before_hover, _) = draw(&mut app, 120, 50);
+    let edge = before_hover[(band.right(), band.y)].bg;
+    assert_ne!(edge, before_hover[(band.right() - 1, band.y)].bg);
+    assert_ne!(edge, app.theme.color("surface.canvas").unwrap());
 }

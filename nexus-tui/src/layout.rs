@@ -20,8 +20,8 @@ pub const RIGHT_OPEN_FROM: u16 = 120;
 /// centred (D17); below it they are 28 / 30.
 pub const WIDE_FROM: u16 = 160;
 pub const MIN_CENTRE: u16 = 40;
-/// The collapsed left sidebar: one letter per session.
-pub const RAIL_WIDTH: u16 = 6;
+/// The collapsed left sidebar: initials per project.
+pub const RAIL_WIDTH: u16 = 8;
 /// The full left sidebar's drag bounds; a drag below `RAIL_SNAP` collapses it
 /// to the rail.
 pub const LEFT_MIN: u16 = 20;
@@ -224,7 +224,17 @@ impl Regions {
         );
 
         // Header: [ toggle ] [ title ............ ] [ bell ] [ toggle ]
-        let toggle_left = r(header.x, header.y, 3.min(header.width), header.height);
+        let toggle_width = if flags.left_rail && left.is_some() {
+            RAIL_WIDTH
+        } else {
+            3
+        };
+        let toggle_left = r(
+            header.x,
+            header.y,
+            toggle_width.min(header.width),
+            header.height,
+        );
         let toggle_right = r(
             header.x + header.width.saturating_sub(4),
             header.y,

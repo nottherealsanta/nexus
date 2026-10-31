@@ -30,9 +30,22 @@ switcher) and a scope icon (`▣` for the current project, `◎` for all project
 click to toggle without a notification). It shows an UPPERCASE project header, `⌥ branch  ~/…/dir`
 sub-groups for linked worktrees, and two-line rows (mark slot, title, time;
 `⌥ branch`, `2 ↳`) ending with `+ New session`; `Settings` is pinned at the bottom. Drag its inner edge to resize it (20–60 columns);
-dragging below 14 columns collapses it to a rail of one letter per session,
-with search on top and `+` below, and hovering a letter shows the session's
-title and place. Settings → Sidebar switches full / rail / hidden. The project
+dragging below 14 columns collapses it to a project rail, with search on top and
+`+` below. Projects stay in creation order and use uppercase initials; collisions
+use the next available consonant, then a numeric suffix. Running or recently
+active projects (within one hour) are lighter gray; inactive projects are darker.
+The rail aligns the sidebar toggle and every label's first character on its center
+column. Selection and hover fill the tile's full width, with padding above the
+label and below its counter row; the selected project has a thin white left border and white
+initials. The final edge column fades into the timeline in truecolor terminals. Tiles
+have a blank row between them. The counter row shows nonzero root-session counts
+in order: needs attention (purple), finished/unread (blue), running (green), idle
+(white). Archived sessions are excluded; subagents contribute to their root's
+state rather than counting twice. Counts above nine display `*`. Hovering or
+keyboard focus shows the full project name and exact counts with labels.
+Activating a project restores its last selected
+session in this client, falling back to its newest unarchived root session or an
+empty new-session view. Settings → Sidebar switches full / rail / hidden. The project
 strip under the card shows the project name (bold), its path (muted),
 `⌥ branch` and `checkout` (muted) or `worktree` (bold violet); `ctrl+p commands`
 sits muted at the right while idle. The card has no rail and no status band.

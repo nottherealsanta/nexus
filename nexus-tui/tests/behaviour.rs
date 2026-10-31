@@ -853,10 +853,7 @@ fn voice_settings_refresh_consent_remove_and_track_progress() {
     let (_, rows) = draw(&mut a, 120, 36);
     let frame = rows.join("\n");
     assert!(frame.contains("State: absent"), "{frame}");
-    assert!(
-        frame.contains("moondream/parakeet-redux"),
-        "{frame}"
-    );
+    assert!(frame.contains("moondream/parakeet-redux"), "{frame}");
     assert!(frame.contains("179 MB"), "{frame}");
 
     let remove_row = a
