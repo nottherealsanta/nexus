@@ -6,7 +6,8 @@
 //!
 //! ```json
 //! {"ui": {"left_width": 44, "left_rail": false, "left_open": true, "right_open": true},
-//!  "theme": {"mode": "dark", "monochrome": false, "animations": true}}
+//!  "theme": {"mode": "dark", "monochrome": false, "animations": true},
+//!  "notifications": {"sound": true}}
 //! ```
 //!
 //! Every field is optional. A missing, unreadable or corrupt file is ignored,
@@ -53,9 +54,18 @@ pub struct ThemePrefs {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct NotificationsPrefs {
+    /// Cues for a session finishing and for one that needs the user.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sound: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Prefs {
     pub ui: UiPrefs,
     pub theme: ThemePrefs,
+    pub notifications: NotificationsPrefs,
 }
 
 pub fn path(home: &Path) -> PathBuf {
@@ -113,6 +123,7 @@ pub fn merge_changes(stored: &mut Prefs, seen: &Prefs, now: &Prefs) {
     field!(theme.mode);
     field!(theme.monochrome);
     field!(theme.animations);
+    field!(notifications.sound);
 }
 
 /// Which display options the command line or environment already decided.
@@ -149,6 +160,7 @@ mod tests {
                 monochrome: Some(true),
                 animations: Some(false),
             },
+            notifications: NotificationsPrefs { sound: Some(false) },
         }
     }
 

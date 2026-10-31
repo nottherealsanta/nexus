@@ -274,7 +274,7 @@ impl ApiCall {
             } => "Allowed for this session",
             ApiCall::Reply { allow: true, .. } => "Allowed",
             ApiCall::Reply { .. } => "Denied",
-            ApiCall::Answer { .. } => "Answered",
+            ApiCall::Answer { .. } => "",
             ApiCall::SetModel { .. } => "Model changed from the next call",
             ApiCall::SetAgent { .. } => "Agent changed from the next call",
             ApiCall::SetEffort { .. } => "Effort changed from the next call",
@@ -314,6 +314,8 @@ pub struct ActionDone {
 pub struct Done {
     /// A session the app should open (new sessions).
     pub open: Option<String>,
+    /// The created session itself, so its tab can render before its event arrives.
+    pub session: Option<crate::api::Session>,
     /// Set when the write lost a revision race; the app reports it.
     pub conflict: Option<String>,
     /// A local file the action produced (exports), for the success toast.
@@ -569,6 +571,7 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             )?
             .ok_or("no session returned")?;
             done.open = Some(s.id.clone());
+            done.session = Some(s.clone());
             let key2 = RequestId::new();
             conflict(
                 api.prompt_images(&s.id, text, images, "send", &key2)
@@ -991,7 +994,7 @@ mod tests {
             id: "qst_1".into(),
             answers: answers.clone(),
         };
-        assert_eq!(call.done_label(), "Answered");
+        assert_eq!(call.done_label(), "");
         assert_eq!(call.draft(), None);
         let api = Http::new(&url, "tok").ok().map(CoreApi::new);
         let done = run(api, call).await;
@@ -1189,7 +1192,7 @@ mod tests {
                 let (status, body) = match path {
                     "/api/voice" => (
                         "200 OK",
-                        json!({"stt":{"state":"ready","repo":"org/stt","size":181_000_000}}),
+                        json!({"stt":{"state":"ready","repo":"org/stt","size":179_005_408}}),
                     ),
                     "/api/voice/stt/download" => ("202 Accepted", json!({"state":"downloading"})),
                     "/api/voice/transcribe?partial=1" => ("200 OK", json!({"text":"hello there"})),

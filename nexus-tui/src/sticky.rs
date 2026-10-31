@@ -34,27 +34,26 @@ pub struct Pin {
 }
 
 /// The pinned band for a viewport starting at line `offset`. `cards` are the
-/// open user bands as `(top, rows)`, in order: a padding row, the text rows and
-/// a padding row.
-pub fn select(cards: &[(usize, usize)], offset: usize, total: usize) -> Option<Pin> {
+/// open user bands as `(top, rows, text rows)`, in order: a padding row, the
+/// text rows, any preview rows and a padding row.
+pub fn select(cards: &[(usize, usize, usize)], offset: usize, total: usize) -> Option<Pin> {
     if offset >= total {
         return None;
     }
     // The first text row (top + 1) is the row that matters: once it is above the
     // viewport the real message is gone.
-    let card = cards.iter().rposition(|&(top, _)| top + 1 < offset)?;
-    let (top, height) = cards[card];
+    let card = cards.iter().rposition(|&(top, _, _)| top + 1 < offset)?;
+    let (top, height, body) = cards[card];
     // Never overlay a copy while the real band still occupies the viewport.
     if offset < top.saturating_add(height) {
         return None;
     }
-    let body = height.saturating_sub(2).max(1);
     let body_rows = body.min(MAX_ROWS);
     let rows = body_rows + 1;
     // The next band pushes the pin up as it arrives, then replaces it.
     let room = cards
         .get(card + 1)
-        .map_or(usize::MAX, |&(next, _)| next.saturating_sub(offset));
+        .map_or(usize::MAX, |&(next, _, _)| next.saturating_sub(offset));
     let shown = rows.min(room);
     if shown == 0 {
         return None;
@@ -118,7 +117,7 @@ pub fn shade(above: usize, cells: usize, ascii: bool) -> (String, String) {
 mod tests {
     use super::*;
 
-    const CARDS: [(usize, usize); 2] = [(0, 5), (20, 5)];
+    const CARDS: [(usize, usize, usize); 2] = [(0, 5, 3), (20, 5, 3)];
 
     #[test]
     fn nothing_is_pinned_at_the_top_or_while_the_band_is_on_screen() {
@@ -153,14 +152,14 @@ mod tests {
 
     #[test]
     fn long_messages_take_three_rows_and_end_in_an_ellipsis() {
-        assert_eq!(select(&[(0, 12)], 5, 30), None);
-        let pin = select(&[(0, 12)], 12, 30).unwrap();
+        assert_eq!(select(&[(0, 12, 10)], 5, 30), None);
+        let pin = select(&[(0, 12, 10)], 12, 30).unwrap();
         assert_eq!((pin.body, pin.rows, pin.clipped), (3, 4, true));
         assert_eq!(pin.last, 11, "the count starts after the whole band");
         let mut spans = vec![Span::raw(" "), Span::raw("▾"), Span::raw(" hello   ")];
         ellipsize(&mut spans, "…");
         assert_eq!(spans[2].content, " hell…   ");
-        let single = select(&[(0, 3)], 5, 30).unwrap();
+        let single = select(&[(0, 3, 1)], 5, 30).unwrap();
         assert_eq!((single.body, single.clipped), (1, false));
     }
 

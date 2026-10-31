@@ -71,7 +71,9 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
 - The waiting card is docked above the composer on the panel surface with a heavy accent
   rail: `◆ Allow bash?`, `waiting on you · 0:42`, the parameter table, the diff capped at
   12 rows and the choices as key chips on `surface.raised` (the selected row on the
-  selection band; a choice Core does not offer is muted with its reason). Toasts are
+  selection band; a choice Core does not offer is muted with its reason). A multi-select
+  question's card uses the violet `interactive.multi` rail and ticks; the review page (the
+  last page, listing every question and answer) uses the `text.primary` rail. Toasts are
   raised blocks top-right under the header (level `▌`, glyph, bold title, `×`, no
   lifetime hairline), three at a time with `+N more`; clicking one opens its full text in
   the modal. The banner is one row at the top of the page and pushes the timeline down;

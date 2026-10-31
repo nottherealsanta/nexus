@@ -43,6 +43,17 @@ pub enum Effect {
     /// An OS notification through the terminal (OSC 9 or 777) for a session
     /// that needs the user while it is out of view.
     Notify(String),
+    /// A notification cue: a session finished or needs the user.
+    Sound(Sound),
+}
+
+/// The two notification cues (Settings › Notifications › Notification sounds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sound {
+    /// Every session, including subagents, that finished its turn.
+    Finished,
+    /// A session waiting for an approval or an answer.
+    Input,
 }
 
 /// Terminal notifications (Settings › Notifications › Terminal notifications).
@@ -210,6 +221,8 @@ const MUTATING: &[&str] = &[
 
 const NOT_WIRED: &str = "Not available yet.";
 const READ_ONLY: &str = "Read-only until Core is connected again.";
+/// A second Ctrl+C this soon after the first quits the TUI.
+const CTRL_C_QUIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WaitKind {
@@ -217,47 +230,171 @@ pub enum WaitKind {
     Question,
 }
 
-/// Answers collected so far for the focused `ask` request. It belongs to one
-/// request id: another request (or none) starts from a blank draft.
+/// One question's in-progress answer. It survives page changes, so left/right
+/// can revisit a question and the review can show what was written.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AskPick {
+    /// Highlighted option.
+    pub cursor: usize,
+    /// Ticked option indices (multi-select) or the single picked option.
+    pub chosen: Vec<usize>,
+    /// Free text, saved when the page changes.
+    pub text: String,
+}
+
+/// Answers collected so far for one `ask` request.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AskDraft {
-    pub request: String,
-    /// Finished answers, in question order.
-    pub answers: Vec<Value>,
-    /// Highlighted option of the current question.
-    pub cursor: usize,
-    /// Ticked options of the current question (multi-select).
-    pub chosen: Vec<usize>,
+    /// One pick per question, in question order.
+    pub picks: Vec<AskPick>,
+    /// `0..questions.len()` is a question; `questions.len()` the review page.
+    pub page: usize,
     /// The reply is in flight; a second submit would only get a 409.
     pub sent: bool,
 }
 
-/// The question the card shows now: the next unanswered one of the focused request.
+/// The page the card shows now: a question, or the review when `review()`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AskCurrent {
     pub wait: WaitItem,
-    pub index: usize,
+    pub page: usize,
     pub total: usize,
-    pub question: Value,
-    pub draft: AskDraft,
+    pub questions: Vec<Value>,
+    pub picks: Vec<AskPick>,
+    pub sent: bool,
 }
 
 impl AskCurrent {
+    /// The last page: every question and the answer given to it.
+    pub fn review(&self) -> bool {
+        self.page >= self.total
+    }
+
+    pub fn question(&self) -> Option<&Value> {
+        self.questions.get(self.page)
+    }
+
+    pub fn pick(&self) -> Option<&AskPick> {
+        self.picks.get(self.page)
+    }
+
     pub fn options(&self) -> &[Value] {
-        self.question["options"]
-            .as_array()
-            .map_or(&[], Vec::as_slice)
+        self.question()
+            .and_then(|q| q["options"].as_array())
+            .map_or(&[] as &[Value], Vec::as_slice)
     }
 
     pub fn multiple(&self) -> bool {
-        self.question["multiple"].as_bool().unwrap_or(false)
+        self.question()
+            .is_some_and(|q| q["multiple"].as_bool().unwrap_or(false))
     }
 
     pub fn allows_text(&self) -> bool {
-        self.question["allow_free_text"]
-            .as_bool()
-            .unwrap_or(self.options().is_empty())
+        self.question().is_some_and(|q| {
+            q["allow_free_text"]
+                .as_bool()
+                .unwrap_or_else(|| q["options"].as_array().is_none_or(Vec::is_empty))
+        })
     }
+
+    /// The answer to question `i` as the review page shows it.
+    pub fn answer(&self, i: usize) -> Option<String> {
+        ask_pick_text(self.questions.get(i)?, self.picks.get(i)?)
+    }
+
+    /// The complete reply, in question order.
+    pub fn answers(&self) -> Vec<Value> {
+        ask_answers(&self.questions, &self.picks)
+    }
+}
+
+/// The complete reply for `questions`, in question order.
+fn ask_answers(questions: &[Value], picks: &[AskPick]) -> Vec<Value> {
+    questions
+        .iter()
+        .enumerate()
+        .map(|(i, q)| {
+            let pick = picks.get(i).cloned().unwrap_or_default();
+            let opts = q["options"]
+                .as_array()
+                .map_or(&[] as &[Value], Vec::as_slice);
+            let mut chosen: Vec<usize> = pick
+                .chosen
+                .iter()
+                .copied()
+                .filter(|i| *i < opts.len())
+                .collect();
+            chosen.sort_unstable();
+            chosen.dedup();
+            let selected: Vec<Value> = chosen.iter().map(|i| opts[*i]["id"].clone()).collect();
+            let allows = q["allow_free_text"].as_bool().unwrap_or(opts.is_empty());
+            let text = pick.text.trim();
+            json!({
+                "question_id": q["id"],
+                "selected": selected,
+                "text": if allows && !text.is_empty() {
+                    Value::from(text)
+                } else {
+                    Value::Null
+                },
+            })
+        })
+        .collect()
+}
+
+/// The selected option labels and free text of one answer, for the review.
+fn ask_pick_text(q: &Value, pick: &AskPick) -> Option<String> {
+    let opts = q["options"]
+        .as_array()
+        .map_or(&[] as &[Value], Vec::as_slice);
+    let mut parts: Vec<String> = pick
+        .chosen
+        .iter()
+        .filter_map(|i| opts.get(*i))
+        .filter_map(|o| o["label"].as_str())
+        .map(str::to_owned)
+        .collect();
+    let allows = q["allow_free_text"].as_bool().unwrap_or(opts.is_empty());
+    let text = pick.text.trim();
+    if allows && !text.is_empty() {
+        if parts.is_empty() {
+            parts.push(text.to_owned());
+        } else {
+            parts.push(format!("\"{text}\""));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+/// Why the answer to `q` is not ready to send, if it is not.
+fn ask_pick_problem(q: &Value, pick: &AskPick) -> Option<&'static str> {
+    let opts = q["options"]
+        .as_array()
+        .map_or(&[] as &[Value], Vec::as_slice);
+    let selected = pick.chosen.iter().filter(|i| **i < opts.len()).count();
+    let allows = q["allow_free_text"].as_bool().unwrap_or(opts.is_empty());
+    let text = allows && !pick.text.trim().is_empty();
+    if opts.is_empty() {
+        if !text {
+            return Some("Type the answer in the composer, then press enter");
+        }
+    } else if q["multiple"].as_bool().unwrap_or(false) {
+        if selected == 0 && !text {
+            return Some("Pick at least one option (space or a number)");
+        }
+    } else {
+        if selected > 1 {
+            return Some("This question takes one option");
+        }
+        if selected == 0 && !text {
+            return Some("Pick an option with up/down and enter, or type an answer");
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -282,6 +419,8 @@ pub struct SideEntry {
 #[derive(Debug, Clone)]
 pub enum SettingsItem {
     Heading(String),
+    /// Read-only text, such as a configuration problem. Not selectable.
+    Note(String),
     Row {
         row: Box<crate::manifest::Row>,
         /// The section's unavailable reason, which disables its rows.
@@ -519,6 +658,8 @@ pub struct Ui {
     pub unread_sessions: HashSet<String>,
     pub failed_sessions: HashSet<String>,
     pub notify: Notify,
+    /// The local notification cues; `notifications.sound` in `tui.json`.
+    pub sound: bool,
     pub view: View,
     pub pending_selected: Option<usize>,
     pub settings_row: usize,
@@ -561,7 +702,8 @@ pub struct Ui {
     pub wait_seen: HashMap<String, Instant>,
     /// The card and clock text last announced by `tick`.
     pub wait_shown: Option<(String, u64)>,
-    pub ask: AskDraft,
+    /// One draft per pending `ask` request, so parallel asks keep their answers.
+    pub asks: HashMap<String, AskDraft>,
     pub project: Option<String>,
     /// Content rows and viewport rows of the timeline at the last draw.
     pub timeline_total: usize,
@@ -626,8 +768,12 @@ pub struct App {
     pub timeline_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<crate::timeline::Timeline>)>>,
     /// Test/diagnostic counter for real timeline builds.
     pub timeline_builds: std::cell::Cell<u64>,
+    /// Terminal image protocol and the decoded states behind timeline previews.
+    pub image_viewer: std::cell::RefCell<crate::images::Viewer>,
     bindings: HashMap<(String, String), String>,
     shortcut_leader: Option<Instant>,
+    /// First Ctrl+C on an empty composer; a second within two seconds quits.
+    ctrl_c: Option<Instant>,
 }
 
 /// Subsequence match of `query` in `text`, preferring the tightest window,
@@ -742,6 +888,7 @@ impl App {
                 unread_sessions: HashSet::new(),
                 failed_sessions: HashSet::new(),
                 notify: Notify::default(),
+                sound: true,
                 view: View::Session,
                 pending_selected: None,
                 settings_row: 0,
@@ -773,7 +920,7 @@ impl App {
                 search: None,
                 wait_seen: HashMap::new(),
                 wait_shown: None,
-                ask: AskDraft::default(),
+                asks: HashMap::new(),
                 project: None,
                 timeline_total: 0,
                 timeline_height: 0,
@@ -809,8 +956,10 @@ impl App {
             timeline_revision: std::cell::Cell::new(0),
             timeline_cache: std::cell::RefCell::new(None),
             timeline_builds: std::cell::Cell::new(0),
+            image_viewer: std::cell::RefCell::new(crate::images::Viewer::default()),
             bindings,
             shortcut_leader: None,
+            ctrl_c: None,
         }
     }
 
@@ -1579,60 +1728,62 @@ impl App {
             .cloned()
     }
 
-    /// The focused wait's current question, when it is a question.
+    /// The focused wait's current page, when it is a question.
     pub fn ask_current(&self) -> Option<AskCurrent> {
         let wait = self
             .wait_focused()
             .filter(|w| w.kind == WaitKind::Question)?;
         let q = self.state.model.questions.get(&wait.id)?;
-        let draft = if self.ui.ask.request == wait.id {
-            self.ui.ask.clone()
-        } else {
-            AskDraft::default()
-        };
-        let index = draft.answers.len();
-        let question = q.questions.get(index)?.clone();
+        let total = q.questions.len();
+        let draft = self.ui.asks.get(&wait.id).cloned().unwrap_or_default();
+        let (mut picks, page, sent) = (draft.picks, draft.page, draft.sent);
+        picks.resize(total, AskPick::default());
         Some(AskCurrent {
-            index,
-            total: q.questions.len(),
-            question,
-            draft,
             wait,
+            page: page.min(total),
+            total,
+            questions: q.questions.clone(),
+            picks,
+            sent,
         })
     }
 
-    /// The draft of request `id`, started blank when it belonged to another.
-    fn ask_draft(&mut self, id: &str) -> &mut AskDraft {
-        if self.ui.ask.request != id {
-            self.ui.ask = AskDraft {
-                request: id.to_owned(),
-                ..AskDraft::default()
-            };
+    /// The draft of request `id`, started blank on first use.
+    fn ask_picks(&mut self, id: &str, total: usize) -> &mut AskDraft {
+        let draft = self.ui.asks.entry(id.to_owned()).or_default();
+        if draft.picks.len() != total {
+            draft.picks.resize(total, AskPick::default());
         }
-        &mut self.ui.ask
+        if draft.page > total {
+            draft.page = total;
+        }
+        draft
     }
 
-    /// Tick (multi-select) or choose option `i` of the current question.
+    /// Tick (multi-select) or choose option `i` of the current question. Enter
+    /// locks the answer and moves on; choosing alone never sends.
     pub fn ask_pick(&mut self, i: usize) {
         let Some(cur) = self.ask_current() else {
             return;
         };
-        if cur.draft.sent || i >= cur.options().len() {
+        if cur.sent || cur.review() || i >= cur.options().len() {
             return;
         }
         let multiple = cur.multiple();
-        let d = self.ask_draft(&cur.wait.id);
-        d.cursor = i;
+        let d = self.ask_picks(&cur.wait.id, cur.total);
+        let Some(pick) = d.picks.get_mut(cur.page) else {
+            return;
+        };
+        pick.cursor = i;
         if multiple {
-            match d.chosen.iter().position(|c| *c == i) {
+            match pick.chosen.iter().position(|c| *c == i) {
                 Some(at) => {
-                    d.chosen.remove(at);
+                    pick.chosen.remove(at);
                 }
-                None => d.chosen.push(i),
+                None => pick.chosen.push(i),
             }
         } else {
-            d.chosen = vec![i];
-            self.ask_confirm(false);
+            pick.chosen = vec![i];
         }
     }
 
@@ -1640,19 +1791,77 @@ impl App {
         let Some(cur) = self.ask_current() else {
             return;
         };
+        if cur.sent || cur.review() {
+            return;
+        }
         let last = cur.options().len().saturating_sub(1);
-        let d = self.ask_draft(&cur.wait.id);
-        d.cursor = if down {
-            (cur.draft.cursor + 1).min(last)
-        } else {
-            cur.draft.cursor.saturating_sub(1)
-        };
+        let cursor = cur.pick().map_or(0, |p| p.cursor);
+        let d = self.ask_picks(&cur.wait.id, cur.total);
+        if let Some(pick) = d.picks.get_mut(cur.page) {
+            pick.cursor = if down {
+                (cursor + 1).min(last)
+            } else {
+                cursor.saturating_sub(1)
+            };
+        }
     }
 
-    /// Finish the current question from the ticked or highlighted option and,
-    /// when the composer holds text and the question allows it, that text. The
-    /// last question sends the whole reply. `typed` is a composer Enter: the text
-    /// is the answer, so a question that takes no text says so instead.
+    /// Keep the composer's text with the current question before leaving it.
+    fn ask_stash(&mut self) {
+        let Some(cur) = self.ask_current() else {
+            return;
+        };
+        if cur.sent || cur.review() || !cur.allows_text() {
+            return;
+        }
+        let text = self.composer_ref().expanded_text();
+        let d = self.ask_picks(&cur.wait.id, cur.total);
+        if let Some(pick) = d.picks.get_mut(cur.page) {
+            pick.text = text;
+        }
+    }
+
+    /// Show the page's own text once the composer is free; an ordinary draft in
+    /// the composer is never overwritten.
+    fn ask_load(&mut self) {
+        let Some(cur) = self.ask_current() else {
+            return;
+        };
+        if cur.review() || !cur.allows_text() || !self.composer_ref().expanded_text().is_empty() {
+            return;
+        }
+        let text = cur.pick().map_or(String::new(), |p| p.text.clone());
+        self.composer().set_text(&text);
+    }
+
+    /// Move to the previous or next page: a question, or the review at the end.
+    fn ask_page(&mut self, forward: bool) {
+        let Some(cur) = self.ask_current() else {
+            return;
+        };
+        if cur.sent {
+            return;
+        }
+        let target = if forward {
+            (cur.page + 1).min(cur.total)
+        } else {
+            cur.page.saturating_sub(1)
+        };
+        if target == cur.page {
+            return;
+        }
+        self.ask_stash();
+        if !cur.review() && cur.allows_text() {
+            self.composer().clear();
+        }
+        self.ask_picks(&cur.wait.id, cur.total).page = target;
+        self.ask_load();
+    }
+
+    /// Enter on a question locks its answer and moves to the next page (the
+    /// review after the last one); Enter on the review sends the reply. `typed`
+    /// is a composer Enter: its text is the answer, so an option-only question
+    /// says so instead of silently using the text.
     pub fn ask_confirm(&mut self, typed: bool) {
         let Some(cur) = self.ask_current() else {
             return;
@@ -1660,71 +1869,112 @@ impl App {
         if !self.writable() {
             return self.toast(Level::Warning, READ_ONLY);
         }
-        if cur.draft.sent {
+        if cur.sent {
             return;
         }
-        let text = self.composer_ref().expanded_text().trim().to_owned();
-        let opts = cur.options().to_vec();
-        if typed && !text.is_empty() && !cur.allows_text() {
+        if cur.review() {
+            return self.ask_submit();
+        }
+        let text = self.composer_ref().expanded_text();
+        if typed && !text.trim().is_empty() && !cur.allows_text() {
             return self.toast(
                 Level::Info,
                 "This question takes an option: press its number, or use up/down and enter",
             );
         }
-        let use_text = !text.is_empty() && cur.allows_text();
-        let mut chosen = cur.draft.chosen.clone();
-        if !cur.multiple() && chosen.is_empty() && !opts.is_empty() && !use_text {
-            chosen = vec![cur.draft.cursor.min(opts.len() - 1)];
+        let opts = cur.options().to_vec();
+        let mut pick = cur.pick().cloned().unwrap_or_default();
+        if cur.allows_text() {
+            pick.text = text;
         }
-        if opts.is_empty() && !use_text {
-            return self.toast(
-                Level::Info,
-                "Type the answer in the composer, then press enter",
-            );
+        let use_text = cur.allows_text() && !pick.text.trim().is_empty();
+        if !cur.multiple() && pick.chosen.is_empty() && !opts.is_empty() && !use_text {
+            pick.chosen = vec![pick.cursor.min(opts.len() - 1)];
         }
-        if cur.multiple() && chosen.is_empty() && !use_text {
-            return self.toast(Level::Info, "Pick at least one option (number or space)");
+        let Some(q) = cur.question() else {
+            return;
+        };
+        if let Some(problem) = ask_pick_problem(q, &pick) {
+            return self.toast(Level::Info, problem);
         }
-        chosen.sort_unstable();
-        let selected: Vec<Value> = chosen
-            .iter()
-            .filter_map(|i| opts.get(*i).map(|o| o["id"].clone()))
-            .collect();
-        let answer = json!({
-            "question_id": cur.question["id"],
-            "selected": selected,
-            "text": if use_text { Value::from(text) } else { Value::Null },
+        let d = self.ask_picks(&cur.wait.id, cur.total);
+        if let Some(slot) = d.picks.get_mut(cur.page) {
+            *slot = pick;
+        }
+        d.page = cur.page + 1;
+        if cur.allows_text() {
+            self.composer().clear();
+        }
+        self.ask_load();
+    }
+
+    /// Send every answer. A page that is not ready is shown instead of the POST
+    /// being rejected by Core.
+    pub fn ask_submit(&mut self) {
+        let Some(cur) = self.ask_current() else {
+            return;
+        };
+        if !self.writable() {
+            return self.toast(Level::Warning, READ_ONLY);
+        }
+        if cur.sent {
+            return;
+        }
+        let mut picks = cur.picks.clone();
+        if !cur.review() && cur.allows_text() {
+            if let Some(pick) = picks.get_mut(cur.page) {
+                pick.text = self.composer_ref().expanded_text();
+            }
+        }
+        let problem = cur.questions.iter().enumerate().find_map(|(i, q)| {
+            picks
+                .get(i)
+                .and_then(|p| ask_pick_problem(q, p))
+                .map(|why| (i, why))
         });
-        if use_text {
-            self.composer().take();
+        if let Some((page, why)) = problem {
+            let d = self.ask_picks(&cur.wait.id, cur.total);
+            d.picks = picks;
+            d.page = page;
+            if !cur.review() && cur.allows_text() {
+                self.composer().clear();
+            }
+            self.ask_load();
+            return self.toast(Level::Info, why);
         }
-        let total = cur.total;
-        let (session, id) = (cur.wait.session_id.clone(), cur.wait.id.clone());
-        let d = self.ask_draft(&id);
-        d.answers.push(answer);
-        d.cursor = 0;
-        d.chosen.clear();
-        if d.answers.len() >= total {
-            d.sent = true;
-            let answers = d.answers.clone();
-            self.api(ApiCall::Answer {
-                session,
-                id,
-                answers,
-            });
+        let answers = ask_answers(&cur.questions, &picks);
+        let d = self.ask_picks(&cur.wait.id, cur.total);
+        d.picks = picks;
+        d.page = cur.total;
+        d.sent = true;
+        if !cur.review() && cur.allows_text() {
+            self.composer().clear();
         }
+        self.api(ApiCall::Answer {
+            session: cur.wait.session_id.clone(),
+            id: cur.wait.id.clone(),
+            answers,
+        });
     }
 
     fn ask_key(&mut self, ev: &KeyEvent, name: &str) {
         let Some(cur) = self.ask_current() else {
             return;
         };
+        if cur.sent {
+            return;
+        }
         let n_opts = cur.options().len();
         match name {
             "up" => self.ask_move(false),
             "down" => self.ask_move(true),
+            "left" => self.ask_page(false),
+            "right" => self.ask_page(true),
             "enter" => self.ask_confirm(false),
-            "space" if n_opts > 0 => self.ask_pick(cur.draft.cursor),
+            "space" if n_opts > 0 => {
+                let cursor = cur.pick().map_or(0, |p| p.cursor);
+                self.ask_pick(cursor);
+            }
             _ => {
                 let digit = name
                     .parse::<usize>()
@@ -1801,6 +2051,33 @@ impl App {
         }
     }
 
+    /// What the `/sessions` modal and Session panel show for a session:
+    /// `needs input`, `failed`, `running`, `finished`, `archived` or `idle`.
+    pub fn session_state(&self, id: &str) -> &'static str {
+        if self.session_waiting(id) {
+            return "needs input";
+        }
+        if self.ui.failed_sessions.contains(id) {
+            return "failed";
+        }
+        if self.is_busy(id) {
+            return "running";
+        }
+        if self
+            .state
+            .model
+            .sessions
+            .get(id)
+            .is_some_and(|s| s.archived)
+        {
+            return "archived";
+        }
+        if self.ui.unread_sessions.contains(id) {
+            return "finished";
+        }
+        "idle"
+    }
+
     pub fn session_waiting(&self, id: &str) -> bool {
         let m = &self.state.model;
         m.approvals
@@ -1847,6 +2124,14 @@ impl App {
             }
         }
         None
+    }
+
+    fn tree_busy(&self, root: &str) -> bool {
+        self.state
+            .model
+            .sessions
+            .keys()
+            .any(|id| self.is_busy(id) && self.root_session(id).as_deref() == Some(root))
     }
 
     pub fn session_worktree<'a>(&'a self, session: &Session) -> Option<&'a Value> {
@@ -4032,6 +4317,16 @@ impl App {
     }
 
     fn select_project(&mut self, id: &str) {
+        self.select_project_announcing(id, true);
+    }
+
+    /// Select without the "Project: name" toast: a startup or add selection
+    /// already has its own notice, or needs none.
+    fn select_project_quietly(&mut self, id: &str) {
+        self.select_project_announcing(id, false);
+    }
+
+    fn select_project_announcing(&mut self, id: &str, announce: bool) {
         self.ui.project = Some(id.to_owned());
         self.ui.cursor.insert(Tab::Sessions, 0);
         self.ui.drawer = None;
@@ -4041,17 +4336,32 @@ impl App {
             .push(Effect::Sync(SyncCommand::ProjectWorktrees(id.to_owned())));
         self.effects
             .push(Effect::Sync(SyncCommand::SkillMcp(id.to_owned())));
-        self.toast(
-            Level::Info,
-            format!(
-                "Project: {}",
-                self.state
-                    .model
-                    .projects
-                    .get(id)
-                    .map_or(id, |p| p.name.as_str())
-            ),
-        );
+        if announce {
+            self.toast(
+                Level::Info,
+                format!(
+                    "Project: {}",
+                    self.state
+                        .model
+                        .projects
+                        .get(id)
+                        .map_or(id, |p| p.name.as_str())
+                ),
+            );
+        }
+    }
+
+    /// The project already registered at `path`, if the snapshot has one.
+    fn project_at_path(&self, path: &str) -> Option<String> {
+        let resolve =
+            |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::PathBuf::from(p));
+        let target = resolve(path);
+        self.state
+            .model
+            .projects
+            .values()
+            .find(|project| resolve(&project.path) == target)
+            .map(|project| project.id.clone())
     }
 
     /// Collapse the selected folder, or move to its parent row in the tree.
@@ -4577,7 +4887,7 @@ impl App {
                     self.api(ApiCall::OlderMessages { session, before });
                 }
             }
-            "waiting.submit_answers" => self.ask_confirm(false),
+            "waiting.submit_answers" => self.ask_submit(),
             "waiting.next" => {
                 self.ui.wait_idx += 1;
                 self.ui.wait_choice = 0;
@@ -4851,6 +5161,11 @@ impl App {
         }
         let text = self.composer_ref().expanded_text();
         if text.trim().is_empty() && self.composer_ref().images.is_empty() {
+            // With a question waiting, Enter confirms the highlighted option
+            // (or says the answer needs text) instead of being a silent no-op.
+            if self.ask_current().is_some() {
+                return self.ask_confirm(true);
+            }
             return;
         }
         // `/name args` runs the command with that slash name.
@@ -5102,9 +5417,6 @@ impl App {
         {
             return self.completion_reply(project, session, query, limit, data);
         }
-        if let SyncMsg::Config(Err(error)) = &msg {
-            self.toast(Level::Warning, format!("Configuration: {error}"));
-        }
         if let SyncMsg::Config(Ok(config)) = &msg {
             if let Some(detail) = config["values"]["ui"]["detail"]
                 .as_str()
@@ -5116,19 +5428,6 @@ impl App {
                 let mut options = self.theme.opts;
                 options.reduced_motion = reduced;
                 self.theme = self.theme.with(options);
-            }
-            if let Some(errors) = config["errors"].as_array().filter(|e| !e.is_empty()) {
-                self.toast(
-                    Level::Warning,
-                    format!(
-                        "Configuration: {}",
-                        errors
-                            .iter()
-                            .filter_map(|e| e.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                );
             }
         }
         if let SyncMsg::Event(event) = &msg {
@@ -5221,12 +5520,30 @@ impl App {
         let turn_closed = matches!(&msg, SyncMsg::Event(e) if e.kind == "turn.summary");
         let catalog = matches!(&msg, SyncMsg::Catalog { .. });
         let file_read = matches!(&msg, SyncMsg::Files { file: true, .. });
+        let notice_event = match &msg {
+            SyncMsg::Event(event) => Some((event.kind.clone(), event.session_id.clone())),
+            _ => None,
+        };
+        let notice_root = notice_event
+            .as_ref()
+            .and_then(|(_, id)| id.as_deref())
+            .and_then(|id| self.root_session(id));
+        let was_busy = notice_root.as_deref().is_some_and(|id| self.tree_busy(id));
         self.state.apply(msg);
         // Launched from a directory: open it as a project (Core reuses one at the same path).
         if snapshot {
             if let Some(path) = self.ui.launch_dir.take() {
-                self.ui.launch_new = true;
-                self.api(ApiCall::AddProject { path });
+                match self.project_at_path(&path) {
+                    // Already registered: open it silently, with no add call or toast.
+                    Some(id) => {
+                        self.select_project_quietly(&id);
+                        self.show_new_session();
+                    }
+                    None => {
+                        self.ui.launch_new = true;
+                        self.api(ApiCall::AddProject { path });
+                    }
+                }
             }
         }
         if file_read {
@@ -5254,6 +5571,19 @@ impl App {
             self.open_palette(PaletteMode::Models);
         }
         if self.state.events_applied > applied_before {
+            if self.ui.sound {
+                if let Some((kind, _)) = &notice_event {
+                    if notice_root
+                        .as_deref()
+                        .is_some_and(|id| was_busy && !self.tree_busy(id))
+                    {
+                        self.effects.push(Effect::Sound(Sound::Finished));
+                    }
+                    if matches!(kind.as_str(), "permission.asked" | "question.asked") {
+                        self.effects.push(Effect::Sound(Sound::Input));
+                    }
+                }
+            }
             if let Some((kind, data)) = global_event {
                 match kind.as_str() {
                     "skills.changed" => {
@@ -5668,21 +5998,41 @@ impl App {
                     self.effects
                         .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
                 }
+                if let Some(mut session) = r.session {
+                    // The create reply is authoritative: keep the tab from the start instead of
+                    // showing the new-session screen until the session's event arrives.
+                    let old = self.state.model.sessions.get(&session.id);
+                    if !old.is_some_and(|o| session.revision < o.revision) {
+                        if session.status.is_none() {
+                            session.status = old
+                                .and_then(|o| o.status.clone())
+                                .or_else(|| Some("idle".into()));
+                        }
+                        self.state
+                            .model
+                            .sessions
+                            .insert(session.id.clone(), session);
+                    }
+                }
                 if let Some(id) = r.open {
                     // events for the new session may not have arrived yet
                     self.open_session(&id);
                 }
                 if let Some(id) = r.project {
-                    self.select_project(&id);
+                    // The success toast already says "Project added".
+                    self.select_project_quietly(&id);
                     if std::mem::take(&mut self.ui.launch_new) {
                         self.show_new_session();
                     }
                 }
             }
             Err(e) => {
-                if matches!(done.call, ApiCall::Answer { .. }) {
-                    // the question still waits: start the answers over
-                    self.ui.ask = AskDraft::default();
+                if let ApiCall::Answer { id, .. } = &done.call {
+                    // The question still waits: keep the picks so the review can
+                    // be revisited instead of asking everything again.
+                    if let Some(draft) = self.ui.asks.get_mut(id) {
+                        draft.sent = false;
+                    }
                 }
                 if let Some((session, text)) = done.call.draft() {
                     let (session, text) = (session.map(str::to_owned), text.to_owned());
@@ -6666,6 +7016,9 @@ impl App {
 
     fn handle_key_inner(&mut self, ev: KeyEvent) {
         let Some(name) = keys::name(&ev) else { return };
+        if name != "ctrl+c" {
+            self.ctrl_c = None;
+        }
         if self.ui.dialog.is_none() && self.ui.dictation.phase != crate::dictation::Phase::Idle {
             use crate::dictation::Phase;
             let capturing = matches!(self.ui.dictation.phase, Phase::Starting | Phase::Recording);
@@ -6723,19 +7076,32 @@ impl App {
                 return;
             }
             "ctrl+z" => return self.effects.push(Effect::Suspend),
-            "ctrl+c"
-                if self.ui.focus == Focus::Composer
+            "ctrl+c" => {
+                let composer = self.ui.focus == Focus::Composer
                     && self.ui.overlay.is_none()
                     && self.ui.dialog.is_none()
-                    && self.ui.edit.is_none()
-                    && self.composer_ref().selection().is_some() =>
-            {
-                if let Some(text) = self.composer_ref().selected_text() {
-                    self.effects.push(Effect::Copy(text));
+                    && self.ui.edit.is_none();
+                if composer && self.composer_ref().selection().is_some() {
+                    if let Some(text) = self.composer_ref().selected_text() {
+                        self.effects.push(Effect::Copy(text));
+                    }
+                    return;
                 }
-                return;
+                if composer && !self.composer_ref().is_empty() {
+                    self.composer().clear_to_history();
+                    self.ctrl_c = Some(self.clock);
+                    return;
+                }
+                let again = self.ctrl_c.is_some_and(|at| {
+                    self.clock.saturating_duration_since(at) <= CTRL_C_QUIT_WINDOW
+                });
+                if again {
+                    self.ctrl_c = None;
+                    return self.effects.push(Effect::Quit);
+                }
+                self.ctrl_c = Some(self.clock);
+                self.toast(Level::Info, "Press Ctrl+C again to quit");
             }
-            "ctrl+c" => return self.effects.push(Effect::Quit),
             _ => {}
         }
         if self.blocking().is_some() {
@@ -6925,11 +7291,11 @@ impl App {
             _ => {}
         }
         if self.ui.focus == Focus::Composer
-            && matches!(name.as_str(), "up" | "down")
             && self.composer_ref().expanded_text().is_empty()
-            && self
-                .ask_current()
-                .is_some_and(|c| !c.options().is_empty() && !c.draft.sent)
+            && self.ask_current().is_some_and(|c| !c.sent)
+            && (matches!(name.as_str(), "left" | "right")
+                || (matches!(name.as_str(), "up" | "down")
+                    && self.ask_current().is_some_and(|c| !c.options().is_empty())))
         {
             self.ui.focus = Focus::Waiting;
             return self.ask_key(&ev, &name);
@@ -8034,10 +8400,21 @@ impl App {
     }
 
     fn waiting_key(&mut self, ev: &KeyEvent, name: &str) {
+        let question = self.ask_current().is_some();
         if let Some(cmd) = self.lookup("waiting", name) {
-            return self.run_command(&cmd);
+            // An approval's letter keys must not eat a question's typing.
+            let approval_only = matches!(
+                cmd.as_str(),
+                "waiting.allow_once"
+                    | "waiting.allow_session"
+                    | "waiting.deny"
+                    | "waiting.deny_note"
+            );
+            if !(question && approval_only) {
+                return self.run_command(&cmd);
+            }
         }
-        if self.ask_current().is_some() && !matches!(name, "left" | "right") {
+        if question {
             return self.ask_key(ev, name);
         }
         if self
@@ -8077,6 +8454,28 @@ impl App {
         let query = self.ui.settings_search.text().to_lowercase();
         let query = query.trim();
         let mut out = Vec::new();
+        // Configuration problems belong where Core's other state is explained,
+        // not in a transient toast on every launch.
+        let problems: Vec<String> = self
+            .state
+            .config_error
+            .iter()
+            .cloned()
+            .chain(
+                self.state
+                    .config
+                    .as_ref()
+                    .and_then(|config| config["errors"].as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|error| error.as_str().map(str::to_owned)),
+            )
+            .filter(|error| query.is_empty() || error.to_lowercase().contains(query))
+            .collect();
+        if !problems.is_empty() {
+            out.push(SettingsItem::Heading("Configuration".into()));
+            out.extend(problems.into_iter().map(SettingsItem::Note));
+        }
         for section in self.manifest.settings_for_tui() {
             let section_hit = section.label.to_lowercase().contains(query);
             if section.page {
@@ -8203,6 +8602,7 @@ impl App {
                 | "appearance.theme"
                 | "appearance.monochrome"
                 | "appearance.animations"
+                | "notifications.sound"
                 | "notifications.terminal"
                 | "appearance.sidebar"
                 | "appearance.details"
@@ -8368,6 +8768,7 @@ impl App {
                 let now = modes.iter().position(|m| *m == self.ui.notify).unwrap_or(1) as isize;
                 self.ui.notify = modes[(now + step).rem_euclid(3) as usize];
             }
+            "notifications.sound" => self.ui.sound = !self.ui.sound,
             "mcp.full_definitions" => {
                 if let Some(config) = &self.state.config {
                     if let Some(revision) = config["revision"].as_str() {
@@ -8496,6 +8897,7 @@ impl App {
             | "agents.default_root"
             | "tools.default_permission"
             | "appearance.sidebar"
+            | "notifications.sound"
             | "notifications.terminal"
             | "appearance.timeline_detail" => self.settings_change_row(row, 1),
             "mcp.full_definitions" | "mcp.max_listed_tools" | "context.handoff_percent" => {
@@ -9202,7 +9604,7 @@ impl App {
     // ---- preferences ----------------------------------------------------------------------------
 
     fn prefs_now(&self) -> crate::prefs::Prefs {
-        use crate::prefs::{Prefs, ThemePrefs, UiPrefs};
+        use crate::prefs::{NotificationsPrefs, Prefs, ThemePrefs, UiPrefs};
         Prefs {
             ui: UiPrefs {
                 left_width: Some(self.ui.left_width),
@@ -9221,6 +9623,9 @@ impl App {
                 ),
                 monochrome: Some(self.theme.opts.tier == Tier::Mono),
                 animations: Some(!self.theme.opts.reduced_motion),
+            },
+            notifications: NotificationsPrefs {
+                sound: Some(self.ui.sound),
             },
         }
     }
@@ -9254,6 +9659,9 @@ impl App {
             .and_then(crate::ui::Detail::from_label)
         {
             self.ui.detail = d;
+        }
+        if let Some(sound) = prefs.notifications.sound {
+            self.ui.sound = sound;
         }
         let mut options = self.theme.opts;
         if !over.mode {
@@ -9313,7 +9721,12 @@ impl App {
                     && contains(self.regions.timeline, ev.column, ev.row)
                     && matches!(
                         self.hits.at(ev.column, ev.row),
-                        Some(Target::Timeline | Target::Block(_) | Target::ContextSection(_))
+                        Some(
+                            Target::Timeline
+                                | Target::Block(_)
+                                | Target::BandToggle(_)
+                                | Target::ContextSection(_)
+                        )
                     )
                 {
                     if let Some(screen) = self.timeline_screen.clone() {
@@ -9657,19 +10070,24 @@ impl App {
             Target::Block(i) => {
                 self.select_block(i);
                 // A click expands a clipped reply but never folds an open one,
-                // so selecting text in it doesn't collapse it; Enter still folds.
-                let open_reply = self.ui.timeline_blocks.get(i).is_some_and(|b| {
-                    b.kind == crate::timeline::BlockKind::Assistant
-                        && self
-                            .ui
+                // and a user band folds only from its left edge. Enter still
+                // folds either.
+                let kind = self.ui.timeline_blocks.get(i).map(|b| b.kind);
+                let open_reply = kind == Some(crate::timeline::BlockKind::Assistant)
+                    && self.ui.timeline_blocks.get(i).is_some_and(|b| {
+                        self.ui
                             .timeline_open
                             .get(&b.key)
                             .copied()
                             .unwrap_or_else(|| self.block_default_open(b))
-                });
-                if !open_reply {
+                    });
+                if kind != Some(crate::timeline::BlockKind::Turn) && !open_reply {
                     self.activate_block();
                 }
+            }
+            Target::BandToggle(i) => {
+                self.select_block(i);
+                self.activate_block();
             }
             Target::CopyBlock(i) => {
                 self.select_block(i);
@@ -10135,7 +10553,7 @@ fn voice_action_spec(id: &str) -> Option<(VoiceTarget, VoiceOperation)> {
 
 fn voice_defaults(target: VoiceTarget) -> (&'static str, u64) {
     match target {
-        VoiceTarget::Stt => ("ConwayResearch/Underdog-Bark-3.0-Clean", 181_000_000),
+        VoiceTarget::Stt => ("moondream/parakeet-redux", 179_005_408),
         VoiceTarget::Tts => ("gradium/phonon-31m-en", 65_000_000),
     }
 }

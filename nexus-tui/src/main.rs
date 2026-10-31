@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyEvent, KeyEventKind};
 use nexus_tui::actions::{self, ActionDone};
 use nexus_tui::api::{Event as ApiEvent, History, Message, Snapshot};
-use nexus_tui::app::{App, Effect};
+use nexus_tui::app::{App, Effect, Sound};
 use nexus_tui::discovery;
 use nexus_tui::frames::{self, Applied};
 use nexus_tui::keys;
@@ -315,6 +315,12 @@ impl Interactive {
                     let _ = out.flush();
                 }
                 Effect::Notify(text) => term::notify(&text),
+                Effect::Sound(sound) => {
+                    nexus_tui::dictation::play_notification_cue(match sound {
+                        Sound::Finished => "complete",
+                        Sound::Input => "input",
+                    });
+                }
                 Effect::OpenUrl(url) => {
                     let (cmd, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
                         ("open", &[])
@@ -464,6 +470,11 @@ async fn run(
     let size = terminal.size()?;
     let mut app = App::new(AppState::new(), Theme::new(opts), (size.width, size.height));
     app.apply_prefs(&home, prefs::load(&home), over);
+    // Query graphics support after entering the alternate screen but before
+    // the input thread starts, so the terminal's replies are not eaten.
+    let picker = ratatui_image::picker::Picker::from_query_stdio()
+        .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((10, 20)));
+    app.image_viewer.borrow_mut().set_picker(picker);
     // The launcher runs cargo from the repo, so it passes the directory you started in.
     app.ui.launch_dir = std::env::var("NEXUS_TUI_LAUNCH_DIR")
         .ok()

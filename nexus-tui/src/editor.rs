@@ -589,13 +589,28 @@ impl Editor {
             self.anchor = None;
         }
     }
-    /// Ctrl+C on a non-empty draft: empty it, keeping one undo step to bring it back.
+    /// Empty the draft, keeping one undo step to bring it back.
     pub fn clear(&mut self) {
         self.checkpoint();
         self.text.clear();
         self.pastes.clear();
         self.cursor = 0;
         self.anchor = None;
+    }
+    /// Ctrl+C clearing a draft: empty it, keep one undo step, and put the
+    /// cleared text in recall history so Up brings it back.
+    pub fn clear_to_history(&mut self) {
+        let text = self.expanded();
+        self.clear();
+        self.remember(text);
+    }
+    fn remember(&mut self, text: String) {
+        self.history.push(text);
+        if self.history.len() > 500 {
+            self.history.remove(0);
+        }
+        self.history_index = self.history.len();
+        self.history_scratch = None;
     }
     pub fn take(&mut self) -> String {
         let text = self.expanded();
@@ -605,12 +620,7 @@ impl Editor {
         self.anchor = None;
         self.undo.clear();
         self.redo.clear();
-        self.history.push(text.clone());
-        if self.history.len() > 500 {
-            self.history.remove(0);
-        }
-        self.history_index = self.history.len();
-        self.history_scratch = None;
+        self.remember(text.clone());
         text
     }
     pub fn set_history(&mut self, mut entries: Vec<String>) {
@@ -654,6 +664,15 @@ mod tests {
         assert!(e.text.is_empty() && e.cursor == 0);
         e.undo();
         assert_eq!(e.text, "half a thought");
+    }
+    #[test]
+    fn clear_to_history_keeps_the_cleared_text_for_recall() {
+        let mut e = Editor::default();
+        e.paste("one\ntwo\nthree");
+        e.clear_to_history();
+        assert!(e.text.is_empty() && e.cursor == 0);
+        e.history(true);
+        assert_eq!(e.text, "one\ntwo\nthree");
     }
     #[test]
     fn visual_wrap_keeps_words_and_source_whitespace() {

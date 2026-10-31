@@ -95,6 +95,8 @@ pub struct Timeline {
     pub turns: usize,
     /// Keys of the activity groups that are live (running or waiting) now.
     pub live_groups: Vec<String>,
+    /// Image previews drawn over blank lines reserved in the user band.
+    pub previews: Vec<crate::images::Preview>,
 }
 
 /// Frames a finished group's glyph flashes the accent (DESIGN_PLAN.md D06).
@@ -474,6 +476,7 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
         fingerprint: theme_fingerprint(t),
         out: Vec::new(),
         blocks: Vec::new(),
+        previews: Vec::new(),
         turn: None,
         denied: HashSet::new(),
         live_groups: Vec::new(),
@@ -485,6 +488,7 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
         blocks: b.blocks,
         turns: b.turn.map_or(0, |n| n + 1),
         live_groups: b.live_groups,
+        previews: b.previews,
     }
 }
 
@@ -498,6 +502,7 @@ struct Builder<'a> {
     fingerprint: u64,
     out: Vec<Rc<TLine>>,
     blocks: Vec<Block>,
+    previews: Vec<crate::images::Preview>,
     turn: Option<usize>,
     denied: HashSet<String>,
     live_groups: Vec<String>,
@@ -863,6 +868,33 @@ impl Builder<'_> {
     fn selected(&self) -> bool {
         self.app.ui.focus == crate::ui::Focus::Timeline
             && self.app.ui.timeline_sel == Some(self.blocks.len())
+    }
+
+    /// A user-text row with its `[Image X]` attachment markers lifted.
+    fn marker_spans(&self, row: &str, base: Style, markers: &[String]) -> Vec<Span<'static>> {
+        let marker = self
+            .st(ACCENT, "surface.raised")
+            .add_modifier(Modifier::BOLD);
+        let mut spans = Vec::new();
+        let mut rest = row;
+        loop {
+            let hit = markers
+                .iter()
+                .filter_map(|m| rest.find(m.as_str()).map(|at| (at, m)))
+                .min_by_key(|(at, _)| *at);
+            let Some((at, m)) = hit else {
+                if !rest.is_empty() {
+                    spans.push(Span::styled(rest.to_owned(), base));
+                }
+                break;
+            };
+            if at > 0 {
+                spans.push(Span::styled(rest[..at].to_owned(), base));
+            }
+            spans.push(Span::styled(m.clone(), marker));
+            rest = &rest[at + m.len()..];
+        }
+        spans
     }
 
     fn line(&mut self, spans: Vec<Span<'static>>) {
@@ -1282,7 +1314,7 @@ impl Builder<'_> {
                                         busy,
                                         false,
                                     );
-                                    self.assistant_block(&format!("{}-{pi}", m.id), &text, false);
+                                    self.assistant_block(&format!("{}-{pi}", m.id), &text);
                                 }
                             }
                             "reasoning" => {
@@ -1385,27 +1417,33 @@ impl Builder<'_> {
         // Live stream of the current step.
         if let Some(s) = self.app.state.model.streaming.get(&view.session_id) {
             if !s.text.is_empty() {
+                let block_start = self.blocks.len();
                 self.block(
                     "streaming-text",
                     BlockKind::Assistant,
                     self.turn,
                     false,
                     |b| {
+                        let start = b.out.len();
                         let full = b.bw;
                         b.bw = full.saturating_sub(ASSISTANT_INDENT).max(1);
-                        for row in b.wrap_text(&s.text, b.bw) {
-                            if row.is_empty() {
-                                b.line(Vec::new());
-                            } else {
-                                b.line(vec![
-                                    Span::raw(" ".repeat(ASSISTANT_INDENT)),
-                                    Span::styled(row, b.primary()),
-                                ]);
+                        b.streaming_markdown(&s.text, "streaming-text");
+                        b.bw = full;
+                        for line in &mut b.out[start..] {
+                            let line = Rc::make_mut(line);
+                            if !line.spans.is_empty() {
+                                line.spans
+                                    .insert(0, Span::raw(" ".repeat(ASSISTANT_INDENT)));
                             }
                         }
-                        b.bw = full;
                     },
                 );
+                // The Markdown body pushed its code blocks first; keep the
+                // message before them, as `assistant_block` does.
+                if self.blocks.len() > block_start {
+                    let live = self.blocks.pop().unwrap();
+                    self.blocks.insert(block_start, live);
+                }
             }
         }
         // Trim trailing blanks.
@@ -1787,6 +1825,12 @@ impl Builder<'_> {
         } else {
             band_meta(&tags, n, clock.as_deref(), &sep)
         };
+        let image_markers: Vec<String> = message
+            .parts
+            .iter()
+            .filter(|part| part["type"] == "image")
+            .map(|part| format!("[{}]", part["name"].as_str().unwrap_or("image")))
+            .collect();
         self.block(key, BlockKind::Turn, Some(n), true, |b| {
             let pad = || TLine {
                 spans: vec![Span::styled(" ", bg)],
@@ -1813,11 +1857,9 @@ impl Builder<'_> {
             }
             for (i, row) in rows.iter().enumerate() {
                 // The band carries no fold marker; the text keeps its 2-cell inset.
-                let mut spans = vec![
-                    Span::styled(" ", bg),
-                    Span::styled(" ", gutter),
-                    Span::styled(format!(" {row}"), bg),
-                ];
+                let mut spans = vec![Span::styled(" ", bg), Span::styled(" ", gutter)];
+                spans.push(Span::styled(" ", bg));
+                spans.extend(b.marker_spans(row, bg, &image_markers));
                 if i == 0 && meta_width + 3 < b.bw {
                     let padding = b.bw.saturating_sub(3 + width(row) + meta_width).max(1);
                     spans.push(Span::styled(" ".repeat(padding), bg));
@@ -1833,22 +1875,37 @@ impl Builder<'_> {
                 }));
             }
             if !folded {
-                for image in message.parts.iter().filter(|p| p["type"] == "image") {
-                    let name = image["name"].as_str().unwrap_or("image");
-                    b.out.push(Rc::new(TLine {
-                        spans: vec![
-                            Span::styled("   ", bg),
-                            Span::styled(
-                                format!("Image | {name} "),
-                                b.st(PRIMARY, "surface.panel"),
-                            ),
-                        ],
-                        bg: Some(bg),
-                        rail: Some(rail),
-                        focus: false,
-                        context_section: None,
-                        context_items: Vec::new(),
-                    }));
+                // Reserve blank band rows for the previews; the image protocol
+                // draws over them once the block has been laid out.
+                for (index, image) in message
+                    .parts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, part)| part["type"] == "image")
+                {
+                    let data_url = image["data_url"].as_str().unwrap_or_default();
+                    let Some((width, rows)) = crate::images::preview_size(data_url, available)
+                    else {
+                        continue;
+                    };
+                    let start = b.out.len();
+                    for _ in 0..rows {
+                        b.out.push(Rc::new(TLine {
+                            spans: Vec::new(),
+                            bg: Some(bg),
+                            rail: Some(rail),
+                            focus: false,
+                            context_section: None,
+                            context_items: Vec::new(),
+                        }));
+                    }
+                    b.previews.push(crate::images::Preview {
+                        start,
+                        width,
+                        rows,
+                        key: format!("{}:{index}", message.id),
+                        data_url: data_url.to_owned(),
+                    });
                 }
             }
             b.out.push(Rc::new(pad()));
@@ -2260,7 +2317,7 @@ impl Builder<'_> {
         self.notice_row(format!("notice:{}", m.id), &label, text.to_owned());
     }
 
-    fn assistant_block(&mut self, key: &str, text: &str, streaming: bool) {
+    fn assistant_block(&mut self, key: &str, text: &str) {
         let k = format!("assistant:{key}");
         let open = self.is_open(&k, true);
         let body = if open {
@@ -2270,7 +2327,6 @@ impl Builder<'_> {
             let n = text.lines().count().saturating_sub(4);
             format!("{}\n{} {n} more lines", head.join("\n"), self.ell())
         };
-        let _ = streaming;
         let block_start = self.blocks.len();
         self.block(k.clone(), BlockKind::Assistant, self.turn, true, |b| {
             let start = b.out.len();
@@ -2355,7 +2411,7 @@ impl Builder<'_> {
         if running {
             self.live_groups.push(key.clone());
         }
-        // A finished group folds to its verb summary. While it runs, medium
+        // A finished group folds to its count summary. While it runs, medium
         // detail keeps the newest five members visible (D06); high detail opens
         // every member, and low keeps a single `Working` row.
         let detail = self.app.ui.detail;
@@ -2371,17 +2427,16 @@ impl Builder<'_> {
             || (running && detail != crate::ui::Detail::Low);
         let open = has_wait || self.is_open(&key, default_open);
         let clip_live = running && !has_wait && detail != crate::ui::Detail::High && !explicit;
-        // Verb labels in first-seen order, with their counts.
+        // Nouns in first-seen order, with their counts.
         let mut order: Vec<&str> = Vec::new();
         let mut counts = std::collections::BTreeMap::<&str, usize>::new();
-        let mut unknown = std::collections::BTreeSet::<&str>::new();
         let mut denied_count = 0;
         let mut edit_files = std::collections::BTreeSet::<String>::new();
         let (mut added, mut removed, mut edits) = (0usize, 0usize, false);
         for item in activity.iter() {
-            let label = match item {
-                Activity::Thought(_, _, _) => "Thought",
-                Activity::StreamingThought(_) => "Thought",
+            let noun = match item {
+                Activity::Thought(_, _, _) => "thought",
+                Activity::StreamingThought(_) => "thought",
                 Activity::Tool { id, name, args } => {
                     let failure = results.get(id).is_some_and(|d| d.is_error)
                         || traces.get(id).is_some_and(|t| t.failed);
@@ -2401,54 +2456,44 @@ impl Builder<'_> {
                         edit_files.insert(path);
                     }
                     match name.as_str() {
-                        "bash" => "Ran command",
-                        "read" => "Read file",
-                        "edit" | "patch" | "write" => "Edited file",
-                        "code" => "Ran cell",
-                        "ask" => "Asked question",
-                        "web_search" => "Searched time",
-                        "web_fetch" => "Fetched page",
-                        "session" => "Started session",
-                        _ => {
-                            unknown.insert(name.as_str());
-                            "Used tool"
-                        }
+                        "bash" => "command",
+                        "read" => "read",
+                        "edit" | "patch" | "write" => "edit",
+                        "code" => "cell",
+                        "ask" => "question",
+                        "web_search" => "search",
+                        "web_fetch" => "page",
+                        "session" => "session",
+                        _ => "tool",
                     }
                 }
             };
-            if !counts.contains_key(label) {
-                order.push(label);
+            if !counts.contains_key(noun) {
+                order.push(noun);
             }
-            *counts.entry(label).or_default() += 1;
+            *counts.entry(noun).or_default() += 1;
         }
         let summary = if running {
             "Working".to_owned()
         } else {
             order
                 .iter()
-                .map(|label| {
-                    let count = if *label == "Edited file" {
+                .map(|noun| {
+                    let count = if *noun == "edit" {
                         edit_files.len().max(1)
                     } else {
-                        counts[label]
+                        counts[*noun]
                     };
-                    if *label == "Thought" {
-                        return "Thought".to_owned();
-                    }
-                    if *label == "Used tool" && unknown.len() == 1 {
-                        return format!("Used {}", unknown.iter().next().unwrap());
-                    }
-                    let (verb, noun) = label.rsplit_once(' ').unwrap_or((label, ""));
-                    format!("{verb} {count} {noun}{}", if count == 1 { "" } else { "s" })
-                })
-                .enumerate()
-                // `Read 2 files, ran 1 command`: only the first verb is capitalised.
-                .map(|(i, piece)| {
-                    let mut chars = piece.chars();
-                    match chars.next() {
-                        Some(c) if i > 0 => c.to_lowercase().collect::<String>() + chars.as_str(),
-                        _ => piece,
-                    }
+                    // `3 thoughts, 50 commands, 8 tools, 9 reads`; a `search`
+                    // takes `es`.
+                    let suffix = if count == 1 {
+                        ""
+                    } else if *noun == "search" {
+                        "es"
+                    } else {
+                        "s"
+                    };
+                    format!("{count} {noun}{suffix}")
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -2503,15 +2548,6 @@ impl Builder<'_> {
                     true,
                     b.meta(),
                     b.primary(),
-                ));
-            } else if !running && order == ["Edited file"] {
-                // `Edited 7 files`: the count in white.
-                let n = edit_files.len().max(1);
-                left.push(Span::styled("Edited ", b.meta()));
-                left.push(Span::styled(n.to_string(), b.primary()));
-                left.push(Span::styled(
-                    if n == 1 { " file" } else { " files" },
-                    b.meta(),
                 ));
             } else {
                 left.push(Span::styled(
@@ -3303,15 +3339,29 @@ impl Builder<'_> {
     fn diagnostic(&mut self, key: &str, e: &crate::api::Event) -> bool {
         let d = &e.data;
         let (text, detail, level) = match e.kind.as_str() {
-            "session.error" => (
-                format!(
-                    "{}: {}",
-                    d["kind"].as_str().unwrap_or("error"),
-                    d["message"].as_str().unwrap_or("")
-                ),
-                d["status"].as_i64().map(|s| format!("HTTP {s}")),
-                "error",
-            ),
+            "session.error" => {
+                let kind = d["kind"].as_str().unwrap_or("error");
+                let message = d["message"].as_str().unwrap_or("");
+                if kind == "interrupted" {
+                    // Stopping a turn is the user's choice, not a failure: show
+                    // it in the interrupted (warning) colour, not error red.
+                    (
+                        if message.is_empty() {
+                            "interrupted".to_owned()
+                        } else {
+                            message.to_owned()
+                        },
+                        None,
+                        "warning",
+                    )
+                } else {
+                    (
+                        format!("{kind}: {message}"),
+                        d["status"].as_i64().map(|s| format!("HTTP {s}")),
+                        "error",
+                    )
+                }
+            }
             "retry_scheduled" => (
                 match d["max_attempts"].as_u64() {
                     Some(max) => format!(
@@ -3423,6 +3473,16 @@ impl Builder<'_> {
     // -- markdown-lite ----------------------------------------------------------
 
     fn markdown(&mut self, text: &str, parent_key: &str, full_text: &str) {
+        self.markdown_body(text, parent_key, full_text, true);
+    }
+
+    /// Markdown for text still arriving. Every delta is a new body, so caching
+    /// each frame would only churn the layout cache and evict finished rows.
+    fn streaming_markdown(&mut self, text: &str, parent_key: &str) {
+        self.markdown_body(text, parent_key, text, false);
+    }
+
+    fn markdown_body(&mut self, text: &str, parent_key: &str, full_text: &str, cache: bool) {
         let palette = crate::markdown::Palette::from_theme(self.t);
         let key = MarkdownKey {
             text: hash_str(text),
@@ -3432,24 +3492,26 @@ impl Builder<'_> {
             width: self.bw,
             palette: self.fingerprint,
         };
-        if let Some(hit) = self.app.layout.borrow_mut().markdown(key) {
-            let base = self.out.len();
-            self.out.extend(hit.lines.iter().cloned());
-            for fence in hit.fences {
-                self.blocks.push(Block {
-                    key: format!("code:{parent_key}:{}", fence.index),
-                    kind: BlockKind::Code,
-                    start: base + fence.start,
-                    end: base + fence.end,
-                    turn: self.turn,
-                    focusable: true,
-                    toggle: false,
-                    default_open: None,
-                    target: Some(fence.source),
-                    clipped: false,
-                });
+        if cache {
+            if let Some(hit) = self.app.layout.borrow_mut().markdown(key) {
+                let base = self.out.len();
+                self.out.extend(hit.lines.iter().cloned());
+                for fence in hit.fences {
+                    self.blocks.push(Block {
+                        key: format!("code:{parent_key}:{}", fence.index),
+                        kind: BlockKind::Code,
+                        start: base + fence.start,
+                        end: base + fence.end,
+                        turn: self.turn,
+                        focusable: true,
+                        toggle: false,
+                        default_open: None,
+                        target: Some(fence.source),
+                        clipped: false,
+                    });
+                }
+                return;
             }
-            return;
         }
         let start = self.out.len();
         let blocks_start = self.blocks.len();
@@ -3509,7 +3571,7 @@ impl Builder<'_> {
                 });
             }
         }
-        if self.out.len() > start {
+        if cache && self.out.len() > start {
             let entry =
                 CachedMarkdown::capture(&self.out[start..], &self.blocks[blocks_start..], start);
             self.app.layout.borrow_mut().put_markdown(key, entry);
@@ -3662,25 +3724,8 @@ impl Builder<'_> {
 fn parts_text(m: &crate::api::Message) -> String {
     m.parts
         .iter()
-        .enumerate()
-        .filter(|(i, p)| {
-            if p["type"] != "text" {
-                return false;
-            }
-            let image_index = m.parts[..*i]
-                .iter()
-                .filter(|part| part["type"] == "image")
-                .count();
-            let marker = format!(
-                "[Image {}]",
-                char::from(b'A'.saturating_add(image_index as u8))
-            );
-            !(m.parts
-                .get(i + 1)
-                .is_some_and(|next| next["type"] == "image")
-                && p["text"].as_str() == Some(marker.as_str()))
-        })
-        .map(|(_, p)| p["text"].as_str().unwrap_or(""))
+        .filter(|p| p["type"] == "text")
+        .map(|p| p["text"].as_str().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
 }

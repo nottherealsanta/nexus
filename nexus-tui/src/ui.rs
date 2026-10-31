@@ -54,7 +54,7 @@ impl Tab {
 /// How much of the agent's activity the timeline shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Detail {
-    /// One line per activity group (`Ran 1 command, Read 2 files`).
+    /// One line per activity group (`3 thoughts, 50 commands, 8 tools, 9 reads`).
     Low,
     /// Finished groups fold to their summary; a live group shows its newest
     /// members as a tree.
@@ -523,6 +523,8 @@ pub enum Target {
     },
     /// One timeline block, by index in the last built timeline.
     Block(usize),
+    /// The left edge of a user band: fold or unfold it.
+    BandToggle(usize),
     CopyBlock(usize),
     /// The pinned copy of a user band (sticky header): scrolls back to the band, by block index.
     StickyUser(usize),

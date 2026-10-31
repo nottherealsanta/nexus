@@ -829,8 +829,8 @@ fn voice_settings_refresh_consent_remove_and_track_progress() {
         result: Ok(Done {
             voice: Some(serde_json::json!({
                 "stt": {
-                    "state": "absent", "repo": "ConwayResearch/Underdog-Bark-3.0-Clean",
-                    "revision": "main", "size": 181_000_000, "cache_path": null, "error": null
+                    "state": "absent", "repo": "moondream/parakeet-redux",
+                    "revision": "main", "size": 179_005_408, "cache_path": null, "error": null
                 },
                 "tts": {
                     "state": "absent", "repo": "gradium/phonon-31m-en",
@@ -854,10 +854,10 @@ fn voice_settings_refresh_consent_remove_and_track_progress() {
     let frame = rows.join("\n");
     assert!(frame.contains("State: absent"), "{frame}");
     assert!(
-        frame.contains("ConwayResearch/Underdog-Bark-3.0-Clean"),
+        frame.contains("moondream/parakeet-redux"),
         "{frame}"
     );
-    assert!(frame.contains("181 MB"), "{frame}");
+    assert!(frame.contains("179 MB"), "{frame}");
 
     let remove_row = a
         .settings_items()
@@ -874,7 +874,7 @@ fn voice_settings_refresh_consent_remove_and_track_progress() {
     let dialog = a.ui.dialog.as_ref().expect("download asks before consent");
     assert_eq!(dialog.button, 0, "Cancel is the default selection");
     let consent = dialog.body.join(" ");
-    assert!(consent.contains("181 MB"));
+    assert!(consent.contains("179 MB"));
     assert!(consent.contains("from Hugging Face into the standard cache"));
     press(&mut a, &["enter"]);
     assert!(a.ui.dialog.is_none());
@@ -920,7 +920,7 @@ fn voice_settings_refresh_consent_remove_and_track_progress() {
         call: refresh,
         result: Ok(Done {
             voice: Some(serde_json::json!({
-                "stt": {"state":"downloading","repo":"ConwayResearch/Underdog-Bark-3.0-Clean","size":181_000_000},
+                "stt": {"state":"downloading","repo":"moondream/parakeet-redux","size":179_005_408},
                 "tts": {
                     "state":"runtime_missing", "repo":"gradium/phonon-31m-en",
                     "size":65_000_000, "cache_path":"/cache/models--gradium--phonon-31m-en",
@@ -1312,8 +1312,8 @@ fn absent_stt_status_requires_repository_and_size_consent() {
             voice: Some(serde_json::json!({
                 "stt": {
                     "state": "absent",
-                    "repo": "ConwayResearch/Underdog-Bark-3.0-Clean",
-                    "size": 181_000_000
+                    "repo": "moondream/parakeet-redux",
+                    "size": 179_005_408
                 }
             })),
             ..Done::default()
@@ -1322,8 +1322,8 @@ fn absent_stt_status_requires_repository_and_size_consent() {
     assert_eq!(a.ui.dictation.phase, Phase::Consent);
     let dialog = a.ui.dialog.as_ref().unwrap();
     let body = dialog.body.join(" ");
-    assert!(body.contains("ConwayResearch/Underdog-Bark-3.0-Clean"));
-    assert!(body.contains("181 MB"));
+    assert!(body.contains("moondream/parakeet-redux"));
+    assert!(body.contains("179 MB"));
     assert!(a.effects.is_empty(), "the model download waits for consent");
 
     press(&mut a, &["right", "enter"]);
@@ -1345,7 +1345,7 @@ fn stt_ready_progress_wins_a_race_with_the_status_request() {
         "cursor": format!("{log_generation}:100000"),
         "type": "voice.progress",
         "time": 1.0,
-        "data": {"model":"stt", "state":"ready", "bytes_done":181_000_000, "bytes_total":181_000_000}
+        "data": {"model":"stt", "state":"ready", "bytes_done":179_005_408, "bytes_total":179_005_408}
     });
     let Frame::Event(event) = Frame::from_value("voice.progress", None, &event).unwrap() else {
         panic!("expected a durable voice progress event");
@@ -1643,6 +1643,46 @@ fn sent_draft_history_restores_the_unsent_draft() {
 }
 
 #[test]
+fn ctrl_c_clears_the_draft_and_up_recalls_it() {
+    let mut a = app();
+    a.handle_paste("one\ntwo\nthree");
+    press(&mut a, &["ctrl+c"]);
+    assert!(a.composer_ref().is_empty());
+    assert!(!a.effects.iter().any(|e| matches!(e, Effect::Quit)));
+    press(&mut a, &["up"]);
+    assert_eq!(a.composer_ref().expanded_text(), "one\ntwo\nthree");
+    assert!(!a.effects.iter().any(|e| matches!(e, Effect::Quit)));
+}
+
+#[test]
+fn ctrl_c_twice_quits_within_the_window() {
+    let mut a = app();
+    press(&mut a, &["ctrl+c"]);
+    assert!(!a.effects.iter().any(|e| matches!(e, Effect::Quit)));
+    assert!(a
+        .ui
+        .alerts
+        .toasts
+        .iter()
+        .any(|toast| toast.text == "Press Ctrl+C again to quit"));
+    press(&mut a, &["ctrl+c"]);
+    assert!(a.effects.iter().any(|e| matches!(e, Effect::Quit)));
+
+    // Clearing a draft is the first press; the next one quits.
+    let mut a = app();
+    typing(&mut a, "draft");
+    press(&mut a, &["ctrl+c", "ctrl+c"]);
+    assert!(a.effects.iter().any(|e| matches!(e, Effect::Quit)));
+
+    // A slow second press only arms the quit again.
+    let mut a = app();
+    press(&mut a, &["ctrl+c"]);
+    a.clock += std::time::Duration::from_secs(3);
+    press(&mut a, &["ctrl+c"]);
+    assert!(!a.effects.iter().any(|e| matches!(e, Effect::Quit)));
+}
+
+#[test]
 fn mouse_drag_selects_composer_text_for_copy() {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     let mut a = app();
@@ -1755,6 +1795,7 @@ fn feed(a: &mut nexus_tui::app::App, id: u64, kind: &str, session: &str, data: &
 #[test]
 fn terminal_notifications_fire_only_for_sessions_out_of_view() {
     let mut a = app(); // viewing SESSION
+    a.ui.sound = false; // this test is about terminal notifications
     feed(
         &mut a,
         17,
@@ -1841,6 +1882,8 @@ fn terminal_notifications_setting_has_its_default_and_cycles() {
     assert_eq!(Notify::Waiting.label(), "waiting only");
     assert_eq!(Notify::All.label(), "waiting, done and errors");
     assert!(App::settings_wired("notifications.terminal"));
+    assert!(App::settings_wired("notifications.sound"));
+    assert!(app().ui.sound, "notification sounds are on by default");
 }
 
 #[test]
@@ -1872,6 +1915,38 @@ fn agent_and_model_chosen_before_a_session_exists_go_into_its_creation() {
             if fields["agent"] == "plan" && fields["model"] == "codex/gpt-5"
     )));
     assert_eq!(a.ui.draft, Default::default(), "the draft is spent");
+}
+
+#[test]
+fn a_created_session_has_its_tab_before_its_event_arrives() {
+    let mut a = app();
+    a.state.model.select(None);
+    let session: nexus_tui::api::Session = serde_json::from_value(serde_json::json!({
+        "id": "ses_new",
+        "project_id": "prj_1a17de160d3c070dfda",
+        "directory": "/work/nexus-home/ws",
+        "title": "New session",
+        "agent": "build",
+        "created": 1793113284.8440971,
+        "updated": 1793113284.8440971,
+        "revision": 1
+    }))
+    .unwrap();
+    a.apply_done(ActionDone {
+        call: ApiCall::NewAndPrompt {
+            project: "prj_1a17de160d3c070dfda".into(),
+            text: "hello".into(),
+            images: vec![],
+            fields: serde_json::json!({}),
+        },
+        result: Ok(Done {
+            open: Some("ses_new".into()),
+            session: Some(session),
+            ..Done::default()
+        }),
+    });
+    assert!(a.tab_ids().iter().any(|id| id == "ses_new"));
+    assert_eq!(a.viewed_root().as_deref(), Some("ses_new"));
 }
 
 #[test]
@@ -2350,4 +2425,221 @@ fn the_draft_shows_the_model_core_will_create_the_session_with() {
     assert_eq!(a.effective_model(None), "codex/configured");
     assert_eq!(a.current_agent(), "plan");
     assert_eq!(a.current_effort(), "high");
+}
+
+#[test]
+fn only_the_finished_root_tree_and_every_wait_play_their_cue() {
+    fn event(id: i64, kind: &str, session: &str, data: serde_json::Value) -> SyncMsg {
+        let v = serde_json::json!({"id": id, "type": kind, "session_id": session,
+            "cursor": format!("log_c915bfc9b6d826c4:{id}"), "data": data});
+        SyncMsg::Event(match Frame::from_value(kind, None, &v) {
+            Ok(Frame::Event(e)) => e,
+            other => panic!("{other:?}"),
+        })
+    }
+    fn cues(a: &App) -> Vec<nexus_tui::app::Sound> {
+        a.effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Sound(sound) => Some(*sound),
+                _ => None,
+            })
+            .collect()
+    }
+    let mut a = app();
+    let mut child = a.state.model.sessions[SESSION].clone();
+    child.id = "ses_child".into();
+    child.parent_id = Some(SESSION.into());
+    child.title = "Child".into();
+    child.status = Some("idle".into());
+    a.state.model.sessions.insert(child.id.clone(), child);
+    a.effects.clear();
+
+    // The root's own turn can end while a subagent keeps it busy: no cue yet.
+    a.apply_sync(event(
+        100,
+        "session.status",
+        SESSION,
+        serde_json::json!(
+        {"status": "busy", "turn_id": "trn_root"}),
+    ));
+    a.effects.clear();
+    a.apply_sync(event(
+        101,
+        "session.status",
+        SESSION,
+        serde_json::json!(
+        {"status": "busy", "turn_id": "trn_root", "turn_finished": true}),
+    ));
+    assert!(
+        cues(&a).is_empty(),
+        "a running child keeps the root over open"
+    );
+
+    // A subagent finishing while the root is busy must be silent.
+    a.apply_sync(event(
+        102,
+        "session.status",
+        "ses_child",
+        serde_json::json!(
+        {"status": "busy", "turn_id": "trn_child"}),
+    ));
+    a.effects.clear();
+    a.apply_sync(event(
+        103,
+        "session.status",
+        "ses_child",
+        serde_json::json!(
+        {"status": "idle", "turn_id": "trn_child"}),
+    ));
+    assert!(cues(&a).is_empty());
+
+    // Then the whole root session is over.
+    a.effects.clear();
+    a.apply_sync(event(
+        104,
+        "session.status",
+        SESSION,
+        serde_json::json!({"status": "idle"}),
+    ));
+    assert_eq!(cues(&a), vec![nexus_tui::app::Sound::Finished]);
+
+    // Even if the root reports idle first, wait for every descendant.
+    let mut grandchild = a.state.model.sessions["ses_child"].clone();
+    grandchild.id = "ses_grandchild".into();
+    grandchild.parent_id = Some("ses_child".into());
+    grandchild.status = Some("busy".into());
+    a.state
+        .model
+        .sessions
+        .insert(grandchild.id.clone(), grandchild);
+    a.state.model.sessions.get_mut("ses_child").unwrap().status = Some("busy".into());
+    a.effects.clear();
+    a.apply_sync(event(
+        105,
+        "session.status",
+        "ses_child",
+        serde_json::json!({"status": "idle"}),
+    ));
+    assert!(
+        cues(&a).is_empty(),
+        "a running grandchild prevents completion"
+    );
+    a.apply_sync(event(
+        106,
+        "session.status",
+        "ses_grandchild",
+        serde_json::json!({"status": "idle"}),
+    ));
+    assert_eq!(cues(&a), vec![nexus_tui::app::Sound::Finished]);
+
+    // A wait in either session asks for the user with the other cue.
+    a.effects.clear();
+    a.apply_sync(event(
+        107,
+        "permission.asked",
+        "ses_child",
+        serde_json::json!(
+        {"id": "per_1", "session_id": "ses_child", "tool": "bash"}),
+    ));
+    assert_eq!(cues(&a), vec![nexus_tui::app::Sound::Input]);
+    assert_eq!(a.session_state(SESSION), "needs input");
+
+    // The Settings toggle silences both cues.
+    a.ui.sound = false;
+    a.effects.clear();
+    a.apply_sync(event(
+        108,
+        "question.asked",
+        "ses_child",
+        serde_json::json!(
+        {"id": "qst_1", "session_id": "ses_child", "questions": []}),
+    ));
+    assert!(cues(&a).is_empty());
+}
+
+#[test]
+fn launching_in_a_registered_project_selects_it_without_adding_or_toasting() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    a.effects.clear();
+    a.ui.alerts.toasts.clear();
+    a.ui.launch_dir = Some("/work/nexus-home/ws".into());
+    a.apply_sync(SyncMsg::Snapshot {
+        snapshot: Box::new(snapshot()),
+        cause: nexus_tui::sync::ResyncCause::Initial,
+    });
+    assert_eq!(
+        a.current_project().as_deref(),
+        Some("prj_1a17de160d3c070dfda")
+    );
+    assert!(
+        !a.effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Api(ApiCall::AddProject { .. }))),
+        "{:?}",
+        a.effects
+    );
+    assert!(a.ui.alerts.toasts.is_empty(), "{:?}", a.ui.alerts.toasts);
+}
+
+#[test]
+fn launching_in_a_new_directory_adds_the_project_with_one_toast() {
+    let path = std::env::temp_dir()
+        .join(format!("nexus-tui-new-project-{}", std::process::id()))
+        .to_string_lossy()
+        .into_owned();
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    a.effects.clear();
+    a.ui.alerts.toasts.clear();
+    a.ui.launch_dir = Some(path.clone());
+    a.apply_sync(SyncMsg::Snapshot {
+        snapshot: Box::new(snapshot()),
+        cause: nexus_tui::sync::ResyncCause::Initial,
+    });
+    let call = a
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Api(call @ ApiCall::AddProject { path: found }) if found == &path => {
+                Some(call.clone())
+            }
+            _ => None,
+        })
+        .expect("a new directory is added");
+    a.apply_done(ActionDone {
+        call,
+        result: Ok(Done {
+            project: Some("prj_new".into()),
+            ..Done::default()
+        }),
+    });
+    let texts: Vec<&str> =
+        a.ui.alerts
+            .toasts
+            .iter()
+            .map(|toast| toast.text.as_str())
+            .collect();
+    assert_eq!(texts, ["Project added"]);
+}
+
+#[test]
+fn configuration_problems_are_listed_in_settings_instead_of_toasted() {
+    let mut a = app();
+    a.ui.alerts.toasts.clear();
+    a.apply_sync(SyncMsg::Config(Ok(serde_json::json!({
+        "revision": "cfg-1",
+        "values": {"ui": {"detail": "medium", "reduced_motion": false}},
+        "errors": ["defaults.model: unknown setting"]
+    }))));
+    assert!(a.ui.alerts.toasts.is_empty(), "{:?}", a.ui.alerts.toasts);
+    a.execute("app.settings");
+    assert!(a.settings_items().iter().any(
+        |item| matches!(item, SettingsItem::Note(text) if text == "defaults.model: unknown setting")
+    ));
+    let (_, rows) = draw(&mut a, 120, 36);
+    assert!(
+        rows.join("\n").contains("defaults.model: unknown setting"),
+        "{}",
+        rows.join("\n")
+    );
 }

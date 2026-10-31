@@ -42,8 +42,9 @@ control row, the bottom edge and the strip. The control row sheds effort, then
 the provider, then the meter as the column narrows; while busy its right side
 reads `esc stop` instead of the meter. The focus bar at the card's left edge is
 drawn only in ANSI-16 and mono. Pending inputs appear in a padded card above the
-composer, marked `Q` for queued messages or `S` for steers; a held queue is
-marked `Q held`.
+composer; their text starts where the input starts, with a highlighted `Q` for a
+queued message or `S` for a steer one cell to its left. A held queue says `held`
+after the message.
 The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`): the viewed tab is bold on the page surface, the others muted on the band, a child session shows `root › child` with clickable earlier crumbs. `alt+d`
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high
@@ -165,7 +166,10 @@ pickers, session export and a directory change are wired.
 
 ### Markdown and diffs (DESIGN_PLAN.md D08, D09)
 
-`markdown.rs` draws assistant text. Headings are bold: H1 and H2 in
+`markdown.rs` draws assistant text, including the live scratch while it
+streams: formatting appears as the deltas arrive, and an unclosed fence draws
+as a code block until its closing line lands. These streaming frames are not
+cached (every delta is a new body); the durable message is. Headings are bold: H1 and H2 in
 `text.primary` (H1 with a muted `─` underline as wide as its text), H3 and
 below in `text.secondary`. Inline code is `text.primary` on `surface.panel`,
 padded by one space, never accent. A fence has no background, framed as in old Nexus: a `╭─ language` header and a `╰─`
@@ -216,8 +220,10 @@ asking first when dirty; Esc leaves a clean editor and asks before dropping chan
 `files.changed` reloads a clean editor and warns a dirty one. Opening another session or a Git
 diff is refused while the text is unsaved.
 
-**K5-K11 client parts.** The session switcher (`ctrl+k`) also lists sessions whose user messages
-match (Core's `/api/search`) after the title matches, with the snippet in the hint column. A
+**K5-K11 client parts.** The session switcher (`ctrl+k`) marks each session with the same status
+glyph as its tab (running spinner, attention/error dot or idle dot) beside the age, and also
+lists sessions whose user messages match (Core's `/api/search`) after the title matches, with
+the snippet in the hint column. A
 session opens with its newest 200 messages; Enter on `older messages are not loaded` (or the
 palette's Load older turns) reads the page before the oldest. A running session loads every older page on its own, and pages already read stay cached across snapshot resyncs. The approval card offers `y` allow
 once, `a` allow for the session, `n` deny, `d` deny with the composer's text as the note.
@@ -247,7 +253,9 @@ terminal notification (OSC 9, or OSC 777 in foot, kitty, Ghostty and WezTerm),
 only while it is out of view. Settings › Notifications › Terminal notifications
 sets off, waiting only (the default) or waiting, done and errors (a finished
 turn or a failed session too). Terminal focus is not tracked, so a session in
-view never notifies.
+view never notifies. Settings › Notifications › Notification sounds (on by
+default) plays a rising cue when a root session and all its subagents have finished, and
+a higher cue when one needs input; `NEXUS_COMPLETION_SOUNDS=off` silences both.
 
 The right sidebar (D12) has SESSION, CONTEXT and GIT sections: UPPERCASE bold muted
 labels, a 9-cell key column and values truncated in the middle. CONTEXT shows the
@@ -265,14 +273,15 @@ untracked contents. Esc returns to the timeline.
 Timeline rhythm (DESIGN_PLAN.md D04-D07): the user message is a band across the
 whole page width on the raised surface (rail `▌` at its edge, muted or the focus
 colour, the fold marker inside, `#n · time` at the right, `copy` on hover or
-focus). When its text has scrolled off the top, `sticky.rs` pins a copy under
+focus; only its left edge folds it, and a click on the text just selects). When
+its text has scrolled off the top, `sticky.rs` pins a copy under
 the header (three rows at most, a `░` shade row with `↑ N lines of this turn
 above`); the next band pushes it up and a click scrolls back. The turn footer is
 the right-aligned `▪ Agent · models · effort · tools · duration · tokens · cost`
 row with no end status or continue hint: a failed turn puts its first error line
 (`✕`) above, and the usage units (`i`, `o`, `r`, `c`) are fainter than their
 counts. Durations read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Activity groups fold to
-`Read 2 files, ran 1 command` with `+N −M` and `✕ N failed`; a live group is
+`3 thoughts, 50 commands, 8 tools, 9 reads` with `+N −M` and `✕ N failed`; a live group is
 `Working` (shimmer) over its newest five members and `… N earlier`, and its glyph
 flashes the accent for six frames when it finishes (not with reduced motion).
 Members lead with a verb glyph (`→ ← $ * λ ? ↳ ↗`, ASCII `> < $ * L ? ^ ^`,
@@ -521,13 +530,17 @@ at a time with `+N more`; a click, or Enter on the focused toast (`F6` to it), o
 the full text in a modal (`c` copies, Esc closes), and the notifications modal opens the
 same text for an entry. The `↓ N new · end` pill sits on the row above the composer card.
 The card also answers `ask` questions: `Alt+W` focuses it, a number key (1-9, 0 for the
-tenth) or Up/Down with Enter picks an option, Space or a number ticks options of a
-multi-select question, and clicking an option picks it. A question without options,
-or one that allows a note, takes text typed in the composer (typing from the
-focused card moves there) and sent with Enter. Several questions go one at a time;
-the reply is sent once, as a keyed `POST …/question/{id}`, after the last one
-(`Ctrl+Enter` or the button confirms the current question). Esc keeps following
-the manifest chain, so while the turn is busy it interrupts, which cancels the
+tenth) or Up/Down picks an option, and clicking an option picks it. Enter locks the
+answer and moves to the next question; the last question leads to a review page whose
+rail is `text.primary` (white in the dark theme) and which lists every question with its
+answer, where Enter sends the reply. Left/Right move between the questions and the
+review, from the card or an empty composer. Space ticks options of a multi-select
+question, whose card uses the violet `interactive.multi` rail and ticks. A question
+without options, or one that allows a note, takes text typed in the composer (typing
+from the focused card moves there; each question keeps its own text). The reply is sent
+once, as a keyed `POST …/question/{id}` (`Ctrl+Enter` submits from any page). Tab and
+Shift+Tab switch between parallel asks, each of which keeps its own answers. Esc keeps
+following the manifest chain, so while the turn is busy it interrupts, which cancels the
 question. Settings opens in a centered
 modal using old Nexus's panel geometry and a searchable root/drill list. Press
 `/` to filter settings; Enter opens a section, and Esc returns to the root
@@ -536,8 +549,10 @@ and keyboard handling.
 
 Keys come from the manifest (`F1` lists them; the palette shows each command's
 key). Beyond the manifest: `F6`/`Shift+F6` cycle focus, `Ctrl+J` inserts a
-newline where `Shift+Enter` is not reported, `Ctrl+C` copies a composer selection or quits, `Ctrl+Z` undoes in the composer
-(and suspends elsewhere), and `Ctrl+Y` redoes.
+newline where `Shift+Enter` is not reported, `Ctrl+C` copies a composer
+selection, or clears the draft and keeps the cleared text in Up history; twice
+within two seconds quits (`Ctrl+Z` undoes in the composer and suspends
+elsewhere, and `Ctrl+Y` redoes).
 `/name` in the composer runs the command with that slash name (`/rename New
 title`, `/continue`, `/new`, `/settings`...); an unknown `/word` is sent as text.
 
@@ -611,8 +626,10 @@ TUI can be driven by hand in a browser.
   `[Image B]`, … at the cursor; the attachment names appear on one row above the
   card (no previews); deleting a marker removes its attachment. Up to eight
   images, 8 MiB combined; image-only sends work and a failed send restores the
-  images. Stored images show in the timeline as an `Image | name` line. Normal
-  text paste is unchanged.
+  images. In the timeline the `[Image A]` marker in the text is highlighted and
+  its preview is drawn under the band (`ratatui-image`: kitty, iTerm2 or sixel
+  where the terminal supports it, half-blocks otherwise). Normal text paste is
+  unchanged.
 - The top header omits the busy spinner, working label and elapsed time.
 - The model picker shows model names on the left and providers on the right;
   `m` toggles details below the picker (they follow the selection) and is
@@ -651,6 +668,7 @@ TUI can be driven by hand in a browser.
 
 Settings reads the shared defaults, timeline detail, reduced-motion choice and disabled tools from Core's `/api/config`.
 Use left/right or Enter to change a choice or tool switch; Core checks the file
-revision before each write. Configuration errors and rejected writes appear as
-warnings. A `config.changed` event refreshes Settings after an external edit.
+revision before each write. Configuration errors are listed at the top of
+Settings, and rejected writes appear as warnings. A `config.changed` event
+refreshes Settings after an external edit.
 The session context meter reads Core's context budget; `~` marks estimates.

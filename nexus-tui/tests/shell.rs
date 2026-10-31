@@ -581,6 +581,31 @@ fn composer_shows_a_pending_model_and_truncates_in_priority_order() {
 }
 
 #[test]
+fn pending_queue_text_lines_up_with_the_input_and_its_marker_is_highlighted() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.state.inputs.insert(
+        SESSION.into(),
+        serde_json::json!({"held": false, "inputs": [
+            {"id": "in_1", "mode": "queue", "parts": [{"type": "text", "text": "queued one"}]},
+            {"id": "in_2", "mode": "steer", "parts": [{"type": "text", "text": "steer one"}]}
+        ]}),
+    );
+    let (buf, rows) = draw(&mut app, 120, 36);
+    let input_x = (app.regions.composer.x + 5) as usize;
+    let accent = app.theme.color("interactive.accent").unwrap();
+    for (text, mark) in [("queued one", "Q"), ("steer one", "S")] {
+        let y = rows
+            .iter()
+            .position(|row| row.contains(text))
+            .unwrap_or_else(|| panic!("{text:?} not in {rows:#?}"));
+        let row = &rows[y];
+        assert_eq!(col_of(row, text), input_x, "{row:?}");
+        assert_eq!(col_of(row, mark), input_x - 2, "{row:?}");
+        assert_eq!(buf[(input_x as u16 - 2, y as u16)].fg, accent, "{row:?}");
+    }
+}
+
+#[test]
 fn project_worktrees_supply_sidebar_and_location_branches_without_a_session_listing() {
     use nexus_tui::sync::SyncMsg;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
@@ -1591,6 +1616,39 @@ fn answers_sent(app: &nexus_tui::app::App) -> Vec<serde_json::Value> {
         .collect()
 }
 
+#[test]
+fn parallel_asks_keep_their_own_picks() {
+    let notes = r#"{"id":"notes","question":"Anything else?"}"#;
+    let mut app = asking(&format!("[{DB}]"), (120, 36));
+    let data = format!(
+        r#"{{"id":"qst_99","session_id":"{SESSION}","call_id":"call_99","created":2.0,"questions":[{notes}]}}"#
+    );
+    let sse = format!(
+        "id: {GEN}:5\nevent: question.asked\ndata: {{\"id\":5,\"seq\":5,\"time\":2.0,\"type\":\"question.asked\",\"session_id\":\"{SESSION}\",\"data\":{data},\"cursor\":\"{GEN}:5\"}}\n\n"
+    );
+    for e in events(&sse) {
+        app.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+    }
+    // Pick an option in the first ask, then answer the second one.
+    press(&mut app, &["alt+w", "2"]);
+    press(&mut app, &["tab"]);
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("Anything else?"), "{all}");
+    typing(&mut app, "second answer");
+    // Back on the first ask its pick survived, and it still sends alone.
+    press(&mut app, &["alt+w", "shift+tab"]);
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        all.contains("Which database?") && all.contains("2 SQLite"),
+        "{all}"
+    );
+    press(&mut app, &["enter", "enter"]);
+    assert_eq!(
+        answers_sent(&app),
+        vec![serde_json::json!([{"question_id": "db", "selected": ["lite"], "text": null}])]
+    );
+}
+
 const DB: &str = r#"{"id":"db","question":"Which database?","options":[{"id":"pg","label":"PostgreSQL"},{"id":"lite","label":"SQLite"}],"multiple":false,"allow_free_text":false}"#;
 
 #[test]
@@ -1605,24 +1663,54 @@ fn question_card_shows_options_and_a_number_key_answers() {
         all.contains("Which database?")
             && all.contains("1 PostgreSQL")
             && all.contains("2 SQLite")
-            && all.contains("enter submit"),
+            && all.contains("enter review"),
         "{all}"
     );
     assert!(!all.contains("arrives with"), "{all}");
+    // a number only picks; Enter locks the answer and shows the review
     press(&mut app, &["2"]);
+    assert!(answers_sent(&app).is_empty());
+    press(&mut app, &["enter"]);
+    assert!(answers_sent(&app).is_empty());
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        all.contains("review")
+            && all.contains("1. Which database?")
+            && all.contains("SQLite")
+            && all.contains("enter submit"),
+        "{all}"
+    );
+    press(&mut app, &["enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "db", "selected": ["lite"], "text": null}])]
     );
     // a second press while the reply is in flight sends nothing more
-    press(&mut app, &["1", "enter"]);
+    press(&mut app, &["enter"]);
     assert_eq!(answers_sent(&app).len(), 1);
+}
+
+#[test]
+fn enter_in_an_empty_composer_locks_the_focused_question() {
+    // Enter from the composer locks the answer (then the review submits): an
+    // empty composer is not a reason to swallow the key while a question waits.
+    let mut app = asking(&format!("[{DB}]"), (120, 36));
+    assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Composer);
+    press(&mut app, &["enter"]);
+    assert!(answers_sent(&app).is_empty(), "Enter locks before it sends");
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        answers_sent(&app),
+        vec![serde_json::json!([{"question_id": "db", "selected": ["pg"], "text": null}])]
+    );
 }
 
 #[test]
 fn arrows_and_enter_pick_and_clicks_hit_options() {
     let mut app = asking(&format!("[{DB}]"), (120, 36));
     press(&mut app, &["alt+w", "down", "down", "enter"]);
+    assert!(answers_sent(&app).is_empty(), "Enter locks the answer");
+    press(&mut app, &["enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "db", "selected": ["lite"], "text": null}])]
@@ -1641,6 +1729,8 @@ fn arrows_and_enter_pick_and_clicks_hit_options() {
         "option row is a hit target"
     );
     click(&mut app, x, row as u16);
+    assert!(answers_sent(&app).is_empty(), "a click only picks");
+    press(&mut app, &["enter", "enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "db", "selected": ["pg"], "text": null}])]
@@ -1653,7 +1743,14 @@ fn free_text_goes_through_the_composer_and_several_questions_send_once() {
     let multi = r#"{"id":"tags","question":"Which tags?","options":[{"id":"a","label":"alpha"},{"id":"b","label":"beta"}],"multiple":true,"allow_free_text":false}"#;
     let mut app = asking(&format!("[{DB},{multi},{notes}]"), (120, 36));
     press(&mut app, &["alt+w", "1"]);
-    // multi-select: tick two, enter confirms
+    // single-select: Enter locks the answer and moves to the next question
+    press(&mut app, &["enter"]);
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        all.contains("Which tags?") && all.contains("question 2 of 3"),
+        "{all}"
+    );
+    // multi-select: tick two, Enter locks
     press(&mut app, &["1", "2", "enter"]);
     assert!(answers_sent(&app).is_empty());
     let all = joined(&draw(&mut app, 120, 36).1);
@@ -1661,9 +1758,19 @@ fn free_text_goes_through_the_composer_and_several_questions_send_once() {
         all.contains("Anything else?") && all.contains("question 3 of 3"),
         "{all}"
     );
-    // typing from the card lands in the composer; Enter there answers
+    // typing from the card lands in the composer; Enter locks and shows the review
     typing(&mut app, "keep it small");
     assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Composer);
+    press(&mut app, &["enter"]);
+    assert!(answers_sent(&app).is_empty());
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        all.contains("1. Which database?")
+            && all.contains("3. Anything else?")
+            && all.contains("keep it small"),
+        "{all}"
+    );
+    assert!(app.composer_ref().expanded_text().is_empty());
     press(&mut app, &["enter"]);
     assert_eq!(
         answers_sent(&app),
@@ -1673,7 +1780,99 @@ fn free_text_goes_through_the_composer_and_several_questions_send_once() {
             {"question_id": "notes", "selected": [], "text": "keep it small"}
         ])]
     );
-    assert!(app.composer_ref().expanded_text().is_empty());
+}
+
+#[test]
+fn left_and_right_move_between_questions_and_keep_each_answer() {
+    let notes = r#"{"id":"notes","question":"Anything else?"}"#;
+    let mut app = asking(&format!("[{DB},{notes}]"), (120, 36));
+    press(&mut app, &["alt+w", "2", "enter"]);
+    typing(&mut app, "a note");
+    // left goes back to the first question with its pick still marked
+    press(&mut app, &["alt+w", "left"]);
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        all.contains("Which database?") && all.contains("2 SQLite"),
+        "{all}"
+    );
+    // right returns to the text question with its answer restored
+    press(&mut app, &["right"]);
+    assert_eq!(app.composer_ref().expanded_text(), "a note");
+    // one more right reaches the review; nothing is sent yet
+    press(&mut app, &["right"]);
+    assert!(answers_sent(&app).is_empty());
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        all.contains("1. Which database?")
+            && all.contains("SQLite")
+            && all.contains("2. Anything else?")
+            && all.contains("a note"),
+        "{all}"
+    );
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        answers_sent(&app),
+        vec![serde_json::json!([
+            {"question_id": "db", "selected": ["lite"], "text": null},
+            {"question_id": "notes", "selected": [], "text": "a note"}
+        ])]
+    );
+}
+
+/// Foreground colours of the waiting card's heavy rail cells.
+fn rail_colors(buf: &ratatui::buffer::Buffer) -> Vec<Color> {
+    let area = buf.area;
+    let mut v = Vec::new();
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            let cell = &buf[(x, y)];
+            if cell.symbol() == "\u{2503}" {
+                v.push(cell.fg);
+            }
+        }
+    }
+    v
+}
+
+#[test]
+fn arrows_space_and_enter_work_for_a_multi_select_question() {
+    let multi = r#"{"id":"tags","question":"Which tags?","options":[{"id":"a","label":"alpha"},{"id":"b","label":"beta"}],"multiple":true,"allow_free_text":false}"#;
+    let mut app = asking(&format!("[{multi}]"), (120, 36));
+    // Down moves the cursor, Space ticks, Enter locks and opens the review.
+    press(&mut app, &["alt+w", "down", "space", "enter"]);
+    assert!(answers_sent(&app).is_empty());
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        all.contains("1. Which tags?") && all.contains("beta") && all.contains("enter submit"),
+        "{all}"
+    );
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        answers_sent(&app),
+        vec![serde_json::json!([{"question_id": "tags", "selected": ["b"], "text": null}])]
+    );
+}
+
+#[test]
+fn multi_select_is_violet_and_the_review_rail_is_white() {
+    let multi = r#"{"id":"tags","question":"Which tags?","options":[{"id":"a","label":"alpha"},{"id":"b","label":"beta"}],"multiple":true,"allow_free_text":false}"#;
+    let mut app = asking(&format!("[{multi}]"), (120, 36));
+    let (buf, _) = draw(&mut app, 120, 36);
+    let violet = app.theme.color("interactive.multi").unwrap();
+    let rails = rail_colors(&buf);
+    assert!(
+        !rails.is_empty() && rails.iter().all(|c| *c == violet),
+        "{rails:?}"
+    );
+
+    press(&mut app, &["alt+w", "1", "enter"]);
+    let (buf, _) = draw(&mut app, 120, 36);
+    let white = app.theme.color("text.primary").unwrap();
+    let rails = rail_colors(&buf);
+    assert!(
+        !rails.is_empty() && rails.iter().all(|c| *c == white),
+        "{rails:?}"
+    );
 }
 
 #[test]
@@ -3653,6 +3852,30 @@ fn session_search_toggles_project_scope_without_losing_query() {
     assert_eq!(app.palette_items()[0].label, "Find this other session");
     press(&mut app, &["tab"]);
     assert!(app.palette_items().is_empty());
+}
+
+#[test]
+fn session_search_uses_the_tab_status_glyph_instead_of_state_words() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.run_command("session.switch");
+    let (_, rows) = draw(&mut app, 120, 36);
+    let y = app
+        .hits
+        .rect_of(&Target::PaletteItem(0))
+        .expect("session row")
+        .y as usize;
+    assert!(rows[y].contains('\u{b7}'), "{:?}", rows[y]);
+    assert!(!rows[y].contains("idle"), "{:?}", rows[y]);
+
+    busy(&mut app);
+    let (_, rows) = draw(&mut app, 120, 36);
+    let y = app
+        .hits
+        .rect_of(&Target::PaletteItem(0))
+        .expect("session row")
+        .y as usize;
+    assert!(rows[y].contains('\u{25d0}'), "{:?}", rows[y]);
+    assert!(!rows[y].contains("running"), "{:?}", rows[y]);
 }
 
 #[test]

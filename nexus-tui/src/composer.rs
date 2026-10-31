@@ -62,6 +62,11 @@ impl Composer {
         self.editor.clear();
         self.refresh();
     }
+    /// Ctrl+C: clear the draft and keep what it held in recall history.
+    pub fn clear_to_history(&mut self) {
+        self.editor.clear_to_history();
+        self.refresh();
+    }
     pub fn set_text(&mut self, text: &str) {
         self.editor.clear();
         self.editor.insert(&clean(text));

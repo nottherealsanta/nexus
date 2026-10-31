@@ -27,6 +27,7 @@ const PRIMARY: &str = "text.primary";
 const SECONDARY: &str = "text.secondary";
 const MUTED: &str = "text.muted";
 const ACCENT: &str = "interactive.accent";
+const MULTI: &str = "interactive.multi";
 
 struct Cx<'a> {
     app: &'a App,
@@ -855,29 +856,6 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
         None
     };
     let ascii = cx.t.opts.ascii;
-    let glyph_of = |id: &str| -> (String, Style) {
-        if a.is_busy(id) {
-            (cx.t.spinner(a.frame).to_owned(), cx.st(PRIMARY, SIDEBAR))
-        } else if a.ui.failed_sessions.contains(id) {
-            (
-                if ascii { "o" } else { "\u{25cf}" }.to_owned(),
-                cx.st("status.error", SIDEBAR),
-            )
-        } else if a.session_waiting(id) {
-            let (g, tok) = cx.t.attention("waiting");
-            (g.to_owned(), cx.st(tok, SIDEBAR))
-        } else if a.ui.unread_sessions.contains(id) {
-            (
-                if ascii { "*" } else { "\u{25cf}" }.to_owned(),
-                cx.st("status.info", SIDEBAR),
-            )
-        } else {
-            (
-                if ascii { "." } else { "\u{b7}" }.to_owned(),
-                cx.st(MUTED, SIDEBAR),
-            )
-        }
-    };
     struct Tab {
         index: Option<usize>,
         /// Breadcrumb parts (root first); one part for a plain title.
@@ -974,8 +952,7 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
         clear(buf, rect, base);
         let mut cx_x = x + 1;
         if let Some(id) = &t.id {
-            let (g, gs) = glyph_of(id);
-            let gs = gs.patch(cx.t.bg(bg));
+            let (g, gs) = session_glyph(cx, id, bg);
             cx_x = put(buf, cx_x, tr.y, &g, gs, 1) + 1;
         }
         let parts = shown(t, max_title);
@@ -1038,6 +1015,34 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
         clear(buf, rect, style);
         put(buf, x + 1, tr.y, "+", style, 1);
         hits.add(rect, Target::NewSession);
+    }
+}
+
+/// The status mark in front of a session tab, also used by the session
+/// switcher so both carry the same icon.
+fn session_glyph(cx: &Cx, id: &str, bg: &str) -> (String, Style) {
+    let a = cx.app;
+    let ascii = cx.t.opts.ascii;
+    if a.is_busy(id) {
+        (cx.t.spinner(a.frame).to_owned(), cx.st(PRIMARY, bg))
+    } else if a.ui.failed_sessions.contains(id) {
+        (
+            if ascii { "o" } else { "\u{25cf}" }.to_owned(),
+            cx.st("status.error", bg),
+        )
+    } else if a.session_waiting(id) {
+        let (g, tok) = cx.t.attention("waiting");
+        (g.to_owned(), cx.st(tok, bg))
+    } else if a.ui.unread_sessions.contains(id) {
+        (
+            if ascii { "*" } else { "\u{25cf}" }.to_owned(),
+            cx.st("status.info", bg),
+        )
+    } else {
+        (
+            if ascii { "." } else { "\u{b7}" }.to_owned(),
+            cx.st(MUTED, bg),
+        )
     }
 }
 
@@ -3072,30 +3077,25 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
             .unwrap_or("default"),
         primary,
     );
-    // `✓ idle`: the glyph carries the status colour.
-    let (state, name) = if a.is_busy(&s.id) {
-        ("running", "running")
-    } else if s.archived {
-        ("archived", "done")
-    } else {
-        ("idle", "done")
-    };
+    // `◆ needs input`: the glyph carries the state colour.
+    let state = a.session_state(&s.id);
     if *y < r.bottom() {
-        let (glyph, _, token) = cx.t.status(name);
-        put(buf, r.x + 1, *y, "Status", cx.st(MUTED, SIDEBAR), KEY_W);
-        let glyph = if name == "running" {
-            cx.t.spinner(a.frame)
-        } else {
-            glyph
+        let (glyph, token) = match state {
+            "needs input" => cx.t.attention("waiting"),
+            "failed" => cx.t.attention("error"),
+            "finished" => cx.t.attention("unread"),
+            "running" => (cx.t.spinner(a.frame), PRIMARY),
+            "archived" => {
+                let (glyph, _, token) = cx.t.status("cancelled");
+                (glyph, token)
+            }
+            _ => {
+                let (glyph, _, token) = cx.t.status("done");
+                (glyph, token)
+            }
         };
-        let x = put(
-            buf,
-            r.x + VALUE_X,
-            *y,
-            glyph,
-            cx.st(if name == "running" { PRIMARY } else { token }, SIDEBAR),
-            2,
-        );
+        put(buf, r.x + 1, *y, "Status", cx.st(MUTED, SIDEBAR), KEY_W);
+        let x = put(buf, r.x + VALUE_X, *y, glyph, cx.st(token, SIDEBAR), 2);
         put(
             buf,
             x + 1,
@@ -3884,7 +3884,40 @@ fn draw_timeline(
             }
         }
     }
-    // Every visible block is clickable; a click selects and toggles it.
+    // Image previews draw over the blank band rows reserved by the builder.
+    if !timeline.previews.is_empty() {
+        let mut viewer = cx.app.image_viewer.borrow_mut();
+        for preview in &timeline.previews {
+            if preview.start >= top + h || preview.start + preview.rows <= top {
+                continue;
+            }
+            let x = inner.x + 3;
+            let width = (preview.width as u16).min(inner.right().saturating_sub(x));
+            if width == 0 {
+                continue;
+            }
+            let y = r.y + preview.start.saturating_sub(top) as u16;
+            let y0 = y.max(r.y);
+            let y1 = (y + preview.rows as u16).min(r.bottom());
+            if y1 <= y0 {
+                continue;
+            }
+            if let Some(state) = viewer.protocol(&preview.key, &preview.data_url) {
+                let image =
+                    ratatui_image::StatefulImage::<ratatui_image::protocol::StatefulProtocol>::new(
+                    )
+                    .resize(ratatui_image::Resize::Fit(None));
+                ratatui::widgets::StatefulWidget::render(
+                    image,
+                    Rect::new(x, y0, width, y1 - y0),
+                    buf,
+                    state,
+                );
+            }
+        }
+    }
+    // Every visible block is clickable; a click selects it and (except for a
+    // user band's body) toggles it.
     for (bi, b) in timeline.blocks.iter().enumerate() {
         if b.end <= top || b.start >= top + h {
             continue;
@@ -3901,6 +3934,28 @@ fn draw_timeline(
             }
         } else {
             hits.add(rect, Target::Block(bi));
+        }
+        // The left edge of a user band is its fold control; hovering it lifts
+        // the strip and brightens the rail.
+        if b.kind == crate::timeline::BlockKind::Turn {
+            let toggle = Rect::new(inner.x, y0, 3.min(inner.width), y1 - y0);
+            if cx.hovered(toggle) {
+                if let Some(bg) = cx.t.color("interactive.hover") {
+                    for y in toggle.y..toggle.bottom() {
+                        for x in toggle.x..toggle.right() {
+                            buf[(x, y)].set_bg(bg);
+                        }
+                    }
+                }
+                let rail = cx.t.structure("rail");
+                let style = cx
+                    .st("interactive.focus", "interactive.hover")
+                    .add_modifier(Modifier::BOLD);
+                for y in toggle.y..toggle.bottom() {
+                    put(buf, toggle.x, y, rail, style, 1);
+                }
+            }
+            hits.add(toggle, Target::BandToggle(bi));
         }
         if b.kind == crate::timeline::BlockKind::Code && b.end > 0 {
             let row = b.end - 1;
@@ -3939,17 +3994,15 @@ fn draw_timeline(
                 hits.add(button, Target::CopyBlock(bi));
             }
         }
-        // An open user band shows `copy` on its last text row (its bottom
-        // padding row when the message is a single row, where the first row
-        // holds `#n · time`) while hovered or focused.
+        // An open user band shows `copy` at the top-right of its top padding
+        // row while hovered or focused; the text row below keeps `#n · time`.
         let focused = a.ui.focus == Focus::Timeline && a.ui.timeline_sel == Some(bi);
         if b.kind == crate::timeline::BlockKind::Turn
             && b.end - b.start >= 3
             && (cx.hovered(rect) || focused)
             && inner.width >= 8
         {
-            let rows = b.end - b.start - 2;
-            let row = if rows >= 2 { b.end - 2 } else { b.end - 1 };
+            let row = b.start;
             if row >= top && row < top + h {
                 let y = r.y + (row - top) as u16;
                 let label = "copy";
@@ -4159,9 +4212,21 @@ fn draw_sticky(
         .enumerate()
         .filter(|(_, b)| b.kind == crate::timeline::BlockKind::Turn && b.end - b.start >= 3)
         .collect();
-    let cards: Vec<(usize, usize)> = bands
+    let cards: Vec<(usize, usize, usize)> = bands
         .iter()
-        .map(|(_, b)| (b.start, b.end - b.start))
+        .map(|(_, b)| {
+            let previews: usize = timeline
+                .previews
+                .iter()
+                .filter(|p| p.start > b.start && p.start < b.end)
+                .map(|p| p.rows)
+                .sum();
+            (
+                b.start,
+                b.end - b.start,
+                (b.end - b.start).saturating_sub(2 + previews).max(1),
+            )
+        })
         .collect();
     let Some(pin) = crate::sticky::select(&cards, top, timeline.lines.len()) else {
         return;
@@ -4240,6 +4305,8 @@ enum WRow {
     Diff(Vec<ratatui::text::Span<'static>>),
     DiffNote(String),
     Ask(String),
+    /// A review row's answer and whether the question was answered.
+    Answer(String, bool),
     Opt(usize),
     Field(String),
     Choice(usize),
@@ -4337,26 +4404,40 @@ fn wait_rows(app: &App, w: u16, limit: usize) -> Vec<WRow> {
         }
         WaitKind::Question => {
             if let Some(c) = app.ask_current() {
-                rows.push(WRow::Ask(
-                    json_str(&c.question["question"]).replace('\n', " "),
-                ));
-                let opts = c.options().len();
-                let shown = opts.min(ASK_ROWS);
-                let top = c
-                    .draft
-                    .cursor
-                    .saturating_sub(shown.saturating_sub(1))
-                    .min(opts - shown);
-                rows.extend((top..top + shown).map(WRow::Opt));
-                if opts == 0 {
-                    rows.push(WRow::Field(
-                        "Type the answer in the composer below, then press enter.".into(),
+                if c.review() {
+                    for (i, question) in c.questions.iter().enumerate() {
+                        rows.push(WRow::Ask(format!(
+                            "{}. {}",
+                            i + 1,
+                            json_str(&question["question"]).replace('\n', " ")
+                        )));
+                        let answer = c.answer(i);
+                        rows.push(WRow::Answer(
+                            answer.clone().unwrap_or_else(|| "not answered".into()),
+                            answer.is_some(),
+                        ));
+                    }
+                } else if let Some(question) = c.question() {
+                    rows.push(WRow::Ask(
+                        json_str(&question["question"]).replace('\n', " "),
                     ));
-                } else if c.allows_text() {
-                    rows.push(WRow::Blank);
-                    rows.push(WRow::Field(
-                        "Or type your own answer in the composer below.".into(),
-                    ));
+                    let opts = c.options().len();
+                    let shown = opts.min(ASK_ROWS);
+                    let cursor = c.pick().map_or(0, |p| p.cursor);
+                    let top = cursor
+                        .saturating_sub(shown.saturating_sub(1))
+                        .min(opts.saturating_sub(shown));
+                    rows.extend((top..top + shown).map(WRow::Opt));
+                    if opts == 0 {
+                        rows.push(WRow::Field(
+                            "Type the answer in the composer below, then press enter.".into(),
+                        ));
+                    } else if c.allows_text() {
+                        rows.push(WRow::Blank);
+                        rows.push(WRow::Field(
+                            "Or type your own answer in the composer below.".into(),
+                        ));
+                    }
                 }
             }
             rows.push(WRow::Blank);
@@ -4364,7 +4445,8 @@ fn wait_rows(app: &App, w: u16, limit: usize) -> Vec<WRow> {
     }
     rows.push(WRow::Hint);
     rows.push(WRow::Pad);
-    // Fit: diff first, then blanks, pads, the field, table rows, option rows.
+    // Fit: diff first, then blanks, pads, the field, table rows, option rows,
+    // then review answers one at a time.
     fn drop_last(rows: &mut Vec<WRow>, pick: fn(&WRow) -> bool, keep: usize) -> bool {
         if rows.iter().filter(|r| pick(r)).count() > keep {
             if let Some(i) = rows.iter().rposition(pick) {
@@ -4383,7 +4465,14 @@ fn wait_rows(app: &App, w: u16, limit: usize) -> Vec<WRow> {
             || drop_last(&mut rows, |r| matches!(r, WRow::Pad), 0)
             || drop_last(&mut rows, |r| matches!(r, WRow::Field(_)), 0)
             || drop_last(&mut rows, |r| matches!(r, WRow::Table(..)), 1)
-            || drop_last(&mut rows, |r| matches!(r, WRow::Opt(_)), 1);
+            || drop_last(&mut rows, |r| matches!(r, WRow::Opt(_)), 1)
+            || {
+                let n = rows
+                    .iter()
+                    .filter(|r| matches!(r, WRow::Answer(..)))
+                    .count();
+                n > 0 && drop_last(&mut rows, |r| matches!(r, WRow::Answer(..)), n - 1)
+            };
         if !done {
             break;
         }
@@ -4444,12 +4533,22 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let at = a.ui.wait_idx.min(items.len().saturating_sub(1));
     let focused = a.ui.focus == Focus::Waiting;
     let writable = a.writable();
+    let ask = a.ask_current();
+    let review = ask.as_ref().is_some_and(|c| c.review());
+    let multi = ask.as_ref().is_some_and(|c| !c.review() && c.multiple());
+    // A multi-select question uses the violet mark; the review page uses the
+    // strongest text colour (white in the dark theme) for its rail.
+    let mark = match (&w.kind, review, multi) {
+        (WaitKind::Question, true, _) => PRIMARY,
+        (WaitKind::Question, false, true) => MULTI,
+        _ => ACCENT,
+    };
     let card = Rect::new(r.x + 2, r.y, r.width.saturating_sub(4), r.height);
     clear(buf, card, cx.st(SECONDARY, PANEL));
     let rail_style = if focused {
-        cx.st(ACCENT, PANEL).add_modifier(Modifier::BOLD)
+        cx.st(mark, PANEL).add_modifier(Modifier::BOLD)
     } else {
-        cx.st(ACCENT, PANEL)
+        cx.st(mark, PANEL)
     };
     for y in card.y..card.bottom() {
         put(buf, card.x, y, cx.t.structure("rail_heavy"), rail_style, 1);
@@ -4459,6 +4558,11 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let inner_w = end.saturating_sub(x);
     let rows = wait_rows(a, r.width, r.height as usize);
     let (wg, _, wt) = cx.t.status("waiting");
+    let head = if w.kind == WaitKind::Question {
+        mark
+    } else {
+        wt
+    };
     let tool = if w.kind == WaitKind::Approval {
         approval_parts(a, &w.id).0
     } else {
@@ -4481,7 +4585,7 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             card.x + 1,
             y,
             marker,
-            cx.st(ACCENT, PANEL).add_modifier(Modifier::BOLD),
+            cx.st(mark, PANEL).add_modifier(Modifier::BOLD),
             1,
         );
     };
@@ -4494,7 +4598,7 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     WaitKind::Approval => format!("Allow {tool}?"),
                     WaitKind::Question => "Nexus asks".to_owned(),
                 };
-                let tx = put(buf, x, y, wg, cx.st(wt, PANEL), 2);
+                let tx = put(buf, x, y, wg, cx.st(head, PANEL), 2);
                 let right = if items.len() > 1 {
                     let key = a
                         .manifest
@@ -4528,13 +4632,23 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 } else {
                     format!("waiting on you{}{}", cx.sep(), mmss(a.wait_secs(&w.id)))
                 };
-                if let Some(c) = a.ask_current().filter(|c| c.total > 1) {
-                    sub.push_str(&format!(
-                        "{}question {} of {}",
-                        cx.sep(),
-                        c.index + 1,
-                        c.total
-                    ));
+                if let Some(c) = &ask {
+                    if c.review() {
+                        sub.push_str(&format!(
+                            "{}review{}{} question{}",
+                            cx.sep(),
+                            cx.sep(),
+                            c.total,
+                            if c.total == 1 { "" } else { "s" }
+                        ));
+                    } else if c.total > 1 {
+                        sub.push_str(&format!(
+                            "{}question {} of {}",
+                            cx.sep(),
+                            c.page + 1,
+                            c.total
+                        ));
+                    }
                 }
                 if let Some(child) = &w.child {
                     sub.push_str(&format!("{}in child: {child}", cx.sep()));
@@ -4584,14 +4698,37 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     inner_w,
                 );
             }
+            WRow::Answer(text, answered) => {
+                let st = if *answered {
+                    cx.st(SECONDARY, PANEL)
+                } else {
+                    cx.st("status.warning", PANEL)
+                };
+                let head = if *answered {
+                    review_arrow(cx)
+                } else if cx.t.opts.ascii {
+                    "-"
+                } else {
+                    "\u{00b7}"
+                };
+                let line = format!("  {head} {text}");
+                put(
+                    buf,
+                    x,
+                    y,
+                    &truncate(&line, inner_w as usize, cx.ell()),
+                    st,
+                    inner_w,
+                );
+            }
             WRow::Opt(i) => {
                 let Some(c) = a.ask_current() else { continue };
                 let Some(o) = c.options().get(*i) else {
                     continue;
                 };
-                let on = c.draft.chosen.contains(i);
+                let on = c.pick().is_some_and(|p| p.chosen.contains(i));
                 let label = json_str(&o["label"]);
-                let mark = if c.multiple() {
+                let tick = if c.multiple() {
                     if on {
                         "[x] "
                     } else {
@@ -4600,9 +4737,13 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 } else {
                     ""
                 };
-                let line = format!("{mark}{} {}", (i + 1) % 10, label.trim_matches('"'));
-                let mut st = cx.st(SECONDARY, PANEL);
-                if *i == c.draft.cursor {
+                let line = format!("{tick}{} {}", (i + 1) % 10, label.trim_matches('"'));
+                let mut st = if c.multiple() && on {
+                    cx.st(MULTI, PANEL)
+                } else {
+                    cx.st(SECONDARY, PANEL)
+                };
+                if *i == c.pick().map_or(0, |p| p.cursor) {
                     band_row(buf, y, PRIMARY);
                     st = cx.st(PRIMARY, PANEL).add_modifier(Modifier::BOLD);
                 }
@@ -4719,22 +4860,36 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 };
                 let mut hints: Vec<(String, String)> = Vec::new();
                 let mut submit = None;
-                match (&w.kind, a.ask_current()) {
-                    (WaitKind::Question, Some(c)) if c.draft.sent => {
+                match (&w.kind, ask.as_ref()) {
+                    (WaitKind::Question, Some(c)) if c.sent => {
                         hints.push((String::new(), "sending the answers...".into()));
                     }
+                    (WaitKind::Question, Some(c)) if focused && c.review() => {
+                        if c.total > 0 {
+                            hints.push((leftright(cx).to_owned(), "pages".into()));
+                        }
+                        submit = Some(hints.len());
+                        hints.push(("enter".into(), "submit".into()));
+                        hints.push(("esc".into(), "stops the turn".into()));
+                    }
                     (WaitKind::Question, Some(c)) if focused => {
+                        if c.total > 1 {
+                            hints.push((leftright(cx).to_owned(), "pages".into()));
+                        }
                         if !c.options().is_empty() {
                             hints.push((updown(cx).to_owned(), "move".into()));
                         }
                         if c.multiple() {
                             hints.push(("space".into(), "tick".into()));
                         }
-                        let last = c.index + 1 >= c.total;
-                        submit = Some(hints.len());
                         hints.push((
                             "enter".into(),
-                            if last { "submit" } else { "next question" }.into(),
+                            if c.page + 1 < c.total {
+                                "next"
+                            } else {
+                                "review"
+                            }
+                            .into(),
                         ));
                         hints.push(("esc".into(), "stops the turn".into()));
                     }
@@ -5002,6 +5157,11 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         // One filled card, aligned with the composer panel below it.
         let card = Rect::new(r.x + 2, r.y, r.width.saturating_sub(4), extra);
         clear(buf, card, cx.st(MUTED, PANEL));
+        // The message text starts where the composer's input starts; the
+        // `Q`/`S` marker sits two cells left of it, one cell of air between.
+        let input_x = composer_inner(composer, !cx.app.composer_ref().images.is_empty()).x;
+        let mark_x = input_x.saturating_sub(2);
+        let end = card.right().saturating_sub(2);
         for (line, (idx, item)) in inputs
             .iter()
             .enumerate()
@@ -5017,33 +5177,41 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 .lines()
                 .next()
                 .unwrap_or("");
-            let mode = if item["mode"] == "steer" {
-                "S"
-            } else if held {
-                "Q held"
-            } else {
-                "Q"
-            };
+            let mode = if item["mode"] == "steer" { "S" } else { "Q" };
             let selected = cx.app.ui.pending_selected == Some(idx);
-            let label = format!(
-                "{} {} · {}{}",
-                if selected { "▸" } else { " " },
-                mode,
-                text,
-                if selected {
-                    "  enter edit · backspace remove · s steer · shift+↑/↓ move"
-                } else {
-                    ""
-                }
-            );
+            let y = r.y + 1 + line as u16;
             put(
                 buf,
-                card.x + 2,
-                r.y + 1 + line as u16,
-                &label,
-                cx.st(if selected { PRIMARY } else { MUTED }, PANEL),
-                card.width.saturating_sub(4),
+                mark_x,
+                y,
+                mode,
+                cx.st(ACCENT, PANEL).add_modifier(Modifier::BOLD),
+                1,
             );
+            let held_suffix = if held { " held" } else { "" };
+            let hint = if selected {
+                "  enter edit · backspace remove · s steer · shift+↑/↓ move"
+            } else {
+                ""
+            };
+            let text_end = end.saturating_sub(width(held_suffix) as u16).max(input_x);
+            let mut x = put(
+                buf,
+                input_x,
+                y,
+                text,
+                cx.st(if selected { PRIMARY } else { MUTED }, PANEL),
+                text_end.saturating_sub(input_x),
+            );
+            x = put(
+                buf,
+                x,
+                y,
+                held_suffix,
+                cx.st(MUTED, PANEL),
+                end.saturating_sub(x),
+            );
+            put(buf, x, y, hint, cx.st(MUTED, PANEL), end.saturating_sub(x));
         }
     }
     let r = composer;
@@ -5803,6 +5971,7 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
         }),
         "appearance.monochrome" => Some(on_off(a.theme.mono())),
         "appearance.animations" => Some(on_off(!a.theme.opts.reduced_motion)),
+        "notifications.sound" => Some(on_off(a.ui.sound)),
         "notifications.terminal" => Some(a.ui.notify.label().into()),
         "appearance.sidebar" => Some(
             match (a.ui.left_open, a.ui.left_rail) {
@@ -5975,7 +6144,7 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
                 row,
                 section_reason,
             } => Some(a.settings_details(row, section_reason.as_deref())),
-            crate::app::SettingsItem::Heading(_) => None,
+            crate::app::SettingsItem::Heading(_) | crate::app::SettingsItem::Note(_) => None,
         })
         .unwrap_or_default()
         .into_iter()
@@ -6013,6 +6182,16 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
         let Some(i) = line else { continue };
         match &items[*i] {
             crate::app::SettingsItem::Heading(label) => heading(cx, buf, &m, y, label),
+            crate::app::SettingsItem::Note(text) => {
+                put(
+                    buf,
+                    x + 2,
+                    y,
+                    &truncate(text, w.saturating_sub(2) as usize, cx.ell()),
+                    cx.st("status.warning", RAISED),
+                    w.saturating_sub(2),
+                );
+            }
             crate::app::SettingsItem::Row {
                 row,
                 section_reason,
@@ -6385,6 +6564,22 @@ fn updown(cx: &Cx) -> &'static str {
         "up/down"
     } else {
         "\u{2191}\u{2193}"
+    }
+}
+
+fn leftright(cx: &Cx) -> &'static str {
+    if cx.t.opts.ascii {
+        "left/right"
+    } else {
+        "\u{2190}\u{2192}"
+    }
+}
+
+fn review_arrow(cx: &Cx) -> &'static str {
+    if cx.t.opts.ascii {
+        "->"
+    } else {
+        "\u{2192}"
     }
 }
 
@@ -6913,10 +7108,20 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
             quiet = quiet.patch(hover);
             clear(buf, rr, style);
         }
+        let mark = match &it.kind {
+            PaletteKind::Session(id) if it.category == "session" => {
+                Some(session_glyph(cx, id, RAISED))
+            }
+            _ => None,
+        };
         let hw = width(&it.hint) as u16;
-        let hx = m.x + m.w - hw;
+        let mark_w = mark.as_ref().map_or(0, |(g, _)| width(g) as u16 + 1);
+        let hx = (m.x + m.w).saturating_sub(hw + mark_w);
+        if let Some((g, gs)) = &mark {
+            put(buf, hx, y, g, *gs, width(g) as u16);
+        }
         if hw > 0 {
-            put(buf, hx, y, &it.hint, quiet, hw);
+            put(buf, hx + mark_w, y, &it.hint, quiet, hw);
         }
         let room = hx.saturating_sub(m.x + 2 + 1) as usize;
         let mut label_style = style;
@@ -7267,7 +7472,7 @@ fn draw_help(cx: &Cx, buf: &mut Buffer, area: Rect, top: usize, hits: &mut HitMa
         "Insert newline (where shift+enter is not reported)".into(),
     ));
     rows.push(("ctrl+z".into(), "Suspend to the shell".into()));
-    rows.push(("ctrl+c".into(), "Quit".into()));
+    rows.push(("ctrl+c".into(), "Clear the draft; twice to quit".into()));
     let h = m.body.height as usize;
     let top = top.min(rows.len().saturating_sub(h));
     for (i, (k, t)) in rows.iter().skip(top).take(h).enumerate() {

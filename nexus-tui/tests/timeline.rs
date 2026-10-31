@@ -375,12 +375,54 @@ fn hovering_user_block_reveals_copy_and_copies_that_message() {
         .hits
         .rect_of(&Target::CopyBlock(user))
         .expect("hover reveals copy");
+    assert_eq!(copy.y, rect.y, "copy sits at the top-right of the band");
     a.effects.clear();
     click(&mut a, copy.x, copy.y);
     assert!(a
         .effects
         .iter()
         .any(|e| matches!(e, Effect::Copy(text) if text == "hi")));
+}
+
+#[test]
+fn a_user_band_folds_only_from_its_left_edge() {
+    use nexus_tui::timeline::BlockKind;
+    use nexus_tui::ui::Target;
+    let mut a = app();
+    rows(&mut a);
+    let user = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == BlockKind::Turn)
+        .unwrap();
+    let key = a.blocks()[user].key.clone();
+    a.ui.timeline_open.insert(key.clone(), true);
+    rows(&mut a);
+
+    let rect = a.hits.rect_of(&Target::Block(user)).unwrap();
+    click(&mut a, rect.x + 5, rect.y + 1);
+    rows(&mut a);
+    assert_eq!(a.ui.timeline_sel, Some(user), "a body click selects");
+    assert_eq!(
+        a.ui.timeline_open.get(&key),
+        Some(&true),
+        "a body click does not fold the band"
+    );
+
+    let toggle = a.hits.rect_of(&Target::BandToggle(user)).unwrap();
+    a.mouse = Some((toggle.x, toggle.y));
+    let (buf, _) = draw(&mut a, 120, 36);
+    if let Some(bg) = a.theme.color("interactive.hover") {
+        assert_eq!(buf[(toggle.x, toggle.y)].bg, bg, "the fold edge lifts");
+    }
+    a.mouse = None;
+    click(&mut a, toggle.x, toggle.y);
+    rows(&mut a);
+    assert_eq!(
+        a.ui.timeline_open.get(&key),
+        Some(&false),
+        "the left edge folds the band"
+    );
 }
 
 #[test]
@@ -445,9 +487,9 @@ fn activity_groups_respect_text_and_child_boundaries_and_preserve_details() {
         .map(|s| s.content.as_ref())
         .collect::<String>();
     assert!(
-        text.contains("Read 1 file")
-            && text.contains("ran 1 command")
-            && text.contains("thought")
+        text.contains("1 read")
+            && text.contains("1 thought")
+            && text.contains("1 command")
             && !text.contains("failed"),
         "{text}"
     );
@@ -932,17 +974,14 @@ fn calls(a: &mut nexus_tui::app::App, tools: &[(&str, Option<&str>)]) {
 }
 
 #[test]
-fn verb_groups_cover_every_tool_family_and_name_unknown_tools() {
+fn activity_counts_cover_every_tool_family_and_group_unknown_tools() {
     let mut a = app();
     let ok = Some("ok");
     for (tools, want) in [
-        (
-            vec![("web_search", ok), ("web_search", ok)],
-            "Searched 2 times",
-        ),
-        (vec![("web_fetch", ok); 3], "Fetched 3 pages"),
-        (vec![("ask", ok)], "Asked 1 question"),
-        (vec![("code", ok), ("code", ok)], "Ran 2 cells"),
+        (vec![("web_search", ok), ("web_search", ok)], "2 searches"),
+        (vec![("web_fetch", ok); 3], "3 pages"),
+        (vec![("ask", ok)], "1 question"),
+        (vec![("code", ok), ("code", ok)], "2 cells"),
     ] {
         calls(&mut a, &tools);
         let text = rows(&mut a).join("\n");
@@ -950,14 +989,13 @@ fn verb_groups_cover_every_tool_family_and_name_unknown_tools() {
     }
     calls(&mut a, &[("mcp_weather", ok), ("mcp_weather", ok)]);
     let text = rows(&mut a).join("\n");
-    assert!(text.contains("Used mcp_weather"), "{text}");
-    assert!(!text.contains("Used tool"), "{text}");
+    assert!(text.contains("2 tools"), "{text}");
     calls(
         &mut a,
         &[("mcp_weather", ok), ("skill_x", ok), ("skill_x", ok)],
     );
     let text = rows(&mut a).join("\n");
-    assert!(text.contains("Used 3 tools"), "{text}");
+    assert!(text.contains("3 tools"), "{text}");
 }
 
 #[test]
@@ -1428,7 +1466,7 @@ fn detail_levels_fold_finished_groups_until_high_expands_every_tool() {
         count(&a, BlockKind::Group) > 0 && count(&a, BlockKind::Tool) == 0,
         "{low}"
     );
-    assert!(low.contains("Ran 2 commands"), "{low}");
+    assert!(low.contains("2 commands"), "{low}");
     assert!(!low.contains("echo first"), "{low}");
     // Medium: a finished group still folds to its summary (DESIGN_PLAN D06
     // "Detail levels"); only a live group shows its tree at this level.
@@ -1436,7 +1474,7 @@ fn detail_levels_fold_finished_groups_until_high_expands_every_tool() {
     assert_eq!(a.ui.detail, Detail::Medium);
     let medium = rows(&mut a).join("\n");
     assert_eq!(count(&a, BlockKind::Tool), 0, "{medium}");
-    assert!(medium.contains("Ran 2 commands"), "{medium}");
+    assert!(medium.contains("2 commands"), "{medium}");
     assert!(!medium.contains("first-output"), "{medium}");
     // High: every tool opens and shows its output.
     a.execute("timeline.detail_cycle");
@@ -1557,6 +1595,49 @@ fn an_interrupted_turn_has_no_continue_hint_and_a_failed_turn_puts_its_error_abo
 }
 
 #[test]
+fn a_user_interruption_is_not_drawn_in_the_error_colour() {
+    use nexus_tui::api::Event;
+    let mut a = app();
+    let time = a.messages()[0].created;
+    a.state
+        .model
+        .selected
+        .as_mut()
+        .unwrap()
+        .scratch
+        .push(Event {
+            id: 951,
+            cursor: None,
+            seq: None,
+            time: time + 0.5,
+            kind: "session.error".into(),
+            session_id: Some(SESSION.into()),
+            data: serde_json::json!({
+                "kind": "interrupted",
+                "message": "interrupted by the user"
+            }),
+        });
+    let t = nexus_tui::timeline::build(&a, &a.theme, 0, 100);
+    let line = t
+        .lines
+        .iter()
+        .find(|line| line_text(line).contains("interrupted by the user"))
+        .expect("the interruption row");
+    let body = line
+        .spans
+        .iter()
+        .find(|span| span.content.contains("interrupted by the user"))
+        .unwrap();
+    assert_eq!(body.style.fg, a.theme.fg("text.secondary").fg);
+    assert_ne!(body.style.fg, a.theme.fg("status.error").fg);
+    assert_eq!(
+        line.spans[0].style.fg,
+        a.theme.fg("status.warning").fg,
+        "the interrupted glyph uses the warning colour"
+    );
+}
+
+#[test]
 fn a_folded_group_still_shows_edits_and_failures() {
     let mut a = app(); // low detail: groups folded
     a.state.model.selected.as_mut().unwrap().messages = serde_json::from_value(serde_json::json!([
@@ -1580,7 +1661,7 @@ fn a_folded_group_still_shows_edits_and_failures() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        text.contains("Read 1 file, edited 2 files, ran 1 command"),
+        text.contains("1 read, 2 edits, 1 command"),
         "edits share the group with reads and commands: {text}"
     );
     assert!(
@@ -2030,20 +2111,45 @@ fn assistant_text_aligns_with_the_user_message() {
 }
 
 #[test]
-fn image_labels_align_with_user_text() {
+fn image_marker_is_highlighted_and_its_preview_is_drawn() {
+    use ratatui::style::Modifier;
     let mut a = app();
-    a.state.model.selected.as_mut().unwrap().messages[0].parts.push(
-        serde_json::json!({"type":"image", "name":"Image A", "data_url":"data:image/png;base64,AA=="}),
+    let image = nexus_tui::images::Image::from_png(
+        "Image A".into(),
+        include_bytes!("../fixtures/clipboard.png"),
+    )
+    .unwrap();
+    let message = &mut a.state.model.selected.as_mut().unwrap().messages[0];
+    message.parts[0]["text"] = serde_json::json!("[Image A] hi");
+    message.parts.push(serde_json::json!({
+        "type": "image", "name": image.name, "data_url": image.data_url
+    }));
+    let (buf, rows) = draw(&mut a, 120, 36);
+    let text = rows.join("\n");
+    assert!(
+        !text.contains("Image |"),
+        "no separate image label row: {text}"
     );
-    let (_, rows) = draw(&mut a, 120, 36);
-    let text = rows.iter().find(|row| row.contains("  hi")).unwrap();
-    let image = rows
+    let (y, x) = rows
         .iter()
-        .find(|row| row.contains("Image | Image A"))
-        .unwrap();
+        .enumerate()
+        .find_map(|(y, row)| {
+            row.find("[Image A]")
+                .map(|x| (y, nexus_tui::text::width(&row[..x])))
+        })
+        .expect("the marker is part of the message");
+    let cell = &buf[(x as u16, y as u16)];
     assert_eq!(
-        nexus_tui::text::width(&text[..text.find("hi").unwrap()]),
-        nexus_tui::text::width(&image[..image.find("Image |").unwrap()])
+        cell.fg,
+        a.theme
+            .fg("interactive.accent")
+            .fg
+            .expect("the accent has a colour")
+    );
+    assert!(cell.modifier.contains(Modifier::BOLD));
+    assert!(
+        rows.iter().any(|row| row.contains('▀')),
+        "the preview is drawn in the band"
     );
 }
 
@@ -2166,6 +2272,47 @@ fn streaming_text_aligns_with_the_finished_assistant_message() {
     };
     assert_eq!(col("Streaming"), col("Hello"));
     assert_eq!(col("second line"), col("Hello"));
+}
+
+#[test]
+fn streaming_text_renders_markdown_as_it_arrives() {
+    use ratatui::style::Modifier;
+
+    let mut a = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    for (id, text) in [
+        (20, "# Streamed "),
+        (21, "heading\n\nUse `parse()`"),
+        (22, " here.\n\n- one\n- two"),
+        (23, "\n\n```python\nprint(1)"),
+    ] {
+        let v = serde_json::json!({"id": id, "type": "text_delta", "session_id": SESSION,
+            "cursor": "log_c915bfc9b6d826c4:20",
+            "data": {"type": "text_delta", "text": text}});
+        if let Ok(nexus_tui::api::Frame::Event(e)) =
+            nexus_tui::api::Frame::from_value("text_delta", None, &v)
+        {
+            a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+        }
+    }
+    let (buf, rows) = draw(&mut a, 120, 36);
+    let text = rows.join("\n");
+    assert!(text.contains("Streamed heading"), "{text}");
+    // Still the live scratch, not a stored message, yet already Markdown.
+    assert!(!text.contains("# Streamed"), "heading marker: {text}");
+    assert!(!text.contains("`parse()`"), "code markers: {text}");
+    assert!(text.contains("• one") && text.contains("• two"), "{text}");
+    // An unclosed fence still draws as a code block while it streams.
+    assert!(!text.contains("```"), "fence markers: {text}");
+    assert!(
+        text.contains("python") && text.contains("print(1)"),
+        "{text}"
+    );
+    let (y, x) = rows
+        .iter()
+        .enumerate()
+        .find_map(|(y, row)| row.find("Streamed heading").map(|x| (y, x)))
+        .unwrap();
+    assert!(buf[(x as u16, y as u16)].modifier.contains(Modifier::BOLD));
 }
 
 // -- turn summaries (TURN_SUMMARY_PLAN 5.1) -------------------------------------

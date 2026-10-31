@@ -56,6 +56,8 @@ pub fn with_turn(o: Options, size: (u16, u16)) -> App {
     for e in events(TURN) {
         app.apply_sync(SyncMsg::Event(e));
     }
+    // The fixture's waits and its idle session cue are setup, not the test's action.
+    app.effects.clear();
     app
 }
 

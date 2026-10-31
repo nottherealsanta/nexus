@@ -91,13 +91,14 @@ def main(path):
                 # Unit suffixes and other de-emphasised labels: quieter than muted,
                 # so they are held to the mark floor rather than the text floor.
                 check(f"{p} text.faint on {s}", cc["text.faint"], cc[s], nmin)
-                for mk in ("border.focus", "interactive.accent", "interactive.focus",
+                for mk in ("border.focus", "interactive.accent", "interactive.multi",
+                           "interactive.focus",
                            "status.success", "status.warning", "status.error", "status.info"):
                     check(f"{p} {mk} on {s}", cc[mk], cc[s], nmin)
                 for agent in data[tn]["agent"]:
                     check(f"{p} agent.{agent} on {s}", cc[f"agent.{agent}"], cc[s], tmin)
                 for sk in ("status.success", "status.warning", "status.error", "status.info",
-                           "interactive.accent"):
+                           "interactive.accent", "interactive.multi"):
                     check(f"{p} {sk} (as text) on {s}", cc[sk], cc[s], tmin)
             check(f"{p} text.primary on selection", cc["text.primary"], cc["interactive.selection"], tmin)
             check(f"{p} text.secondary on selection", cc["text.secondary"], cc["interactive.selection"], tmin)

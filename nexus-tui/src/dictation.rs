@@ -24,10 +24,13 @@ pub const SETTLE_FRAMES: u8 = 3;
 const MAX_SAMPLES: usize = MAX_SECONDS * TARGET_RATE as usize;
 const LEVEL_WINDOW: usize = TARGET_RATE as usize / 20;
 const CUE_RATE: u32 = 44_100;
-const CUE_NOTES: [(&str, [f32; 2]); 3] = [
+const CUE_NOTES: [(&str, [f32; 2]); 5] = [
     ("start", [660.0, 880.0]),
     ("stop", [880.0, 587.0]),
     ("loading", [440.0, 440.0]),
+    // Old Nexus's completion cue, then a higher two-note cue for a wait.
+    ("complete", [660.0, 1046.5]),
+    ("input", [880.0, 1174.7]),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -545,11 +548,14 @@ fn cue_pcm(kind: &str) -> Vec<f32> {
         .collect()
 }
 
-fn play_cue(kind: &str, wait: bool) -> Result<(), String> {
-    if std::env::var("NEXUS_VOICE_SOUNDS")
+fn sounds_off(variable: &str) -> bool {
+    std::env::var(variable)
         .ok()
         .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "off" | "0" | "false"))
-    {
+}
+
+fn play_cue_now(kind: &str, wait: bool) -> Result<(), String> {
+    if !CUE_NOTES.iter().any(|(name, _)| *name == kind) {
         return Ok(());
     }
     let mut samples = vec![0.0; CUE_RATE as usize / 4];
@@ -579,6 +585,22 @@ fn play_cue(kind: &str, wait: bool) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+fn play_cue(kind: &str, wait: bool) -> Result<(), String> {
+    if sounds_off("NEXUS_VOICE_SOUNDS") {
+        return Ok(());
+    }
+    play_cue_now(kind, wait)
+}
+
+/// The notification cue for a session finishing or waiting for the user.
+/// `NEXUS_COMPLETION_SOUNDS=off` disables both, as in old Nexus.
+pub fn play_notification_cue(kind: &str) {
+    if sounds_off("NEXUS_COMPLETION_SOUNDS") {
+        return;
+    }
+    let _ = play_cue_now(kind, false);
 }
 
 pub fn play_loading_cue() {

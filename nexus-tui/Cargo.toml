@@ -28,5 +28,7 @@ pulldown-cmark = { version = "=0.13.4", default-features = false }
 libc = "=0.2.191"
 base64 = "=0.22.1"
 png = "=0.17.16"
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+ratatui-image = { version = "=8.1.1", default-features = false, features = ["crossterm"] }
 rodio = { version = "=0.23.0", default-features = false, features = ["playback"] }
 cpal = "=0.18.2"

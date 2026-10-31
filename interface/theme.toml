@@ -44,6 +44,7 @@ focus   = "#e8a46e"     # focus ring / focus bar (meaningful, >= 3:1)
 
 [dark.interactive]
 accent    = "#e8a46e"   # brand mark, active tab, links, primary action
+multi     = "#a78bfa"   # multi-select questions: rail, marker and ticks
 on_accent = "#121314"   # text on an accent fill
 focus     = "#e8a46e"   # keyboard focus indicator
 selection = "#2c2824"   # selected row/range background (accent tint)
@@ -92,6 +93,7 @@ focus   = "#a84e16"
 
 [light.interactive]
 accent    = "#a84e16"
+multi     = "#6743ae"
 on_accent = "#ffffff"
 focus     = "#a84e16"
 selection = "#f0e3d8"
@@ -197,6 +199,7 @@ style = ""
 "border.strong" = 239
 "border.focus" = 179
 "interactive.accent" = 179
+"interactive.multi" = 141
 "interactive.on_accent" = 233
 "interactive.focus" = 179
 "interactive.selection" = 237
@@ -232,6 +235,7 @@ style = ""
 "border.strong" = 250
 "border.focus" = 94
 "interactive.accent" = 94
+"interactive.multi" = 60
 "interactive.on_accent" = 231
 "interactive.focus" = 94
 "interactive.selection" = 224
@@ -267,6 +271,7 @@ style = ""
 "border.strong" = "bright_black"
 "border.focus" = "yellow"
 "interactive.accent" = "yellow"
+"interactive.multi" = "magenta"
 "interactive.on_accent" = "black"
 "interactive.focus" = "yellow"
 "interactive.selection" = "bright_black"   # background
@@ -302,6 +307,7 @@ style = ""
 "border.strong" = "white"
 "border.focus" = "red"
 "interactive.accent" = "red"
+"interactive.multi" = "magenta"
 "interactive.on_accent" = "white"
 "interactive.focus" = "red"
 "interactive.selection" = "white"          # background
@@ -341,6 +347,7 @@ style = ""
 "border.strong" = []
 "border.focus" = ["bold"]
 "interactive.accent" = ["bold"]
+"interactive.multi" = ["bold"]
 "interactive.focus" = ["bold"]         # always with the focus bar glyph
 "interactive.selection" = ["reverse"]
 "interactive.hover" = ["underline"]
