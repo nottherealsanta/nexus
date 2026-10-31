@@ -251,6 +251,10 @@ describe("shell", () => {
     await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/api/session")));
     const request = app.requests().find((r) => r.method === "POST" && r.url.endsWith("/api/session")) as any;
     expect(request.body).toEqual({ project: "prj_1", agent: "review", model: "codex/gpt-5", effort: "high" });
+    // The created session's tab replaces the New session tab at once; it does not wait for
+    // the session's event or detail read (which would flash the header back to New session).
+    await app.waitFor("id:session-tab-ses_new");
+    expect(app.shows("id:new-session-tab")).toBe(false);
   });
 
   test("settings sections follow the manifest order", async () => {
@@ -781,7 +785,7 @@ describe("tool output detail cap", () => {
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
     await app.waitFor("id:tool-row-call_bash");
-    expect(app.texts().join("\n").includes("Ran 2 commands")).toBe(true);
+    expect(app.texts().join("\n").includes("2 commands")).toBe(true);
     await app.keyboard.press("alt+d");
     await app.waitFor("text:Detail: high");
     await app.waitFor("text:high line 1");
@@ -1054,5 +1058,64 @@ describe("image paste and background shell context", () => {
     await app.waitFor("id:background-shell-done");
     expect(app.shows("id:msg-user")).toBe(false);
     await app.screenshot("/private/tmp/nexus-background-shell.png");
+  });
+});
+
+describe("composer prompt history", () => {
+  // The project's prompts, newest first, as Core serves them.
+  const prompts = (...entries: string[]) => ({
+    "GET */api/project/prj_1/prompts*": { body: { prompts: entries.map((text) => ({ text, image_count: 0 })) } },
+  });
+  const composer = async (entries: string[]) => {
+    const app = await open("./ComposerFixture.tsx", {
+      network: selectedSessionNetwork(prompts(...entries)),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.waitUntil(() => app.requests().some((r) => r.url.includes("/api/project/prj_1/prompts")));
+    return app;
+  };
+
+  test("Up walks a recalled multi-line prompt's lines before an older prompt", async () => {
+    const app = await composer(["line one\nline two", "older"]);
+    await app.type("id:composer-input", "mine");
+    await app.keyboard.press("up"); // recalls with the caret at the prompt's end
+    expect(app.value("id:composer-input")).toBe("line one\nline two");
+    // The caret is on the recalled prompt's last line: Up belongs to the input, not to history.
+    await app.keyboard.press("up");
+    expect(app.value("id:composer-input")).toBe("line one\nline two");
+    // On the first line it recalls the older prompt.
+    await app.keyboard.press("up");
+    expect(app.value("id:composer-input")).toBe("older");
+    // Down comes back, and then to the draft the recall kept.
+    await app.keyboard.press("down");
+    expect(app.value("id:composer-input")).toBe("line one\nline two");
+    await app.keyboard.press("down");
+    expect(app.value("id:composer-input")).toBe("mine");
+  });
+
+  test("Up in a multi-line draft does not recall while its caret is below the first line", async () => {
+    const app = await composer(["older"]);
+    await app.type("id:composer-input", "a");
+    await app.keyboard.press("shift+enter"); // a line break in a multiline input that submits
+    await app.type("id:composer-input", "b");
+    await app.keyboard.press("up");
+    expect(app.value("id:composer-input")).toBe("a\nb");
+    // The caret reached the first line: now Up recalls.
+    await app.keyboard.press("up");
+    expect(app.value("id:composer-input")).toBe("older");
+  });
+
+  test("Up on an empty composer steps through history and Down returns to the draft", async () => {
+    const app = await composer(["newest", "older"]);
+    await app.keyboard.press(`${mod}+l`); // composer.focus
+    await app.keyboard.press("up");
+    expect(app.value("id:composer-input")).toBe("newest");
+    await app.keyboard.press("up");
+    expect(app.value("id:composer-input")).toBe("older");
+    await app.keyboard.press("down");
+    expect(app.value("id:composer-input")).toBe("newest");
+    await app.keyboard.press("down");
+    expect(app.value("id:composer-input")).toBe("");
   });
 });

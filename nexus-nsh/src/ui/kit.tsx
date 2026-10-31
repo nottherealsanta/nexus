@@ -53,12 +53,13 @@ export const TONE: Record<string, string> = {
   "text.primary": "text-foreground", "status.success": "text-success", "status.error": "text-error", "interactive.accent": "text-primary",
   "status.warning": "text-warning", "text.muted": "text-muted-foreground", "status.info": "text-info",
 };
-export function Status(p: { kind: keyof typeof statusGlyphs; word?: boolean; class?: string }) {
+export function Status(p: { kind: keyof typeof statusGlyphs; word?: boolean; class?: string; text?: string }) {
   const g = statusGlyphs[p.kind];
+  const label = p.text ?? g.label;
   return (
-    <View class="flex-row items-center gap-1" accessible accessibilityLabel={g.label}>
+    <View class="flex-row items-center gap-1" accessible accessibilityLabel={label}>
       <Text class={`w-3.5 text-center text-[13px] leading-5 ${TONE[g.token]} ${p.class ?? ""}`}>{g.unicode}</Text>
-      <If when={p.word}><Text class={`text-xs leading-4 ${TONE[g.token]}`}>{g.label}</Text></If>
+      <If when={p.word}><Text class={`text-xs leading-4 ${TONE[g.token]}`}>{label}</Text></If>
     </View>
   );
 }

@@ -65,6 +65,7 @@ def css(mode: str) -> dict[str, str]:
         "selection": g("interactive.selection"),
         "hover": g("interactive.hover"),
         "on-accent": g("interactive.on_accent"),
+        "multi": g("interactive.multi"),
         "success": g("status.success"),
         "warning": g("status.warning"),
         "error": g("status.error"),

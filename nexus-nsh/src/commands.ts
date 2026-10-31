@@ -14,6 +14,7 @@ import {
 import { ApiError, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
 import { Message } from "./core/api";
+import { normalizeSession } from "./core/reduce";
 import { imageDrafts } from "./images";
 import { disabledKey, selectedSkillCounts, setDisabledTool, shouldInstallRequestedDirectly, toggleDisabledTool } from "./skills-mcp";
 import { speakAnswer, speechPlaying, stopSpeaking } from "./speech";
@@ -205,6 +206,10 @@ export async function sendPrompt(text: string, images: import("./images").DraftI
       if (selected.disabled_tools !== undefined) fields.disabled_tools = selected.disabled_tools;
       const created = await request<any>("POST", "/api/session", { body: { project, ...fields }, key: newKey() });
       createdId = created.id;
+      // The POST reply is authoritative: keep the tab and its title from the start, instead of
+      // falling back to "New session" until the session's event or detail read arrives.
+      const previous = model.sessions.get(created.id);
+      if (!previous || (created.revision ?? 0) >= previous.revision) model.sessions.set(created.id, normalizeSession(created));
       sessionDraft.set({});
       await selectSession(created.id);
       ses = created;

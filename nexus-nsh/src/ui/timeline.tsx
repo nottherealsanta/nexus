@@ -545,22 +545,18 @@ function activitySummary(items: ActivityEntry[]): string {
   if (tools.some((tool) => tool.state === "running" || tool.state === "waiting")) return "Working";
   const counts = new Map<string, number>();
   for (const item of items) {
-    let label: string;
-    if (item.kind === "reasoning") label = "Thought";
+    let noun: string;
+    if (item.kind === "reasoning") noun = "thought";
     else {
-      label = ({
-        bash: "Ran command", read: "Read file", edit: "Edited file", patch: "Edited file", write: "Wrote file",
-        code: "Ran cell", ask: "Asked question", web_search: "Searched time", web_fetch: "Fetched page",
-      } as Record<string, string>)[item.name] ?? `Used ${item.name}`;
+      noun = ({
+        bash: "command", read: "read", edit: "edit", patch: "edit", write: "edit",
+        code: "cell", ask: "question", web_search: "search", web_fetch: "page", session: "session",
+      } as Record<string, string>)[item.name] ?? "tool";
     }
-    counts.set(label, (counts.get(label) ?? 0) + 1);
+    counts.set(noun, (counts.get(noun) ?? 0) + 1);
   }
-  return [...counts.entries()].map(([label, count], index) => {
-    if (label === "Thought") return "Thought";
-    const [verb, noun] = label.lastIndexOf(" ") > 0 ? [label.slice(0, label.lastIndexOf(" ")), label.slice(label.lastIndexOf(" ") + 1)] : [label, ""];
-    const piece = `${verb} ${count} ${noun}${count === 1 || !noun ? "" : "s"}`.trim();
-    return index ? piece[0].toLowerCase() + piece.slice(1) : piece;
-  }).join(", ");
+  // `3 thoughts, 50 commands, 8 tools, 9 reads`; a `search` takes `es`.
+  return [...counts.entries()].map(([noun, count]) => `${count} ${noun}${count === 1 ? "" : noun === "search" ? "es" : "s"}`).join(", ");
 }
 
 function groupActivities(rows: Row[]): Row[] {

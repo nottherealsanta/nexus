@@ -64,6 +64,10 @@ export interface SyncHost {
   /** Global live-only notifications share the SSE cursor but never become session scratch. */
   globalEvent?(event: CoreEvent): void;
   handoffEvent?(event: CoreEvent): void;
+  /** A session stopped running: its own or every descendant turn is done. */
+  sessionFinished?(id: string): void;
+  /** An approval or question is newly waiting. */
+  sessionInput?(id: string): void;
   canStart: boolean;
 }
 
@@ -174,12 +178,29 @@ export class Sync {
       scheduled = false;
       let resync: string | null = null;
       let closed: string | null = null;
+      const busy = (id: string) => m.running.has(id) || m.sessions.get(id)?.status === "busy";
+      const root = (id: string): string | undefined => {
+        let session = m.sessions.get(id);
+        for (let i = 0; session && i < m.sessions.size; i++) {
+          if (!session.parent_id) return session.id;
+          session = m.sessions.get(session.parent_id);
+        }
+        return undefined;
+      };
+      const treeBusy = (id: string) => [...m.sessions.keys()].some((sid) => busy(sid) && root(sid) === id);
       for (const ev of buf) {
+        const sid = ev.session_id;
+        const rootId = sid ? root(sid) : undefined;
+        const wasBusy = !!rootId && treeBusy(rootId);
         if (ev.type.startsWith("input.") && ev.session_id) h.inputsChanged?.(ev.session_id);
         if (ev.type === "config.changed") h.configChanged?.();
         if (ev.type === "provider.login" || ev.type === "agents.changed") h.settingsEvent?.(ev);
         const r = m.applyEvent(ev);
         if (typeof r === "object") { resync = r.resync; break; }
+        if (r === "applied" && sid) {
+          if (rootId && wasBusy && !treeBusy(rootId)) h.sessionFinished?.(rootId);
+          if (ev.type === "permission.asked" || ev.type === "question.asked") h.sessionInput?.(sid);
+        }
         if (r === "applied" && (ev.type === "session.handoff" || ev.type === "session.handoff_failed")) h.handoffEvent?.(ev);
         if (r === "applied" && !ev.session_id && ["skills.changed", "mcp.changed", "mcp.failed", "voice.progress", "agents.changed", "extensions.changed", "config.changed"].includes(ev.type)) h.globalEvent?.(ev);
         if (r === "applied" && ["turn.summary", "message.added", "session.updated"].includes(ev.type) && ev.session_id && ev.session_id === m.selected?.sessionId) { h.contextChanged?.(ev.session_id); if (ev.type === "turn.summary") closed = ev.session_id; }

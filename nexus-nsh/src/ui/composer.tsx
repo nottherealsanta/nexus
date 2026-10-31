@@ -184,11 +184,17 @@ export function Composer() {
       tab: () => { const c = completion(); const row = c?.rows[Math.min(selected(), (c?.rows.length ?? 1) - 1)]; if (row) accept(row); },
     });
   });
-  // Prompt history: Up in an empty composer recalls older prompts, Down returns toward the draft.
-  // The caret position is not readable here, so Up and Down are taken only while the draft is empty or
-  // is exactly the recalled entry.
+  // Prompt history: Up on the composer's first line recalls older prompts, Down on its last line
+  // returns toward the draft. Elsewhere the arrows belong to the input and move the caret between
+  // lines, so a recalled multi-line prompt is walked line by line before the one before it.
   const recall = signal<{ at: number; scratch: string } | null>(null);
   const recalled = () => { const r = recall(); const e = promptHistory().entries; return r && e[r.at] === text() ? r : null; };
+  // The caret as the input reports it (UTF-16 units, clamped to the draft a replacement shortened);
+  // a selection takes no arrow.
+  const caret = signal({ start: 0, end: 0 });
+  const caretAt = () => { const t = text(); const c = caret(); return c.start === c.end ? Math.min(c.end, t.length) : -1; };
+  const onFirstLine = () => { const at = caretAt(); return at >= 0 && !text().slice(0, at).includes("\n"); };
+  const onLastLine = () => { const at = caretAt(); return at >= 0 && !text().slice(at).includes("\n"); };
   // `viewed()` changes on every model bump; reload only when the project or the viewed session changes.
   let historyKey = "";
   effect(() => {
@@ -201,23 +207,28 @@ export function Composer() {
   effect(() => {
     if (!focused() || open()) return;
     const entries = promptHistory().entries;
-    const set = (v: string) => draft.update((d) => ({ ...d, [key()]: v }));
-    if (!entries.length || (text() !== "" && !recalled())) return;
-    return bindOpenKeys({
-      up: () => {
-        const r = recalled();
-        const at = r ? Math.min(entries.length - 1, r.at + 1) : 0;
-        recall.set({ at, scratch: r ? r.scratch : text() });
-        set(entries[at]);
-      },
-      down: () => {
-        const r = recalled();
-        if (!r) return;
-        if (r.at === 0) { recall.set(null); set(r.scratch); return; }
-        recall.set({ at: r.at - 1, scratch: r.scratch });
-        set(entries[r.at - 1]);
-      },
-    });
+    if (!entries.length) return;
+    // A recalled prompt lands with its caret at the end: Up then walks its lines before the next one.
+    const set = (v: string) => {
+      draft.update((d) => ({ ...d, [key()]: v }));
+      caret.set({ start: v.length, end: v.length });
+      try { ref?.setSelection(v.length, v.length); } catch { /* the platform keeps the caret */ }
+    };
+    const keys: Record<string, () => void> = {};
+    if (onFirstLine()) keys.up = () => {
+      const r = recalled();
+      const at = r ? Math.min(entries.length - 1, r.at + 1) : 0;
+      recall.set({ at, scratch: r ? r.scratch : text() });
+      set(entries[at]);
+    };
+    if (recalled() && onLastLine()) keys.down = () => {
+      const r = recalled();
+      if (!r) return;
+      if (r.at === 0) { recall.set(null); set(r.scratch); return; }
+      recall.set({ at: r.at - 1, scratch: r.scratch });
+      set(entries[r.at - 1]);
+    };
+    return bindOpenKeys(keys);
   });
   effect(() => {
     if (!focused() || !busy() || !canSend() || open()) return;
@@ -303,6 +314,7 @@ export function Composer() {
             }}
             onChange={({ value: t }) => { selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); }}
             onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
+            onSelectionChange={({ start, end }) => caret.set({ start, end })}
             onKeyPress={(e: { key: string }) => {
               if (String(e.key).toLowerCase() !== "escape") return;
               if (dictationPhase() !== "idle") { cancelDictation(); return; }

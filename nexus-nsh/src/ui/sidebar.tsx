@@ -11,6 +11,7 @@ import { fileListing, loadFiles, showFile } from "../store";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
 import { ProjectMcpPanel } from "./project-mcp";
+import { projectActivity, projectLabels, railProjects } from "../project-rail";
 
 const TAB_ICON: Record<string, IconName> = { sessions: "sessions", files: "files", projects: "projects" };
 export const leftSidebarWidth = signal(264);
@@ -74,20 +75,27 @@ export function LeftSidebar(p: { drawer?: boolean }) {
     </View>
   );
 }
-/** Compact session rail shown when the docked sidebar is collapsed. */
+/** Compact project rail shown when the docked sidebar is collapsed. */
 export function SessionRail() {
+  const projects = () => { m(); return railProjects(model.projects.values()); };
+  const labels = () => projectLabels(projects());
+  const activity = (id: string) => { m(); return projectActivity(id, model.sessions.values(), model.running, tick()); };
+  const summary = (id: string) => {
+    const a = activity(id);
+    return a.running ? `${a.running} running` : a.latest ? `active ${relTime(a.latest, tick())}` : "No session activity";
+  };
   return (
-    <View class="w-12 bg-sidebar items-center pt-2" testID="session-rail" accessibilityLabel="Session rail">
+    <View class="w-12 bg-sidebar items-center pt-2" testID="session-rail" accessibilityLabel="Project rail">
       <IconButton icon="search" label="Search sessions" testID="rail-search" onPress={() => { leftTab.set("sessions"); toggleLeft(); }} />
       <IconButton icon="plus" label="New session" testID="rail-new-session" onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} />
       <Scroll class="flex-1" contentClass="items-center gap-1 pb-2">
-        <Each of={rowSessions()} key={(s) => s.id}>
-          {(s) => <Button onPress={() => void selectSession(s().id)} accessibilityLabel={`Open ${s().title || "Untitled"}`}
-            selected={(m(), model.selected?.sessionId === s().id && centre() === "session")} testID={`rail-session-${s().id}`}
-            tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{s().title || "Untitled"}</Text>}
-            class={`relative size-9 items-center justify-center rounded-(--radius) hover:bg-accent ${FOCUS}`}>
-            <If when={(m(), model.selected?.sessionId === s().id && centre() === "session")}><View class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary" /></If>
-            <Text class={`text-[13px] ${(m(), model.selected?.sessionId === s().id) ? "font-semibold text-foreground" : "text-muted-foreground"}`}>{(s().title || "Untitled").trim().charAt(0).toUpperCase()}</Text>
+        <Each of={projects()} key={(p) => p.id}>
+          {(p) => <Button onPress={() => { scopeAll.set(false); selectProject(p().id); }} accessibilityLabel={`${p().name} · ${summary(p().id)}`}
+            selected={currentProject() === p().id} testID={`rail-project-${p().id}`}
+            tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{p().name} · {summary(p().id)}</Text>}
+            class={`relative size-9 items-center justify-center rounded-(--radius) hover:bg-accent ${currentProject() === p().id ? "bg-accent" : ""} ${FOCUS}`}>
+            <If when={currentProject() === p().id}><View class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary" /></If>
+            <Text class={`text-[13px] font-medium ${activity(p().id).active ? "text-foreground opacity-70" : "text-muted-foreground opacity-50"}`}>{labels().get(p().id)}</Text>
           </Button>}
         </Each>
       </Scroll>

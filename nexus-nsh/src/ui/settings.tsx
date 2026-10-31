@@ -5,7 +5,7 @@ import { Btn, T, FOCUS } from "./kit";
 import { Heading, Modal, ModalFooter, ModalTitle, SelectBar } from "./modal";
 import { manifest } from "../gen/manifest";
 import { byId, commands, copyText, escape, keyLabel, loadProviders, run } from "../commands";
-import { catalogSource, info, compat, isNarrow, live, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsPage, settingsReload, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker, providerLogins, confirmDialog } from "../store";
+import { catalogSource, info, compat, isNarrow, live, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsPage, settingsReload, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker, providerLogins, confirmDialog, notificationSoundsOn, setNotificationSounds } from "../store";
 import { CLIENT_API, CLIENT_VERSION } from "../core/api";
 import { request } from "../core/transport";
 import { voiceInfoLines, voiceActionReason } from "../voice-settings";
@@ -73,7 +73,7 @@ async function refreshCatalog() {
 }
 
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["appearance.theme", "appearance.animations", "appearance.timeline_detail", "about.inspector", "agents.default_root", "tools.default_permission", "agents.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove"]);
+const WIRED = new Set(["appearance.theme", "appearance.animations", "appearance.timeline_detail", "notifications.sound", "about.inspector", "agents.default_root", "tools.default_permission", "agents.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove"]);
 
 function voiceTarget(id: string): VoiceTarget | null {
   if (id.startsWith("dictation.stt_")) return "stt";
@@ -394,6 +394,7 @@ function control(r: Row): JSX.Element {
       onPick={(v) => { themeChoice.set(v as any); setColorScheme(v as "light" | "dark" | "system"); savePrefs(); }} />;
   }
   if (r.id === "appearance.animations") return <Seg label={r.label} options={["on", "off"]} value={config()?.values?.ui?.reduced_motion ? "off" : "on"} onPick={(v) => void patchConfig("ui.reduced_motion", v === "off")} />;
+  if (r.id === "notifications.sound") return <Seg label={r.label} options={["off", "on"]} value={notificationSoundsOn() ? "on" : "off"} onPick={(v) => setNotificationSounds(v === "on")} />;
   if (r.id === "mcp.full_definitions") return <Seg label={r.label} options={["off", "on"]} value={config()?.values?.mcp?.full_definitions ? "on" : "off"} onPick={(v) => void patchConfig("mcp.full_definitions", v === "on")} />;
   if (r.id === "mcp.max_listed_tools") return <McpToolsLimit />;
   if (r.id === "context.handoff_percent") return <HandoffPercent />;

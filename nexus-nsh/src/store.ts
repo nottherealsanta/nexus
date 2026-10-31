@@ -8,6 +8,7 @@ import { ApiError, request } from "./core/transport";
 import type { ProjectMcpSummary } from "./project-mcp";
 import { emptyGlobalToastState, globalEventToast } from "./skills-mcp";
 import { receiveVoiceProgress } from "./voice-state";
+import { playNotificationCue } from "./cues";
 
 export type CentreView = "session" | "new_session" | "settings" | "editor" | "file";
 export type Toast = { id: number; level: "success" | "info" | "warning" | "error"; text: string; at: number };
@@ -177,6 +178,15 @@ export async function loadPrefs() {
 }
 export function savePrefs() {
   try { void Storage.setItem("nexus.prefs", JSON.stringify({ prefs: prefs(), theme: themeChoice(), leftOpen: leftOpen(), rightOpen: rightOpen(), leftTab: leftTab(), timelineDetail: timelineDetail() })); } catch {}
+}
+
+/** Notification sounds are on unless Settings turned them off. */
+export function notificationSoundsOn(): boolean {
+  return prefs()["notifications.sound"] !== false;
+}
+export function setNotificationSounds(on: boolean) {
+  prefs.update((p) => ({ ...p, "notifications.sound": on }));
+  savePrefs();
 }
 
 export function setTimelineDetail(level: TimelineDetail) {
@@ -415,6 +425,8 @@ const host: SyncHost = {
   },
   contextChanged(id) { void loadContext(id).catch(() => {}); },
   inputsChanged(id) { void loadInputs(id).catch(() => {}); },
+  sessionFinished() { if (notificationSoundsOn()) playNotificationCue("finished"); },
+  sessionInput() { if (notificationSoundsOn()) playNotificationCue("input"); },
   handoffEvent(e) {
     if (e.type === "session.handoff_failed") { toast("warning", `Automatic handoff failed: ${(e.data as any)?.error ?? "unknown error"}`); return; }
     const d = e.data as { reason?: string; to?: string };
@@ -649,6 +661,8 @@ export function subagentsOf(root: string): Session[] {
     .sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : 1));
 }
 
+const lastProjectSession = new Map<string, string>();
+
 export async function selectSession(id: string) {
   const ses = model.sessions.get(id);
   // Subagents have no tab: opening one keeps its root's tab (TUI parity).
@@ -656,6 +670,7 @@ export async function selectSession(id: string) {
   openedTabs.update((tabs) => tabs.includes(tab) ? tabs : [...tabs, tab]);
   model.unreadSessions.delete(id);
   if (ses) {
+    lastProjectSession.set(ses.project_id, id);
     currentProject.set(ses.project_id);
     loadComposerData(ses.project_id);
   }
@@ -682,7 +697,9 @@ export function selectProject(id: string) {
   currentProject.set(id);
   loadComposerData(id);
   loadProjectWorktrees(id);
-  const first = model.sessionsRecent().find((s) => s.project_id === id && !s.parent_id && !s.archived);
+  const remembered = model.sessions.get(lastProjectSession.get(id) ?? "");
+  const first = remembered && remembered.project_id === id && !remembered.archived
+    ? remembered : model.sessionsRecent().find((s) => s.project_id === id && !s.parent_id && !s.archived);
   if (first) void selectSession(first.id);
   else { model.select(null); centre.set("new_session"); bump(); }
 }

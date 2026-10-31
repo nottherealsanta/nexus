@@ -765,11 +765,12 @@ export const manifest = {
      },
      {
       "id": "notifications.sound",
-      "label": "Completion sound",
+      "label": "Notification sounds",
       "kind": "toggle",
       "scope": "client",
       "clients": "both",
-      "default": false
+      "default": true,
+      "note": "A rising cue when a root session and all its subagents have finished, and a higher cue when any session needs input. NEXUS_COMPLETION_SOUNDS=off disables both."
      },
      {
       "id": "notifications.os",
@@ -2152,7 +2153,7 @@ export const manifest = {
     "palette",
     "timeline"
    ],
-   "note": "Low: each activity group is one line (`Ran 1 command`). Medium: every tool on its own collapsed line with its key detail. High: every tool expanded, long output capped to its first and last lines (`o` shows all)."
+   "note": "Low: each activity group is one line (`1 command, 2 reads`). Medium: every tool on its own collapsed line with its key detail. High: every tool expanded, long output capped to its first and last lines (`o` shows all)."
   },
   {
    "id": "tool.show_all_output",

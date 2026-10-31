@@ -82,7 +82,9 @@ oldest first, three at most and then `+N more`, with no lifetime hairline. A toa
 full text on the record; clicking it, or pressing Enter on it, or clicking an entry of the
 notifications drawer opens it in the modal dialog (`c` copies, Esc closes). The banner is a
 36 px strip, and the jump-to-latest pill (`↓ 3 new · ⌘↓`) sits above the composer, right-aligned
-with its card.
+with its card. Settings › Notifications › Notification sounds (on by default) plays a rising
+Web Audio cue when a root session and all its subagents have finished, and a higher cue when any session needs
+input; `NEXUS_COMPLETION_SOUNDS=off` silences both.
 
 The chrome follows D02. The 44 px header band and both sidebars sit on `bg-sidebar`
 (the chrome surface) with no edge rules; the centre is `bg-background` (the canvas). The
@@ -142,7 +144,14 @@ newest request with known usage. A ledger that began counting well after the
 first message is labelled `Totals since …`, and requests that reported no usage
 are counted as unknown. It also counts descendant sessions. Right-click or Shift+F10 opens the
 manifest-driven session/project row menu, including confirmed project removal,
-and Projects has a trailing `+ Add project` row. Projects also shows the selected
+and Projects has a trailing `+ Add project` row. The collapsed sidebar shows projects
+in creation order, with stable uppercase initials (collisions use the next available
+consonant, then a numeric suffix). Projects with running sessions or session activity
+within the last hour are lighter gray; inactive projects are darker. Selection has
+a separate background and edge marker. Hover/focus shows the full name and activity;
+clicking restores the project's last selected session in this client, or its newest
+unarchived root session, or the new-session view when empty.
+Projects also shows the selected
 project's `.mcp.json` servers. Enabled, valid entries start automatically with a
 new session, and the panel warns that their commands run then without asking;
 reading or refreshing it never starts a server. Each row shows its current

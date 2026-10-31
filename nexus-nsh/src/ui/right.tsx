@@ -7,6 +7,7 @@ import { contextBudget, gitStatus, m, model, modelCatalog, viewed } from "../sto
 import { agentColor } from "../agent-color";
 import type { SelectedView } from "../core/reduce";
 import { latestUsage, ledgerTotals, unknownRequests } from "../core/turns";
+import { attention } from "./sidebar";
 
 const sections = manifest.navigation.right_sidebar.section as unknown as { id: string; label: string; order: number; unavailable_reason?: string }[];
 
@@ -170,11 +171,20 @@ export function RightSidebar(p: { drawer?: boolean }) {
               const kids = () => descendants().length;
               const runningKids = () => descendants().filter((child) => child.status === "busy" || model.running.has(child.id)).length;
               const failedKids = () => descendants().filter((child) => child.status === "failed" || model.failedSessions.has(child.id)).length;
+              const state = () => {
+                const id = ses().id;
+                if (attention(id) === "waiting") return { kind: "waiting" as const, word: "needs input" };
+                if (model.failedSessions.has(id)) return { kind: "error" as const, word: "failed" };
+                if (ses().status === "busy" || model.running.has(id)) return { kind: "running" as const, word: "running" };
+                if (ses().archived) return { kind: "cancelled" as const, word: "archived" };
+                if (model.unreadSessions.has(id)) return { kind: "done" as const, word: "finished" };
+                return { kind: "done" as const, word: "idle" };
+              };
               return (
                 <View>
                   <Field k="Title" v={ses().title || "Untitled"} />
                   <Field k="Id"><View class="flex-row items-center gap-1"><Text style={{ userSelect: "text" }} class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground">{midTruncate(ses().id, 15)}</Text><IconButton icon="copy" label="Copy session id" onPress={() => run("session.copy_id")} class="size-7" /></View></Field>
-                  <Field k="Status"><View class="flex-row"><Status kind={ses().status === "busy" ? "running" : ses().archived ? "cancelled" : "done"} word /></View></Field>
+                  <Field k="Status"><View class="flex-row"><Status kind={state().kind} word text={state().word} /></View></Field>
                   <Field k="Agent"><Text class={agentColor(ses().agent)}>{ses().agent}</Text></Field>
                   <Field k="Model" v={`${ses().model || "default"}${ses().model_source ? ` (${ses().model_source})` : ""}`} mono />
                   <Field k="Effort" v={(ses().effort as string) || "default"} />

@@ -4,10 +4,10 @@ import { formatVoiceSize, voiceActionReason, voiceCommandReason, voiceInfoLines 
 import { receiveVoiceProgress, ttsDownloadProgress, voiceDownloadProgress, voiceStatus, voiceStatusError, voiceStatusLoading } from "./src/voice-state";
 import type { VoiceStatus } from "./src/voice-state";
 
-const sttRepo = "ConwayResearch/Underdog-Bark-3.0-Clean";
+const sttRepo = "moondream/parakeet-redux";
 const ttsRepo = "gradium/phonon-31m-en";
 const status = (): VoiceStatus => ({
-  stt: { state: "absent", repo: sttRepo, revision: "main", size: 181_000_000, cache_path: null, error: null },
+  stt: { state: "absent", repo: sttRepo, revision: "main", size: 179_005_408, cache_path: null, error: null },
   tts: { state: "absent", repo: ttsRepo, revision: "main", size: 65_000_000, cache_path: null, error: null },
 });
 
@@ -19,7 +19,7 @@ describe("voice settings", () => {
   });
 
   test("formats model sizes and disables only meaningless actions", () => {
-    expect(formatVoiceSize(181_000_000)).toBe("181 MB");
+    expect(formatVoiceSize(179_005_408)).toBe("179 MB");
     expect(formatVoiceSize(65_000_000)).toBe("65 MB");
     expect(formatVoiceSize(null)).toBe("size unavailable");
     expect(voiceActionReason("stt", "download", { ...status().stt, state: "ready" })).toBe("The speech-to-text model is already ready.");
@@ -42,10 +42,10 @@ describe("voice settings", () => {
       stt: { ...status().stt, state: "downloading" },
       tts: { ...status().tts, state: "runtime_missing", error: "optional speech runtime is not installed" },
     });
-    voiceDownloadProgress.set({ model: "stt", state: "downloading", bytes_done: 10_000_000, bytes_total: 181_000_000 });
+    voiceDownloadProgress.set({ model: "stt", state: "downloading", bytes_done: 10_000_000, bytes_total: 179_005_408 });
     const stt = voiceInfoLines("stt").join("\n");
     const tts = voiceInfoLines("tts").join("\n");
-    expect(stt.includes("State: downloading · 6% (10 MB / 181 MB)") && stt.includes(sttRepo) && stt.includes("181 MB") && stt.includes("Cache path: not in the Hugging Face cache")).toBe(true);
+    expect(stt.includes("State: downloading · 6% (10 MB / 179 MB)") && stt.includes(sttRepo) && stt.includes("179 MB") && stt.includes("Cache path: not in the Hugging Face cache")).toBe(true);
     expect(tts.includes("runtime_missing") && tts.includes(ttsRepo) && tts.includes("65 MB") && tts.includes("optional speech runtime is not installed") && tts.includes("nexus voice init")).toBe(true);
     voiceStatus.set(null);
     voiceDownloadProgress.set(null);
