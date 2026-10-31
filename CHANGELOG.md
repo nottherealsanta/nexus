@@ -11,6 +11,30 @@
 - Refine TUI and NSH settings, dictation, image handling, and timeline presentation.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
+## [0.11.0](https://github.com/nottherealsanta/nexus/compare/v0.10.0...v0.11.0) (2026-10-31)
+
+
+### Features
+
+* **core:** retain wire payloads with bounded expiry ([26704a2](https://github.com/nottherealsanta/nexus/commit/26704a263c4a5ab2f7f728daf656545f2c0a068b))
+* **nsh:** improve project navigation and session activity ([a437b45](https://github.com/nottherealsanta/nexus/commit/a437b455e22c704d2f46ad3a126a0533b016e745))
+* plain nexus and nexus tui open the terminal client ([8622de5](https://github.com/nottherealsanta/nexus/commit/8622de5a4a2666987d3f63cd498cb23a6608717a))
+* project MCP opt-out and web timeline parity ([be9c568](https://github.com/nottherealsanta/nexus/commit/be9c568a26b0ce3b9d77a2022cbdb0e86c2f1f8d))
+* **voice:** use offline Parakeet speech recognition ([90e853d](https://github.com/nottherealsanta/nexus/commit/90e853dadac28aba497e155093963d0be22e322e))
+
+
+### Bug fixes
+
+* **voice:** default to Parakeet Redux ([45ba0f3](https://github.com/nottherealsanta/nexus/commit/45ba0f3393bcdc856e4b477f5802ace609113838))
+
+
+### Performance
+
+* **tui:** coalesce frames and cache timeline layout ([948468a](https://github.com/nottherealsanta/nexus/commit/948468aa76cb88be0186b66edee8c55ef4452b65))
+* **tui:** optimize timeline rendering and interactions ([ccec95d](https://github.com/nottherealsanta/nexus/commit/ccec95d68c4e7c26266cf2fbaab108723e66b6a4))
+* **tui:** reuse the timeline for chrome-only frames ([7849b38](https://github.com/nottherealsanta/nexus/commit/7849b38ad3d35db8bc41774fc46eff229d602358))
+* **tui:** share cached timeline lines as Rc ([0d7979f](https://github.com/nottherealsanta/nexus/commit/0d7979f47acbdd1848251b9e13413aafbaefe0f8))
+
 ## [0.10.0](https://github.com/nottherealsanta/nexus/compare/v0.7.2...v0.10.0) (2026-10-30)
 
 Nexus 0.10 is a rebuild around a shared Core and an ordered, visible context timeline.
