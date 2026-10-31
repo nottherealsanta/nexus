@@ -1,8 +1,8 @@
 # Plan: TUI render performance
 
-Status: phases 1–3 implemented 2026-10-31 (results below). Phase 4 remains;
-measure again before choosing its scope. The goal is to remove the TUI's
-stream backlog and long-session frame cost
+Status: phases 1–3 implemented 2026-10-31 (results below); phase 4 is deferred
+until a larger reported workload (measurement in that section). The goal is to
+remove the TUI's stream backlog and long-session frame cost
 **without changing timeline content or interaction behavior**. Coalescing
 intentionally skips intermediate stream frames. At equivalent render boundaries,
 with the same clock and animation phase, buffers, cursor and interaction metadata
@@ -378,10 +378,29 @@ per-dependency graph is left for when profiling shows it matters.
 
 ## Phase 4: viewport layout
 
+Status: deferred 2026-10-31. The phase 2/3 targets are met at 1,000 messages, so
+this is not needed for the reported workload; the measurement that would trigger
+it is at the end of this section.
+
 If parsing caches leave assembly cost above budget, use indexed heights and build
 only viewport blocks plus a margin. Preserve total height, jump-to-block, sticky
 user headers, fold behavior, scroll anchors and selection/copy semantics. Width
 changes and newly loaded history need explicit height invalidation.
+
+Measured with the same replay beyond the target (`NEXUS_TUI_REPLAY_MESSAGES`,
+release, no tools):
+
+| Messages | Timeline build | Paced draw mean | RSS (burst run) |
+| --- | --- | --- | --- |
+| 1,000 | 7.3–8.5 ms | 5.15–5.23 ms | 53–55 MB |
+| 2,000 | 21.7 ms | 15.2 ms | 468 MB |
+| 5,000 | 47.3 ms | 32.7 ms | 1.1 GB |
+
+At 5,000 messages the cache hits its 32 MiB cap (5,692 evictions in the burst
+run) and per-frame assembly dominates. A real session that large would benefit
+from viewport-only assembly and shared cached line slices; until one is
+reported, phase 4 stays deferred rather than changing block offsets, sticky
+headers and selection semantics without a workload to validate them.
 
 ## Reproducible benchmark and delivery
 

@@ -28,8 +28,9 @@ The sections below are the record of the release steps and the backlog that rema
   (typing, scrolling, idle ticks) reuse the last timeline. In a deterministic
   replay, 902 events cost 16 frames instead of 902; a 200-message stream draw is
   1.1–1.3 ms and a 1,000-message draw 5.2 ms (release), while chrome-only draws
-  are 0.36 ms and 0.54 ms. Remaining work: phase 4 (viewport layout), optional
-  at this cost, in
+  are 0.36 ms and 0.54 ms. Phase 4 (viewport layout) is deferred: at 2,000
+  messages a stream draw is ~15 ms and at 5,000 ~33 ms with the 32 MiB cache
+  capped, so it becomes worthwhile only for a history that large. Details in
   [TUI_PERFORMANCE_PLAN.md](TUI_PERFORMANCE_PLAN.md).
 - **Merged.** `main` is now Nexus 0.10 (`e2c6cd2`, pushed directly, no PR; branch protection is off). `nexus10` shared no history with `main`, so the merge used `-s ours` and keeps old Nexus 0.7.2 as the second parent: no force-push, and nothing was lost. Old Nexus is also branch `nexus01` (pushed, plus one backup commit of its uncommitted local work) and tag `v0.7.2`.
 - Release gate O1 to O4 are done. O5 (platform matrix) is deferred to [TODO.md](TODO.md); O6 (release-download install) is written and tested against a local release (step 3).
