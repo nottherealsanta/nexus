@@ -13,17 +13,17 @@ from nexus.server import build_app, make_runtime
 from nexus.store import Store
 from nexus.voice.audio import silence
 from nexus.voice.manager import VoiceManager
-from nexus.voice.store import EXPECTED_SIZES, MODEL_ID, PROCESSOR_ID, ModelPaths
+from nexus.voice.store import EXPECTED_SIZES, MODEL_ID, ModelPaths
 
 TOKEN = "voice-test-token"
 
 
 class FakeStore:
     def __init__(self) -> None:
-        self.sizes = {MODEL_ID: 0, PROCESSOR_ID: 0}
+        self.sizes = {MODEL_ID: 0}
 
     def verified_paths(self) -> ModelPaths:
-        return ModelPaths(Path("/fake/bark"), Path("/fake/processor"))
+        return ModelPaths(Path("/fake/photon"))
 
     def cache_sizes(self) -> dict[str, int]:
         return dict(self.sizes)
@@ -56,7 +56,7 @@ async def setup(tmp_path, monkeypatch):
 
     def download(target):
         target.sizes = dict(EXPECTED_SIZES)
-        return ModelPaths(Path("/fake/bark"), Path("/fake/processor"))
+        return ModelPaths(Path("/fake/photon"))
 
     voice = VoiceManager(
         engine_factory=lambda _paths: engine,

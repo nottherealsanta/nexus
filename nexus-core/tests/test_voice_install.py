@@ -1,4 +1,15 @@
+import tomllib
+from pathlib import Path
+
 from nexus.voice import install
+from nexus.voice.store import KESTREL_VERSION, PHOTON_VERSION
+
+
+def test_voice_extra_pins_the_reviewed_runtime_for_pip_installs():
+    project = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text(encoding="utf-8"))
+    requirements = project["project"]["optional-dependencies"]["voice"]
+    assert any(item.startswith(f"moondream=={PHOTON_VERSION};") for item in requirements)
+    assert any(item.startswith(f"kestrel=={KESTREL_VERSION};") for item in requirements)
 
 
 def test_requirements_drop_the_extra_marker(monkeypatch):

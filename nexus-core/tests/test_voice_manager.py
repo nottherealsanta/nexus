@@ -13,18 +13,18 @@ import pytest
 from nexus.voice.audio import silence
 from nexus.voice.manager import VoiceManager
 from nexus.voice.model import VoiceError
-from nexus.voice.store import EXPECTED_SIZES, MODEL_ID, PROCESSOR_ID, ModelPaths
+from nexus.voice.store import BARK_MODEL_ID, EXPECTED_SIZES, MODEL_ID, ModelPaths
 
 
 class FakeStore:
     def __init__(self, *, missing: bool = False) -> None:
         self.missing = missing
-        self.sizes = {MODEL_ID: 0, PROCESSOR_ID: 0}
+        self.sizes = {MODEL_ID: 0}
 
     def verified_paths(self) -> ModelPaths:
         if self.missing:
             raise FileNotFoundError("not cached")
-        return ModelPaths(Path("/fake/bark"), Path("/fake/processor"))
+        return ModelPaths(Path("/fake/photon"))
 
     def cache_sizes(self) -> dict[str, int]:
         return dict(self.sizes)
@@ -157,13 +157,45 @@ async def test_idle_engine_is_unloaded() -> None:
 
 
 @pytest.mark.asyncio
+async def test_idle_unload_reloads_a_fresh_worker() -> None:
+    engines: list[FakeEngine] = []
+
+    def factory(_paths):
+        engines.append(FakeEngine())
+        return engines[-1]
+
+    manager = VoiceManager(engine_factory=factory, store=FakeStore(), idle_unload_seconds=0.01)
+    await manager.transcribe(silence(0.5))
+    await asyncio.sleep(0.03)
+    assert len(engines) == 1 and engines[0].closed
+    await manager.transcribe(silence(0.5))
+    assert len(engines) == 2 and not engines[1].closed
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_corrupt_snapshot_is_reported_without_loading() -> None:
+    class CorruptStore(FakeStore):
+        def verified_paths(self) -> ModelPaths:
+            raise ValueError("voice snapshot hash mismatch for model.safetensors")
+
+    manager, engine = make_manager(store=CorruptStore())
+    with pytest.raises(VoiceError) as error:
+        await manager.transcribe(silence(0.5))
+    assert error.value.code == "voice_model_invalid"
+    assert engine.loads == 0
+    assert manager.error is not None and "hash mismatch" in manager.error
+    await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_consent_download_publishes_progress_and_does_not_load_engine() -> None:
     store = FakeStore()
     engine = FakeEngine()
 
     def fake_download(target):
         target.sizes = dict(EXPECTED_SIZES)
-        return ModelPaths(Path("/fake/bark"), Path("/fake/processor"))
+        return ModelPaths(Path("/fake/photon"))
 
     manager, _ = make_manager(store=store, engine=engine, download_runner=fake_download)
     events: list[dict] = []
@@ -188,4 +220,69 @@ async def test_custom_model_is_not_loaded_or_downloaded() -> None:
         await manager.start_download(lambda _event: None)
     assert download_error.value.code == "voice_model_unsupported"
     assert engine.loads == 0
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_transcription_clears_the_engine_and_reloads() -> None:
+    class BlockingEngine(FakeEngine):
+        async def transcribe(self, audio: bytes) -> str:
+            self.started_event.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    engines: list[FakeEngine] = []
+
+    def factory(_paths):
+        engine = BlockingEngine() if not engines else FakeEngine()
+        engines.append(engine)
+        return engine
+
+    manager = VoiceManager(engine_factory=factory, store=FakeStore(), idle_unload_seconds=0)
+    task = asyncio.create_task(manager.transcribe(silence(0.5)))
+    for _ in range(100):
+        if engines:
+            break
+        await asyncio.sleep(0.01)
+    assert engines
+    await engines[0].started_event.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert manager._engine is None and engines[0].closed
+    result = await manager.transcribe(silence(0.5))
+    assert result.text == "hello" and len(engines) == 2
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_bark_config_gets_an_explicit_migration_message() -> None:
+    manager, engine = make_manager(repo_getter=BARK_MODEL_ID)
+    with pytest.raises(VoiceError) as error:
+        await manager.transcribe(silence(0.5))
+    assert error.value.code == "voice_model_unsupported"
+    assert "no longer supported" in str(error.value)
+    assert "moondream/parakeet-redux" in str(error.value)
+    assert "config.toml" in str(error.value)
+    assert "left in place" in str(error.value)
+    with pytest.raises(VoiceError) as download_error:
+        await manager.start_download(lambda _event: None)
+    assert download_error.value.code == "voice_model_unsupported"
+    assert engine.loads == 0
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_engine_failure_is_reported_and_released() -> None:
+    class FailingEngine(FakeEngine):
+        async def transcribe(self, audio: bytes) -> str:
+            raise RuntimeError("kestrel failed")
+
+    engine = FailingEngine()
+    manager, _ = make_manager(engine=engine)
+    with pytest.raises(VoiceError) as error:
+        await manager.transcribe(silence(0.5))
+    assert error.value.code == "voice_failed"
+    assert manager.error is not None and "kestrel failed" in manager.error
+    assert not manager.loaded and engine.closed
     await manager.close()

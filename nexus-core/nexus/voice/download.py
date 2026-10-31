@@ -7,7 +7,7 @@ from .store import REPOS, ModelPaths, ModelStore
 
 
 def download_stt(store: ModelStore) -> ModelPaths:
-    """Download only the two pinned manifest allowlists, then verify every byte."""
+    """Download only the pinned manifest allowlist, then verify every byte."""
     from huggingface_hub import snapshot_download
 
     for repo in REPOS:

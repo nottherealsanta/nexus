@@ -1,8 +1,8 @@
 """Lazy STT model lifecycle, consented cache download and serialized inference.
 
-The engine runs in a single worker thread, matching the old manager's model
-thread while keeping torch and Transformers out of the daemon's import path.
-It is loaded on the first transcription only and closed after ten idle minutes.
+Photon runs in one dedicated child process, keeping torch, Kestrel and its
+telemetry reporter out of the daemon's process. The worker is loaded on the
+first transcription only and closed after ten idle minutes.
 
 Adapted from old Nexus nexus/voice/manager.py.
 """
@@ -16,7 +16,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from .model import TranscribeResult, VoiceError
-from .store import EXPECTED_SIZE, EXPECTED_SIZES, MODEL_ID, ModelPaths, ModelStore
+from .store import EXPECTED_SIZE, EXPECTED_SIZES, MODEL_ID, ModelPaths, ModelStore, unsupported_reason
 
 _PATH = re.compile(r"(?:[A-Za-z]:\\|~?/)[^\s'\",;)]*")
 IDLE_UNLOAD_SECONDS = 600
@@ -36,9 +36,18 @@ class Engine(Protocol):
 
 
 def _default_engine(paths: ModelPaths) -> Engine:
-    from .engine import BarkEngine
+    from .engine import PhotonWorkerEngine
 
-    return BarkEngine(paths)
+    return PhotonWorkerEngine(paths)
+
+
+def _default_available() -> bool:
+    from .engine import PhotonWorkerEngine
+
+    return PhotonWorkerEngine.available()
+
+
+_default_engine.available = staticmethod(_default_available)
 
 
 def _default_download(store: ModelStore) -> ModelPaths:
@@ -48,7 +57,7 @@ def _default_download(store: ModelStore) -> ModelPaths:
 
 
 class VoiceManager:
-    """Keep Bark cold until requested, serialize inference, and unload when idle."""
+    """Keep Photon cold until requested, serialize inference, and unload when idle."""
 
     def __init__(
         self,
@@ -146,6 +155,9 @@ class VoiceManager:
                 engine = await self._ensure_engine()
                 try:
                     text = await engine.transcribe(wav)
+                except asyncio.CancelledError:
+                    await self._close_engine()
+                    raise
                 except Exception as exc:
                     self._last_error = _describe(exc)
                     await self._close_engine()
@@ -161,8 +173,9 @@ class VoiceManager:
                 self._schedule_unload()
 
     async def _ensure_engine(self) -> Engine:
-        if self._repo() != MODEL_ID:
-            raise VoiceError("voice_model_unsupported", "This STT engine only supports the pinned Bark model")
+        reason = unsupported_reason(self._repo())
+        if reason is not None:
+            raise VoiceError("voice_model_unsupported", reason)
         if self._engine is not None:
             return self._engine
         availability = getattr(self.engine_factory, "available", None)
@@ -179,6 +192,9 @@ class VoiceManager:
         engine = self.engine_factory(paths)
         try:
             await engine.load()
+        except asyncio.CancelledError:
+            await engine.close()
+            raise
         except ImportError as exc:
             await engine.close()
             raise VoiceError("voice_dependency_missing", "STT needs the voice extra: nexus voice init") from exc
@@ -197,8 +213,9 @@ class VoiceManager:
         """Start the explicit, consented download and return its initial state."""
         if self._closed:
             raise VoiceError("voice_unavailable", "Voice input is unavailable")
-        if self._repo() != MODEL_ID:
-            raise VoiceError("voice_model_unsupported", "There is no pinned download for this STT model")
+        reason = unsupported_reason(self._repo())
+        if reason is not None:
+            raise VoiceError("voice_model_unsupported", reason)
         if self._pending or self.downloading:
             raise VoiceError("voice_busy", "Voice is busy")
         self._download_state = "downloading"

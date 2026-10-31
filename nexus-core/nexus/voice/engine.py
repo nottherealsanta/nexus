@@ -1,119 +1,44 @@
-"""Local Bark dictation adapter.
+"""Local Photon dictation adapter.
 
-The model is Underdog Bark 3.0 Clean: NVIDIA Parakeet TDT 0.6B v3 weights in the
-custom ``.bark`` container. ``nexus.voice.bark`` decodes that file as data into a
-stock Transformers ``ParakeetForTDT``, and the tokenizer and feature extractor
-load from the pinned processor files beside it. Everything is local: the
-``from_pretrained`` calls take a verified directory with ``local_files_only``,
-no remote code is trusted or executed, and nothing is unpickled.
+The model is ``moondream/parakeet-redux``: NVIDIA Parakeet TDT 0.6B v3 with a
+1.58-bit packed ternary encoder. The reviewed Photon stack (``moondream 2.6.1`` /
+``kestrel 0.9.1``) reads that packed checkpoint, so Nexus does not decode a custom
+container or build an f32 Transformers model.
 
-Adapted from old Nexus nexus/voice/engine.py.
+Photon/Kestrel starts a telemetry reporter and an HF config probe when an engine
+is created, and Kestrel has no public way to turn either off. STT therefore runs
+in a dedicated child process (``nexus.voice.worker``) whose environment is
+offline, whose telemetry reporter is replaced by a no-op, and whose Python-level
+socket calls are guarded (best effort; native libraries are not sandboxed).
+
+``MODEL_ID`` selects the registered Photon family. The verified local
+``model_path`` is authoritative for the checkpoint, tokenizer and ternary
+manifest; no remote resolution is intended.
 """
 
 from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import os
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+import sys
+import tempfile
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
-from .store import MANIFEST, MODEL_FILE, MODEL_ID, ModelPaths
+from .store import MANIFEST, MODEL_ID, ModelPaths
 
-_MODEL_FILES = (MODEL_FILE,)
-_PROCESSOR_FILES = tuple(name for name in MANIFEST if name != MODEL_FILE)
-_REQUIRED_FILES = _MODEL_FILES + _PROCESSOR_FILES
-_PACKAGES = ("numpy", "torch", "transformers", "constriction", "librosa")
-MAX_CPU_THREADS = 4  # dictation must not take over every core of the machine
-
-
-def _build_runtime(model_dir: Path, processor_dir: Path, device: str) -> tuple[Any, str]:
-    """Load verified HF snapshots into a Transformers Parakeet model."""
-    import numpy as np
-    import torch
-    from transformers import (
-        AutoProcessor,
-        GenerationConfig,
-        ParakeetForTDT,
-        ParakeetTDTConfig,
-    )
-
-    from .bark import open_bark
-
-    resolved_device = _resolve_device(torch, device)
-    if resolved_device == "cpu":
-        torch.set_num_threads(max(1, min(MAX_CPU_THREADS, os.cpu_count() or 1)))
-    config, tensors = open_bark((model_dir / MODEL_FILE).resolve())  # hub snapshots link into blobs/; open_bark refuses symlinks
-    model = ParakeetForTDT(ParakeetTDTConfig.from_dict(config))
-    _load_tensors(model, tensors, torch)
-    model.generation_config = GenerationConfig.from_pretrained(
-        str(processor_dir), local_files_only=True,
-    )
-    processor = AutoProcessor.from_pretrained(
-        str(processor_dir), local_files_only=True, trust_remote_code=False,
-    )
-    model = model.eval().to(resolved_device)
-    return _BarkRuntime(model, processor, torch, np, resolved_device), resolved_device
-
-
-def _load_tensors(model: Any, tensors: Any, torch: Any) -> None:
-    """Copy decoded tensors into ``model`` one at a time; every name and shape must match."""
-    state = model.state_dict()
-    seen: set[str] = set()
-    with torch.no_grad():
-        for name, value in tensors:
-            target = state.get(name)
-            if target is None or tuple(target.shape) != tuple(value.shape) or name in seen:
-                raise ValueError("bark tensors do not match the Parakeet model")
-            target.copy_(torch.from_numpy(value))
-            seen.add(name)
-    missing = [n for n in state if n not in seen and "num_batches_tracked" not in n]
-    if missing:
-        raise ValueError("bark file is missing Parakeet tensors")
-
-
-class _BarkRuntime:
-    """One loaded model plus its processor; callers serialize access."""
-
-    def __init__(self, model: Any, processor: Any, torch: Any, np: Any, device: str) -> None:
-        self._model = model
-        self._processor = processor
-        self._torch = torch
-        self._np = np
-        self._device = device
-
-    def transcribe(self, wav: bytes) -> str:
-        from .audio import SAMPLE_RATE, parse_wav
-
-        np, torch = self._np, self._torch
-        pcm = parse_wav(wav).pcm
-        wave = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
-        inputs = self._processor(
-            [wave], sampling_rate=SAMPLE_RATE, return_tensors="pt", padding=True,
-        )
-        dtype = next(self._model.parameters()).dtype
-        inputs = {
-            key: value.to(self._device, dtype) if value.is_floating_point() else value.to(self._device)
-            for key, value in inputs.items()
-        }
-        with torch.inference_mode():
-            output = self._model.generate(**inputs)
-        return str(self._processor.batch_decode(output.sequences, skip_special_tokens=True)[0]).strip()
-
-    def close(self) -> None:
-        self._model = self._processor = None
-        gc.collect()
-        torch = self._torch
-        try:
-            if self._device == "cuda":
-                torch.cuda.empty_cache()
-            elif self._device == "mps":
-                torch.mps.empty_cache()
-        except Exception:  # noqa: BLE001, S110 - cache release is best effort
-            pass
+_REQUIRED_FILES = tuple(MANIFEST)
+_PACKAGES = ("moondream", "kestrel", "kestrel_native", "kestrel_kernels", "torch", "numpy", "huggingface_hub")
+_PROXY_ENV = {
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+}
+LOAD_TIMEOUT_SECONDS = 180.0
+TRANSCRIBE_TIMEOUT_SECONDS = 120.0
+_STOP_TIMEOUT_SECONDS = 5.0
 
 
 def _resolve_device(torch: Any, device: str) -> str:
@@ -133,8 +58,113 @@ def _resolve_device(torch: Any, device: str) -> str:
     return "cpu"
 
 
-class BarkEngine:
-    """Serialize local WAV transcription through one dedicated worker thread."""
+def _anchor(model_dir: Path) -> tempfile.TemporaryDirectory[str]:
+    """A directory of links we own, so Kestrel cannot fall back to a remote repo.
+
+    Kestrel's local checkpoint resolver only checks that the path exists before
+    using it. Pointing it at our own directory of symlinks means a cache removal
+    or a concurrent delete fails as a missing file instead of turning into an
+    implicit ``snapshot_download``. Only four small links are created; the
+    weights stay in the HF cache.
+    """
+    anchor = tempfile.TemporaryDirectory(prefix="nexus-photon-")
+    root = Path(anchor.name)
+    try:
+        for name in _REQUIRED_FILES:
+            (root / name).symlink_to(model_dir / name)
+    except BaseException:
+        anchor.cleanup()
+        raise
+    return anchor
+
+
+def _build_runtime(model_dir: Path, device: str) -> tuple[Any, str]:
+    """Load the verified local snapshot through Photon; never resolve a repo id."""
+    import torch
+
+    resolved = _resolve_device(torch, device)
+    anchor = _anchor(model_dir)
+    try:
+        import moondream as md
+
+        client = md.photon(MODEL_ID, device=resolved, model_path=str(anchor.name))
+    except BaseException:
+        anchor.cleanup()
+        raise
+    return _PhotonRuntime(client, resolved, anchor), resolved
+
+
+class _PhotonRuntime:
+    """One loaded Photon client plus the local anchor it reads."""
+
+    def __init__(self, client: Any, device: str, anchor: tempfile.TemporaryDirectory[str]) -> None:
+        self._client = client
+        self._device = device
+        self._anchor = anchor
+
+    def transcribe(self, wav: bytes) -> str:
+        from .audio import parse_wav
+
+        parse_wav(wav)  # the manager validates first; direct callers must not skip it
+        result = self._client.transcribe(audio=wav, timestamps="none")
+        if not isinstance(result, dict):
+            raise TypeError("Photon returned an unsupported transcription result")
+        text = result.get("text")
+        if not isinstance(text, str):
+            raise TypeError("Photon returned an invalid transcript")
+        return text.strip()
+
+    def close(self) -> None:
+        client, self._client = self._client, None
+        try:
+            if client is not None:
+                client.close()
+        finally:
+            self._anchor.cleanup()
+            gc.collect()
+            try:
+                import torch
+
+                if self._device == "cuda":
+                    torch.cuda.empty_cache()
+                elif self._device == "mps":
+                    torch.mps.empty_cache()
+            except Exception:  # noqa: BLE001, S110 - cache release is best effort
+                pass
+
+
+def _worker_command() -> list[str]:
+    return [sys.executable, "-m", "nexus.voice.worker"]
+
+
+def _worker_env(model_dir: Path, device: str) -> dict[str, str]:
+    env = {key: value for key, value in os.environ.items()
+           if key not in _PROXY_ENV and key not in {"MOONDREAM_API_KEY", "MOONDREAM_API_BASE_URL"}}
+    env.update({
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "DO_NOT_TRACK": "1",
+        "OMP_WAIT_POLICY": "passive",
+        "NEXUS_VOICE_MODEL_DIR": str(model_dir),
+        "NEXUS_VOICE_DEVICE": device,
+        "PYTHONUNBUFFERED": "1",
+    })
+    return env
+
+
+def _worker_error(message: dict[str, Any]) -> BaseException:
+    code = str(message.get("error") or "voice_worker_failed")
+    text = str(message.get("message") or code)
+    if code == "dependency_missing":
+        return ImportError(text)
+    if code == "model_not_cached":
+        return FileNotFoundError(text)
+    return RuntimeError(text)
+
+
+class PhotonWorkerEngine:
+    """Serialize one local Photon worker process; the worker owns the model."""
 
     model_id = MODEL_ID
 
@@ -142,79 +172,165 @@ class BarkEngine:
         self,
         model_dir: Path | ModelPaths,
         *,
-        processor_dir: Path | None = None,
         device: str = "auto",
-        runtime_builder: Callable[[Path, Path, str], tuple[Any, str]] | None = None,
+        worker_command: list[str] | None = None,
+        load_timeout_s: float = LOAD_TIMEOUT_SECONDS,
+        transcribe_timeout_s: float = TRANSCRIBE_TIMEOUT_SECONDS,
     ) -> None:
-        if isinstance(model_dir, ModelPaths):
-            self.model_dir = model_dir.model_dir
-            self.processor_dir = model_dir.processor_dir
-        else:
-            self.model_dir = Path(model_dir)
-            self.processor_dir = Path(processor_dir) if processor_dir is not None else self.model_dir
+        self.model_dir = Path(model_dir.model_dir if isinstance(model_dir, ModelPaths) else model_dir)
         self.requested_device = device
         self.device = device
-        self._runtime_builder = runtime_builder or _build_runtime
-        self._executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="nexus-voice",
-        )
-        self._runtime: Any | None = None
-        self._loaded = False
+        self._worker_command = worker_command or _worker_command()
+        self._load_timeout_s = load_timeout_s
+        self._transcribe_timeout_s = transcribe_timeout_s
+        self._process: asyncio.subprocess.Process | None = None
+        self._lock = asyncio.Lock()
         self._closed = False
 
     @staticmethod
     def available() -> bool:
-        """Return whether the local inference runtime is installed."""
+        """Return whether the Photon runtime is installed."""
         try:
             return all(find_spec(name) is not None for name in _PACKAGES)
         except (ImportError, ValueError):
             return False
 
+    def _validate_model(self) -> None:
+        if not self.model_dir.is_dir():
+            raise FileNotFoundError("verified Photon model directory is missing")
+        missing = [name for name in _REQUIRED_FILES if not (self.model_dir / name).is_file()]
+        if missing:
+            raise FileNotFoundError(f"verified Photon model files are incomplete: {', '.join(missing)}")
+
+    def _env(self) -> dict[str, str]:
+        return _worker_env(self.model_dir, self.requested_device)
+
     async def load(self) -> None:
         if self._closed:
             raise RuntimeError("voice engine is closed")
-        if self._loaded:
+        if self._process is not None:
             return
-        loop = asyncio.get_running_loop()
-
-        def create() -> tuple[Any, str]:
-            if not self.model_dir.is_dir() or not self.processor_dir.is_dir():
-                raise FileNotFoundError("verified voice model directory is missing")
-            if any(not (self.model_dir / name).is_file() for name in _MODEL_FILES):
-                raise FileNotFoundError("verified Bark model files are incomplete")
-            if any(not (self.processor_dir / name).is_file() for name in _PROCESSOR_FILES):
-                raise FileNotFoundError("verified voice processor files are incomplete")
-            return self._runtime_builder(self.model_dir, self.processor_dir, self.requested_device)
-
-        self._runtime, self.device = await loop.run_in_executor(self._executor, create)
-        self._loaded = True
+        self._validate_model()
+        process = await asyncio.create_subprocess_exec(
+            *self._worker_command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=self._env(),
+            limit=1 << 20,
+        )
+        self._process = process
+        try:
+            message = await self._read(self._load_timeout_s)
+            if "error" in message:
+                raise _worker_error(message)
+            if message.get("ready") is not True:
+                raise RuntimeError("voice worker did not report ready")
+            self.device = str(message.get("device") or self.requested_device)
+        except BaseException:
+            self._invalidate()
+            raise
 
     async def transcribe(self, audio: bytes) -> str:
         if self._closed:
             raise RuntimeError("voice engine is closed")
-        if not self._loaded or self._runtime is None or self._closed:
+        if self._process is None:
             raise RuntimeError("voice engine is not ready")
         if not isinstance(audio, bytes):
             raise TypeError("voice audio must be bytes")
-        loop = asyncio.get_running_loop()
-        text = await loop.run_in_executor(self._executor, self._runtime.transcribe, audio)
-        if not isinstance(text, str):
-            raise TypeError("Bark returned an invalid transcript")
-        return text
+        async with self._lock:
+            process = self._process
+            if process is None or process.returncode is not None or process.stdin is None:
+                self._invalidate()
+                raise RuntimeError("voice worker is not running")
+            try:
+                process.stdin.write(json.dumps({"bytes": len(audio)}).encode() + b"\n" + audio)
+                await process.stdin.drain()
+                message = await self._read(self._transcribe_timeout_s)
+                if "error" in message:
+                    raise _worker_error(message)
+                text = message.get("text")
+                if not isinstance(text, str):
+                    raise TypeError("Photon returned an invalid transcript")
+                return text.strip()
+            except BaseException:
+                self._invalidate()
+                raise
+
+    def _invalidate(self) -> None:
+        """Kill the worker so a cancelled or timed-out response cannot be read later."""
+        process, self._process = self._process, None
+        self._closed = True
+        if process is None:
+            return
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except Exception:  # noqa: BLE001, S110 - already gone
+                pass
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            asyncio.get_running_loop().create_task(process.wait())
+        except RuntimeError:  # no running loop (defensive; callers are async)
+            pass
+
+    async def _read(self, timeout_s: float) -> dict[str, Any]:
+        process = self._process
+        if process is None or process.stdout is None:
+            raise RuntimeError("voice worker is not running")
+        try:
+            line = await asyncio.wait_for(process.stdout.readline(), timeout=timeout_s)
+        except TimeoutError as exc:
+            raise TimeoutError("the voice worker did not respond in time") from exc
+        if not line:
+            code = process.returncode
+            raise RuntimeError(f"voice worker exited ({code})" if code is not None else "voice worker stopped")
+        try:
+            message = json.loads(line)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("voice worker returned invalid data") from exc
+        if not isinstance(message, dict):
+            raise TypeError("voice worker returned invalid data")
+        return message
 
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        runtime, self._runtime = self._runtime, None
-        try:
-            if runtime is not None:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(self._executor, runtime.close)
-        finally:
-            self._executor.shutdown(wait=True, cancel_futures=True)
-            self._loaded = False
+        await self._stop()
+
+    async def _stop(self) -> None:
+        process, self._process = self._process, None
+        if process is None:
+            return
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except Exception:  # noqa: BLE001, S110 - already gone
+                pass
+        if process.returncode is None:
+            try:
+                await asyncio.wait_for(process.wait(), timeout=_STOP_TIMEOUT_SECONDS)
+            except TimeoutError:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=_STOP_TIMEOUT_SECONDS)
+                except TimeoutError:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                    await process.wait()
+            except ProcessLookupError:
+                pass
+        if process.stdout is not None:
+            process.stdout.feed_eof()
 
 
-__all__ = ["BarkEngine"]
+__all__ = ["PhotonWorkerEngine"]

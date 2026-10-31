@@ -1,8 +1,8 @@
 """`nexus voice init`: install the heavy voice runtime into the environment Nexus runs from.
 
-The packages (torch, transformers, ptts, ...) are the optional `voice` extra in
-pyproject.toml; they are never base dependencies, so status checks and installs on
-unsupported platforms stay light.
+The packages (moondream's Photon runtime, torch, ptts, ...) are the optional
+`voice` extra in pyproject.toml; they are never base dependencies, so status
+checks and installs on unsupported platforms stay light.
 
 A successful init leaves `$NEXUS10_HOME/voice.json` naming that environment. The
 development launcher (`scripts/nexus`) reads it and passes `--extra voice` to its
@@ -70,7 +70,7 @@ def init() -> int:
     if not reqs:
         print("This install of Nexus lists no voice packages.", file=sys.stderr)
         return 1
-    print(f"Installing the voice runtime ({len(reqs)} packages, torch is large) into {sys.prefix}")
+    print(f"Installing the voice runtime ({len(reqs)} packages, including Photon and torch) into {sys.prefix}")
     code = subprocess.run(install_command(reqs), check=False).returncode
     if code:
         print(f"The install failed (exit {code}).", file=sys.stderr)

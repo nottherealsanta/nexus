@@ -1,4 +1,5 @@
 from nexus.voice import hf_cache, status
+from nexus.voice.store import EXPECTED_SIZE
 
 H = "a" * 40
 
@@ -55,3 +56,55 @@ def test_status_states(monkeypatch, tmp_path):
     assert tts["state"] == "runtime_missing" and "nexus voice init" in tts["error"]
     monkeypatch.setattr(status, "_missing", lambda m: [])
     assert status.status()["tts"]["state"] == "ready"
+
+
+def test_stt_status_reports_the_pinned_model_and_download_size(monkeypatch, tmp_path):
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    monkeypatch.setattr(status, "_platform_stt_supported", lambda: True)
+    stt = status.status()["stt"]
+    assert stt["repo"] == "moondream/parakeet-redux"
+    assert stt["revision"] == "2bf128600aac4b16946f7ed8372e56117fe5e23b"
+    assert stt["state"] == "absent"
+    assert stt["size"] == EXPECTED_SIZE > 0
+
+
+def test_stt_status_rejects_an_unreviewed_runtime_version(monkeypatch, tmp_path):
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    repo, revision, files = status.STT["repos"][0]
+    make(tmp_path, repo, files)
+    snapshots = tmp_path / ("models--" + repo.replace("/", "--")) / "snapshots"
+    (snapshots / H).rename(snapshots / revision)
+    monkeypatch.setattr(status, "_missing", lambda _modules: [])
+    monkeypatch.setattr(
+        status.metadata, "version",
+        lambda name: "2.7.0" if name == "moondream" else "0.9.1",
+    )
+    stt = status.entry(status.STT, supported=True)
+    assert stt["state"] == "runtime_missing"
+    assert "moondream 2.7.0 is not supported" in stt["error"]
+    assert "reviewed: 2.6.1" in stt["error"]
+
+
+def test_stt_status_explains_the_bark_migration(monkeypatch, tmp_path):
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / "config.toml").write_text(
+        '[voice]\nstt_model = "ConwayResearch/Underdog-Bark-3.0-Clean"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(status, "_platform_stt_supported", lambda: True)
+    stt = status.status()["stt"]
+    assert stt["state"] == "unsupported"
+    assert "no longer supported" in stt["error"]
+    assert "moondream/parakeet-redux" in stt["error"]
+
+
+def test_stt_platform_support_matches_the_native_wheels():
+    assert status._stt_supported("Darwin", "arm64", "", "", "14.0")
+    assert not status._stt_supported("Darwin", "arm64", "", "", "13.6")
+    assert not status._stt_supported("Darwin", "x86_64", "", "", "14.0")
+    assert status._stt_supported("Linux", "x86_64", "glibc", "2.28", "")
+    assert not status._stt_supported("Linux", "x86_64", "glibc", "2.27", "")
+    assert status._stt_supported("Linux", "aarch64", "glibc", "2.34", "")
+    assert not status._stt_supported("Linux", "aarch64", "glibc", "2.31", "")
+    assert not status._stt_supported("Linux", "x86_64", "musl", "1.2", "")

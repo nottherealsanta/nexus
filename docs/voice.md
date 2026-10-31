@@ -3,22 +3,42 @@
 Adapted from old Nexus `docs/voice.md`. Models come from the standard Hugging Face
 cache (`$HF_HUB_CACHE`, `$HF_HOME/hub`, `$XDG_CACHE_HOME/huggingface/hub`, then
 `~/.cache/huggingface/hub`). Nexus keeps no copy of its own. The runtime is the
-optional extra: `nexus voice init` (ptts, numpy, Hugging Face Hub, torch,
-Transformers, constriction and librosa).
+optional extra: `nexus voice init` (Moondream Photon through `moondream`, PyTorch,
+numpy, Hugging Face Hub and ptts).
 
 Defaults, changeable in `config.toml`: `[voice] stt_model =
-"ConwayResearch/Underdog-Bark-3.0-Clean"`, `[speech] tts_model =
-"gradium/phonon-31m-en"`.
+"moondream/parakeet-redux"`, `[speech] tts_model = "gradium/phonon-31m-en"`.
+
+The STT model is Moondream's packed ternary Parakeet Redux checkpoint (177.8 MB
+of weights, 179 MB including its config, tokenizer and ternary manifest). Photon
+reads the base-3 packed checkpoint; the CPU and Metal paths keep the packed
+codes, and CUDA uses Kestrel's resident dense form. Nexus does not decode a
+custom weight container or build an f32 Transformers model.
 
 ## Status
 
 `GET /api/voice` returns `{stt, tts}`, each `{state, repo, revision, cache_path,
 size, error}`. `state` is `unsupported`, `runtime_missing`, `absent`,
 `downloading`, `ready`, `loaded` or `error`. It never loads a model or downloads
-(`nexus/voice/hf_cache.py`, `status.py`). STT uses two pinned snapshots: the
-Underdog Bark weight container and NVIDIA's Parakeet processor files. Their
-manifest sizes and SHA-256 hashes are checked before a download is reported as
-ready. Bark inference is supported on Apple Silicon and glibc Linux x86-64.
+(`nexus/voice/hf_cache.py`, `nexus/voice/status.py`). STT uses one pinned
+snapshot: `moondream/parakeet-redux` at revision
+`2bf128600aac4b16946f7ed8372e56117fe5e23b`, with `model.safetensors`,
+`config.json`, `ternary.json` and `tokenizer.json`. The manifest sizes and
+SHA-256 hashes are checked before a download is reported as ready. For an absent
+pinned model `size` is the expected download size, so consent dialogs show the
+real figure. The installed runtime must be exactly `moondream 2.6.1` with
+`kestrel 0.9.1`; any other version is reported as `runtime_missing` with a
+reinstall message.
+
+STT inference is supported on macOS 14 or newer on Apple silicon (the locked
+PyTorch 2.15 wheel is macOS 14+), and on glibc Linux x86-64 (glibc 2.28 or newer)
+and aarch64 (glibc 2.34 or newer). The native Kestrel and PyTorch wheels have
+CPython 3.14 builds for those platforms. The model weights are CC-BY-4.0. The
+Photon runtime is installed separately from PyPI; at the version examined, its
+`kestrel-kernels` dependency is proprietary M87 Labs software and Kestrel
+enables basic usage telemetry by default. Nexus does not redistribute the
+runtime. Review those terms before enabling the voice extra; see
+`nexus-core/nexus/voice/NOTICE`.
 
 ## Speech to text
 
@@ -37,12 +57,43 @@ global `voice.progress` event with `model: "stt"`, `state`, `bytes_done`,
 reporting `ready`. The worker writes to the standard HF cache, not a Nexus model
 directory.
 
-The Bark engine is not imported or loaded at daemon startup. `POST /api/voice/stt/prepare`
-loads it from local snapshots before capture; transcription also loads it on demand
-using `local_files_only=True`. Inference is
-serialized on one worker thread. After 10 idle minutes the engine is closed.
-Errors include 409 `voice_busy`/`voice_model_not_cached` and 422
+The Photon runtime is not imported or started at daemon startup.
+`POST /api/voice/stt/prepare` starts it from the verified local snapshot before
+capture; transcription also starts it on demand. STT runs in one isolated child
+process (`nexus/voice/worker.py`) so the daemon's environment is never changed:
+
+- The parent passes `MODEL_ID` only to select the registered Photon family; the
+  verified local `model_path` is authoritative for the checkpoint, tokenizer and
+  ternary manifest. The worker gives Photon an owned directory of symlinks, so
+  Kestrel takes its local checkpoint branch. A missing or deleted cache fails as
+  a missing file instead of an implicit `snapshot_download`.
+- Kestrel's telemetry reporter is replaced by a no-op and its Hugging Face
+  config probe is disabled. A process-local Python socket guard, best effort and
+  not an OS sandbox, rejects non-loopback DNS lookups and connections made
+  through Python's socket module. Native runtime libraries can bypass it; the
+  exact reviewed versions and offline mode are the primary guarantees.
+- The reviewed runtime is exactly `moondream 2.6.1` with `kestrel 0.9.1`. The
+  worker checks the installed distributions and fails closed on any other
+  version instead of silently applying the private telemetry/probe shims to an
+  unreviewed release.
+- The verified sizes and SHA-256 hashes are checked by Core before the worker
+  starts. A missing or corrupt snapshot fails closed.
+
+Inference is serialized on the single worker. After 10 idle minutes the worker
+is stopped and its memory released; the next request starts a new one from the
+cache. Errors include 409 `voice_busy`/`voice_model_not_cached` and 422
 `voice_dependency_missing`/`voice_model_invalid`/`voice_load_failed`.
+
+### Migrating from Underdog Bark
+
+Older configuration files may still say
+`[voice] stt_model = "ConwayResearch/Underdog-Bark-3.0-Clean"`. That engine is
+no longer supported. `GET /api/voice`, `nexus voice status` and dictation report
+an explicit message asking you to set `[voice] stt_model =
+"moondream/parakeet-redux"` in `config.toml` and download the new model. Nexus
+does not rewrite the setting automatically and does not delete the cached Bark
+files as part of the migration. An explicit Remove action in Settings still
+deletes only the configured repository after its own confirmation.
 
 ## Speech
 
@@ -54,6 +105,19 @@ offline (`HF_HUB_OFFLINE=1`), unloaded after 10 idle minutes. Errors are JSON
 `{error, code}`: 409 `speech_busy`/`speech_turn_active`, 404 `speech_no_answer`,
 422 for the rest (`speech_model_not_cached`, `speech_dependency_missing`, …).
 `POST /api/voice/speak/stop` stops the current answer; the worker stays loaded.
+
+## Notification sounds
+
+Both clients play two generated cues, best effort through the default audio
+device: a rising two-note cue when a session finishes, and a higher two-note cue
+when a session waits for an approval or an answer. The finished cue follows the
+session state, so a subagent finishing sounds when its own turn ends and the
+root sounds again only when its whole tree is idle. Replayed events, snapshots
+and services without an output device stay silent. `NEXUS_COMPLETION_SOUNDS=off`
+(also `0` or `false`) disables both cues. Settings › Notifications › Notification
+sounds is the per-client switch; it is on by default. The TUI plays them through
+`rodio` in `nexus-tui/src/dictation.rs`; NSH uses Web Audio oscillators in
+`nexus-nsh/src/cues.ts`.
 
 ## TUI
 
@@ -105,19 +169,21 @@ a toast. Not yet checked in a browser.
 
 ## Installing the runtime
 
-The heavy packages (torch, transformers, librosa, constriction, ptts, numpy, Hugging Face
-Hub) are the optional `voice` extra and are never installed with Nexus. `nexus voice init`
-installs them into the environment Nexus runs from (`uv pip install --python <that python>`,
-or `pip` without uv), prints the model status and asks you to restart the daemon
-(`nexus daemon stop`). `nexus voice status` shows the status without installing. Models are
-still downloaded only on request. In a development checkout `uv sync` removes these packages
-again; use `uv sync --extra voice` there instead.
+The heavy packages (Moondream Photon, PyTorch, numpy, Hugging Face Hub and ptts) are
+the optional `voice` extra and are never installed with Nexus. `nexus voice init`
+installs them into the environment Nexus runs from (`uv pip install --python <that
+python>`, or `pip` without uv), prints the model status and asks you to restart the
+daemon (`nexus daemon stop`). `nexus voice status` shows the status without installing.
+The extra pins `moondream==2.6.1` and `kestrel==0.9.1`; the worker refuses any other
+installed version rather than applying the reviewed private shims to it.
+Models are still downloaded only on request. In a development checkout `uv sync`
+removes these packages again; use `uv sync --extra voice` there instead.
 
 ## Settings: Voice and speech
 
 Both clients show the models in Settings → Voice and speech (manifest section `dictation`):
 state, repo, size, cache path and any error (for example `nexus voice init`) per model, from
-`GET /api/voice`. Download asks for consent first (repo, about 181 MB for speech to text and
+`GET /api/voice`. Download asks for consent first (repo, about 179 MB for speech to text and
 65 MB for text to speech, from Hugging Face into the standard cache), then calls
 `POST /api/voice/stt/download` or `/tts/download` and follows `voice.progress`. Remove
 confirms (Cancel is the default) and calls `DELETE /api/voice/{stt|tts}`, which deletes only
@@ -125,9 +191,24 @@ that repo's folder from the cache; it is refused while a download runs or speech
 are disabled with a reason when they make no sense in the current state. The settings are
 read on open and after each action. Not yet checked against real downloads or in a browser.
 
+## Benchmark
+
+A real audio/model benchmark is opt-in and never downloads anything. Download the model
+through the app first, then from `nexus-core`:
+
+```sh
+uv run --extra voice python -m nexus.voice.benchmark speech.wav --device cpu --repeat 3
+```
+
+It uses the same isolated offline worker and prints load time, per-run transcription
+time, real-time factor and RSS. **No real audio or model benchmark has been run for this
+change**; the results above are not measured numbers.
+
 ## Verification status
 
-Decision (2026-10-29): section I is accepted without a run against real audio, a real Bark
-download or a browser. Everything above is covered by unit, fake-engine and API tests, and
-the TTS worker was run once with the cached phonon model. Real microphone capture, the real
-STT download and transcription, and playback and Settings in a browser are not verified.
+Decision (2026-10-29): section I is accepted without a run against real audio, a real
+model download or a browser. Everything above is covered by unit, fake-worker and API
+tests. The Bark path is gone; its cached files are left for the user to remove. The
+pinned Parakeet Redux hashes and allowlist come from the Hugging Face revision metadata.
+Real microphone capture, the real STT download and transcription, and playback and
+Settings in a browser are not verified. The opt-in benchmark above has not been run.

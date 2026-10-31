@@ -23,13 +23,12 @@ nexus = "nexus.cli:main"
 
 [project.optional-dependencies]
 voice = [
-    "constriction>=0.5,<0.6; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and platform_machine == 'x86_64')",
     "huggingface-hub>=0.34",
-    "librosa>=0.11,<1; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and platform_machine == 'x86_64')",
+    "kestrel==0.9.1; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64'))",
+    "moondream==2.6.1; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64'))",
     "numpy>=1.26",
     "ptts>=0.4.1,<1",
-    "torch>=2.6,<3; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and platform_machine == 'x86_64')",
-    "transformers>=5.19,<6; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and platform_machine == 'x86_64')",
+    "torch>=2.8,<3; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64'))",
 ]
 
 [build-system]
