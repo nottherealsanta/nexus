@@ -1,7 +1,7 @@
 # Plan: TUI render performance
 
-Status: phases 1–2 implemented 2026-10-31 (results below). Phases 3–4 remain;
-measure again before choosing their scope. The goal is to remove the TUI's
+Status: phases 1–3 implemented 2026-10-31 (results below). Phase 4 remains;
+measure again before choosing its scope. The goal is to remove the TUI's
 stream backlog and long-session frame cost
 **without changing timeline content or interaction behavior**. Coalescing
 intentionally skips intermediate stream frames. At equivalent render boundaries,
@@ -335,10 +335,46 @@ measurement.
 
 ## Phase 3: separate timeline and chrome invalidation
 
+Status: implemented 2026-10-31; see the result below.
+
 Optional after profiling. Non-selected session events can still affect child
 cards, shared settings, waits and other visible state. Use explicit dependencies,
 not selected-session identity alone, before reusing the last timeline. Continue
 redrawing chrome when required and preserve interaction metadata.
+
+### Phase 3 result (2026-10-31)
+
+`App::timeline_for(width)` (`app.rs`, called from `render.rs`) keeps the last
+`Rc<Timeline>` and reuses it when a cheap key is unchanged. The key covers:
+
+- a `timeline_revision` bumped by every sync message and API result, so new
+  messages, history merges, tool completion, child updates, summaries, snapshots
+  and non-selected session events invalidate conservatively;
+- the viewed session, content width and resolved theme fingerprint;
+- detail level, session/settings view, focus, selected block, every fold/raw/
+  `show all` entry, group flash state and the animation frame when motion is on;
+- wall-clock seconds while a session is running, because turn-footer durations
+  are time-dependent.
+
+Chrome-only changes (composer typing, scrolling, toasts, alerts, status text,
+idle ticks) now redraw the shell without rebuilding the timeline. Direct model
+edits outside the reducer must call `App::invalidate_timeline()`; the timeline
+tests' synthetic-message helper does. `tests/frames.rs` adds 27 tests including
+typing/scroll reuse, idle-tick reuse, animation-phase invalidation, model/UI/
+fold/width invalidation and conservative non-selected event invalidation.
+
+`--bench --replay` now also runs 110 chrome-only frames (100 composer
+keystrokes plus 10 scrolls) after the paced stream. Release:
+
+| | 200 messages | 1,000 messages |
+| --- | --- | --- |
+| Chrome frames / timeline builds | 110 / **0** | 110 / **0** |
+| Chrome draw, mean / p95 | **0.36 / 0.39 ms** | **0.54 / 0.59 ms** |
+| Stream draw for comparison | 1.48 ms | 5.54 ms |
+
+Chrome-only frames are 4–10× cheaper than a streamed frame at the same history
+size. Non-selected events still rebuild (correct but conservative); a full
+per-dependency graph is left for when profiling shows it matters.
 
 ## Phase 4: viewport layout
 

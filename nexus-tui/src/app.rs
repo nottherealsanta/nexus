@@ -618,6 +618,12 @@ pub struct App {
     pub timeline_drag: Option<(crate::selection::Selection, Option<Target>)>,
     /// Rendered message bodies, keyed by content/width/theme (timeline.rs).
     pub layout: std::cell::RefCell<crate::timeline::LayoutCache>,
+    /// Bumped whenever a sync message may change the timeline's model inputs.
+    pub timeline_revision: std::cell::Cell<u64>,
+    /// Last built timeline and the key it was built for.
+    pub timeline_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<crate::timeline::Timeline>)>>,
+    /// Test/diagnostic counter for real timeline builds.
+    pub timeline_builds: std::cell::Cell<u64>,
     bindings: HashMap<(String, String), String>,
     shortcut_leader: Option<Instant>,
 }
@@ -798,6 +804,9 @@ impl App {
             timeline_screen: None,
             timeline_drag: None,
             layout: std::cell::RefCell::new(crate::timeline::LayoutCache::default()),
+            timeline_revision: std::cell::Cell::new(0),
+            timeline_cache: std::cell::RefCell::new(None),
+            timeline_builds: std::cell::Cell::new(0),
             bindings,
             shortcut_leader: None,
         }
@@ -4539,7 +4548,77 @@ impl App {
         affects_view
     }
 
+    /// The timeline for `width`, rebuilt only when one of its inputs changed.
+    ///
+    /// Model inputs are covered by `timeline_revision` (bumped by every sync
+    /// message and result); the rest are hashed here: the viewed session, its
+    /// width, resolved theme, focus/selection, fold/raw state, detail level and
+    /// animation phase. Chrome-only changes (typing, scrolling, toasts, status)
+    /// therefore reuse the lines, blocks and hit-target indices of the last
+    /// build. Non-selected session events stay conservative: every sync message
+    /// bumps the revision, so child cards and waits cannot go stale.
+    pub fn timeline_for(&self, width: usize) -> std::rc::Rc<crate::timeline::Timeline> {
+        let key = self.timeline_cache_key(width);
+        if let Some((cached, timeline)) = self.timeline_cache.borrow().as_ref() {
+            if *cached == key {
+                return std::rc::Rc::clone(timeline);
+            }
+        }
+        let timeline =
+            std::rc::Rc::new(crate::timeline::build(self, &self.theme, self.frame, width));
+        *self.timeline_cache.borrow_mut() = Some((key, std::rc::Rc::clone(&timeline)));
+        self.timeline_builds.set(self.timeline_builds.get() + 1);
+        timeline
+    }
+
+    /// Drop the cached timeline explicitly (tests and direct model edits).
+    pub fn invalidate_timeline(&self) {
+        self.timeline_revision
+            .set(self.timeline_revision.get().wrapping_add(1));
+    }
+
+    fn timeline_cache_key(&self, width: usize) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.timeline_revision.get().hash(&mut h);
+        self.viewed_id().hash(&mut h);
+        width.hash(&mut h);
+        crate::timeline::theme_fingerprint(&self.theme).hash(&mut h);
+        (self.ui.detail as u8).hash(&mut h);
+        (self.ui.view as u8).hash(&mut h);
+        self.ui.focus.hash(&mut h);
+        self.ui.timeline_sel.hash(&mut h);
+        if !self.theme.opts.reduced_motion {
+            self.frame.hash(&mut h);
+        }
+        let mut opens: Vec<(&String, &bool)> = self.ui.timeline_open.iter().collect();
+        opens.sort_by(|a, b| a.0.cmp(b.0));
+        for (key, open) in opens {
+            key.hash(&mut h);
+            open.hash(&mut h);
+        }
+        let mut flash: Vec<(&String, &usize)> = self.ui.group_flash.iter().collect();
+        flash.sort_by(|a, b| a.0.cmp(b.0));
+        for (key, at) in flash {
+            key.hash(&mut h);
+            at.hash(&mut h);
+        }
+        let busy = self
+            .state
+            .model
+            .selected
+            .as_ref()
+            .is_some_and(|view| self.is_busy(&view.session_id));
+        if busy || !self.state.model.running.is_empty() {
+            // Running durations are wall-clock seconds in turn footers.
+            (crate::app::now_secs() as u64).hash(&mut h);
+        }
+        h.finish()
+    }
+
     pub fn apply_sync(&mut self, msg: SyncMsg) {
+        self.timeline_revision
+            .set(self.timeline_revision.get().wrapping_add(1));
         if let SyncMsg::SkillMcp {
             project,
             skills,
@@ -4860,6 +4939,8 @@ impl App {
     }
 
     pub fn apply_done(&mut self, done: ActionDone) {
+        self.timeline_revision
+            .set(self.timeline_revision.get().wrapping_add(1));
         match done.call.clone() {
             ApiCall::VoiceStatus { generation } => {
                 self.apply_voice_status(generation, done.result);

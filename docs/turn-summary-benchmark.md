@@ -33,7 +33,7 @@ Before, the session also lost 10 617 events to the cap (`… older diagnostics
 are not loaded`), so its sidebar counted 5.2M input tokens; the ledger counts
 all 5.9M.
 
-## Render replay (phases 1–2, 2026-10-31)
+## Render replay (phases 1–3, 2026-10-31)
 
 `--bench WxH --replay` is a deterministic in-memory stream through the same
 `frames::run_batch` policy and timeline cache as the interactive loop. It needs
@@ -70,6 +70,8 @@ numbers are the same run before the layout cache:
 | Paced applied rate, phase 2 | 1,615–1,678 events/s | 363–368 events/s |
 | CPU user / sys, phase 2 | 0.58–0.60 s / 4–6 ms | 2.64–2.65 s / 15–18 ms |
 | RSS, phase 2 | 25–26 MB | 53–55 MB |
+| Chrome frames / timeline builds, phase 3 | 110 / **0** | 110 / **0** |
+| Chrome draw, phase 3 mean / p95 | **0.36 / 0.39 ms** | **0.54 / 0.59 ms** |
 
 With long tool diffs at high detail (`NEXUS_TUI_REPLAY_TOOLS=1`), release draws
 cost 2.0 ms at 200 messages and 9.4–9.9 ms at 1,000; RSS is ~32 MB / ~309 MB,
@@ -105,7 +107,8 @@ rss_kib 53168
 
 Both provisional targets are met: under 2 ms for realistic 200-message draws
 and 5–15 ms for the 1,000-message case. Batching cuts 902 events to 16 burst
-frames; the cache makes unchanged bodies and tool rows cheap to re-assemble.
-Residual cost is copying and painting all loaded lines. The replay does not
+frames; the cache makes unchanged bodies and tool rows cheap to re-assemble, and
+chrome-only frames reuse the built timeline instead of rebuilding it. Residual
+stream-frame cost is copying and painting all loaded lines. The replay does not
 measure terminal output or input latency; the scratch-Core pty run in the
 section above remains the end-to-end check.

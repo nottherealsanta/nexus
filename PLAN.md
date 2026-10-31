@@ -19,16 +19,17 @@ The sections below are the record of the release steps and the backlog that rema
 
 ## Where things stand (2026-10-30)
 
-- **TUI render performance (phases 1–2 landed 2026-10-31).** The loop draws
+- **TUI render performance (phases 1–3 landed 2026-10-31).** The loop draws
   only when the model changes, coalesces up to 64 queued sync messages within an
   8 ms soft budget, and treats input, effects and due ticks as barriers. Raw
   `wire_event`/`wire_response` rows still advance the reducer but skip the
   frame. Rendered Markdown bodies, wrapped text and tool details are cached by
-  content, width and theme, with a bounded per-app cache. In a deterministic
-  replay, 902 events cost 16 frames instead of 902; a 200-message draw is
-  1.1–1.3 ms and a 1,000-message draw 5.2 ms (release), from 8.5 ms and 164 ms
-  before phase 2. Remaining work: phase 3 (separate timeline/chrome
-  invalidation) and phase 4 (viewport layout), both optional at this cost, in
+  content, width and theme, with a bounded per-app cache; chrome-only frames
+  (typing, scrolling, idle ticks) reuse the last timeline. In a deterministic
+  replay, 902 events cost 16 frames instead of 902; a 200-message stream draw is
+  1.1–1.3 ms and a 1,000-message draw 5.2 ms (release), while chrome-only draws
+  are 0.36 ms and 0.54 ms. Remaining work: phase 4 (viewport layout), optional
+  at this cost, in
   [TUI_PERFORMANCE_PLAN.md](TUI_PERFORMANCE_PLAN.md).
 - **Merged.** `main` is now Nexus 0.10 (`e2c6cd2`, pushed directly, no PR; branch protection is off). `nexus10` shared no history with `main`, so the merge used `-s ours` and keeps old Nexus 0.7.2 as the second parent: no force-push, and nothing was lost. Old Nexus is also branch `nexus01` (pushed, plus one backup commit of its uncommitted local work) and tag `v0.7.2`.
 - Release gate O1 to O4 are done. O5 (platform matrix) is deferred to [TODO.md](TODO.md); O6 (release-download install) is written and tested against a local release (step 3).

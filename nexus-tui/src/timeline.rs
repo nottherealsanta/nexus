@@ -110,7 +110,7 @@ fn hash_str(text: &str) -> u64 {
 
 /// Every theme token that can change a rendered timeline body. The mode/tier
 /// are already resolved into these colours; `ascii` changes glyphs.
-fn theme_fingerprint(theme: &Theme) -> u64 {
+pub fn theme_fingerprint(theme: &Theme) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for token in [
         "text.primary",

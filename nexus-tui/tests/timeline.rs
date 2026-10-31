@@ -905,6 +905,7 @@ fn calls(a: &mut nexus_tui::app::App, tools: &[(&str, Option<&str>)]) {
     ]))
     .unwrap();
     view.scratch.clear();
+    a.invalidate_timeline();
 }
 
 #[test]

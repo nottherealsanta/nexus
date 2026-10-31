@@ -136,12 +136,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let mut metrics = (0usize, 0usize, None::<usize>);
     let timeline = {
         let a: &App = app;
-        Some(crate::timeline::build(
-            a,
-            &a.theme,
-            a.frame,
-            regions.timeline.width.saturating_sub(4) as usize,
-        ))
+        Some(a.timeline_for(regions.timeline.width.saturating_sub(4) as usize))
     };
     if let Some(t) = &timeline {
         app.note_live_groups(t);
@@ -304,7 +299,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     app.ui.timeline_total = metrics.0;
     app.ui.timeline_height = metrics.1;
     if let Some(t) = timeline {
-        app.ui.timeline_blocks = t.blocks;
+        app.ui.timeline_blocks = t.blocks.clone();
         let n = app.ui.timeline_blocks.len();
         // A fold changes line ranges and can add or remove blocks; keep the
         // selection on the same key rather than the same index.

@@ -306,7 +306,7 @@ tools/bench.sh ROOT [turns] [runs]
 NEXUS10_REDUCED_MOTION=1 cargo run -- --dark --bench 160x48 --replay
                            # no Core: replay a deterministic 200-message / ~900-event stream
                            # through the real batch policy; prints burst and paced frame counts,
-                           # timeline build time and cache hits/misses.
+                           # timeline build time, cache hits/misses and chrome-only frames.
                            # NEXUS_TUI_REPLAY_MESSAGES and NEXUS_TUI_REPLAY_EVENTS set the fixture;
                            # NEXUS_TUI_REPLAY_TOOLS=1 adds long edit diffs and opens high detail.
 ```
@@ -331,8 +331,13 @@ bodies (including fenced-code block offsets), wrapped plain text and unclipped
 tool detail rows are keyed by their content, width and a resolved theme
 fingerprint; focus, selection and clipping stay outside the cached value.
 Entries are FIFO-evicted under a 32 MiB cap, and the replay reports hits,
-misses and evictions. This is what keeps a 200-message draw near 1 ms and a
-1,000-message draw near 5 ms in the release build; `--bench ... --replay`
+misses and evictions. The built timeline itself is reused when only chrome
+changes (typing, scrolling, idle ticks, toasts); `App::timeline_for` hashes the
+model revision, viewed session, width, theme, focus/selection, fold/raw state,
+detail and animation phase, and conservative sync-message revisions keep child
+cards and waits from going stale. This is what keeps a 200-message draw near
+1 ms, a 1,000-message draw near 5 ms and chrome-only frames near 0.4–0.5 ms in
+the release build; `--bench ... --replay`
 measures it without a Core or PTY (results in
 [../TUI_PERFORMANCE_PLAN.md](../TUI_PERFORMANCE_PLAN.md)).
 

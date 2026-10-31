@@ -688,8 +688,120 @@ fn an_unchanged_frame_does_no_parse_or_wrap_work() {
 
     let _ = render(&mut app, 120, 36);
     let (hits2, misses2, _) = stats(&app);
-    assert!(hits2 > hits, "the second frame hits cached bodies");
+    assert_eq!(hits2, hits, "the cached timeline needs no body lookups");
     assert_eq!(misses2, misses, "no body is parsed or wrapped again");
+}
+
+// ---- phase 3: timeline and chrome invalidation ------------------------------
+
+#[test]
+fn typing_and_scrolling_reuse_the_timeline() {
+    let (w, h) = (120u16, 36u16);
+    let mut app = fresh();
+    let _ = render(&mut app, w, h);
+    let builds = app.timeline_builds.get();
+    let blocks = app.ui.timeline_blocks.clone();
+    let screen = app.timeline_screen.clone();
+
+    typing(&mut app, "hello");
+    let _ = render(&mut app, w, h);
+    assert_eq!(app.timeline_builds.get(), builds, "typing is chrome only");
+    assert_eq!(app.ui.timeline_blocks, blocks);
+    assert_eq!(app.timeline_screen, screen, "timeline cells are unchanged");
+
+    app.scroll_timeline(-2);
+    let _ = render(&mut app, w, h);
+    assert_eq!(app.timeline_builds.get(), builds, "scrolling reuses lines");
+}
+
+#[test]
+fn idle_ticks_reuse_the_timeline_but_animation_rebuilds() {
+    let mut app = fresh();
+    app.theme = app.theme.with(nexus_tui::theme::Options {
+        reduced_motion: true,
+        ..app.theme.opts
+    });
+    let _ = render(&mut app, 120, 36);
+    let builds = app.timeline_builds.get();
+    app.tick(Instant::now());
+    let _ = render(&mut app, 120, 36);
+    assert_eq!(
+        app.timeline_builds.get(),
+        builds,
+        "no animation, no rebuild"
+    );
+
+    let mut moving = fresh();
+    moving.theme = moving.theme.with(nexus_tui::theme::Options {
+        reduced_motion: false,
+        ..moving.theme.opts
+    });
+    let _ = render(&mut moving, 120, 36);
+    let builds = moving.timeline_builds.get();
+    moving.frame += 1;
+    let _ = render(&mut moving, 120, 36);
+    assert_eq!(
+        moving.timeline_builds.get(),
+        builds + 1,
+        "the spinner phase is a timeline input"
+    );
+}
+
+#[test]
+fn model_ui_and_size_changes_rebuild_the_timeline() {
+    let (w, h) = (120u16, 36u16);
+    let mut app = fresh();
+    let _ = render(&mut app, w, h);
+    let mut builds = app.timeline_builds.get();
+
+    add_message(&mut app, 1200, 80, "assistant", "a new cached frame");
+    let _ = render(&mut app, w, h);
+    assert_eq!(app.timeline_builds.get(), builds + 1, "new content");
+    builds = app.timeline_builds.get();
+
+    app.ui.focus = nexus_tui::ui::Focus::Timeline;
+    let _ = render(&mut app, w, h);
+    assert_eq!(app.timeline_builds.get(), builds + 1, "focus bar");
+    builds = app.timeline_builds.get();
+
+    press(&mut app, &["down"]);
+    let _ = render(&mut app, w, h);
+    assert_eq!(app.timeline_builds.get(), builds + 1, "selection");
+    builds = app.timeline_builds.get();
+
+    let key = app
+        .ui
+        .timeline_blocks
+        .iter()
+        .find(|block| block.kind == BlockKind::Assistant)
+        .expect("assistant block")
+        .key
+        .clone();
+    app.ui.timeline_open.insert(key, false);
+    let _ = render(&mut app, w, h);
+    assert_eq!(app.timeline_builds.get(), builds + 1, "fold state");
+    builds = app.timeline_builds.get();
+
+    app.set_size(100, 30);
+    let _ = render(&mut app, 100, 30);
+    assert_eq!(app.timeline_builds.get(), builds + 1, "width");
+}
+
+#[test]
+fn a_non_selected_session_event_rebuilds_conservatively() {
+    let mut app = fresh();
+    let _ = render(&mut app, 120, 36);
+    let builds = app.timeline_builds.get();
+    app.apply_sync(SyncMsg::Event(event(
+        1300,
+        "session.status",
+        json!({"status": "busy", "turn_id": "trn_other", "origin": "prompt"}),
+    )));
+    // The event belongs to SESSION, but the point is that any view-affecting
+    // sync message invalidates the timeline even when the selected content did
+    // not obviously change.
+    let _ = render(&mut app, 120, 36);
+    assert_eq!(app.timeline_builds.get(), builds + 1);
 }
 
 #[test]

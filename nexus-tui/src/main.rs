@@ -1161,6 +1161,31 @@ fn cpu_ms() -> (f64, f64) {
     }
 }
 
+/// Chrome-only frames: composer typing and scrolling, which must redraw the
+/// shell without rebuilding the timeline. Returns `(frames, builds, draws)`.
+fn replay_chrome(app: &mut App, (w, h): (u16, u16)) -> (usize, u64, Vec<f64>) {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let _ = render::render_buffer(app, w, h);
+    let base = app.timeline_builds.get();
+    let mut draws = Vec::new();
+    let mut frames = 0;
+    for i in 0..100 {
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let start = Instant::now();
+        let _ = render::render_buffer(app, w, h);
+        draws.push(elapsed_ms(start));
+        frames += 1;
+        if i % 10 == 9 {
+            app.scroll_timeline(-2);
+            let start = Instant::now();
+            let _ = render::render_buffer(app, w, h);
+            draws.push(elapsed_ms(start));
+            frames += 1;
+        }
+    }
+    (frames, app.timeline_builds.get() - base, draws)
+}
+
 /// `--bench WxH --replay`: a deterministic in-memory stream through the
 /// production batch policy. No Core and no PTY: this measures scheduling,
 /// layout and paint, not terminal output or input latency.
@@ -1232,6 +1257,10 @@ fn replay(opts: Options, (w, h): (u16, u16)) -> i32 {
         "paced_cache hits {} misses {} evictions {} entries {paced_entries} bytes {paced_bytes}",
         paced_cache.0, paced_cache.1, paced_cache.2
     );
+    let mut chrome = replay_app(opts, (w, h), messages);
+    let (chrome_frames, chrome_builds, chrome_draws) = replay_chrome(&mut chrome, (w, h));
+    println!("chrome frames {chrome_frames} timeline_builds {chrome_builds}");
+    timing("chrome_draw_ms", chrome_draws);
     let cpu_end = cpu_ms();
     println!(
         "cpu_ms user {:.0} sys {:.0}",
