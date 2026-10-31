@@ -84,12 +84,15 @@ the latest GitHub release and never installs.
 - **Storage.** SQLite at `~/.nexus/nexus.db` (WAL). Tables: `project`,
   `session`, `session_snapshot`, `message`, `event`, `file_observation`, `turn`,
   `turn_request`, `turn_tool`, `turn_attempt`, `session_usage`, `mutation`,
-  `preference` and `log`.
+  `preference`, `log`, `event_body` and `storage_metrics`.
   `session_snapshot` is
   the JSON configuration frozen for one session; `event` is the durable event
   log, in publish order (see [Durable event log](#durable-event-log)); `log`
   holds that database's log generation, retention floor and head high-water
-  mark; `mutation` is the idempotency journal; `turn_attempt` records provider
+  mark; `event_body` holds content-addressed, compressed wire bodies and
+  `storage_metrics` is the native SQLite counter row (event/payload/wire/body
+  bytes) used instead of rescanning the log on every pass; `mutation` is the
+  idempotency journal; `turn_attempt` records provider
   retry attempts; `file_observation` holds each session's read observations (see
   below); `turn`, `turn_request` and `turn_tool` are the durable execution
   lifecycle ([Crash recovery](#crash-recovery)) and, with `session_usage`, the
@@ -97,8 +100,7 @@ the latest GitHub release and never installs.
   `preference` holds machine-wide name/value settings (`Store.preference`,
   `set_preference`).
   The file's `PRAGMA user_version` is the schema version (`store.SCHEMA_VERSION`).
-  There are no in-place migrations: `prepare_database` runs before the database
-  opens, and a file with another version (an earlier release, no version at all,
+  A file with another version (an earlier release, no version at all,
   or an unreadable file) is renamed with its `-wal` and `-shm` files to
   `nexus.db.v<version>-<YYYYmmdd-HHMMSS>.bak` (`v0` for none, `vunreadable`), and
   a new database starts in its place; the old one is never read. The new
@@ -107,7 +109,13 @@ the latest GitHub release and never installs.
   `Store.backup` holds the backup path (also logged as a warning) when one was
   made. An empty file is replaced without a backup; a database with a *newer*
   version is refused (`StoreError`) and left alone. Backups are never deleted;
-  a release that changes `SCHEMA` raises `SCHEMA_VERSION`.
+  a release that needs a destructive schema change raises `SCHEMA_VERSION`.
+  Additive payload storage (the `event` payload columns, `event_body`,
+  `storage_metrics`, triggers and indexes) is created in place on the current
+  version, so an existing 0.10 database keeps its event ids, messages and
+  snapshots. Old event rows are measured/compressed in small resumable batches
+  (`backfill_event_payloads`, `backfill_wire_turn_ids`) during startup and
+  maintenance; a crash only leaves the remaining rows unmeasured.
   A `message` row also records the id of the `message.added` event that announced it.
   Deleting a project or session deletes everything under it, including its child
   sessions, snapshots, observations, execution records and session events.
@@ -162,22 +170,58 @@ id into a cursor, `<generation>:<id>`, and serves the reconnect stream.
   errors (wrong generation, ahead, malformed, below the floor) are 400/409/410
   JSON responses with the current head, not a silent "start now". The full
   contract, filtering and overflow are in [api.md](api.md#event-stream).
-- **Retention.** `nexus/retention.py` removes only a contiguous prefix of old
-  diagnostic events and advances `log.floor`; the head high-water mark remains.
-  Events are pinned by an in-flight replay and protected by an unfinished
-  turn/request, an open wait or a live background job. Messages, snapshots and
-  model context never expire with the wire log. Defaults are 14 days and 256 MiB
-  of retained payload, checked hourly (`NEXUS10_EVENT_RETENTION_DAYS`,
-  `NEXUS10_EVENT_RETENTION_BYTES`, `NEXUS10_RETENTION_INTERVAL_SECONDS`).
-  A `log.retention` global event reports pruning or storage pressure. Each pass
-  removes at most 5,000 events in one transaction; later passes continue cleanup.
-  A replay releases its pin when catch-up reaches the live queue. Terminal turn/request/tool
-  rows are pruned after 30 days while keeping 200 turns per session (their
-  summaries go with them; the `session_usage` ledger stays); mutation
-  entries expire seven days after terminal resolution. Pressure is reported, not
-  silently resolved by dropping incoming events: `log.retention` carries the
-  removed count, batches, retained payload bytes and `over_budget` when the
-  protected evidence itself exceeds the budget.
+- **Retention.** `nexus/retention.py` has two independent diagnostic lifetimes.
+  Heavy wire payloads are content-addressed, compressed and deduplicated.
+  Successful terminal turns expire their payload up to one hour after completion
+  (default 3,600 s), failed/interrupted turns after 24 hours, and a soft 256 MiB
+  wire budget expires the oldest eligible payloads first. A linked terminal
+  turn is the evidence boundary, so its payload can expire even while another
+  turn in the same session is running; a legacy/unlinked payload keeps the
+  conservative session-wide protection. Expiry keeps the event envelope/id/type
+  and writes an explicit `$nexus_payload: "expired"` marker; it never moves
+  `floor`. Defaults:
+  `NEXUS10_WIRE_SUCCESS_RETENTION_SECONDS`,
+  `NEXUS10_WIRE_FAILURE_RETENTION_SECONDS`, `NEXUS10_WIRE_PAYLOAD_BYTES`;
+  `NEXUS10_WIRE_DEBUG_RETENTION_DAYS` explicitly extends both lifetimes for
+  debugging (0 disables the extension). Expiry writes a compact marker (metadata
+  only); the explanatory note and resync hint are synthesized on read.
+  `stored_event_bytes` counts the serialized event rows (including compact
+  markers/body references), while `body_bytes` counts unique compressed bodies;
+  the two are reported separately rather than double-counting shared bodies.
+
+  Normalized stream deltas/`part_done`/`tool_call_started` are not selectively
+  expired yet because recovery uses them for an interrupted request's partial
+  summary; they remain full events until ordinary prefix retention, which is a
+  deliberate, documented deferral.
+
+  Ordinary diagnostic events are additionally removed from a contiguous prefix
+  after 14 days or the 256 MiB budget and advance `log.floor`
+  (`NEXUS10_EVENT_RETENTION_DAYS`, `NEXUS10_EVENT_RETENTION_BYTES`). Events are
+  pinned by an in-flight replay and protected by an unfinished turn/request, an
+  open wait or a live background job. Messages, snapshots, turn/request/tool
+  evidence and model context never expire with the wire log. Terminal
+  turn/request/tool rows are pruned after 30 days while keeping 200 turns per
+  session; mutation entries expire seven days after terminal resolution.
+
+  Maintenance is continuous and bounded: it wakes on a terminal turn, on
+  pressure and on the periodic interval (`NEXUS10_RETENTION_INTERVAL_SECONDS`,
+  default and maximum 60 seconds). A pass measures a small migration batch,
+  expires one payload batch, removes a few event/turn/mutation batches
+  (`NEXUS10_RETENTION_BATCH_SIZE` 2000, `NEXUS10_RETENTION_EVENT_BATCHES` 4),
+  then yields for 50 ms
+  (`NEXUS10_RETENTION_CATCHUP_DELAY_SECONDS`, default 0.05). Catch-up is
+  therefore not limited by an hourly cadence. `log.retention` announcements
+  are rate-limited to one per 60 seconds
+  (`NEXUS10_RETENTION_ANNOUNCE_SECONDS`), so an impossible budget cannot make
+  maintenance flood its own log. Deferred partial indexes are built at most one
+  per pass; each still requires its own one-time table scan after startup, not
+  during it. `log.retention` and `/api/info`'s `retention_status` report bytes,
+  blockers (protected sessions, replay pins, unmeasured events), index progress,
+  last run/duration/error and `over_budget`. Pressure is reported, never
+  resolved by silently dropping incoming events.
+  `Store.reclaim_space` is a dry-run inventory by default and only performs a
+  bounded `incremental_vacuum` when the database was created with auto_vacuum;
+  a full `VACUUM` is never automatic.
 - **Reconnect.** `GET /api/event` accepts `?cursor=` or `Last-Event-ID`, registers
   the live subscription and reads the head atomically, replays the stored log up
   to that head in pages, then continues live while skipping the overlap. Cursor

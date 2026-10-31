@@ -65,7 +65,22 @@ class ToolEnd:
 @dataclass(frozen=True, slots=True)
 class MessageAdded:
     message: Message
-    input_id: str | None = None
+    input_ids: tuple[str, ...] = ()
+
+
+def merge_steering(messages: list[Message]) -> Message:
+    """One user message for steers delivered together, their text separated by newlines."""
+    if len(messages) == 1:
+        return messages[0]
+    parts: list[Part] = []
+    for message in messages:
+        for part in message.parts:
+            if isinstance(part, Text) and parts and isinstance(parts[-1], Text):
+                previous = parts[-1]
+                parts[-1] = Text(previous.text + "\n" + part.text)
+            else:
+                parts.append(part)
+    return Message("user", tuple(parts))
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,9 +290,11 @@ class Agent:
             notices = [*(self.inbox() if self.inbox is not None else []), *self._flush_notes()]
             if notices:
                 yield self._add(Message("user", tuple(Text(n) for n in notices)))
-            for input_id, message in self.steering() if self.steering else []:
+            steering = self.steering() if self.steering else []
+            if steering:
+                message = merge_steering([message for _, message in steering])
                 self.messages.append(message)
-                yield MessageAdded(message, input_id)
+                yield MessageAdded(message, tuple(input_id for input_id, _ in steering))
             yield StepStart(step)
             parts: list[Part] = []
             stop = "other"

@@ -129,6 +129,8 @@ const ms = (a, b) => (a && b) ? `${Math.round((b - a) * 1000)} ms` : "–";
 const jsonBlock = (summary, value, open) => h("details", { open: open || null }, h("summary", {}, summary), h("pre", { class: "json" }, pretty(value)));
 const isWire = (t) => t.startsWith("wire_");
 const isDelta = (t) => t.endsWith("_delta") || (t === "wire_event");
+const isExpiredPayload = (e) => e && (e.payload_state === "expired" || e.expired ||
+  (e.data && ["expired", "unavailable"].includes(e.data.$nexus_payload)));
 
 async function api(path) {
   const r = await fetch(path, { headers: { authorization: `Bearer ${TOKEN}` } });
@@ -458,6 +460,7 @@ function previewItem(it) {
 function viewRaw() {
   const want = S.rawFilter.toLowerCase();
   const rows = S.events.filter((e) => (!S.hideDeltas || !isDelta(e.type)) && (!want || e.type.toLowerCase().includes(want) || compact(e.data).toLowerCase().includes(want)));
+  const expired = S.events.filter(isExpiredPayload).length;
   const t0 = S.events.length ? S.events[0].time : 0;
   const shown = rows.slice(0, S.rawShown);
   const tbody = h("tbody", {});
@@ -465,7 +468,9 @@ function viewRaw() {
     const detail = h("tr", { hidden: "" }, h("td", { colspan: "4" }, h("pre", { class: "json" }, pretty(e))));
     tbody.append(h("tr", { class: "ev", onclick: () => detail.toggleAttribute("hidden") },
       h("td", { class: "num mono" }, e.id != null ? e.id : "live"), h("td", { class: "num mono" }, `+${(e.time - t0).toFixed(3)}s`),
-      h("td", { class: "type" + (isWire(e.type) ? " wire" : "") }, e.type, e.type === "wire_event" ? ` · ${e.data.name}` : ""),
+      h("td", { class: "type" + (isWire(e.type) ? " wire" : "") }, e.type,
+        e.type === "wire_event" && e.data && e.data.name ? ` · ${e.data.name}` : "",
+        isExpiredPayload(e) ? " · payload expired" : ""),
       h("td", { class: "preview" }, clip(compact(e.data), PREVIEW))), detail);
   }
   const search = h("input", { type: "search", placeholder: "filter by type or content", value: S.rawFilter });
@@ -474,6 +479,8 @@ function viewRaw() {
   return h("div", {},
     S.eventHistoryTruncated ? h("div", { class: "note warn" },
       `Earlier diagnostic events expired at the retention floor (event ${S.eventFloor}). Messages and snapshots above are complete; the wire log before this boundary is not retained.`) : null,
+    expired ? h("div", { class: "note warn" },
+      `${expired} diagnostic wire payload(s) expired by payload retention. Their event ids and types are still shown with an explicit expired marker; messages, snapshots and turn records are complete. The full payload cannot be recovered, but /api/snapshot resyncs the canonical conversation state.`) : null,
     h("div", { class: "toolbar" }, search, h("label", {}, deltas, " hide token deltas and provider SSE events"),
       h("span", { class: "note" }, `${rows.length} of ${S.events.length} events match${shown.length < rows.length ? `, showing the first ${shown.length}` : ""}. Click a row for the full JSON.`)),
     S.events.length ? h("table", {}, h("thead", {}, h("tr", {}, ["id", "time", "type", "data"].map((c) => h("th", {}, c)))), tbody) : noEvents(),

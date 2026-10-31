@@ -105,7 +105,7 @@ Then, from any directory:
 
 | Command | Does |
 | --- | --- |
-| `nexus` / `nexus tui` | Launch the TUI (starts Core with the repo's `uv run nexus`); runs the release binary (`--debug` for a debug build; debug redraws are about 10x slower). The TUI opens the directory you launched from as a project and shows its new-session screen (`NEXUS_TUI_LAUNCH_DIR`, set by the launcher) |
+| `nexus` / `nexus tui` | Launch the TUI (starts Core with the repo's `uv run nexus`); runs the release binary (`--debug` for a debug build; debug redraws are about 10x slower). The TUI opens the directory you launched from as a project—selecting it when it is already registered—and shows its new-session screen (`NEXUS_TUI_LAUNCH_DIR`, set by the launcher) |
 | `nexus build` | `uv sync`, release TUI build (`--debug` for a debug build), NSH web build |
 | `nexus web` | Build the web app if needed, start Core, serve it on 4820 and open it (`--no-open`, `--port N`) |
 | `nexus dev web` | Start Core and the hot-reloading NSH web app, then open it through the API proxy; Ctrl-C stops both web servers (not Core). Use `--no-open`, `--port N` for the proxy, and `--dev-port N` for NSH (defaults 4820 and 8790). NSH's development host may also be reachable on the local network. |
@@ -134,9 +134,17 @@ Tuning (all optional, read at daemon start):
 | `NEXUS_RETRY_BASE_DELAY` | 1.0 | Base backoff seconds |
 | `NEXUS_RETRY_MAX_WAIT` | 30.0 | Longest single backoff |
 | `NEXUS_RETRY_MAX_ELAPSED` | 60.0 | Retry budget per step |
-| `NEXUS10_EVENT_RETENTION_DAYS` | 14 | Diagnostic event age |
-| `NEXUS10_EVENT_RETENTION_BYTES` | 268435456 | Retained event payload budget (256 MiB) |
-| `NEXUS10_RETENTION_INTERVAL_SECONDS` | 3600 | Maintenance cadence |
+| `NEXUS10_EVENT_RETENTION_DAYS` | 14 | Whole-event prefix age |
+| `NEXUS10_EVENT_RETENTION_BYTES` | 268435456 | Whole-event retained payload budget (256 MiB) |
+| `NEXUS10_WIRE_SUCCESS_RETENTION_SECONDS` | 3600 | Wire payload lifetime after a successful terminal turn |
+| `NEXUS10_WIRE_FAILURE_RETENTION_SECONDS` | 86400 | Wire payload lifetime after a failed/interrupted turn |
+| `NEXUS10_WIRE_PAYLOAD_BYTES` | 268435456 | Soft retained wire payload budget (256 MiB) |
+| `NEXUS10_WIRE_DEBUG_RETENTION_DAYS` | 0 | Explicit longer wire lifetime for debugging (0 = off) |
+| `NEXUS10_RETENTION_INTERVAL_SECONDS` | 60 | Periodic maintenance cadence (capped at 60s; terminal/pressure passes wake sooner) |
+| `NEXUS10_RETENTION_BATCH_SIZE` | 2000 | Rows per bounded maintenance batch |
+| `NEXUS10_RETENTION_EVENT_BATCHES` | 4 | Event batches attempted per pass |
+| `NEXUS10_RETENTION_CATCHUP_DELAY_SECONDS` | 0.05 | Yield between catch-up passes |
+| `NEXUS10_RETENTION_ANNOUNCE_SECONDS` | 60 | Minimum interval between `log.retention` announcements |
 | `NEXUS10_TURN_RETENTION_DAYS` | 30 | Terminal turn lifecycle age |
 | `NEXUS10_KEEP_TURNS` | 200 | Recent turns kept per session |
 | `NEXUS10_MUTATION_RETENTION_DAYS` | 7 | Idempotency-key lifetime after resolution |
@@ -257,7 +265,7 @@ posting, renders the turn (including questions and approvals), and accepts
 | `test_mutations.py` | keyed acceptance/replay, duplicate requests, crash-before-journal unknown outcomes, deleted targets and revision preconditions |
 | `test_retry.py` | pre-stream retry policy, attempt records, backoff cancellation, frozen requests and no tool replay |
 | `test_client_snapshot.py` | consistent snapshots, reconnect cursors, overflow/resync, rotated local tokens and CLI tree isolation |
-| `test_retention.py` | event age/byte limits, bounded deletion, floor/head persistence, replay pins, protected lifecycle evidence and export boundaries |
+| `test_retention.py` | event age/byte limits, wire payload compression/dedup/expiry, bounded deletion, resumable migration, floor/head persistence, replay pins, protected lifecycle evidence and export boundaries |
 | `test_loop.py` | The loop with a scripted provider |
 
 Loop tests use a small scripted provider that replays one reply per request.

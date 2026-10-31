@@ -139,17 +139,17 @@ async def test_steer_during_tool_call_is_after_result_before_next_request(setup_
     release.set()
     await _wait_until(lambda: session_id not in runtime.turns, "marathon turn did not finish", timeout=20)
 
-    request = next(req for req in marathon.requests if "also check the result" in _user_texts(req))
-    roles = [msg.role for msg in request.messages[-4:]]
-    assert roles == ["assistant", "tool", "user", "user"]
-    assert _user_texts(request)[-2:] == ["also check the result", "then report the count"]
+    request = next(req for req in marathon.requests if any("also check the result" in text for text in _user_texts(req)))
+    roles = [msg.role for msg in request.messages[-3:]]
+    assert roles == ["assistant", "tool", "user"]
+    assert _user_texts(request)[-1] == "also check the result\nthen report the count"
     messages = await _messages(client, session_id)
     delivered = [m for m in messages if m.get("delivery") == "steer"]
-    assert [m["parts"][0]["text"] for m in delivered] == ["also check the result", "then report the count"]
+    assert [m["parts"][0]["text"] for m in delivered] == ["also check the result\nthen report the count"]
     events = await _events(client, session_id)
     delivered_events = [e["data"] for e in events if e["type"] == "input.delivered"]
     assert [e["id"] for e in delivered_events] == input_ids
-    assert [e["message_id"] for e in delivered_events] == [m["id"] for m in delivered]
+    assert [e["message_id"] for e in delivered_events] == [delivered[0]["id"]] * 2
     assert {e["turn_id"] for e in delivered_events} == {started.json()["turn_id"]}
 
 

@@ -19,6 +19,7 @@ contract:
 | `type` | Event name (`text_delta`, `message.added`, `session.created`, …). |
 | `session_id` | The owning session, or `null` for a global event. |
 | `data` | The event payload. |
+| `payload_state` | `full` or `expired` on stored/replayed events. Expired wire events keep the same id/type and carry an explicit `$nexus_payload: "expired"` marker in `data`. |
 | `cursor` | On the SSE stream only: `<log generation>:<id>`. |
 
 The `log` table holds one generation (`log_<hex>`) for the database. A new,
@@ -36,11 +37,38 @@ observations are gone; the tombstone is only what a client needs to drop it.
 `bus.overflow` is stream control, is never stored, and has no durable id.
 Details and response codes: [api.md](api.md#event-stream).
 
-**Retention.** Old diagnostic events are removed from a contiguous prefix and
-`floor` becomes the last removed id. The head high-water mark remains even when
-no rows are retained. A cursor at the floor may resume; below it the response is
-410 `history_unavailable`. Messages and snapshots are independent of event
-expiry. A `log.retention` global event reports each pass.
+**Retention.** There are two independent diagnostic lifetimes. Heavy wire
+payloads (`wire_request`, `wire_response`, `wire_event`) are content-addressed
+in `event_body`, compressed when that is smaller and deduplicated by SHA-256.
+Their event envelopes stay in the log: a successful terminal turn's payload
+expires up to an hour after completion, a failed or interrupted turn's after 24
+hours, and a soft 256 MiB budget expires the oldest eligible payloads first.
+Expiry is selective: it clears the body pointer, stores a compact expiry marker
+in `data`, sets `payload_state` and never renumbers or removes the envelope or
+moves `floor`. The human-readable note and `/api/snapshot` resync guidance are
+synthesized at replay/export time rather than written once per event, so
+expiry does not grow the database with repeated prose. A terminal turn's linked
+payload expires even
+if another turn in the same session is running; unlinked legacy payloads retain
+session-wide protection. A replay or export in progress is not half-expired:
+in-flight replay pins still hold.
+
+Normalized `text_delta`, `reasoning_delta`, `tool_args_delta`, `part_done` and
+`tool_call_started` events are deliberately **not** selectively expired yet:
+recovery reads them to describe an interrupted stream when the request row has
+no complete parts. They remain full semantic events and are removed only by the
+ordinary prefix retention below until an equivalent durable summary is
+checkpointed. This is a documented deferral, not an invisible expiry rule.
+
+Separately, ordinary diagnostic events are removed from a contiguous prefix
+after the event age and `floor` becomes the last removed id. The head
+high-water mark remains even when no rows are retained. A cursor at the floor
+may resume; below it the response is 410 `history_unavailable`. Messages,
+snapshots, turn/request/tool execution records and `session_usage` are
+independent of both event expiry and payload expiry. A `log.retention` global
+event reports each pass, including wire payload counts, bytes, blockers and the
+last run. Maintenance runs at most every 60 seconds, wakes on terminal turns and
+on soft-budget pressure, and rate-limits its own `log.retention` announcements.
 
 ## Conversation
 
@@ -339,6 +367,8 @@ pending composer input; `input.held` updates queue hold state. These are activit
 records, not model context. `input.delivered` links an input to `message_id` and
 `turn_id` when it becomes a user message. Stored message JSON adds the optional
 `delivery` field (`steer` or `queued`), which clients use for timeline labels.
+Steers delivered together share one `message_id`: their text is one user message
+separated by newlines.
 The provider receives the user message's parts in their stored order.
 Reconnecting clients rebuild pending activity from `/api/snapshot` or the
 session input endpoint, independently of diagnostic event retention.

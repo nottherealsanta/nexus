@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, Self
 from urllib.parse import quote
 
+from . import payloads
 from .llmhub.responses import redact_headers
 from .snapshot import RECONSTRUCTED_NOTE
 
@@ -93,6 +94,8 @@ class Boundary:
     counts: dict[str, dict[str, int]]
     floor: int = 0
     history_truncated: bool = False
+    expired_payloads: int = 0
+    wire_payload_bytes: int = 0
 
 
 class ExportView:
@@ -178,6 +181,18 @@ class ExportView:
                     "select count(*) from event where session_id = ?", (row["id"],)
                 ).fetchone()[0],
             }
+        ids = [row["id"] for row in self.sessions]
+        marks = ", ".join("?" * len(ids))
+        try:
+            expired = self.db.execute(
+                f"select count(*) from event where session_id in ({marks})"
+                " and payload_state = 'expired'", ids).fetchone()[0]
+            wire_bytes = self.db.execute(
+                f"select coalesce(sum(payload_bytes), 0) from event where session_id in ({marks})"
+                " and payload_state = 'full'"
+                " and type in ('wire_request', 'wire_response', 'wire_event')", ids).fetchone()[0]
+        except sqlite3.OperationalError:  # a database from before payload storage; the view stays read-only
+            expired, wire_bytes = 0, 0
         return Boundary(
             generated=time.time(),
             generation=log["generation"] if log else "",
@@ -187,6 +202,8 @@ class ExportView:
             counts=counts,
             floor=floor,
             history_truncated=floor > 0,
+            expired_payloads=expired,
+            wire_payload_bytes=wire_bytes,
         )
 
     def close(self) -> None:
@@ -284,7 +301,10 @@ class ExportView:
                     "time": row["time"],
                     "type": row["type"],
                     "session_id": row["session_id"],
-                    "data": redact_transport(row["type"], json.loads(row["data"])),
+                    "data": redact_transport(row["type"], payloads.event_data(self.db, row)),
+                    "payload_state": row["payload_state"] if payloads.has_column(row, "payload_state") else "full",
+                    **({"expired": True, "original_bytes": row["payload_bytes"]}
+                       if payloads.has_column(row, "payload_state") and row["payload_state"] == "expired" else {}),
                 }
             if count < EVENT_PAGE:
                 break
@@ -328,6 +348,8 @@ class ExportView:
                 "seq": self.boundary.seq,
                 "floor": self.boundary.floor,
                 "history_truncated": self.boundary.history_truncated,
+                "expired_payloads": self.boundary.expired_payloads,
+                "wire_payload_bytes": self.boundary.wire_payload_bytes,
                 "session_updated": self.boundary.session_updated,
                 "counts": self.boundary.counts,
                 "note": (
@@ -335,7 +357,10 @@ class ExportView:
                     "boundary are not in this export. `seq` is the publishing daemon's counter; "
                     "`event_id` is durable, and a resume cursor is `<log_generation>:<event_id>`. "
                     "When `history_truncated` is true, diagnostic events at or below `floor` expired "
-                    "before this export; messages and snapshots remain complete."
+                    "before this export; messages and snapshots remain complete. "
+                    "`expired_payloads` counts envelopes whose diagnostic wire body expired by payload "
+                    "retention; their ids and types remain with an explicit `$nexus_payload: expired` "
+                    "marker, and canonical messages/snapshots are unaffected."
                 ),
             },
         }
@@ -579,6 +604,10 @@ def markdown_export(view: ExportView) -> Iterator[str]:
     if view.boundary.history_truncated:
         yield (f"- Event retention: earlier diagnostic events expired at floor {view.boundary.floor}; "
                "the JSON event log starts after that boundary. Messages and snapshots are complete.\n")
+    if view.boundary.expired_payloads:
+        yield (f"- Wire payload retention: {view.boundary.expired_payloads} diagnostic event payload(s) "
+               "expired; their event ids and types remain in the JSON log with an explicit expired marker. "
+               "Messages and snapshots are complete.\n")
     yield (
         "\nThe export is read-only. A sub agent's conversation is its own context and appears in "
         "its own section, never inside its parent's messages. Provider stream deltas live in the JSON "

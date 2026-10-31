@@ -2,7 +2,8 @@
 
 Core reads `$NEXUS10_HOME/config.toml` (normally `~/.nexus/config.toml`).
 A missing file uses defaults. Invalid keys fall back independently and appear
-in the API's `errors`; malformed TOML is never overwritten by a patch.
+in the API's `errors` and in each client's Settings (under Configuration);
+malformed TOML is never overwritten by a patch.
 
 The initial inventory is `defaults.effort`, `defaults.agent`,
 `defaults.permission` (`allow` or `ask`) and `tools.disabled`. New root sessions

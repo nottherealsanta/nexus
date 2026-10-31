@@ -601,9 +601,13 @@ refused. After writing, the observation is dropped. No approval is requested.
 ## ask
 
 `ask {questions: [...]}` asks the user one or more questions and waits for the
-answers. It is a task tool, not a control tool and not an approval. In the TUI,
-use up/down and Enter to choose an option; for multiple choices, use Space to
-toggle each option before Enter. The question card does not show an elapsed timer.
+answers. It is a task tool, not a control tool and not an approval. A request
+carries 1-5 questions. In the TUI they are pages: use Up/Down to move, Space to
+tick a multi-select option, and Enter to lock the answer and go on. Left/Right
+revisit any page (or an empty composer's Left/Right does); the last page is a
+review listing every question and its answer, where Enter sends the whole reply.
+Enter in the composer locks or sends exactly like the card, using the highlighted
+option or the text typed there. The question card does not show an elapsed timer.
 
 ```jsonc
 // arguments

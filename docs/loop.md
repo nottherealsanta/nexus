@@ -157,10 +157,11 @@ validates and reconciles the stored context before calling it
 
 The runtime's durable input queue is separate from the loop's message history.
 Before a model request, the loop takes pending steers after preceding tool
-results. Each delivered input becomes one user message. Storage commits the
-message and delivery state together; clients show it at that point in the
-context line. If a steer arrives while a final answer streams, the loop takes
-another step before ending the turn.
+results. Steers taken at the same boundary become one user message, their text
+separated by newlines, so the model sees a single instruction rather than a
+run of user turns. Storage commits that message and each input's delivery state
+together; clients show it at that point in the context line. If a steer arrives
+while a final answer streams, the loop takes another step before ending the turn.
 
 Queued inputs start separate turns after completion or failure. Interruption
 holds the queue; sending the next item explicitly releases it. Recovery keeps

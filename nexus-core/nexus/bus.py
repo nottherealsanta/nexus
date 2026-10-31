@@ -79,7 +79,8 @@ class Bus:
     def subscriber_count(self) -> int:
         return len(self._subscribers)
 
-    def publish(self, type_: str, data: Any = None, *, session_id: str | None = None) -> dict[str, Any]:
+    def publish(self, type_: str, data: Any = None, *, session_id: str | None = None,
+                turn_id: str | None = None) -> dict[str, Any]:
         with self._lock:
             self._seq += 1
             if type_ == "session.deleted":
@@ -89,7 +90,12 @@ class Bus:
             event: dict[str, Any] = {"seq": self._seq, "time": time.time(), "type": type_,
                                      "session_id": session_id, "data": data}
             if self._log is not None:
+                # Internal storage metadata: the store records it for payload
+                # retention, and it is removed before any subscriber sees it.
+                if turn_id is not None:
+                    event["_turn_id"] = turn_id
                 event_id = self._log.append_event(event)
+                event.pop("_turn_id", None)
                 if event_id is None:
                     # The subject session is gone: there is no durable identity to resume from.
                     return event

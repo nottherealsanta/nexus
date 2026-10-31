@@ -1106,3 +1106,53 @@ async def test_permission_storage_failure_does_not_release_tool(tmp_path, monkey
         future.cancel()
         store.close()
 
+
+
+def test_wire_payload_expiry_waits_for_recovery_and_leaves_restored_parts_identical(tmp_path):
+    from nexus.llmhub.types import Usage
+
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    crash = Crash(tmp_path / "nexus.db", workspace)
+    session = crash.session()
+    turn = crash.turn(session)
+    request = crash.request(turn)
+    parts = [
+        to_json(Text("the answer", origin="codex", raw={"type": "message", "role": "assistant"})),
+        to_json(ToolCall("c1", "read", '{"path": "a.txt"}', origin="codex",
+                         raw={"type": "function_call", "call_id": "c1"})),
+    ]
+    crash.store.finish_request(request["id"], stop="tool_calls", response_id="resp_1", parts=parts)
+    crash.store.record_usage(request["id"], None, Usage(input_tokens=12, output_tokens=4))
+    wire = crash.bus.publish("wire_request", {
+        "type": "wire_request", "method": "POST", "url": "https://api.example/v1",
+        "headers": {}, "body": {"messages": [{"role": "user", "content": "hi"}]},
+    }, session_id=session.id, turn_id=turn["id"])
+    # Even an explicit pressure pass cannot expire the unfinished turn's evidence.
+    crash.store.db.execute("update event set time = 1, expires = 1 where id = ?", (wire["id"],))
+    crash.store.db.execute("update turn set started = 1 where id = ?", (turn["id"],))
+    crash.store.db.commit()
+    result = crash.store.expire_wire_payloads(
+        now=10**9, byte_budget=0, protect_sessions=crash.store.protected_sessions())
+    assert result["expired"] == 0
+    assert {e["id"]: e for e in crash.store.events(session.id)}[wire["id"]]["payload_state"] == "full"
+    crash.close()
+
+    rt = restart(tmp_path / "nexus.db")
+    try:
+        messages = rt.store.messages(session.id)
+        [assistant] = [m for m in messages if m.message.role == "assistant"]
+        assert message_json(assistant)["parts"] == parts
+        assert rt.store.session_usage(session.id)["models"]["unknown"]["input"] == 12
+        # Only now is the turn terminal and recovery checkpointed. Expiring the
+        # wire body cannot change the restored canonical parts or usage.
+        rt.store.db.execute("update turn set finished = ? where id = ?", (1.0, turn["id"]))
+        rt.store.db.commit()
+        rt.store.schedule_wire_expiry(success_seconds=3600, failure_seconds=24 * 3600)
+        assert rt.store.expire_wire_payloads(now=10**9, byte_budget=10**9)["expired"] == 1
+        [again] = [m for m in rt.store.messages(session.id) if m.message.role == "assistant"]
+        assert message_json(again)["parts"] == parts
+        assert rt.store.session_usage(session.id)["models"]["unknown"]["input"] == 12
+        assert {e["id"]: e for e in rt.store.events(session.id)}[wire["id"]]["payload_state"] == "expired"
+    finally:
+        rt.store.close()

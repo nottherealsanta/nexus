@@ -523,6 +523,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                     "floor": runtime.store.log_floor(),
                     "floor_cursor": format_cursor(generation, runtime.store.log_floor())},
             "retention": asdict(runtime.retention.settings),
+            "retention_status": runtime.retention.metrics(),
             "retry": {"max_attempts": runtime.retry_policy.max_attempts,
                       "base_delay": runtime.retry_policy.base_delay,
                       "max_wait": runtime.retry_policy.max_wait,

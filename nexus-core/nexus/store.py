@@ -54,6 +54,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import payloads
 from .codec import message_from_json, message_to_json, part_from_json, to_json
 from .llmhub.types import Image, Message, Text, ToolCall, ToolResult, Usage
 from .paths import home
@@ -92,9 +93,112 @@ create table if not exists event (
   seq integer not null,
   time real not null,
   type text not null,
-  data text not null
+  data text not null,
+  payload_bytes integer not null default -1,
+  stored_bytes integer not null default 0,
+  payload_state text not null default 'full',
+  body_sha text,
+  turn_id text,
+  expires real,
+  turn_link_checked integer not null default 1
 );
 create index if not exists event_session on event(session_id, id);
+create index if not exists event_wire_expiry on event(expires, id)
+  where payload_state = 'full' and payload_bytes >= 0
+    and type in ('wire_request', 'wire_response', 'wire_event');
+create index if not exists event_turn on event(turn_id) where turn_id is not null;
+create index if not exists event_wire_order on event(id)
+  where payload_state = 'full' and payload_bytes >= 0
+    and type in ('wire_request', 'wire_response', 'wire_event');
+create index if not exists event_lifecycle on event(session_id, type, id)
+  where type in ('bash.started', 'bash.finished', 'permission.asked', 'permission.replied',
+                 'question.asked', 'question.replied');
+create table if not exists event_body (
+  sha text primary key,
+  encoding text not null,
+  body blob not null,
+  raw_bytes integer not null,
+  stored_bytes integer not null,
+  refs integer not null default 0,
+  created real not null
+);
+create table if not exists storage_metrics (
+  id integer primary key check (id = 1),
+  event_count integer not null default 0,
+  payload_bytes integer not null default 0,
+  expired_bytes integer not null default 0,
+  wire_bytes integer not null default 0,
+  body_count integer not null default 0,
+  body_bytes integer not null default 0,
+  event_stored_bytes integer not null default 0,
+  pending_events integer not null default 0,
+  payload_cursor integer not null default 0,
+  turn_link_cursor integer not null default 0,
+  indexes_ready integer not null default 0
+);
+create trigger if not exists event_metrics_insert after insert on event begin
+  update storage_metrics set
+    event_count = event_count + 1,
+    payload_bytes = payload_bytes + case when new.payload_state = 'full' then max(new.payload_bytes, 0) else 0 end,
+    expired_bytes = expired_bytes + case when new.payload_state = 'expired' then max(new.payload_bytes, 0) else 0 end,
+    wire_bytes = wire_bytes + case when new.payload_state = 'full'
+      and new.type in ('wire_request', 'wire_response', 'wire_event') then max(new.payload_bytes, 0) else 0 end,
+    event_stored_bytes = event_stored_bytes + max(new.stored_bytes, 0),
+    pending_events = pending_events + case when new.payload_bytes < 0 then 1 else 0 end
+  where id = 1;
+end;
+create trigger if not exists event_metrics_delete after delete on event begin
+  update storage_metrics set
+    event_count = event_count - 1,
+    payload_bytes = payload_bytes - case when old.payload_state = 'full' then max(old.payload_bytes, 0) else 0 end,
+    expired_bytes = expired_bytes - case when old.payload_state = 'expired' then max(old.payload_bytes, 0) else 0 end,
+    wire_bytes = wire_bytes - case when old.payload_state = 'full'
+      and old.type in ('wire_request', 'wire_response', 'wire_event') then max(old.payload_bytes, 0) else 0 end,
+    event_stored_bytes = event_stored_bytes - max(old.stored_bytes, 0),
+    pending_events = pending_events - case when old.payload_bytes < 0 then 1 else 0 end
+  where id = 1;
+end;
+create trigger if not exists event_metrics_update after update of payload_state, payload_bytes, stored_bytes on event begin
+  update storage_metrics set
+    payload_bytes = payload_bytes
+      - case when old.payload_state = 'full' then max(old.payload_bytes, 0) else 0 end
+      + case when new.payload_state = 'full' then max(new.payload_bytes, 0) else 0 end,
+    expired_bytes = expired_bytes
+      - case when old.payload_state = 'expired' then max(old.payload_bytes, 0) else 0 end
+      + case when new.payload_state = 'expired' then max(new.payload_bytes, 0) else 0 end,
+    wire_bytes = wire_bytes
+      - case when old.payload_state = 'full'
+          and old.type in ('wire_request', 'wire_response', 'wire_event') then max(old.payload_bytes, 0) else 0 end
+      + case when new.payload_state = 'full'
+          and new.type in ('wire_request', 'wire_response', 'wire_event') then max(new.payload_bytes, 0) else 0 end,
+    event_stored_bytes = event_stored_bytes - max(old.stored_bytes, 0) + max(new.stored_bytes, 0),
+    pending_events = pending_events
+      - case when old.payload_bytes < 0 then 1 else 0 end
+      + case when new.payload_bytes < 0 then 1 else 0 end
+  where id = 1;
+end;
+create trigger if not exists event_body_ref_insert after insert on event when new.body_sha is not null begin
+  update event_body set refs = refs + 1 where sha = new.body_sha;
+end;
+create trigger if not exists event_body_ref_link after update of body_sha on event
+  when old.body_sha is null and new.body_sha is not null begin
+  update event_body set refs = refs + 1 where sha = new.body_sha;
+end;
+create trigger if not exists event_body_ref_delete after delete on event when old.body_sha is not null begin
+  update event_body set refs = refs - 1 where sha = old.body_sha;
+  delete from event_body where sha = old.body_sha and refs <= 0;
+end;
+create trigger if not exists event_body_ref_unlink after update of body_sha on event
+  when old.body_sha is not null and new.body_sha is null begin
+  update event_body set refs = refs - 1 where sha = old.body_sha;
+  delete from event_body where sha = old.body_sha and refs <= 0;
+end;
+create trigger if not exists event_body_metrics_insert after insert on event_body begin
+  update storage_metrics set body_count = body_count + 1, body_bytes = body_bytes + new.stored_bytes where id = 1;
+end;
+create trigger if not exists event_body_metrics_delete after delete on event_body begin
+  update storage_metrics set body_count = body_count - 1, body_bytes = body_bytes - old.stored_bytes where id = 1;
+end;
 create table if not exists log (
   id integer primary key check (id = 1),
   generation text not null,
@@ -259,7 +363,63 @@ create index if not exists message_event on message(event_id);
 """
 
 
-SCHEMA_VERSION = 1  # bump on any change to SCHEMA; there are no in-place migrations
+LIFECYCLE_TYPES_SQL = ("'bash.started', 'bash.finished', 'permission.asked', 'permission.replied',"
+                      " 'question.asked', 'question.replied'")
+DEFERRED_INDEXES = (
+    ("event_wire_expiry",
+     ("create index if not exists event_wire_expiry on event(expires, id)"
+      " where payload_state = 'full' and payload_bytes >= 0"
+      " and type in ('wire_request', 'wire_response', 'wire_event')")),
+    ("event_turn",
+     "create index if not exists event_turn on event(turn_id) where turn_id is not null"),
+    ("event_wire_order",
+     ("create index if not exists event_wire_order on event(id)"
+      " where payload_state = 'full' and payload_bytes >= 0"
+      " and type in ('wire_request', 'wire_response', 'wire_event')")),
+    ("event_lifecycle",
+     ("create index if not exists event_lifecycle on event(session_id, type, id)"
+      " where type in ('bash.started', 'bash.finished', 'permission.asked', 'permission.replied',"
+      " 'question.asked', 'question.replied')")),
+)
+_STORAGE_METRICS_DDL = """create table if not exists storage_metrics (
+  id integer primary key check (id = 1),
+  event_count integer not null default 0,
+  payload_bytes integer not null default 0,
+  expired_bytes integer not null default 0,
+  wire_bytes integer not null default 0,
+  body_count integer not null default 0,
+  body_bytes integer not null default 0,
+  pending_events integer not null default 0,
+  payload_cursor integer not null default 0,
+  turn_link_cursor integer not null default 0,
+  indexes_ready integer not null default 0
+);"""
+
+
+def _migration_schema() -> str:
+    """SCHEMA with the heavy partial indexes left for maintenance to build.
+
+    Existing databases must not spend their startup opening on a table-wide
+    index build. The tables, columns and triggers are still created here; the
+    four partial indexes are built one per maintenance pass by
+    `Store.ensure_payload_indexes`, and their progress is reported in metrics.
+    """
+    names = {name for name, _ in DEFERRED_INDEXES}
+    out: list[str] = []
+    skipping = False
+    for line in SCHEMA.splitlines():
+        stripped = line.strip()
+        if any(stripped.startswith(f"create index if not exists {name} ") for name in names):
+            skipping = True
+        if not skipping:
+            out.append(line)
+        if skipping and stripped.endswith(";"):
+            skipping = False
+    return "\n".join(out)
+
+
+SCHEMA_VERSION = 1  # fresh databases get this version; additive payload storage migrates in place
+EVENT_MIGRATION_BATCH = 500
 
 log = logging.getLogger(__name__)
 
@@ -451,7 +611,236 @@ class Store:
         self.db.execute("pragma synchronous = normal")  # WAL + normal: safe across crashes, fast per-event commits
         self._pins: dict[int, tuple[int, int]] = {}
         self._pin_seq = 0
+        self.pressure_bytes: int | None = None
+        self.on_pressure: Any = None
+        self._pressure_notified = False
+        self._migrate_payload_storage()
         self._generation = self._ensure_log()
+
+    # -- additive payload storage -------------------------------------------
+
+    def _migrate_payload_storage(self) -> None:
+        """Add the payload lifecycle columns/tables to an existing database in place.
+
+        The schema version deliberately does not change: an older 0.10 database
+        keeps its projects, sessions, messages, snapshots and event ids instead
+        of being renamed and replaced. Added columns are defaulted. Existing
+        rows start as `payload_bytes = -1` (unmeasured); the resumable backfill
+        measures them later. Heavy partial indexes are deliberately *not* built
+        during this startup method.
+        """
+        event_columns = {row["name"] for row in self.db.execute("pragma table_info(event)")}
+        added_payload = "payload_bytes" not in event_columns
+        additions = {
+            "payload_bytes": "integer not null default -1",
+            "stored_bytes": "integer not null default 0",
+            "payload_state": "text not null default 'full'",
+            "body_sha": "text",
+            "turn_id": "text",
+            "expires": "real",
+            "turn_link_checked": "integer not null default 0",
+        }
+        with self.db:
+            for name, definition in additions.items():
+                if name not in event_columns:
+                    self.db.execute(f"alter table event add column {name} {definition}")
+        # Create the metric table with its current columns, then add any that an
+        # earlier payload-storage build lacked. Triggers must not reference a
+        # missing column when SCHEMA is applied below.
+        self.db.execute(_STORAGE_METRICS_DDL)
+        metric_columns = {row["name"] for row in self.db.execute("pragma table_info(storage_metrics)")}
+        metric_additions = {
+            "event_stored_bytes": "integer not null default 0",
+            "pending_events": "integer not null default 0",
+            "payload_cursor": "integer not null default 0",
+            "turn_link_cursor": "integer not null default 0",
+            "indexes_ready": "integer not null default 0",
+        }
+        with self.db:
+            for name, definition in metric_additions.items():
+                if name not in metric_columns:
+                    self.db.execute(f"alter table storage_metrics add column {name} {definition}")
+        self.db.executescript(_migration_schema())
+        with self.db:
+            row = self.db.execute("select 1 from storage_metrics where id = 1").fetchone()
+            if row is None:
+                # All pre-payload rows are unmeasured. Counting rows is a
+                # metadata scan, not a payload read; do not run the full SUM
+                # reconciliation unless a partial payload build already left
+                # measured rows behind (a development/repair case only).
+                total = self.db.execute("select count(*) from event").fetchone()[0]
+                # If this migration just added payload_bytes, every row is
+                # unmeasured by definition; do not probe the payload column.
+                measured = None if added_payload else self.db.execute(
+                    "select 1 from event where payload_bytes >= 0 limit 1").fetchone()
+                self.db.execute(
+                    "insert into storage_metrics (id, event_count, pending_events) values (1, ?, ?)",
+                    (total, total if measured is None else 0))
+                if measured is not None:
+                    self._recompute_storage_metrics()
+            existing = {row["name"] for row in self.db.execute(
+                "select name from sqlite_master where type = 'index'")}
+            ready = all(name in existing for name, _ in DEFERRED_INDEXES)
+            self.db.execute("update storage_metrics set indexes_ready = ? where id = 1", (1 if ready else 0,))
+
+    def _recompute_storage_metrics(self) -> None:
+        """Full reconciliation, reserved for a repair of an already-measured database."""
+        row = self.db.execute(
+            "select count(*),"
+            " coalesce(sum(case when payload_state = 'full' and payload_bytes >= 0 then payload_bytes else 0 end), 0),"
+            " coalesce(sum(case when payload_state = 'expired' and payload_bytes >= 0 then payload_bytes else 0 end), 0),"
+            " coalesce(sum(case when payload_state = 'full' and payload_bytes >= 0"
+            "   and type in ('wire_request', 'wire_response', 'wire_event') then payload_bytes else 0 end), 0),"
+            " coalesce(sum(case when payload_bytes < 0 then 1 else 0 end), 0),"
+            " coalesce(sum(max(stored_bytes, 0)), 0)"
+            " from event").fetchone()
+        body = self.db.execute(
+            "select count(*), coalesce(sum(stored_bytes), 0) from event_body").fetchone()
+        with self.db:
+            self.db.execute(
+                "update storage_metrics set event_count = ?, payload_bytes = ?, expired_bytes = ?,"
+                " wire_bytes = ?, pending_events = ?, event_stored_bytes = ?,"
+                " body_count = ?, body_bytes = ? where id = 1",
+                (row[0], row[1], row[2], row[3], row[4], row[5], body[0], body[1]),
+            )
+
+    def ensure_payload_indexes(self, *, limit: int = 1) -> dict[str, Any]:
+        """Build at most `limit` deferred partial indexes; progress is durable."""
+        row = self.db.execute("select indexes_ready from storage_metrics where id = 1").fetchone()
+        if row is not None and row[0]:
+            return {"built": 0, "ready": True, "remaining": 0}
+        existing = {item["name"] for item in self.db.execute(
+            "select name from sqlite_master where type = 'index'")}
+        built = 0
+        for name, ddl in DEFERRED_INDEXES:
+            if name in existing:
+                continue
+            if built >= max(0, limit):
+                break
+            with self.db:
+                self.db.execute(ddl)
+            existing.add(name)
+            built += 1
+        remaining = sum(1 for name, _ in DEFERRED_INDEXES if name not in existing)
+        if remaining == 0:
+            with self.db:
+                self.db.execute("update storage_metrics set indexes_ready = 1 where id = 1")
+        return {"built": built, "ready": remaining == 0, "remaining": remaining}
+
+    def backfill_event_payloads(self, *, limit: int = EVENT_MIGRATION_BATCH) -> dict[str, int]:
+        """Measure and compress a bounded batch of legacy event rows.
+
+        Work is selected after a durable rowid cursor and stopped by LIMIT, so
+        a measured region is not rescanned. The remaining count comes from the
+        trigger-maintained `pending_events` counter, never from `count(*)`.
+        """
+        metric = self.db.execute(
+            "select payload_cursor, pending_events from storage_metrics where id = 1").fetchone()
+        cursor = metric["payload_cursor"] if metric else 0
+        rows = self.db.execute(
+            "select id, time, type, data from event where id > ? and payload_bytes < 0"
+            " order by id limit ?", (cursor, max(0, limit))).fetchall()
+        pending = metric["pending_events"] if metric else 0
+        if not rows:
+            if cursor == 0:
+                with self.db:
+                    self.db.execute(
+                        "update storage_metrics set payload_cursor ="
+                        " (select coalesce(max(id), 0) from event) where id = 1")
+            return {"rows": 0, "remaining": pending}
+        with self.db:
+            for row in rows:
+                raw = row["data"].encode("utf-8")
+                if row["type"] in payloads.WIRE_TYPES:
+                    sha = payloads.body_sha(raw)
+                    encoding, body = payloads.encode_body(raw)
+                    self.db.execute(
+                        "insert or ignore into event_body"
+                        " (sha, encoding, body, raw_bytes, stored_bytes, refs, created)"
+                        " values (?, ?, ?, ?, ?, 0, ?)",
+                        (sha, encoding, body, len(raw), len(body), time.time()))
+                    marker = payloads.stored_marker(sha)
+                    self.db.execute(
+                        "update event set payload_bytes = ?, stored_bytes = ?, body_sha = ?, data = ?"
+                        " where id = ?",
+                        (len(raw), len(marker.encode("utf-8")), sha, marker, row["id"]))
+                else:
+                    self.db.execute(
+                        "update event set payload_bytes = ?, stored_bytes = ? where id = ?",
+                        (len(raw), len(raw), row["id"]))
+            self.db.execute("update storage_metrics set payload_cursor = ? where id = 1", (rows[-1]["id"],))
+        remaining = self.db.execute(
+            "select pending_events from storage_metrics where id = 1").fetchone()[0]
+        return {"rows": len(rows), "remaining": remaining}
+
+    def backfill_wire_turn_ids(self, *, limit: int = EVENT_MIGRATION_BATCH) -> int:
+        """Attach old diagnostic events to a request turn, resumably and once each.
+
+        A durable rowid cursor and `turn_link_checked` marker mean rows that do
+        not match any request are retired instead of being selected forever.
+        The request match is bounded by its start/finish times and by the next
+        request's watermark, so an event is not attributed across a turn gap.
+        """
+        metric = self.db.execute(
+            "select turn_link_cursor from storage_metrics where id = 1").fetchone()
+        cursor = metric["turn_link_cursor"] if metric else 0
+        rows = self.db.execute(
+            "select id, session_id, time from event where id > ? and turn_link_checked = 0"
+            " and turn_id is null and type in ('wire_request', 'wire_response', 'wire_event')"
+            " order by id limit ?", (cursor, max(0, limit))).fetchall()
+        if not rows:
+            if cursor == 0:
+                with self.db:
+                    self.db.execute(
+                        "update storage_metrics set turn_link_cursor ="
+                        " (select coalesce(max(id), 0) from event) where id = 1")
+            return 0
+        checked = 0
+        with self.db:
+            for row in rows:
+                request = self.db.execute(
+                    "select r.turn_id from turn_request r left join turn t on t.id = r.turn_id"
+                    " where r.session_id = ? and r.event_after < ?"
+                    " and ? >= r.started - 5"
+                    " and ? <= coalesce(r.finished, t.finished, 9e18) + 5"
+                    " and ? <= coalesce((select min(r2.event_after) from turn_request r2"
+                    "   where r2.session_id = r.session_id and r2.event_after > r.event_after), 9e18)"
+                    " order by r.event_after desc limit 1",
+                    (row["session_id"], row["id"], row["time"], row["time"], row["id"])).fetchone()
+                self.db.execute(
+                    "update event set turn_id = ?, turn_link_checked = 1 where id = ?",
+                    (request["turn_id"] if request is not None else None, row["id"]))
+                checked += 1
+            self.db.execute(
+                "update storage_metrics set turn_link_cursor = ? where id = 1", (rows[-1]["id"],))
+        return checked
+
+    def storage_inventory(self) -> dict[str, Any]:
+        """O(1) counters from storage_metrics; never scans event payloads."""
+        metrics = self.db.execute("select * from storage_metrics where id = 1").fetchone()
+        page = self.db.execute("pragma page_size").fetchone()[0]
+        pages = self.db.execute("pragma page_count").fetchone()[0]
+        free = self.db.execute("pragma freelist_count").fetchone()[0]
+        auto = self.db.execute("pragma auto_vacuum").fetchone()[0]
+        return {
+            "events": metrics["event_count"] if metrics else 0,
+            "payload_bytes": metrics["payload_bytes"] if metrics else 0,
+            "expired_bytes": metrics["expired_bytes"] if metrics else 0,
+            "wire_bytes": metrics["wire_bytes"] if metrics else 0,
+            "bodies": metrics["body_count"] if metrics else 0,
+            "body_bytes": metrics["body_bytes"] if metrics else 0,
+            "stored_event_bytes": metrics["event_stored_bytes"] if metrics else 0,
+            "unmeasured_events": metrics["pending_events"] if metrics else 0,
+            "payload_cursor": metrics["payload_cursor"] if metrics else 0,
+            "turn_link_cursor": metrics["turn_link_cursor"] if metrics else 0,
+            "indexes_ready": bool(metrics["indexes_ready"]) if metrics else False,
+            "page_size": page,
+            "page_count": pages,
+            "freelist_pages": free,
+            "free_bytes": free * page,
+            "file_bytes": self.path.stat().st_size if self.path.exists() else 0,
+            "auto_vacuum": auto,
+        }
 
     def _ensure_log(self) -> str:
         """This database's log generation; created once and kept across restarts."""
@@ -754,15 +1143,52 @@ class Store:
         history was deleted with the session, so there is nothing to resume from.
         Any other storage failure is raised; the caller must not publish an event
         that was not stored.
+
+        A wire event's body is stored once in `event_body`, keyed by its SHA-256,
+        and compressed when that is smaller. The event row itself keeps the
+        durable envelope; `turn_id` is internal metadata (the bus removes it
+        before delivery) and lets retention schedule the payload lifetime.
         """
+        turn_id = event.pop("_turn_id", None)
+        raw_text = json.dumps(event["data"], separators=(",", ":"))
+        raw = raw_text.encode("utf-8")
+        size = len(raw)
+        body_sha = None
+        stored_bytes = size
+        data = raw_text
+        if event["type"] in payloads.WIRE_TYPES:
+            body_sha = payloads.body_sha(raw)
+            encoding, body = payloads.encode_body(raw)
+            data = payloads.stored_marker(body_sha)
+            # The event row stores a small body reference; the compressed
+            # payload lives once in event_body. Count both separately.
+            stored_bytes = len(data.encode("utf-8"))
         try:
             with self.db:
+                if body_sha is not None:
+                    self.db.execute(
+                        "insert or ignore into event_body"
+                        " (sha, encoding, body, raw_bytes, stored_bytes, refs, created)"
+                        " values (?, ?, ?, ?, ?, 0, ?)",
+                        (body_sha, encoding, body, size, stored_bytes, time.time()))
                 row = self.db.execute(
-                    "insert into event (session_id, seq, time, type, data) values (?, ?, ?, ?, ?)",
-                    (event["session_id"], event["seq"], event["time"], event["type"], json.dumps(event["data"])),
+                    "insert into event (session_id, seq, time, type, data, payload_bytes,"
+                    " stored_bytes, payload_state, body_sha, turn_id, turn_link_checked)"
+                    " values (?, ?, ?, ?, ?, ?, ?, 'full', ?, ?, ?)",
+                    (event["session_id"], event["seq"], event["time"], event["type"], data,
+                     size, stored_bytes, body_sha, turn_id, 1 if turn_id is not None else 0),
                 )
                 event_id = row.lastrowid
                 self.db.execute("update log set head_high = max(head_high, ?) where id = 1", (event_id,))
+                if body_sha is not None and self.pressure_bytes is not None:
+                    wire = self.db.execute(
+                        "select wire_bytes from storage_metrics where id = 1").fetchone()[0]
+                    if wire > self.pressure_bytes:
+                        if not self._pressure_notified and callable(self.on_pressure):
+                            self.on_pressure()
+                        self._pressure_notified = True
+                    else:
+                        self._pressure_notified = False
                 return event_id
         except sqlite3.IntegrityError:
             session_id = event["session_id"]
@@ -778,10 +1204,15 @@ class Store:
             "select * from event where id > ? and id <= ? order by id limit ?", (after, upto, limit))
         return [self._event_row(r) for r in rows]
 
-    @staticmethod
-    def _event_row(row: sqlite3.Row) -> dict[str, Any]:
-        return {"id": row["id"], "seq": row["seq"], "time": row["time"], "type": row["type"],
-                "session_id": row["session_id"], "data": json.loads(row["data"])}
+    def _event_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        state = row["payload_state"]
+        event = {"id": row["id"], "seq": row["seq"], "time": row["time"], "type": row["type"],
+                 "session_id": row["session_id"], "data": payloads.event_data(self.db, row),
+                 "payload_state": state}
+        if state == payloads.EXPIRED:
+            event["expired"] = True
+            event["original_bytes"] = row["payload_bytes"]
+        return event
 
     def log_generation(self) -> str:
         return self._generation
@@ -795,6 +1226,11 @@ class Store:
         """The last event id removed by retention; `0` means nothing was removed."""
         row = self.db.execute("select floor from log where id = 1").fetchone()
         return row["floor"] if row else 0
+
+    def _lifecycle_index(self) -> str:
+        """Force the small partial lifecycle index once maintenance has built it."""
+        row = self.db.execute("select indexes_ready from storage_metrics where id = 1").fetchone()
+        return " indexed by event_lifecycle" if row is not None and row[0] else ""
 
     def protected_sessions(self) -> set[str]:
         """Sessions whose events still carry recovery or lifecycle evidence.
@@ -811,9 +1247,10 @@ class Store:
         for row in self.db.execute(
                 "select distinct session_id from turn_request where status = 'started'"):
             out.add(row["session_id"])
+        index = self._lifecycle_index()
         for row in self.db.execute(
-                "select distinct session_id from event where session_id is not null and type in"
-                " ('bash.started', 'permission.asked', 'question.asked')"):
+                f"select distinct session_id from event{index} where session_id is not null and type in"
+                f" ({LIFECYCLE_TYPES_SQL})"):
             session_id = row["session_id"]
             if self._has_open_lifecycle(session_id):
                 out.add(session_id)
@@ -822,21 +1259,177 @@ class Store:
     def _has_open_lifecycle(self, session_id: str) -> bool:
         started: set[str] = set()
         finished: set[str] = set()
+        index = self._lifecycle_index()
         for row in self.db.execute(
-                "select type, json_extract(data, '$.id') as ident from event where session_id = ?"
-                " and type in ('bash.started', 'bash.finished') order by id", (session_id,)):
-            if not row["ident"]:
+                f"select type, json_extract(data, '$.id') as ident from event{index} where session_id = ?"
+                f" and type in ({LIFECYCLE_TYPES_SQL}) order by id", (session_id,)):
+            if row["type"] not in ("bash.started", "bash.finished") or not row["ident"]:
                 continue
             (started.add if row["type"] == "bash.started" else finished.add)(row["ident"])
         if started - finished:
             return True
         asked = {row["id"] for row in self.db.execute(
-            "select json_extract(data, '$.id') as id from event where session_id = ? and type in"
-            " ('permission.asked', 'question.asked')", (session_id,)) if row["id"]}
+            f"select type, json_extract(data, '$.id') as id from event{index} where session_id = ?"
+            f" and type in ({LIFECYCLE_TYPES_SQL})", (session_id,))
+            if row["type"] in ("permission.asked", "question.asked") and row["id"]}
         replied = {row["id"] for row in self.db.execute(
-            "select json_extract(data, '$.id') as id from event where session_id = ? and type in"
-            " ('permission.replied', 'question.replied')", (session_id,)) if row["id"]}
+            f"select type, json_extract(data, '$.id') as id from event{index} where session_id = ?"
+            f" and type in ({LIFECYCLE_TYPES_SQL})", (session_id,))
+            if row["type"] in ("permission.replied", "question.replied") and row["id"]}
         return bool(asked - replied)
+
+    def schedule_wire_expiry(self, *, success_seconds: float, failure_seconds: float,
+                             debug_seconds: float = 0.0, limit: int = EVENT_MIGRATION_BATCH) -> dict[str, int]:
+        """Give terminal turns' wire payloads their first expiry deadline.
+
+        Deadlines are derived from durable `turn.status`/`turn.finished`, not
+        from the wall clock at maintenance time, so a slow daemon cannot extend
+        a payload's life. A pending recovery blocks the schedule: it is the
+        durable evidence a restart still needs.
+        """
+        success = max(0.0, success_seconds, debug_seconds)
+        failure = max(0.0, failure_seconds, debug_seconds)
+        rows = self.db.execute(
+            "select e.id, e.session_id, e.time, t.status, t.finished from event e"
+            " join turn t on t.id = e.turn_id"
+            " where e.payload_state = 'full' and e.expires is null"
+            " and e.type in ('wire_request', 'wire_response', 'wire_event')"
+            " and t.status in ('completed', 'failed', 'interrupted')"
+            " and t.recovery != 'pending' and t.finished is not null"
+            " order by e.id limit ?", (max(0, limit),)).fetchall()
+        with self.db:
+            for row in rows:
+                ttl = success if row["status"] == "completed" else failure
+                self.db.execute("update event set expires = ? where id = ? and expires is null",
+                                (row["finished"] + ttl, row["id"]))
+        # Events written before turn ids existed, or by an older daemon, have no
+        # turn link. They remain eligible after the conservative (failure)
+        # lifetime, but expiry still skips a protected session.
+        unlinked = self.db.execute(
+            "select id, time from event where turn_id is null and expires is null"
+            " and payload_state = 'full' and type in ('wire_request', 'wire_response', 'wire_event')"
+            " and time < ? order by id limit ?",
+            (time.time() - failure, max(0, limit),)).fetchall()
+        with self.db:
+            for row in unlinked:
+                self.db.execute("update event set expires = ? where id = ? and expires is null",
+                                (row["time"] + failure, row["id"]))
+        return {"scheduled": len(rows), "unlinked": len(unlinked)}
+
+    def expire_wire_payloads(self, *, now: float, byte_budget: int | None,
+                             protect_sessions: set[str] | None = None,
+                             batch_size: int = EVENT_MIGRATION_BATCH) -> dict[str, Any]:
+        """Expire eligible diagnostic payloads oldest-first, keeping their envelopes.
+
+        Eligibility requires a terminal, non-pending turn (or an unlinked row
+        older than the conservative lifetime) and no active replay pin. The SQL
+        applies those exclusions *before* LIMIT, so a large protected or pinned
+        prefix cannot starve later eligible payloads. A soft byte budget may
+        expire older eligible payloads before their deadline; it never touches
+        an unfinished turn or recovery-pending session.
+        """
+        protecting = set(protect_sessions or ())
+        pinned = list(self._pins.values())
+        conditions = [
+            "e.payload_state = 'full'",
+            "e.payload_bytes >= 0",
+            "e.type in ('wire_request', 'wire_response', 'wire_event')",
+            ("(e.turn_id is not null and (t.id is null or"
+             " (t.status in ('completed', 'failed', 'interrupted') and t.recovery != 'pending'))"
+             " or (e.turn_id is null and {session_filter}))"),
+        ]
+        params: list[Any] = []
+        if protecting:
+            marks = ", ".join("?" * len(protecting))
+            session_filter = f"(e.session_id is null or e.session_id not in ({marks}))"
+            params.extend(sorted(protecting))
+        else:
+            session_filter = "1"
+        conditions[3] = conditions[3].format(session_filter=session_filter)
+        for start, end in pinned:
+            conditions.append("not (e.id between ? and ?)")
+            params.extend([start, end])
+        base = (
+            "select e.id, e.session_id, e.turn_id, e.type, e.payload_bytes, e.expires"
+            " from event e left join turn t on t.id = e.turn_id"
+            " where " + " and ".join(conditions)
+        )
+        due = self.db.execute(
+            base + " and e.expires is not null and e.expires <= ? order by e.expires, e.id limit ?",
+            (*params, now, max(0, batch_size))).fetchall()
+        metric = self.db.execute("select wire_bytes from storage_metrics where id = 1").fetchone()
+        started_over = bool(byte_budget is not None and metric and metric[0] > byte_budget)
+        expired_rows: list[sqlite3.Row] = []
+        expired_bytes = 0
+
+        with self.db:
+            def expire(row: sqlite3.Row) -> bool:
+                nonlocal expired_bytes
+                marker = payloads.compact_expired_marker(
+                    row["type"], row["payload_bytes"], expired_at=now, deadline=row["expires"])
+                encoded = json.dumps(marker, separators=(",", ":"))
+                changed = self.db.execute(
+                    "update event set payload_state = 'expired', data = ?, stored_bytes = ?,"
+                    " body_sha = null, expires = ? where id = ? and payload_state = 'full'",
+                    (encoded, len(encoded.encode("utf-8")), now, row["id"])).rowcount
+                if changed:
+                    expired_bytes += max(0, row["payload_bytes"])
+                return bool(changed)
+
+            # First honour deadlines. Then, while over the soft budget, expire
+            # the oldest eligible payloads only until it fits. This is selective,
+            # not a prefix delete: an unfinished session or pinned range in the
+            # middle does not hold every later payload.
+            for row in due:
+                if expire(row):
+                    expired_rows.append(row)
+            remaining = (metric[0] if metric else 0) - expired_bytes
+            if byte_budget is not None and remaining > byte_budget:
+                more = self.db.execute(
+                    base + " order by e.id limit ?",
+                    (*params, max(0, batch_size))).fetchall()
+                for row in more:
+                    if remaining <= byte_budget:
+                        break
+                    if expire(row):
+                        expired_rows.append(row)
+                        remaining -= max(0, row["payload_bytes"])
+        remaining = self.db.execute("select wire_bytes from storage_metrics where id = 1").fetchone()
+        return {
+            "expired": len(expired_rows), "expired_bytes": expired_bytes,
+            "wire_bytes": remaining[0] if remaining else 0,
+            "over_budget": bool(started_over or (byte_budget is not None and remaining
+                                                 and remaining[0] > byte_budget)),
+            "blocked": bool(protecting or pinned), "batches": 1 if expired_rows else 0,
+        }
+
+    def reclaim_space(self, *, dry_run: bool = True, max_pages: int = 1000) -> dict[str, Any]:
+        """Report, and only explicitly perform, bounded SQLite free-page reclamation.
+
+        Maintenance never vacuums automatically. A full `VACUUM` rewrites the
+        whole file and needs free disk equal to the database, so it stays an
+        operator decision; this method only uses `incremental_vacuum` when the
+        database was created with auto_vacuum, and always reports inventory first.
+        """
+        before = self.storage_inventory()
+        plan = {
+            "dry_run": dry_run,
+            "before": before,
+            "free_bytes": before["free_bytes"],
+            "bounded_pages": min(max(0, max_pages), before["freelist_pages"]),
+            "strategy": (
+                "incremental_vacuum" if before["auto_vacuum"] == 2
+                else "full vacuum is required but is never automatic; run it offline when free disk allows"
+            ),
+        }
+        if dry_run or before["free_bytes"] == 0:
+            return {**plan, "performed": False}
+        if before["auto_vacuum"] != 2:
+            return {**plan, "performed": False}
+        pages = plan["bounded_pages"]
+        if pages:
+            self.db.execute(f"pragma incremental_vacuum({int(pages)})")
+        return {**plan, "performed": True, "after": self.storage_inventory()}
 
     def prune_turns(self, *, now: float, age_seconds: float, keep_per_session: int = 200) -> dict[str, int]:
         """Remove old terminal execution rows, keeping recovery evidence and recent turns."""
@@ -886,70 +1479,70 @@ class Store:
 
     def prune_events(self, *, now: float, age_seconds: float | None, byte_budget: int | None,
                      protect_sessions: set[str] | None = None, batch_size: int = 5000) -> dict[str, Any]:
-        """Remove one contiguous prefix of old events and advance the floor.
+        """Remove one bounded oldest prefix of diagnostic events and advance `floor`.
 
-        Protection is conservative: events of a session with an unfinished turn
-        (or with a listed live job/wait) are never removed, and an in-flight
-        replay pins its range. Returns counts and the new floor; never removes
-        the durable head or reuses an id.
+        The pass reads at most one batch of the oldest surviving rows. It never
+        walks the whole retained suffix to find an exact byte boundary: when the
+        measured payload is over budget it deletes the oldest rows until enough
+        bytes are gone (or the batch ends), and the next pass continues. Age
+        uses the same bounded oldest-prefix scan, so no table-wide `max(id)`
+        query or heavy time index is required.
         """
         floor = self.log_floor()
         head = self.log_head()
         protecting = set(protect_sessions or ())
-        protected_cutoff: int | None = None
+        limit = head
         if protecting:
             marks = ", ".join("?" * len(protecting))
             row = self.db.execute(
                 f"select min(id) from event where session_id in ({marks})", tuple(protecting)).fetchone()
             if row and row[0] is not None:
-                protected_cutoff = row[0] - 1
+                limit = min(limit, row[0] - 1)
         pinned = self._pinned_cutoff()
-        cutoff: int | None = None
-        if age_seconds is not None:
-            row = self.db.execute(
-                "select max(id) from event where id > ? and time < ?",
-                (floor, now - age_seconds)).fetchone()
-            if row and row[0] is not None:
-                cutoff = row[0]
-        if byte_budget is not None:
-            # Keep the newest suffix that fits. Size and age are independent
-            # expiry conditions: either can require removing an older prefix.
-            used = 0
-            for row in self.db.execute(
-                    "select id, length(cast(data as blob)) + length(cast(type as blob))"
-                    " from event where id > ? order by id desc", (floor,)):
-                used += row[1]
-                if used > byte_budget:
-                    cutoff = max(cutoff or floor, row[0])
-                    break
-        if cutoff is None:
+        if pinned is not None:
+            limit = min(limit, pinned)
+        if limit <= floor:
             return self._retention_pressure(floor, head, protecting, byte_budget)
-        cutoff = min(cutoff, head)
-        for limit in (protected_cutoff, pinned):
-            if limit is not None:
-                cutoff = min(cutoff, limit)
-        if cutoff <= floor:
-            return self._retention_pressure(floor, head, protecting, byte_budget)
-        # One bounded batch per maintenance pass; do not hold the event loop
-        # through an unbounded sequence of DELETE statements in one transaction.
         rows = self.db.execute(
-            "select id from event where id > ? and id <= ? order by id limit ?",
-            (floor, cutoff, max(1, batch_size))).fetchall()
-        if rows:
-            cutoff = rows[-1]["id"]
+            "select id, time, payload_state, payload_bytes from event"
+            " where id > ? and id <= ? order by id limit ?",
+            (floor, limit, max(1, batch_size))).fetchall()
+        if not rows:
+            return self._retention_pressure(floor, head, protecting, byte_budget)
+        chosen: int | None = None
+        if age_seconds is not None:
+            age_limit = now - age_seconds
+            for row in rows:
+                if row["time"] < age_limit:
+                    chosen = row["id"]
+        measured = self.db.execute("select payload_bytes from storage_metrics where id = 1").fetchone()
+        if byte_budget is not None and measured is not None and measured[0] > byte_budget:
+            overflow = measured[0] - byte_budget
+            used = 0
+            for row in rows:
+                if row["payload_state"] == "full":
+                    used += max(0, row["payload_bytes"])
+                if used >= overflow:
+                    chosen = max(chosen or 0, row["id"])
+                    break
+            else:
+                chosen = max(chosen or 0, rows[-1]["id"])
+        if chosen is None:
+            return self._retention_pressure(floor, head, protecting, byte_budget)
+        cutoff = min(chosen, limit)
         with self.db:
-            removed = self.db.execute("delete from event where id > ? and id <= ?", (floor, cutoff)).rowcount
+            removed = self.db.execute(
+                "delete from event where id > ? and id <= ?", (floor, cutoff)).rowcount
             self.db.execute("update log set floor = ? where id = 1", (cutoff,))
         retained_bytes = self.db.execute(
-            "select coalesce(sum(length(cast(data as blob)) + length(cast(type as blob))), 0) from event").fetchone()[0]
+            "select payload_bytes from storage_metrics where id = 1").fetchone()[0]
         return {"removed": removed, "floor": cutoff, "head": head, "protected": sorted(protecting),
                 "pinned": bool(self._pins), "batches": 1,
                 "retained_bytes": retained_bytes,
                 "over_budget": (retained_bytes > byte_budget) if byte_budget is not None else False}
 
     def _retention_pressure(self, floor: int, head: int, protecting: set[str], budget: int | None) -> dict[str, Any]:
-        used = self.db.execute(
-            "select coalesce(sum(length(cast(data as blob)) + length(cast(type as blob))), 0) from event").fetchone()[0]
+        used = self.db.execute("select payload_bytes from storage_metrics where id = 1").fetchone()[0]
         return {"removed": 0, "floor": floor, "head": head, "protected": sorted(protecting),
                 "pinned": bool(self._pins), "batches": 0, "retained_bytes": used,
                 "over_budget": budget is not None and used > budget}

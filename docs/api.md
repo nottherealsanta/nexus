@@ -29,7 +29,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | DELETE | `/api/kernel/{id}` | | 204; 409 while busy |
 | GET | `/api/config` | | `{revision, values, defaults, schema, errors}` for the initial settings |
 | PATCH | `/api/config` | `{expected_revision, set, unset}` | updated config; stale revision is 409 |
-| GET | `/api/info` | | `{name, version, api_version: {major, minor}, code, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retry, idempotency}` |
+| GET | `/api/info` | | `{name, version, api_version: {major, minor}, code, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retention_status, retry, idempotency}` |
 | GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
 | GET | `/api/search` | `?q=`, `?project=`, `?archived=exclude\|only\|include`, `?limit=` (1..100, default 30) | `{query, hits: [{session_id, kind: "title" or "user", message_id, snippet, rank, session}]}`: one hit per session, best first ([Search](#search-k5)) |
 | GET | `/api/usage` | | `{fetched, providers: [{id, label, plan, windows, notes, error}]}`: plan limits of signed-in codex and copilot ([Usage](#usage-k11)) |
@@ -581,9 +581,12 @@ Events are read in pages of 1,000 by event row id until a short page; this is
 not the `/event` endpoint's 5,000-event page cap, and there is no `limit` query
 parameter. Both formats stream. The export includes every event **retained at
 the boundary**; when retention has moved the floor, `boundary.history_truncated`
-is true, `boundary.floor` names the expired boundary, and the Markdown header
-says so. Messages and snapshots are not affected by event expiry, and the export
-never claims an expired wire event was present.
+is true and `boundary.floor` names the expired boundary. `boundary.expired_payloads`
+counts wire envelopes whose body expired by payload retention (their ids/types
+remain with an explicit expired marker); `boundary.wire_payload_bytes` is the
+retained full wire payload size. The Markdown header names both cases. Messages
+and snapshots are not affected by either lifetime, and the export never claims
+an expired wire payload was present.
 
 Only top-level transport `headers` on `wire_request` and `wire_response` events
 are passed through provider header redaction (`authorization`,
@@ -722,7 +725,14 @@ data: {"id": 4201, "cursor": "log_1a2b3c4d5e6f7a8b:4201", "seq": 77, "time": 179
 
 `generation`, `head`, `head_cursor` and `floor` are stream/info metadata, not
 fields of every event; each event carries `id`, `cursor`, `seq`, `time`, `type`,
-`session_id` and `data`.
+`session_id`, `data` and `payload_state`. For a stored/replayed `wire_request`,
+`wire_response` or `wire_event`, `payload_state` is `full` or `expired`. An
+expired payload keeps its id/type/cursor and has an explicit marker in `data`:
+`{"$nexus_payload": "expired", "state": "expired", "event_type": …,
+"original_bytes": …, "expired_at": …, "reason": …, "note": …,
+"resync": "/api/snapshot"}`. It is never an empty event and does not move the
+floor. Live SSE delivery always carries the full payload when it is first
+published; payload expiry affects subsequent replay/storage reads.
 
 Events are committed before subscribers receive them; a storage failure raises
 instead of publishing an event that could not be replayed. A session event whose
@@ -762,12 +772,15 @@ Reload state from `GET /api/snapshot` (or `GET /api/project` and
 "start live at the boundary". A cursor error is never silently turned into
 "start now".
 
-Retention removes only a contiguous prefix of the log and moves `floor` to the
-last removed event id. A cursor **at** the floor can resume (the next event is
-`floor + 1`); a cursor below it gets 410 `history_unavailable` with the current
-head and floor. The durable head high-water mark survives even when every
-retained row was removed, so ids are never reused. A session's messages,
-snapshots and conversation stay independent of diagnostic event expiry.
+Prefix retention removes only a contiguous prefix of the log and moves `floor`
+to the last removed event id. A cursor **at** the floor can resume (the next
+event is `floor + 1`); a cursor below it gets 410 `history_unavailable` with the
+current head and floor. The durable head high-water mark survives even when
+every retained row was removed, so ids are never reused. Independently, heavy
+wire payload bodies may expire without moving the floor; the event stays at its
+id with `payload_state: "expired"` and the explicit marker above. A session's
+messages, snapshots, turn/request/tool records and `session_usage` stay
+independent of both diagnostic lifetimes.
 
 The replay-to-live boundary is atomic. The server registers the live
 subscription, reads the durable head as the same step, and then pages the stored
@@ -841,7 +854,7 @@ Deleting a project publishes one tombstone per deleted session, then
 | `turn.recovered` | a turn a daemon restart interrupted: its outcome, restored messages, tool classifications, cancelled waits and lost runtime state (see [Crash recovery](#crash-recovery)) |
 | `retry_scheduled` / `retry_started` / `retry_exhausted` | one provider retry transition: `{attempt, next_attempt?, attempt_id, delay?, reason, status?, retry_after?, max_attempts}` |
 | `model_fallback` | a child switched after a pre-response failure: `{previous, model, reason}`; a context message also announces the switch |
-| `log.retention` | a global retention pass: `{at, events: {removed, floor, head, protected, pinned}, turns, mutations, settings}` |
+| `log.retention` | a global retention pass: `{at, elapsed_ms, events: {removed, floor, head, protected, pinned, batches, retained_bytes, over_budget}, wire: {expired, expired_bytes, wire_bytes, over_budget, blocked}, migration, turn_links, scheduled, turns, mutations, storage, blockers, worked, settings}` |
 | `session.notified` | `{from, text}`: a `wait: false` child finished, and its answer goes to this (parent) session |
 | `session.workspace_tools` | `{active, entry, tools}`: the on-demand workspace controls were activated |
 | `session.escalated` | `{needed, why, parent_id}`: a child reported it is blocked (its parent's report carries it) |
@@ -1098,7 +1111,9 @@ Archive and deletion refuse pending inputs unless `drop_inputs: true` is given.
 `input.added`, `input.updated`, `input.removed`, `input.delivered` and
 `input.held` events update client activity. Delivery includes the stored
 `message_id` and `turn_id`; the corresponding user message has `delivery:
-"steer"` or `"queued"`. Pending items themselves are not timeline messages.
+"steer"` or `"queued"`. Steers delivered at the same boundary share one user
+message, whose text joins them with newlines, and their events carry the same
+`message_id`. Pending items themselves are not timeline messages.
 
 
 ## Handoff, titles and `/btw`

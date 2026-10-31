@@ -124,14 +124,23 @@ class Inputs:
         return message_from_json({"role": "user", "parts": item["parts"]})
 
     def deliver(self, sid: str, iid: str, turn_id: str) -> Any:
-        item = self.get(sid, iid)
+        return self.deliver_many(sid, [iid], turn_id)
+
+    def deliver_many(self, sid: str, iids: list[str], turn_id: str, message: Message | None = None) -> Any:
+        """Commit steers delivered together as one user message, each input pointing at it."""
+        items = [self.get(sid, iid) for iid in iids]
+        if message is None:
+            message = self.message(items[0])
+        delivery = "steer" if items[0]["mode"] == "steer" else "queued"
         with self.store.db:
-            message = self.store._insert_message(sid, self.message(item), time.time())
-            text, images = self.store._prompt_text(message.message)
+            stored = self.store._insert_message(sid, message, time.time())
+            text, images = self.store._prompt_text(stored.message)
             if text.strip() or images:
                 self.store.db.execute("insert into prompt_history (session_id, text, image_count, created) values (?, ?, ?, ?)",
                                       (sid, text, images, time.time()))
-            self.store.db.execute("update message set delivery = ? where id = ?", ("steer" if item["mode"] == "steer" else "queued", message.id))
-            self.store.db.execute("update pending_input set state = 'delivered', message_id = ?, turn_id = ? where id = ?", (message.id, turn_id, iid))
+            self.store.db.execute("update message set delivery = ? where id = ?", (delivery, stored.id))
+            for iid in iids:
+                self.store.db.execute("update pending_input set state = 'delivered', message_id = ?, turn_id = ? where id = ?",
+                                      (stored.id, turn_id, iid))
         from dataclasses import replace
-        return replace(message, delivery="steer" if item["mode"] == "steer" else "queued")
+        return replace(stored, delivery=delivery)

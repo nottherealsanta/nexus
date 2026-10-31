@@ -242,6 +242,8 @@ class Runtime:
         self.retry_policy = RetryPolicy.from_env()
         self.retention = Retention(self)
         self.mutation_lifetime = self.retention.settings.mutation_lifetime
+        store.pressure_bytes = self.retention.settings.wire_bytes
+        store.on_pressure = self.retention.note_pressure
         bus.attach(store)  # every published event is durable before any subscriber sees it
         self.recovered: list[dict[str, Any]] = []
 
@@ -270,8 +272,8 @@ class Runtime:
         return self.recovered
 
     async def start_maintenance(self) -> None:
-        """Prune expired diagnostics in a background task; the first pass is synchronous."""
-        self.retention.run_once()
+        """Start bounded maintenance without doing a startup database scan."""
+        self.retention.note_pressure()
         self.retention.start()
 
     # -- idempotent mutations --------------------------------------------------
@@ -2534,14 +2536,15 @@ class Runtime:
                         clock = ReasoningClock()
                     elif event.message.role == "tool":
                         stored = self.store.save_tool_message(session_id, event.message, turn_id=turn_id)
-                    elif event.input_id or input_id:
-                        iid = event.input_id or input_id
-                        item = self.inputs.get(session_id, iid)
-                        stored = self.inputs.deliver(session_id, iid, turn_id)
+                    elif event.input_ids or input_id:
+                        iids = list(event.input_ids) or [input_id]
+                        items = [self.inputs.get(session_id, iid) for iid in iids]
+                        stored = self.inputs.deliver_many(session_id, iids, turn_id, event.message)
                         agent.messages[-1] = stored.message
-                        published = self.bus.publish("input.delivered", {**item, "state": "delivered", "message_id": stored.id, "turn_id": turn_id}, session_id=session_id)
-                        with self.store.db:
-                            self.store.db.execute("update pending_input set event_id = ? where id = ?", (published.get("id", -1), iid))
+                        for iid, item in zip(iids, items):
+                            published = self.bus.publish("input.delivered", {**item, "state": "delivered", "message_id": stored.id, "turn_id": turn_id}, session_id=session_id)
+                            with self.store.db:
+                                self.store.db.execute("update pending_input set event_id = ? where id = ?", (published.get("id", -1), iid))
                         input_id = None
                     else:
                         stored = self.store.append_message(session_id, event.message)
@@ -2620,7 +2623,7 @@ class Runtime:
                         request_parts = []
                         clock = ReasoningClock()
                     data = to_json(event)
-                    self.bus.publish(data["type"], data, session_id=session_id)
+                    self.bus.publish(data["type"], data, session_id=session_id, turn_id=turn_id)
             self.store.finish_turn(turn_id, "completed", steps=step)
             completed = True
             closed = True
@@ -2733,6 +2736,7 @@ class Runtime:
             if closed:
                 self.store.set_turn_recovery(turn_id, "none")
             self.store.resolve_mutations_for_turn(turn_id, lifetime=self.mutation_lifetime)
+            self.retention.note_terminal()
 
     def publish_turn_summary(self, session_id: str, turn_id: str, *, recovery: str | None = None) -> None:
         """Announce a closed turn's summary: the same entry `GET /api/session/{id}/turn` returns.

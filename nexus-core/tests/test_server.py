@@ -61,7 +61,10 @@ async def test_info_reports_the_api_contract_clients_check(setup):
     _, client, _, _ = setup
     info = (await client.get("/api/info")).json()
     assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 4}
-    assert set(info) >= {"version", "pid", "home", "url", "log", "retention", "retry", "idempotency"}
+    assert set(info) >= {"version", "pid", "home", "url", "log", "retention", "retention_status",
+                         "retry", "idempotency"}
+    assert info["retention"]["wire_success_seconds"] == 3600
+    assert info["retention_status"]["storage"]["events"] >= 0
 
 
 async def test_projects_are_unique_by_path_and_own_sessions(setup):

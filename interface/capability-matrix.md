@@ -342,7 +342,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | Z6 | Blocking alert: major version mismatch | Core work | 12a Version handshake | `/api/info.version` is the Core version string, not an API major.minor |
 | Z7 | Notifications drawer with unread count and session links | Client only | | History is view state; old TUI keeps 50 |
 | Z8 | Attention marks (row, project, window title) | Client only | | See L20 |
-| Z9 | Completion sound; OS/terminal notification (bell, OSC 9/777) | Client only | | Per-kind switches live in Settings Notifications |
+| Z9 | Notification sounds (finished, needs input); OS/terminal notification (bell, OSC 9/777) | Client only | | Per-kind switches live in Settings Notifications; sound is implemented in both clients (2026-10-31) |
 
 ## 13. Connection to Core
 

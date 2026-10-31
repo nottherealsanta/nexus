@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Improve TUI rendering performance with coalesced updates, cached Markdown/layout, and shared timeline rows; render streaming Markdown and bound live thought previews.
+- Add paged, multi-question `ask` interactions, clearer activity counts, session status, and completion/needs-input notification sounds in both clients.
+- Replace Bark speech recognition with pinned Parakeet Redux in an offline worker, with verified caching, cancellation, timeout handling, and updated voice documentation.
+- Add expirable, content-addressed wire payload storage while preserving durable event envelopes; introduce bounded retention maintenance, protected-session handling, and expired-payload visibility in exports and the inspector.
+- Make project MCP entries start automatically for new sessions unless explicitly disabled; document the trust implications.
+- Improve NSH project navigation, activity indicators, session restoration, layout, typography, and composer context display.
+- Refine TUI and NSH settings, dictation, image handling, and timeline presentation.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
 ## [0.10.0](https://github.com/nottherealsanta/nexus/compare/v0.7.2...v0.10.0) (2026-10-30)
