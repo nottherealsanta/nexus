@@ -30,7 +30,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "ui": {"detail": "medium", "reduced_motion": False},
     "web": {"search_url": "http://127.0.0.1:18765/search", "fetch_timeout_s": 15},
     "mcp": {"full_definitions": False, "max_listed_tools": 25},
-    "voice": {"stt_model": "ConwayResearch/Underdog-Bark-3.0-Clean"},
+    "voice": {"stt_model": "moondream/parakeet-redux"},
     "speech": {"tts_model": "gradium/phonon-31m-en"},
 }
 
