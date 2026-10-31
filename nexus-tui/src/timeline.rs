@@ -7,6 +7,7 @@
 //! Nothing here talks to Core or to the terminal beyond `Theme`.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
@@ -31,6 +32,7 @@ const ASSISTANT_INDENT: usize = 3;
 /// chevron sits above its members' glyphs (user choice, 2026-10-29).
 const ACTIVITY_INDENT: usize = 3;
 
+#[derive(Clone)]
 pub struct TLine {
     pub spans: Vec<Span<'static>>,
     pub bg: Option<Style>,
@@ -95,6 +97,299 @@ pub struct Timeline {
 
 /// Frames a finished group's glyph flashes the accent (DESIGN_PLAN.md D06).
 pub const FLASH_FRAMES: usize = 6;
+
+/// Bound on rendered-body cache bytes per app. Long histories (1,000 messages
+/// of ~1.2 KB) fit; a much larger history evicts its oldest entries first.
+const CACHE_BYTES: usize = 32 * 1024 * 1024;
+
+fn hash_str(text: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(text, &mut h);
+    std::hash::Hasher::finish(&h)
+}
+
+/// Every theme token that can change a rendered timeline body. The mode/tier
+/// are already resolved into these colours; `ascii` changes glyphs.
+fn theme_fingerprint(theme: &Theme) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for token in [
+        "text.primary",
+        "text.secondary",
+        "text.muted",
+        "text.faint",
+        "interactive.accent",
+        "interactive.focus",
+        "border.default",
+        "border.strong",
+        "status.info",
+        "status.success",
+        "status.warning",
+        "status.error",
+        "status.interrupted",
+        "surface.canvas",
+        "surface.panel",
+        "surface.raised",
+        "diff.add",
+        "diff.del",
+        "diff.add_bg",
+        "diff.del_bg",
+    ] {
+        theme.color(token).hash(&mut h);
+    }
+    theme.opts.ascii.hash(&mut h);
+    std::hash::Hasher::finish(&h)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct DetailKey {
+    name: u64,
+    args: u64,
+    args_len: usize,
+    output: u64,
+    output_len: usize,
+    error: u64,
+    error_len: usize,
+    media: u64,
+    is_error: bool,
+    raw: bool,
+    /// Content width the rows were wrapped to.
+    width: usize,
+    /// Theme/glyph fingerprint.
+    theme: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct MarkdownKey {
+    text: u64,
+    text_len: usize,
+    full: u64,
+    full_len: usize,
+    width: usize,
+    palette: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct WrapKey {
+    text: u64,
+    text_len: usize,
+    width: usize,
+}
+
+#[derive(Clone)]
+struct CachedFence {
+    /// Relative to the first line of the cached body.
+    start: usize,
+    end: usize,
+    index: usize,
+    source: String,
+}
+
+#[derive(Clone)]
+struct CachedMarkdown {
+    lines: Vec<TLine>,
+    fences: Vec<CachedFence>,
+    bytes: usize,
+}
+
+impl CachedMarkdown {
+    fn capture(lines: &[TLine], blocks: &[Block], base: usize) -> Self {
+        let mut bytes = std::mem::size_of_val(lines);
+        for line in lines {
+            bytes += std::mem::size_of_val(line.spans.as_slice());
+            bytes += line
+                .spans
+                .iter()
+                .map(|span| span.content.len())
+                .sum::<usize>();
+        }
+        let fences: Vec<CachedFence> = blocks
+            .iter()
+            .filter(|block| block.kind == BlockKind::Code)
+            .filter_map(|block| {
+                let (_, index) = block.key.rsplit_once(':')?;
+                Some(CachedFence {
+                    start: block.start.checked_sub(base)?,
+                    end: block.end.checked_sub(base)?,
+                    index: index.parse().ok()?,
+                    source: block.target.clone().unwrap_or_default(),
+                })
+            })
+            .collect();
+        bytes += fences
+            .iter()
+            .map(|fence| fence.source.len() + std::mem::size_of::<CachedFence>())
+            .sum::<usize>();
+        Self {
+            lines: lines.to_vec(),
+            fences,
+            bytes,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum CacheKey {
+    Markdown(MarkdownKey),
+    Wrap(WrapKey),
+    Detail(DetailKey),
+}
+
+enum CacheEntry {
+    Markdown(CachedMarkdown),
+    Wrap(Vec<String>),
+    Detail(ToolDetail),
+}
+
+impl CacheEntry {
+    fn bytes(&self) -> usize {
+        match self {
+            Self::Markdown(entry) => entry.bytes,
+            Self::Wrap(rows) => rows
+                .iter()
+                .map(|row| row.len() + std::mem::size_of::<String>())
+                .sum(),
+            Self::Detail(detail) => {
+                std::mem::size_of::<ToolDetail>()
+                    + detail
+                        .rows
+                        .iter()
+                        .map(|row| {
+                            std::mem::size_of_val(row.as_slice())
+                                + row.iter().map(|span| span.content.len()).sum::<usize>()
+                        })
+                        .sum::<usize>()
+            }
+        }
+    }
+}
+
+/// Rendered bodies and wrapped plain text, keyed by their complete inputs.
+///
+/// A cache is held by one `App` (not a thread-local) so memory is bounded per
+/// session, views that leave the app can be dropped with it, and tests cannot
+/// share stale entries. Entries are FIFO-evicted once the byte cap is reached.
+pub struct LayoutCache {
+    entries: HashMap<CacheKey, CacheEntry>,
+    order: std::collections::VecDeque<CacheKey>,
+    bytes: usize,
+    limit: usize,
+    hits: u64,
+    misses: u64,
+    evictions: u64,
+}
+
+impl Default for LayoutCache {
+    fn default() -> Self {
+        Self::with_limit(CACHE_BYTES)
+    }
+}
+
+impl LayoutCache {
+    pub fn with_limit(limit: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: std::collections::VecDeque::new(),
+            bytes: 0,
+            limit,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+        }
+    }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// `(hits, misses, evictions)` since the app started.
+    pub fn stats(&self) -> (u64, u64, u64) {
+        (self.hits, self.misses, self.evictions)
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.bytes = 0;
+    }
+
+    fn markdown(&mut self, key: MarkdownKey) -> Option<CachedMarkdown> {
+        match self.entries.get(&CacheKey::Markdown(key)) {
+            Some(CacheEntry::Markdown(entry)) => {
+                self.hits += 1;
+                Some(entry.clone())
+            }
+            _ => {
+                self.misses += 1;
+                None
+            }
+        }
+    }
+
+    fn put_markdown(&mut self, key: MarkdownKey, entry: CachedMarkdown) {
+        self.insert(CacheKey::Markdown(key), CacheEntry::Markdown(entry));
+    }
+
+    fn wrapped(&mut self, key: WrapKey) -> Option<Vec<String>> {
+        match self.entries.get(&CacheKey::Wrap(key)) {
+            Some(CacheEntry::Wrap(rows)) => {
+                self.hits += 1;
+                Some(rows.clone())
+            }
+            _ => {
+                self.misses += 1;
+                None
+            }
+        }
+    }
+
+    fn put_wrapped(&mut self, key: WrapKey, rows: &[String]) {
+        self.insert(CacheKey::Wrap(key), CacheEntry::Wrap(rows.to_vec()));
+    }
+
+    fn detail(&mut self, key: DetailKey) -> Option<ToolDetail> {
+        match self.entries.get(&CacheKey::Detail(key)) {
+            Some(CacheEntry::Detail(detail)) => {
+                self.hits += 1;
+                Some(detail.clone())
+            }
+            _ => {
+                self.misses += 1;
+                None
+            }
+        }
+    }
+
+    fn put_detail(&mut self, key: DetailKey, detail: ToolDetail) {
+        self.insert(CacheKey::Detail(key), CacheEntry::Detail(detail));
+    }
+
+    fn insert(&mut self, key: CacheKey, entry: CacheEntry) {
+        let bytes = entry.bytes();
+        if let Some(old) = self.entries.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(old.bytes());
+        } else {
+            self.order.push_back(key);
+        }
+        self.bytes += bytes;
+        self.entries.insert(key, entry);
+        while self.bytes > self.limit && self.entries.len() > 1 {
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(entry) = self.entries.remove(&old) {
+                self.bytes = self.bytes.saturating_sub(entry.bytes());
+                self.evictions += 1;
+            }
+        }
+    }
+}
 
 /// Turn facts gathered from messages, the stored turns' summaries and the
 /// running turn's live events (usage, steps, model, end reason).
@@ -173,6 +468,7 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
         t,
         frame,
         bw: width.saturating_sub(2).max(8),
+        fingerprint: theme_fingerprint(t),
         out: Vec::new(),
         blocks: Vec::new(),
         turn: None,
@@ -195,6 +491,8 @@ struct Builder<'a> {
     frame: usize,
     /// Content width (one cell of breathing room on each side).
     bw: usize,
+    /// Resolved theme colours and glyph mode for cache keys.
+    fingerprint: u64,
     out: Vec<TLine>,
     blocks: Vec<Block>,
     turn: Option<usize>,
@@ -330,6 +628,7 @@ const COMMAND_ROWS: usize = 2;
 /// A tool's detail rows. `head` leading rows (the command) are never cut;
 /// `tail_cap` output keeps its last `OUTPUT_TAIL` rows, anything else (a diff,
 /// the raw view) keeps a head and a tail.
+#[derive(Clone)]
 struct ToolDetail {
     rows: Vec<Vec<Span<'static>>>,
     head: usize,
@@ -816,7 +1115,8 @@ impl Builder<'_> {
         }
 
         enum Item<'a> {
-            Msg(&'a crate::api::Message),
+            /// Message index in `view.messages` and the message itself.
+            Msg(usize, &'a crate::api::Message),
             Ev(&'a crate::api::Event),
             /// A row stored turns' summaries describe (a retry, an error).
             Summary(&'a str, &'a crate::api::Event),
@@ -834,7 +1134,7 @@ impl Builder<'_> {
         };
         let mut items: Vec<(i64, usize, usize, Item)> = Vec::new();
         for (i, m) in view.messages.iter().enumerate() {
-            items.push((key_of(i), 2 * i + 1, 0, Item::Msg(m)));
+            items.push((key_of(i), 2 * i + 1, 0, Item::Msg(i, m)));
         }
         let synthetic = summary_rows(view);
         for (rank, (at, before, key, e)) in synthetic.iter().enumerate() {
@@ -878,7 +1178,7 @@ impl Builder<'_> {
         let mut turn_no = 0usize;
         let mut folded = false;
         for (_, _, _, item) in &items {
-            if let Item::Msg(m) = item {
+            if let Item::Msg(_, m) = item {
                 for p in &m.parts {
                     if p["type"] == "tool_call" && p["name"] == "message_session" {
                         if let Some(child) = arg_json(&json_str(&p["arguments"]))
@@ -894,14 +1194,14 @@ impl Builder<'_> {
         let mut background_notices = Vec::new();
         for (_, _, _, item) in &items {
             let background = match item {
-                Item::Msg(m) if m.role == "user" => is_background_done(&parts_text(m)),
+                Item::Msg(_, m) if m.role == "user" => is_background_done(&parts_text(m)),
                 _ => false,
             };
             if !background && !matches!(item, Item::Ev(e) if !is_diagnostic(e)) {
                 self.background_notices(&mut background_notices);
             }
             match item {
-                Item::Msg(m) => {
+                Item::Msg(index, m) => {
                     if m.role == "user" {
                         self.activity_group(
                             &mut activity,
@@ -938,7 +1238,7 @@ impl Builder<'_> {
                         }
                         turn_no = turns
                             .iter()
-                            .position(|t| t.start_msg == msg_index(view, &m.id))
+                            .position(|t| t.start_msg == *index)
                             .unwrap_or(turn_no);
                         self.turn = Some(turn_no);
                         turn_open = true;
@@ -1087,7 +1387,7 @@ impl Builder<'_> {
                     |b| {
                         let full = b.bw;
                         b.bw = full.saturating_sub(ASSISTANT_INDENT).max(1);
-                        for row in text::wrap(&s.text, b.bw) {
+                        for row in b.wrap_text(&s.text, b.bw) {
                             if row.is_empty() {
                                 b.line(Vec::new());
                             } else {
@@ -1494,7 +1794,7 @@ impl Builder<'_> {
             let mut rows = if folded {
                 vec![truncate(&body, body_width, b.ell())]
             } else {
-                text::wrap(&body, body_width)
+                b.wrap_text(&body, body_width)
             };
             if big && !full && !folded {
                 rows.truncate(6);
@@ -2301,7 +2601,7 @@ impl Builder<'_> {
             if open {
                 let indent = " ".repeat(ACTIVITY_INDENT + 2);
                 let room = b.bw.saturating_sub(indent.len() + 2).max(1);
-                for row in text::wrap(&summary, room) {
+                for row in b.wrap_text(&summary, room) {
                     b.line(vec![
                         Span::styled(format!("{indent}{vbar} "), rail),
                         Span::styled(row, italic),
@@ -2617,6 +2917,30 @@ impl Builder<'_> {
         trace: Option<&ToolTrace>,
         raw: bool,
     ) -> ToolDetail {
+        let output = done.map(|d| d.output.as_str()).unwrap_or("");
+        let error = trace.and_then(|t| t.error.as_deref()).unwrap_or("");
+        let media = done.map_or(0, |d| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            d.media.hash(&mut h);
+            std::hash::Hasher::finish(&h)
+        });
+        let key = DetailKey {
+            name: hash_str(name),
+            args: hash_str(args),
+            args_len: args.len(),
+            output: hash_str(output),
+            output_len: output.len(),
+            error: hash_str(error),
+            error_len: error.len(),
+            media,
+            is_error: done.is_some_and(|d| d.is_error),
+            raw,
+            width: self.bw,
+            theme: self.fingerprint,
+        };
+        if let Some(hit) = self.app.layout.borrow_mut().detail(key) {
+            return hit;
+        }
         let mut out = Vec::new();
         let mut head = 0;
         let mut tail_cap = false;
@@ -2636,11 +2960,13 @@ impl Builder<'_> {
                     ));
                 }
             }
-            return ToolDetail {
+            let detail = ToolDetail {
                 rows: plain_rows(out),
                 head,
                 tail_cap,
             };
+            self.app.layout.borrow_mut().put_detail(key, detail.clone());
+            return detail;
         }
         let a = arg_json(args).unwrap_or(Value::Null);
         match name {
@@ -2658,11 +2984,15 @@ impl Builder<'_> {
                         .unwrap_or("");
                     crate::diff::Diff::from_replace(old, new)
                 };
-                return self.diff_detail(&diff);
+                let detail = self.diff_detail(&diff);
+                self.app.layout.borrow_mut().put_detail(key, detail.clone());
+                return detail;
             }
             "write" => {
                 let diff = crate::diff::Diff::from_new(a["content"].as_str().unwrap_or(""));
-                return self.diff_detail(&diff);
+                let detail = self.diff_detail(&diff);
+                self.app.layout.borrow_mut().put_detail(key, detail.clone());
+                return detail;
             }
             _ => {
                 tail_cap = true;
@@ -2706,11 +3036,13 @@ impl Builder<'_> {
                 }
             }
         }
-        ToolDetail {
+        let detail = ToolDetail {
             rows: plain_rows(out),
             head,
             tail_cap,
-        }
+        };
+        self.app.layout.borrow_mut().put_detail(key, detail.clone());
+        detail
     }
 
     /// A diff as detail rows: split at 110 cells and wider, unified below
@@ -3052,10 +3384,39 @@ impl Builder<'_> {
     // -- markdown-lite ----------------------------------------------------------
 
     fn markdown(&mut self, text: &str, parent_key: &str, full_text: &str) {
+        let palette = crate::markdown::Palette::from_theme(self.t);
+        let key = MarkdownKey {
+            text: hash_str(text),
+            text_len: text.len(),
+            full: hash_str(full_text),
+            full_len: full_text.len(),
+            width: self.bw,
+            palette: self.fingerprint,
+        };
+        if let Some(hit) = self.app.layout.borrow_mut().markdown(key) {
+            let base = self.out.len();
+            self.out.extend(hit.lines.iter().cloned());
+            for fence in hit.fences {
+                self.blocks.push(Block {
+                    key: format!("code:{parent_key}:{}", fence.index),
+                    kind: BlockKind::Code,
+                    start: base + fence.start,
+                    end: base + fence.end,
+                    turn: self.turn,
+                    focusable: true,
+                    toggle: false,
+                    default_open: None,
+                    target: Some(fence.source),
+                    clipped: false,
+                });
+            }
+            return;
+        }
+        let start = self.out.len();
+        let blocks_start = self.blocks.len();
         let sources = crate::markdown::fence_sources(full_text);
         let mut fences: std::collections::BTreeMap<usize, (usize, usize)> =
             std::collections::BTreeMap::new();
-        let palette = crate::markdown::Palette::from_theme(self.t);
         let rows = crate::markdown::lines(text, &palette, self.bw);
         if rows.is_empty() && !text.trim().is_empty() {
             self.legacy_markdown(text);
@@ -3109,6 +3470,27 @@ impl Builder<'_> {
                 });
             }
         }
+        if self.out.len() > start {
+            let entry =
+                CachedMarkdown::capture(&self.out[start..], &self.blocks[blocks_start..], start);
+            self.app.layout.borrow_mut().put_markdown(key, entry);
+        }
+    }
+
+    /// `text::wrap` with a body cache. Wrapping is the hottest part of a frame
+    /// for long messages; the result depends only on the text and width.
+    fn wrap_text(&self, text: &str, width: usize) -> Vec<String> {
+        let key = WrapKey {
+            text: hash_str(text),
+            text_len: text.len(),
+            width,
+        };
+        if let Some(hit) = self.app.layout.borrow_mut().wrapped(key) {
+            return hit;
+        }
+        let rows = crate::text::wrap(text, width);
+        self.app.layout.borrow_mut().put_wrapped(key, &rows);
+        rows
     }
 
     fn legacy_markdown(&mut self, text: &str) {
@@ -3180,14 +3562,14 @@ impl Builder<'_> {
             .or_else(|| t.strip_prefix("### "))
             .or_else(|| t.strip_prefix("#### "))
         {
-            for row in text::wrap(&strip_inline(rest), self.bw) {
+            for row in self.wrap_text(&strip_inline(rest), self.bw) {
                 self.line(vec![Span::styled(
                     row,
                     self.primary().add_modifier(Modifier::BOLD),
                 )]);
             }
         } else if let Some(rest) = t.strip_prefix("> ") {
-            for row in text::wrap(&strip_inline(rest), self.bw.saturating_sub(2)) {
+            for row in self.wrap_text(&strip_inline(rest), self.bw.saturating_sub(2)) {
                 self.line(vec![
                     Span::styled(
                         format!("  {} ", self.t.structure("rail")),
@@ -3206,7 +3588,7 @@ impl Builder<'_> {
             self.bullet(&marker, rest);
         } else if t.starts_with('|') {
             // Tables stay readable as preformatted rows; no alignment guessing.
-            for row in text::wrap(t, self.bw) {
+            for row in self.wrap_text(t, self.bw) {
                 self.line(vec![Span::styled(row, self.secondary())]);
             }
         } else if t.starts_with("---") || t.starts_with("***") {
@@ -3215,7 +3597,7 @@ impl Builder<'_> {
                 self.st("border.default", CANVAS),
             )]);
         } else {
-            for row in text::wrap(&strip_inline(t), self.bw) {
+            for row in self.wrap_text(&strip_inline(t), self.bw) {
                 self.line(vec![Span::styled(row, self.primary())]);
             }
         }
@@ -3224,7 +3606,7 @@ impl Builder<'_> {
     fn bullet(&mut self, marker: &str, rest: &str) {
         let text = strip_inline(rest);
         let mut first = true;
-        for row in text::wrap(&text, self.bw.saturating_sub(2)) {
+        for row in self.wrap_text(&text, self.bw.saturating_sub(2)) {
             if first {
                 self.line(vec![
                     Span::styled(format!("{marker} "), self.meta()),
@@ -3236,13 +3618,6 @@ impl Builder<'_> {
             }
         }
     }
-}
-
-fn msg_index(view: &crate::reduce::SelectedView, id: &str) -> usize {
-    view.messages
-        .iter()
-        .position(|m| m.id == id)
-        .unwrap_or(usize::MAX)
 }
 
 fn parts_text(m: &crate::api::Message) -> String {

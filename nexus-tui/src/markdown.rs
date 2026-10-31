@@ -49,6 +49,23 @@ impl Palette {
             ascii: theme.opts.ascii,
         }
     }
+
+    /// Every input (colour or glyph choice) that changes rendered Markdown.
+    pub fn fingerprint(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        self.text.hash(&mut h);
+        self.quiet.hash(&mut h);
+        self.muted.hash(&mut h);
+        self.accent.hash(&mut h);
+        self.border.hash(&mut h);
+        self.border_strong.hash(&mut h);
+        self.blue.hash(&mut h);
+        self.success.hash(&mut h);
+        self.warning.hash(&mut h);
+        self.panel.hash(&mut h);
+        self.ascii.hash(&mut h);
+        h.finish()
+    }
 }
 
 // Display controls rather than passing terminal escape sequences through. The
@@ -66,10 +83,23 @@ fn terminal_safe(text: &str) -> String {
 }
 
 /// Word-wrap styled graphemes, adapted from old Nexus `transcript::wrap`.
+///
+/// Wrapping tracks borrowed grapheme slices and only allocates when a row is
+/// turned into styled runs, merging adjacent cells that share a style. The
+/// result is visually identical to per-grapheme spans but has far fewer
+/// allocations and later clones (timeline caching depends on that).
 pub fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+    #[derive(Clone, Copy)]
+    struct Cell<'a> {
+        text: &'a str,
+        style: Style,
+        width: usize,
+        space: bool,
+    }
+
     let width = width.max(1);
-    let mut rows = Vec::new();
-    let mut row: Vec<(Span<'static>, usize, bool)> = Vec::new();
+    let mut rows: Vec<Vec<Cell<'_>>> = Vec::new();
+    let mut row: Vec<Cell<'_>> = Vec::new();
     let mut cols = 0;
     let mut break_at = None;
     for span in spans {
@@ -87,11 +117,11 @@ pub fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static
                 }
                 if let Some(at) = break_at.filter(|at| *at > 0 && *at < row.len()) {
                     let tail = row.split_off(at);
-                    while row.last().is_some_and(|cell| cell.2) {
+                    while row.last().is_some_and(|cell| cell.space) {
                         row.pop();
                     }
                     rows.push(std::mem::replace(&mut row, tail));
-                    cols = row.iter().map(|cell| cell.1).sum();
+                    cols = row.iter().map(|cell| cell.width).sum();
                 } else {
                     rows.push(std::mem::take(&mut row));
                     cols = 0;
@@ -101,7 +131,12 @@ pub fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static
             if dropped {
                 continue;
             }
-            row.push((Span::styled(grapheme.to_owned(), span.style), w, space));
+            row.push(Cell {
+                text: grapheme,
+                style: span.style,
+                width: w,
+                space,
+            });
             cols += w;
             if space {
                 break_at = Some(row.len());
@@ -110,7 +145,19 @@ pub fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static
     }
     rows.push(row);
     rows.into_iter()
-        .map(|row| row.into_iter().map(|cell| cell.0).collect())
+        .map(|cells| {
+            let mut runs: Vec<(String, Style)> = Vec::new();
+            for cell in cells {
+                if let Some((text, _)) = runs.last_mut().filter(|(_, s)| *s == cell.style) {
+                    text.push_str(cell.text);
+                } else {
+                    runs.push((cell.text.to_owned(), cell.style));
+                }
+            }
+            runs.into_iter()
+                .map(|(text, style)| Span::styled(text, style))
+                .collect()
+        })
         .collect()
 }
 

@@ -17,6 +17,7 @@ pub mod dictation;
 pub mod diff;
 pub mod discovery;
 pub mod editor;
+pub mod frames;
 pub mod images;
 pub mod keys;
 pub mod layout;

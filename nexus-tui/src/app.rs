@@ -616,6 +616,8 @@ pub struct App {
     pub mouse: Option<(u16, u16)>,
     pub timeline_screen: Option<ratatui::buffer::Buffer>,
     pub timeline_drag: Option<(crate::selection::Selection, Option<Target>)>,
+    /// Rendered message bodies, keyed by content/width/theme (timeline.rs).
+    pub layout: std::cell::RefCell<crate::timeline::LayoutCache>,
     bindings: HashMap<(String, String), String>,
     shortcut_leader: Option<Instant>,
 }
@@ -654,6 +656,23 @@ fn fuzzy(query: &str, text: &str) -> Option<i32> {
         }
     }
     best
+}
+
+/// Whether applying `msg` can change what the next frame shows.
+///
+/// Conservative by construction: every variant and every unknown event kind
+/// asks for a draw. Only raw provider traffic (`wire_event`, `wire_response`)
+/// is invisible — the reducer drops both from the selected view's scratch (so
+/// they never reach the timeline's diagnostics), `App::apply_sync` has no
+/// branch for them, and they produce no toast, alert, sidebar mark or effect.
+/// `wire_request` stays visible: its model feeds the composer and turn
+/// metadata. An invisible message is still applied, advancing the reducer's
+/// cursor and deduplication state; it just does not need a frame.
+pub fn sync_msg_affects_view(msg: &SyncMsg) -> bool {
+    match msg {
+        SyncMsg::Event(event) => !matches!(event.kind.as_str(), "wire_event" | "wire_response"),
+        _ => true,
+    }
 }
 
 impl App {
@@ -778,6 +797,7 @@ impl App {
             mouse: None,
             timeline_screen: None,
             timeline_drag: None,
+            layout: std::cell::RefCell::new(crate::timeline::LayoutCache::default()),
             bindings,
             shortcut_leader: None,
         }
@@ -4508,6 +4528,16 @@ impl App {
     }
 
     // ---- sync & results ------------------------------------------------------------------
+
+    /// Apply one sync message and report whether it may have changed the view.
+    ///
+    /// The flag is computed before the message moves, so callers can batch
+    /// without cloning. `apply_sync` itself always runs exactly once.
+    pub fn apply_sync_tracked(&mut self, msg: SyncMsg) -> bool {
+        let affects_view = sync_msg_affects_view(&msg);
+        self.apply_sync(msg);
+        affects_view
+    }
 
     pub fn apply_sync(&mut self, msg: SyncMsg) {
         if let SyncMsg::SkillMcp {

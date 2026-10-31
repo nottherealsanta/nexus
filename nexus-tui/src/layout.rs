@@ -270,7 +270,7 @@ pub fn contains(rect: Rect, x: u16, y: u16) -> bool {
 }
 
 /// Clickable rects registered during a draw. Later registrations are on top.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct HitMap {
     hits: Vec<(Rect, Target)>,
 }

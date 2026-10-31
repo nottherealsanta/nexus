@@ -7,6 +7,9 @@
 # nexus-core), NEXUS_PORT (default 4797), BENCH_SIZE (default 160x48),
 # NEXUS_TUI_BIN (default target/release/nexus-tui, built if missing).
 # Prints the seed summary (events, event data bytes) and one --bench report per run.
+# For the Core-free render replay (TUI_PERFORMANCE_PLAN.md phase 1), run the
+# built binary directly:
+#   NEXUS_TUI_REPLAY_MESSAGES=200 "$bin" --bench 160x48 --replay
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 core="$here/../../nexus-core"

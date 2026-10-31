@@ -3,7 +3,7 @@
 use ratatui::{buffer::Buffer, layout::Rect, style::Modifier};
 use unicode_width::UnicodeWidthStr;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Selection {
     pub area: Rect,
     pub screen: Buffer,

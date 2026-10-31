@@ -19,6 +19,17 @@ The sections below are the record of the release steps and the backlog that rema
 
 ## Where things stand (2026-10-30)
 
+- **TUI render performance (phases 1–2 landed 2026-10-31).** The loop draws
+  only when the model changes, coalesces up to 64 queued sync messages within an
+  8 ms soft budget, and treats input, effects and due ticks as barriers. Raw
+  `wire_event`/`wire_response` rows still advance the reducer but skip the
+  frame. Rendered Markdown bodies, wrapped text and tool details are cached by
+  content, width and theme, with a bounded per-app cache. In a deterministic
+  replay, 902 events cost 16 frames instead of 902; a 200-message draw is
+  1.1–1.3 ms and a 1,000-message draw 5.2 ms (release), from 8.5 ms and 164 ms
+  before phase 2. Remaining work: phase 3 (separate timeline/chrome
+  invalidation) and phase 4 (viewport layout), both optional at this cost, in
+  [TUI_PERFORMANCE_PLAN.md](TUI_PERFORMANCE_PLAN.md).
 - **Merged.** `main` is now Nexus 0.10 (`e2c6cd2`, pushed directly, no PR; branch protection is off). `nexus10` shared no history with `main`, so the merge used `-s ours` and keeps old Nexus 0.7.2 as the second parent: no force-push, and nothing was lost. Old Nexus is also branch `nexus01` (pushed, plus one backup commit of its uncommitted local work) and tag `v0.7.2`.
 - Release gate O1 to O4 are done. O5 (platform matrix) is deferred to [TODO.md](TODO.md); O6 (release-download install) is written and tested against a local release (step 3).
 - **CI** first ran on the merge push (run 41073305862). After fixes: `lint` and `core` pass on macOS and Ubuntu; the five stale `nexus-tui/tests/shell.rs` tests are updated and the TUI tests pass locally; the `nsh` job now builds a pinned `nsh` (step 4). The next push shows whether `ci-ok` is green. Release-please opened PR #97 "release 0.10.0"; do not merge it until CI is green. Stale PRs from old Nexus are still open and should be closed: #95 (release 0.8.0 for the old `nexus-harness` component) and #70 (an empty commit that triggered an old patch release); closing them was blocked by the permission classifier in the session, so close them by hand.

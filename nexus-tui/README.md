@@ -303,6 +303,12 @@ tools/bench.sh ROOT [turns] [runs]
                            # seed a ~30 000-event session in ROOT/home, start its Core and run
                            # the release build's --bench 160x48: history load, first frame,
                            # RSS, frame time while scrolling (numbers in ../PLAN.md)
+NEXUS10_REDUCED_MOTION=1 cargo run -- --dark --bench 160x48 --replay
+                           # no Core: replay a deterministic 200-message / ~900-event stream
+                           # through the real batch policy; prints burst and paced frame counts,
+                           # timeline build time and cache hits/misses.
+                           # NEXUS_TUI_REPLAY_MESSAGES and NEXUS_TUI_REPLAY_EVENTS set the fixture;
+                           # NEXUS_TUI_REPLAY_TOOLS=1 adds long edit diffs and opens high detail.
 ```
 
 Display options (flags override the environment): `--dark | --light`, `--mono`
@@ -310,6 +316,25 @@ Display options (flags override the environment): `--dark | --light`, `--mono`
 means truecolor), `--ascii` (also `NEXUS10_ASCII=1` or a non-UTF-8 locale),
 `--reduced-motion` (also `NEXUS10_REDUCED_MOTION=1`: spinners stay still and an
 idle terminal is never redrawn).
+
+**The loop draws only when the model changed.** One sync message wakes the
+select; up to 64 queued sync messages then join it within an 8 ms soft budget
+(`src/frames.rs`). Ready input, a due tick (125 ms) and image/done/dictation
+replies are barriers, so input is always rendered before the next input and
+effects run in order between items. `wire_event` and `wire_response` still
+advance the reducer's cursor but need no frame; every other event kind is
+conservative. A finite burst's last visible state is drawn before the loop waits
+again, and an invisible-only burst does not clear a pending draw.
+
+**Rendered bodies are cached per app** (`timeline::LayoutCache`). Markdown
+bodies (including fenced-code block offsets), wrapped plain text and unclipped
+tool detail rows are keyed by their content, width and a resolved theme
+fingerprint; focus, selection and clipping stay outside the cached value.
+Entries are FIFO-evicted under a 32 MiB cap, and the replay reports hits,
+misses and evictions. This is what keeps a 200-message draw near 1 ms and a
+1,000-message draw near 5 ms in the release build; `--bench ... --replay`
+measures it without a Core or PTY (results in
+[../TUI_PERFORMANCE_PLAN.md](../TUI_PERFORMANCE_PLAN.md)).
 
 Session rows in the left sidebar (D03) have two lines. Line 1 is the mark slot at
 x=2 (waiting `◆`, error `✕`, running spinner, unread `●`, in that order of
@@ -408,14 +433,18 @@ for selection, undo/redo and collapsed large pastes; sent text expands every pas
 | `ui`, `layout` | View-state types (focus, overlays, dialogs, alerts, mouse targets). `Regions::compute` is the one geometry function; the renderer registers every clickable rect in a `HitMap` as it draws it and the map is rebuilt each frame. |
 | `app` | Focus model, `when`-term evaluation, command availability, the palette, the Esc chain, keyboard/mouse/paste handling. Produces `Effect`s (API call, microphone capture, supervisor command, clipboard, quit, suspend). |
 | `actions` | Core actions (prompt, session changes, voice status/download/transcription, and others), each with its own `RequestId` where applicable; failed sends restore their draft. |
-| `timeline` | The session timeline: blocks in model order (starting context, turns, user/assistant text, reasoning, tools and their diffs, notices, diagnostics, child cards) with fold state and the list of selectable blocks. Folding is view state only. |
+| `timeline` | The session timeline: blocks in model order (starting context, turns, user/assistant text, reasoning, tools and their diffs, notices, diagnostics, child cards) with fold state and the list of selectable blocks. Folding is view state only. `LayoutCache` keeps rendered bodies, wrapped text and tool detail rows keyed by content, width and theme, with a bounded FIFO cache shared by every frame in one app. |
 | `paint` | Buffer-level drawing helpers: `scrim` (dim a buffer under a modal), `modal_rect` (the modal block's geometry), `meter`. |
 | `render` | Ratatui drawing from the model, theme and manifest. Timeline blocks become hit targets as they are drawn. `render_text` renders to a text grid for tests and frame dumps. |
 | `term` | Raw mode, alternate screen, mouse, bracketed paste, kitty keyboard flags; restored on error, panic (hook) and Ctrl+Z suspend/resume. |
+| `frames` | Batch policy for the interactive loop: tick interval, soft budget, message bound and the dirty/halt result of a batch. |
 
-Tests (111): unit tests live in the modules; `tests/timeline.rs` covers turn
+Tests: unit tests live in the modules; `tests/timeline.rs` covers turn
 grouping and footers, folding (including "all but last"), tool diffs and the raw
-toggle, history merging, and keyboard/mouse block selection; `tests/sync.rs` runs the supervisor
+toggle, history merging, and keyboard/mouse block selection; `tests/frames.rs`
+drives the production batch policy with deterministic queues and compares
+batched replay with per-event rendering (buffer, hit map, scroll and model);
+`tests/sync.rs` runs the supervisor
 against a scripted loopback mock Core (live, reconnect, cursor rejection,
 overflow, restart, auth failure, API major/minor, offline, selection);
 `tests/mutations.rs` covers keyed retry, replay and conflicts. Shared fixtures

@@ -9,7 +9,7 @@ doc and the code disagree, the code wins: fix the doc.
 | --- | --- |
 | [llm-providers.md](llm-providers.md) | The four providers, the table, both dialects, quirks, replay, redaction, errors, examples |
 | [porting-ledger.md](porting-ledger.md) | Historical changes from old Nexus and their rationale |
-| [turn-summary-benchmark.md](turn-summary-benchmark.md) | TUI turn-summary load measurement |
+| [turn-summary-benchmark.md](turn-summary-benchmark.md) | TUI turn-summary load and render-replay measurements |
 | [config.md](config.md) | Configuration file primitives (in progress) |
 | [auth.md](auth.md) | Sign-in flows, `auth.json`, locking, refresh-token rotation |
 | [models.md](models.md) | models.dev catalog, cache, filters, `provider/model` refs |
