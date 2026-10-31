@@ -1453,7 +1453,7 @@ fn the_footer_is_right_aligned_and_wraps_from_the_left_at_every_width() {
             .unwrap_or_else(|| panic!("{page}: no footer"));
         // The footer is the last row of the turn: after it only the end of the lines.
         let tail = &t.lines[at..];
-        let texts: Vec<String> = tail.iter().map(line_text).collect();
+        let texts: Vec<String> = tail.iter().map(|l| line_text(l)).collect();
         assert!(
             texts.iter().all(|r| r.width() == page - 2),
             "{page}: every footer row is padded to the right edge: {texts:?}"
@@ -1489,7 +1489,7 @@ fn an_interrupted_turn_has_no_continue_hint_and_a_failed_turn_puts_its_error_abo
             .retain(|e| e.kind != "turn_end" && e.kind != "done");
     }
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 100);
-    let text: Vec<String> = t.lines.iter().map(line_text).collect();
+    let text: Vec<String> = t.lines.iter().map(|l| line_text(l)).collect();
     let footer = text
         .iter()
         .find(|r| r.trim_start().starts_with("Build"))
@@ -1513,7 +1513,7 @@ fn an_interrupted_turn_has_no_continue_hint_and_a_failed_turn_puts_its_error_abo
         data: serde_json::json!({"kind": "provider", "message": "rate limited\nretry after 4s"}),
     });
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 100);
-    let text: Vec<String> = t.lines.iter().map(line_text).collect();
+    let text: Vec<String> = t.lines.iter().map(|l| line_text(l)).collect();
     let at = text
         .iter()
         .position(|r| r.trim_start().starts_with("Build"))
@@ -1550,7 +1550,7 @@ fn a_folded_group_still_shows_edits_and_failures() {
     let text = nexus_tui::timeline::build(&a, &a.theme, 0, 100)
         .lines
         .iter()
-        .map(line_text)
+        .map(|l| line_text(l))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
@@ -1700,7 +1700,7 @@ fn tool_detail_is_the_old_box_with_a_raw_toggle() {
     let tool = t.blocks.iter().find(|b| b.kind == BlockKind::Tool).unwrap();
     let rows: Vec<String> = t.lines[tool.start..tool.end]
         .iter()
-        .map(line_text)
+        .map(|l| line_text(l))
         .collect();
     assert!(rows[0].trim_start().starts_with("┌ $ Shell"), "{rows:?}");
     let name = t.lines[tool.start]
@@ -2188,7 +2188,7 @@ fn the_floor_row_says_older_turns_have_no_details() {
     );
     view.floor = Some(3);
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 200);
-    let text: Vec<String> = t.lines.iter().map(line_text).collect();
+    let text: Vec<String> = t.lines.iter().map(|l| line_text(l)).collect();
     let floor = text
         .iter()
         .position(|r| r.contains("the turns above have no recorded details"))
@@ -2220,7 +2220,7 @@ fn the_floor_row_says_older_turns_have_no_details() {
     assert!(!t
         .lines
         .iter()
-        .map(line_text)
+        .map(|l| line_text(l))
         .any(|r| r.contains("no recorded details")));
 }
 
@@ -2233,7 +2233,7 @@ fn unknown_usage_is_said_and_never_shown_as_zero() {
         5.0,
     );
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 200);
-    let text: Vec<String> = t.lines.iter().map(line_text).collect();
+    let text: Vec<String> = t.lines.iter().map(|l| line_text(l)).collect();
     let footer = text
         .iter()
         .rfind(|r| r.trim_start().starts_with("Build"))
@@ -2288,7 +2288,7 @@ fn stored_attempts_and_errors_become_retry_and_error_rows() {
     );
     a.state.model.selected.as_mut().unwrap().turns[1].start_seq = 4;
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 200);
-    let text: Vec<String> = t.lines.iter().map(line_text).collect();
+    let text: Vec<String> = t.lines.iter().map(|l| line_text(l)).collect();
     let find = |needle: &str| {
         text.iter()
             .position(|r| r.contains(needle))

@@ -378,9 +378,10 @@ per-dependency graph is left for when profiling shows it matters.
 
 ## Phase 4: viewport layout
 
-Status: deferred 2026-10-31. The phase 2/3 targets are met at 1,000 messages, so
-this is not needed for the reported workload; the measurement that would trigger
-it is at the end of this section.
+Status: shared cached line slices landed 2026-10-31; viewport-only assembly is
+still deferred. The phase 2/3 targets are met at 1,000 messages, so this is not
+needed for the reported workload; the measurement that would trigger the rest is
+at the end of this section.
 
 If parsing caches leave assembly cost above budget, use indexed heights and build
 only viewport blocks plus a margin. Preserve total height, jump-to-block, sticky
@@ -396,11 +397,16 @@ release, no tools):
 | 2,000 | 21.7 ms | 15.2 ms | 468 MB |
 | 5,000 | 47.3 ms | 32.7 ms | 1.1 GB |
 
-At 5,000 messages the cache hits its 32 MiB cap (5,692 evictions in the burst
-run) and per-frame assembly dominates. A real session that large would benefit
-from viewport-only assembly and shared cached line slices; until one is
-reported, phase 4 stays deferred rather than changing block offsets, sticky
-headers and selection semantics without a workload to validate them.
+At 5,000 messages per-frame assembly dominates. `Timeline::lines` now holds
+`Rc<TLine>` and cached Markdown bodies hand out line references instead of deep
+clones, so a cached block costs a pointer increment rather than a span clone.
+That reduced the 5,000-message replay's peak RSS from ~1.1 GB to ~0.33 GB with
+no change to the 1,000-message target (5.7 ms paced). Assembly still walks every
+message and allocates block metadata, so viewport-only line materialization
+(indexed heights, then build only the visible blocks plus a margin) remains the
+next step for 2,000+ message histories; it is deferred rather than changing
+block offsets, sticky headers and selection semantics without a workload to
+validate them.
 
 ## Reproducible benchmark and delivery
 

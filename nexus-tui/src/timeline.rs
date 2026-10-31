@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::rc::Rc;
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
@@ -88,7 +89,7 @@ pub struct Block {
 }
 
 pub struct Timeline {
-    pub lines: Vec<TLine>,
+    pub lines: Vec<Rc<TLine>>,
     pub blocks: Vec<Block>,
     pub turns: usize,
     /// Keys of the activity groups that are live (running or waiting) now.
@@ -186,13 +187,13 @@ struct CachedFence {
 
 #[derive(Clone)]
 struct CachedMarkdown {
-    lines: Vec<TLine>,
+    lines: Vec<Rc<TLine>>,
     fences: Vec<CachedFence>,
     bytes: usize,
 }
 
 impl CachedMarkdown {
-    fn capture(lines: &[TLine], blocks: &[Block], base: usize) -> Self {
+    fn capture(lines: &[Rc<TLine>], blocks: &[Block], base: usize) -> Self {
         let mut bytes = std::mem::size_of_val(lines);
         for line in lines {
             bytes += std::mem::size_of_val(line.spans.as_slice());
@@ -493,7 +494,7 @@ struct Builder<'a> {
     bw: usize,
     /// Resolved theme colours and glyph mode for cache keys.
     fingerprint: u64,
-    out: Vec<TLine>,
+    out: Vec<Rc<TLine>>,
     blocks: Vec<Block>,
     turn: Option<usize>,
     denied: HashSet<String>,
@@ -861,14 +862,14 @@ impl Builder<'_> {
     }
 
     fn line(&mut self, spans: Vec<Span<'static>>) {
-        self.out.push(TLine {
+        self.out.push(Rc::new(TLine {
             spans,
             bg: None,
             rail: None,
             focus: false,
             context_section: None,
             context_items: Vec::new(),
-        });
+        }));
     }
     fn blank(&mut self) {
         self.line(Vec::new());
@@ -894,7 +895,8 @@ impl Builder<'_> {
         if selected {
             // No fill (the user's call, 2026-10-28): the focus bar in the
             // gutter on every row, and the header row in bold.
-            for (k, l) in self.out[start..end].iter_mut().enumerate() {
+            for (k, line) in self.out[start..end].iter_mut().enumerate() {
+                let l = Rc::make_mut(line);
                 l.focus = true;
                 if k == 0 && l.rail.is_none() {
                     for sp in &mut l.spans {
@@ -1515,7 +1517,7 @@ impl Builder<'_> {
             // conversation for the whole session.
             let pad = b.st(MUTED, PANEL);
             b.line(Vec::new());
-            b.out.last_mut().unwrap().bg = Some(pad);
+            Rc::make_mut(b.out.last_mut().unwrap()).bg = Some(pad);
             for row in rows {
                 let section = row.iter().find_map(|(text, role)| {
                     (*role == CtxRole::Title).then(|| text.trim().to_owned())
@@ -1552,12 +1554,12 @@ impl Builder<'_> {
                     spans.push(Span::styled(text, style));
                 }
                 b.line(if spans.len() == 1 { Vec::new() } else { spans });
-                b.out.last_mut().unwrap().bg = Some(pad);
-                b.out.last_mut().unwrap().context_section = section;
-                b.out.last_mut().unwrap().context_items = context_items;
+                Rc::make_mut(b.out.last_mut().unwrap()).bg = Some(pad);
+                Rc::make_mut(b.out.last_mut().unwrap()).context_section = section;
+                Rc::make_mut(b.out.last_mut().unwrap()).context_items = context_items;
             }
             b.line(Vec::new());
-            b.out.last_mut().unwrap().bg = Some(pad);
+            Rc::make_mut(b.out.last_mut().unwrap()).bg = Some(pad);
         });
     }
 
@@ -1787,7 +1789,7 @@ impl Builder<'_> {
                 context_section: None,
                 context_items: Vec::new(),
             };
-            b.out.push(pad());
+            b.out.push(Rc::new(pad()));
             let available = b.bw.saturating_sub(3);
             let meta_width = width(&metadata);
             let body_width = available.saturating_sub(meta_width + 2).max(1);
@@ -1814,19 +1816,19 @@ impl Builder<'_> {
                     spans.push(Span::styled(" ".repeat(padding), bg));
                     spans.push(Span::styled(metadata.clone(), b.st(MUTED, raised)));
                 }
-                b.out.push(TLine {
+                b.out.push(Rc::new(TLine {
                     spans,
                     bg: Some(bg),
                     rail: Some(rail),
                     focus: false,
                     context_section: None,
                     context_items: Vec::new(),
-                });
+                }));
             }
             if !folded {
                 for image in message.parts.iter().filter(|p| p["type"] == "image") {
                     let name = image["name"].as_str().unwrap_or("image");
-                    b.out.push(TLine {
+                    b.out.push(Rc::new(TLine {
                         spans: vec![
                             Span::styled("   ", bg),
                             Span::styled(
@@ -1839,10 +1841,10 @@ impl Builder<'_> {
                         focus: false,
                         context_section: None,
                         context_items: Vec::new(),
-                    });
+                    }));
                 }
             }
-            b.out.push(pad());
+            b.out.push(Rc::new(pad()));
         });
         if let Some(block) = self.blocks.last_mut() {
             block.target = Some(message.id.clone());
@@ -2167,14 +2169,14 @@ impl Builder<'_> {
                     b.bw,
                 );
                 let mut push = |spans: Vec<Span<'static>>| {
-                    b.out.push(TLine {
+                    b.out.push(Rc::new(TLine {
                         spans,
                         bg: Some(bg),
                         rail: Some(rail),
                         focus: false,
                         context_section: None,
                         context_items: Vec::new(),
-                    });
+                    }));
                 };
                 let width_in = bw.saturating_sub(3);
                 let head = format!("Continued from {}", from);
@@ -2255,6 +2257,7 @@ impl Builder<'_> {
             }
             b.bw = width;
             for line in &mut b.out[start..] {
+                let line = Rc::make_mut(line);
                 if !line.spans.is_empty() {
                     line.spans
                         .insert(0, Span::raw(" ".repeat(ASSISTANT_INDENT)));
@@ -3232,19 +3235,19 @@ impl Builder<'_> {
                     // Finished: every dot on, no animation.
                     spans[1] = Span::styled(b.t.dots_full().to_owned(), agent_style);
                 }
-                b.out.push(TLine {
+                b.out.push(Rc::new(TLine {
                     spans,
                     bg: None,
                     rail: None,
                     focus: false,
                     context_section: None,
                     context_items: Vec::new(),
-                });
+                }));
                 if !meta.is_empty() {
-                    b.out.push(plain(meta.clone(), secondary));
+                    b.out.push(Rc::new(plain(meta.clone(), secondary)));
                 }
                 if !outcome.is_empty() {
-                    b.out.push(plain(outcome.clone(), secondary));
+                    b.out.push(Rc::new(plain(outcome.clone(), secondary)));
                 }
             },
         );
@@ -3445,7 +3448,7 @@ impl Builder<'_> {
                 self.line(spans);
                 if let Some(background) = row.bg {
                     if let Some(line) = self.out.last_mut() {
-                        line.bg = Some(Style::default().bg(background));
+                        Rc::make_mut(line).bg = Some(Style::default().bg(background));
                     }
                 }
             }
