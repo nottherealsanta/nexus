@@ -329,6 +329,7 @@ create table if not exists turn_request (
   reasoning_seconds real
 );
 create index if not exists turn_request_turn on turn_request(turn_id, step);
+create index if not exists turn_request_session_time on turn_request(session_id, event_after);
 create table if not exists session_usage (
   session_id text not null references session(id) on delete cascade,
   model text not null,

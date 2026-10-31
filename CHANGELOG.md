@@ -10,6 +10,7 @@
 - Improve NSH project navigation, activity indicators, session restoration, layout, typography, and composer context display.
 - Refine TUI and NSH settings, dictation, image handling, and timeline presentation.
 - Add a project-based TUI sidebar rail with activity counts, project navigation, and per-project session restoration.
+- Add a session/time index for efficient turn-request lookups.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
 ## [0.10.0](https://github.com/nottherealsanta/nexus/compare/v0.7.2...v0.10.0) (2026-10-30)
