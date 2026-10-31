@@ -470,6 +470,8 @@ pub struct ProjectInventory {
     pub mcp: Vec<Value>,
     pub skills_error: Option<String>,
     pub mcp_error: Option<String>,
+    /// `GET /api/project/{id}/mcp` failed (the global read may still have worked).
+    pub project_mcp_error: Option<String>,
 }
 
 pub struct Ui {
@@ -895,7 +897,7 @@ impl App {
 
         // Before a session exists the list is Core's own plan for it (`/api/draft/context`),
         // never a client-side guess; until Core answers there is nothing to list.
-        let tools: Vec<String> = if session.is_some() {
+        let mut tools: Vec<String> = if session.is_some() {
             self.state
                 .model
                 .selected
@@ -922,6 +924,42 @@ impl App {
                 .map(str::to_owned)
                 .collect()
         };
+        if session.is_none() {
+            // A draft plan contains only enabled tools. Keep switches visible while
+            // a changed selection is being replanned and after a tool is disabled.
+            if let (Some((asked, Ok(plan))), Some(mut now)) =
+                (&self.state.draft_context, self.draft_request())
+            {
+                let mut previous = asked.clone();
+                previous.as_object_mut().map(|o| o.remove("disabled_tools"));
+                now.as_object_mut().map(|o| o.remove("disabled_tools"));
+                if previous == now {
+                    if let Some(list) = plan["tools"].as_array() {
+                        for name in list.iter().filter_map(Value::as_str) {
+                            if !tools.iter().any(|tool| tool == name) {
+                                tools.push(name.to_owned());
+                            }
+                        }
+                    }
+                    if let Some(list) = asked["disabled_tools"].as_array() {
+                        for name in list
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .filter(|n| !n.contains(':'))
+                        {
+                            if !tools.iter().any(|tool| tool == name) {
+                                tools.push(name.to_owned());
+                            }
+                        }
+                    }
+                }
+            }
+            for name in disabled.iter().filter(|name| !name.contains(':')) {
+                if !tools.contains(name) {
+                    tools.push(name.clone());
+                }
+            }
+        }
         for tool in tools {
             push(
                 tool.clone(),
@@ -952,7 +990,7 @@ impl App {
             push(key, label, on, skill["locked"].as_bool().unwrap_or(false));
         }
 
-        let mcp_values = if let Some(session) = session {
+        let mcp_values: Vec<Value> = if let Some(session) = session {
             session
                 .extra
                 .get("mcp")
@@ -962,29 +1000,223 @@ impl App {
         } else {
             self.draft_values("mcp")
         };
-        for server in mcp_values {
-            let Some(name) = server["server"].as_str() else {
-                continue;
-            };
-            let key = format!("mcp:{name}");
-            let state = server["state"].as_str().unwrap_or("");
-            let mut label = name.to_owned();
-            if let Some(tools) = server["tools"].as_u64() {
-                label.push_str(&format!(" · {tools} tools"));
-            } else {
-                label.push_str(" · tools unknown");
+        if session.is_some() {
+            for server in mcp_values {
+                if let Some((key, label, on, locked)) =
+                    self.mcp_item(Some(&server), None, &disabled)
+                {
+                    push(key, label, on, locked);
+                }
             }
-            if state == "unavailable" {
-                if let Some(error) = server["error"].as_str().filter(|s| !s.is_empty()) {
+        } else {
+            // Core's draft plan is the model context. The project inventory adds
+            // the actual `.mcp.json` rows Core plans away: disabled, failed and
+            // invalid entries. They are shown off and locked so the section's
+            // `(off)` count never claims they are in the model context.
+            let inventory_rows = self.inventory_mcp_rows();
+            let mut seen = HashSet::new();
+            for server in &mcp_values {
+                if let Some(name) = server["server"].as_str() {
+                    seen.insert(name.to_owned());
+                }
+                let inventory_row = server["server"]
+                    .as_str()
+                    .and_then(|name| Self::inventory_row_for(&inventory_rows, name, Some(server)));
+                if let Some((key, label, on, locked)) =
+                    self.mcp_item(Some(server), inventory_row, &disabled)
+                {
+                    push(key, label, on, locked);
+                }
+            }
+            for server in &inventory_rows {
+                let Some(name) = server["server"].as_str() else {
+                    continue;
+                };
+                if seen.contains(name) {
+                    continue;
+                }
+                if let Some((key, label, on, locked)) = self.mcp_item(None, Some(server), &disabled)
+                {
+                    push(key, label, on, locked);
+                }
+            }
+        }
+        items
+    }
+
+    /// The global inventory plus this project's actual `.mcp.json` rows from
+    /// `GET /api/project/{id}/mcp`, looked up by the exact current project id.
+    /// Rows include enabled, disabled, failed and invalid entries; this is a
+    /// read and never starts a server. A project row wins over a global row of
+    /// the same name (a disabled global default must not hide the project's
+    /// enabled entry).
+    fn inventory_mcp_rows(&self) -> Vec<Value> {
+        let Some(project) = self.current_project() else {
+            return Vec::new();
+        };
+        let Some(inventory) = self.ui.inventories.get(&project) else {
+            return Vec::new();
+        };
+        let mut rows: Vec<Value> = inventory
+            .mcp
+            .iter()
+            .filter(|row| {
+                Self::is_project_mcp_row(row)
+                    && row["project_id"]
+                        .as_str()
+                        .is_none_or(|id| id == project.as_str())
+            })
+            .cloned()
+            .collect();
+        for row in &inventory.mcp {
+            if Self::is_project_mcp_row(row)
+                || rows.iter().any(|kept| kept["server"] == row["server"])
+            {
+                continue;
+            }
+            rows.push(row.clone());
+        }
+        rows
+    }
+
+    fn refresh_project_mcp_inventory(&mut self, project: String) {
+        self.ui.draft_asked = None;
+        self.effects
+            .push(Effect::Sync(SyncCommand::SkillMcp(project)));
+    }
+
+    /// Whether an inventory row belongs to a project `.mcp.json` rather than
+    /// the user's global configuration.
+    fn is_project_mcp_row(row: &Value) -> bool {
+        row["source"].as_str() == Some("project") || row["project_id"].is_string()
+    }
+
+    /// The inventory row matching a draft row's scope. A project draft never
+    /// falls back to a same-named global row: that row belongs to another
+    /// scope and may be disabled while the project entry is enabled.
+    fn inventory_row_for<'a>(
+        rows: &'a [Value],
+        name: &str,
+        draft: Option<&Value>,
+    ) -> Option<&'a Value> {
+        let project_scope = draft.and_then(|row| row["scope"].as_str()) == Some("project");
+        rows.iter().find(|row| {
+            row["server"].as_str() == Some(name)
+                && (!project_scope || Self::is_project_mcp_row(row))
+        })
+    }
+
+    /// One row's effective state. A concrete inventory problem (invalid,
+    /// disabled or failed) wins over a stale draft plan, so a row never claims
+    /// to be in the model context when Core cannot currently run it.
+    fn mcp_row_state(draft: Option<&Value>, inventory: Option<&Value>) -> String {
+        let draft_state = draft.and_then(|row| row["state"].as_str());
+        let inventory_state = inventory.and_then(|row| row["state"].as_str());
+        inventory_state
+            .filter(|state| matches!(*state, "invalid" | "disabled" | "failed" | "unavailable"))
+            .or(draft_state)
+            .or(inventory_state)
+            .unwrap_or("unknown")
+            .to_owned()
+    }
+
+    fn mcp_row_tools(draft: Option<&Value>, inventory: Option<&Value>) -> Option<u64> {
+        draft
+            .and_then(|row| row["tools"].as_u64())
+            .or_else(|| inventory.and_then(|row| row["tools"].as_u64()))
+    }
+
+    fn append_mcp_tools(label: &mut String, draft: Option<&Value>, inventory: Option<&Value>) {
+        match Self::mcp_row_tools(draft, inventory) {
+            Some(tools) => label.push_str(&format!(" · {tools} tools")),
+            None if draft.is_some() => label.push_str(" · tools unknown"),
+            None => {}
+        }
+    }
+
+    /// One MCP row as a switch. `draft` is Core's plan for the next session
+    /// (what the model would receive); `inventory` is the real configuration
+    /// row. Inventory-only rows are off and locked, and disabled, failed and
+    /// invalid states are named explicitly instead of being called active.
+    fn mcp_item(
+        &self,
+        draft: Option<&Value>,
+        inventory: Option<&Value>,
+        disabled: &[String],
+    ) -> Option<(String, String, bool, bool)> {
+        let row = draft.or(inventory)?;
+        let name = row["server"].as_str()?;
+        let key = format!("mcp:{name}");
+        let draft_state = draft.and_then(|row| row["state"].as_str());
+        let state = Self::mcp_row_state(draft, inventory);
+        let error = inventory
+            .and_then(|row| row["error"].as_str())
+            .or_else(|| draft.and_then(|row| row["error"].as_str()))
+            .filter(|error| !error.is_empty());
+        let is_project = inventory.is_some_and(Self::is_project_mcp_row)
+            || draft.and_then(|row| row["scope"].as_str()) == Some("project");
+        let mut label = name.to_owned();
+        match state.as_str() {
+            "invalid" => {
+                label.push_str(" · invalid");
+                if let Some(error) = error {
+                    label.push_str(&format!(": {error}"));
+                }
+            }
+            "disabled" => label.push_str(if is_project {
+                " · disabled in .mcp.json"
+            } else {
+                " · disabled in configuration"
+            }),
+            "failed" => {
+                label.push_str(" · failed");
+                if let Some(error) = error {
+                    label.push_str(&format!(": {error}"));
+                }
+            }
+            "unavailable" => {
+                Self::append_mcp_tools(&mut label, draft, inventory);
+                if let Some(error) = error {
                     label.push_str(&format!(" · unavailable: {error}"));
                 } else {
                     label.push_str(" · unavailable");
                 }
             }
-            let on = state == "on" && !disabled.iter().any(|entry| entry == &key);
-            push(key, label, on, server["locked"].as_bool().unwrap_or(false));
+            "idle" if draft.is_none() => label.push_str(if is_project {
+                " · starts with the session"
+            } else {
+                " · available"
+            }),
+            "connected" => {
+                label.push_str(" · connected");
+                Self::append_mcp_tools(&mut label, draft, inventory);
+            }
+            "connecting" => label.push_str(" · connecting"),
+            _ => {
+                Self::append_mcp_tools(&mut label, draft, inventory);
+                if draft.is_none() && !state.is_empty() && state != "on" && state != "off" {
+                    label.push_str(&format!(" · {state}"));
+                }
+            }
         }
-        items
+        // A concrete problem is never model context, even if a draft row of the
+        // same name says on: that row may be another scope, and this entry must
+        // not be shown as if it were active.
+        let runnable = !matches!(
+            state.as_str(),
+            "invalid" | "disabled" | "failed" | "unavailable"
+        );
+        let on =
+            runnable && draft_state == Some("on") && !disabled.iter().any(|entry| entry == &key);
+        let locked = if !runnable {
+            true
+        } else if let Some(draft) = draft {
+            draft["locked"].as_bool().unwrap_or(false)
+        } else {
+            // Inventory-only: it was not part of Core's plan for the session.
+            true
+        };
+        Some((key, label, on, locked))
     }
 
     /// What a context entry is, for its info modal: title and text.
@@ -1015,20 +1247,195 @@ impl App {
             let values = match session {
                 Some(s) => s.extra.get("mcp").and_then(Value::as_array).cloned(),
                 None => Some(self.draft_values("mcp")),
+            }
+            .unwrap_or_default();
+            let draft_row = values.iter().find(|s| s["server"].as_str() == Some(name));
+            let inventory_rows = self.inventory_mcp_rows();
+            let inventory_row = if session.is_none() {
+                Self::inventory_row_for(&inventory_rows, name, draft_row).cloned()
+            } else {
+                None
             };
-            let server = values?
-                .into_iter()
-                .find(|s| s["server"].as_str() == Some(name))?;
-            let mut lines = vec![format!(
-                "State: {}",
-                server["state"].as_str().unwrap_or("unknown")
-            )];
-            lines.push(match server["tools"].as_u64() {
-                Some(n) => format!("Tools: {n}"),
-                None => "Tools: unknown until it connects".to_owned(),
-            });
-            if let Some(e) = server["error"].as_str().filter(|e| !e.is_empty()) {
+            let row = inventory_row.as_ref().or(draft_row)?;
+            let state = Self::mcp_row_state(draft_row, inventory_row.as_ref());
+            let is_project = inventory_row.as_ref().is_some_and(Self::is_project_mcp_row)
+                || draft_row.and_then(|s| s["scope"].as_str()) == Some("project");
+            let error = inventory_row
+                .as_ref()
+                .and_then(|s| s["error"].as_str())
+                .or_else(|| draft_row.and_then(|s| s["error"].as_str()))
+                .filter(|e| !e.is_empty());
+            let file = inventory_row
+                .as_ref()
+                .and_then(|s| s["file"].as_str())
+                .or_else(|| draft_row.and_then(|s| s["file"].as_str()))
+                .filter(|f| !f.is_empty());
+            let warnings: Vec<&str> = inventory_row
+                .as_ref()
+                .and_then(|s| s["warnings"].as_array())
+                .map(|list| list.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let mut lines = vec![match state.as_str() {
+                "on" if session.is_none() => {
+                    "State: on (in the model context of the next session)".to_owned()
+                }
+                "on" => "State: on (in the model context)".to_owned(),
+                "off" if session.is_none() => "State: switched off for the next session".to_owned(),
+                "off" => "State: switched off for this session".to_owned(),
+                "unavailable" => "State: unavailable".to_owned(),
+                "idle" if is_project && session.is_none() => {
+                    "State: idle; enabled entries start automatically with a new session".to_owned()
+                }
+                "idle" if session.is_none() => {
+                    "State: idle; enabled servers start with a new session".to_owned()
+                }
+                "idle" => "State: idle (not connected)".to_owned(),
+                "connected" => "State: connected".to_owned(),
+                "connecting" => "State: connecting".to_owned(),
+                "failed" => "State: failed".to_owned(),
+                "disabled" => "State: disabled; it is never started".to_owned(),
+                "invalid" => "State: invalid; it is never started".to_owned(),
+                other => format!("State: {other}"),
+            }];
+            if let Some(e) = error {
                 lines.push(format!("Error: {e}"));
+            }
+            if !warnings.is_empty() {
+                lines.push(format!("Warnings: {}", warnings.join("; ")));
+            }
+            lines.push(
+                if matches!(
+                    state.as_str(),
+                    "disabled" | "invalid" | "failed" | "unavailable"
+                ) {
+                    "Tools: none (not started)".to_owned()
+                } else {
+                    match Self::mcp_row_tools(draft_row, inventory_row.as_ref()) {
+                        Some(n) => format!("Tools: {n}"),
+                        None => "Tools: unknown until it connects".to_owned(),
+                    }
+                },
+            );
+            if is_project {
+                lines.push("Scope: project".to_owned());
+                if let Some(file) = file {
+                    lines.push(format!("File: {file}"));
+                }
+            } else {
+                lines.push(format!(
+                    "Scope: {}",
+                    row["scope"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("global")
+                ));
+            }
+            // The non-secret configuration facts Core returns for both scopes.
+            if let Some(transport) = row["transport"].as_str().filter(|t| !t.is_empty()) {
+                lines.push(format!("Transport: {transport}"));
+            }
+            if let Some(command) = row["command"].as_str().filter(|c| !c.is_empty()) {
+                lines.push(format!("Command: {command}"));
+            }
+            if let Some(count) = row["arg_count"].as_u64() {
+                lines.push(format!("Arguments: {count} (values not shown)"));
+            }
+            if let Some(cwd) = row["cwd"].as_str().filter(|c| !c.is_empty()) {
+                lines.push(format!("Working directory: {cwd}"));
+            }
+            let names: Vec<&str> = row["env_names"]
+                .as_array()
+                .map(|list| list.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            if !names.is_empty() {
+                lines.push(format!("Environment: {}", names.join(", ")));
+            }
+            if let Some(url) = row["url"].as_str().filter(|u| !u.is_empty()) {
+                lines.push(format!("URL: {url}"));
+            }
+            let names: Vec<&str> = row["header_names"]
+                .as_array()
+                .map(|list| list.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            if !names.is_empty() {
+                lines.push(format!("Headers: {}", names.join(", ")));
+            }
+            let include: Vec<&str> = row["include"]
+                .as_array()
+                .map(|list| list.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            if !include.is_empty() {
+                lines.push(format!("Include tools: {}", include.join(", ")));
+            }
+            let exclude: Vec<&str> = row["exclude"]
+                .as_array()
+                .map(|list| list.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            if !exclude.is_empty() {
+                lines.push(format!("Exclude tools: {}", exclude.join(", ")));
+            }
+            if let (Some(connect), Some(call)) = (
+                row["connect_timeout"].as_u64(),
+                row["call_timeout"].as_u64(),
+            ) {
+                lines.push(format!("Timeouts: connect {connect}s, call {call}s"));
+            }
+            if session.is_none() {
+                lines.push(if is_project {
+                    "Startup: enabled project entries start automatically when a session is created; this preview never starts one."
+                        .to_owned()
+                } else {
+                    "Startup: enabled global servers start with a new session; this preview never starts one."
+                        .to_owned()
+                });
+            }
+            let where_file = file.map(|f| format!(" in {f}")).unwrap_or_default();
+            let target = if session.is_none() {
+                "the next session"
+            } else {
+                "this session"
+            };
+            match state.as_str() {
+                "disabled" if is_project => lines.push(format!(
+                    "Action: set \"enabled\": true for this entry{where_file}, then start a new session. Disabled entries are never started."
+                )),
+                "disabled" => lines.push(
+                    "Action: enable this server in Settings → MCP, then start a new session. Disabled entries are never started."
+                        .to_owned(),
+                ),
+                "invalid" if name == "(file)" => lines.push(format!(
+                    "Action: fix {}{} so it parses; an invalid file starts no project server.",
+                    file.unwrap_or(".mcp.json"),
+                    if file.is_some() { "" } else { " in this project" },
+                )),
+                "invalid" => lines.push(format!(
+                    "Action: fix or rename this entry{where_file}; invalid entries are never started."
+                )),
+                "failed" | "unavailable" => lines.push(
+                    "Action: check the error above, then start a new session to retry.".to_owned(),
+                ),
+                "idle" if session.is_none() && is_project => lines.push(
+                    "Action: no action needed; this enabled entry starts with a new session."
+                        .to_owned(),
+                ),
+                "idle" if session.is_none() => lines.push(
+                    "Action: no action needed; this enabled server starts with a new session."
+                        .to_owned(),
+                ),
+                "idle" => lines.push(
+                    "Action: start a new session to start and use it.".to_owned(),
+                ),
+                "on" => lines.push(format!(
+                    "Action: press Enter or click this row to switch it off for {target}."
+                )),
+                "off" => lines.push(format!(
+                    "Action: press Enter or click this row to switch it on for {target}."
+                )),
+                "connected" if draft_row.is_none() => lines.push(
+                    "Action: connected now; start a new session to add it to the model context."
+                        .to_owned(),
+                ),
+                _ => {}
             }
             return Some((format!("MCP · {name}"), lines.join("\n")));
         }
@@ -1067,7 +1474,24 @@ impl App {
 
     pub fn context_inventory_meta(&self, section: &str) -> String {
         if self.viewed().is_none() && self.draft_context().is_none() {
-            return "loading".into();
+            let Some(project) = self.current_project() else {
+                return "no project".into();
+            };
+            let Some(inventory) = self.ui.inventories.get(&project) else {
+                return "loading".into();
+            };
+            if section == "Skills" {
+                if let Some(error) = inventory.skills_error.as_ref() {
+                    return format!("unavailable: {error}");
+                }
+            } else {
+                if let Some(error) = inventory.project_mcp_error.as_ref() {
+                    return format!("project inventory unavailable: {error}");
+                }
+                if let Some(error) = inventory.mcp_error.as_ref() {
+                    return format!("unavailable: {error}");
+                }
+            }
         }
         if self.context_items_for(section).is_empty() {
             "none".into()
@@ -4623,8 +5047,34 @@ impl App {
             project,
             skills,
             mcp,
+            project_mcp,
         } = msg
         {
+            let mut servers: Vec<Value> = project_mcp
+                .as_ref()
+                .ok()
+                .and_then(|value| value["servers"].as_array())
+                .cloned()
+                .unwrap_or_default();
+            // The project endpoint is the actual `.mcp.json` inventory, including
+            // enabled, disabled, failed and invalid entries. Its rows win over a
+            // global row of the same name: a disabled global default (such as
+            // browser-use) must not hide the project's enabled entry. An enabled
+            // global collision arrives as an invalid project row and still wins.
+            if let Some(rows) = mcp
+                .as_ref()
+                .ok()
+                .and_then(|value| value["servers"].as_array())
+            {
+                for row in rows {
+                    if !servers
+                        .iter()
+                        .any(|server| server["server"] == row["server"])
+                    {
+                        servers.push(row.clone());
+                    }
+                }
+            }
             self.ui.inventories.insert(
                 project,
                 ProjectInventory {
@@ -4634,14 +5084,10 @@ impl App {
                         .and_then(|value| value["skills"].as_array())
                         .cloned()
                         .unwrap_or_default(),
-                    mcp: mcp
-                        .as_ref()
-                        .ok()
-                        .and_then(|value| value["servers"].as_array())
-                        .cloned()
-                        .unwrap_or_default(),
+                    mcp: servers,
                     skills_error: skills.err(),
                     mcp_error: mcp.err(),
+                    project_mcp_error: project_mcp.err(),
                 },
             );
             return;
@@ -4842,10 +5288,16 @@ impl App {
                             );
                             self.ui.last_mcp_changed_toast = Some(self.clock);
                         }
-                        self.ui.draft_asked = None;
-                        if let Some(project) = self.current_project() {
-                            self.effects
-                                .push(Effect::Sync(SyncCommand::SkillMcp(project)));
+                        let project = data["project_id"]
+                            .as_str()
+                            .map(str::to_owned)
+                            .or_else(|| self.current_project());
+                        if let Some(project) = project {
+                            if data["scope"].as_str() == Some("project")
+                                || data["project_id"].is_string()
+                            {
+                                self.refresh_project_mcp_inventory(project);
+                            }
                         }
                     }
                     "files.changed" => self.file_changed(&data),
@@ -6994,9 +7446,8 @@ impl App {
         match b.kind {
             Turn | User | Assistant => true,
             Context => true,
-            Notice | Handoff | Diagnostic | Reasoning | Group | Tool | Child | Older | Code => {
-                false
-            }
+            Notice | Footer | Handoff | Diagnostic | Reasoning | Group | Tool | Child | Older
+            | Code => false,
         }
     }
 
@@ -7069,7 +7520,10 @@ impl App {
             }
             return;
         }
-        if b.kind == crate::timeline::BlockKind::Notice {
+        if matches!(
+            b.kind,
+            crate::timeline::BlockKind::Notice | crate::timeline::BlockKind::Footer
+        ) {
             if let Some(text) = b.target.clone() {
                 let title = text
                     .lines()
@@ -7212,10 +7666,27 @@ impl App {
             }
         }
         if item.locked {
-            self.toast(
-                Level::Info,
-                "This item is locked for this session; start a new session to use it.",
-            );
+            // A locked entry is often a configuration problem, not something a
+            // new session can change. Open its facts instead of a dead-end
+            // toast, especially in the new-session preview where "start a new
+            // session" is already true.
+            let informational = item.key.starts_with("mcp:") || self.viewed_id().is_none();
+            if informational {
+                if let Some((title, text)) = self.context_item_info(index) {
+                    self.open_overlay(OverlayKind::ContextDetail {
+                        title,
+                        text,
+                        top: 0,
+                    });
+                    return;
+                }
+            }
+            let message = if self.viewed_id().is_none() {
+                "This entry is not switchable from the preview; open its details to see its configuration and state."
+            } else {
+                "This item is locked for this session; start a new session to use it."
+            };
+            self.toast(Level::Info, message);
             return;
         }
         if !self.writable() {

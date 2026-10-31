@@ -1,8 +1,9 @@
 {
   "cssVars": {
     "theme": {
-      "font-sans": "system-ui, sans-serif",
-      "font-mono": "Monaspace Argon, ui-monospace, monospace",
+      "font-sans": "Monaspace Neon, ui-monospace, monospace",
+      "font-mono": "Monaspace Neon, ui-monospace, monospace",
+      "font-code": "Monaspace Argon, ui-monospace, monospace",
       "radius": "0px",
       "radius-card": "2px"
     },

@@ -5,8 +5,9 @@ import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
 import { FOCUS, Icon, IconButton, Status, T } from "./kit";
 import { DiffView } from "./diff";
-import { ContextSections, disabledOf, foldedMeta, startingSections } from "./newsession";
+import { disabledOf, foldedMeta, startingSections, StartingContext } from "./newsession";
 import type { CtxSection } from "./newsession";
+import { ACTIVITY_CONTROL_INSET, ACTIVITY_INDENT, CARD_INSET, TEXT_INDENT, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
 import { contextDetail, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
 import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
@@ -20,11 +21,11 @@ import "../../fonts/MonaspaceArgon-Bold.otf";
 type Tone = "info" | "accent" | "warning";
 type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
 type Diff = { add: number; del: number };
-/** Timeline metadata is Monaspace Argon like the rest of the model-visible content. */
+/** Timeline metadata uses the app's monospace face. */
 const META = `${T.meta} font-mono`;
 
 type Row =
-  | { key: string; kind: "footer"; agent: string; segments: { text: string; tip?: string }[]; error?: string; interrupted: boolean }
+  | { key: string; kind: "footer"; segments: { text: string; tip?: string }[]; error?: string; interrupted: boolean }
   | {
       key: string; kind: "user"; delivery?: string | null; images?: { name: string; data_url: string }[]; n: number; time: string; text: string; turnKey: string; folded: boolean;
       tools: number; duration: string; status: TurnStatus;
@@ -39,7 +40,7 @@ type Row =
   | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean; running?: boolean; duration?: string }
   | {
       key: string; kind: "activity"; summary: string; items: (Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>)[];
-      open: boolean; defaultOpen: boolean; failed: number; duration?: string; diff?: Diff;
+      open: boolean; defaultOpen: boolean; hidden: number; failed: number; duration?: string; diff?: Diff;
     }
   | {
       key: string; kind: "tool"; id: string; name: string; arg: string; summary: string; tone: Tone;
@@ -140,7 +141,6 @@ export function fmtDuration(s: number): string {
 function clock(sec: number): string {
   return new Date(sec * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
-function titleCase(s: string): string { return s.charAt(0).toUpperCase() + s.slice(1); }
 /** The TUI's delivery tags: the start of a queued turn and a steer inside one, never Core's raw enum. */
 function deliveryTags(delivery?: string | null): string[] {
   return delivery === "steer" || delivery === "queued" ? [delivery] : [];
@@ -217,7 +217,7 @@ function summaryDiags(t: TurnSummary): { t: number; row: Extract<Row, { kind: "d
 }
 
 type TurnMeta = {
-  n: number; start: number; end: number; startTime: number; endTime: number;
+  n: number; start: number; end: number; startTime: number; endTime: number; finishedTime?: number | null;
   input: number; cached: number; output: number; reasoning: number; steps: number;
   /** Finished requests that reported no usage, and requests with usage known. */
   unknown: number; known: number;
@@ -243,7 +243,7 @@ function turnMeta(msgs: Message[], turns: TurnSummary[], scratch: CoreEvent[], b
     const sum = sumUsage(reqs);
     const newest = group.at(-1);
     const meta: TurnMeta = {
-      n, start, end, startTime: msgs[start].created, endTime: window.length ? window[window.length - 1].created : msgs[start].created,
+      n, start, end, startTime: msgs[start].created, endTime: window.length ? window[window.length - 1].created : msgs[start].created, finishedTime: newest?.finished,
       input: sum.input, cached: sum.cached, output: sum.output, reasoning: sum.reasoning, unknown: sum.unknown, known: sum.known,
       steps: 0, tools: 0, models: [], endEvent: !!newest?.ended, status: newest?.status, summarized: group.length > 0,
       followed: !last, running: busy && last,
@@ -482,24 +482,25 @@ export function buildRows(): Row[] {
         const segments: { text: string; tip?: string }[] = [];
         if (meta.models.length) segments.push({ text: meta.models.join(" → ") });
         else if (v?.model && String(v.model) !== "default") segments.push({ text: String(v.model) });
-        if (v?.effort) segments.push({ text: String(v.effort) });
-        if (meta.tools) segments.push({ text: `${meta.tools} tool${meta.tools === 1 ? "" : "s"}` });
-        segments.push({ text: fmtDuration(meta.endTime - meta.startTime) });
+        segments.push({ text: `${meta.tools} tool${meta.tools === 1 ? "" : "s"}` });
         if (meta.known > 0) {
-          let tok = `${fmtCount(meta.input)} i ${fmtCount(meta.output)} o ${fmtCount(meta.reasoning)} r`;
-          if (meta.input > 0) tok += ` ${Math.round(100 * meta.cached / meta.input)}% c`;
           let tip = `input ${meta.input.toLocaleString()} · cached ${meta.cached.toLocaleString()} · output ${meta.output.toLocaleString()} · reasoning ${meta.reasoning.toLocaleString()}`;
+          if (meta.input > 0) tip += ` · ${Math.round(100 * meta.cached / meta.input)}% cached${meta.unknown ? " (reported usage only)" : ""}`;
           // Unknown usage is never counted as zero: the total says it is a floor.
-          if (meta.unknown) { tok += " + unknown"; tip += ` · ${meta.unknown} request${meta.unknown === 1 ? "" : "s"} reported no usage`; }
-          segments.push({ text: tok, tip });
+          if (meta.unknown) tip += ` · ${meta.unknown} request${meta.unknown === 1 ? "" : "s"} reported no usage`;
+          const suffix = meta.unknown ? " + unknown" : "";
+          segments.push({ text: `${fmtCount(meta.input)} in${suffix}`, tip });
+          segments.push({ text: `${fmtCount(meta.output)} out${suffix}`, tip });
         } else if (meta.unknown) {
           segments.push({ text: "tokens unknown", tip: `${meta.unknown} request${meta.unknown === 1 ? "" : "s"} reported no usage` });
         }
+        segments.push({ text: fmtDuration(meta.endTime - meta.startTime), tip: "Elapsed time" });
+        if (!meta.running && meta.finishedTime != null) segments.push({ text: clock(meta.finishedTime), tip: "Finished time" });
         const status = statusOf(meta);
         const error = status === "error" ? (firstLine(meta.error?.message ?? "") || meta.error?.kind) : undefined;
         rows.push({
           t: msg.created + 0.0001,
-          r: [{ key: `footer:${sid}:${meta.n}`, kind: "footer", agent: String(v?.agent ?? ""), segments, error, interrupted: status === "interrupted" }],
+          r: [{ key: `footer:${sid}:${meta.n}`, kind: "footer", segments, error, interrupted: status === "interrupted" }],
         });
       }
     }
@@ -554,10 +555,11 @@ function activitySummary(items: ActivityEntry[]): string {
     }
     counts.set(label, (counts.get(label) ?? 0) + 1);
   }
-  return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([label, count]) => {
+  return [...counts.entries()].map(([label, count], index) => {
     if (label === "Thought") return "Thought";
     const [verb, noun] = label.lastIndexOf(" ") > 0 ? [label.slice(0, label.lastIndexOf(" ")), label.slice(label.lastIndexOf(" ") + 1)] : [label, ""];
-    return `${verb} ${count} ${noun}${count === 1 || !noun ? "" : "s"}`.trim();
+    const piece = `${verb} ${count} ${noun}${count === 1 || !noun ? "" : "s"}`.trim();
+    return index ? piece[0].toLowerCase() + piece.slice(1) : piece;
   }).join(", ");
 }
 
@@ -570,13 +572,18 @@ function groupActivities(rows: Row[]): Row[] {
     if (items.every((item) => item.kind === "reasoning")) { result.push(...items); items = []; return; }
     const key = `group:${items[0].key}`;
     const waiting = items.some((item) => item.kind === "tool" && item.state === "waiting");
-    const defaultOpen = timelineDetail() !== "low" || waiting;
+    const running = items.some((item) => item.kind === "reasoning" ? item.running : item.state === "running" || item.state === "waiting");
+    const detail = timelineDetail();
+    const defaultOpen = waiting || detail === "high" || (running && detail !== "low");
+    const expanded = waiting || open(key, defaultOpen);
+    const explicit = timelineOpen()[key] === true;
+    const hidden = running && !waiting && detail !== "high" && !explicit ? Math.max(0, items.length - 5) : 0;
     const tools = items.filter((item): item is Extract<Row, { kind: "tool" }> => item.kind === "tool");
     const timed = tools.filter((tool) => tool.seconds !== undefined);
     const diffs = tools.filter((tool) => tool.diff !== undefined);
     result.push({
-      key, kind: "activity", summary: activitySummary(items), items,
-      open: open(key, defaultOpen), defaultOpen,
+      key, kind: "activity", summary: running ? "Working" : activitySummary(items), items: items.slice(hidden),
+      open: expanded, defaultOpen, hidden,
       failed: tools.filter((tool) => tool.state === "error").length,
       duration: timed.length ? fmtDuration(timed.reduce((sum, tool) => sum + (tool.seconds ?? 0), 0)) : undefined,
       diff: diffs.length ? diffs.reduce<Diff>((sum, tool) => ({ add: sum.add + (tool.diff?.add ?? 0), del: sum.del + (tool.diff?.del ?? 0) }), { add: 0, del: 0 }) : undefined,
@@ -584,7 +591,7 @@ function groupActivities(rows: Row[]): Row[] {
     items = [];
   };
   for (const row of rows) {
-    if (row.kind === "tool" || (row.kind === "reasoning" && !row.running)) items.push(row);
+    if (row.kind === "tool" || row.kind === "reasoning") items.push(row);
     else { flush(); result.push(row); }
   }
   flush();
@@ -604,24 +611,12 @@ function reportHeight(row: Row, h: number) {
 function RowView(p: { r: () => Row }) {
   const r = p.r;
   return (
-    <View class="w-full items-center px-6" onLayout={(b: any) => reportHeight(r(), b.bounds?.size?.height ?? b.size?.height ?? 72)}>
-      <View class="w-full max-w-[760px] font-mono">
+    <TimelineColumn class="items-center" testID="timeline-row" onLayout={(b: any) => reportHeight(r(), b.bounds?.size?.height ?? b.size?.height ?? 72)}>
+      <View class="w-full font-mono">
         <If when={r().kind === "context"}>
           {() => {
             const c = r() as Extract<Row, { kind: "context" }>;
-            const expanded = () => open(`context:${model.selected?.sessionId}`, c.open);
-            return (
-              <View class="mt-5 mb-2 rounded-(--radius-card) bg-card border border-border px-2 py-1 font-mono" testID="context-section">
-                <View class="w-full flex-row items-center justify-center gap-2 px-1 min-h-7" testID="context-header">
-                  <Button onPress={() => toggle(`context:${model.selected?.sessionId}`, c.open)} accessibilityLabel={expanded() ? "Collapse context" : "Expand context"} testID="context-fold" class={`rounded-(--radius) ${FOCUS}`}><Text class={META}>{expanded() ? "▾" : "▸"}</Text></Button>
-                  <Button onPress={() => contextDetail.set({ title: "Context", detail: c.sections.map((s) => `${s.title}\n${s.detail}`).join("\n\n") })} accessibilityLabel="View context details" testID="context-overview" class={`flex-row items-center gap-2 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class="text-[13px] leading-5 font-semibold text-foreground-secondary font-mono">Context</Text><Text class={META}>{c.meta}</Text></Button>
-                  <If when={!!c.reconstructed}><Text class="text-xs text-warning font-mono">reconstructed</Text></If>
-                </View>
-                <If when={expanded()}>
-                   <View class="pt-2 pl-3 font-mono"><ContextSections sections={c.sections} total={c.total} estimated window={c.window} onInventoryToggle={(kind, name, locked) => { void toggleSessionInventory(kind, name, locked); }} /></View>
-                </If>
-              </View>
-            );
+            return <StartingContext sections={c.sections} total={c.total} estimated window={c.window} reconstructed={!!c.reconstructed} onInventoryToggle={(kind, name, locked) => { void toggleSessionInventory(kind, name, locked); }} />;
           }}
         </If>
         <If when={r().kind === "user"}>
@@ -634,11 +629,10 @@ function RowView(p: { r: () => Row }) {
               <View class="w-full items-end gap-0.5 pt-3 pb-1" testID="turn-footer">
                 <If when={!!f.error}><Text style={{ userSelect: "text" }} class="text-xs leading-4 text-error font-mono">{`✕ ${f.error}`}</Text></If>
                 <View class="flex-row flex-wrap justify-end items-center">
-                  <If when={!!f.agent}><Text class={`text-xs leading-4 font-semibold font-mono ${agentColor(f.agent)}`}>{titleCase(f.agent)}</Text></If>
                   <Each of={f.segments} key={(s, i) => `${i}`}>
                     {(s) => (
                       <Text class={META} tooltip={s().tip ? <Text class="text-xs leading-4 text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{s().tip!}</Text> : undefined}>
-                        {` · ${s().text}`}
+                        {`${s() === f.segments[0] ? "" : " · "}${s().text}`}
                       </Text>
                     )}
                   </Each>
@@ -652,10 +646,10 @@ function RowView(p: { r: () => Row }) {
           <View class="py-1 font-mono"><HandoffCard r={r as any} /></View>
         </If>
         <If when={r().kind === "notice" && (r() as any).text.startsWith("→ Background Shell Done:")}>
-          <Text style={{ userSelect: "text" }} class="text-[13px] leading-5 text-muted-foreground py-2 font-mono" testID="background-shell-done">{(r() as any).text}</Text>
+          <Text style={{ userSelect: "text" }} class={`text-[13px] leading-5 text-muted-foreground py-2 font-mono ${TEXT_INDENT}`} testID="background-shell-done">{(r() as any).text}</Text>
         </If>
         <If when={r().kind === "notice" && !(r() as any).text.startsWith("→ Background Shell Done:")}>
-          <View class="flex-row gap-3 rounded-(--radius-card) bg-card border border-border px-3.5 py-2.5 my-1 font-mono">
+          <View class={`flex-row gap-3 rounded-(--radius-card) bg-card border border-border py-2.5 my-1 font-mono ${CARD_INSET}`}>
             <Rail color={RAIL[(r() as any).tone] ?? "bg-info"} />
             <View class="flex-1 min-w-0 gap-0.5">
               <Text class="text-xs leading-4 font-medium text-muted-foreground font-mono">{(r() as any).label}</Text>
@@ -664,19 +658,19 @@ function RowView(p: { r: () => Row }) {
           </View>
         </If>
         <If when={r().kind === "assistant"}>
-          <View class="py-1.5 pl-4" testID="msg-assistant">
+          <View class={`py-1.5 ${TEXT_INDENT}`} testID="msg-assistant">
             <TextView
               selectable markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
               renderCodeBlock={(block) => <CodeFence block={block} />}
-              classes={{ root: "font-mono text-[15px] leading-6 text-foreground", code: "font-mono text-[13px] rounded-(--radius-card) bg-card text-foreground" }}
+              classes={{ root: "font-mono text-[15px] leading-6 text-foreground", code: "font-(family-name:--font-code) text-[13px] rounded-(--radius-card) bg-card text-foreground" }}
             />
           </View>
         </If>
         <If when={r().kind === "reasoning"}>
-          <ReasoningRow x={r as () => Extract<Row, { kind: "reasoning" }>} />
+          <View class={ACTIVITY_INDENT}><ReasoningRow x={r as () => Extract<Row, { kind: "reasoning" }>} /></View>
         </If>
         <If when={r().kind === "activity"}>
-          <ActivityRow r={r as () => Extract<Row, { kind: "activity" }>} />
+          <View class={ACTIVITY_INDENT}><ActivityRow r={r as () => Extract<Row, { kind: "activity" }>} /></View>
         </If>
         <If when={r().kind === "tool"}>
           <ToolRow r={r as () => Extract<Row, { kind: "tool" }>} />
@@ -688,9 +682,9 @@ function RowView(p: { r: () => Row }) {
             return (
               <View class="flex-row rounded-(--radius-card) bg-card border border-border overflow-hidden my-1 font-mono">
                 <Rail color={RAIL[c.tone] ?? "bg-info"} />
-                <View class="flex-1 min-w-0 gap-1 px-3 py-2">
+                <View class={`flex-1 min-w-0 gap-1 py-2 ${CARD_INSET}`}>
                   <Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId}
-                    class={`flex-row items-center gap-2 rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID="child-card">
+                    class={`flex-row items-center gap-2 rounded-(--radius) px-1 -ml-1 min-h-6 hover:bg-accent ${FOCUS}`} testID="child-card">
                     <Status kind={kind} />
                     <Text class="text-xs leading-4 text-muted-foreground">child</Text>
                     <If when={c.background}><Text class="text-xs leading-4 text-muted-foreground">Background</Text></If>
@@ -709,7 +703,7 @@ function RowView(p: { r: () => Row }) {
           }}
         </If>
         <If when={r().kind === "diag"}>
-          <View class="flex-row gap-3 rounded-(--radius-card) bg-card border border-border px-3.5 py-2.5 my-1 font-mono" testID="msg-diag">
+          <View class={`flex-row gap-3 rounded-(--radius-card) bg-card border border-border py-2.5 my-1 font-mono ${CARD_INSET}`} testID="msg-diag">
             <Rail color={RAIL[(r() as any).tone] ?? "bg-warning"} />
             <View class="flex-1 min-w-0 gap-0.5">
               <Text class="text-xs leading-4 font-medium text-muted-foreground font-mono">{(r() as any).label}</Text>
@@ -719,8 +713,8 @@ function RowView(p: { r: () => Row }) {
           </View>
         </If>
         <If when={r().kind === "older"}>
-          <If when={(r() as any).action === "load-older"} else={<Text class={`${META} py-2`} testID="timeline-older">{(r() as any).text}</Text>}>
-            <View class="flex-row items-center gap-2 py-2">
+          <If when={(r() as any).action === "load-older"} else={<Text class={`${META} py-2 ${TEXT_INDENT}`} testID="timeline-older">{(r() as any).text}</Text>}>
+            <View class={`flex-row items-center gap-2 py-2 ${TEXT_INDENT}`}>
               <Text class={META} testID="timeline-older">{(r() as any).text}</Text>
               <Button onPress={() => run("turn.load_older")} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}>
                 <Text class="text-xs leading-4 text-foreground font-mono">Load older messages</Text>
@@ -729,7 +723,7 @@ function RowView(p: { r: () => Row }) {
           </If>
         </If>
       </View>
-    </View>
+    </TimelineColumn>
   );
 }
 
@@ -746,9 +740,9 @@ function CodeFence(p: { block: TextViewCodeBlock }) {
           <Text class={META}>Copy</Text>
         </Button>
       </View>
-      <Scroll horizontal contentClass="px-4 pb-3.5">
-        <View class="gap-0">
-          {code().split("\n").map((line) => <Text style={{ userSelect: "text" }} class="font-mono text-[13px] leading-5 text-foreground">{line || " "}</Text>)}
+      <Scroll horizontal>
+        <View class="gap-0 px-4 pb-3.5">
+          {code().split("\n").map((line) => <Text style={{ userSelect: "text" }} class="font-(family-name:--font-code) text-[13px] leading-5 text-foreground">{line || " "}</Text>)}
         </View>
       </Scroll>
     </View>
@@ -769,7 +763,7 @@ function HandoffCard(p: { r: () => Extract<Row, { kind: "handoff" }> }) {
   const name = () => origin()?.title ? `“${origin()!.title}”` : r().from;
   const open = () => contextDetail.set({ title: `Handoff from ${name()}`, detail: r().summary });
   return (
-    <View class="w-full rounded-(--radius-card) bg-raised px-4 py-3 gap-1">
+    <View class={`w-full rounded-(--radius-card) bg-raised py-3 gap-1 ${CARD_INSET}`}>
       <Button onPress={open} accessibilityLabel="Show the whole handoff summary" testID="msg-handoff" class={`w-full flex-col items-stretch gap-1 ${FOCUS}`}>
         <View class="flex-row items-center gap-3">
           <Text class="flex-1 min-w-0 text-[14px] leading-5 font-semibold text-foreground font-mono">{`Continued from ${name()}`}</Text>
@@ -792,9 +786,13 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   const copy = () => copyText(r().text, "Copied message");
   const glyph = () => turnGlyph(r().status);
   const meta = () => [...deliveryTags(r().delivery), `#${r().n}`, r().time].join(" · ");
+  const big = () => r().text.length > 4096 || r().text.split("\n").length > 40;
+  const full = () => open(`user:${r().key}`, false);
+  const body = () => big() && !full() ? r().text.split("\n").slice(0, 6).join("\n") : r().text;
   return (
     <If when={r().folded} else={
-      <View class="group/band w-full rounded-(--radius-card) bg-raised px-4 py-3 relative" testID="msg-user"
+      <View>
+      <View class={`group/band w-full rounded-(--radius-card) bg-raised py-3 relative ${CARD_INSET}`} testID="msg-user"
         onFocus={() => focusedBand.set(r().key)} onBlur={() => { if (focusedBand() === r().key) focusedBand.set(null); }}>
         {/* The TUI's band rail stays visible; focus only changes its colour. */}
         <View class={`absolute left-0 top-2 bottom-2 w-0.5 rounded-full ${focusedBand() === r().key ? "bg-primary" : "bg-border"}`} />
@@ -806,7 +804,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
           </View>
         </If>
         <View class="flex-row items-start gap-3">
-          <Text style={{ userSelect: "text" }} class="flex-1 min-w-0 font-mono text-[15px] leading-6 text-foreground">{r().text}</Text>
+          <Text style={big() && !full() ? { userSelect: "text", numberOfLines: 6 } : { userSelect: "text" }} class="flex-1 min-w-0 font-mono text-[15px] leading-6 text-foreground">{body()}</Text>
           <View class="flex-row items-center gap-1 pt-0.5">
             {/* Hover icons: kept mounted (keyboard reachable), shown while the card is hovered or focused. */}
             <View class={`flex-row items-center ${focusedBand() === r().key ? "" : "opacity-0 group-hover/band:opacity-100"}`}>
@@ -817,9 +815,11 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
           </View>
         </View>
       </View>
+      <If when={big()}><Button onPress={() => toggle(`user:${r().key}`, false)} testID={`user-full-${r().n}`} class={`items-start py-3 ${TEXT_INDENT} ${FOCUS}`}><Text class={META}>{full() ? "▾ collapse message" : "▸ show full message (sent whole)"}</Text></Button></If>
+      </View>
     }>
       <Button onPress={fold} accessibilityLabel={`${meta()} folded, show`} testID={`msg-user-folded-${r().n}`}
-        class={`w-full flex-row items-center gap-2 rounded-(--radius-card) bg-raised px-4 min-h-9 hover:bg-accent ${FOCUS}`}>
+        class={`w-full flex-row items-center gap-2 rounded-(--radius-card) bg-raised min-h-9 hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
         <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
         <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 font-mono text-[14px] leading-[22px] text-foreground">{r().text}</Text>
         <If when={r().tools > 0 || !!r().duration}>
@@ -861,13 +861,13 @@ function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void })
         const offset = c.next ? Math.min(0, c.next.top - y - STICKY_BAR) : 0;
         return (
           <View class="absolute left-0 right-0 items-center" style={{ top: offset, pointerEvents: "box-none" }} testID="sticky-user">
-            <View class="w-full max-w-[760px] px-4">
+            <TimelineColumn>
               <Button onPress={() => p.scrollTo(c.band.top)} accessibilityLabel="Scroll to this message" testID="sticky-user-button"
-                class={`w-full flex-row items-center gap-3 rounded-(--radius) bg-raised border-b border-border px-3 min-h-7 hover:bg-accent ${FOCUS}`}>
+                class={`w-full flex-row items-center gap-3 rounded-(--radius) bg-raised border-b border-border min-h-7 hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
                 <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary font-mono">{c.band.text}</Text>
                 <Text class={META}>{`↑ ${lines} lines of this turn above`}</Text>
               </Button>
-            </View>
+            </TimelineColumn>
           </View>
         );
       }}
@@ -901,7 +901,7 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
   return (
     <View class="py-0.5">
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
-        class={`w-full flex-row items-center gap-2 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`}>
+        class={`w-full flex-row items-center gap-2 rounded-(--radius) ${ACTIVITY_CONTROL_INSET} min-h-7 hover:bg-accent ${FOCUS}`}>
         <Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
         <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary font-mono">{r().summary}</Text>
         <If when={!!r().diff}>
@@ -912,6 +912,7 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
       </Button>
       <If when={r().open}>
         <View class="ml-[11px]">
+          <If when={r().hidden > 0}><Text class={`${META} pl-[18px]`}>{`… ${r().hidden} earlier activities hidden`}</Text></If>
           <Each of={r().items} key={(item) => item.key}>
             {(item) => <ActivityItem item={item} last={() => r().items.at(-1)?.key === item().key} />}
           </Each>
@@ -950,7 +951,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
     <View class="py-0.5">
       <If when={x().running} else={
         <Button onPress={() => toggle(`reason:${x().key}`, false)} accessibilityLabel={`${label()}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
-          class={`w-full flex-row items-center gap-2 rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`}>
+          class={`w-full flex-row items-center gap-2 rounded-(--radius) ${ACTIVITY_CONTROL_INSET} min-h-6 hover:bg-accent ${FOCUS}`}>
           <Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
           <Text class={`text-[13px] leading-5 font-semibold text-muted-foreground font-mono`}>{label()}</Text>
           <If when={!!x().encrypted}>
@@ -961,7 +962,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
           </If>
         </Button>
       }>
-        <View class="flex-row items-center gap-2 px-1 min-h-6" testID="reasoning">
+        <View class={`flex-row items-center gap-2 ${ACTIVITY_CONTROL_INSET} min-h-6`} testID="reasoning">
           <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary font-mono">{"Thinking…"}</Text>
         </View>
       </If>
@@ -1082,7 +1083,6 @@ export function Timeline() {
       <If when={rows().length > 0} else={<EmptyTimeline />}>
         <List
           ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingVertical: 12 }}
-          maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 96 }}
           onScroll={(e) => {
             scrollY.set(e.offset.y);
             viewH.set(e.size.height);
@@ -1095,14 +1095,14 @@ export function Timeline() {
       </If>
       <StickyBar rows={rows} scrollTo={(offset) => { try { ref?.scrollToOffset({ offset, animated: true }); } catch {} }} />
       <If when={scrolledUp()}>
-        <View class="absolute bottom-2 left-0 right-0 items-center px-4" style={{ pointerEvents: "box-none" }}>
-          <View class="w-full max-w-[760px] items-end" style={{ pointerEvents: "box-none" }}>
+        <View class="absolute bottom-2 left-0 right-0 items-center" style={{ pointerEvents: "box-none" }}>
+          <TimelineColumn class="items-end">
             <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${newBelow(rows())} new`} testID="jump-latest" class={`flex-row items-center gap-1.5 rounded-full border border-border bg-popover px-3 min-h-8 shadow-md hover:bg-accent ${FOCUS}`}>
               <Text class="text-[13px] leading-5 text-foreground-secondary">↓</Text>
               <Text class="text-[13px] leading-5 text-popover-foreground">{newBelow(rows()) > 0 ? `${newBelow(rows())} new` : "latest"}</Text>
               <Text class={META}>{`· ${keyLabel(byId.get("session.jump_latest")!) ?? "end"}`}</Text>
             </Button>
-          </View>
+          </TimelineColumn>
         </View>
       </If>
     </View>

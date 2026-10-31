@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from typing import Any
 
 MAX_TEXT_CHARS = 24_000
@@ -80,6 +81,25 @@ def part(text: str) -> str:
 
 def qualified_name(server: str, tool: str) -> str:
     return f"mcp__{part(server)}__{part(tool)}"
+
+
+def collision(target: str, targets: Iterable[tuple[str, str]]) -> tuple[str, str] | None:
+    """A different `(server, tool)` with the same normalized permission name, if one is known.
+
+    `mcp__<server>__<tool>` is lossy: punctuation becomes `_`, and a `__` in
+    either part is indistinguishable from the separator. A permission rule
+    written for `qualified_name` therefore cannot tell colliding targets apart.
+    Callers that turn an `allow` rule into an automatic allow use this to notice
+    the collision and require an approval instead.
+    """
+    server, _, tool = target.partition("/")
+    if not server or not tool:
+        return None
+    name = qualified_name(server, tool)
+    for other_server, other_tool in targets:
+        if (other_server, other_tool) != (server, tool) and qualified_name(other_server, other_tool) == name:
+            return other_server, other_tool
+    return None
 
 
 def read_only(tool: Any) -> bool:

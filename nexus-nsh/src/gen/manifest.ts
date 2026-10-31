@@ -250,8 +250,7 @@ export const manifest = {
     {
      "id": "git_status",
      "label": "Git status",
-     "order": 2,
-     "unavailable_reason": "Git status needs the files/git endpoints in Core (PLAN.md Step 12a)."
+     "order": 2
     }
    ]
   },
@@ -309,19 +308,9 @@ export const manifest = {
       "options": [
        "system",
        "light",
-       "dark",
-       "named"
+       "dark"
       ],
       "command": "app.theme"
-     },
-     {
-      "id": "appearance.named_theme",
-      "label": "Named theme",
-      "kind": "choice",
-      "scope": "client",
-      "clients": "both",
-      "unavailable_reason": "Named themes are not available yet.",
-      "note": "Choose a named theme when themes are available."
      },
      {
       "id": "appearance.density",
@@ -1645,7 +1634,7 @@ export const manifest = {
     "palette",
     "composer"
    ],
-   "note": "Core synthesizes the final answer with the cached TTS model and streams a WAV; the client plays it (PLAN.md I2)."
+   "note": "Core synthesizes the final answer with the cached TTS model and streams a WAV; the client plays it."
   },
   {
    "id": "session.speak_stop",

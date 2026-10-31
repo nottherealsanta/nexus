@@ -61,6 +61,7 @@ pub enum BlockKind {
     Group,
     Tool,
     Notice,
+    Footer,
     /// The handoff summary a continued session starts from; Enter shows it whole.
     Handoff,
     Diagnostic,
@@ -399,6 +400,7 @@ struct TurnMeta {
     start_msg: usize,
     start_time: f64,
     end_time: f64,
+    finished_time: Option<f64>,
     input: u64,
     cached: u64,
     output: u64,
@@ -602,7 +604,9 @@ pub(crate) fn local_date(_timestamp: f64) -> Option<String> {
 }
 
 fn fmt_count(n: u64) -> String {
-    if n >= 1000 {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1000 {
         let k = n as f64 / 1000.0;
         if k >= 100.0 {
             format!("{k:.0}K")
@@ -1509,6 +1513,7 @@ impl Builder<'_> {
                 ell: b.ell(),
                 ascii: b.t.opts.ascii,
                 estimated: true,
+                preview: false,
                 window,
                 columns: true,
             };
@@ -1614,6 +1619,7 @@ impl Builder<'_> {
                 meta.steps += t.steps;
                 if let Some(f) = t.finished {
                     meta.end_time = meta.end_time.max(f);
+                    meta.finished_time = Some(meta.finished_time.map_or(f, |old| old.max(f)));
                 }
                 for r in &t.requests {
                     match &r.usage {
@@ -1679,6 +1685,7 @@ impl Builder<'_> {
                         meta.status = None;
                     }
                     "turn_end" => {
+                        meta.finished_time = Some(e.time);
                         meta.stop = e.data["stop"].as_str().map(str::to_owned);
                         meta.end_event = true;
                         meta.status = None;
@@ -1929,11 +1936,7 @@ impl Builder<'_> {
         }
     }
 
-    /// The turn footer (DESIGN_PLAN.md D05): right-aligned
-    /// `Agent · models · effort · tools · duration · tokens`, with no end
-    /// status or continue hint; a failed turn puts the first line of its error
-    /// on the row above. The usage unit suffixes (`i`, `o`, `r`, `c`) are
-    /// fainter than their counts.
+    /// A finished turn's compact summary; further details open on selection.
     fn turn_footer(&mut self, n: usize, turns: &[TurnMeta]) {
         let Some(meta) = turns.get(n) else { return };
         let end = self.turn_end(meta);
@@ -1974,20 +1977,15 @@ impl Builder<'_> {
                 )]);
             }
         }
-        // The effort the turn's requests ran with, else the session's.
-        if let Some(effort) = meta.effort.clone().or_else(|| {
+        let effort = meta.effort.clone().or_else(|| {
             session.and_then(|s| {
                 s.extra
                     .get("effort")
                     .and_then(Value::as_str)
                     .map(str::to_owned)
             })
-        }) {
-            if !effort.is_empty() && effort != "none" && effort != "default" {
-                bits.push(vec![Span::styled(effort, value)]);
-            }
-        }
-        if meta.tools > 0 {
+        });
+        {
             bits.push(vec![Span::styled(
                 format!(
                     "{} tool{}",
@@ -1997,23 +1995,12 @@ impl Builder<'_> {
                 value,
             )]);
         }
-        bits.push(vec![Span::styled(fmt_duration(meta.duration()), value)]);
         if meta.has_usage() {
             let count = |n: u64, unit: &'static str| {
                 vec![Span::styled(fmt_count(n), value), Span::styled(unit, faint)]
             };
             bits.push(count(meta.input, "i"));
             bits.push(count(meta.output, "o"));
-            bits.push(count(meta.reasoning, "r"));
-            if meta.input > 0 {
-                bits.push(vec![
-                    Span::styled(
-                        format!("{:.0}%", 100.0 * meta.cached as f64 / meta.input as f64),
-                        value,
-                    ),
-                    Span::styled("c", faint),
-                ]);
-            }
         }
         if meta.unknown_usage {
             // Unknown is said, never shown as zero.
@@ -2026,22 +2013,50 @@ impl Builder<'_> {
                 value,
             )]);
         }
-        let agent = session.map(|s| s.agent.clone()).unwrap_or_default();
-        let label: String = agent
-            .chars()
-            .next()
-            .map(|c| c.to_uppercase().collect::<String>() + &agent[c.len_utf8()..])
-            .unwrap_or_default();
+        let duration = fmt_duration(meta.duration());
+        bits.push(vec![Span::styled(
+            if meta.finished_time.is_some() {
+                duration
+            } else {
+                format!("~{duration}")
+            },
+            value,
+        )]);
+        if let Some(finished) = meta.finished_time {
+            if let Some(time) = local_clock(finished) {
+                bits.push(vec![Span::styled(time, value)]);
+            }
+        }
+        let mut details = vec!["Turn details".to_owned()];
+        if let Some(effort) = effort.filter(|e| !e.is_empty() && e != "none" && e != "default") {
+            details.push(format!("Effort: {effort}"));
+        }
+        if meta.has_usage() {
+            details.push(format!("Reasoning: {} tokens", fmt_count(meta.reasoning)));
+            if meta.input > 0 {
+                details.push(format!(
+                    "Cached input: {} tokens ({:.0}%)",
+                    fmt_count(meta.cached),
+                    100.0 * meta.cached as f64 / meta.input as f64
+                ));
+            }
+        }
+        if meta.unknown_usage {
+            details.push(
+                if meta.has_usage() {
+                    "Some usage unknown"
+                } else {
+                    "Usage unknown"
+                }
+                .to_owned(),
+            );
+        }
         let sep = self.sep();
         let sep_w = width(&sep);
 
         // Break the segments from the left onto extra right-aligned rows.
         let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
         let mut used = 0usize;
-        if !label.is_empty() {
-            rows[0].push(Span::styled(label.clone(), self.t.agent_style(&agent)));
-            used = width(&label);
-        }
         for bit in bits {
             let w: usize = bit.iter().map(|s| width(s.content.as_ref())).sum();
             let row = rows.last_mut().expect("a row");
@@ -2078,11 +2093,24 @@ impl Builder<'_> {
                 Span::styled(text, self.status_style("status.error")),
             ]);
         }
+        let start = self.out.len();
         for mut spans in rows {
             let used: usize = spans.iter().map(|s| width(s.content.as_ref())).sum();
             spans.insert(0, Span::raw(" ".repeat(self.bw.saturating_sub(used))));
             self.line(spans);
         }
+        self.blocks.push(Block {
+            key: format!("turn-footer-{n}"),
+            kind: BlockKind::Footer,
+            start,
+            end: self.out.len(),
+            turn: Some(n),
+            focusable: true,
+            toggle: false,
+            default_open: None,
+            target: Some(details.join("\n")),
+            clipped: false,
+        });
     }
 
     // -- items -----------------------------------------------------------------
@@ -2664,7 +2692,15 @@ impl Builder<'_> {
             if open {
                 let indent = " ".repeat(ACTIVITY_INDENT + 2);
                 let room = b.bw.saturating_sub(indent.len() + 2).max(1);
-                for row in text::wrap(text, room) {
+                let rows = b.wrap_text(text, room);
+                let hidden = rows.len().saturating_sub(10);
+                if hidden > 0 {
+                    b.line(vec![
+                        Span::styled(format!("{indent}{vbar} "), rail),
+                        Span::styled(format!("{} {hidden} earlier lines", b.ell()), muted),
+                    ]);
+                }
+                for row in rows.into_iter().skip(hidden) {
                     b.line(vec![
                         Span::styled(format!("{indent}{vbar} "), rail),
                         Span::styled(row, italic),
@@ -3859,7 +3895,20 @@ fn tool_summary(
 
 #[cfg(test)]
 mod tests {
-    use super::{band_meta, fmt_duration};
+    use super::{band_meta, fmt_count, fmt_duration};
+
+    #[test]
+    fn counts_use_millions_at_one_million() {
+        for (n, want) in [
+            (999, "999"),
+            (6_700, "6.7K"),
+            (999_000, "999K"),
+            (1_000_000, "1.0M"),
+            (1_354_000, "1.4M"),
+        ] {
+            assert_eq!(fmt_count(n), want);
+        }
+    }
 
     #[test]
     fn durations_are_never_below_a_tenth_and_never_say_less_than_one() {

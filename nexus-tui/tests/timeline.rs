@@ -384,6 +384,29 @@ fn hovering_user_block_reveals_copy_and_copies_that_message() {
 }
 
 #[test]
+fn footer_hover_and_click_reveal_usage_details() {
+    use nexus_tui::timeline::BlockKind;
+    use nexus_tui::ui::{OverlayKind, Target};
+    let mut a = app();
+    rich_footer(&mut a);
+    rows(&mut a);
+    let index = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == BlockKind::Footer)
+        .unwrap();
+    let rect = a.hits.rect_of(&Target::Block(index)).unwrap();
+    a.mouse = Some((rect.x + 2, rect.y));
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("Cached input: 4.0K tokens (33%)"), "{text}");
+    assert!(text.contains("Reasoning: 500 tokens"), "{text}");
+    click(&mut a, rect.x + 2, rect.y);
+    assert!(
+        matches!(a.ui.overlay.as_ref().map(|o| &o.kind), Some(OverlayKind::ContextDetail { text, .. }) if text.contains("Reasoning: 500 tokens"))
+    );
+}
+
+#[test]
 fn activity_groups_respect_text_and_child_boundaries_and_preserve_details() {
     use nexus_tui::timeline::{build, BlockKind};
     let mut a = app();
@@ -1158,12 +1181,23 @@ fn the_turn_footer_shows_usage_without_cost() {
         ),
     );
     let text = rows(&mut a).join("\n");
-    assert!(
-        text.contains("100Ki") && text.contains("10.0Ko") && text.contains("50%c"),
-        "{text}"
-    );
-    assert!(text.contains("Build"), "right-aligned agent lead: {text}");
+    assert!(text.contains("100Ki") && text.contains("10.0Ko"), "{text}");
     let footer = text.lines().find(|line| line.contains("100Ki")).unwrap();
+    assert!(!footer.contains("Build") && !footer.contains("50%c"));
+    let timeline = nexus_tui::timeline::build(&a, &a.theme, 0, 200);
+    let details = timeline
+        .blocks
+        .iter()
+        .find(|b| b.kind == nexus_tui::timeline::BlockKind::Footer)
+        .unwrap()
+        .target
+        .as_deref()
+        .unwrap();
+    assert!(
+        details.contains("Cached input: 50.0K tokens (50%)"),
+        "{details}"
+    );
+    assert!(details.contains("Reasoning: 0 tokens"), "{details}");
     assert!(!footer.contains('$'), "{footer}");
     assert!(!footer.contains('▪'), "{footer}");
 }
@@ -1198,11 +1232,11 @@ fn the_turn_footers_usage_units_are_fainter_than_their_counts() {
         .iter()
         .filter(|s| matches!(s.content.as_ref(), "i" | "o" | "r" | "c"))
         .collect();
-    assert_eq!(units.len(), 4, "i, o, r and c: {:?}", footer.spans);
+    assert_eq!(units.len(), 2, "i and o: {:?}", footer.spans);
     for unit in units {
         assert_eq!(unit.style.fg, faint, "unit {unit:?}");
     }
-    for value in ["100K", "10.0K", "0", "50%"] {
+    for value in ["100K", "10.0K"] {
         let span = footer
             .spans
             .iter()
@@ -1444,13 +1478,14 @@ fn the_footer_is_right_aligned_and_wraps_from_the_left_at_every_width() {
     use unicode_width::UnicodeWidthStr;
     let mut a = app();
     rich_footer(&mut a);
-    for (page, wraps) in [(55usize, true), (60, false), (120, false), (200, false)] {
+    for page in [35usize, 55, 60, 120, 200] {
         let t = nexus_tui::timeline::build(&a, &a.theme, 0, page);
-        let at = t
-            .lines
+        let block = t
+            .blocks
             .iter()
-            .position(|l| line_text(l).trim_start().starts_with("Build"))
-            .unwrap_or_else(|| panic!("{page}: no footer"));
+            .find(|b| b.kind == nexus_tui::timeline::BlockKind::Footer)
+            .unwrap();
+        let at = block.start;
         // The footer is the last row of the turn: after it only the end of the lines.
         let tail = &t.lines[at..];
         let texts: Vec<String> = tail.iter().map(|l| line_text(l)).collect();
@@ -1458,12 +1493,9 @@ fn the_footer_is_right_aligned_and_wraps_from_the_left_at_every_width() {
             texts.iter().all(|r| r.width() == page - 2),
             "{page}: every footer row is padded to the right edge: {texts:?}"
         );
-        assert_eq!(texts.len() > 1, wraps, "{page}: {texts:?}");
+        let wraps = texts.len() > 1;
         let joined = texts.iter().map(|r| r.trim()).collect::<Vec<_>>().join(" ");
-        for part in ["GPT-5 Terra", "3 tools", "12.0Ki", "33%c", "2.0Ko", "500r"] {
-            if part == "3 tools" {
-                continue; // the fixture turn has no tools
-            }
+        for part in ["GPT-5 Terra", "0 tools", "12.0Ki", "2.0Ko"] {
             assert!(joined.contains(part), "{page}: {part:?} in {joined:?}");
         }
         assert!(
@@ -1490,10 +1522,7 @@ fn an_interrupted_turn_has_no_continue_hint_and_a_failed_turn_puts_its_error_abo
     }
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 100);
     let text: Vec<String> = t.lines.iter().map(|l| line_text(l)).collect();
-    let footer = text
-        .iter()
-        .find(|r| r.trim_start().starts_with("Build"))
-        .expect("footer");
+    let footer = text.iter().find(|r| r.contains("0 tools")).expect("footer");
     assert!(
         !footer.contains("enter continue") && !footer.contains("/continue"),
         "the footer carries no continue hint: {footer:?}"
@@ -1514,10 +1543,7 @@ fn an_interrupted_turn_has_no_continue_hint_and_a_failed_turn_puts_its_error_abo
     });
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 100);
     let text: Vec<String> = t.lines.iter().map(|l| line_text(l)).collect();
-    let at = text
-        .iter()
-        .position(|r| r.trim_start().starts_with("Build"))
-        .unwrap();
+    let at = text.iter().position(|r| r.contains("0 tools")).unwrap();
     assert!(
         text[at - 1].trim() == "\u{2715} rate limited",
         "error row above: {:?}",
@@ -2206,10 +2232,7 @@ fn the_floor_row_says_older_turns_have_no_details() {
         "between the turns: {text:#?}"
     );
     // The first turn's footer comes before the row; it has no token figures.
-    let footers: Vec<&String> = text
-        .iter()
-        .filter(|r| r.trim_start().starts_with("Build"))
-        .collect();
+    let footers: Vec<&String> = text.iter().filter(|r| r.contains("0 tools")).collect();
     assert_eq!(footers.len(), 2, "{text:#?}");
     assert!(!footers[0].contains("1.0Ki"), "{}", footers[0]);
     assert!(footers[1].contains("1.0Ki"), "{}", footers[1]);
@@ -2234,10 +2257,7 @@ fn unknown_usage_is_said_and_never_shown_as_zero() {
     );
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 200);
     let text: Vec<String> = t.lines.iter().map(|l| line_text(l)).collect();
-    let footer = text
-        .iter()
-        .rfind(|r| r.trim_start().starts_with("Build"))
-        .unwrap();
+    let footer = text.iter().rfind(|r| r.contains("0 tools")).unwrap();
     assert!(footer.contains("usage unknown"), "{footer}");
     assert!(!footer.contains("0i") && !footer.contains("0o"), "{footer}");
     // The model still comes from the request.
@@ -2305,10 +2325,7 @@ fn stored_attempts_and_errors_become_retry_and_error_rows() {
     assert!(find("third question") < exhausted && exhausted < error);
     // The footer of the failed turn has its error above it, and no continue hint
     // is needed for a failure that is not an interruption.
-    let footer = text
-        .iter()
-        .rposition(|r| r.trim_start().starts_with("Build"))
-        .unwrap();
+    let footer = text.iter().rposition(|r| r.contains("0 tools")).unwrap();
     assert!(
         text[footer - 1].contains("codex: HTTP 500"),
         "{:?}",
@@ -2354,7 +2371,7 @@ fn a_turn_summary_replaces_the_running_turns_events() {
     assert_eq!(view.usage.models["codex/gpt-5"].requests, 1);
     assert_eq!(view.usage.models["codex/gpt-5"].usage.input, 2000);
     let text = rows(&mut a).join("\n");
-    assert!(text.contains("2.0Ki") && text.contains("50%c"), "{text}");
+    assert!(text.contains("2.0Ki") && text.contains("30o"), "{text}");
 }
 
 #[test]

@@ -81,8 +81,9 @@ def css(mode: str) -> dict[str, str]:
 # Radius and fonts are NSH-medium choices (scale proposal: see README.md); colours are not.
 RADIUS = {"radius": "0px", "radius-card": "2px"}
 FONTS = {
-    "font-sans": "system-ui, sans-serif",
-    "font-mono": "Monaspace Argon, ui-monospace, monospace",
+    "font-sans": "Monaspace Neon, ui-monospace, monospace",
+    "font-mono": "Monaspace Neon, ui-monospace, monospace",
+    "font-code": "Monaspace Argon, ui-monospace, monospace",
 }
 cssvars = {
     "theme": {**FONTS, **RADIUS},

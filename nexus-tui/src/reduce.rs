@@ -545,7 +545,10 @@ impl Model {
                 if let Some(s) = self.sessions.get_mut(&sid) {
                     s.status = Some(status.clone());
                 }
-                if status == "busy" {
+                if e.data["turn_finished"] == true {
+                    self.running.remove(&sid);
+                    self.streaming.remove(&sid);
+                } else if status == "busy" {
                     if let Some(turn) = str_field(&e.data, "turn_id") {
                         self.running.insert(sid, turn);
                     }

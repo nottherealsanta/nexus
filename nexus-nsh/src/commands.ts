@@ -672,7 +672,7 @@ const BLOCKED: Record<string, string> = {
 
 export interface Availability { ok: boolean; reason?: string }
 export function availability(c: Cmd): Availability {
-  if (c.status === "blocked_core") return { ok: false, reason: BLOCKED[c.id] ?? `Needs a Core increment (PLAN.md Step 12a). ${c.unavailable_reason ?? ""}`.trim() };
+  if (c.status === "blocked_core") return { ok: false, reason: BLOCKED[c.id] ?? c.unavailable_reason ?? "Not available yet." };
   if (c.status === "deferred") return { ok: false, reason: `Deferred: ${c.unavailable_reason ?? "not built yet"}` };
   const voiceReason = voiceCommandReason(c.id);
   if (voiceReason) return { ok: false, reason: voiceReason };

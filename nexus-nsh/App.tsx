@@ -10,6 +10,9 @@ import { AddProject, Blocking, Confirm, Drawers, Palette, Picker, RenameSession,
 import { bindKeys, rightIsOpen, rightWidthHint } from "./src/commands";
 import { isNarrow, leftOpen, loadPrefs, startApp, themeChoice } from "./src/store";
 import { setColorScheme } from "nsh";
+import "./fonts/MonaspaceNeon-Regular.otf";
+import "./fonts/MonaspaceNeon-Medium.otf";
+import "./fonts/MonaspaceNeon-Bold.otf";
 
 function App() {
   void loadPrefs().then(() => { if (themeChoice() !== "system") setColorScheme(themeChoice()); });

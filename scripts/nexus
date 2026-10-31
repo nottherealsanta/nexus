@@ -7,6 +7,7 @@
 #   nexus build [--debug]     sync Core, build the TUI (release) and the NSH web app
 #                             (after `nexus voice init`, syncs keep the voice extra)
 #   nexus web [flags]         serve the NSH web app and open it
+#   nexus dev web [flags]     run the hot-reloading web app and open it
 #   nexus restart             restart the Core daemon
 #   nexus stop                stop the Core daemon
 #   nexus migrate             make ~/.nexus the Nexus 0.10 home (asks first; see docs/development.md)
@@ -161,6 +162,69 @@ web() {
   (cd "$NSH" && NEXUS_NSH_CORE_CMD="$(core_cmd)" exec node scripts/serve.mjs ${args[@]+"${args[@]}"})
 }
 
+dev_web() (
+  ensure_home
+  ensure_uv
+  ensure_npm
+  ensure_nsh
+  local open_browser=1 port="${NEXUS_NSH_PORT:-4820}" dev_port=8790
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-open) open_browser=0 ;;
+      --port) shift; port="${1:?--port needs a value}" ;;
+      --dev-port) shift; dev_port="${1:?--dev-port needs a value}" ;;
+      *) die "dev web: unknown argument $1" ;;
+    esac
+    shift
+  done
+  node - "$port" "$dev_port" <<'NODE' || die "dev web: choose two available ports (--port and --dev-port)"
+const net = require('node:net');
+const ports = process.argv.slice(2).map(Number);
+if (ports.some(p => !Number.isInteger(p) || p < 1 || p > 65535) || ports[0] === ports[1]) process.exit(1);
+const servers = ports.map(port => {
+  const server = net.createServer();
+  server.on('error', () => process.exit(1));
+  server.listen(port, '127.0.0.1', () => {
+    if (servers.every(s => s.listening)) servers.forEach(s => s.close());
+  });
+  return server;
+});
+NODE
+  (cd "$NSH" && npm run gen)
+  core daemon start >/dev/null || true
+  local dev_pid='' proxy_pid=''
+  cleanup_dev_web() {
+    [ -z "$dev_pid" ] || kill "$dev_pid" 2>/dev/null || true
+    [ -z "$proxy_pid" ] || kill "$proxy_pid" 2>/dev/null || true
+    wait 2>/dev/null || true
+  }
+  trap cleanup_dev_web EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  (cd "$NSH" && exec nsh dev App.tsx --target web --port "$dev_port") & dev_pid=$!
+  (cd "$NSH" && NEXUS_NSH_CORE_CMD="$(core_cmd)" exec node scripts/serve.mjs --port "$port" --upstream "http://127.0.0.1:$dev_port") & proxy_pid=$!
+  printf '› Waiting for the hot-reloading web app at http://127.0.0.1:%s (Ctrl-C to stop)\n' "$port"
+  while :; do
+    kill -0 "$dev_pid" 2>/dev/null || die "dev web: NSH development host stopped"
+    kill -0 "$proxy_pid" 2>/dev/null || die "dev web: API proxy stopped"
+    if node - "$port" <<'NODE'
+const http = require('node:http');
+const req = http.get(`http://127.0.0.1:${process.argv[2]}/`, res => { res.resume(); process.exit(res.statusCode === 200 ? 0 : 1); });
+req.setTimeout(1000, () => req.destroy());
+req.on('error', () => process.exit(1));
+NODE
+    then break; fi
+    sleep 1
+  done
+  printf '› Web app ready: http://127.0.0.1:%s\n' "$port"
+  if [ "$open_browser" = 1 ]; then
+    if command -v open >/dev/null 2>&1; then open "http://127.0.0.1:$port" || true
+    elif command -v xdg-open >/dev/null 2>&1; then xdg-open "http://127.0.0.1:$port" || true; fi
+  fi
+  while kill -0 "$dev_pid" 2>/dev/null && kill -0 "$proxy_pid" 2>/dev/null; do sleep 1; done
+  die "dev web: a development server stopped"
+)
+
 restart() {
   ensure_home
   ensure_uv
@@ -238,6 +302,7 @@ case "${1:-}" in
   once)                shift; tui --once "$@" ;;
   build|b)             shift; build_all "$@" ;;
   web|w)               shift; web "$@" ;;
+  dev)                 shift; [ "${1:-}" = web ] || die "usage: nexus dev web [--no-open] [--port N] [--dev-port N]"; shift; dev_web "$@" ;;
   restart|r)           shift; restart "$@" ;;
   stop)                shift; ensure_home; core daemon stop "$@" ;;
   status|s)            shift; status_all "$@" ;;

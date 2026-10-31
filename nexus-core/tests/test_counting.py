@@ -13,3 +13,8 @@ def test_budget_prefers_measured_usage_including_zero():
         "used": 123, "window": 200000, "exact": True,
     }
     assert budget({}, 200000, 0)["used"] == 0
+
+
+def test_estimate_prices_an_inline_image_flat():
+    image = "data:image/png;base64," + "A" * 400_000
+    assert budget({"input": [{"image_url": image}]}, None)["used"] < 2_000

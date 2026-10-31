@@ -123,11 +123,13 @@ pub enum SyncMsg {
         project: String,
         data: Result<Value, String>,
     },
-    /// Project skills and enabled, valid MCP servers for a new-session preview.
+    /// Project skills, global MCP servers and this project's `.mcp.json` inventory
+    /// for a new-session preview. None of the reads starts a server.
     SkillMcp {
         project: String,
         skills: Result<Value, String>,
         mcp: Result<Value, String>,
+        project_mcp: Result<Value, String>,
     },
     Event(Event),
 }
@@ -591,21 +593,25 @@ async fn load_git_diff(cx: &mut Ctx, api: &CoreApi) {
     }
 }
 
-/// Refresh the listings used by a not-yet-created session. The two endpoints
-/// are independent, so a failure in one keeps the other available.
+/// Refresh the listings used by a not-yet-created session. The endpoints are
+/// independent, so a failure in one keeps the others available. The project
+/// MCP read is keyed by the exact project id the preview is for; it returns
+/// enabled, disabled, failed and invalid entries without spawning any server.
 async fn load_skill_mcp(cx: &mut Ctx, api: &CoreApi) {
     let Some(project) = cx.skill_mcp.take() else {
         return;
     };
     let query = [("project", project.clone())];
-    let (skills, mcp) = tokio::join!(
+    let (skills, mcp, project_mcp) = tokio::join!(
         api.http.get("/api/skill", &query),
         api.http.get("/api/mcp", &[]),
+        api.project_mcp(&project),
     );
     let msg = SyncMsg::SkillMcp {
         project,
         skills: skills.map_err(|e| e.to_string()),
         mcp: mcp.map_err(|e| e.to_string()),
+        project_mcp: project_mcp.map_err(|e| e.to_string()),
     };
     cx.send(msg);
 }

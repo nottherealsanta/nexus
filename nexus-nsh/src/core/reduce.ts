@@ -250,7 +250,8 @@ export class Model {
         const s = this.sessions.get(sid);
         if (s) s.status = d.status;
         if (d.status === "busy") this.failedSessions.delete(sid);
-        if (d.status === "busy") { if (d.turn_id) this.running.set(sid, d.turn_id); }
+        if (d.turn_finished) { this.running.delete(sid); this.streaming.delete(sid); }
+        else if (d.status === "busy") { if (d.turn_id) this.running.set(sid, d.turn_id); }
         else { this.running.delete(sid); this.streaming.delete(sid); }
         break;
       }

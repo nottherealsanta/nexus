@@ -3553,6 +3553,7 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
         ell: cx.ell(),
         ascii: cx.t.opts.ascii,
         estimated: true,
+        preview: true,
         window,
         columns: true,
     };
@@ -3599,14 +3600,7 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
                 "Skills" | "MCP" | "Tools" => a
                     .context_items_for(&title)
                     .iter()
-                    .map(|item| {
-                        format!(
-                            "[{}] {}{}",
-                            if item.on { "x" } else { " " },
-                            item.label,
-                            if item.locked { " · new session" } else { "" }
-                        )
-                    })
+                    .map(|item| format!("[{}] {}", if item.on { "x" } else { " " }, item.label))
                     .collect::<Vec<_>>()
                     .join("\n"),
                 _ => instruction_preview(a),
@@ -4020,6 +4014,44 @@ fn draw_timeline(
         }
     }
     draw_sticky(cx, buf, r, inner, hits, timeline, top);
+    for b in timeline
+        .blocks
+        .iter()
+        .filter(|b| b.key.starts_with("turn-footer-"))
+    {
+        if b.end <= top || b.start >= top + h {
+            continue;
+        }
+        let y = r.y + b.start.saturating_sub(top) as u16;
+        let rect = Rect::new(
+            inner.x,
+            y,
+            inner.width,
+            (b.end.min(top + h) - b.start.max(top)) as u16,
+        );
+        if cx.hovered(rect) {
+            if let Some(details) = &b.target {
+                let lines: Vec<&str> = details.lines().collect();
+                let w = (lines.iter().map(|s| width(s)).max().unwrap_or(0) + 4)
+                    .min(inner.width as usize) as u16;
+                let height = lines.len() as u16 + 2;
+                if w >= 4 && y >= r.y + height {
+                    let area = Rect::new(inner.right() - w, y - height, w, height);
+                    boxed(cx, buf, area, "", RAISED);
+                    for (i, line) in lines.iter().enumerate() {
+                        put(
+                            buf,
+                            area.x + 2,
+                            area.y + 1 + i as u16,
+                            &truncate(line, w.saturating_sub(4) as usize, cx.ell()),
+                            cx.st(MUTED, RAISED),
+                            w.saturating_sub(4),
+                        );
+                    }
+                }
+            }
+        }
+    }
     // The focus location: the selected block's first row, else the top.
     let bar_y = if a.ui.focus == Focus::Timeline {
         a.ui.timeline_sel

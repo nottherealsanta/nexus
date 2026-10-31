@@ -11,8 +11,8 @@ the [HTTP API](api.md). Clients never read Nexus state files.
 | Command | What it does |
 | --- | --- |
 | `nexus serve [--port N]` | Runs the daemon in the foreground. |
-| `nexus daemon start` | Starts it in the background if none answers, then waits until it does (15 s at most). |
-| `nexus daemon stop` | Sends SIGTERM. Running turns are interrupted. |
+| `nexus daemon start` | Starts it in the background if none answers, then waits until it does (15 s at most). It does not spawn a second daemon while one is registered and still starting, and names the process when an unregistered one already holds the port. |
+| `nexus daemon stop` | Sends SIGTERM to the pid in `daemon.json`, even when the daemon no longer answers; SIGKILL follows it if a live event stream holds the process past the grace period. |
 | `nexus daemon status` | Prints the URL, pid and log path. |
 
 `nexus run`, `chat`, `project` and `session` start the daemon automatically.
@@ -28,8 +28,10 @@ loads a model or downloads. `nexus update` compares `/api/info`'s version with
 the latest GitHub release and never installs.
 
 - **Discovery.** While it runs, the daemon writes `~/.nexus/daemon.json` (0600)
-  with `{url, pid, token, started}` and removes it on exit. A client trusts the
-  file only after `GET /api/info` answers with the token.
+  with `{url, pid, token, started}` and removes it on exit. It binds the port
+  *before* writing the file, so a second daemon that cannot get the port exits
+  without touching the running daemon's registration. A client trusts the file
+  only after `GET /api/info` answers with the token.
 - **Token.** A new random token is made on each start. It keeps other local
   users and web pages off the loopback port.
 - **Port.** `$NEXUS_PORT`, default 4747, bound to 127.0.0.1 only.
@@ -62,6 +64,9 @@ the latest GitHub release and never installs.
   - `title`: set from the first prompt (`Image` for an image-only prompt).
   - `archived`: whether this session's whole tree is archived. Archive state is
     separate from busy/idle `status`; see [Session archiving](#session-archiving).
+  - `status`: busy while its own turn or any child turn is running, even if its
+    own turn has finished. A `session.status` event with `turn_finished: true`
+    closes that turn while retaining the busy session status.
   - `snapshot`: the frozen agent, prompt, tool definitions, child catalog and
     instruction file resolved at creation ([agents.md](agents.md#session-snapshots)).
 - **Messages.** Append-only rows in session order, saved as each one is

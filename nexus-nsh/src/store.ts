@@ -5,6 +5,7 @@ import { Model, normalizeSession } from "./core/reduce";
 import { Banner, ConnectionState, MESSAGE_PAGE, Sync, SyncHost } from "./core/sync";
 import { Compat, Info, Message, Session } from "./core/api";
 import { ApiError, request } from "./core/transport";
+import type { ProjectMcpSummary } from "./project-mcp";
 import { emptyGlobalToastState, globalEventToast } from "./skills-mcp";
 import { receiveVoiceProgress } from "./voice-state";
 
@@ -272,6 +273,37 @@ export function loadProjectWorktrees(id: string, refresh = false) {
   });
 }
 
+// --- project `.mcp.json` ----------------------------------------------------------------------
+/** One project's MCP summary; enabled servers start with a new session, never from this read. */
+export type ProjectMcpState = { data: ProjectMcpSummary | null; loading: boolean; error: string | null };
+export const projectMcp = signal<Record<string, ProjectMcpState>>({});
+const projectMcpRequests = new Set<string>();
+const projectMcpSeq = new Map<string, number>();
+
+/**
+ * Read `GET /api/project/{id}/mcp` (never starts a server). `refresh` asks again even when a
+ * cached summary exists, so a manual Refresh or an `mcp.changed` shows the current file.
+ */
+export async function loadProjectMcp(project: string, refresh = false): Promise<ProjectMcpSummary | null> {
+  const cached = projectMcp()[project];
+  if (!refresh && (projectMcpRequests.has(project) || cached?.data)) return cached?.data ?? null;
+  const seq = (projectMcpSeq.get(project) ?? 0) + 1;
+  projectMcpSeq.set(project, seq);
+  projectMcpRequests.add(project);
+  projectMcp.update((all) => ({ ...all, [project]: { data: cached?.data ?? null, loading: true, error: null } }));
+  try {
+    const data = await request<ProjectMcpSummary>("GET", `/api/project/${project}/mcp`);
+    if (projectMcpSeq.get(project) === seq) projectMcp.update((all) => ({ ...all, [project]: { data, loading: false, error: null } }));
+    return data;
+  } catch (e) {
+    const error = e instanceof ApiError ? e.message : String(e);
+    if (projectMcpSeq.get(project) === seq) projectMcp.update((all) => ({ ...all, [project]: { data: cached?.data ?? null, loading: false, error } }));
+    return null;
+  } finally {
+    if (projectMcpSeq.get(project) === seq) projectMcpRequests.delete(project);
+  }
+}
+
 /** The most-specific checkout containing a directory (path-component aware). */
 export function worktreeForDirectory(directory: string, listing: any | null | undefined): any | null {
   const trees = listing?.worktrees;
@@ -483,6 +515,10 @@ function handleGlobalEvent(e: import("./core/api").CoreEvent) {
   if (e.type === "skills.changed" || e.type === "mcp.changed") {
     const project = currentProject();
     if (project) loadStartingInventory(project, true);
+  }
+  if (e.type === "mcp.changed") {
+    const eventProject = typeof (e.data as { project_id?: unknown })?.project_id === "string" ? (e.data as { project_id: string }).project_id : currentProject();
+    if (eventProject) void loadProjectMcp(eventProject, true);
   }
   if (["agents.changed", "skills.changed", "mcp.changed", "extensions.changed", "config.changed"].includes(e.type) && draftContext()) {
     const project = currentProject();

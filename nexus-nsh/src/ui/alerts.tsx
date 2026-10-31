@@ -41,7 +41,7 @@ export function currentAlerts(): Alert[] {
   for (const b of banners()) {
     const key = `b-${b.kind}`;
     if (hidden.includes(key)) continue;
-    if (b.kind === "api_unreported") out.push({ key, level: "info", text: "Core does not report an API version yet", sub: "Compatibility is unchecked until Core adds api_version to /api/info (Step 12a).", actions: [], dismissible: true });
+    if (b.kind === "api_unreported") out.push({ key, level: "info", text: "Core does not report an API version", sub: "Compatibility cannot be checked.", actions: [], dismissible: true });
     if (b.kind === "newer_core") out.push({ key, level: "warning", text: `Core has a newer API (${b.core}) than this client`, sub: "Some features may be missing. Update NSH.", actions: [], dismissible: true });
     if (b.kind === "daemon_restarted") out.push({ key, level: "warning", text: "Core restarted: state was resynced", sub: "Turns that were running show as interrupted.", actions: [], dismissible: true });
     if (b.kind === "resynced") out.push({ key, level: "info", text: "Resynced with Core", sub: b.why, actions: [], dismissible: true });

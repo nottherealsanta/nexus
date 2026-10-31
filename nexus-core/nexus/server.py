@@ -30,6 +30,9 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | POST | /api/project | `{path, name?}` → the project at that path (created if new) |
 | GET/PATCH/DELETE | /api/project/{id} | one project; PATCH `{name}` |
 | GET | /api/project/{id}/worktrees | the project checkout's worktrees, before any session exists |
+| GET | /api/project/{id}/mcp | this project's `.mcp.json`: file, revision, error, warnings and server rows |
+| GET | /api/project/{id}/mcp/{name} | one project server, plus `tool_names` and `log`; never connects |
+| POST | /api/project/{id}/mcp/{name}/restart | close and reconnect a project server |
 | GET | /api/session | `?project=`, `?directory=` or `?parent=`; `?archived=` exclude/only/include |
 | POST | /api/session | `{project? or directory? or parent?, agent?, title?, model?, permission?, effort?}` |
 | GET/PATCH/DELETE | /api/session/{id} | one session; PATCH `{agent?, title?, model?, permission?, effort?}` |
@@ -789,6 +792,34 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         except mcp_module.McpUnavailable as exc:
             raise NotFound(str(exc)) from exc
 
+    def project_mcp_scope(project: Any) -> Any:
+        """The project's MCP scope, with its project-scoped event sink attached."""
+        scope = runtime.project_mcp(project)
+        return scope
+
+    async def project_mcp_list(request: Request) -> Response:
+        project = runtime.project(p(request, "id"))
+        project_mcp_scope(project)
+        return JSONResponse(runtime.project_mcp_summary(project))
+
+    async def project_mcp_one(request: Request) -> Response:
+        project, name = runtime.project(p(request, "id")), p(request, "name")
+        scope = project_mcp_scope(project)
+        row = scope.row(name)
+        if row is None:
+            raise NotFound(f"no MCP server {name!r} in this project")
+        conn = scope.manager.connections.get(name)
+        return JSONResponse(row | {"tool_names": [t.name for t in conn.tools] if conn else [],
+                                   "log": str(scope.log_path(name))})
+
+    async def project_mcp_restart(request: Request) -> Response:
+        project, name = runtime.project(p(request, "id")), p(request, "name")
+        project_mcp_scope(project)
+        try:
+            return JSONResponse(await runtime.restart_project_mcp(project, name))
+        except mcp_module.McpUnavailable as exc:
+            raise NotFound(str(exc)) from exc
+
     async def agent_one(request: Request) -> Response:
         return JSONResponse(agent_json(runtime.agents(agent_project_path(request)).get(p(request, "name")), prompt=True))
 
@@ -1328,6 +1359,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/project", route(projects), methods=["GET", "POST"]),
         Route("/api/project/{id}", route(project), methods=["GET", "PATCH", "DELETE"]),
         Route("/api/project/{id}/worktrees", route(project_worktrees)),
+        Route("/api/project/{id}/mcp", route(project_mcp_list)),
+        Route("/api/project/{id}/mcp/{name}/restart", route(project_mcp_restart), methods=["POST"]),
+        Route("/api/project/{id}/mcp/{name}", route(project_mcp_one)),
         Route("/api/project/{id}/files", route(project_files)),
         Route("/api/project/{id}/file", route(project_file), methods=["GET", "PUT"]),
         Route("/api/project/{id}/files/search", route(project_file_search)),

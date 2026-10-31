@@ -2,7 +2,7 @@
 
 Things that are not blocking the 0.10.0 release. [PLAN.md](PLAN.md) holds the release steps.
 
-## Explain the 14.7K vs ~3.9K token gap
+## 1. Explain the 14.7K vs ~3.9K token gap
 
 In the real TUI, a Claude Haiku 5.5 session (2026-10-30) answered "hi there" and the turn footer read 14.7Ki input
 (47% cached) while the starting-context view said `total ~3,965 tok` and the composer meter 14.7K · 14.7%. The context
@@ -35,3 +35,5 @@ Linux needs, in the installer's checks and in `docs/development.md`: `pkg-config
 `alsa-lib-devel` / `alsa-lib-dev`), a C toolchain, `git`, `uv`, Rust, Node 22 and `nsh`. Release TUI binaries are built on Ubuntu
 22.04 (glibc 2.35). The Monty kernel launcher uses `/usr/bin/env`; confirm the path on Linux (the forced worker crashes and cold
 start are not covered).
+  
+## 2. on installed system nexus should launch the tui ( right now when another system installs nexus - they have todo nexus-tui )  

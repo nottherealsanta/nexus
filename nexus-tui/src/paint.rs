@@ -312,6 +312,9 @@ pub struct CtxLayout<'a> {
     pub ascii: bool,
     /// Counts are estimates (`~`).
     pub estimated: bool,
+    /// This is the new-session preview: locked rows are explained by their
+    /// state, not by "new session" (the preview already is that session).
+    pub preview: bool,
     /// The model's context window, for the total's share.
     pub window: Option<u64>,
     /// Lay the tools out in up to four columns instead of one per row.
@@ -451,7 +454,10 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
                 let marker = switch_marker(item.on, layout.ascii);
                 let marker = format!("  {marker}");
                 let mut label = item.label.clone();
-                if item.locked {
+                // Locked means "not on at this start". The new-session preview
+                // already is the next session, and an invalid entry cannot be
+                // used by any session until it is fixed.
+                if item.locked && !layout.preview && !item.label.contains(" · invalid") {
                     label.push_str(" · new session");
                 }
                 let role = if item.locked {
@@ -509,7 +515,7 @@ fn switch_marker(on: bool, ascii: bool) -> &'static str {
 fn grid_rows(items: &[CtxItem], layout: &CtxLayout, rows: &mut Vec<CtxRow>) {
     use crate::text::width;
     let label = |item: &CtxItem| {
-        if item.locked {
+        if item.locked && !layout.preview {
             format!("{} \u{b7} new session", item.label)
         } else {
             item.label.clone()
@@ -570,6 +576,7 @@ mod ctx_tests {
             ell: "\u{2026}",
             ascii: false,
             estimated: true,
+            preview: false,
             window: Some(200_000),
             columns: false,
         }
@@ -728,6 +735,47 @@ mod ctx_tests {
         let t = text(&rows);
         assert!(t.iter().any(|l| l.contains("Tools [1] ~100")), "{t:?}");
         assert!(t.iter().any(|l| l.contains("\u{25cf} read")), "{t:?}");
+    }
+
+    #[test]
+    fn the_new_session_preview_names_a_locked_state_instead_of_new_session() {
+        let section = CtxSection {
+            title: "MCP".into(),
+            tokens: None,
+            meta: String::new(),
+            body: CtxBody::Inventory(vec![CtxItem {
+                index: 0,
+                key: "mcp:runner".into(),
+                label: "runner · disabled in .mcp.json".into(),
+                on: false,
+                locked: true,
+            }]),
+        };
+        let mut preview = layout(80);
+        preview.preview = true;
+        let preview_text = text(&context_rows(&[section], 0, &preview));
+        assert!(preview_text
+            .iter()
+            .any(|line| line.contains("disabled in .mcp.json")));
+        assert!(!preview_text.iter().any(|line| line.contains("new session")));
+
+        let session_text = text(&context_rows(
+            &[CtxSection {
+                title: "MCP".into(),
+                tokens: None,
+                meta: String::new(),
+                body: CtxBody::Inventory(vec![CtxItem {
+                    index: 0,
+                    key: "mcp:runner".into(),
+                    label: "runner · disabled in .mcp.json".into(),
+                    on: false,
+                    locked: true,
+                }]),
+            }],
+            0,
+            &layout(80),
+        ));
+        assert!(session_text.iter().any(|line| line.contains("new session")));
     }
 }
 

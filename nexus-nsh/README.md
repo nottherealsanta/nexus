@@ -16,17 +16,20 @@ workspace session tabs, new-session view, timeline, waiting card, composer,
 settings navigation, alerts, notifications and connection states are usable
 against a real Core. Tabs show running, unread, failed and idle state; they
 switch, rename and close without deleting sessions. The timeline has starting
-context, Markdown (prose 15/24 in Monaspace Argon; fenced code is a panel card with the language and
-a Copy button; inline code is 13 px Monaspace on the panel), and three detail levels: activity groups collapsed in low,
-individual collapsed tools in medium, and expanded tools in high. Each user
+context, Markdown (prose 15/24 in Monaspace Neon; fenced code is a panel card with the language and
+a Copy button and padded code; inline code is 13 px Monaspace on the panel), and three detail levels: finished activity groups collapse in low and medium,
+while high expands their tools. Running groups show the latest five activities in medium (with earlier items announced), and waiting groups stay open. Each user
 message is the turn's header: a full-width raised card (`#n · time` on the right,
+with long messages previewed in six lines and expandable as sent,
 Copy and Fold on hover) that folds to one line. A sticky copy of the current
 user card sits under the header with `↑ N lines of this turn above`, pushed up by
 the next card and clicked to scroll back. Turn footers are a right-aligned meta
-row (`▪ Agent · models · effort · tools · duration · tokens · cost`) with no
+row (`models · tools · input tokens · output tokens · elapsed · finished`) with no
 status word: a failed turn shows its first error line above it, and an
 interrupted one adds `/continue`. Durations read `0.4s`, `4.2s`, `1m 05s` and
-`1h 02m`. Activity groups are 28 px rows with `+N −M` and failures when folded;
+`1h 02m`. Hovering over token counts shows reported counts, reasoning tokens and
+cache share. The finish time is omitted when unavailable or while the turn is
+running. Activity groups are 28 px rows with `+N −M` and failures when folded;
 members are 24 px rows on a tree line with verb icons (the status glyph replaces
 the icon while running, failed or waiting), and a member's output sits in a
 320 px box with Show all. Thoughts show `Thought · preview`, with the body behind
@@ -34,10 +37,10 @@ a 2 px rule; a thought with no tool beside it is a single `Thought · preview` r
 clipping is announced and the show-all control restores the whole inspection
 output.
 
-User-message text and assistant prose use Monaspace Argon by default, as do
-code and tool output. NSH imports the bundled regular, medium and bold faces so
-the packaged app registers them before rendering; the surrounding chrome keeps
-its system font. Child cards label background calls, distinguish failed and
+The app uses Monaspace Neon for its text, including chrome, prose and tool output;
+inline code, fenced code and diff content use Monaspace Argon. NSH imports the
+bundled regular, medium and bold faces so the packaged app registers them before
+rendering. Child cards label background calls, distinguish failed and
 running status, and allow the full tool result to be expanded without navigating
 away from the parent session.
 
@@ -83,36 +86,47 @@ with its card.
 
 The chrome follows D02. The 44 px header band and both sidebars sit on `bg-sidebar`
 (the chrome surface) with no edge rules; the centre is `bg-background` (the canvas). The
-header is three slots that match the sidebars (264 px, the centre, 300 px when the right
+header is three slots that match the sidebars (the resizable left sidebar, the centre, 300 px when the right
 sidebar is docked). Controls have square corners and cards use a subtle 2 px radius;
-round indicators and meters retain their shape. The new-session starting-context card is centered in the same column as the composer; the timeline context header is centered within its card.
+round indicators and meters retain their shape. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
 Over the docked left sidebar its left slot holds the 32 px toggle and
 the Sessions, Files and Projects icons (they follow the sidebar's open state; narrow, they
 are in the drawer with labels). The session tabs are 28 px and square, aligned with
-the 760 px reading column: the viewed tab is on the canvas surface with primary text, the
+the end of the left sidebar: the viewed tab is on the canvas surface with primary text, the
 others are muted with a hover fill. Their × shows on hover (and on the viewed tab). Tabs are
 root sessions only: opening a subagent keeps its root's tab in view. Under the header a
 subagent strip names the parent, offers the back button, repeats the root breadcrumb and lists
 the root's children as focusable buttons with running, waiting, failed or completed state. The run status sits at the
-column's right edge; the bell and right toggle are at the far right. Glyphs and status
+centre's right edge; the bell and right toggle are at the far right. The context timeline
+uses the full available centre width with responsive horizontal padding (24 px narrow,
+48 px from 820 px, 64 px from 1200 px and 80 px from 1600 px). Every card shares the
+column's left edge, and assistant prose plus activity and thought rows start at the
+cards' 16 px text inset (activity rows keep a 4 px hover pad inside their 12 px indent).
+Glyphs and status
 tones come from `interface/theme.toml` (`glyphs.status`, `glyphs.attention`). The
 `border.strong` token is emitted as `border-strong` (`--border-strong`) for the decorative
 split rules and tool boxes.
 
 The composer is a card on the panel surface (2 px radius, 1 px border that turns
-to the focus colour, 12x16 padding) with pill selectors for agent (in its colour),
-model with its muted provider, and effort. Its control row ends with the context
-meter (an 80x4 px bar in the agent colour and `82k · 41%`) and the send button.
+to the focus colour) with compact selectors for agent (in its colour), model with
+its muted provider, and effort. The agent label aligns with the message input;
+the control row ends with dictation and send buttons.
 While a session runs, a Working row above the card shows the elapsed time and
 output tokens (`Working · 12s · ↓4.1k`) with Stop. Typing `/` opens a completion
 block on the card's top edge (commands, with their key hints); `@` completes
 project paths from Core's file listing. Tab accepts, Enter runs a slash command,
 Esc closes. The location strip below the card shows the muted home-shortened path and
-branch; a linked worktree adds `⑂`. It has no project prefix, checkout label or commands
+branch; a linked worktree adds `⑂`. On the right, the context meter shows an
+80x4 px bar in the agent colour and `82k · 41%` when known (on narrow screens,
+the count is shown without the bar). Draft context is marked as an estimate.
+The strip has no project prefix, checkout label or commands
 hint. Before a session exists, the agent/model/effort pickers and slash commands
 set draft creation fields. Timeline detail is a saved NSH preference. The
 starting-context section lists the prompt, tools, instructions, skills and MCP
-servers with estimates and the catalog window share. Skills and servers have
+servers with estimates and the catalog window share. Its text uses a consistent
+13 px size, compact section counts, gray status dots and a three-column list of
+all tools. Disabled entries remain marked and counted. The system prompt row omits the agent name, and the instruction file
+has no inline preview (its detail remains available by clicking its title). Skills and servers have
 per-session switches; entries not available at session start are dimmed and say
 “new session”. Before a session exists, NSH loads the project skills and enabled
 MCP servers into the draft and sends its `disabled_tools` with session creation.
@@ -128,7 +142,14 @@ newest request with known usage. A ledger that began counting well after the
 first message is labelled `Totals since …`, and requests that reported no usage
 are counted as unknown. It also counts descendant sessions. Right-click or Shift+F10 opens the
 manifest-driven session/project row menu, including confirmed project removal,
-and Projects has a trailing `+ Add project` row. Settings has Providers and
+and Projects has a trailing `+ Add project` row. Projects also shows the selected
+project's `.mcp.json` servers. Enabled, valid entries start automatically with a
+new session, and the panel warns that their commands run then without asking;
+reading or refreshing it never starts a server. Each row shows its current
+status and the non-secret facts Core reports: transport, command name, argument
+count, working directory, environment or HTTP header names, and a
+credential-free URL. Disabled and invalid entries say so, with the reason.
+Settings has Providers and
 Agents pages (a drill-in with a back link; Esc returns): provider connections
 with device codes, key entry and catalog refresh, and the default agent and effort with a line per subagent that opens its model
 and fallback lists. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
@@ -157,6 +178,14 @@ npm run build          # packaged web app in dist/Nexus
 npm run serve          # the web app on 127.0.0.1:4820, proxying /api to Core (127.0.0.1:4747)
 NEXUS10_HOME=/tmp/nx npm run serve -- --port 4821   # another home and port
 ```
+
+For web development, `nexus dev web` starts the hot-reloading host and API proxy
+and opens the app. Ctrl-C stops both web servers, leaving Core running. Without
+the launcher, run `nsh dev App.tsx --target web --port 8790` and, in a
+second terminal, `npm run serve -- --upstream http://127.0.0.1:8790`. Open the
+proxy at `http://127.0.0.1:4820` so API requests still get daemon authentication.
+The NSH development host reloads source changes; the packaged `npm run serve`
+alone serves a static build.
 
 Tests are headless interaction tests against a fake network (`App.test.tsx`).
 They open the real app in a browser target (the headless engine cannot resolve

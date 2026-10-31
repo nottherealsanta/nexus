@@ -805,6 +805,7 @@ async def test_stored_pre_workspace_snapshot_keeps_its_tools_until_activation(en
     current_session = env.rt.session(sid)
     found = env.rt.agents(str(env.workspace))
     old = env.rt._build_snapshot(
+        project=env.rt.project(current_session.project_id),
         directory=current_session.directory, spec=found.get("build", child=False), found=found,
         disabled=set(), child=False, workspace={"entry": False, "activated": False})
     env.store.set_snapshot(sid, old)

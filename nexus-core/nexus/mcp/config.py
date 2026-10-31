@@ -8,7 +8,7 @@ an error for that server only.
 Adapted from old Nexus `nexus/mcp/client.py` `normalize_server_entry`, cut down
 to the keys that act: no `envFile`, no OAuth, no `${input:…}`. Keys that other
 clients write for approval or UI (`autoApprove`, `trust`, `description`…) are
-accepted and reported, never acted on; approval stays with the permission rules.
+accepted and reported, never acted on; a tool call stays with the permission rules.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}\Z")
 DEFAULT_CONNECT_TIMEOUT = 20.0
@@ -84,9 +85,15 @@ class ServerConfig:
             info |= {"command": Path(self.command).name, "arg_count": len(self.args), "env_names": sorted(self.env),
                      "cwd": self.cwd}
         else:
-            from urllib.parse import urlsplit
             parts = urlsplit(self.url)
-            info |= {"url": f"{parts.scheme}://{parts.hostname or ''}{f':{parts.port}' if parts.port else ''}{parts.path}",
+            try:
+                port = parts.port
+            except ValueError:
+                port = None
+            host = parts.hostname or ""
+            if ":" in host and not host.startswith("["):  # a bracketed IPv6 literal stays a valid URL
+                host = f"[{host}]"
+            info |= {"url": f"{parts.scheme}://{host}{f':{port}' if port else ''}{parts.path}",
                      "header_names": sorted(self.headers)}
         return info
 
@@ -125,11 +132,16 @@ def _strings(value: Any, what: str) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _mapping(value: Any, what: str, workspace: str) -> dict[str, str]:
+def _table(value: Any, what: str) -> dict[str, Any]:
+    """A raw table, checked before its entries are merged or interpolated."""
     if not isinstance(value, dict) or not all(isinstance(k, str) for k in value):
         raise McpConfigError(f"{what} must be a table of strings")
+    return value
+
+
+def _mapping(value: Any, what: str, workspace: str) -> dict[str, str]:
     out: dict[str, str] = {}
-    for key, item in value.items():
+    for key, item in _table(value, what).items():
         if isinstance(item, bool | int | float):
             item = str(item)
         if not isinstance(item, str):
@@ -188,7 +200,9 @@ def parse(name: str, entry: Any, *, workspace: str = "") -> ServerConfig:
             command, args = (argv[0] if argv else ""), argv[1:]
         elif isinstance(command, dict):  # Zed: {path, args, env}
             args = _strings(command.get("args", []), "command.args")
-            entry = {**entry, "env": {**command.get("env", {}), **entry.get("env", {})}}
+            nested = _table(command.get("env", {}), "command.env")
+            outer = _table(entry.get("env", entry.get("environment", {})), "env")
+            entry = {**entry, "env": {**nested, **outer}}
             command = command.get("path")
             args = args + _strings(entry.get("args", []), "args") if "args" in entry else args
         else:

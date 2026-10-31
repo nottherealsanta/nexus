@@ -541,7 +541,7 @@ describe("context, composer and footer parity", () => {
 
   });
 
-  test("turn footer prices cached and uncached input using the catalog", async () => {
+  test("turn footer orders model, tools, tokens, duration and finish time", async () => {
     const app = await open("./App.tsx", {
       network: selectedSessionNetwork({
         "GET */api/session/ses_1/turn*": turnPage([turnSummary("trn_1", 0, [["codex/gpt-5", usage(100000, 10000, 50000)]])]),
@@ -553,14 +553,20 @@ describe("context, composer and footer parity", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:turn-footer");
     const footer = app.texts().join("\n");
-    expect(footer.includes("100K in 50.0K cached 10.0K out")).toBe(true);
-    expect(footer.includes("$0.16")).toBe(true);
+    const parts = ["gpt-5", "0 tools", "100K in", "10.0K out", "1.0s", new Date(2000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })];
+    let previous = -1;
+    for (const part of parts) {
+      const index = footer.indexOf(part, previous + 1);
+      expect(index > previous).toBe(true);
+      previous = index;
+    }
   });
 
-  test("composer control row shows the context meter; the project strip shows the palette hint", async () => {
+  test("location strip shows the context meter", async () => {
     const app = await open("./App.tsx", {
       network: selectedSessionNetwork({
         "GET */api/session/ses_1/turn*": turnPage([turnSummary("trn_1", 0, [["codex/gpt-5", usage(1000)], ["codex/gpt-5", usage(11100)]])]),
+        "GET */api/session/*/context": { body: { used: 11100, window: 1_000_000, exact: true } },
         "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-6.1 Terra", context: 1_000_000, tiers: [270_000] }] } },
       }),
       width: 1024, height: 768, platform: "web",
@@ -570,7 +576,7 @@ describe("context, composer and footer parity", () => {
     await app.waitFor("id:composer-usage");
     const shown = app.texts().join("\n");
     expect(shown.includes("GPT-6.1 Terra") && shown.includes("codex")).toBe(true);
-    expect(shown.includes("11k · 1.1%")).toBe(true);
+    expect(shown.includes("11K · 1.1%")).toBe(true);
     expect(app.shows("id:composer-meter")).toBe(true);
     expect(app.shows("id:location-strip")).toBe(true);
     expect(shown.includes("ctrl+p commands")).toBe(false);

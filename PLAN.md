@@ -28,12 +28,22 @@ The sections below are the record of the release steps and the backlog that rema
   (typing, scrolling, idle ticks) reuse the last timeline. In a deterministic
   replay, 902 events cost 16 frames instead of 902; a 200-message stream draw is
   1.1–1.3 ms and a 1,000-message draw 5.2 ms (release), while chrome-only draws
-  are 0.36 ms and 0.54 ms. Phase 4 (viewport layout) is deferred: at 2,000
-  messages a stream draw is ~15 ms and at 5,000 ~33 ms, so it is worthwhile
-  only for a history that large. Cached timeline lines are shared as
-  `Rc<TLine>` so a cache hit no longer deep-clones spans (5,000-message replay
-  RSS ~1.1 GB → ~0.33 GB). Full viewport-only assembly is deferred. Details in
+  are 0.36 ms and 0.54 ms. Cached timeline lines are shared as `Rc<TLine>` so
+  a cache hit no longer deep-clones spans (5,000-message replay RSS ~1.1 GB →
+  ~0.33 GB). Full viewport-only assembly is deferred: at 2,000 messages a
+  stream draw is ~15 ms and at 5,000 ~33 ms, so it is worthwhile only for a
+  history that large. Details in
   [TUI_PERFORMANCE_PLAN.md](TUI_PERFORMANCE_PLAN.md).
+- TUI turn footer token counts use `M` for millions instead of thousands of `K`.
+- TUI live thoughts show the last ten wrapped lines and announce earlier hidden lines; completed thoughts remain fully expandable.
+- Session status stays busy while a sub agent is running, including between parent turns.
+- Appearance offers system, light and dark only; the unavailable named-theme setting and development-step references in client notices were removed.
+- Web layout: session tabs start beside the left sidebar, and the timeline and new-session preview share one responsive reading column (24 px gutters narrow, 48/64/80 px at 820/1200/1600 px) with every card, assistant prose, activity and thought row on the same 16 px text edge; the new-session card no longer uses the old 760 px preview column, and fenced code has padded content. Long user messages preview six lines with an explicit expand control. Activity groups fold when finished in low and medium detail and show recent live activity in medium; list auto-follow is disabled to allow scrolling up.
+- Web appearance: starting-context section diamonds and inline instruction preview removed, agent name omitted from the system prompt row, text size unified, counts compacted and tools shown with gray indicators in three columns; the collapsed session rail is more compact and the docked left sidebar can be resized. `nexus dev web` starts NSH's hot-reloading web host behind the API proxy.
+- Web composer: tightened input spacing, aligned the agent label, removed selector chevrons and moved context usage to the location strip (including draft estimates).
+- Web typography uses Monaspace Neon throughout, reserving Monaspace Argon for inline and fenced code and diffs.
+- Draft TUI tool switches remain available when disabled and during context replanning.
+- **Project MCP is opt-out (core and docs done 2026-10-31).** Enabled, valid `<project>/.mcp.json` entries now start automatically with a new session; `enabled: false` is the opt-out, per-project connections and the enabled-global-name collision rule remain, and the approve/revoke API, fingerprints and `pending_approval` are gone. This is deliberate: the file is arbitrary code, so the docs warn that starting a session in an untrusted project runs it. Core tests cover automatic start, reload on the next session, disabled entries, isolation and collisions; the disabled-global `browser-use` draft case asserts the enabled project row wins and is connected. **Client cleanup is delegated:** remove the TUI/NSH project approval review and pending/approved state, and fix the new-session inventory merge so a global disabled row with the same name never overrides an enabled project row (the `browser-use` screenshot showed the global default beside "new session" even though the project entry was live).
 - **Merged.** `main` is now Nexus 0.10 (`e2c6cd2`, pushed directly, no PR; branch protection is off). `nexus10` shared no history with `main`, so the merge used `-s ours` and keeps old Nexus 0.7.2 as the second parent: no force-push, and nothing was lost. Old Nexus is also branch `nexus01` (pushed, plus one backup commit of its uncommitted local work) and tag `v0.7.2`.
 - Release gate O1 to O4 are done. O5 (platform matrix) is deferred to [TODO.md](TODO.md); O6 (release-download install) is written and tested against a local release (step 3).
 - **CI** first ran on the merge push (run 41073305862). After fixes: `lint` and `core` pass on macOS and Ubuntu; the five stale `nexus-tui/tests/shell.rs` tests are updated and the TUI tests pass locally; the `nsh` job now builds a pinned `nsh` (step 4). The next push shows whether `ci-ok` is green. Release-please opened PR #97 "release 0.10.0"; do not merge it until CI is green. Stale PRs from old Nexus are still open and should be closed: #95 (release 0.8.0 for the old `nexus-harness` component) and #70 (an empty commit that triggered an old patch release); closing them was blocked by the permission classifier in the session, so close them by hand.
@@ -142,6 +152,7 @@ The pages are in both clients ([config.md](docs/config.md#settings-layout)). Rem
 - Show agent and user-tool errors in client pickers and Settings; add a visible changed-file notice for a running tool, process memory limits and validation of project-only names in `[tools] disabled`. Exercise a user tool in a real session and run the reload stress test.
 - Add default-on settings for skills and exercise skills with a real model. Decide whether and how `allowed-tools` should be enforced without changing a cached prompt or granting permissions.
 - Add MCP resources and prompts and Settings screens for adding/editing servers; exercise browser-use (the pinned `uvx` package, `nexus-browser/`) in a real model session, including server failure; its screenshots and LLM-backed tools are unexercised. MCP output must remain bounded, fenced as untrusted and visible as received.
+- Remove the obsolete project MCP approval UI in both clients (review dialog, approve/revoke calls, pending/approved labels and the `mcp_approval` state) and make the new-session inventory prefer the project row over a same-named global row; this is a client change after the core opt-out model above.
 - Support editing hooks in Settings, render hook rows in both timelines, and fire `SessionEnd` on archive. Test `bash(...)` matchers on compound commands and `PostToolUse` after denied approval; verify a blocking hook with a real model.
 
 ### Providers

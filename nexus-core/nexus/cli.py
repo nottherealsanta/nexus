@@ -893,7 +893,11 @@ def _daemon(action: str) -> None:
         print("stopped" if daemon.stop() else "not running")
     else:
         found = daemon.discover()
-        print(f"running at {found['url']} (pid {found['pid']}) · logs {daemon.log_path()}" if found else "not running")
+        if found:
+            print(f"running at {found['url']} (pid {found['pid']}) · logs {daemon.log_path()}")
+        else:
+            conflict = daemon.port_conflict()
+            print(f"not running · {conflict}" if conflict else "not running")
 
 
 def _doctor(as_json: bool) -> int:

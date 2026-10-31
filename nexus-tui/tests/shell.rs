@@ -3066,6 +3066,140 @@ fn preview_context_headings_open_details_on_mouse_click() {
 }
 
 #[test]
+fn new_session_preview_names_disabled_project_mcp_and_opens_its_details() {
+    use nexus_tui::sync::SyncMsg;
+    use nexus_tui::ui::OverlayKind;
+    let dir = scratch_dir("mcp-inventory");
+    let mut app = new_session_app(&dir, (160, 60));
+    let project = app.current_project().unwrap();
+    let request = app.draft_request().unwrap();
+    app.state.apply(SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({
+            "tools": [],
+            "skills": [],
+            "mcp": [{"server": "browser-use", "state": "on", "tools": 4, "locked": false, "scope": "project"}]
+        })),
+    });
+    app.apply_sync(SyncMsg::SkillMcp {
+        project: project.clone(),
+        skills: Ok(serde_json::json!({"skills": []})),
+        mcp: Ok(serde_json::json!({"servers": [
+            {"server": "browser-use", "state": "disabled", "tools": 0, "enabled": false},
+            {"server": "docs", "state": "connected", "tools": 2, "enabled": true}
+        ]})),
+        project_mcp: Ok(serde_json::json!({
+            "project_id": project.clone(),
+            "file": "/repo/.mcp.json",
+            "exists": true,
+            "revision": "rev",
+            "error": null,
+            "warnings": [],
+            "servers": [
+                {
+                    "server": "browser-use", "state": "idle", "error": null,
+                    "tools": 0, "enabled": true, "source": "project", "project_id": project.clone(),
+                    "file": "/repo/.mcp.json", "transport": "stdio", "command": "npx",
+                    "arg_count": 2, "cwd": "/repo", "env_names": ["TOKEN"]
+                },
+                {
+                    "server": "switched-off", "state": "disabled", "error": null,
+                    "tools": 0, "enabled": false, "source": "project", "project_id": project.clone(),
+                    "file": "/repo/.mcp.json", "transport": "stdio", "command": "fake-server",
+                    "arg_count": 1, "cwd": "/repo", "env_names": []
+                },
+                {
+                    "server": "broken", "state": "invalid",
+                    "error": "unknown key 'timeout'", "tools": 0, "enabled": false,
+                    "source": "project", "project_id": project.clone(),
+                    "file": "/repo/.mcp.json"
+                },
+                {
+                    "server": "(file)", "state": "invalid",
+                    "error": ".mcp.json is not valid JSON: trailing comma", "tools": 0,
+                    "enabled": false, "source": "project", "project_id": project,
+                    "file": "/repo/.mcp.json"
+                }
+            ]
+        })),
+    });
+    let (_, rows) = draw(&mut app, 160, 60);
+    let all = joined(&rows);
+    assert!(
+        all.contains("MCP [5]"),
+        "the inventory is listed:
+{all}"
+    );
+    assert!(
+        !all.contains("MCP  none"),
+        "the preview must not claim there are no MCP entries:\n{all}"
+    );
+    let live = rows
+        .iter()
+        .find(|row| row.contains("browser-use"))
+        .expect("enabled project row");
+    assert!(live.contains('●') && !live.contains('○'), "{live}");
+    assert!(live.contains("4 tools"), "{live}");
+    assert!(!live.contains("disabled"), "{live}");
+    assert!(!live.contains("new session"), "{live}");
+    let disabled = rows
+        .iter()
+        .find(|row| row.contains("switched-off"))
+        .expect("disabled row");
+    assert!(
+        disabled.contains('○') && !disabled.contains('●'),
+        "{disabled}"
+    );
+    assert!(disabled.contains("disabled in .mcp.json"), "{disabled}");
+    assert!(
+        !disabled.contains("new session"),
+        "the preview is already the new session: {disabled}"
+    );
+    let invalid = rows
+        .iter()
+        .find(|row| row.contains("broken"))
+        .expect("invalid row");
+    assert!(invalid.contains("invalid"), "{invalid}");
+    assert!(
+        invalid.contains("unknown key 'timeout'"),
+        "the error is actionable: {invalid}"
+    );
+    assert!(
+        !invalid.contains("new session"),
+        "an invalid entry is not available in a new session: {invalid}"
+    );
+    assert!(invalid.contains('○') && !invalid.contains('●'), "{invalid}");
+    let file = rows
+        .iter()
+        .find(|row| row.contains("(file)"))
+        .expect("whole-file invalid row");
+    assert!(file.contains("not valid JSON"), "{file}");
+    assert!(!file.contains("new session"), "{file}");
+
+    // Clicking a disabled row explains its current configuration and the exact
+    // action, rather than offering a locked "start a new session" dead end.
+    let y = rows
+        .iter()
+        .position(|row| row.contains("switched-off"))
+        .unwrap() as u16;
+    let x = col_of(&rows[y as usize], "switched-off");
+    click(&mut app, x as u16, y);
+    let detail = match app.ui.overlay.as_ref().map(|o| &o.kind) {
+        Some(OverlayKind::ContextDetail { text, .. }) => text.clone(),
+        other => panic!("disabled row must open its details, got {other:?}"),
+    };
+    assert!(detail.contains("State: disabled"), "{detail}");
+    assert!(detail.contains("never started"), "{detail}");
+    assert!(detail.contains("\"enabled\": true"), "{detail}");
+    assert!(detail.contains("/repo/.mcp.json"), "{detail}");
+    assert!(detail.contains("Command: fake-server"), "{detail}");
+    assert!(detail.contains("Arguments: 1"), "{detail}");
+    assert!(!detail.contains("approval"), "{detail}");
+    assert!(!detail.contains("new session to use it"), "{detail}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn the_new_session_view_without_agents_md_says_none_and_counts_less() {
     let with = scratch_dir("a");
     std::fs::write(with.join("AGENTS.md"), "x".repeat(4000)).unwrap();

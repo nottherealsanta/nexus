@@ -174,7 +174,6 @@ order = 1
 id = "git_status"
 label = "Git status"
 order = 2
-unavailable_reason = "Git status needs the files/git endpoints in Core (PLAN.md Step 12a)."
 
 [navigation.centre]
 # Exactly one centre view at a time.
@@ -229,17 +228,8 @@ kind = "choice"
 scope = "client"
 clients = "both"
 default = "system"
-options = ["system", "light", "dark", "named"]
+options = ["system", "light", "dark"]
 command = "app.theme"
-
-[[settings.section.row]]
-id = "appearance.named_theme"
-label = "Named theme"
-kind = "choice"
-scope = "client"
-clients = "both"
-unavailable_reason = "Named themes are not available yet."
-note = "Choose a named theme when themes are available."
 
 [[settings.section.row]]
 id = "appearance.density"
@@ -1181,7 +1171,7 @@ slash = "speak"
 when = ["has_session", "session.idle"]
 unavailable_reason = "Speaking needs an idle session with a completed answer."
 placement = ["palette", "composer"]
-note = "Core synthesizes the final answer with the cached TTS model and streams a WAV; the client plays it (PLAN.md I2)."
+note = "Core synthesizes the final answer with the cached TTS model and streams a WAV; the client plays it."
 
 [[command]]
 id = "session.speak_stop"

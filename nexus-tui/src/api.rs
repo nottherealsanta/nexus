@@ -1218,6 +1218,14 @@ impl CoreApi {
             .await
     }
 
+    /// A project's `.mcp.json` inventory: `{file, exists, revision, error, warnings, servers}`.
+    /// Read-only: it never starts a server.
+    pub async fn project_mcp(&self, project: &str) -> Result<Value, Error> {
+        self.http
+            .get(&format!("/api/project/{project}/mcp"), &[])
+            .await
+    }
+
     /// The connected providers' model catalog (`{source, models}`).
     pub async fn models(&self) -> Result<Value, Error> {
         self.http.get("/api/model", &[]).await

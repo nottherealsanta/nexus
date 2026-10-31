@@ -390,8 +390,8 @@ function control(r: Row): JSX.Element {
     return <Btn label={r.label} onPress={() => void run(r.command!)} disabled={!!reason} reason={reason} testID={`setting-${r.id}-action`} />;
   }
   if (r.id === "appearance.theme") {
-    return <Seg label="Theme" options={["system", "light", "dark", "named"]} value={themeChoice()} disabled={false}
-      onPick={(v) => { if (v === "named") { toast("info", "Named themes: shared theme tokens arrive with Step 12.2."); return; } themeChoice.set(v as any); setColorScheme(v as "light" | "dark" | "system"); savePrefs(); }} />;
+    return <Seg label="Theme" options={["system", "light", "dark"]} value={themeChoice()} disabled={false}
+      onPick={(v) => { themeChoice.set(v as any); setColorScheme(v as "light" | "dark" | "system"); savePrefs(); }} />;
   }
   if (r.id === "appearance.animations") return <Seg label={r.label} options={["on", "off"]} value={config()?.values?.ui?.reduced_motion ? "off" : "on"} onPick={(v) => void patchConfig("ui.reduced_motion", v === "off")} />;
   if (r.id === "mcp.full_definitions") return <Seg label={r.label} options={["off", "on"]} value={config()?.values?.mcp?.full_definitions ? "on" : "off"} onPick={(v) => void patchConfig("mcp.full_definitions", v === "on")} />;

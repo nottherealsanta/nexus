@@ -2,7 +2,7 @@
 //! server on loopback). Bodies come from `fixtures/` (real daemon captures and
 //! documented shapes).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -34,6 +34,8 @@ struct Inner {
     info: String,
     snapshot: String,
     scripts: VecDeque<Script>,
+    /// JSON bodies for read endpoints the test scripts, keyed by path.
+    routes: HashMap<String, String>,
     /// (path, last-event-id) of every request received.
     requests: Vec<(String, Option<String>)>,
 }
@@ -73,6 +75,13 @@ impl Mock {
     }
     fn set_token(&self, t: &str) {
         self.inner.lock().unwrap().token = t.into();
+    }
+    fn route(&self, path: &str, body: Value) {
+        self.inner
+            .lock()
+            .unwrap()
+            .routes
+            .insert(path.into(), body.to_string());
     }
     fn count(&self, path: &str) -> usize {
         self.inner
@@ -139,6 +148,8 @@ async fn serve(mut sock: tokio::net::TcpStream, inner: Arc<Mutex<Inner>>) {
                 r#"{"error":"unauthorized"}"#.into(),
                 false,
             )
+        } else if let Some(body) = g.routes.get(&path) {
+            (200, "application/json", body.clone(), false)
         } else {
             match path.as_str() {
                 "/api/info" => (200, "application/json", g.info.clone(), false),
@@ -512,5 +523,73 @@ async fn selecting_a_session_loads_its_history_without_a_resync() {
     assert_eq!(mock.count("/api/event"), 1);
     assert_eq!(mock.count(&format!("/api/session/{sid}/message")), 1);
     assert!(st.connection.is_live());
+    h.commands.send(Command::Shutdown).unwrap();
+}
+
+#[tokio::test]
+async fn mcp_inventory_reads_the_global_list_and_the_exact_project_endpoint() {
+    let mock = Mock::start("tok").await;
+    let home = temp_home("mcp-inventory");
+    write_daemon(&home, &mock.url, 10, "tok");
+    let project = "prj_1a17de160d3c070dfda";
+    mock.route("/api/skill", json!({"skills": [], "problems": []}));
+    mock.route(
+        "/api/mcp",
+        json!({"servers": [
+            {"server": "docs", "state": "connected", "tools": 2, "enabled": true},
+            {"server": "browser-use", "state": "disabled", "tools": 0, "enabled": false}
+        ]}),
+    );
+    mock.route(
+        &format!("/api/project/{project}/mcp"),
+        json!({
+            "project_id": project,
+            "file": "/repo/.mcp.json",
+            "exists": true,
+            "revision": "rev",
+            "error": null,
+            "warnings": [],
+            "servers": [{
+                "server": "browser-use", "state": "idle", "error": null,
+                "tools": 0, "enabled": true, "source": "project", "project_id": project,
+                "file": "/repo/.mcp.json", "transport": "stdio", "command": "npx",
+                "arg_count": 2, "cwd": "/repo", "env_names": ["TOKEN"]
+            }]
+        }),
+    );
+    mock.script(Script::Hold(connected(3, Some(3))));
+    let mut h = sync::spawn(config(&home));
+    let (mut st, mut log) = (AppState::new(), vec![]);
+    drive(&mut h, &mut st, &mut log, |s, _| s.connection.is_live()).await;
+    h.commands.send(Command::SkillMcp(project.into())).unwrap();
+    drive(&mut h, &mut st, &mut log, |_, log| {
+        log.iter().any(|m| matches!(m, SyncMsg::SkillMcp { .. }))
+    })
+    .await;
+
+    assert_eq!(mock.count(&format!("/api/project/{project}/mcp")), 1);
+    assert!(mock
+        .paths()
+        .contains(&format!("/api/project/{project}/mcp")));
+    let msg = log
+        .iter()
+        .find_map(|m| match m {
+            SyncMsg::SkillMcp {
+                project: answered,
+                mcp,
+                project_mcp,
+                ..
+            } => Some((answered, mcp, project_mcp)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(msg.0, project, "the preview's exact project id is read");
+    assert_eq!(msg.1.as_ref().unwrap()["servers"][0]["server"], "docs");
+    assert_eq!(msg.1.as_ref().unwrap()["servers"][1]["state"], "disabled");
+    let project_rows = msg.2.as_ref().unwrap();
+    assert_eq!(project_rows["project_id"], project);
+    assert_eq!(project_rows["servers"][0]["server"], "browser-use");
+    assert_eq!(project_rows["servers"][0]["state"], "idle");
+    assert_eq!(project_rows["servers"][0]["source"], "project");
     h.commands.send(Command::Shutdown).unwrap();
 }

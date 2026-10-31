@@ -5,7 +5,7 @@ import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, fo
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
-  agentCatalog, contextBudget, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, modelCatalog, tick,
+  agentCatalog, contextBudget, draftContext, draftContextKey, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, modelCatalog, tick,
   projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
@@ -72,7 +72,7 @@ function completionFor(text: string): Completion | null {
 export function Composer() {
   let ref: any;
   focusComposer.fn = () => { try { ref?.focus(); } catch {} };
-  const h = signal(44);
+  const h = signal(28);
   const key = () => draftKey();
   const text = () => draft()[key()] ?? "";
   const images = () => imageDrafts()[key()] ?? [];
@@ -144,8 +144,10 @@ export function Composer() {
   /** The latest request's input occupancy, as a count and a share of the model's window. */
   const usage = (): { input: number; pct: number | null } | null => {
     m();
-    const id = model.selected?.sessionId;
-    const budget = id ? contextBudget()[id] : null;
+    const id = ses()?.id;
+    const project = currentProject();
+    const draftAnswer = draftContext();
+    const budget = id ? contextBudget()[id] : project && draftAnswer?.key === draftContextKey(project) ? draftAnswer.data : null;
     if (!budget || !Number.isFinite(budget.used)) return null;
     return { input: budget.used, pct: budget.window && budget.window > 0 ? 100 * budget.used / budget.window : null };
 
@@ -153,7 +155,8 @@ export function Composer() {
   const usageLabel = () => {
     const u = usage();
     if (!u) return "";
-    const prefix = model.selected && contextBudget()[model.selected.sessionId]?.exact === false ? "~" : "";
+    const id = ses()?.id;
+    const prefix = !id || contextBudget()[id]?.exact === false ? "~" : "";
     if (u.pct === null) return prefix + compact(u.input);
     return `${prefix}${compact(u.input)} · ${u.pct >= 10 ? Math.round(u.pct) : u.pct.toFixed(1)}%`;
   };
@@ -305,14 +308,14 @@ export function Composer() {
               if (dictationPhase() !== "idle") { cancelDictation(); return; }
               if (open()) dismissed.set(text());
             }}
-            onContentSizeChange={(s) => h.set(Math.min(220, Math.max(44, Math.ceil(s.size?.height ?? (s as any).height ?? 28) + 16)))}
+            onContentSizeChange={(s) => h.set(Math.min(220, Math.max(28, Math.ceil(s.size?.height ?? (s as any).height ?? 22) + 4)))}
             style={{ height: h() }}
             class="font-mono px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
           />
-          <View class="h-2" />
+          <View class="h-1" />
           <View class="flex-row items-center gap-1 min-w-0 min-h-8">
             <View class="flex-1 min-w-0 flex-row items-center gap-1">
-              <Selector command="agent.change" label={agentName()} dot={agentRailColor(agent())} labelClass={`font-semibold ${agentColor(agent())}`} testID="composer-agent" />
+              <Selector command="agent.change" label={agentName()} labelClass={`font-semibold ${agentColor(agent())}`} testID="composer-agent" alignStart />
               <Selector command="model.change" label={modelParts().name} sub={isNarrow() || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
               <If when={!isNarrow()}>
                 <Selector command="model.effort" label={effort()} testID="composer-effort" />
@@ -322,16 +325,6 @@ export function Composer() {
               </If>
             </View>
             <View class="shrink-0 flex-row items-center gap-3">
-              <If when={!!usageLabel() && !isNarrow()}>
-                <View class="flex-row items-center gap-2" testID="composer-meter">
-                  <If when={usage()?.pct !== null && usage()?.pct !== undefined}>
-                    <View class="w-20 h-1 rounded-full bg-border overflow-hidden">
-                      <View class={`h-full rounded-full ${agentRailColor(agent())}`} style={{ width: `${meterPct()}%` }} />
-                    </View>
-                  </If>
-                  <Text style={{ numberOfLines: 1 }} class={T.meta} testID="composer-usage">{usageLabel()}</Text>
-                </View>
-              </If>
               <If when={dictationPhase() === "recording" || dictationPhase() === "stopping"}>
                 <IconButton icon="stop" label={dictationPhase() === "recording" ? "Stop and insert transcript" : "Finishing transcription"}
                   testID="dictation-stop" disabled={dictationPhase() !== "recording"} onPress={() => void run("voice.dictate")}
@@ -349,7 +342,7 @@ export function Composer() {
             </View>
           </View>
         </View>
-        <LocationStrip />
+        <LocationStrip usageLabel={usageLabel()} meterPct={usage()?.pct == null ? null : meterPct()} meterColor={agentRailColor(agent())} />
       </View>
     </View>
   );
@@ -419,8 +412,8 @@ function compact(n: number): string {
 }
 function capitalize(s: string): string { return s ? `${s[0].toUpperCase()}${s.slice(1)}` : "Build"; }
 
-/** A pill selector on the control row: an optional dot, the label, a muted sub-label and a chevron. */
-function Selector(p: { command: string; label: string; dot?: string; labelClass?: string; sub?: string; testID: string }) {
+/** A selector on the control row, with an optional muted sub-label. */
+function Selector(p: { command: string; label: string; labelClass?: string; sub?: string; testID: string; alignStart?: boolean }) {
   const c = byId.get(p.command);
   const state = () => c ? availability(c) : { ok: false, reason: "Command is unavailable." };
   const disabled = () => !state().ok;
@@ -430,12 +423,10 @@ function Selector(p: { command: string; label: string; dot?: string; labelClass?
       onPress={() => void run(p.command)} disabled={disabled()} testID={p.testID}
       accessibilityLabel={`${p.label}${disabled() ? `, unavailable: ${reason()}` : ""}`}
       tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{disabled() ? `${p.label}: ${reason()}` : p.label}</Text>}
-      class={`flex-row items-center gap-1.5 min-w-0 shrink h-7 px-2 rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
+      class={`flex-row items-center gap-1.5 min-w-0 shrink h-7 ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
     >
-      <If when={!!p.dot}>{() => <View class={`size-2 shrink-0 rounded-full ${p.dot}`} />}</If>
       <Text style={{ numberOfLines: 1 }} class={`text-[13px] leading-5 ${p.labelClass ?? "text-foreground-secondary"}`}>{p.label}</Text>
       <If when={!!p.sub}><Text style={{ numberOfLines: 1 }} class="text-[13px] leading-5 text-muted-foreground">{p.sub!}</Text></If>
-      <Icon name="chevron-down" size={12} class="tint-muted-foreground" />
     </Button>
   );
 }
@@ -511,7 +502,7 @@ function PendingStack() {
 }
 
 /** The location strip shows the path, branch and linked-worktree icon. */
-function LocationStrip() {
+function LocationStrip(p: { usageLabel: string; meterPct: number | null; meterColor: string }) {
   const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
   const session = () => { m(); return viewed(); };
   const directory = () => session()?.directory ?? project()?.path ?? "";
@@ -539,7 +530,7 @@ function LocationStrip() {
   };
   const tooltip = (text: string) => <Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{text}</Text>;
   return (
-    <If when={project() && directory()}>
+    <If when={(project() && directory()) || !!p.usageLabel}>
       <View class="w-full flex-row items-center gap-2 min-h-7 pt-1.5 px-1 min-w-0" testID="location-strip">
         <If when={!!session()}>
           <Button
@@ -562,6 +553,16 @@ function LocationStrip() {
         </If>
         <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={T.meta}>⑂</Text></If>
         <View class="flex-1" />
+        <If when={!!p.usageLabel}>
+          <View class="shrink-0 flex-row items-center gap-2" testID="composer-meter">
+            <If when={p.meterPct !== null && !isNarrow()}>
+              <View class="w-20 h-1 rounded-full bg-border overflow-hidden">
+                <View class={`h-full rounded-full ${p.meterColor}`} style={{ width: `${p.meterPct ?? 0}%` }} />
+              </View>
+            </If>
+            <Text style={{ numberOfLines: 1 }} class={T.meta} testID="composer-usage">{p.usageLabel}</Text>
+          </View>
+        </If>
       </View>
     </If>
   );

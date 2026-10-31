@@ -122,12 +122,26 @@ function serveStatic(req, res) {
   });
 }
 
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
   try { route(req, res); } catch (e) {
     console.error("request failed:", e);
     if (!res.headersSent) json(res, 500, { error: "host error" }); else res.destroy();
   }
-}).listen(port, "127.0.0.1", () => console.log(`nexus-nsh host on http://127.0.0.1:${port}  home=${nexusHome}  ${upstream ? "upstream=" + upstream.href : "static=" + staticDir}`));
+});
+server.on("upgrade", (req, socket, head) => {
+  if (!upstream || !allowedHosts.has(req.headers.host ?? "") || !allowedHosts.has(originHost(req.headers.origin ?? "")) || !req.url?.startsWith("/") || req.url.startsWith("//")) return socket.destroy();
+  const out = http.request({ host: upstream.hostname, port: upstream.port, path: req.url, headers: { ...req.headers, host: upstream.host, origin: upstream.origin } });
+  out.on("upgrade", (res, peer, extra) => {
+    socket.write(`HTTP/1.1 ${res.statusCode} ${res.statusMessage}\r\n${res.rawHeaders.reduce((s, h, i) => s + (i % 2 ? `${h}\r\n` : `${h}: `), "")}\r\n`);
+    if (head.length) peer.write(head);
+    if (extra.length) socket.write(extra);
+    peer.pipe(socket).pipe(peer);
+  });
+  out.on("error", () => socket.destroy());
+  out.on("response", () => socket.destroy());
+  out.end();
+});
+server.listen(port, "127.0.0.1", () => console.log(`nexus-nsh host on http://127.0.0.1:${port}  home=${nexusHome}  ${upstream ? "upstream=" + upstream.href : "static=" + staticDir}`));
 
 function route(req, res) {
   if (!guard(req, res)) return;

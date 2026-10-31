@@ -381,7 +381,7 @@ Dictation, Keybindings, Notifications, About.
 
 | ID | Feature | Class | Source / step | Notes |
 | --- | --- | --- | --- | --- |
-| ST1 | Appearance: theme (light/dark/system/named), density, font and size (NSH) | Client only | | Per-client; shared token file |
+| ST1 | Appearance: theme (light/dark/system), density, font and size (NSH) | Client only | | Per-client; shared token file |
 | ST2 | Providers: list with connected state | API ready | `GET /api/provider` (`id`, `label`, `dialect`, `connected`, `verified`, `methods`, key fields) | Settings → Providers page |
 | ST3 | Providers: account, expiry | Core work | 12a Settings over the API | Not returned |
 | ST4 | Providers: sign in (browser/device), sign out | API ready | `POST/GET/DELETE /api/provider/{id}/login` | Device flows and OpenCode API key |

@@ -1,7 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
+
 ## [0.10.0](https://github.com/nottherealsanta/nexus/compare/v0.7.2...v0.10.0) (2026-10-30)
 
+Nexus 0.10 is a rebuild around a shared Core and an ordered, visible context timeline.
+
+- A terminal client, session trees, subagents, context controls, and approvals.
+- Provider integrations, model selection, workspace tools, skills, MCP servers, and hooks.
+- Session search, file editing, worktrees, voice features, and migration from old Nexus.
+- Release installation with checksum verification for macOS and Linux. The web client requires a checkout.
+
+The detailed changes included in this release follow.
 
 ### Features
 

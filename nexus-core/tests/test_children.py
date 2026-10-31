@@ -101,10 +101,15 @@ async def test_non_blocking_child_wakes_the_idle_parent(env):
         if parent["id"] not in rt.turns:
             break
         await asyncio.sleep(0.01)
-    assert parent["id"] not in rt.turns and rt.turns  # the parent is idle, the child still runs
+    assert parent["id"] not in rt.turns and rt.turns  # the parent turn ended, but the child still runs
+    assert (await client.get(f"/api/session/{parent['id']}")).json()["status"] == "busy"
+    statuses = [e["data"] for e in rt.store.events(parent["id"], limit=5000) if e["type"] == "session.status"]
+    assert statuses[-1]["status"] == "busy" and statuses[-1]["turn_finished"] is True
+    assert all(s["status"] == "busy" for s in statuses)
 
     gate.set()
     await _idle(rt)
+    assert (await client.get(f"/api/session/{parent['id']}")).json()["status"] == "idle"
     texts = await _texts(client, parent["id"])
     assert next(t for role, t in texts if role == "tool").startswith("Started sub agent")
     notice = [t for role, t in texts if role == "user" and t.startswith("[Notification: sub agent finished]")]

@@ -371,6 +371,328 @@ fn draft_context_switches_are_sent_with_new_session_fields() {
 }
 
 #[test]
+fn new_session_mcp_inventory_prefers_the_project_row_over_a_disabled_global_default() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let project = a.current_project().unwrap();
+    let request = a.draft_request().unwrap();
+    a.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({
+            "tools": [],
+            "skills": [],
+            "mcp": [{"server": "browser-use", "state": "on", "tools": 4, "locked": false, "scope": "project"}]
+        })),
+    });
+    a.apply_sync(SyncMsg::SkillMcp {
+        project: project.clone(),
+        skills: Ok(serde_json::json!({"skills": []})),
+        mcp: Ok(serde_json::json!({"servers": [
+            {"server": "docs", "state": "connected", "tools": 2, "enabled": true},
+            {"server": "browser-use", "state": "disabled", "tools": 0, "enabled": false}
+        ]})),
+        project_mcp: Ok(serde_json::json!({
+            "project_id": project.clone(),
+            "file": "/repo/.mcp.json",
+            "exists": true,
+            "revision": "rev",
+            "error": null,
+            "warnings": [],
+            "servers": [
+                {
+                    "server": "browser-use", "state": "idle", "error": null,
+                    "tools": 0, "enabled": true, "source": "project", "project_id": project.clone(),
+                    "file": "/repo/.mcp.json", "transport": "stdio", "command": "npx",
+                    "arg_count": 2, "cwd": "/repo", "env_names": ["TOKEN"]
+                },
+                {
+                    "server": "switched-off", "state": "disabled", "error": null,
+                    "tools": 0, "enabled": false, "source": "project", "project_id": project.clone(),
+                    "file": "/repo/.mcp.json", "transport": "stdio", "command": "fake-server",
+                    "arg_count": 1, "cwd": "/repo", "env_names": []
+                },
+                {
+                    "server": "broken", "state": "invalid",
+                    "error": "unknown key 'timeout'", "tools": 0, "enabled": false,
+                    "source": "project", "project_id": project.clone(), "file": "/repo/.mcp.json"
+                },
+                {
+                    "server": "other-project", "state": "idle", "error": null,
+                    "tools": 0, "enabled": true, "source": "project", "project_id": "prj_other",
+                    "file": "/other/.mcp.json"
+                }
+            ]
+        })),
+    });
+
+    let inventory = a.ui.inventories.get(&project).unwrap();
+    assert!(inventory.mcp.iter().any(|row| row["server"] == "docs"));
+    let browser_rows: Vec<_> = inventory
+        .mcp
+        .iter()
+        .filter(|row| row["server"] == "browser-use")
+        .collect();
+    assert_eq!(browser_rows.len(), 1, "one row per server name");
+    assert_eq!(browser_rows[0]["state"], "idle", "the project row wins");
+    assert_eq!(browser_rows[0]["source"], "project");
+
+    // The exact screenshot case: Core's draft plan has the project entry on,
+    // while the global list also has a disabled browser-use default.
+    let items = a.context_items();
+    let browser = items
+        .iter()
+        .find(|item| item.key == "mcp:browser-use")
+        .unwrap();
+    assert!(browser.on, "the project entry is in the model context");
+    assert!(!browser.locked, "a draft switch must stay switchable");
+    assert!(browser.label.contains("4 tools"), "{}", browser.label);
+    assert!(!browser.label.contains("disabled"), "{}", browser.label);
+    let disabled = items
+        .iter()
+        .find(|item| item.key == "mcp:switched-off")
+        .unwrap();
+    assert!(!disabled.on && disabled.locked);
+    assert!(
+        disabled.label.contains("disabled in .mcp.json"),
+        "{}",
+        disabled.label
+    );
+    let broken = items.iter().find(|item| item.key == "mcp:broken").unwrap();
+    assert!(!broken.on && broken.locked);
+    assert!(broken.label.contains("invalid"), "{}", broken.label);
+    assert!(
+        broken.label.contains("unknown key 'timeout'"),
+        "{}",
+        broken.label
+    );
+    assert!(
+        !items.iter().any(|item| item.key == "mcp:other-project"),
+        "a row for another project must not leak into this preview"
+    );
+}
+
+#[test]
+fn new_session_mcp_preview_keeps_the_model_plan_and_explains_project_rows() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let project = a.current_project().unwrap();
+    let request = a.draft_request().unwrap();
+    a.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({
+            "tools": [],
+            "skills": [],
+            "mcp": [
+                {"server": "ready", "state": "on", "tools": 3, "locked": false, "scope": "global"},
+                {"server": "project-on", "state": "on", "tools": 2, "locked": false, "scope": "project"},
+                {
+                    "server": "waiting", "state": "unavailable", "tools": null,
+                    "locked": true, "error": "connect failed", "scope": "project"
+                },
+                {"server": "toggled", "state": "off", "tools": null, "locked": false, "scope": "project"}
+            ]
+        })),
+    });
+    a.apply_sync(SyncMsg::SkillMcp {
+        project: project.clone(),
+        skills: Ok(serde_json::json!({"skills": []})),
+        mcp: Ok(serde_json::json!({"servers": [
+            {"server": "ready", "state": "idle", "tools": 0, "enabled": true}
+        ]})),
+        project_mcp: Ok(serde_json::json!({
+            "project_id": project.clone(),
+            "file": "/repo/.mcp.json",
+            "exists": true,
+            "revision": "rev",
+            "error": null,
+            "warnings": ["ignored unknown top-level keys: description"],
+            "servers": [
+                {
+                    "server": "project-on", "state": "idle", "error": null,
+                    "tools": 0, "enabled": true, "source": "project", "project_id": project.clone(),
+                    "file": "/repo/.mcp.json", "transport": "stdio", "command": "runner",
+                    "arg_count": 2, "cwd": "/repo", "env_names": ["TOKEN"],
+                    "include": ["read"], "exclude": ["delete"],
+                    "connect_timeout": 20, "call_timeout": 60,
+                    "warnings": ["ignored unknown top-level keys: description"]
+                },
+                {
+                    "server": "toggled", "state": "idle", "error": null,
+                    "tools": 0, "enabled": true, "source": "project", "project_id": project.clone(),
+                    "file": "/repo/.mcp.json"
+                },
+                {
+                    "server": "broken", "state": "invalid",
+                    "error": "unknown key 'timeout'", "tools": 0, "enabled": false,
+                    "source": "project", "project_id": project.clone(),
+                    "file": "/repo/.mcp.json"
+                },
+                {
+                    "server": "switched-off", "state": "disabled", "error": null,
+                    "tools": 0, "enabled": false, "source": "project", "project_id": project.clone(),
+                    "file": "/repo/.mcp.json", "transport": "stdio", "command": "fake-server",
+                    "arg_count": 1, "cwd": "/repo", "env_names": []
+                },
+                {
+                    "server": "(file)", "state": "invalid",
+                    "error": ".mcp.json is not valid JSON: trailing comma", "tools": 0,
+                    "enabled": false, "source": "project", "project_id": project.clone(),
+                    "file": "/repo/.mcp.json"
+                }
+            ]
+        })),
+    });
+
+    let items = a.context_items();
+    let ready = items.iter().find(|item| item.key == "mcp:ready").unwrap();
+    assert!(ready.on && !ready.locked);
+    assert!(ready.label.contains("3 tools"), "{}", ready.label);
+    let project_on = items
+        .iter()
+        .find(|item| item.key == "mcp:project-on")
+        .unwrap();
+    assert!(project_on.on && !project_on.locked);
+    assert!(project_on.label.contains("2 tools"), "{}", project_on.label);
+    let waiting = items.iter().find(|item| item.key == "mcp:waiting").unwrap();
+    assert!(!waiting.on && waiting.locked);
+    assert!(waiting.label.contains("unavailable"), "{}", waiting.label);
+    assert!(
+        waiting.label.contains("connect failed"),
+        "{}",
+        waiting.label
+    );
+    let toggled = items.iter().find(|item| item.key == "mcp:toggled").unwrap();
+    assert!(
+        !toggled.on && !toggled.locked,
+        "a draft switch stays switchable"
+    );
+    for (key, state) in [
+        ("mcp:broken", "invalid"),
+        ("mcp:switched-off", "disabled in .mcp.json"),
+        ("mcp:(file)", "invalid"),
+    ] {
+        let item = items.iter().find(|item| item.key == key).unwrap();
+        assert!(!item.on && item.locked, "{key} must be off and locked");
+        assert!(item.label.contains(state), "{key}: {}", item.label);
+        assert!(!item.label.contains("new session"), "{key}: {}", item.label);
+    }
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| item.key.starts_with("mcp:") && item.on)
+            .count(),
+        2,
+        "only the servers in Core's draft plan count as model context"
+    );
+
+    let info = items
+        .iter()
+        .position(|item| item.key == "mcp:broken")
+        .and_then(|index| a.context_item_info(index))
+        .unwrap();
+    assert!(info.0.contains("broken"));
+    assert!(info.1.contains("invalid"), "{}", info.1);
+    assert!(info.1.contains("unknown key 'timeout'"), "{}", info.1);
+    assert!(info.1.contains("/repo/.mcp.json"), "{}", info.1);
+    assert!(info.1.contains("Action: fix or rename"), "{}", info.1);
+    assert!(!info.1.contains("approval"), "{}", info.1);
+    assert!(!info.1.contains("Fingerprint"), "{}", info.1);
+
+    let info = items
+        .iter()
+        .position(|item| item.key == "mcp:switched-off")
+        .and_then(|index| a.context_item_info(index))
+        .unwrap();
+    assert!(info.1.contains("State: disabled"), "{}", info.1);
+    assert!(info.1.contains("never started"), "{}", info.1);
+    assert!(info.1.contains("\"enabled\": true"), "{}", info.1);
+    assert!(info.1.contains("/repo/.mcp.json"), "{}", info.1);
+    assert!(info.1.contains("Command: fake-server"), "{}", info.1);
+    assert!(info.1.contains("Arguments: 1"), "{}", info.1);
+    assert!(!info.1.contains("approval"), "{}", info.1);
+    assert!(!info.1.contains("new session to use it"), "{}", info.1);
+
+    let info = items
+        .iter()
+        .position(|item| item.key == "mcp:project-on")
+        .and_then(|index| a.context_item_info(index))
+        .unwrap();
+    assert!(
+        info.1
+            .contains("State: on (in the model context of the next session)"),
+        "{}",
+        info.1
+    );
+    assert!(info.1.contains("Command: runner"), "{}", info.1);
+    assert!(info.1.contains("Arguments: 2"), "{}", info.1);
+    assert!(info.1.contains("Working directory: /repo"), "{}", info.1);
+    assert!(info.1.contains("Environment: TOKEN"), "{}", info.1);
+    assert!(info.1.contains("Include tools: read"), "{}", info.1);
+    assert!(info.1.contains("Exclude tools: delete"), "{}", info.1);
+    assert!(
+        info.1.contains("Timeouts: connect 20s, call 60s"),
+        "{}",
+        info.1
+    );
+    assert!(info.1.contains("Startup:"), "{}", info.1);
+    assert!(!info.1.contains("approval"), "{}", info.1);
+    assert!(!info.1.contains("Fingerprint"), "{}", info.1);
+
+    let info = items
+        .iter()
+        .position(|item| item.key == "mcp:(file)")
+        .and_then(|index| a.context_item_info(index))
+        .unwrap();
+    assert!(info.0.contains("(file)"));
+    assert!(info.1.contains("invalid"), "{}", info.1);
+    assert!(info.1.contains("not valid JSON"), "{}", info.1);
+    assert!(info.1.contains("Action: fix /repo/.mcp.json"), "{}", info.1);
+    assert!(!info.1.contains("approval"), "{}", info.1);
+}
+
+#[test]
+fn an_explicit_project_state_is_never_shown_on_even_when_a_draft_row_says_on() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let project = a.current_project().unwrap();
+    let request = a.draft_request().unwrap();
+    a.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({
+            "tools": [],
+            "skills": [],
+            "mcp": [{"server": "shared-name", "state": "on", "tools": 1, "locked": false, "scope": "project"}]
+        })),
+    });
+    a.apply_sync(SyncMsg::SkillMcp {
+        project: project.clone(),
+        skills: Ok(serde_json::json!({"skills": []})),
+        mcp: Ok(serde_json::json!({"servers": [
+            {"server": "shared-name", "state": "connected", "tools": 1, "enabled": true}
+        ]})),
+        project_mcp: Ok(serde_json::json!({
+            "project_id": project.clone(),
+            "file": "/repo/.mcp.json",
+            "exists": true,
+            "revision": "rev",
+            "error": null,
+            "warnings": [],
+            "servers": [{
+                "server": "shared-name", "state": "invalid",
+                "error": "name 'shared-name' is already used by a global MCP server",
+                "tools": 0, "enabled": false, "source": "project", "project_id": project,
+                "file": "/repo/.mcp.json"
+            }]
+        })),
+    });
+    let item = a
+        .context_items()
+        .into_iter()
+        .find(|item| item.key == "mcp:shared-name")
+        .unwrap();
+    assert!(!item.on, "an invalid project row must not look active");
+    assert!(item.locked);
+    assert!(item.label.contains("invalid"), "{}", item.label);
+}
+
+#[test]
 fn skills_and_mcp_events_toast_and_debounce() {
     let mut a = app();
     let first = a.ui.alerts.toasts.len();
@@ -1919,6 +2241,34 @@ fn core_answers_the_starting_context_of_the_current_draft_only() {
     );
     a.tick(std::time::Instant::now());
     assert_eq!(asked(&a), 2);
+}
+
+#[test]
+fn draft_tool_switch_stays_visible_through_replanning() {
+    let mut a = App::new(
+        nexus_tui::state::AppState::new(),
+        nexus_tui::theme::Theme::new(opts(Mode::Dark, Tier::TrueColor)),
+        (120, 36),
+    );
+    a.state.apply(SyncMsg::Snapshot {
+        snapshot: Box::new(common::snapshot()),
+        cause: nexus_tui::sync::ResyncCause::Initial,
+    });
+    let request = a.draft_request().expect("draft request");
+    a.apply_sync(SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({"tools": ["read", "grep"]})),
+    });
+    a.ui.draft.disabled_tools.push("read".into());
+    assert!(a.context_items().iter().any(|i| i.key == "read" && !i.on));
+    let request = a.draft_request().unwrap();
+    a.apply_sync(SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({"tools": ["grep"]})),
+    });
+    assert!(a.context_items().iter().any(|i| i.key == "read" && !i.on));
+    a.ui.draft.disabled_tools.clear();
+    assert!(a.context_items().iter().any(|i| i.key == "read" && i.on));
 }
 
 #[test]

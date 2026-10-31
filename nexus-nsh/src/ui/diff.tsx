@@ -7,7 +7,7 @@ import { width } from "../store";
 
 export const SPLIT_MIN_WIDTH = 1100;
 const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)/;
-const MONO = "font-mono text-[13px] leading-5";
+const MONO = "font-(family-name:--font-code) text-[13px] leading-5";
 
 export type DiffItem = { kind: "hunk" | "ctx" | "add" | "del"; o?: number; n?: number; text: string };
 

@@ -1,5 +1,5 @@
 import type { JSX } from "nsh";
-import { List, Scroll, Text, View, effect, signal } from "nsh";
+import { List, PanResponder, Scroll, Text, View, effect, signal } from "nsh";
 import { Button, ContextMenu, MenuItem, Tab, Tabs, Input } from "nsh/base";
 import { Btn, Icon, IconButton, Status, AttentionMark, T, FOCUS, relTime, abbrev, midTruncate } from "./kit";
 import { manifest } from "../gen/manifest";
@@ -10,8 +10,10 @@ import { request } from "../core/transport";
 import { fileListing, loadFiles, showFile } from "../store";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
+import { ProjectMcpPanel } from "./project-mcp";
 
 const TAB_ICON: Record<string, IconName> = { sessions: "sessions", files: "files", projects: "projects" };
+export const leftSidebarWidth = signal(264);
 const tabs = manifest.navigation.left_sidebar.tab as unknown as { id: "sessions" | "files" | "projects"; label: string; command: string; order: number }[];
 
 function hint(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
@@ -42,8 +44,14 @@ export function SidebarTabs(p: { labels?: boolean }) {
 }
 
 export function LeftSidebar(p: { drawer?: boolean }) {
+  let startWidth = 264;
+  const resize = PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onPanResponderGrant: () => { startWidth = leftSidebarWidth(); },
+    onPanResponderMove: (_event, gesture) => { leftSidebarWidth.set(Math.max(180, Math.min(480, startWidth + gesture.dx))); },
+  });
   return (
-    <View class={`bg-sidebar ${p.drawer ? "flex-1" : "w-[264px]"}`} testID="left-sidebar" role="none" accessibilityLabel="Left sidebar">
+    <View class={`bg-sidebar ${p.drawer ? "flex-1" : "shrink-0"}`} style={p.drawer ? {} : { width: leftSidebarWidth() }} testID="left-sidebar" role="none" accessibilityLabel="Left sidebar">
       <If when={!!p.drawer}>
         <View class="flex-row items-center h-14 px-2"><SidebarTabs labels /></View>
       </If>
@@ -62,6 +70,7 @@ export function LeftSidebar(p: { drawer?: boolean }) {
           <Text class={T.meta}>{hint("app.settings") ?? ""}</Text>
         </Button>
       </View>
+      <If when={!p.drawer}><View {...resize.panHandlers} class="absolute right-0 top-0 bottom-0 w-2" testID="left-sidebar-resize" accessibilityLabel="Resize left sidebar" /></If>
     </View>
   );
 }
@@ -70,7 +79,7 @@ export function SessionRail() {
   return (
     <View class="w-12 bg-sidebar items-center pt-2" testID="session-rail" accessibilityLabel="Session rail">
       <IconButton icon="search" label="Search sessions" testID="rail-search" onPress={() => { leftTab.set("sessions"); toggleLeft(); }} />
-      <View class="h-[112px] justify-start"><IconButton icon="plus" label="New session" testID="rail-new-session" onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} /></View>
+      <IconButton icon="plus" label="New session" testID="rail-new-session" onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} />
       <Scroll class="flex-1" contentClass="items-center gap-1 pb-2">
         <Each of={rowSessions()} key={(s) => s.id}>
           {(s) => <Button onPress={() => void selectSession(s().id)} accessibilityLabel={`Open ${s().title || "Untitled"}`}
@@ -320,6 +329,7 @@ function ProjectsTab() {
           return <ProjectRow project={() => row.project} count={count} />;
         }}
       </List>
+      <ProjectMcpPanel />
     </View>
   );
 }

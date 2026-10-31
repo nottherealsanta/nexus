@@ -108,6 +108,7 @@ Then, from any directory:
 | `nexus` / `nexus tui` | Launch the TUI (starts Core with the repo's `uv run nexus`); runs the release binary (`--debug` for a debug build; debug redraws are about 10x slower). The TUI opens the directory you launched from as a project and shows its new-session screen (`NEXUS_TUI_LAUNCH_DIR`, set by the launcher) |
 | `nexus build` | `uv sync`, release TUI build (`--debug` for a debug build), NSH web build |
 | `nexus web` | Build the web app if needed, start Core, serve it on 4820 and open it (`--no-open`, `--port N`) |
+| `nexus dev web` | Start Core and the hot-reloading NSH web app, then open it through the API proxy; Ctrl-C stops both web servers (not Core). Use `--no-open`, `--port N` for the proxy, and `--dev-port N` for NSH (defaults 4820 and 8790). NSH's development host may also be reachable on the local network. |
 | `nexus restart` | Stop and start the Core daemon |
 | `nexus stop` | Stop the Core daemon |
 | `nexus status` | Core daemon and provider status |

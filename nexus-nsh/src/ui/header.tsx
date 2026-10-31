@@ -1,7 +1,7 @@
 import { Scroll, Text, View } from "nsh";
 import { Button } from "nsh/base";
 import { IconButton, Status, FOCUS, TONE } from "./kit";
-import { SidebarTabs, attention } from "./sidebar";
+import { SidebarTabs, attention, leftSidebarWidth } from "./sidebar";
 import { byId, closeTab, keyLabel, run, rightIsOpen, rightWidthHint, tabIds } from "../commands";
 import { attention as attentionGlyph, statusGlyphs, structure } from "../gen/theme";
 import { centre, connection, drawer, isNarrow, leftOpen, m, model, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
@@ -50,7 +50,7 @@ function SessionTab(p: { id: string }) {
   );
 }
 
-/** The session tab strip, on the reading column; the viewed tab is the only one on the canvas surface. */
+/** The session tab strip; the viewed tab is the only one on the canvas surface. */
 function WorkspaceTabs() {
   const ids = () => { m(); return tabIds(); };
   const current = () => centre();
@@ -156,7 +156,7 @@ export function SubagentStrip() {
 
 /**
  * The 44 px chrome band (56 px narrow). Three slots match the sidebars: 264 px over the left
- * sidebar, the centre column (tabs and run status on the 760 px reading column), and 300 px over
+ * sidebar, the centre column (tabs and run status), and 300 px over
  * the right sidebar when it is docked. Narrow, the sidebars are drawers and the band is 56 px.
  */
 export function Header() {
@@ -165,12 +165,12 @@ export function Header() {
   const rightDocked = () => !isNarrow() && rightIsOpen(width());
   return (
     <View class={`flex-row items-center bg-sidebar ${isNarrow() ? "h-14" : "h-11"}`} role="toolbar" accessibilityLabel="Workspace header" testID="header">
-      <View class={`flex-row items-center gap-0.5 shrink-0 px-2 ${leftDocked() ? "w-[264px]" : ""}`}>
+      <View class="flex-row items-center gap-0.5 shrink-0 px-2" style={leftDocked() ? { width: leftSidebarWidth() } : {}}>
         <IconButton icon="panel-left" label="Toggle left sidebar" testID="toggle-left" selected={isNarrow() ? drawer() === "left" : leftOpen()} onPress={() => run("sidebar.left.toggle")} reason={key("sidebar.left.toggle") ?? undefined} />
         <If when={leftDocked()}><SidebarTabs /></If>
       </View>
-      <View class="flex-1 min-w-0 h-full flex-row items-center justify-center px-2">
-        <View class="flex-1 min-w-0 max-w-[760px] flex-row items-center gap-2">
+      <View class="flex-1 min-w-0 h-full flex-row items-center px-2">
+        <View class="flex-1 min-w-0 flex-row items-center gap-2">
           <WorkspaceTabs />
           <View class="flex-row items-center gap-2 shrink-0">
             <If when={conn().kind !== "live" && conn().kind !== "connecting"}>

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import secrets
 import time
@@ -106,6 +107,8 @@ from .loop import (
     ToolStart,
     TurnEnd,
 )
+from .mcp.project import ProjectMcp
+from .mcp.search import Result as McpSearchResult
 from .observations import FileGuard, FileObservation
 from .questions import PendingQuestion, QuestionError
 from .recovery import Recovery, open_approvals
@@ -187,12 +190,18 @@ class ReasoningClock:
         return round(self.total, 3) if self.total is not None else None
 
 
-def _config_stamp() -> tuple[int, int] | None:
+def _config_stamp() -> tuple[int, str] | None:
+    """Content stamp for the MCP manager.
+
+    mtime and size alone miss a rewrite made within the filesystem's timestamp
+    granularity, or one whose timestamp was preserved. The MCP manager compares
+    this on its next use, so it must notice every byte change.
+    """
     try:
-        stat = ConfigFile().path.stat()
+        raw = ConfigFile().path.read_bytes()
     except OSError:
         return None
-    return stat.st_mtime_ns, stat.st_size
+    return len(raw), hashlib.sha256(raw).hexdigest()
 
 
 class Runtime:
@@ -213,6 +222,7 @@ class Runtime:
         self.resolved_questions: dict[str, str] = {}  # qst id -> "answered" | "cancelled" (bounded tombstones)
         self.mcp = mcp_files.McpManager(lambda kind, data: self.bus.publish(kind, data),
                                         lambda: ConfigFile().mcp_servers(), _config_stamp)
+        self.project_mcps: dict[str, ProjectMcp] = {}
         self.inboxes: dict[str, list[str]] = {}  # session id -> notices waiting for its next model call
         self.notify: dict[str, str] = {}  # child id -> parent id, for children started with wait: false
         self.escalations: dict[str, list[str]] = {}  # child id -> blocks it reported, until its parent's report carries them
@@ -341,6 +351,43 @@ class Runtime:
             raise NotFound(f"no project {project_id}")
         return project
 
+    def project_mcp(self, project: Project) -> ProjectMcp:
+        """This project's own `.mcp.json` scope; its servers never appear in another project."""
+        manager = self.project_mcps.get(project.id)
+        if manager is None or manager.project_path != str(Path(project.path).resolve()):
+            manager = ProjectMcp(project.id, project.path, lambda kind, data: self.bus.publish(kind, data),
+                                 # Only enabled globals reserve a name. A disabled entry (including the offered
+                                 # browser-use default) cannot shadow a project server; enabling it later makes
+                                 # the project entry invalid on its next read.
+                                 reserved=lambda: set(self.mcp.names()))
+            self.project_mcps[project.id] = manager
+        return manager
+
+    def project_mcp_by_path(self, project_path: str | None) -> ProjectMcp | None:
+        if not project_path:
+            return None
+        resolved = str(Path(project_path).expanduser().resolve())
+        project = next((p for p in self.store.projects() if p.path == resolved), None)
+        return self.project_mcp(project) if project is not None else None
+
+    def project_mcp_summary(self, project: Project) -> dict[str, Any]:
+        """This project's `.mcp.json` state: no secret values, and it never starts a server."""
+        manager = self.project_mcp(project)
+        definition = manager.refresh()
+        return {"project_id": project.id, "file": definition.file, "exists": definition.exists,
+                "revision": definition.revision, "error": definition.error,
+                "warnings": list(definition.warnings), "servers": manager.status()}
+
+    def project_mcp_row(self, project: Project, name: str) -> dict[str, Any] | None:
+        return self.project_mcp(project).row(name)
+
+    async def restart_project_mcp(self, project: Project, name: str) -> dict[str, Any]:
+        manager = self.project_mcp(project)
+        manager.refresh()
+        row = await manager.restart(name)
+        manager.emit("mcp.changed", {"file": manager.definition().file})
+        return row
+
     def rename_project(self, project_id: str, name: str, *, expected_revision: int | None = None) -> Project:
         self.project(project_id)
         project = self.store.update_project(project_id, name=name, expected_revision=expected_revision)
@@ -372,6 +419,9 @@ class Runtime:
             if not self.store.delete_project(project_id):
                 raise NotFound(f"no project {project_id}")
             self._publish_tombstones(sessions)
+            manager = self.project_mcps.pop(project_id, None)
+            if manager is not None:
+                await manager.close()
             self.bus.publish("project.deleted", {"id": project_id})
         finally:
             self.closing_sessions.difference_update(closing_ids)
@@ -414,13 +464,16 @@ class Runtime:
             "directory_changed": str(Path(s.directory).resolve()) != starting,
             "directory_change": ({"from": pending["from"], "to": pending["to"], "status": "pending",
                                   "source": pending["source"]} if pending else None),
-            "permission": s.permission, "status": "busy" if s.id in self.turns else "idle",
+            "permission": s.permission, "status": "busy" if self._session_busy(s) else "idle",
             "archived": bool(s.archived), "revision": s.revision, "continued_from": s.continued_from,
             "continued_to": self.store.continuation_of(s.id),
             "created": s.created, "updated": s.updated,
             # A child's spend, for its card in the parent; no ledger query for root sessions.
             **({"tokens": self._spent_tokens(s.id)} if s.parent_id else {}),
         }
+
+    def _session_busy(self, session: Session) -> bool:
+        return session.id in self.turns or any(c.id in self.turns for c in self.store.children(session.id))
 
     def _spent_tokens(self, session_id: str) -> int:
         models = self.store.session_usage(session_id)["models"].values()
@@ -441,8 +494,10 @@ class Runtime:
         skills += [{"name": n, "description": r["description"], "scope": r["scope"], "locked": started, "state": "off"}
                    for n, r in book.get("off", {}).items()]
         mcp = snapshot.get("mcp") or {}
+        scopes = mcp.get("scopes") or {}
         servers = [{"server": n, "tools": (mcp.get("tools") or {}).get(n), "locked": False, "error": None,
-                    "state": "off" if mcp_files.DISABLED_PREFIX + n in disabled else "on"} for n in mcp.get("servers", [])]
+                    "scope": scopes.get(n), "state": "off" if mcp_files.DISABLED_PREFIX + n in disabled else "on"}
+                   for n in mcp.get("servers", [])]
         servers += [{"server": n, "tools": None, "locked": True, "error": e, "state": "unavailable"}
                     for n, e in (mcp.get("unavailable") or {}).items()]
         servers += [{"server": n, "tools": None, "locked": started, "error": None, "state": "off"}
@@ -528,15 +583,53 @@ class Runtime:
     def skills(self, project_path: str | None) -> skill_files.SkillSet:
         return skill_files.discover(project_path)
 
-    def switchable(self, project_path: str | None) -> list[str]:
-        """Names beyond the built-in tools a session may switch off: user tools and `skill:<name>` entries."""
+    def switchable(self, project_path: str | None, project_id: str | None = None) -> list[str]:
+        """Names beyond the built-in tools a session may switch off: user tools, skills and both MCP scopes."""
+        project = self.project(project_id) if project_id else None
+        mcp_names = self.mcp.names(enabled_only=False)
+        project_mcp = self.project_mcp(project) if project is not None else self.project_mcp_by_path(project_path)
+        if project_mcp is not None:
+            mcp_names += [name for name in project_mcp.known_names() if name not in mcp_names]
         return [*self.extensions(project_path).tools,
                 *(skill_files.DISABLED_PREFIX + n for n in self.skills(project_path).skills),
-                *(mcp_files.DISABLED_PREFIX + n for n in self.mcp.names(enabled_only=False))]
+                *(mcp_files.DISABLED_PREFIX + n for n in mcp_names)]
 
-    def mcp_servers(self, disabled: set[str] | frozenset[str] = frozenset()) -> list[str]:
+    def mcp_servers(self, disabled: set[str] | frozenset[str] = frozenset(),
+                    project: Project | None = None) -> list[str]:
         """Enabled servers a session reaches through `mcp_tool_search`/`mcp_call`, minus those it switched off."""
-        return [n for n in self.mcp.names() if mcp_files.DISABLED_PREFIX + n not in disabled]
+        names = self.mcp.names()
+        if project is not None:
+            names += [name for name in self.project_mcp(project).names(disabled) if name not in names]
+        return [n for n in names if mcp_files.DISABLED_PREFIX + n not in disabled]
+
+    def _mcp_connection(self, project: Project, name: str) -> Any:
+        project_mcp = self.project_mcp(project)
+        if name in project_mcp.names(enabled_only=False):
+            return project_mcp.manager.connections.get(name)
+        return self.mcp.connections.get(name)
+
+    def _mcp_scope(self, session: Session, name: str) -> tuple[Any, bool]:
+        """`(manager-like scope, is_project)` for one server name frozen into a session."""
+        snapshot = self.snapshot_for(session)
+        scopes = (snapshot.get("mcp") or {}).get("scopes") or {}
+        project_mcp = self.project_mcp(self.project(session.project_id))
+        is_project = scopes.get(name) == "project" or (
+            name not in scopes and name in project_mcp.valid_names())
+        return (project_mcp if is_project else self.mcp), is_project
+
+    def _mcp_targets(self, session: Session) -> list[tuple[str, str]]:
+        """Every `(server, tool)` known in the scopes this session may call."""
+        targets: list[tuple[str, str]] = []
+        for name in self._mcp_allowed(session):
+            scope, _ = self._mcp_scope(session, name)
+            find = getattr(scope, "targets", None)
+            if find is not None:
+                targets.extend(find([name]))
+        return targets
+
+    def _mcp_collision(self, session: Session, target: str) -> tuple[str, str] | None:
+        from .mcp import bridge as mcp_bridge
+        return mcp_bridge.collision(target, self._mcp_targets(session))
 
     @staticmethod
     def enabled_tool_names(granted: list[str], control: list[str], disabled: set[str], child: bool) -> list[str]:
@@ -673,25 +766,53 @@ class Runtime:
         off = {n: s.record() for n, s in found.skills.items() if n not in items}
         return {"items": items, "off": off}
 
-    def _mcp_at_start(self, disabled: set[str]) -> dict[str, Any]:
+    def _mcp_at_start(self, disabled: set[str], project: Project) -> dict[str, Any]:
         """The MCP servers a new session starts with, and how they are listed in its context.
 
         Every enabled server that is not switched off should already be online (`create_session_ready`
-        connects them); one that is not is `unavailable` and stays off for this session.
+        connects them); one that is not is `unavailable` and stays off for this session. An enabled
+        project entry is connected like a global one; a disabled entry is never started and holds no
+        row here.
         """
         full, limit = ConfigFile().mcp_modes()
-        wanted = self.mcp_servers(disabled)
-        up = [n for n in wanted if self.mcp.connections[n].state == "connected"]
-        failed = [n for n in self.mcp.names() if self.mcp.connections[n].state == "failed"]
-        down = {n: self.mcp.connections[n].error or "not connected"
-                for n in dict.fromkeys([*(n for n in wanted if n not in up), *failed])}
-        off = [n for n in self.mcp.names() if mcp_files.DISABLED_PREFIX + n in disabled and n not in down]
-        listing = self.mcp.listing(up, full=full, max_listed=limit) if up else ""
-        return {"servers": up, "unavailable": down, "off": off, "full_definitions": full, "max_listed_tools": limit,
-                "listing": listing, "tools": {n: len(self.mcp.connections[n].tools) for n in up}}
+        project_mcp = self.project_mcp(project)
+        definition = project_mcp.refresh()  # reconcile before reading manager.connections
+        global_names = self.mcp.names()
+        project_names = project_mcp.names(disabled)
+        all_global = self.mcp.connections
+        all_project = project_mcp.manager.connections
+        global_wanted = [n for n in global_names if mcp_files.DISABLED_PREFIX + n not in disabled]
+        global_connections = {n: all_global.get(n) for n in global_wanted}
+        project_connections = {n: all_project.get(n) for n in project_names}
+        up_global = [n for n, conn in global_connections.items() if conn is not None and conn.state == "connected"]
+        up_project = [n for n, conn in project_connections.items() if conn is not None and conn.state == "connected"]
+        # A failed server is unavailable even when the planning step just switched it off for this
+        # session (it does that for every server that is not connected), so it must not fall through
+        # to the `off` list.
+        global_failed = [n for n in global_names if n in all_global and all_global[n].state == "failed"]
+        project_failed = [n for n in project_mcp.names()
+                          if n in all_project and all_project[n].state == "failed"]
+        down = {n: all_global[n].error if n in all_global and all_global[n].error else "not connected"
+                for n in dict.fromkeys([*(n for n in global_wanted if n not in up_global), *global_failed])}
+        down |= {n: all_project[n].error if n in all_project and all_project[n].error else "not connected"
+                 for n in dict.fromkeys([*(n for n in project_names if n not in up_project), *project_failed])}
+        off = [n for n in global_names if mcp_files.DISABLED_PREFIX + n in disabled and n not in down]
+        off += [n for n in project_mcp.names(enabled_only=False)
+                if mcp_files.DISABLED_PREFIX + n in disabled and n not in down]
+        up = [*up_global, *up_project]
+        connections = {n: global_connections[n] for n in up_global if global_connections[n] is not None}
+        connections |= {n: project_connections[n] for n in up_project if project_connections[n] is not None}
+        listing = self.mcp.listing_connections(connections, full=full, max_listed=limit) if connections else ""
+        scopes = {n: "global" for n in global_names}
+        # A project entry wins the name even when a disabled global entry (the offered
+        # browser-use default) has the same name; only an enabled global reserves it.
+        scopes |= {n: "project" for n in definition.servers}
+        return {"servers": up, "unavailable": down, "off": off, "scopes": scopes,
+                "full_definitions": full, "max_listed_tools": limit, "listing": listing,
+                "tools": {n: len(connections[n].tools) for n in up}}
 
-    def _build_snapshot(self, *, directory: str, spec: agent_files.AgentDef, found: agent_files.AgentSet,
-                        disabled: set[str], child: bool, origin: str = "created",
+    def _build_snapshot(self, *, project: Project, directory: str, spec: agent_files.AgentDef,
+                        found: agent_files.AgentSet, disabled: set[str], child: bool, origin: str = "created",
                         instruction_file: dict[str, Any] | None = None,
                         current_instruction_file: dict[str, Any] | None = None,
                         notice: str | None = None, workspace: dict[str, Any] | None = None,
@@ -706,7 +827,7 @@ class Runtime:
             # A child or an agent switch keeps the skills and MCP servers its session started with.
             skill_book, mcp_book = dict(carry["skills"]), dict(carry["mcp"])
         else:
-            skill_book, mcp_book = self._skills_at_start(project_path, disabled), self._mcp_at_start(disabled)
+            skill_book, mcp_book = self._skills_at_start(project_path, disabled), self._mcp_at_start(disabled, project)
         skill_items, mcp_names = skill_book["items"], mcp_book["servers"]
         granted = self.granted_tool_names(spec, [*user_tools, *([skill_files.SKILL_TOOL] if skill_items else []),
                                                  *(mcp_files.MCP_TOOLS if mcp_names else [])])
@@ -757,7 +878,8 @@ class Runtime:
         found = self.agents(self.project(session.project_id).path)
         spec = found.get(session.agent, child=session.parent_id is not None)
         rebuilt = self._build_snapshot(
-            directory=session.directory, spec=spec, found=found, disabled=session.disabled(),
+            project=self.project(session.project_id), directory=session.directory, spec=spec, found=found,
+            disabled=session.disabled(),
             child=session.parent_id is not None, origin="reconstructed", notice=snapshots.RECONSTRUCTED_NOTE,
             # Older sessions do not silently gain the on-demand workspace entry point.
             workspace={"entry": False, "activated": False},
@@ -878,11 +1000,14 @@ class Runtime:
             carry = self._extras(self.snapshot_for(parent))
         else:
             # An enabled server that is not online cannot be listed: it stays off for this session.
-            down = [n for n in self.mcp_servers(set(disabled_tools or [])) if self.mcp.connections[n].state != "connected"]
+            disabled_set = set(disabled_tools or [])
+            down = [n for n in self.mcp_servers(disabled_set, project)
+                    if (connection := self._mcp_connection(project, n)) is None
+                    or connection.state != "connected"]
             if down:
                 disabled_tools = [*(disabled_tools or []), *(mcp_files.DISABLED_PREFIX + n for n in down)]
         snapshot = self._build_snapshot(
-            directory=directory, spec=spec, found=found, disabled=set(disabled_tools or []),
+            project=project, directory=directory, spec=spec, found=found, disabled=set(disabled_tools or []),
             child=parent is not None, project_path=project.path, carry=carry,
         )
         return {"model": model, "permission": permission, "effort": effort, "agent": agent, "disabled_tools": disabled_tools,
@@ -958,8 +1083,19 @@ class Runtime:
             disabled = fields.get("disabled_tools")
             if disabled is None:
                 disabled = ConfigFile().read()["values"]["tools"]["disabled"]
-            await self.mcp.connect_all(self.mcp_servers(set(disabled)))
+            await self.connect_mcp(project, set(disabled))
         return self.create_session(project, **fields)
+
+    async def connect_mcp(self, project: Project, disabled: set[str] | frozenset[str]) -> None:
+        """Bring the global and this project's enabled servers online in parallel.
+
+        Disabled project entries are not in `project_mcp.names`, so their commands are never spawned.
+        """
+        project_mcp = self.project_mcp(project)
+        await asyncio.gather(
+            self.mcp.connect_all(self.mcp_servers(disabled, None)),
+            project_mcp.connect_all(project_mcp.names(disabled)),
+        )
 
     @staticmethod
     def _extras(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -1003,7 +1139,8 @@ class Runtime:
         if fields.get("model"):
             provider_for(fields["model"])
         if fields.get("disabled_tools") is not None:
-            self.check_tool_names(fields["disabled_tools"], self.switchable(self.project(current.project_id).path))
+            project = self.project(current.project_id)
+            self.check_tool_names(fields["disabled_tools"], self.switchable(project.path, project.id))
         if fields.get("agent") == "":
             raise ValueError("agent must not be empty")
         if expected_revision is not None and expected_revision != current.revision:
@@ -1054,7 +1191,7 @@ class Runtime:
             previous = self.store.snapshot(session_id)
             previous_workspace = previous.get("workspace") if previous else None
             rebuilt = self._build_snapshot(
-                directory=current.directory, spec=new_agent, found=found,
+                project=self.project(current.project_id), directory=current.directory, spec=new_agent, found=found,
                 disabled=set(new_disabled) if new_disabled is not None else current.disabled(),
                 child=current.parent_id is not None, origin="agent-switch",
                 instruction_file=previous["instruction_file"] if previous else None,
@@ -1569,7 +1706,7 @@ class Runtime:
         `exact` false (no request has run).
         """
         disabled = disabled_tools if disabled_tools is not None else ConfigFile().read()["values"]["tools"]["disabled"]
-        await self.mcp.connect_all(self.mcp_servers(set(disabled)))
+        await self.connect_mcp(project, set(disabled))
         plan = self._plan_session(project, model=model, permission=None, effort=effort, agent=agent, parent=None,
                                   disabled_tools=disabled_tools, directory=directory)
         snapshot, spec = plan["snapshot"], plan["spec"]
@@ -1648,6 +1785,24 @@ class Runtime:
                 self.update_session(session_id, title=title)
             return
 
+    def _handoff_disabled(self, project: Project, session: Session) -> list[str]:
+        """Switches a continuation keeps: explicit ones that still name something.
+
+        A session records `mcp:<name>` for every server it could not connect at
+        its start. Carrying that into the new session would keep a server that
+        has since been fixed off forever, so those transient entries are
+        dropped and the new session retries. Entries that are no longer
+        switchable (a removed server, an edited-away tool) are dropped too
+        instead of making the handoff fail.
+        """
+        snapshot = self.snapshot_for(session)
+        unavailable = set((snapshot.get("mcp") or {}).get("unavailable") or {})
+        keep = [entry for entry in sorted(session.disabled())
+                if not (entry.startswith(mcp_files.DISABLED_PREFIX)
+                        and entry[len(mcp_files.DISABLED_PREFIX):] in unavailable)]
+        valid = set(self.switchable(project.path, project.id))
+        return [entry for entry in keep if entry in valid]
+
     async def handoff(self, session_id: str, *, reason: str = "user") -> dict[str, Any]:
         """Write the summary, then start a new root session of the same agent that begins with it."""
         session = self.session(session_id)
@@ -1665,9 +1820,10 @@ class Runtime:
             self._record_oneshot(session_id, "handoff", result)
             self._check_turn_start(self.session(session_id))  # a turn may have started while the model wrote
             project = self.project(session.project_id)
-            created = self.create_session(
+            created = await self.create_session_ready(
                 project, title=session.title, model=session.model or None, permission=session.permission,
-                effort=session.effort, agent=session.agent, disabled_tools=sorted(session.disabled()),
+                effort=session.effort, agent=session.agent,
+                disabled_tools=self._handoff_disabled(project, session),
                 directory=session.directory, continued_from=session_id)
             text = f"[Handoff from session {session_id}]\n\n{result['text']}"
             stored = self.store.append_handoff(created.id, Message("user", (Text(text),)))
@@ -1962,10 +2118,35 @@ class Runtime:
             raise ToolError("query must be a non-empty string")
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise ToolError("limit must be an integer")
-        allowed = self._mcp_allowed(self.session(session_id))
+        session = self.session(session_id)
+        allowed = self._mcp_allowed(session)
         if server is not None and server not in allowed:
             raise ToolError(f"server {server!r} is not available in this session; available: {', '.join(allowed) or 'none'}")
-        result = await self.mcp.search(query, servers=allowed, server=server, limit=limit)
+        global_names = [name for name in allowed if not self._mcp_scope(session, name)[1]]
+        project_names = [name for name in allowed if self._mcp_scope(session, name)[1]]
+        if server is not None:
+            scope, _ = self._mcp_scope(session, server)
+            try:
+                result = await scope.search(query, servers=[server], server=server, limit=limit)
+            except mcp_files.McpUnavailable as exc:
+                raise ToolError(mcp_bridge.fence(str(exc), server="search", kind="tool-error", limit=2000)) from exc
+        else:
+            async def search(scope: Any, names: list[str]) -> Any:
+                if not names:
+                    return None
+                try:
+                    return await scope.search(query, servers=names, server=None, limit=limit)
+                except mcp_files.McpUnavailable as exc:
+                    return McpSearchResult((), 0, (str(exc),))
+
+            found = [item for item in await asyncio.gather(search(self.mcp, global_names),
+                                                            search(self.project_mcp(self.project(session.project_id)),
+                                                            project_names)) if item is not None]
+            matches = tuple(entry for item in found for entry in item.matches)
+            if not query.startswith("select:"):
+                matches = matches[: max(1, limit)]
+            result = McpSearchResult(matches, sum(item.total for item in found),
+                                     tuple(error for item in found for error in item.errors))
         rows = [f"{len(result.matches)} of {result.total} tools"]
         for number, entry in enumerate(result.matches, 1):
             tool = entry.tool
@@ -1994,7 +2175,8 @@ class Runtime:
                     media.append(Media(artifact, artifacts.clean_mime(mime), name))
                 return artifact
 
-            text, is_error = await self.mcp.call(target, arguments, save=save)
+            scope, _ = self._mcp_scope(self.session(session_id), server)
+            text, is_error = await scope.call(target, arguments, save=save)
         except mcp_files.McpUnavailable as exc:
             raise ToolError(mcp_bridge.fence(str(exc), server=server, kind="tool-error", limit=2000)) from exc
         if is_error:
@@ -2223,6 +2405,8 @@ class Runtime:
         self.bus.publish("session.status", status, session_id=session_id)
         self.turns[session_id] = asyncio.create_task(
             self._run(session_id, user_text, turn["id"], origin=origin, continuation=continuation, input_id=input_id))
+        if session.parent_id and session.parent_id not in self.turns:
+            self.bus.publish("session.status", {"status": "busy"}, session_id=session.parent_id)
         return turn
 
     def prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None, mode: str = "send", typed: bool = False) -> dict[str, Any]:
@@ -2527,7 +2711,11 @@ class Runtime:
                     self.notify[session_id] = watcher
                 self.prompt(session_id, "\n\n".join(leftover))  # notices that arrived as the turn ended
             else:
-                idle: dict[str, Any] = {"status": "idle", "turn_id": turn_id, "origin": origin}
+                session = self.store.session(session_id)
+                busy = session is not None and self._session_busy(session)
+                idle: dict[str, Any] = {"status": "busy" if busy else "idle", "turn_id": turn_id, "origin": origin}
+                if busy:
+                    idle["turn_finished"] = True
                 if continuation is not None:
                     idle["continuation"] = continuation
                     if continuation.get("reconciliation"):
@@ -2537,6 +2725,11 @@ class Runtime:
                         and not (self._model_ref(session_id) or "mock/").startswith("mock/"):
                     self.background.add(task := asyncio.ensure_future(self._auto_handoff(session_id)))
                     task.add_done_callback(self.background.discard)
+            session = self.store.session(session_id)
+            if session and session.parent_id:
+                parent = self.store.session(session.parent_id)
+                if parent and not self._session_busy(parent):
+                    self.bus.publish("session.status", {"status": "idle"}, session_id=parent.id)
             if closed:
                 self.store.set_turn_recovery(turn_id, "none")
             self.store.resolve_mutations_for_turn(turn_id, lifetime=self.mutation_lifetime)
@@ -2674,11 +2867,19 @@ class Runtime:
         if call.name == mcp_files.MCP_CALL:
             # Rules and the read-only hint apply to the target (`mcp__server__tool`), not to the proxy.
             target = args.get("tool")
-            name, quiet = self.mcp.approval(target if isinstance(target, str) else "")
+            text = target if isinstance(target, str) else ""
+            scope, _ = self._mcp_scope(session, text.partition("/")[0])
+            name, quiet = scope.approval(text)
         verdict = self.permission_verdict(session, name, args if name == call.name else {})
         if verdict is not None and verdict.action == "deny":
             raise ToolError(f"{name} was refused by {verdict.reason}; do not retry it, "
                             "choose another approach or ask the user")
+        if (call.name == mcp_files.MCP_CALL and verdict is not None and verdict.action == "allow"
+                and self._mcp_collision(session, text) is not None):
+            # The normalized key is shared with a different target, so this allow
+            # rule cannot say which one the user meant. Fall through to the
+            # session's own permission, an exact target grant, or an approval.
+            verdict = None
         asked_by_rule = verdict is not None and verdict.action == "ask"
         if not asked_by_rule and (verdict is not None or quiet or session.permission == "allow"):
             return True
@@ -2714,7 +2915,17 @@ class Runtime:
 
     @staticmethod
     def grant_key(name: str, tool: str, args: dict[str, Any]) -> str:
-        """What "allow for this session" covers: the tool, except bash, which is the exact command (K7)."""
+        """What "allow for this session" covers: the tool, except bash, which is the exact command (K7).
+
+        An MCP call is granted for its exact `server/tool` target. The qualified
+        permission name (`mcp__<server>__<tool>`) normalizes both parts, so
+        distinct targets can share it; using that name as the grant key would
+        let a grant for one target silently cover another.
+        """
+        if tool == mcp_files.MCP_CALL:
+            target = args.get("tool")
+            if isinstance(target, str) and target:
+                return "mcp: " + target
         if tool == "bash":
             command = args.get("command")
             return "bash: " + command if isinstance(command, str) else "bash"
@@ -2848,5 +3059,7 @@ class Runtime:
         await self.retention.stop()
         await self.jobs.shutdown()
         await self.kernels.shutdown()
-        await self.mcp.close()
+        await asyncio.gather(self.mcp.close(),
+                             *(manager.close() for manager in self.project_mcps.values()),
+                             return_exceptions=True)
         skill_files.install.release_all()

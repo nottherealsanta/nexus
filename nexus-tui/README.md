@@ -48,22 +48,42 @@ The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`): the viewed
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high
 (every tool expanded, long output capped). Drag the left sidebar's edge to resize it.
+Turn footer token counts use `K` for thousands and `M` for millions.
 The starting context is a list of `◆` sections (DESIGN_PLAN D10, `paint::context_rows`, one
 renderer for the timeline and the new-session view): System prompt, AGENTS.md, Tools, Skills,
 MCP and Child agents or Workspace tools when present. Tool, skill and MCP rows show their
 on/off state; click a row or focus the timeline and use ↑/↓ then Enter/Space to switch it.
 Tools use up to four columns as space allows, both before and after a message.
-Locked session rows are dimmed and say `new session`. Each header keeps its estimated count
+Locked session rows are dimmed and say `new session`; in the new-session preview a locked row
+names its state or configuration instead, because that view already is the next session. Each header keeps its estimated count
 (`~2,140 tok`, characters ÷ 4) and meta, a text row gives the total and the share of the model's
 window, and there is no bar. The instruction file is part of the system prompt, so the total
 counts the prompt and the tool schemas only. Previews clip with `…`. After the first turn the
 whole section folds to `▸ Context · 4 items · ~2.9k tokens`. The new-session view shows the same
 sections under a header block (`New session in <project>`, agent, model, effort, directory and
-branch, then the `Tab`/`ctrl+m`/`ctrl+e`/`ctrl+d` hints); it loads project skills and enabled MCP
-servers from Core and sends draft switches with session creation. Its prompt preview is built
+branch, then the `Tab`/`ctrl+m`/`ctrl+e`/`ctrl+d` hints); it loads project skills, the global MCP
+list and the project's actual `.mcp.json` inventory from Core (enabled, disabled, failed and
+invalid entries, including a whole-file `(file)` error row; read without starting a server) and
+sends draft switches with session creation. Only servers in Core's draft plan count as model
+context; a project row wins over a same-named global row, so a disabled global default never
+hides the project's enabled entry. Enabled, valid project entries start automatically with the
+new session and are shown on; disabled, failed and invalid rows are shown off and locked with
+their state named. There is no per-project approval step (Core removed the approve/revoke
+endpoints, fingerprints and `pending_approval` state): the file is trusted configuration, and
+`"enabled": false` is the opt-out. Click a row (or the marker of a blocked row) for its details:
+the file, state, error and warnings, the command name and argument count or sanitized URL,
+working directory, environment and header names, tool filters and timeouts, and the exact action
+to take. The TUI never starts a project server. Its prompt preview is built
 from the first line of the agent's prompt body, the project's `AGENTS.md` when the TUI can read
 it, and the selected agent's tool list or the default tools. Counts read `~N` with "estimated"
-on hover. The turn footer adds the catalog price when the model has one.
+on hover. Finished-turn footers show model, tool count, input and output tokens,
+elapsed time and recorded finish time, in that order. Hover for reasoning tokens,
+cached input percentage and available effort; click the footer or select it in
+the timeline and press Enter for the same details without hover. Missing usage is
+marked unknown, and finish time is omitted when it was not recorded; elapsed
+time based on the last available message is prefixed `~`. Terminal
+mouse-motion reporting is needed for hover; the keyboard and click alternatives
+work without it.
 
 `/learn <source>` asks whether to install into this project or every project, previews the
 source, then either installs an unambiguous set of new skills or opens a checklist. The checklist
@@ -120,7 +140,7 @@ page, at most 10 pages) and keeps them in `SelectedView::turns`:
 
 | Shown | From |
 | --- | --- |
-| Turn footer: models, effort, tokens, cache %, duration | the turn's requests (`model`, `effort`, `usage`), `finished` |
+| Turn footer and details: models, effort, tokens, cache %, duration, finish time | the turn's requests (`model`, `effort`, `usage`), `finished` |
 | Tool timing and failure | `tools[]` |
 | Retry stack and the turn's error row | `requests[].attempts`, `error` |
 | Composer context and the sidebar's Used | the newest request with usage (`usage.input`) |
@@ -264,7 +284,8 @@ view keeps a head and a tail), and a `raw` toggle on the head row. `o`, or Enter
 on the open tool, shows all; `r` raw and `i` inspector work on a focused tool.
 Reasoning reads `▸ Thought · preview` (or `◇ Thought` within an activity tree,
 ASCII `o Thought`; no duration, see Interface notes) and
-stays open with its live text while it streams. The header status reads
+stays open with its last ten wrapped lines while it streams, with a count of
+earlier lines hidden. Once finished, opening it shows the full text. The header status reads
 `◆ waiting for you` or `✕ offline`; it has no busy state.
 
 The right sidebar's Session
@@ -601,7 +622,9 @@ TUI can be driven by hand in a browser.
   rows, with the tool inventory and full prompt contents in the section details;
   estimates use `~`, Skills and MCP are labelled unavailable until Core supports
   them, disabled tools are counted, and the system prompt opens in its detail
-  view without an inline preview. The starting context stays expanded.
+  view without an inline preview. Draft tool switches remain visible when off
+  and while Core recalculates the estimate, so they can be turned back on.
+  The starting context stays expanded.
 - The composer supports mouse and Shift selection, Alt/Control+Left and Right
   word movement (with Shift to select), Alt+B/F and Control+Home/End. It has one
   row of top padding above the input and a half-height bottom edge. Its status

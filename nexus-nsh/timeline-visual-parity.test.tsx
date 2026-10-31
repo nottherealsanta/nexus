@@ -1,4 +1,4 @@
-// Timeline visual parity with the TUI: Argon (font-mono) content, delivery tags,
+// Timeline visual parity with the TUI: monospace content, delivery tags,
 // completed-thought timings and the parent's child card. Existing parity.test.tsx is untouched.
 import { describe, expect, open, test } from "nsh/test";
 
@@ -65,6 +65,17 @@ const turn = (requests: unknown[]) => ({
 });
 
 describe("timeline visual parity", () => {
+  test("long user messages offer their complete sent text", async () => {
+    const message = Array.from({ length: 45 }, (_, i) => `line ${i + 1}`).join("\n");
+    const app = await openSession({ messages: [user("m1", 1, message)] });
+    await app.waitFor("id:user-full-1");
+    expect(app.texts().join("\n")).toContain("show full message (sent whole)");
+    expect(app.texts().join("\n")).not.toContain("line 45");
+    await app.press("id:user-full-1");
+    await app.waitFor("text:▾ collapse message");
+    expect(app.texts().join("\n")).toContain("line 45");
+  });
+
   test("user delivery reads as steer and queued with the turn number, not the raw enum", async () => {
     const app = await openSession({
       messages: [

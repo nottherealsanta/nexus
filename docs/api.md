@@ -38,7 +38,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
 | GET | `/api/model/last` | `?project=`, `?agent=` | `{model, source}`: the model a new session for this agent starts with: `agent` (last selected for it in the project), `last` (last selected anywhere) or `none` with `""` ([daemon.md](daemon.md#model-selection)) |
 | GET | `/api/agent` | `?project=` or `?directory=` | `{agents: [Agent], problems: [{path, error}]}` |
-| (session JSON) | | | also `skills: [{name, description, scope, state, locked}]` and `mcp: [{server, tools, state, locked, error}]`: what the starting-context header switches ([tools.md](tools.md#skills-and-the-skill-tool), [mcp.md](mcp.md)) |
+| (session JSON) | | | also `skills: [{name, description, scope, state, locked}]` and `mcp: [{server, tools, state, locked, error, scope?: "global" or "project"}]`: what the starting-context header switches. `state` is `on`, `off` or `unavailable`; a disabled project entry is not part of the session ([tools.md](tools.md#skills-and-the-skill-tool), [mcp.md](mcp.md#project-servers)) |
 | GET | `/api/skill` | `?project=` or `?directory=` | `{skills: [{name, description, scope, path, sha256, allowed_tools, warnings}], problems: [{path, error, kind}]}` ([tools.md](tools.md#skills-and-the-skill-tool)) |
 | POST | `/api/skill/install` | `{fetch_id, skills?, scope, project?, overwrite?}` or `{source, scope, …}` | `{installed, skipped, problems, available, scope}`: `/learn`, copies skills from a Git repo or folder ([tools.md](tools.md#learn-installing-skills)) |
 | POST | `/api/skill/preview` | `{source, scope, project?}` | `{fetch_id, source, scope, requested, problems, found: [{name, description, installed, warnings}]}`; the fetch is kept 10 minutes ([tools.md](tools.md#learn-installing-skills)) |
@@ -62,6 +62,9 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | PATCH | `/api/project/{id}` | `{name, expected_revision?}` or `If-Match` | `Project`; a stale revision is 409 |
 | DELETE | `/api/project/{id}` | | 204; deletes its sessions too |
 | GET | `/api/project/{id}/worktrees` | | the project checkout's worktrees (`repository`, `main`, `worktrees[]`, `project_directory`); 400 outside Git |
+| GET | `/api/project/{id}/mcp` | | this project's `.mcp.json`: `{project_id, file, exists, revision, error, warnings, servers}`; never starts a server ([mcp.md](mcp.md#project-servers)) |
+| GET | `/api/project/{id}/mcp/{name}` | | one project MCP row plus `tool_names` and `log`; never starts a server |
+| POST | `/api/project/{id}/mcp/{name}/restart` | | close and reconnect a project server; returns the row |
 | GET | `/api/session` | `?project=`, `?directory=` or `?parent=`, plus `?archived=exclude\|only\|include` | `[Session]` |
 | POST | `/api/session` | `{project` or `directory` or `parent, agent?, title?, model?, permission?, effort?, disabled_tools?}` | `Session`; with `parent`, a child in the parent's directory (`launched_by: "user"`) |
 | GET | `/api/session/{id}` | | `Session` |
@@ -89,7 +92,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/session/{id}/children` | | `[Session]`, direct children |
 | GET | `/api/session/{id}/tree` | | the whole tree containing it, from its root: `Session` + nested `children` |
 | POST | `/api/session/{id}/btw` | `{question}` | 200 `{answer, usage}`. One request with the session's context up to its last completed tool call plus the question; no tool runs and nothing is stored (the request and reply are a `oneshot` event, kind `btw`). 400 empty, 502 provider failure |
-| POST | `/api/session/{id}/handoff` | `{}` | 201 `{from, to, reason, session, summary}`. Writes a summary with one tool-free request, then starts a new root session of the same agent, model, directory and switches whose first message (`delivery: "handoff"`) is that summary; `continued_from` links back. The old session is not changed. 409 busy/archived, 400 child or empty session |
+| POST | `/api/session/{id}/handoff` | `{}` | 201 `{from, to, reason, session, summary}`. Writes a summary with one tool-free request, then starts a new root session of the same agent, model, directory and switches whose first message (`delivery: "handoff"`) is that summary; `continued_from` links back. Like any new root session it reloads the global and project MCP configuration and connects enabled project servers; explicit MCP switches carry over, but servers that were only automatically switched off after a failed connect are retried. The old session is not changed. 409 busy/archived, 400 child or empty session |
 | GET | `/api/session/{id}/context` | | the provider request body plus `used`, `window`, `exact` context budget |
 | GET | `/api/session/{id}/snapshot` | | the full frozen session snapshot (agent, prompt, tools, instruction file, child catalog) |
 | GET | `/api/session/{id}/export` | `?format=markdown\|json&scope=session\|tree` | a read-only Markdown transcript or JSON document; see [Session export](#session-export) |
@@ -826,7 +829,7 @@ Deleting a project publishes one tombstone per deleted session, then
 | `session.snapshot` | a snapshot summary, emitted once when an old session is lazily reconstructed |
 | `session.deleted` | `{id}`: a global tombstone stored without the session's history |
 | `session.archived` / `session.unarchived` | `{root, sessions: [ids], archived}`: one transition for a whole tree, stored in the root's event log |
-| `session.status` | `{status: "busy" or "idle", turn_id?, origin?: "prompt" or "continuation", continuation?, reconciled?}` before and after each turn; a recovered turn's idle also carries `reason` and `turn_id` |
+| `session.status` | `{status: "busy" or "idle", turn_id?, origin?: "prompt" or "continuation", continuation?, reconciled?, turn_finished?}` before and after each turn and when child activity changes the parent's status. A parent remains busy while a child runs; `turn_finished: true` marks its own turn ending while its status remains busy. A recovered turn's idle also carries `reason` and `turn_id` |
 | `message.added` | `Message`, once it is saved |
 | `permission.asked` | pending approval |
 | `permission.replied` | `{id, session_id?, allow, outcome: "allowed" or "denied" or "cancelled", reason?, scope?: "session", grant?, note?}`; a cancellation has `allow: false` ([Approvals](#approvals-k7)) |
@@ -1109,7 +1112,8 @@ the session's cache, and a tool call in the reply is ignored. Each request and r
   first message is `[Handoff from session <id>]` plus the summary and has `delivery: "handoff"`. Events:
   `session.handoff {from, to, reason}` on the old session (reason `user` or `auto`), `session.created` and the
   message on the new one, and `session.handoff_failed {error}` when an automatic attempt failed (the session is
-  unchanged and the next completed turn tries again). Session JSON carries `continued_from` (the session whose summary this one starts from; stored on the session row and cleared if that session is deleted) and `continued_to` (the newest session started from this one). Both clients use them: the handoff card names the original and `/origin` (`/continuation` the other way) opens it.
+  unchanged and the next completed turn tries again). The new session reloads the MCP configuration and connects
+  enabled servers like any new root session; see [mcp.md](mcp.md#lifecycle). Session JSON carries `continued_from` (the session whose summary this one starts from; stored on the session row and cleared if that session is deleted) and `continued_to` (the newest session started from this one). Both clients use them: the handoff card names the original and `/origin` (`/continuation` the other way) opens it.
 - **Titles.** The first words of the first prompt are the title at once; a model-written title (Title Case, a few
   words, from the first message only) replaces it unless the user renamed the session meanwhile. The model comes from `[context] title_models`, tried in order; if all fail the first words stay. The `mock/` provider is skipped.
 
@@ -1134,10 +1138,28 @@ with this endpoint. Turn summaries page with `before=<turn id>` as before.
 ### Approvals (K7)
 
 `POST /api/session/{id}/permission/{pid}` takes `{reply: "allow" or "deny", scope?: "once" or "session", note?}`.
-`scope: "session"` (allow only) also grants the same call for the rest of the session: the tool, or for `bash` the
-exact command. A deny rule still wins over a grant, and a grant covers an `ask` rule too. Grants live in memory
+`scope: "session"` (allow only) also grants the same call for the rest of the session: the tool, for `bash` the
+exact command, and for an MCP call the exact `server/tool` target. A deny rule still wins over a grant, and a grant
+covers an `ask` rule too. Grants live in memory
 (a daemon restart forgets them; `GET`/`DELETE …/grant` shows and clears them). `note` (deny only) is added to the
 refusal the model reads: `the user declined this tool call: <note>`. Both show in `permission.replied`.
+
+### Project MCP servers
+
+A project's `.mcp.json` is trusted configuration. Every enabled, valid entry starts with a new
+session in that project; there is no approval endpoint. The file is arbitrary code: opening an
+untrusted project and starting a session runs its commands ([mcp.md](mcp.md#project-servers)).
+`GET /api/project/{id}/mcp` returns
+`{project_id, file, exists, revision, error, warnings, servers}` and never starts a server
+(it reads the file and may close a changed or removed connection). `revision` is the SHA-256 of
+the file bytes, or `missing`. Each `servers` row has `server`, `state`, `error`, `tools`,
+`enabled`, `source: "project"`, `project_id`, `file`, `warnings` and the non-secret facts from
+`config.describe()`. `state` is `idle`, `connecting`, `connected`, `failed`, `disabled` or
+`invalid`; a file error is the special server `(file)` with `state: "invalid"`. Environment and
+header values are never returned; a remote URL has credentials, query and fragment removed.
+
+`POST …/restart` reconnects a project entry. `GET …/mcp/{name}` adds `tool_names` and `log`.
+Changes are picked up at the next read; a new session uses them ([mcp.md](mcp.md#changes-and-invalidation)).
 
 ### Artifacts (K8)
 

@@ -59,6 +59,11 @@ web_fetch = "ask"
   `tool` rule matches it. `tool` may be a glob (`mcp__github__*`). In a pattern
   `*` matches any characters including `/`, `?` one character, `\` escapes;
   matching is case sensitive.
+* **MCP target keys.** An MCP call is matched by the normalized
+  `mcp__<server>__<tool>` key. If distinct targets known to the session share
+  that key, an `allow` rule cannot say which one was meant: it is ignored and
+  the call follows the session's `permission`, an exact-target grant, or asks.
+  `deny` and `ask` rules still apply. Details: [mcp.md](mcp.md#what-the-model-sees).
 * **Order.** Any matching `deny`, from either source, wins. Otherwise the last
   matching rule in `[tools.permission]` (file order) decides `allow` or `ask`.
   The agent's rules (`ask` and `deny` only) add an `ask`. A call no rule
