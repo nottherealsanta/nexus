@@ -1,7 +1,7 @@
 import { agentColor } from "../agent-color";
 import { List, Scroll, Text, View, keymap, signal } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Heading, Modal, ModalFooter, ModalTitle, SelectBar } from "./modal";
+import { Heading, Modal, ModalFooter, ModalTitle } from "./modal";
 import type { JSX } from "nsh";
 import { Btn, IconButton, T, FOCUS } from "./kit";
 import { availability, closeLearnChecklist, commands, escape, installLearnChecklist, keyLabel, renameSession, run, Cmd } from "../commands";
@@ -49,8 +49,7 @@ function PaletteBody() {
                 const dis = () => !it().a.ok;
                 return (
                   <Button onPress={() => pick(c())} selected={idx() === i()} accessibilityLabel={`${c().title}${dis() ? `, unavailable: ${it().a.reason}` : ""}`} testID={`cmd-${c().id}`}
-                    class={`group/row relative rounded-(--radius) px-3 py-1 min-h-8 justify-center hover:bg-accent ${FOCUS}`}>
-                    <SelectBar on={idx() === i()} hover />
+                    class={`group/row relative rounded-(--radius) px-3 py-1 min-h-8 justify-center hover:bg-accent ${idx() === i() ? "bg-selection" : ""} ${FOCUS}`}>
                     <View class="flex-row items-center gap-3">
                       <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-6 ${dis() ? "text-muted-foreground" : "text-popover-foreground"}`}>{c().title}</Text>
                       <Text class={T.meta}>{keyLabel(c()) ?? (c().slash ? `/${c().slash}` : "")}</Text>
@@ -119,8 +118,7 @@ function PickerBody() {
               <Each of={filtered()} key={(x) => x.id}>
                 {(it, i) => (
                   <Button onPress={() => choose(it())} selected={idx() === clamp(i())} accessibilityLabel={it().label} testID={`pick-${i()}`}
-                    class={`group/row relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent ${FOCUS}`}>
-                    <SelectBar on={idx() === clamp(i())} hover />
+                    class={`group/row relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent ${idx() === clamp(i()) ? "bg-selection" : ""} ${FOCUS}`}>
                     <View class="flex-row items-center gap-3">
                       <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-6 ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{it().label}</Text>
                       <If when={!!it().hint}><Text style={{ numberOfLines: 1 }} class="text-[14px] leading-6 text-muted-foreground tabular-nums">{it().hint}</Text></If>
@@ -183,14 +181,13 @@ function SkillChecklistBody() {
                 const checked = () => selected().includes(skill().name);
                 return (
                   <Button onPress={() => { active.set(i()); toggle(skill().name); }} selected={active() === i()} accessibilityLabel={`${skill().name}, ${checked() ? "selected" : "not selected"}${skill().installed ? ", installed, will be replaced" : ""}`} testID={`learn-skill-${skill().name}`}
-                    class={`group/row relative rounded-(--radius) px-3 py-1.5 min-h-9 hover:bg-accent ${FOCUS}`}>
-                    <SelectBar on={active() === i()} hover />
+                    class={`group/row relative rounded-(--radius) px-3 py-1.5 min-h-9 hover:bg-accent ${active() === i() ? "bg-selection" : ""} ${FOCUS}`}>
                     <View class="flex-row items-start gap-2">
                       <Text class={`w-4 text-center text-[13px] leading-5 ${checked() ? "text-primary" : "text-muted-foreground"}`}>{checked() ? "☑" : "☐"}</Text>
                       <View class="flex-1 min-w-0 gap-0.5">
                         <View class="flex-row items-center gap-2">
                           <Text class="text-[13px] leading-5 font-medium text-popover-foreground">{skill().name}</Text>
-                          <If when={!!skill().installed}><Text class="text-[10px] leading-4 text-warning rounded-(--radius) border border-border px-1.5">installed</Text></If>
+                          <If when={!!skill().installed}><Text class="text-[10px] leading-4 text-warning rounded-(--radius) px-1.5">installed</Text></If>
                         </View>
                         <If when={!!skill().description}><Text style={{ numberOfLines: 2 }} class={T.meta}>{skill().description}</Text></If>
                         <If when={!!skill().warnings?.length}><Text style={{ numberOfLines: 1 }} class="text-xs leading-4 text-warning">{skill().warnings!.join(" · ")}</Text></If>
@@ -295,7 +292,7 @@ function AddProjectBody() {
           <Text class="text-[15px] leading-5 font-semibold text-popover-foreground">Add project</Text>
           <Text class={T.sec}>Absolute path of a directory on the machine running Core. Core creates the project if it is new.</Text>
         </View>
-        <Input autoFocus placeholder="/path/to/repo" accessibilityLabel="Project path" testID="project-path" onChange={({ value: t }) => path.set(t)} onSubmit={() => void submit()} submitBehavior="submit" class={`h-9 rounded-(--radius) border bg-background px-3 font-mono text-[13px] text-foreground ${err() ? "border-error" : "border-border"}`} />
+        <Input autoFocus placeholder="/path/to/repo" accessibilityLabel="Project path" testID="project-path" onChange={({ value: t }) => path.set(t)} onSubmit={() => void submit()} submitBehavior="submit" class={`h-9 rounded-(--radius) px-3 font-mono text-[13px] text-foreground ${err() ? "bg-error/10" : "bg-background"}`} />
         <If when={err()}><Text class="text-[13px] leading-5 text-error">{"✕ " + err()}</Text></If>
         <View class="flex-row justify-end gap-2">
           <Btn label="Cancel" onPress={() => addProjectOpen.set(false)} />
@@ -371,7 +368,7 @@ function RenameSessionBody() {
       <View class="gap-4">
         <ModalTitle title="Rename session" />
         <Input autoFocus defaultValue={initial} onChange={({ value }) => text.set(value)} onSubmit={save} submitBehavior="submit"
-          accessibilityLabel="Session title" testID="rename-input" class="rounded-(--radius) border border-border bg-card px-3 h-10 text-foreground" />
+          accessibilityLabel="Session title" testID="rename-input" class="rounded-(--radius) bg-card px-3 h-10 text-foreground" />
         <View class="flex-row justify-end gap-2">
           <Btn label="Cancel" onPress={cancel} />
           <Btn label="Save" kind="primary" onPress={save} disabled={!text().trim()} testID="rename-save" />

@@ -154,7 +154,7 @@ function Count(p: { text: string; estimated: boolean; class: string }) {
   return (
     <If when={p.estimated} else={<Text class={p.class}>{p.text}</Text>}>
       <Button accessibilityLabel={`${p.text}, ${ESTIMATED}`} testID="ctx-estimate"
-        tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{ESTIMATED}</Text>}
+        tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{ESTIMATED}</Text>}
         class="rounded-(--radius)"><Text class={p.class}>{p.text}</Text></Button>
     </If>
   );
@@ -171,12 +171,12 @@ function Section(p: { s: CtxSection; estimated: boolean; onOpen: () => void; onI
   return (
     <View class="py-1 gap-1" testID={`ctx-${s.key}`}>
       <View class="flex-row items-center gap-2 min-h-5 rounded-(--radius) hover:bg-accent">
-        <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`} class={`rounded-(--radius) ${FOCUS}`}><Text class="font-mono text-[13px] leading-5 font-semibold text-foreground-secondary">{s.title}</Text></Button>
-        <If when={s.count !== undefined}><Text class="font-mono text-[13px] leading-5 text-muted-foreground tabular-nums">{`[${s.count}]`}</Text></If>
+        <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`} class={`rounded-(--radius) ${FOCUS}`}><Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{s.title}</Text></Button>
+        <If when={s.count !== undefined}><Text class="text-[13px] leading-5 text-muted-foreground tabular-nums">{`[${s.count}]`}</Text></If>
         <If when={s.tokens !== undefined}>
-          <Count text={`${p.estimated ? "~" : ""}${contextTokens(s.tokens ?? 0)}`} estimated={p.estimated} class={`${T.sec} font-mono tabular-nums`} />
+          <Count text={`${p.estimated ? "~" : ""}${contextTokens(s.tokens ?? 0)}`} estimated={p.estimated} class={`${T.sec} tabular-nums`} />
         </If>
-        <If when={!!s.meta}><Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 font-mono text-[13px] leading-5 text-muted-foreground tabular-nums">{s.meta}</Text></If>
+        <If when={!!s.meta}><Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-muted-foreground tabular-nums">{s.meta}</Text></If>
       </View>
       <If when={s.body.kind === "grid"}>
         <View class="flex-row flex-wrap pl-5" testID={`ctx-${s.key}-grid`}>
@@ -206,11 +206,11 @@ function Section(p: { s: CtxSection; estimated: boolean; onOpen: () => void; onI
                   <View class="flex-1 min-w-0 gap-0.5">
                     <View class="flex-row items-center gap-2">
                       <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 font-mono text-[13px] leading-5 ${item().on ? "text-foreground-secondary" : "text-muted-foreground line-through"}`}>{item().name}</Text>
-                      <If when={item().locked}><Text class="font-mono text-[13px] leading-5 text-muted-foreground">new session</Text></If>
+                      <If when={item().locked}><Text class="text-[13px] leading-5 text-muted-foreground">new session</Text></If>
                     </View>
-                    <If when={!!item().description}><Text style={{ numberOfLines: 2 }} class="font-mono text-[13px] leading-5 text-muted-foreground">{item().description}</Text></If>
-                    <If when={!!status()}><Text class="font-mono text-[13px] leading-5 text-muted-foreground">{status()}</Text></If>
-                    <If when={!!item().error}><Text style={{ numberOfLines: 2 }} class="font-mono text-[13px] leading-5 text-warning">{item().error}</Text></If>
+                    <If when={!!item().description}><Text style={{ numberOfLines: 2 }} class="text-[13px] leading-5 text-muted-foreground">{item().description}</Text></If>
+                    <If when={!!status()}><Text class="text-[13px] leading-5 text-muted-foreground">{status()}</Text></If>
+                    <If when={!!item().error}><Text style={{ numberOfLines: 2 }} class="text-[13px] leading-5 text-warning">{item().error}</Text></If>
                   </View>
                 </Button>
               );
@@ -225,7 +225,7 @@ function Section(p: { s: CtxSection; estimated: boolean; onOpen: () => void; onI
 /** A single detail dialog remains mounted even when the context section is folded. */
 export function ContextDetailModal() {
   const detail = contextDetail;
-  return <If when={detail()}>{() => <Modal width={760} label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}><View class="flex-row items-center min-h-8 gap-3"><Text class="flex-1 font-mono text-[15px] leading-5 font-semibold text-popover-foreground">{detail()!.title}</Text><Text class={`${T.meta} font-mono rounded-(--radius) bg-muted px-1.5`}>esc</Text></View><Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }} contentClass="pt-3"><Text testID="context-detail-text" style={{ userSelect: "text" }} class="font-mono text-[13px] leading-5 text-foreground">{detail()!.detail}</Text></Scroll></Modal>}</If>;
+  return <If when={detail()}>{() => <Modal width={760} label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}><View class="flex-row items-center min-h-8 gap-3"><Text class="flex-1 text-[15px] leading-5 font-semibold text-popover-foreground">{detail()!.title}</Text><Text class={`${T.meta} rounded-(--radius) bg-muted px-1.5`}>esc</Text></View><Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }} contentClass="pt-3"><Text testID="context-detail-text" style={{ userSelect: "text" }} class="font-mono text-[13px] leading-5 text-foreground">{detail()!.detail}</Text></Scroll></Modal>}</If>;
 }
 
 /** The sections and the total as text (no bar). */
@@ -234,12 +234,12 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
   const detail = contextDetail;
   return (
     <View class="w-full rounded-(--radius-card) bg-card px-4 py-3" testID="context-sections">
-      <If when={!!p.reconstructed}><Text class="text-[13px] leading-5 text-warning font-mono">reconstructed</Text></If>
+      <If when={!!p.reconstructed}><Text class="text-[13px] leading-5 text-warning">reconstructed</Text></If>
       <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => <Section s={s()} estimated={p.estimated} onOpen={() => detail.set(s())} onInventoryToggle={p.onInventoryToggle} />}</Each>
       <View class="flex-row items-center gap-2 pt-1" testID="context-total">
-        <Text class="font-mono text-[13px] leading-5 font-semibold text-foreground">total</Text>
-        <Count text={`${p.estimated ? "~" : ""}${thousands(p.total)}`} estimated={p.estimated} class="font-mono text-[13px] leading-5 text-foreground tabular-nums" />
-        <If when={!!pct()}><Text class="font-mono text-[13px] leading-5 text-muted-foreground tabular-nums">{`· ${pct()} of the window`}</Text></If>
+        <Text class="text-[13px] leading-5 font-semibold text-foreground">total</Text>
+        <Count text={`${p.estimated ? "~" : ""}${thousands(p.total)}`} estimated={p.estimated} class="text-[13px] leading-5 text-foreground tabular-nums" />
+        <If when={!!pct()}><Text class="text-[13px] leading-5 text-muted-foreground tabular-nums">{`· ${pct()} of the window`}</Text></If>
       </View>
     </View>
   );

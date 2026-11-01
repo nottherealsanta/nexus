@@ -1,10 +1,11 @@
-import { mount, View, Text, safeArea, windowSize, effect, colorScheme } from "nsh";
+import { mount, View, Text, platform, safeArea, windowSize, effect, colorScheme } from "nsh";
+import { Window } from "nsh/desktop";
 import { Button } from "nsh/base";
 import { Header } from "./src/ui/header";
 import { LeftSidebar, SessionRail, SessionsTab } from "./src/ui/sidebar";
 import { SettingsView } from "./src/ui/settings";
 import { Icon, IconButton, FOCUS } from "./src/ui/kit";
-import { RightSidebar } from "./src/ui/right";
+import { RightRail, RightSidebar } from "./src/ui/right";
 import { Centre } from "./src/ui/centre";
 import { FilePanel, filePanelWidth } from "./src/ui/editor";
 import { ContextDetailModal } from "./src/ui/newsession";
@@ -16,9 +17,10 @@ import { ConnectScreen, coreEditing } from "./src/ui/connect";
 import { bindKeys, rightIsOpen, rightWidthHint } from "./src/commands";
 import { coreReady, coreUrl, drawer, isNarrow, leftOpen, loadPrefs, native, panelOpen, panelWide, phone, phonePage, startApp, themeChoice, viewed } from "./src/store";
 import { setColorScheme } from "nsh";
-import "./fonts/MonaspaceNeon-Regular.otf";
-import "./fonts/MonaspaceNeon-Medium.otf";
-import "./fonts/MonaspaceNeon-Bold.otf";
+import "./fonts/Geist-Regular.ttf";
+import "./fonts/Geist-Medium.ttf";
+import "./fonts/Geist-SemiBold.ttf";
+import "./fonts/Geist-Bold.ttf";
 
 function PhoneShell() {
   return <View class="flex-1 min-h-0" testID="phone-shell">
@@ -54,6 +56,7 @@ function App() {
   startApp();
   bindKeys();
   effect(() => { rightWidthHint.w = windowSize().width; });
+  effect(() => { if (platform.os === "macos") Window.setTitleBar({ style: "hidden", height: 44 }); });
   void colorScheme;
   const leftPersistent = () => !isNarrow() && leftOpen();
   const rightPersistent = () => !isNarrow() && !panelOpen() && rightIsOpen(windowSize().width);
@@ -69,6 +72,7 @@ function App() {
             <If when={leftPersistent()} else={<If when={!isNarrow()}><SessionRail /></If>}><LeftSidebar /></If>
             <Centre />
             <If when={rightPersistent()}><RightSidebar /></If>
+            <If when={!isNarrow()}><RightRail /></If>
           </View>
           <Drawers />
         </View>

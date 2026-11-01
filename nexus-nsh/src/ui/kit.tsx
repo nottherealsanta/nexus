@@ -24,7 +24,7 @@ export function IconButton(p: { icon: IconName; label: string; onPress?: () => v
   return (
     <Button
       onPress={p.onPress} disabled={p.disabled} selected={p.selected} accessibilityLabel={p.label} testID={p.testID}
-      tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{p.reason ? `${p.label}: ${p.reason}` : p.label}</Text>}
+      tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{p.reason ? `${p.label}: ${p.reason}` : p.label}</Text>}
       class={`items-center justify-center rounded-(--radius) hover:bg-accent disabled:opacity-50 ${isNarrow() ? "size-11" : "size-8"} ${FOCUS} ${p.class ?? ""}`}
     >
       <Icon name={p.icon} class={p.tint ?? "tint-foreground-secondary"} />
@@ -35,12 +35,12 @@ export function IconButton(p: { icon: IconName; label: string; onPress?: () => v
 /** Text button: primary (accent fill), default (raised, hairline) or danger. */
 export function Btn(p: { initial?: boolean; label: string; onPress?: () => void; kind?: "primary" | "default" | "danger" | "ghost"; disabled?: boolean; reason?: string; testID?: string; busy?: boolean; icon?: IconName }) {
   const k = p.kind ?? "default";
-  const skin = k === "primary" ? "bg-primary border-primary" : k === "danger" ? "bg-secondary border-error hover:bg-accent" : k === "ghost" ? "border-transparent hover:bg-accent" : "bg-secondary border-border hover:bg-accent";
+  const skin = k === "primary" ? "bg-primary" : k === "danger" ? "bg-secondary hover:bg-accent" : k === "ghost" ? "hover:bg-accent" : "bg-secondary hover:bg-accent";
   const fg = k === "primary" ? "text-on-accent" : k === "danger" ? "text-error" : "text-foreground";
   return (
     <Button
       onPress={p.onPress} disabled={p.disabled || p.busy} testID={p.testID} accessibilityLabel={p.reason && p.disabled ? `${p.label}, unavailable: ${p.reason}` : p.label}
-      class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) border px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 active:opacity-80 ${skin} ${p.initial ? "border-ring" : ""} ${FOCUS}`}
+      class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 active:opacity-80 ${skin} ${p.initial ? "border-ring" : ""} ${FOCUS}`}
     >
       <If when={p.icon}>{() => <Icon name={p.icon!} class={k === "primary" ? "tint-on-accent" : k === "danger" ? "tint-error" : "tint-foreground-secondary"} />}</If>
       <Text class={`text-[13px] leading-5 font-medium ${fg}`}>{p.busy ? "Working…" : p.label}</Text>
@@ -66,6 +66,20 @@ export function Status(p: { kind: keyof typeof statusGlyphs; word?: boolean; cla
 export function AttentionMark(p: { kind: keyof typeof attention }) {
   const g = attention[p.kind];
   return <Text class={`w-3.5 text-center text-[13px] leading-5 ${TONE[g.token]}`} accessibilityLabel={p.kind}>{g.unicode}</Text>;
+}
+
+/**
+ * The box rule: a hairline runs along a box's straight sides and stops before each corner's curve.
+ * Put it in a `relative` box with `r` set to that box's radius (16 for `--radius-card`, 10 for `--radius`).
+ */
+export function Edges(p: { r?: number; color?: string; left?: string; leftWidth?: number; testID?: string }) {
+  const r = p.r ?? 16, c = p.color ?? "bg-border-strong";
+  return <>
+    <View class={`absolute h-px ${c}`} style={{ top: 0, left: r, right: r }} />
+    <View class={`absolute h-px ${c}`} style={{ bottom: 0, left: r, right: r }} />
+    <View class={`absolute w-px ${c}`} style={{ right: 0, top: r, bottom: r }} />
+    <View class={`absolute ${p.left ?? c}`} style={{ left: 0, top: r, bottom: r, width: p.leftWidth ?? 1 }} testID={p.testID ?? (p.left ? "edge-rail" : undefined)} />
+  </>;
 }
 
 export function Rule() { return <View class="h-px bg-border" />; }

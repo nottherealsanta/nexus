@@ -3,7 +3,7 @@ import { List, Scroll, computed, signal, Text, View } from "nsh";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
-import { FOCUS, Icon, IconButton, Status, T } from "./kit";
+import { Edges, FOCUS, Icon, IconButton, Status, T } from "./kit";
 import { DiffView } from "./diff";
 import { disabledOf, foldedMeta, startingSections, StartingContext } from "./newsession";
 import type { CtxSection } from "./newsession";
@@ -23,7 +23,7 @@ type Tone = "info" | "accent" | "warning";
 type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
 type Diff = { add: number; del: number };
 /** Timeline metadata uses the app's monospace face. */
-const META = `${T.meta} font-mono`;
+const META = `${T.meta}`;
 /** A tappable row: finger-sized on a phone, its desktop height otherwise. */
 const hit = (base: string) => (isNarrow() ? "min-h-11" : base);
 
@@ -626,7 +626,7 @@ function RowView(p: { r: () => Row }) {
   const r = p.r;
   return (
     <TimelineColumn class="items-center" testID="timeline-row" onLayout={(b: any) => reportHeight(r(), b.bounds?.size?.height ?? b.size?.height ?? 72)}>
-      <View class="w-full font-mono">
+      <View class="w-full">
         <If when={r().kind === "context"}>
           {() => {
             const c = r() as Extract<Row, { kind: "context" }>;
@@ -641,33 +641,33 @@ function RowView(p: { r: () => Row }) {
             const f = r() as Extract<Row, { kind: "footer" }>;
             return (
               <View class="w-full items-end gap-0.5 pt-3 pb-1" testID="turn-footer">
-                <If when={!!f.error}><Text style={{ userSelect: "text" }} class="text-xs leading-4 text-error font-mono">{`✕ ${f.error}`}</Text></If>
+                <If when={!!f.error}><Text style={{ userSelect: "text" }} class="text-xs leading-4 text-error">{`✕ ${f.error}`}</Text></If>
                 <View class="flex-row flex-wrap justify-end items-center">
                   <Each of={f.segments} key={(s, i) => `${i}`}>
                     {(s) => (
-                      <Text class={META} tooltip={s().tip ? <Text class="text-xs leading-4 text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{s().tip!}</Text> : undefined}>
+                      <Text class={META} tooltip={s().tip ? <Text class="text-xs leading-4 text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{s().tip!}</Text> : undefined}>
                         {`${s() === f.segments[0] ? "" : " · "}${s().text}`}
                       </Text>
                     )}
                   </Each>
-                  <If when={f.interrupted}><Text class="text-xs leading-4 text-warning font-mono">{" · /continue"}</Text></If>
+                  <If when={f.interrupted}><Text class="text-xs leading-4 text-warning">{" · /continue"}</Text></If>
                 </View>
               </View>
             );
           }}
         </If>
         <If when={r().kind === "handoff"}>
-          <View class="py-1 font-mono"><HandoffCard r={r as any} /></View>
+          <View class="py-1"><HandoffCard r={r as any} /></View>
         </If>
         <If when={r().kind === "notice" && (r() as any).text.startsWith("→ Background Shell Done:")}>
-          <Text style={{ userSelect: "text" }} class={`text-[13px] leading-5 text-muted-foreground py-2 font-mono ${TEXT_INDENT}`} testID="background-shell-done">{(r() as any).text}</Text>
+          <Text style={{ userSelect: "text" }} class={`text-[13px] leading-5 text-muted-foreground py-2 ${TEXT_INDENT}`} testID="background-shell-done">{(r() as any).text}</Text>
         </If>
         <If when={r().kind === "notice" && !(r() as any).text.startsWith("→ Background Shell Done:")}>
-          <View class={`flex-row gap-3 rounded-(--radius-card) bg-card border border-border py-2.5 my-1 font-mono ${CARD_INSET}`}>
+          <View class={`relative flex-row gap-3 rounded-(--radius-card) bg-card py-2.5 my-1 ${CARD_INSET}`}><Edges color="bg-border" />
             <Rail color={RAIL[(r() as any).tone] ?? "bg-info"} />
             <View class="flex-1 min-w-0 gap-0.5">
-              <Text class="text-xs leading-4 font-medium text-muted-foreground font-mono">{(r() as any).label}</Text>
-              <Text style={{ userSelect: "text" }} class={`${T.sec} font-mono`}>{(r() as any).text}</Text>
+              <Text class="text-xs leading-4 font-medium text-muted-foreground">{(r() as any).label}</Text>
+              <Text style={{ userSelect: "text" }} class={`${T.sec}`}>{(r() as any).text}</Text>
             </View>
           </View>
         </If>
@@ -676,7 +676,7 @@ function RowView(p: { r: () => Row }) {
             <TextView
               selectable markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
               renderCodeBlock={(block) => <CodeFence block={block} />}
-              classes={{ root: "font-mono text-[14px] leading-[22px] text-foreground", code: "font-(family-name:--font-code) text-[13px] rounded-(--radius-card) bg-card text-foreground" }}
+              classes={{ root: "text-[14px] leading-[22px] text-foreground", code: "font-(family-name:--font-code) text-[13px] rounded-(--radius-card) bg-card text-foreground" }}
             />
           </View>
         </If>
@@ -694,7 +694,7 @@ function RowView(p: { r: () => Row }) {
             const c = r() as Extract<Row, { kind: "child" }>;
             const kind = c.tone === "accent" ? "waiting" : c.status === "running" || c.status === "starting…" || c.status === "started" ? "running" : c.status === "failed" ? "error" : "done";
             return (
-              <View class="flex-row rounded-(--radius-card) bg-card border border-border overflow-hidden my-1 font-mono">
+              <View class="relative flex-row rounded-(--radius-card) bg-card overflow-hidden my-1"><Edges color="bg-border" />
                 <Rail color={RAIL[c.tone] ?? "bg-info"} />
                 <View class={`flex-1 min-w-0 gap-1 py-2 ${CARD_INSET}`}>
                   <Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId}
@@ -717,11 +717,11 @@ function RowView(p: { r: () => Row }) {
           }}
         </If>
         <If when={r().kind === "diag"}>
-          <View class={`flex-row gap-3 rounded-(--radius-card) bg-card border border-border py-2.5 my-1 font-mono ${CARD_INSET}`} testID="msg-diag">
+          <View class={`relative flex-row gap-3 rounded-(--radius-card) bg-card py-2.5 my-1 ${CARD_INSET}`} testID="msg-diag"><Edges color="bg-border" />
             <Rail color={RAIL[(r() as any).tone] ?? "bg-warning"} />
             <View class="flex-1 min-w-0 gap-0.5">
-              <Text class="text-xs leading-4 font-medium text-muted-foreground font-mono">{(r() as any).label}</Text>
-              <Text style={{ userSelect: "text" }} class={`${T.sec} font-mono`}>{(r() as any).text}</Text>
+              <Text class="text-xs leading-4 font-medium text-muted-foreground">{(r() as any).label}</Text>
+              <Text style={{ userSelect: "text" }} class={`${T.sec}`}>{(r() as any).text}</Text>
               <If when={(r() as any).detail}><Text class={META}>{(r() as any).detail}</Text></If>
             </View>
           </View>
@@ -731,7 +731,7 @@ function RowView(p: { r: () => Row }) {
             <View class={`flex-row items-center gap-2 py-2 ${TEXT_INDENT}`}>
               <Text class={META} testID="timeline-older">{(r() as any).text}</Text>
               <Button onPress={() => run("turn.load_older")} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 ${hit("min-h-6")} justify-center hover:bg-accent ${FOCUS}`}>
-                <Text class="text-xs leading-4 text-foreground font-mono">Load older messages</Text>
+                <Text class="text-xs leading-4 text-foreground">Load older messages</Text>
               </Button>
             </View>
           </If>
@@ -780,10 +780,10 @@ function HandoffCard(p: { r: () => Extract<Row, { kind: "handoff" }> }) {
     <View class={`w-full rounded-(--radius-card) bg-raised py-3 gap-1 ${CARD_INSET}`}>
       <Button onPress={open} accessibilityLabel="Show the whole handoff summary" testID="msg-handoff" class={`w-full flex-col items-stretch gap-1 ${FOCUS}`}>
         <View class="flex-row items-center gap-3">
-          <Text class="flex-1 min-w-0 text-[14px] leading-5 font-semibold text-foreground font-mono">{`Continued from ${name()}`}</Text>
+          <Text class="flex-1 min-w-0 text-[14px] leading-5 font-semibold text-foreground">{`Continued from ${name()}`}</Text>
           <Text class={META}>{`handoff · ${r().time}`}</Text>
         </View>
-        <Text style={{ numberOfLines: 3 }} testID="handoff-preview" class="text-[14px] leading-5 text-foreground font-mono">{lines().join("\n")}</Text>
+        <Text style={{ numberOfLines: 3 }} testID="handoff-preview" class="text-[14px] leading-5 text-foreground">{lines().join("\n")}</Text>
       </Button>
       <View class="flex-row gap-3">
         <Button onPress={open} class={`${FOCUS}`}><Text class={META}>Show all</Text></Button>
@@ -806,10 +806,10 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   return (
     <If when={r().folded} else={
       <View>
-      <View class={`group/band w-full rounded-(--radius-card) bg-raised py-3 relative ${CARD_INSET}`} testID="msg-user"
+      <View class={`group/band w-full bg-raised py-3 relative ${CARD_INSET}`} testID="msg-user"
         onFocus={() => focusedBand.set(r().key)} onBlur={() => { if (focusedBand() === r().key) focusedBand.set(null); }}>
         {/* The TUI's band rail stays visible; focus only changes its colour. */}
-        <View class={`absolute left-0 top-2 bottom-2 w-0.5 rounded-full ${focusedBand() === r().key ? "bg-primary" : "bg-border"}`} />
+        <View class={`absolute left-0 top-0 bottom-0 w-0.5 ${focusedBand() === r().key ? "bg-primary" : "bg-border-strong"}`} />
         <If when={!!r().images?.length}>
           <View class="flex-row flex-wrap gap-2 pb-2" testID="user-images">
             <Each of={r().images ?? []} key={(i) => i.data_url}>
@@ -825,7 +825,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
           </View>
         </If>
         <View class="flex-row items-start gap-3">
-          <Text style={big() && !full() ? { userSelect: "text", numberOfLines: 6 } : { userSelect: "text" }} class="flex-1 min-w-0 font-mono text-[14px] leading-[22px] text-foreground">{body()}</Text>
+          <Text style={big() && !full() ? { userSelect: "text", numberOfLines: 6 } : { userSelect: "text" }} class="flex-1 min-w-0 text-[14px] leading-[22px] text-foreground">{body()}</Text>
           <View class="flex-row items-center gap-1 pt-0.5">
             {/* Hover icons: kept mounted (keyboard reachable), shown while the card is hovered or focused;
                 a phone or tablet has no hover, so they stay visible there. */}
@@ -843,7 +843,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
       <Button onPress={fold} accessibilityLabel={`${meta()} folded, show`} testID={`msg-user-folded-${r().n}`}
         class={`w-full flex-row items-center gap-2 rounded-(--radius-card) bg-raised min-h-9 hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
         <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
-        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 font-mono text-[14px] leading-[22px] text-foreground">{r().text}</Text>
+        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[14px] leading-[22px] text-foreground">{r().text}</Text>
         <If when={r().tools > 0 || !!r().duration}>
           {() => <Text class={META}>{[r().tools ? `${r().tools} tool${r().tools === 1 ? "" : "s"}` : "", r().duration].filter(Boolean).join(" · ")}</Text>}
         </If>
@@ -892,8 +892,8 @@ function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void })
           <View class="absolute left-0 right-0 items-center" style={{ top: offset, pointerEvents: "box-none" }} testID="sticky-user">
             <TimelineColumn>
               <Button onPress={() => p.scrollTo(c.band.top)} accessibilityLabel="Scroll to this message" testID="sticky-user-button"
-                class={`w-full flex-row items-center gap-3 rounded-(--radius) bg-raised border-b border-border ${hit("min-h-7")} hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
-                <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary font-mono">{c.band.text}</Text>
+                class={`w-full flex-row items-center gap-3 bg-raised border-b border-border ${hit("min-h-7")} hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
+                <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.band.text}</Text>
                 <Text class={META}>{`↑ ${lines} lines of this turn above`}</Text>
               </Button>
             </TimelineColumn>
@@ -932,11 +932,11 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
         class={`w-full flex-row items-center gap-2 rounded-(--radius) ${ACTIVITY_CONTROL_INSET} ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
         <Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
-        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary font-mono">{r().summary}</Text>
+        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{r().summary}</Text>
         <If when={!!r().diff}>
           {() => <Text class={META}><Text class="text-success">{`+${r().diff!.add}`}</Text>{" "}<Text class="text-error">{`−${r().diff!.del}`}</Text></Text>}
         </If>
-        <If when={r().failed > 0}><Text class="text-xs leading-4 text-error font-mono">{`✕ ${r().failed} failed`}</Text></If>
+        <If when={r().failed > 0}><Text class="text-xs leading-4 text-error">{`✕ ${r().failed} failed`}</Text></If>
         <If when={!!r().duration}><Text class={META}>{r().duration!}</Text></If>
       </Button>
       <If when={r().open}>
@@ -951,15 +951,12 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
   );
 }
 
-/** A member of an expanded group: a tree branch (1 px line, 12 px tick) to the left of the row. */
+/** A member of an expanded group: one soft vertical line (the spine) to the left of the row. */
 function ActivityItem(p: { item: () => ActivityEntry; last: () => boolean }) {
   const item = p.item;
   return (
     <View class="relative pl-[18px]">
-      <If when={p.last()} else={<View class="absolute left-0 top-0 bottom-0 w-px bg-border" />}>
-        {() => <View class="absolute left-0 top-0 h-3 w-px bg-border" />}
-      </If>
-      <View class="absolute left-0 top-3 w-3 h-px bg-border" />
+      <View class="absolute left-0 top-0 bottom-0 w-px bg-border-strong" />
       <If when={item().kind === "tool"}>
         <ToolRow r={item as () => Extract<Row, { kind: "tool" }>} />
       </If>
@@ -982,17 +979,17 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
         <Button onPress={() => toggle(`reason:${x().key}`, false)} accessibilityLabel={`${label()}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
           class={`w-full flex-row items-center gap-2 rounded-(--radius) ${ACTIVITY_CONTROL_INSET} ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
           <Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
-          <Text class={`text-[13px] leading-5 font-semibold text-muted-foreground font-mono`}>{label()}</Text>
+          <Text class={`text-[13px] leading-5 font-semibold text-muted-foreground`}>{label()}</Text>
           <If when={!!x().encrypted}>
-            {() => <Text class="text-[13px] leading-5 italic text-muted-foreground font-mono">encrypted, replayed to the provider</Text>}
+            {() => <Text class="text-[13px] leading-5 italic text-muted-foreground">encrypted, replayed to the provider</Text>}
           </If>
           <If when={!x().encrypted}>
-            {() => <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground font-mono">{firstLine(x().text)}</Text>}
+            {() => <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground">{firstLine(x().text)}</Text>}
           </If>
         </Button>
       }>
         <View class={`flex-row items-center gap-2 ${ACTIVITY_CONTROL_INSET} min-h-6`} testID="reasoning">
-          <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary font-mono">{"Thinking…"}</Text>
+          <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{"Thinking…"}</Text>
         </View>
       </If>
       <If when={x().running || (x().open && !x().encrypted)}>
@@ -1000,7 +997,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
           <If when={x().running && hidden() > 0}>
             {() => <Text class={META}>{`… ${hidden()} earlier lines`}</Text>}
           </If>
-          <Text style={{ userSelect: "text" }} class="text-[13px] leading-5 italic text-foreground-secondary font-mono">
+          <Text style={{ userSelect: "text" }} class="text-[13px] leading-5 italic text-foreground-secondary">
             {x().running ? lines().slice(-5).join("\n") : x().text}
           </Text>
         </View>
@@ -1033,18 +1030,18 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
         <If when={live()} else={<Icon name={verbIcon(r().name)} size={16} class="tint-foreground-secondary" />}>
           {() => <Status kind={stateKind()} />}
         </If>
-        <Text class="min-w-[52px] text-[13px] leading-5 font-medium text-foreground font-mono">{verbLabel(r().name)}</Text>
+        <Text class="min-w-[52px] text-[13px] leading-5 font-medium text-foreground">{verbLabel(r().name)}</Text>
         <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground-secondary">{r().arg}</Text>
         <If when={r().state !== "waiting" && !!r().summary}>
           <Text class={META}><Text class={r().summary.startsWith("+") ? "text-success" : r().summary.startsWith("−") ? "text-error" : "text-muted-foreground"}>{r().summary}</Text></Text>
         </If>
         <If when={r().state !== "waiting" && !!r().duration}><Text class={META}>{r().duration!}</Text></If>
-        <If when={r().state === "waiting"}><Text class="text-[13px] text-primary font-mono">waiting</Text></If>
+        <If when={r().state === "waiting"}><Text class="text-[13px] text-primary">waiting</Text></If>
       </View>
       <If when={open()}>
         <View class="ml-[18px] mt-1 mb-1 rounded-(--radius) bg-card overflow-hidden">
           <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
-            <Text class="text-xs leading-4 font-semibold text-foreground font-mono">{verbLabel(r().name)}</Text>
+            <Text class="text-xs leading-4 font-semibold text-foreground">{verbLabel(r().name)}</Text>
             <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 font-mono text-xs leading-4 text-foreground-secondary">{r().arg}</Text>
             <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
               <Text class={META}>{r().raw ? "[raw]" : "raw · r"}</Text>
@@ -1072,7 +1069,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
                 <Text class={META}>{`↑ ${hidden()} earlier lines`}</Text>
                 <View class="flex-1" />
                 <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-show-all-${r().id}`}>
-                  <Text class="text-[13px] leading-5 font-medium text-primary font-mono">Show all</Text>
+                  <Text class="text-[13px] leading-5 font-medium text-primary underline">Show all</Text>
                 </Button>
               </View>
             )}
@@ -1137,7 +1134,7 @@ export function Timeline() {
       <If when={scrolledUp()}>
         <View class="absolute bottom-2 left-0 right-0 items-center" style={{ pointerEvents: "box-none" }}>
           <TimelineColumn class="items-end">
-            <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${below()} new`} testID="jump-latest" class={`flex-row items-center gap-1.5 rounded-full border border-border bg-popover px-3 min-h-8 shadow-md hover:bg-accent ${FOCUS}`}>
+            <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${below()} new`} testID="jump-latest" class={`flex-row items-center gap-1.5 rounded-full bg-popover px-3 min-h-8 shadow-md hover:bg-accent ${FOCUS}`}>
               <Text class="text-[13px] leading-5 text-foreground-secondary">↓</Text>
               <Text class="text-[13px] leading-5 text-popover-foreground">{below() > 0 ? `${below()} new` : "latest"}</Text>
               <Text class={META}>{`· ${keyLabel(byId.get("session.jump_latest")!) ?? "end"}`}</Text>

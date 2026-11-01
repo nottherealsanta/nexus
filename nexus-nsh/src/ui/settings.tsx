@@ -2,7 +2,7 @@ import type { JSX } from "nsh";
 import { Scroll, Text, View, effect, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, T, FOCUS } from "./kit";
-import { Heading, Modal, ModalFooter, ModalTitle, SelectBar } from "./modal";
+import { Heading, Modal, ModalFooter, ModalTitle } from "./modal";
 import { manifest } from "../gen/manifest";
 import { byId, commands, copyText, escape, keyLabel, loadProviders, run } from "../commands";
 import { catalogSource, info, compat, isNarrow, live, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsPage, settingsReload, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker, providerLogins, confirmDialog, notificationSoundsOn, setNotificationSounds } from "../store";
@@ -32,7 +32,7 @@ export function loadSettingsData() {
 
 function Seg(p: { options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string }) {
   return (
-    <View class="flex-row rounded-(--radius) border border-border bg-background p-0.5" role="radiogroup" accessibilityLabel={p.label}>
+    <View class="flex-row rounded-(--radius) bg-background p-0.5" role="radiogroup" accessibilityLabel={p.label}>
       <Each of={p.options} key={(o) => o}>
         {(o) => (
           <Button role="radio" selected={p.value === o()} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${o()}`}
@@ -110,7 +110,7 @@ function HandoffPercent() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="0–100" accessibilityLabel="Automatic handoff threshold (percent, 0 is off)" testID="handoff-percent"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class="h-8 w-24 rounded-(--radius) border border-border bg-background px-2 text-right font-mono text-[13px] text-foreground" />
+        class="h-8 w-24 rounded-(--radius) bg-background px-2 text-right font-mono text-[13px] text-foreground" />
       <Btn label="Save" onPress={save} testID="handoff-percent-save" />
     </View>
   );
@@ -132,7 +132,7 @@ function TitleModels() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="copilot/gpt-6-luna, codex/gpt-6-luna" accessibilityLabel="Title models, provider/model separated by commas" testID="title-models"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class="h-8 min-w-0 flex-1 rounded-(--radius) border border-border bg-background px-2 font-mono text-[13px] text-foreground" />
+        class="h-8 min-w-0 flex-1 rounded-(--radius) bg-background px-2 font-mono text-[13px] text-foreground" />
       <Btn label="Save" onPress={save} testID="title-models-save" />
     </View>
   );
@@ -161,7 +161,7 @@ function McpToolsLimit() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="1–1000" accessibilityLabel="Tools listed by name (limit)" testID="mcp-max-listed-tools"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class="h-8 w-24 rounded-(--radius) border border-border bg-background px-2 text-right font-mono text-[13px] text-foreground" />
+        class="h-8 w-24 rounded-(--radius) bg-background px-2 text-right font-mono text-[13px] text-foreground" />
       <Btn label="Save" onPress={save} testID="mcp-max-listed-tools-save" />
     </View>
   );
@@ -260,7 +260,7 @@ function ProviderRow(p: { p: any }) {
     </View></If>
     <If when={keying()}><View class="gap-2">
       <Input masked autoFocus accessibilityLabel={`${p.p.label} API key`} placeholder={`API key ${p.p.key_hint ?? ""}`} onChange={({ value }) => providerKey.set(value)}
-        class="h-9 rounded-(--radius) border border-border bg-background px-3 text-foreground" testID={`provider-key-${p.p.id}`} />
+        class="h-9 rounded-(--radius) bg-background px-3 text-foreground" testID={`provider-key-${p.p.id}`} />
       <View class="flex-row items-center gap-2">
         <Btn label="Save key" kind="primary" onPress={() => void saveKey()} testID={`provider-key-save-${p.p.id}`} />
         <Btn label="Cancel" onPress={() => { providerKey.set(""); keyEntry.set(null); }} />
@@ -440,7 +440,7 @@ function SettingRow(p: { r: Row; sec: Section }) {
       <View class={isNarrow() ? "" : "w-[44%] pr-2"}>
         <View class="flex-row items-center gap-2">
           <Text class={`text-[14px] leading-[22px] ${disabled ? "text-muted-foreground" : "text-foreground"}`}>{r.label}</Text>
-          <If when={tag}><Text class="text-xs leading-4 text-muted-foreground rounded-(--radius) border border-border px-1.5">{tag}</Text></If>
+          <If when={tag}><Text class="text-xs leading-4 text-muted-foreground rounded-(--radius) px-1.5">{tag}</Text></If>
         </View>
         <If when={disabled && why}><Text class={T.meta}>{why}</Text></If>
         <If when={!disabled && r.note}><Text class={T.meta}>{r.note!}</Text></If>
@@ -510,8 +510,7 @@ export function SettingsView(p: { inline?: boolean }) {
               <Each of={sections} key={(s) => s.id}>
                 {(s) => (
                   <Button onPress={() => { settingsSection.set(s().id); if (s().page) settingsPage.set(s().id); }} selected={cur().id === s().id} testID={`section-${s().id}`} accessibilityLabel={s().label + (s().page ? ", opens a page" : "") + (s().unavailable_reason ? " (unavailable)" : "")}
-                    class={`relative flex-row items-center rounded-(--radius) px-3 hover:bg-accent ${isNarrow() ? "min-h-10" : "min-h-8"} ${FOCUS}`}>
-                    <SelectBar on={cur().id === s().id} />
+                    class={`relative flex-row items-center rounded-(--radius) px-3 hover:bg-accent ${cur().id === s().id ? "bg-selection" : ""} ${isNarrow() ? "min-h-10" : "min-h-8"} ${FOCUS}`}>
                     <Text class={`flex-1 text-[13px] leading-5 ${cur().id === s().id ? "text-foreground font-medium" : s().unavailable_reason ? "text-muted-foreground" : "text-foreground-secondary"}`}>{s().label}</Text>
                     <If when={s().page && !isNarrow()}><Text class={T.meta}>›</Text></If>
                   </Button>

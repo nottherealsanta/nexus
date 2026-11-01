@@ -2,8 +2,8 @@ import type { JSX } from "nsh";
 import { Scroll, Text, View } from "nsh";
 import { IconButton, Status, T, relTime, midTruncate } from "./kit";
 import { manifest } from "../gen/manifest";
-import { run } from "../commands";
-import { contextBudget, gitStatus, m, model, modelCatalog, viewed } from "../store";
+import { rightIsOpen, run } from "../commands";
+import { contextBudget, gitStatus, m, model, modelCatalog, viewed, width } from "../store";
 import { agentColor } from "../agent-color";
 import type { SelectedView } from "../core/reduce";
 import { latestUsage, ledgerTotals, unknownRequests } from "../core/turns";
@@ -21,7 +21,7 @@ function Field(p: { k: string; v?: string | null; mono?: boolean; children?: JSX
     </View>
   );
 }
-const LABEL = "text-[11px] leading-4 font-semibold uppercase tracking-[0.06em] text-muted-foreground";
+const LABEL = "text-[12.5px] leading-4 font-medium text-muted-foreground";
 function Section(p: { title: string; children?: JSX.Element }) {
   return (
     <View class="px-4 pt-5 pb-1" testID={`right-section-${p.title.toLowerCase().replace(/ /g, "-")}`}>
@@ -121,7 +121,7 @@ function GitGroup(p: { title: string; rows: Change[]; letter: (c: Change) => str
             const l = p.letter(c);
             return (
               <View class="flex-row items-center gap-2 min-h-6 rounded-(--radius) px-1 -mx-1 hover:bg-accent" testID="git-row">
-                <Text class={`w-3.5 text-center font-mono text-xs leading-5 font-semibold ${LETTER_TONE[l] ?? "text-muted-foreground"}`}>{l}</Text>
+                <Text class={`w-3.5 text-center text-xs leading-5 font-semibold ${LETTER_TONE[l] ?? "text-muted-foreground"}`}>{l}</Text>
                 <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground">{c.path}</Text>
                 <Text class={`${T.meta} text-diff-add`}>{`+${c.added ?? 0}`}</Text>
                 <Text class={`${T.meta} text-diff-del`}>{`−${c.removed ?? 0}`}</Text>
@@ -240,6 +240,21 @@ export function RightSidebar(p: { drawer?: boolean }) {
           </If>
         </Section>
       </Scroll>
+    </View>
+  );
+}
+
+/** The icon rail: always beside the page on desktop and web; its icons open the panel, which pushes the page. */
+export function RightRail() {
+  const open = () => rightIsOpen(width());
+  const changes = () => Number(gitStatus()?.data?.changes?.length ?? 0);
+  return (
+    <View class="w-11 shrink-0 bg-sidebar items-center pt-2 gap-1" testID="right-rail">
+      <IconButton icon="info" label="Session" selected={open()} testID="rail-session" onPress={() => void run("sidebar.right.toggle")} />
+      <View class="relative">
+        <IconButton icon="branch" label="Git" testID="rail-git" onPress={() => void run("sidebar.right.toggle")} />
+        <If when={changes() > 0}><Text class="absolute right-0.5 top-0 text-[10px] leading-3 font-semibold text-foreground" testID="rail-git-count">{String(changes())}</Text></If>
+      </View>
     </View>
   );
 }

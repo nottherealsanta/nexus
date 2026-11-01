@@ -3,6 +3,7 @@
   "id": "dev.nexus10.nsh",
   "version": "0.10.0",
   "build": 1,
+  "icon": "../interface/brand/nexus-1024.png",
   "appearance": "system",
   "theme": "gen/theme.json",
   "capabilities": {

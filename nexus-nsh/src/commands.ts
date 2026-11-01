@@ -133,7 +133,8 @@ const on = (id: string, run: Handler["run"], mutates = false) => handlers.set(id
 /** Copies text to the system clipboard and confirms it (the timeline's message copy). */
 export function copyText(text: string, done: string) { void Clipboard.writeText(text).then(() => toast("success", done)); }
 export function toggleLeft() { if (isNarrow()) drawer.set(drawer() === "left" ? null : "left"); else { leftOpen.update((v) => !v); savePrefs(); } }
-export function rightIsOpen(w: number) { return rightOpen() ?? w >= 1280; }
+/** The right panel opens on demand from the icon rail. */
+export function rightIsOpen(_w: number) { return rightOpen() ?? false; }
 export function toggleRight(w: number) {
   if (isNarrow()) drawer.set(drawer() === "right" ? null : "right");
   else { rightOpen.set(!rightIsOpen(w)); savePrefs(); }

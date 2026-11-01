@@ -49,12 +49,7 @@ export function ModalFooter(p: { hints: string; right?: string }) {
   );
 }
 
-/** The 2 px accent bar of a selected row; `hover` shows it with the pointer instead (a `group/row` parent). */
-export function SelectBar(p: { on?: boolean; hover?: boolean }) {
-  return <View class={`absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary ${p.on ? "" : p.hover ? "opacity-0 group-hover/row:opacity-100" : "opacity-0"}`} />;
-}
-
-/** An UPPERCASE muted section heading (also used by Settings). */
+/** A muted section heading (also used by Settings). */
 export function Heading(p: { text: string; first?: boolean }) {
-  return <Text class={`text-[11px] leading-4 font-semibold uppercase tracking-[0.06em] text-muted-foreground ${p.first ? "pt-1" : "pt-5"} pb-1.5`}>{p.text}</Text>;
+  return <Text class={`text-[12.5px] leading-4 font-medium text-muted-foreground ${p.first ? "pt-1" : "pt-5"} pb-1.5`}>{p.text}</Text>;
 }

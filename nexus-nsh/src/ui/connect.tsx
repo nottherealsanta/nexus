@@ -1,4 +1,4 @@
-import { Scroll, Text, View, effect, keyboardFrame, platform, safeArea, signal } from "nsh";
+import { Scroll, Text, View, effect, keyboardFrame, platform, safeArea, signal, windowSize } from "nsh";
 import { Input } from "nsh/base";
 import { Btn, FOCUS, T } from "./kit";
 import { connectCore, coreUrl } from "../store";
@@ -11,6 +11,25 @@ const busy = signal(false);
 
 /** The last opened state, so the field starts from the saved address without clobbering typing. */
 let filled = "";
+
+const noise = (a: number, b: number) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
+/** Rows of the logo's `_/` mark in soft clusters, clear around the middle where the form sits. */
+export function slashField(cols: number, rows: number): string[] {
+  const blobs = [[0.14, 0.22, 0.34], [0.86, 0.18, 0.32], [0.16, 0.8, 0.3], [0.86, 0.76, 0.36], [0.5, 0.06, 0.2], [0.55, 0.96, 0.22]];
+  const out: string[] = [];
+  for (let r = 0; r < rows; r++) {
+    let line = "";
+    for (let c = 0; c < cols; c++) {
+      const x = c / Math.max(1, cols - 1), y = r / Math.max(1, rows - 1);
+      const inForm = Math.abs(x - 0.5) < 0.3 && Math.abs(y - 0.5) < 0.3;
+      let d = 0;
+      for (const [bx, by, br] of blobs) d = Math.max(d, 1 - Math.hypot(x - bx, y - by) / br);
+      line += !inForm && d > 0 && noise(c, r) < d * 1.15 ? "_/ " : "   ";
+    }
+    out.push(line);
+  }
+  return out;
+}
 
 /**
  * Connect to Core by address (DESIGN_PLAN / native targets): the iOS and macOS builds are on
@@ -39,13 +58,18 @@ export function ConnectScreen() {
       busy.set(false);
     }
   };
+  const field = () => slashField(Math.ceil(windowSize().width / 20), Math.ceil(windowSize().height / 16));
   return (
-    <Scroll class="flex-1 bg-background" testID="connect"
+    <View class="flex-1 bg-background">
+    <View class="absolute inset-0 overflow-hidden" style={{ pointerEvents: "none" }} testID="connect-field" accessible={false}>
+      <Each of={field()}>{(row) => <Text style={{ numberOfLines: 1 }} class="font-mono text-[11px] leading-4 text-border-strong">{row()}</Text>}</Each>
+    </View>
+    <Scroll class="flex-1" testID="connect"
       contentClass="grow justify-center px-6"
       contentStyle={{ paddingTop: safeArea().top + 24, paddingBottom: safeArea().bottom + 24 + keyboardFrame().height }}>
       <View class="w-full max-w-[420px] gap-4">
         <View class="gap-1.5">
-          <Text class="text-[20px] leading-7 font-semibold text-foreground">Connect to Nexus Core</Text>
+          <Text class="text-[20px] leading-7 font-semibold text-foreground">Connect to Core</Text>
           <Text class={`${T.sec} text-muted-foreground`}>
             This app talks to Core directly over your network. Enter the address Core serves on — for example
             http://192.168.1.20:4747 — with Core started as `NEXUS_HOST=0.0.0.0 nexus serve`.
@@ -58,7 +82,7 @@ export function ConnectScreen() {
             placeholder="http://192.168.1.20:4747" autoCapitalize="none" autoCorrect={false}
             submitBehavior="submit" onSubmit={() => void submit()}
             onChange={({ value }) => { error.set(null); address.set(value); }}
-            class={`h-11 rounded-(--radius) border bg-card px-3 text-[15px] text-foreground placeholder:text-muted-foreground ${FOCUS} ${error() ? "border-error" : "border-border"}`}
+            class={`h-11 rounded-(--radius) px-3 text-[15px] text-foreground placeholder:text-muted-foreground ${FOCUS} ${error() ? "bg-error/10" : "bg-card"}`}
           />
           <If when={!!error()}>
             <Text testID="connect-error" class="text-[13px] leading-5 text-error">{error()!}</Text>
@@ -74,5 +98,6 @@ export function ConnectScreen() {
         </View>
       </View>
     </Scroll>
+    </View>
   );
 }

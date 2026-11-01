@@ -1,6 +1,6 @@
 import { Image, Text, View, effect, safeArea, signal, untracked } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, Icon, IconButton, FOCUS, Status, T, midTruncate } from "./kit";
+import { Btn, Edges, Icon, IconButton, FOCUS, Status, T, midTruncate } from "./kit";
 import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
@@ -10,7 +10,7 @@ import {
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question } from "../core/api";
-import { agentColor, agentRailColor } from "../agent-color";
+import { agentColor, agentSlot } from "../agent-color";
 import { detailOf, fmtDuration } from "./timeline";
 import { groupRequests, latestUsage, sumUsage, turnsIn } from "../core/turns";
 import type { ToolDetailLine } from "./timeline";
@@ -251,7 +251,8 @@ export function Composer() {
 
   const agentName = () => capitalize(agent());
   return (
-    <TimelineColumn class="items-center pb-2 pt-3" testID="composer-area" style={{ paddingBottom: safeArea().bottom + 8 }}>
+    <View class="w-full" testID="composer-area">
+    <TimelineColumn class="items-center pt-3">
       <View class="w-full">
         <If when={busy()}><WorkingRow /></If>
         <PendingStack />
@@ -266,8 +267,7 @@ export function Composer() {
                     const sel = () => i() === Math.min(selected(), rows().length - 1);
                     return (
                       <Button onPress={() => accept(r())} selected={sel()} testID={`completion-${r().key}`}
-                        class={`flex-row items-center gap-3 ${isNarrow() ? "min-h-11" : "h-8"} px-3 hover:bg-accent ${FOCUS}`}>
-                        <If when={sel()}>{() => <View class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary" />}</If>
+                        class={`flex-row items-center gap-3 rounded-(--radius) ${sel() ? "bg-selection" : ""} ${isNarrow() ? "min-h-11" : "h-8"} px-3 hover:bg-accent ${FOCUS}`}>
                         <Text style={{ numberOfLines: 1 }} class={`font-mono text-[12.5px] leading-5 font-medium ${r().muted ? "text-muted-foreground" : "text-foreground"}`}>{r().value}</Text>
                         <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[12px] leading-4 text-muted-foreground">{r().muted ? `${r().help} · ${r().muted}` : r().help}</Text>
                         <If when={!!r().hint}><Text class="text-xs leading-4 text-muted-foreground">{r().hint ?? ""}</Text></If>
@@ -286,8 +286,12 @@ export function Composer() {
             );
           }}
         </If>
+      </View>
+    </TimelineColumn>
+    <View class="w-full bg-sidebar" style={{ paddingBottom: safeArea().bottom }} testID="composer-dock">
+    <TimelineColumn class="items-center pt-3">
         <View
-          class={`w-full rounded-(--radius-card) border bg-card px-4 ${isNarrow() ? "pt-3 pb-2" : "pt-5 pb-3"} ${focused() ? "border-ring" : "border-border"}`}
+          class={`w-full px-1 ${isNarrow() ? "pb-1" : "pb-1.5"}`}
           accessibilityLabel="Composer" testID="composer-panel"
         >
           <If when={images().length > 0}>
@@ -327,7 +331,7 @@ export function Composer() {
             }}
             onContentSizeChange={(s) => h.set(Math.min(220, Math.max(28, Math.ceil(s.size?.height ?? (s as any).height ?? 22) + 4)))}
             style={{ height: h() }}
-            class="font-mono px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
+            class="px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
           />
           <View class="h-1" />
           <View class="flex-row items-center gap-1 min-w-0 min-h-8">
@@ -359,9 +363,11 @@ export function Composer() {
             </View>
           </View>
         </View>
-        <LocationStrip usageLabel={usageLabel()} meterPct={usage()?.pct == null ? null : meterPct()} meterColor={agentRailColor(agent())} />
-      </View>
+        <LocationStrip usageLabel={usageLabel()} />
     </TimelineColumn>
+    <ActivityBar busy={busy()} fraction={usage()?.pct == null ? 0 : meterPct() / 100} slot={agentSlot(agent())} />
+    </View>
+    </View>
   );
 }
 
@@ -439,7 +445,7 @@ function Selector(p: { command: string; label: string; labelClass?: string; sub?
     <Button
       onPress={() => void run(p.command)} disabled={disabled()} testID={p.testID}
       accessibilityLabel={`${p.label}${disabled() ? `, unavailable: ${reason()}` : ""}`}
-      tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{disabled() ? `${p.label}: ${reason()}` : p.label}</Text>}
+      tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{disabled() ? `${p.label}: ${reason()}` : p.label}</Text>}
       class={`flex-row items-center gap-1.5 min-w-0 shrink h-7 ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
     >
       <Text style={{ numberOfLines: 1 }} class={`text-[13px] leading-5 ${p.labelClass ?? "text-foreground-secondary"}`}>{p.label}</Text>
@@ -448,7 +454,47 @@ function Selector(p: { command: string; label: string; labelClass?: string; sub?
   );
 }
 
-/** `◐ Working · 12s · ↓4.1k` above the card while the session runs; ticks once a second. */
+/** The TUI's soft shimmer: a light passes through the word, letter by letter. */
+function Shimmer(p: { text: string; reduced: boolean }) {
+  return <View class="flex-row" accessibilityLabel={p.text} testID="working-shimmer">
+    <Each of={[...p.text]}>{(c, i) => <Text
+      class="text-[13px] leading-5 font-medium text-foreground"
+      style={p.reduced ? {} : { animationName: "pulse", animationDuration: 1800, animationDelay: i() * 110, animationIterationCount: "infinite" }}
+    >{c()}</Text>}</Each>
+  </View>;
+}
+
+const AGENT_TEXT: Record<string, string> = {
+  amber: "text-agent-amber", blue: "text-agent-blue", violet: "text-agent-violet", green: "text-agent-green",
+  teal: "text-agent-teal", rose: "text-agent-rose", sky: "text-agent-sky", gold: "text-agent-gold",
+};
+const AGENT_TONE: Record<string, string> = {
+  amber: "bg-agent-amber text-agent-amber", blue: "bg-agent-blue text-agent-blue", violet: "bg-agent-violet text-agent-violet",
+  green: "bg-agent-green text-agent-green", teal: "bg-agent-teal text-agent-teal", rose: "bg-agent-rose text-agent-rose",
+  sky: "bg-agent-sky text-agent-sky", gold: "bg-agent-gold text-agent-gold",
+};
+/**
+ * The TUI's activity line (`draw_activity_line`) along the dock's foot, a line with a slight glow in
+ * the agent's colour. At rest it fills to the context used; while busy a soft pulse a fifth of the
+ * width glides back and forth on a cosine, three seconds a sweep.
+ */
+function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
+  const phase = signal(0.5);
+  const reduced = () => !!config()?.values?.ui?.reduced_motion;
+  effect(() => {
+    if (!p.busy || reduced()) { phase.set(0.5); return; }
+    const start = Date.now();
+    const id = setInterval(() => phase.set(((Date.now() - start) / 3000) % 1), 33);
+    return () => clearInterval(id);
+  });
+  const left = () => 40 * (1 - Math.cos(phase() * Math.PI * 2));
+  return <View class="relative w-full h-px bg-border-strong" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`}>
+    <If when={p.busy} else={<View class={`absolute top-0 bottom-0 left-0 ${AGENT_TONE[p.slot] ?? "bg-primary text-primary"}`} testID="activity-fill" style={{ width: `${Math.min(100, p.fraction * 100)}%`, boxShadow: [{ x: 0, y: 0, blur: 4 }] }} />}>
+      <View class={`absolute top-0 bottom-0 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
+    </If>
+  </View>;
+}
+
 function WorkingRow() {
   const turn = () => { m(); const msgs = model.selected?.messages ?? []; return [...msgs].reverse().find((x) => x.role === "user"); };
   const elapsed = () => {
@@ -472,7 +518,7 @@ function WorkingRow() {
   return (
     <View class="flex-row items-center gap-2 h-7 mb-1 px-1" testID="working-row">
       <Status kind="running" />
-      <Text class="text-[13px] leading-5 font-semibold text-foreground">Working</Text>
+      <Shimmer text="Working" reduced={!!config()?.values?.ui?.reduced_motion} />
       <Text class={T.sec}>{`· ${fmtDuration(elapsed())}`}</Text>
       <Text class={T.sec} testID="working-output">{`· ↓${compact(output())}`}</Text>
       <View class="flex-1" />
@@ -519,7 +565,7 @@ function PendingStack() {
 }
 
 /** The location strip shows the path, branch and linked-worktree icon. */
-function LocationStrip(p: { usageLabel: string; meterPct: number | null; meterColor: string }) {
+function LocationStrip(p: { usageLabel: string }) {
   const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
   const session = () => { m(); return viewed(); };
   const directory = () => session()?.directory ?? project()?.path ?? "";
@@ -545,39 +591,34 @@ function LocationStrip(p: { usageLabel: string; meterPct: number | null; meterCo
     const c = byId.get("session.worktrees");
     return c ? availability(c) : { ok: false, reason: "Worktree controls are not available in NSH." };
   };
-  const tooltip = (text: string) => <Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{text}</Text>;
+  const tooltip = (text: string) => <Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{text}</Text>;
   return (
     <If when={(project() && directory()) || !!p.usageLabel}>
-      <View class="w-full flex-row items-center gap-2 min-h-7 pt-1.5 px-1 min-w-0" testID="location-strip">
+      <View class="w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 px-1" testID="location-strip">
         <If when={!!session()}>
           <Button
             disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
             accessibilityLabel={`Directory ${directory()}${directoryAvailability().ok ? "" : `, unavailable: ${directoryAvailability().reason ?? ""}`}`}
             tooltip={tooltip(directoryAvailability().reason ?? "Change session directory")}
             class={`min-w-0 shrink rounded-(--radius) ${FOCUS}`}
-          ><Text style={{ numberOfLines: 1 }} class={`${T.meta} min-w-0`}>{path()}</Text></Button>
+          ><Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono min-w-0`}>{path()}</Text></Button>
         </If>
-        <If when={!session()}><Text testID="location-directory" style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.meta}`}>{path()}</Text></If>
+        <If when={!session()}><Text testID="location-directory" style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.meta} font-mono`}>{path()}</Text></If>
         <If when={!!branch()}>
-          <If when={!!session()} else={<Text testID="location-branch" style={{ numberOfLines: 1 }} class={`${T.meta} min-w-0 shrink`}>{`⌥ ${branch()!}`}</Text>}>
+          <If when={!!session()} else={<Text testID="location-branch" style={{ numberOfLines: 1 }} class={`${T.meta} font-mono min-w-0 shrink`}>{`⌥ ${branch()!}`}</Text>}>
             <Button
               disabled={!worktreeAvailability().ok} onPress={() => void run("session.worktrees")} testID="location-branch"
               accessibilityLabel={`Branch ${branch()}${worktreeAvailability().ok ? "" : `, unavailable: ${worktreeAvailability().reason ?? ""}`}`}
               tooltip={tooltip(worktreeAvailability().reason ?? "Worktree controls")}
               class={`min-w-0 shrink rounded-(--radius) ${FOCUS}`}
-            ><Text style={{ numberOfLines: 1 }} class={T.meta}>{`⌥ ${branch()!}`}</Text></Button>
+            ><Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono`}>{`⌥ ${branch()!}`}</Text></Button>
           </If>
         </If>
-        <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={T.meta}>⑂</Text></If>
+        <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={`${T.meta} font-mono`}>⑂</Text></If>
         <View class="flex-1" />
         <If when={!!p.usageLabel}>
           <View class="shrink-0 flex-row items-center gap-2" testID="composer-meter">
-            <If when={p.meterPct !== null && !isNarrow()}>
-              <View class="w-20 h-1 rounded-full bg-border overflow-hidden">
-                <View class={`h-full rounded-full ${p.meterColor}`} style={{ width: `${p.meterPct ?? 0}%` }} />
-              </View>
-            </If>
-            <Text style={{ numberOfLines: 1 }} class={T.meta} testID="composer-usage">{p.usageLabel}</Text>
+            <Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono`} testID="composer-usage">{p.usageLabel}</Text>
           </View>
         </If>
       </View>
@@ -625,7 +666,7 @@ export function WaitingCard() {
   return (
     <TimelineColumn class="items-center" testID="waiting-slot">
       <If when={others().length > 0 && items().length === 0}>
-        <View class="w-full flex-row items-center gap-2 rounded-(--radius-card) border border-border bg-card px-3 py-2 mb-2">
+        <View class="w-full flex-row items-center gap-2 rounded-(--radius-card) bg-card px-3 py-2 mb-2">
           <Status kind="waiting" />
           <Text class={`flex-1 ${T.sec}`}>{`${others().length} other session${others().length === 1 ? " is" : "s are"} waiting for input`}</Text>
           <Btn label="Go to" onPress={() => run("waiting.go_to")} testID="waiting-go-to" />
@@ -693,13 +734,14 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     if (q && live()) bind("waiting.submit_answers", () => void submitQuestion(q));
     return bindOpenKeys(map);
   });
+  const multi = () => question()?.questions.some((x) => x.multiple) ?? false;
   return (
-    <View class="w-full mb-2 flex-row rounded-(--radius-card) bg-card overflow-hidden" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
-      <View class="w-[3px] self-stretch bg-primary" testID="waiting-rail" />
+    <View class="relative w-full mb-2 flex-row rounded-(--radius-card) bg-card" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
+      <Edges left={multi() ? "bg-multi" : "bg-primary"} leftWidth={2} testID="waiting-rail" />
       <View class="flex-1 min-w-0 gap-2.5 px-3.5 py-3">
         <View>
           <View class="flex-row items-center gap-2 min-h-6">
-            <Text class="text-[15px] leading-5 text-primary">◆</Text>
+            <Text class={`text-[15px] leading-5 ${multi() ? "text-multi" : "text-primary"}`}>◆</Text>
             <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[15px] leading-5 font-semibold text-foreground" testID="waiting-title">
               {approval() ? `Allow ${approval()!.tool}?` : "Nexus asks"}
             </Text>
@@ -799,13 +841,13 @@ function QuestionBody(p: { q: Question }) {
                 {(o) => (
                   <Button role={qq().multiple ? "checkbox" : "radio"} selected={sel(o().id)} accessibilityLabel={o().label}
                     onPress={() => upd(id(), (a) => ({ ...a, selected: qq().multiple ? (a.selected.includes(o().id) ? a.selected.filter((x) => x !== o().id) : [...a.selected, o().id]) : [o().id] }))}
-                    class={`flex-row items-center gap-2 rounded-(--radius) border border-border px-2.5 min-h-8 hover:bg-accent selected:border-ring ${FOCUS}`}>
-                    <Text class="text-[13px] text-foreground-secondary w-4">{qq().multiple ? (sel(o().id) ? "[x]" : "[ ]") : sel(o().id) ? "(•)" : "( )"}</Text>
+                    class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 min-h-8 hover:bg-accent selected:bg-selection ${FOCUS}`}>
+                    <Text class={`text-[13px] w-4 ${qq().multiple && sel(o().id) ? "text-multi" : "text-foreground-secondary"}`}>{qq().multiple ? (sel(o().id) ? "[x]" : "[ ]") : sel(o().id) ? "(•)" : "( )"}</Text>
                     <Text class="flex-1 text-[13px] leading-5 text-foreground">{o().label}</Text>
                   </Button>
                 )}
               </Each>
-              <Input placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class="rounded-(--radius) border border-border bg-background px-2.5 h-8 text-[13px] text-foreground" />
+              <Input placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class="rounded-(--radius) bg-background px-2.5 h-8 text-[13px] text-foreground" />
             </View>
           );
         }}

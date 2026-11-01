@@ -1,6 +1,6 @@
 import type { JSX } from "nsh";
 import { List, PanResponder, Scroll, Text, View, effect, safeArea, signal } from "nsh";
-import { Button, ContextMenu, MenuItem, Tab, Tabs, Input } from "nsh/base";
+import { Button, ContextMenu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/base";
 import { Btn, Icon, IconButton, Status, AttentionMark, T, FOCUS, relTime, abbrev, midTruncate } from "./kit";
 import { manifest } from "../gen/manifest";
 import { availability, byId, commands, keyLabel, newSession, run, toggleLeft } from "../commands";
@@ -32,7 +32,7 @@ export function SidebarTabs(p: { labels?: boolean }) {
           <Tab
             selected={leftTab() === t().id} accessibilityLabel={t().label} testID={`tab-${t().id}`} disabled={false}
             onPress={() => { leftTab.set(t().id); if (t().id === "files") void loadFiles(); savePrefs(); }}
-            tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{t().label}{hint(t().command) ? `  ${hint(t().command)}` : ""}</Text>}
+            tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{t().label}{hint(t().command) ? `  ${hint(t().command)}` : ""}</Text>}
             class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) hover:bg-accent ${p.labels ? "px-2.5 min-h-11" : isNarrow() ? "size-11" : "size-8"} ${FOCUS}`}
           >
             <Icon name={TAB_ICON[t().id]} class={leftTab() === t().id ? "tint-foreground" : "tint-muted-foreground"} />
@@ -81,10 +81,13 @@ export function SessionRail() {
   const labels = () => projectLabels(projects());
   const activity = (id: string) => { m(); return projectActivity(id, model.sessions.values(), model.running, tick()); };
   const counts = (id: string) => { m(); return projectCounts(id, model.sessions.values(), model.approvals.values(), model.questions.values(), model.running, model.unreadSessions); };
+  // The rail popup (step 8): shorter wording than the TUI, two rows of two, in aligned columns.
   const details = (id: string) => {
     const c = counts(id);
-    return [`${c[0]} needs attention`, `${c[1]} finished (unread)`, `${c[2]} running`, `${c[3]} idle`];
+    return [`${c[0]} attention`, `${c[1]} unread`, `${c[2]} running`, `${c[3]} idle`];
   };
+  const railTip = signal<string | null>(null);
+  const railFocus = signal<string | null>(null);
   const tones = ["text-multi", "text-info", "text-success", "text-foreground"];
   const kinds = ["attention", "finished", "running", "idle"];
   return (
@@ -98,16 +101,28 @@ export function SessionRail() {
             // Attention and finished sit above the initials, running and idle below.
             const half = (first: number) => shown().slice(first, first + 2).filter((c) => c.n > 0);
             return (
-              <Button onPress={() => { scopeAll.set(false); selectProject(p().id); }} accessibilityLabel={`${p().name} · ${details(p().id).join(", ")}`}
-                selected={currentProject() === p().id} testID={`rail-project-${p().id}`}
-                tooltip={<View class="gap-0.5 text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">
-                  <Text class="font-medium">{p().name}</Text>
-                  <Each of={details(p().id)} key={(d) => d}>
-                    {(d) => <Text class="text-muted-foreground">{d()}</Text>}
-                  </Each>
-                </View>}
-                class={`relative size-10 flex-col gap-0 items-center justify-center rounded-(--radius) hover:bg-accent ${currentProject() === p().id ? "bg-accent" : ""} ${FOCUS}`}>
-                <If when={currentProject() === p().id}><View class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary" /></If>
+              <View role="button" focusable
+                onPress={() => { scopeAll.set(false); selectProject(p().id); }}
+                onFocus={() => { railFocus.set(p().id); railTip.set(p().id); }}
+                onBlur={() => { if (railFocus() === p().id) railFocus.set(null); if (railTip() === p().id) railTip.set(null); }}
+                accessibilityState={{ selected: currentProject() === p().id }}
+                accessibilityLabel={`${p().name} · ${details(p().id).join(", ")}`}
+                testID={`rail-project-${p().id}`}
+                tooltip={<Tooltip placement="right" offset={8} delay={120} open={railTip() === p().id || railFocus() === p().id}
+                  onOpenChange={({ open }) => { if (!open) railTip.set(null); else railTip.set(p().id); }}>
+                  <View class="gap-1 rounded-(--radius) bg-raised px-3 py-2" testID={`rail-popup-${p().id}`}>
+                    <Text class="text-[13px] leading-5 font-semibold text-foreground">{p().name}</Text>
+                    <View class="flex-row gap-3" testID={`rail-popup-${p().id}-above`}>
+                      <Text class="w-[84px] text-xs leading-4 text-multi tabular-nums">{details(p().id)[0]}</Text>
+                      <Text class="w-[64px] text-xs leading-4 text-info tabular-nums">{details(p().id)[1]}</Text>
+                    </View>
+                    <View class="flex-row gap-3" testID={`rail-popup-${p().id}-below`}>
+                      <Text class="w-[84px] text-xs leading-4 text-success tabular-nums">{details(p().id)[2]}</Text>
+                      <Text class="w-[64px] text-xs leading-4 text-foreground tabular-nums">{details(p().id)[3]}</Text>
+                    </View>
+                  </View>
+                </Tooltip>}
+                class={`relative size-10 flex-col gap-0 items-center justify-center rounded-(--radius) hover:bg-accent ${currentProject() === p().id ? "bg-selection" : ""} ${FOCUS}`}>
                 <View testID={`rail-counts-${p().id}-above`} class="flex-row items-center gap-px h-3">
                   <Each of={half(0)} key={(c) => c.kind}>
                     {(c) => <Text testID={`rail-count-${p().id}-${c().kind}`} class={`text-[10px] leading-3 tabular-nums ${c().tone}`}>{railCount(c().n)}</Text>}
@@ -122,7 +137,7 @@ export function SessionRail() {
                     <View testID={`rail-placeholder-${p().id}`} class="w-3 h-px bg-muted-foreground opacity-50" />
                   </If>
                 </View>
-              </Button>
+              </View>
             );
           }}
         </Each>
@@ -226,7 +241,7 @@ export function SessionsTab() {
           {(x) => (
             <If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}>
               <View class="px-2 pt-4 pb-1" testID="session-group">
-                <Text style={{ numberOfLines: 1 }} class="text-[11px] leading-4 font-semibold uppercase tracking-[0.06em] text-muted-foreground">{(x() as any).title}</Text>
+                <Text style={{ numberOfLines: 1 }} class="text-[12.5px] leading-4 font-medium text-muted-foreground">{(x() as any).title}</Text>
               </View>
             </If>
           )}
@@ -266,17 +281,14 @@ function SessionRow(p: { s: () => Session }) {
           if (!phone) void selectSession(s().id);
         } else if (sidebarRowMenu()?.id === s().id) sidebarRowMenu.set(null);
       }}
-      popupClass="min-w-[188px] rounded-(--radius-card) border border-border bg-popover p-1 shadow-lg"
+      popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg"
       trigger={
         <View role="button"
           onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== s().id && focusedSidebarRow()?.id === s().id) focusedSidebarRow.set(null); }}
           onPress={() => { dismissSessionSearch(); focusedSidebarRow.set(ref()); void selectSession(s().id); }} accessibilityState={{ selected: sel() }} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${s().status === "busy" ? "running" : "idle"}`}
-          class={`group/row relative rounded-(--radius) px-2 hover:bg-accent ${phone ? "min-h-[72px] py-3 pr-14" : isNarrow() ? "min-h-[56px] py-2" : "h-[48px] py-2"} ${FOCUS}`}
+          class={`group/row relative rounded-(--radius) px-2 hover:bg-accent ${sel() ? "bg-selection" : ""} ${phone ? "min-h-[72px] py-3 pr-14" : isNarrow() ? "min-h-[56px] py-2" : "h-[48px] py-2"} ${FOCUS}`}
         >
-          <If when={focusedSidebarRow()?.id === s().id || sel()}>
-            {() => <View class="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-primary" testID="row-focus-bar" />}
-          </If>
           <View class="flex-row items-center gap-2 h-5">
             <View class="w-3.5 items-center">
               <If when={att()} else={<If when={s().status === "busy"} else={<Text class="text-[13px] leading-5 text-transparent"> </Text>}><Status kind="running" /></If>}><AttentionMark kind="waiting" /></If>
@@ -388,12 +400,12 @@ function ProjectRow(p: { project: () => Project; count: (id: string) => number }
           selectProject(project().id);
         } else if (sidebarRowMenu()?.id === project().id) sidebarRowMenu.set(null);
       }}
-      popupClass="min-w-[188px] rounded-(--radius-card) border border-border bg-popover p-1 shadow-lg"
+      popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg"
       trigger={
         <View role="button" onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== project().id && focusedSidebarRow()?.id === project().id) focusedSidebarRow.set(null); }}
           onPress={() => { focusedSidebarRow.set(ref()); selectProject(project().id); }} accessibilityState={{ selected: selected() }} testID={`project-${project().id}`} accessibilityLabel={`Project ${project().name}`}
-          class={`gap-0.5 rounded-(--radius) px-2.5 py-1.5 hover:bg-accent ${FOCUS}`}>
+          class={`gap-0.5 rounded-(--radius) px-2.5 py-1.5 hover:bg-accent ${selected() ? "bg-selection" : ""} ${FOCUS}`}>
           <View class="flex-row items-center gap-2">
             <Text style={{ numberOfLines: 1 }} class={`flex-1 text-[13px] leading-5 ${selected() ? "text-foreground font-medium" : "text-foreground"}`}>{project().name}</Text>
             <Text class={T.meta}>{`${p.count(project().id)} · ${relTime(project().updated)}`}</Text>

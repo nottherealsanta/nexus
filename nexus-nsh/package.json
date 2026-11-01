@@ -8,7 +8,7 @@
   "scripts": {
     "gen": "python3 scripts/gen.py",
     "check": "npm run gen && nsh check",
-    "build": "npm run gen && nsh package App.tsx --target web --out dist",
+    "build": "npm run gen && nsh package App.tsx --target web --out dist && node scripts/icons-web.mjs dist",
     "serve": "node scripts/serve.mjs",
     "macos": "npm run gen && nsh package App.tsx --target macos && node scripts/native-info.mjs .nsh/out/Nexus.app --launch-macos",
     "macos:open": "npm run gen && nsh run App.tsx --target macos",
