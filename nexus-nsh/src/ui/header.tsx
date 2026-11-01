@@ -168,7 +168,7 @@ export function Header() {
   // A hidden macOS title bar keeps its traffic lights in the band: the first control starts after them.
   const lights = () => platform.os === "macos" ? titleBar().left : 0;
   return (
-    <View class={`flex-row items-center bg-sidebar ${isNarrow() ? "min-h-14" : "min-h-11"}`} role="toolbar" accessibilityLabel="Workspace header" testID="header"
+    <View class={`flex-row items-center bg-sidebar border-b border-border ${isNarrow() ? "min-h-14" : "min-h-11"}`} role="toolbar" accessibilityLabel="Workspace header" testID="header"
       {...(platform.os === "macos" ? { desktop: { windowDrag: true } } : {})}
       style={{ paddingTop: safeArea().top, ...(lights() ? { paddingLeft: lights() + 8 } : {}) }}>
       <View class="flex-row items-center gap-0.5 shrink-0 px-2" style={leftDocked() ? { width: leftSidebarWidth() } : {}}>

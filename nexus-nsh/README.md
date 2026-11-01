@@ -103,7 +103,8 @@ Web Audio cue when a root session and all its subagents have finished, and a hig
 input; `NEXUS_COMPLETION_SOUNDS=off` silences both.
 
 The chrome follows D02. The 44 px header band and both sidebars sit on `bg-sidebar`
-(the chrome surface) with no edge rules; the centre is `bg-background` (the canvas). The
+(the chrome surface); a `border.default` hairline runs under the band and between each
+sidebar (or its rail) and the page. The centre is `bg-background` (the canvas). The
 header is three slots that match the sidebars (the resizable left sidebar, the centre, 300 px when the right
 sidebar is open). Below the band the 44 px right rail (Session, and Git with its changed-file
 count) opens the panel on demand and pushes the page; the panel starts closed, and

@@ -52,7 +52,7 @@ export function LeftSidebar(p: { drawer?: boolean }) {
     onPanResponderMove: (_event, gesture) => { leftSidebarWidth.set(Math.max(180, Math.min(480, startWidth + gesture.dx))); },
   });
   return (
-    <View class={`bg-sidebar ${p.drawer ? "flex-1" : "shrink-0"}`} style={p.drawer ? {} : { width: leftSidebarWidth() }} testID="left-sidebar" role="none" accessibilityLabel="Left sidebar">
+    <View class={`bg-sidebar ${p.drawer ? "flex-1" : "shrink-0 border-r border-border"}`} style={p.drawer ? {} : { width: leftSidebarWidth() }} testID="left-sidebar" role="none" accessibilityLabel="Left sidebar">
       <If when={!!p.drawer}>
         <View class="flex-row items-center h-14 px-2"><SidebarTabs labels /></View>
       </If>
@@ -91,7 +91,7 @@ export function SessionRail() {
   const tones = ["text-multi", "text-info", "text-success", "text-foreground"];
   const kinds = ["attention", "finished", "running", "idle"];
   return (
-    <View class="w-[42px] bg-sidebar items-center pt-2" testID="session-rail" accessibilityLabel="Project rail">
+    <View class="w-[42px] shrink-0 bg-sidebar border-r border-border items-center pt-2" testID="session-rail" accessibilityLabel="Project rail">
       <IconButton icon="search" label="Search sessions" testID="rail-search" onPress={() => { leftTab.set("sessions"); toggleLeft(); }} />
       <IconButton icon="plus" label="New session" testID="rail-new-session" onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} />
       <Scroll class="flex-1" contentClass="items-center gap-1 pb-2">

@@ -158,7 +158,7 @@ function GitRows(p: { data: () => any }) {
 export function RightSidebar(p: { drawer?: boolean }) {
   const s = () => viewed();
   return (
-    <View class={`bg-sidebar ${p.drawer ? "flex-1" : "w-[300px]"}`} testID="right-sidebar" accessibilityLabel="Right sidebar">
+    <View class={`bg-sidebar ${p.drawer ? "flex-1" : "w-[300px] border-l border-border"}`} testID="right-sidebar" accessibilityLabel="Right sidebar">
       <Scroll class="flex-1">
         <Section title={sections[0].label}>
           <If when={s()} else={<Text class={T.sec}>Select a session to see its details.</Text>}>
@@ -249,7 +249,7 @@ export function RightRail() {
   const open = () => rightIsOpen(width());
   const changes = () => Number(gitStatus()?.data?.changes?.length ?? 0);
   return (
-    <View class="w-11 shrink-0 bg-sidebar items-center pt-2 gap-1" testID="right-rail">
+    <View class="w-11 shrink-0 bg-sidebar border-l border-border items-center pt-2 gap-1" testID="right-rail">
       <IconButton icon="info" label="Session" selected={open()} testID="rail-session" onPress={() => void run("sidebar.right.toggle")} />
       <View class="relative">
         <IconButton icon="branch" label="Git" testID="rail-git" onPress={() => void run("sidebar.right.toggle")} />
