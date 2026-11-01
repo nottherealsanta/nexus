@@ -11,6 +11,8 @@
 - Refine TUI and NSH settings, dictation, image handling, and timeline presentation.
 - Add a project-based TUI sidebar rail with activity counts, project navigation, and per-project session restoration.
 - Add a session/time index for efficient turn-request lookups.
+- Archive idle session trees automatically after a configurable inactivity period, while skipping sessions with active turns or pending user input.
+- Let users provide custom free-text answers to every `ask` question in the Core API, TUI, and NSH.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
 ## [0.10.0](https://github.com/nottherealsanta/nexus/compare/v0.7.2...v0.10.0) (2026-10-30)

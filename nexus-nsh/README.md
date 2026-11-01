@@ -15,7 +15,9 @@ The app itself is TSX (`App.tsx`, `src/`); `package.json` is tooling only.
 workspace session tabs, new-session view, timeline, waiting card, composer,
 settings navigation, alerts, notifications and connection states are usable
 against a real Core. Tabs show running, unread, failed and idle state; they
-switch, rename and close without deleting sessions. The timeline has starting
+switch, rename and close without deleting sessions. Each project has its own open
+tabs and last viewed session or new-session screen, held locally while the client runs.
+The timeline has starting
 context, Markdown (prose 15/24 in Monaspace Neon; fenced code is a panel card with the language and
 a Copy button and padded code; inline code is 13 px Monaspace on the panel), and three detail levels: finished activity groups collapse in low and medium,
 while high expands their tools. Running groups show the latest five activities in medium (with earlier items announced), and waiting groups stay open. Each user

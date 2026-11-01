@@ -541,6 +541,8 @@ pub enum Target {
     Wait(WaitButton),
     /// Option `i` of the question the waiting card asks.
     WaitOption(usize),
+    /// The question card's custom answer field.
+    WaitInput,
     Continue,
     BannerAction(usize),
     BannerHide(usize),

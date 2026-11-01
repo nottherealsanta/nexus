@@ -31,7 +31,8 @@ click to toggle without a notification). It shows an UPPERCASE project header, `
 sub-groups for linked worktrees, and two-line rows (mark slot, title, time;
 `⌥ branch`, `2 ↳`) ending with `+ New session`; `Settings` is pinned at the bottom. Drag its inner edge to resize it (20–60 columns);
 dragging below 14 columns collapses it to a project rail, with search on top and
-`+` below. Projects stay in creation order and use uppercase initials; collisions
+`+` below. Search and new-session buttons are three rows tall, with vertically
+centered icons. Projects stay in creation order and use uppercase initials; collisions
 use the next available consonant, then a numeric suffix. Running or recently
 active projects (within one hour) are lighter gray; inactive projects are darker.
 The rail aligns the sidebar toggle and every label's first character on its center
@@ -43,9 +44,11 @@ in order: needs attention (purple), finished/unread (blue), running (green), idl
 (white). Archived sessions are excluded; subagents contribute to their root's
 state rather than counting twice. Counts above nine display `*`. Hovering or
 keyboard focus shows the full project name and exact counts with labels.
-Activating a project restores its last selected
-session in this client, falling back to its newest unarchived root session or an
-empty new-session view. Settings → Sidebar switches full / rail / hidden. The project
+Activating a project restores its open tabs and last selected session or new-session
+view in this client. On first selection it falls back to its newest unarchived root
+session or an empty new-session view. New-session composer text and images are kept
+separately per project. Tab and draft state lasts for the client process.
+Settings → Sidebar switches full / rail / hidden. The project
 strip under the card shows the project name (bold), its path (muted),
 `⌥ branch` and `checkout` (muted) or `worktree` (bold violet); `ctrl+p commands`
 sits muted at the right while idle. The card has no rail and no status band.
@@ -542,19 +545,21 @@ Core does not offer show their reason). Toasts (D15) are top-right under the hea
 at a time with `+N more`; a click, or Enter on the focused toast (`F6` to it), opens
 the full text in a modal (`c` copies, Esc closes), and the notifications modal opens the
 same text for an entry. The `↓ N new · end` pill sits on the row above the composer card.
-The card also answers `ask` questions: `Alt+W` focuses it, a number key (1-9, 0 for the
-tenth) or Up/Down picks an option, and clicking an option picks it. Enter locks the
+The card also answers `ask` questions: `Alt+W` focuses it and the question wraps to at
+most two lines. Every page has a custom answer field in the card; typing answers in your
+own words or adds context to a selection, and each question keeps its own text. A
+number key (1-9, 0 for the tenth) or Up/Down picks an option, clicking an option picks
+it, and `Alt+A` moves between the option list and the answer field. Enter locks the
 answer and moves to the next question; the last question leads to a review page whose
 rail is `text.primary` (white in the dark theme) and which lists every question with its
-answer, where Enter sends the reply. Left/Right move between the questions and the
-review, from the card or an empty composer. Space ticks options of a multi-select
-question, whose card uses the violet `interactive.multi` rail and ticks. A question
-without options, or one that allows a note, takes text typed in the composer (typing
-from the focused card moves there; each question keeps its own text). The reply is sent
-once, as a keyed `POST …/question/{id}` (`Ctrl+Enter` submits from any page). Tab and
-Shift+Tab switch between parallel asks, each of which keeps its own answers. Esc keeps
-following the manifest chain, so while the turn is busy it interrupts, which cancels the
-question. Settings opens in a centered
+answer, where Enter sends the reply. `Alt+Left`/`Alt+Right` move between the questions
+and review, while Left/Right move the caret in the answer field (or page when the option
+list has focus and the field is empty). Space ticks options of a
+multi-select question, whose card uses the violet `interactive.multi` rail and ticks.
+The reply is sent once, as a keyed `POST …/question/{id}` (`Ctrl+Enter` submits from any
+page). Tab and Shift+Tab switch between parallel asks, each of which keeps its own
+answers. Esc keeps following the manifest chain, so while the turn is busy it interrupts,
+which cancels the question. Settings opens in a centered
 modal using old Nexus's panel geometry and a searchable root/drill list. Press
 `/` to filter settings; Enter opens a section, and Esc returns to the root
 before closing the panel. Existing Core-backed controls retain their own focus

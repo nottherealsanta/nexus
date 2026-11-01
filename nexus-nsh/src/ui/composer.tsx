@@ -800,9 +800,7 @@ function QuestionBody(p: { q: Question }) {
                   </Button>
                 )}
               </Each>
-              <If when={qq().allow_free_text}>
-                <Input placeholder="Or type an answer" onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class="rounded-(--radius) border border-border bg-background px-2.5 h-8 text-[13px] text-foreground" />
-              </If>
+              <Input placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class="rounded-(--radius) border border-border bg-background px-2.5 h-8 text-[13px] text-foreground" />
             </View>
           );
         }}

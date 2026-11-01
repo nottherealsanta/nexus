@@ -1,4 +1,4 @@
-import { loadFiles, loadOlderMessages } from "./store";
+import { loadFiles, loadOlderMessages, rememberNewSession } from "./store";
 import type { UsageProvider } from "./store";
 // Command registry built from interface/manifest.toml (generated to src/gen/manifest.ts).
 // Ids, titles, keys, `when` rules, reasons and placements come from the manifest; this file
@@ -147,6 +147,7 @@ on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settings
 function tab(t: "sessions" | "files" | "projects") { if (t === "files") void loadFiles(); leftTab.set(t); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true); }
 
 export function newSession() {
+  rememberNewSession(currentProject());
   model.select(null); centre.set("new_session");
   const project = currentProject();
   if (project) { loadComposerData(project); loadProjectWorktrees(project); }
@@ -159,21 +160,22 @@ export function tabIds(): string[] {
   m();
   const ids = openedTabs().filter((id) => {
     const s = model.sessions.get(id);
-    return s && !s.parent_id;
+    return s && !s.parent_id && s.project_id === currentProject();
   });
   const root = rootOf(model.selected?.sessionId);
-  return root && !ids.includes(root) ? [...ids, root] : ids;
+  return root && model.sessions.get(root)?.project_id === currentProject() && !ids.includes(root) ? [...ids, root] : ids;
 }
 
 export function closeTab(id: string) {
   const ids = tabIds();
   const at = ids.indexOf(id);
   if (at < 0) return;
-  openedTabs.set(ids.filter((tab) => tab !== id));
+  openedTabs.update((tabs) => tabs.filter((tab) => tab !== id));
   if (rootOf(model.selected?.sessionId) !== id) return;
   const next = ids[at + 1] ?? ids[at - 1];
   if (next) void selectSession(next);
   else {
+    rememberNewSession(currentProject());
     model.select(null);
     centre.set("new_session");
     bump();

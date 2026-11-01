@@ -19,6 +19,14 @@ The sections below are the record of the release steps and the backlog that rema
 
 ## Where things stand (2026-10-30)
 
+- **Idle auto-archive (2026-11-01).** The daemon archives a whole root session
+  tree after no session in it has had activity for
+  `[sessions] auto_archive_idle_seconds` (default 3,600; `0` disables). A sweep
+  runs at startup and about once a minute, uses the ordinary archive transition
+  (one `session.archived` event, nothing stopped or deleted), skips trees with a
+  running turn, pending approval/question/input or a live background bash job,
+  and re-reads the config value every pass. Clients show archived trees through
+  their existing archived filters. Core tests: `tests/test_auto_archive.py`.
 - **TUI render performance (phases 1–3 landed 2026-10-31).** The loop draws
   only when the model changes, coalesces up to 64 queued sync messages within an
   8 ms soft budget, and treats input, effects and due ticks as barriers. Raw
@@ -39,6 +47,7 @@ The sections below are the record of the release steps and the backlog that rema
 - TUI live thoughts show the last ten wrapped lines and announce earlier hidden lines; completed thoughts remain fully expandable.
 - TUI and NSH activity headings are counts, not verbs: `3 thoughts, 50 commands, 8 tools, 9 reads`, with `1 command` singular; a folded group no longer names an unknown tool.
 - **Ask questions page (2026-10-31).** The TUI waiting card pages through an `ask` request's 1-5 questions: Up/Down moves, Space ticks a multi-select option (violet `interactive.multi` rail and ticks), Enter locks the answer and advances, and Left/Right revisit pages (as do Left/Right in an empty composer). The last page is a review listing every question and answer with a `text.primary` (white) rail, where Enter sends the reply; each parallel ask keeps its own picks across Tab.
+- **Ask custom answers (2026-11-01, user request).** Every TUI question page now has a custom answer field inside the card, and the question wraps to two lines instead of one clipped line. Typing answers in the user's own words or adds context to a selection; `Alt+A` moves between the options and the field, and Left/Right move the caret in a non-empty field. Core always accepts free text for every question (`allow_free_text` is normalized to true for compatibility), and NSH shows the same field on every question.
 - Session status stays busy while a sub agent is running, including between parent turns.
 - **Notification sounds and session state (2026-10-31).** Both clients play a rising cue only when a root session and all its subagents have finished; a subagent finishing while the root or another descendant is running is silent. Any session needing input still plays the distinct higher cue. Settings › Notifications › Notification sounds is on by default and `NEXUS_COMPLETION_SOUNDS=off` disables both. The TUI session switcher and both Session panels show `running`, `needs input`, `failed`, `finished`, `archived` or `idle`. Not verified through a real audio device or in a browser.
 - Appearance offers system, light and dark only; the unavailable named-theme setting and development-step references in client notices were removed.
@@ -46,6 +55,8 @@ The sections below are the record of the release steps and the backlog that rema
 - Web appearance: starting-context section diamonds and inline instruction preview removed, agent name omitted from the system prompt row, text size unified, counts compacted and tools shown with gray indicators in three columns; the collapsed session rail is more compact and the docked left sidebar can be resized. `nexus dev web` starts NSH's hot-reloading web host behind the API proxy.
 - Web composer: tightened input spacing, aligned the agent label, removed selector chevrons and moved context usage to the location strip (including draft estimates).
 - Web and TUI collapsed sidebars now navigate projects, with creation-order initials and consonant/numeric collision handling, one-hour activity shading, activity tooltips and per-project session restoration.
+- Project tab strips are isolated in both clients: switching projects restores that project's open tabs and last viewed session or new-session screen, and closing a tab leaves other projects' tabs alone. New-session composer text and images are also project-scoped, including TUI recovery after a failed send. Tab state is client-local and lasts for the client process; browser end-to-end coverage remains to be added.
+- TUI rail search and new-session controls use three-row tiles with vertically centered icons, independent of the taller project tiles.
 - TUI project rail labels and the sidebar toggle share a centered first-character column. Full-width selected/hover tiles have top/bottom padding, a thin white selected left border and white selected initials; the final edge column fades into the timeline. A second row counts attention (purple), finished/unread (blue), running (green) and idle (white), with `*` above nine and exact labeled counts on hover (no overflow legend). Counts exclude archived roots and avoid double-counting subagents.
 - Web typography uses Monaspace Neon throughout, reserving Monaspace Argon for inline and fenced code and diffs.
 - Draft TUI tool switches remain available when disabled and during context replanning.

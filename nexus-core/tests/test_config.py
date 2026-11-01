@@ -186,6 +186,19 @@ def test_mcp_secrets_mask_and_roundtrip(tmp_path):
     assert "Bearer private" in config.path.read_text()
 
 
+def test_session_auto_archive_threshold_defaults_and_bounds(tmp_path):
+    config = ConfigFile(tmp_path / "config.toml")
+    state = config.read()
+    assert state["values"]["sessions"]["auto_archive_idle_seconds"] == 3600
+    assert state["schema"]["sessions.auto_archive_idle_seconds"]["minimum"] == 0
+    result = config.patch(state["revision"], {"sessions.auto_archive_idle_seconds": 7200}, [])
+    assert result["values"]["sessions"]["auto_archive_idle_seconds"] == 7200
+    for bad in (-1, 1.5, True, "3600", 3650 * 86400 + 1):
+        with pytest.raises(ValueError):
+            config.patch(config.read()["revision"], {"sessions.auto_archive_idle_seconds": bad}, [])
+    assert config.read()["values"]["sessions"]["auto_archive_idle_seconds"] == 7200
+
+
 def test_shared_ui_preferences_validate_independently(tmp_path):
     config = ConfigFile(tmp_path / "config.toml")
     result = config.patch(config.read()["revision"], {

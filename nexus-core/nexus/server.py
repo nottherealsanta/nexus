@@ -1113,6 +1113,13 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             result = {**result, "idempotency_key": mutation["key"]}
         return JSONResponse(result, status_code=202)
 
+    async def shell(request: Request) -> Response:
+        body = await _body(request)
+        command = body.get("command", "")
+        if not isinstance(command, str):
+            raise TypeError("command must be a string")
+        return JSONResponse(await runtime.shell(p(request, "id"), command))
+
     async def session_inputs(request: Request) -> Response:
         sid = p(request, "id")
         runtime.session(sid)
@@ -1383,6 +1390,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/session/{id}/git", route(session_git)),
         Route("/api/session/{id}/git/diff", route(session_git_diff)),
         Route("/api/session/{id}/prompt", route(prompt), methods=["POST"]),
+        Route("/api/session/{id}/shell", route(shell), methods=["POST"]),
         Route("/api/session/{id}/input", route(session_inputs)),
         Route("/api/session/{id}/input/next", route(next_input), methods=["POST"]),
         Route("/api/session/{id}/input/{iid}", route(session_input), methods=["PATCH", "DELETE"]),

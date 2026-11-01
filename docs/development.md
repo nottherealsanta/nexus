@@ -43,6 +43,7 @@ nexus/
   bus.py             in-process event bus; persists before publishing, bounded per subscriber
   eventlog.py        log generation, cursors, session filtering, atomic replay-to-live stream
   retention.py       bounded event/lifecycle retention and the retention floor
+  autoarchive.py     scheduled archive of whole session trees idle past the configured threshold
   retry.py           bounded, visible provider-request retry policy
   recovery.py        startup reconciliation of turns a crash left unfinished
   continuation.py    explicit manual continuation and provider-valid context reconciliation
@@ -266,6 +267,7 @@ posting, renders the turn (including questions and approvals), and accepts
 | `test_retry.py` | pre-stream retry policy, attempt records, backoff cancellation, frozen requests and no tool replay |
 | `test_client_snapshot.py` | consistent snapshots, reconnect cursors, overflow/resync, rotated local tokens and CLI tree isolation |
 | `test_retention.py` | event age/byte limits, wire payload compression/dedup/expiry, bounded deletion, resumable migration, floor/head persistence, replay pins, protected lifecycle evidence and export boundaries |
+| `test_auto_archive.py` | strict one-hour default, live config and `0` switch, tree-wide activity, running/waiting/queued/job skips, idempotent transition, scheduler start/stop, maintenance wiring and invalid config fallback |
 | `test_loop.py` | The loop with a scripted provider |
 
 Loop tests use a small scripted provider that replays one reply per request.

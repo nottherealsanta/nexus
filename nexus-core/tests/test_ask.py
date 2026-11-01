@@ -187,7 +187,6 @@ async def test_malformed_request_is_a_tool_error_and_creates_nothing(env):
     ([], "1-5"),
     ([{"id": "q", "question": "x", "extra": 1}], "unknown keys"),
     ([{"id": "q", "question": "  "}], "non-empty"),
-    ([{"id": "q", "question": "x", "options": [], "allow_free_text": False}], "must allow_free_text"),
     ([{"id": "q", "question": "x", "multiple": True}], "multiple requires options"),
     ([{"id": "q", "question": "x", "options": [{"id": "a", "label": "A"}, {"id": "a", "label": "B"}]}],
      "duplicate option ids"),
@@ -229,10 +228,6 @@ def test_question_reply_validation():
         validate_answers(questions, [{"question_id": "name", "text": "Ada"},
                                      {"question_id": "db", "selected": ["pg", "pg"]},
                                      {"question_id": "features", "selected": ["auth"]}])
-    with pytest.raises(QuestionError, match="does not allow a free-text"):
-        validate_answers(questions, [{"question_id": "name", "text": "Ada"},
-                                     {"question_id": "db", "selected": ["pg"], "text": "x"},
-                                     {"question_id": "features", "selected": ["auth"]}])
     with pytest.raises(QuestionError, match="duplicate answer"):
         validate_answers(questions, [{"question_id": "name", "text": "Ada"},
                                      {"question_id": "name", "text": "Grace"},
@@ -249,6 +244,27 @@ def test_question_reply_validation():
     ])
     assert [a["question_id"] for a in answers] == ["name", "db", "features"]
     assert json.loads(result_text(questions, answers).split("\n", 1)[1])["db"]["labels"] == ["PostgreSQL"]
+
+
+def test_every_question_accepts_free_text_alone_or_with_a_selection():
+    questions = normalize_request({"questions": [
+        {"id": "db", "question": "Which database?",
+         "options": [{"id": "pg", "label": "PostgreSQL"}],
+         "allow_free_text": False},
+        {"id": "notes", "question": "Anything else?", "allow_free_text": False},
+    ]})
+    assert all(question["allow_free_text"] is True for question in questions)
+    assert validate_answers(questions, [
+        {"question_id": "db", "text": "Use the one we already run"},
+        {"question_id": "notes", "text": "Keep migrations small"},
+    ]) == [
+        {"question_id": "db", "selected": [], "text": "Use the one we already run"},
+        {"question_id": "notes", "selected": [], "text": "Keep migrations small"},
+    ]
+    assert validate_answers(questions, [
+        {"question_id": "db", "selected": ["pg"], "text": "Version 16"},
+        {"question_id": "notes", "text": "Keep migrations small"},
+    ])[0]["text"] == "Version 16"
 
 
 async def test_invalid_answers_are_rejected_and_the_question_stays_pending(env):

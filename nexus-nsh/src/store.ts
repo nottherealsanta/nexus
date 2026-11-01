@@ -663,6 +663,10 @@ export function subagentsOf(root: string): Session[] {
 
 const lastProjectSession = new Map<string, string>();
 
+export function rememberNewSession(project: string | null | undefined) {
+  if (project) lastProjectSession.set(project, "");
+}
+
 export async function selectSession(id: string) {
   const ses = model.sessions.get(id);
   // Subagents have no tab: opening one keeps its root's tab (TUI parity).
@@ -699,7 +703,7 @@ export function selectProject(id: string) {
   loadProjectWorktrees(id);
   const remembered = model.sessions.get(lastProjectSession.get(id) ?? "");
   const first = remembered && remembered.project_id === id && !remembered.archived
-    ? remembered : model.sessionsRecent().find((s) => s.project_id === id && !s.parent_id && !s.archived);
+    ? remembered : lastProjectSession.has(id) ? undefined : model.sessionsRecent().find((s) => s.project_id === id && !s.parent_id && !s.archived);
   if (first) void selectSession(first.id);
   else { model.select(null); centre.set("new_session"); bump(); }
 }

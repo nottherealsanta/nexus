@@ -27,6 +27,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "agents": {"models": {}, "fallbacks": {}},
     "tools": {"disabled": [], "permission": {}},
     "context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]},
+    "sessions": {"auto_archive_idle_seconds": 3600},
     "ui": {"detail": "medium", "reduced_motion": False},
     "web": {"search_url": "http://127.0.0.1:18765/search", "fetch_timeout_s": 15},
     "mcp": {"full_definitions": False, "max_listed_tools": 25},
@@ -52,6 +53,9 @@ SCHEMA: dict[str, dict[str, Any]] = {
     "context.title_models": {"type": "array", "items": {"type": "string"},
                              "description": "provider/model refs tried in order to write a session title; if none works the first words "
                              "of the first message stay as the title"},
+    "sessions.auto_archive_idle_seconds": {"type": "integer", "minimum": 0, "maximum": 315360000,
+                                           "description": "archive a whole root session tree after it has been idle this long; "
+                                           "0 turns automatic archiving off"},
     "web.search_url": {"type": "string", "description": "SearXNG /search endpoint for web_search (nexus-search/)"},
     "web.fetch_timeout_s": {"type": "number", "minimum": 1, "maximum": 60},
     "mcp.full_definitions": {"type": "boolean", "description": "new sessions put every MCP tool's full definition in the context; "
@@ -98,6 +102,9 @@ def _valid(section: str, key: str, value: Any) -> bool:
         return True
     if section == "context":
         return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100
+    if section == "sessions":
+        return (isinstance(value, int) and not isinstance(value, bool)
+                and 0 <= value <= 3650 * 86400)
     if section == "web":
         if key == "search_url":
             return isinstance(value, str) and value.startswith(("http://", "https://")) and len(value) <= 2048

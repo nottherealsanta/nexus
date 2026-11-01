@@ -230,8 +230,9 @@ deletion or daemon shutdown is silent.
 
 `question.asked` carries one pending request: id, session id, tool call id, the
 validated questions (ids, text, options with labels/previews, `multiple` and
-`allow_free_text`), and its creation time. It is stored in the asking session's
-event log; a question asked from inside `code` uses the nested call id.
+`allow_free_text`, always true because every question accepts a custom answer),
+and its creation time. It is stored in the asking session's event log; a question
+asked from inside `code` uses the nested call id.
 
 `question.replied` is the single resolution event. With `outcome: "answered"` it
 carries the validated answers in question order. With `outcome: "cancelled"` it

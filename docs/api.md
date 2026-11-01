@@ -83,6 +83,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | POST | `/api/session/{id}/directory` | `{directory}` | `Session` + `change`; 200 applied/unchanged, 202 pending while a turn runs |
 | GET | `/api/session/{id}/worktrees` | | `{repository, main, session_directory, worktrees: [...]}` |
 | POST | `/api/session/{id}/worktrees` | `{action: "list" or "create" or "delete", path?, branch?, base?}` | the list, the created/reused worktree, or the deleted worktree |
+| POST | `/api/session/{id}/shell` | `{command}` | 200 `{status, exit_code}`; runs `bash -c` in the session directory (composer `!` mode), adds command and output to context as a user message, never starts a turn |
 | POST | `/api/session/{id}/prompt` | `{text}` | 202 `{status: "busy", turn_id, origin, idempotency_key?}`; 409 while a turn runs |
 | POST | `/api/session/{id}/continue` | `{}` | 202 with turn provenance; starts a turn from the stored context and adds no user message. 409 busy/archived/unreconciled, 400 empty, 404 unknown |
 | POST | `/api/session/{id}/interrupt` | | 204 |
@@ -155,17 +156,17 @@ Configuration patch paths and polling behavior are described in [config.md](conf
 {"id": "qst_…", "session_id": "ses_…", "call_id": "call_…", "created": 1793…,
  "questions": [{"id": "db", "question": "Which database?",
                 "options": [{"id": "pg", "label": "PostgreSQL", "preview": "…"}],
-                "multiple": false, "allow_free_text": false}]}
+                "multiple": false, "allow_free_text": true}]}
 
 // Answer item (POST …/question/{qid})
 {"question_id": "db", "selected": ["pg"], "text": null}
 ```
 
 Questions are separate from approvals: an answer is data for the model, never a
-permission grant. Every question in a request must be answered exactly once.
-Unknown question or option IDs, duplicate or missing answers, invalid
-selection counts and text where the question does not allow it get 400 and leave
-the request pending. A second reply to a resolved request (including after
+permission grant. Every question in a request must be answered exactly once, and
+every question accepts free text (alone or with selections). Unknown question or
+option IDs, duplicate or missing answers and invalid selection counts get 400 and
+leave the request pending. A second reply to a resolved request (including after
 cancellation) gets 409, with no second event or tool result; a bounded set of
 recent resolutions is remembered, so a much older id gets 404 instead. Questions
 live in memory and have no daemon-side timeout; they end with an answer or with
@@ -269,6 +270,13 @@ file observations, directories, worktrees or branches, and it does not stop a
 background bash job. A background job's finish notice is stored as context but
 does not wake an archived session; it is present when the user later unarchives
 and resumes.
+
+The daemon also archives idle trees itself (no API call): a root session whose
+whole tree has had no activity for `[sessions] auto_archive_idle_seconds`
+(default one hour; `0` disables) receives the same transition and one
+`session.archived` event. Trees that are running, waiting for an approval or
+question, holding pending input or running a background job are left alone
+([config.md](config.md#sessions-settings), [daemon.md](daemon.md#session-archiving)).
 
 ### Workspace controls
 

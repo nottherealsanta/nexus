@@ -2816,6 +2816,23 @@ export const manifest = {
    ]
   },
   {
+   "id": "waiting.custom",
+   "title": "Custom answer",
+   "category": "waiting",
+   "keys": {
+    "tui": "alt+a"
+   },
+   "key_context": "waiting",
+   "when": [
+    "waiting.question"
+   ],
+   "unavailable_reason": "No question is waiting.",
+   "placement": [
+    "card"
+   ],
+   "clients": "tui"
+  },
+  {
    "id": "text_edit.cancel",
    "title": "Cancel text edit",
    "category": "navigation",

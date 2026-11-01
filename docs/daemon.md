@@ -282,6 +282,25 @@ log) with the tree ids; repeating the same state publishes nothing.
   `?archived=only` returns archived trees and `?archived=include` returns both.
   Explicit session, tree, message, event and snapshot reads ignore the filter.
 
+### Automatic archive
+
+`nexus/autoarchive.py` runs one bounded sweep at daemon startup and then about
+once a minute. It archives a whole root tree when no session in it has changed
+for `[sessions] auto_archive_idle_seconds` (default 3600; `0` disables,
+[config.md](config.md#sessions-settings)). Idleness is the newest
+`session.updated` in the tree: message inserts and configuration changes set
+it, while reads, listings and status polls do not. Work in a child keeps its
+root unarchived.
+
+A sweep uses the ordinary archive transition, so each tree gets one
+`session.archived` event and nothing is stopped or deleted. Trees with a
+running turn, a pending approval or question, pending input or a live
+background bash job are skipped and retried by a later sweep. The config value
+is re-read every sweep, so changing it does not require a daemon restart. A
+sweep considers at most 500 roots per pass. Unarchiving refreshes the tree's
+activity time, so an explicitly restored session gets a fresh idle window
+instead of being archived again on the next sweep.
+
 ## Session export
 
 `nexus session export ID` is an API client for `GET /api/session/{id}/export`

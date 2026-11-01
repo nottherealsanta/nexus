@@ -16,8 +16,8 @@ SPEC = ToolSpec(
     description=(
         "Ask the user one or more questions and wait for the answers. Each question has a stable id and question "
         "text, optional options (stable ids, labels and optional previews), and is single-select or multi-select. "
-        "A question without options asks for free text; with options, free text is off unless allow_free_text is "
-        "true. Every question must be answered. Returns a JSON object keyed by question id with selected option ids, "
+        "Every question also accepts free text, so the user can add context to a selection or answer in their own "
+        "words. Every question must be answered. Returns a JSON object keyed by question id with selected option ids, "
         "their labels and any free text. Use it for decisions that are genuinely the user's; this is not an approval "
         "or permission request."
     ),
@@ -74,8 +74,8 @@ SPEC = ToolSpec(
                         "allow_free_text": {
                             "type": "boolean",
                             "description": (
-                                "Allow a free-text answer in addition to selections (default true only when "
-                                "there are no options)"
+                                "Accepted for compatibility; every question accepts a free-text answer in "
+                                "addition to selections"
                             ),
                         },
                     },

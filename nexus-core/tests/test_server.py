@@ -913,3 +913,15 @@ async def test_file_put_needs_the_revision_it_read_and_announces_the_change(setu
     events = (await client.get(f"/api/session/{sid}/event")).json()["events"]
     changed = [e["data"] for e in events if e["type"] == "files.changed"]
     assert [c["path"] for c in changed] == ["a.txt"] and changed[0]["revision"] == put.json()["revision"]
+
+
+async def test_shell_command_and_output_join_context_without_a_turn(setup):
+    rt, client, provider, workspace = setup
+    sid = (await client.post('/api/session', json={'directory': str(workspace)})).json()['id']
+    reply = await client.post(f'/api/session/{sid}/shell', json={'command': 'echo hi; exit 3'})
+    assert reply.json()['exit_code'] == 3
+    assert sid not in rt.turns
+    [message] = (await client.get(f'/api/session/{sid}/message')).json()
+    text = json.dumps(message)
+    assert '$ echo hi; exit 3' in text and 'hi' in text and 'exit code 3' in text
+    assert (await client.post(f'/api/session/{sid}/shell', json={'command': ' '})).status_code >= 400

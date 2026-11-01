@@ -183,6 +183,7 @@ pub const WIRED: &[&str] = &[
     "waiting.next",
     "waiting.prev",
     "waiting.focus",
+    "waiting.custom",
     "waiting.go_to",
 ];
 
@@ -238,8 +239,10 @@ pub struct AskPick {
     pub cursor: usize,
     /// Ticked option indices (multi-select) or the single picked option.
     pub chosen: Vec<usize>,
-    /// Free text, saved when the page changes.
-    pub text: String,
+    /// The custom answer, edited inline in the card.
+    pub input: Composer,
+    /// True while the card's text field has focus (`alt+a` toggles it).
+    pub field: bool,
 }
 
 /// Answers collected so far for one `ask` request.
@@ -289,12 +292,10 @@ impl AskCurrent {
             .is_some_and(|q| q["multiple"].as_bool().unwrap_or(false))
     }
 
-    pub fn allows_text(&self) -> bool {
-        self.question().is_some_and(|q| {
-            q["allow_free_text"]
-                .as_bool()
-                .unwrap_or_else(|| q["options"].as_array().is_none_or(Vec::is_empty))
-        })
+    /// True while the custom answer field has the card's focus. A question
+    /// without options has nothing else to focus.
+    pub fn field(&self) -> bool {
+        !self.review() && (self.options().is_empty() || self.pick().is_some_and(|p| p.field))
     }
 
     /// The answer to question `i` as the review page shows it.
@@ -327,12 +328,12 @@ fn ask_answers(questions: &[Value], picks: &[AskPick]) -> Vec<Value> {
             chosen.sort_unstable();
             chosen.dedup();
             let selected: Vec<Value> = chosen.iter().map(|i| opts[*i]["id"].clone()).collect();
-            let allows = q["allow_free_text"].as_bool().unwrap_or(opts.is_empty());
-            let text = pick.text.trim();
+            let text = pick.input.expanded_text();
+            let text = text.trim();
             json!({
                 "question_id": q["id"],
                 "selected": selected,
-                "text": if allows && !text.is_empty() {
+                "text": if !text.is_empty() {
                     Value::from(text)
                 } else {
                     Value::Null
@@ -354,9 +355,9 @@ fn ask_pick_text(q: &Value, pick: &AskPick) -> Option<String> {
         .filter_map(|o| o["label"].as_str())
         .map(str::to_owned)
         .collect();
-    let allows = q["allow_free_text"].as_bool().unwrap_or(opts.is_empty());
-    let text = pick.text.trim();
-    if allows && !text.is_empty() {
+    let text = pick.input.expanded_text();
+    let text = text.trim();
+    if !text.is_empty() {
         if parts.is_empty() {
             parts.push(text.to_owned());
         } else {
@@ -376,11 +377,10 @@ fn ask_pick_problem(q: &Value, pick: &AskPick) -> Option<&'static str> {
         .as_array()
         .map_or(&[] as &[Value], Vec::as_slice);
     let selected = pick.chosen.iter().filter(|i| **i < opts.len()).count();
-    let allows = q["allow_free_text"].as_bool().unwrap_or(opts.is_empty());
-    let text = allows && !pick.text.trim().is_empty();
+    let text = !pick.input.expanded_text().trim().is_empty();
     if opts.is_empty() {
         if !text {
-            return Some("Type the answer in the composer, then press enter");
+            return Some("Type your answer in the question card");
         }
     } else if q["multiple"].as_bool().unwrap_or(false) {
         if selected == 0 && !text {
@@ -1808,32 +1808,75 @@ impl App {
         }
     }
 
-    /// Keep the composer's text with the current question before leaving it.
-    fn ask_stash(&mut self) {
+    /// Focus the custom answer field (or the option list) on this page.
+    fn ask_field(&mut self, on: bool) {
         let Some(cur) = self.ask_current() else {
             return;
         };
-        if cur.sent || cur.review() || !cur.allows_text() {
+        if cur.sent || cur.review() || cur.options().is_empty() {
             return;
         }
-        let text = self.composer_ref().expanded_text();
         let d = self.ask_picks(&cur.wait.id, cur.total);
         if let Some(pick) = d.picks.get_mut(cur.page) {
-            pick.text = text;
+            pick.field = on;
         }
     }
 
-    /// Show the page's own text once the composer is free; an ordinary draft in
-    /// the composer is never overwritten.
-    fn ask_load(&mut self) {
+    /// Edit the page's custom answer. The field takes focus on the first edit.
+    fn ask_input_key(&mut self, ev: &KeyEvent, name: &str) {
         let Some(cur) = self.ask_current() else {
             return;
         };
-        if cur.review() || !cur.allows_text() || !self.composer_ref().expanded_text().is_empty() {
+        if cur.sent || cur.review() {
             return;
         }
-        let text = cur.pick().map_or(String::new(), |p| p.text.clone());
-        self.composer().set_text(&text);
+        let d = self.ask_picks(&cur.wait.id, cur.total);
+        let Some(pick) = d.picks.get_mut(cur.page) else {
+            return;
+        };
+        pick.field = true;
+        if name == "ctrl+j" {
+            pick.input.newline();
+        } else {
+            edit_composer(&mut pick.input, ev, name);
+        }
+    }
+
+    /// Paste into the question card's custom answer field.
+    fn ask_input_paste(&mut self, text: &str) {
+        let Some(cur) = self.ask_current() else {
+            return;
+        };
+        if cur.sent || cur.review() {
+            return;
+        }
+        let d = self.ask_picks(&cur.wait.id, cur.total);
+        if let Some(pick) = d.picks.get_mut(cur.page) {
+            pick.field = true;
+            pick.input.paste(text);
+        }
+    }
+
+    /// Text typed in the composer while a question waits still answers it.
+    fn ask_adopt_composer(&mut self) {
+        let Some(cur) = self.ask_current() else {
+            return;
+        };
+        if cur.sent || cur.review() {
+            return;
+        }
+        let text = self.composer_ref().expanded_text();
+        if text.trim().is_empty() {
+            return;
+        }
+        let d = self.ask_picks(&cur.wait.id, cur.total);
+        if let Some(pick) = d.picks.get_mut(cur.page) {
+            if pick.input.expanded_text().trim().is_empty() {
+                pick.input.set_text(&text);
+                pick.field = true;
+                self.composer().clear();
+            }
+        }
     }
 
     /// Move to the previous or next page: a question, or the review at the end.
@@ -1852,19 +1895,12 @@ impl App {
         if target == cur.page {
             return;
         }
-        self.ask_stash();
-        if !cur.review() && cur.allows_text() {
-            self.composer().clear();
-        }
         self.ask_picks(&cur.wait.id, cur.total).page = target;
-        self.ask_load();
     }
 
     /// Enter on a question locks its answer and moves to the next page (the
-    /// review after the last one); Enter on the review sends the reply. `typed`
-    /// is a composer Enter: its text is the answer, so an option-only question
-    /// says so instead of silently using the text.
-    pub fn ask_confirm(&mut self, typed: bool) {
+    /// review after the last one); Enter on the review sends the reply.
+    pub fn ask_confirm(&mut self) {
         let Some(cur) = self.ask_current() else {
             return;
         };
@@ -1877,19 +1913,9 @@ impl App {
         if cur.review() {
             return self.ask_submit();
         }
-        let text = self.composer_ref().expanded_text();
-        if typed && !text.trim().is_empty() && !cur.allows_text() {
-            return self.toast(
-                Level::Info,
-                "This question takes an option: press its number, or use up/down and enter",
-            );
-        }
         let opts = cur.options().to_vec();
         let mut pick = cur.pick().cloned().unwrap_or_default();
-        if cur.allows_text() {
-            pick.text = text;
-        }
-        let use_text = cur.allows_text() && !pick.text.trim().is_empty();
+        let use_text = !pick.input.expanded_text().trim().is_empty();
         if !cur.multiple() && pick.chosen.is_empty() && !opts.is_empty() && !use_text {
             pick.chosen = vec![pick.cursor.min(opts.len() - 1)];
         }
@@ -1904,10 +1930,13 @@ impl App {
             *slot = pick;
         }
         d.page = cur.page + 1;
-        if cur.allows_text() {
-            self.composer().clear();
+        if let Some(next) = cur.questions.get(d.page) {
+            if next["options"].as_array().is_none_or(Vec::is_empty) {
+                if let Some(pick) = d.picks.get_mut(d.page) {
+                    pick.field = true;
+                }
+            }
         }
-        self.ask_load();
     }
 
     /// Send every answer. A page that is not ready is shown instead of the POST
@@ -1922,12 +1951,7 @@ impl App {
         if cur.sent {
             return;
         }
-        let mut picks = cur.picks.clone();
-        if !cur.review() && cur.allows_text() {
-            if let Some(pick) = picks.get_mut(cur.page) {
-                pick.text = self.composer_ref().expanded_text();
-            }
-        }
+        let picks = cur.picks.clone();
         let problem = cur.questions.iter().enumerate().find_map(|(i, q)| {
             picks
                 .get(i)
@@ -1938,10 +1962,6 @@ impl App {
             let d = self.ask_picks(&cur.wait.id, cur.total);
             d.picks = picks;
             d.page = page;
-            if !cur.review() && cur.allows_text() {
-                self.composer().clear();
-            }
-            self.ask_load();
             return self.toast(Level::Info, why);
         }
         let answers = ask_answers(&cur.questions, &picks);
@@ -1949,9 +1969,6 @@ impl App {
         d.picks = picks;
         d.page = cur.total;
         d.sent = true;
-        if !cur.review() && cur.allows_text() {
-            self.composer().clear();
-        }
         self.api(ApiCall::Answer {
             session: cur.wait.session_id.clone(),
             id: cur.wait.id.clone(),
@@ -1967,13 +1984,26 @@ impl App {
             return;
         }
         let n_opts = cur.options().len();
+        let field = cur.field();
         match name {
+            "alt+a" => self.ask_field(!field),
+            "up" | "down" if n_opts == 0 || field => self.ask_input_key(ev, name),
             "up" => self.ask_move(false),
             "down" => self.ask_move(true),
-            "left" => self.ask_page(false),
-            "right" => self.ask_page(true),
-            "enter" => self.ask_confirm(false),
-            "space" if n_opts > 0 => {
+            "alt+left" => self.ask_page(false),
+            "alt+right" => self.ask_page(true),
+            "left" | "right" => {
+                let has_text = cur
+                    .pick()
+                    .is_some_and(|p| !p.input.expanded_text().trim().is_empty());
+                if field || has_text {
+                    self.ask_input_key(ev, name);
+                } else {
+                    self.ask_page(name == "right");
+                }
+            }
+            "enter" => self.ask_confirm(),
+            "space" if n_opts > 0 && !field => {
                 let cursor = cur.pick().map_or(0, |p| p.cursor);
                 self.ask_pick(cursor);
             }
@@ -1981,14 +2011,12 @@ impl App {
                 let digit = name
                     .parse::<usize>()
                     .ok()
-                    .filter(|_| n_opts > 0 && name.len() == 1);
+                    .filter(|_| n_opts > 0 && !field && name.len() == 1);
                 if let Some(d) = digit {
                     // 1..9 are options 1..9, 0 is the tenth
                     self.ask_pick((d + 9) % 10);
-                } else if keys::printable(ev).is_some() && cur.allows_text() {
-                    // typing starts the free-text answer in the composer
-                    self.ui.focus = Focus::Composer;
-                    self.composer_key(ev, name);
+                } else if keys::printable(ev).is_some() || edit_key(name) {
+                    self.ask_input_key(ev, name);
                 }
             }
         }
@@ -2541,7 +2569,13 @@ impl App {
     // ---- composer & drafts ------------------------------------------------------
 
     fn draft_key(&self) -> String {
-        self.viewed_id().unwrap_or("").to_owned()
+        self.viewed_id().map(str::to_owned).unwrap_or_else(|| {
+            Self::new_session_draft_key(self.ui.project.as_deref().unwrap_or(""))
+        })
+    }
+
+    fn new_session_draft_key(project: &str) -> String {
+        format!("new:{project}")
     }
 
     pub fn composer_ref(&self) -> &Composer {
@@ -4167,16 +4201,21 @@ impl App {
             .tabs
             .iter()
             .filter(|id| {
-                self.state
-                    .model
-                    .sessions
-                    .get(id.as_str())
-                    .is_some_and(|s| s.parent_id.is_none())
+                self.state.model.sessions.get(id.as_str()).is_some_and(|s| {
+                    s.parent_id.is_none() && Some(&s.project_id) == self.ui.project.as_ref()
+                })
             })
             .cloned()
             .collect();
         if let Some(id) = self.viewed_root() {
-            if !ids.contains(&id) {
+            if !ids.contains(&id)
+                && self
+                    .state
+                    .model
+                    .sessions
+                    .get(&id)
+                    .is_some_and(|s| Some(&s.project_id) == self.ui.project.as_ref())
+            {
                 ids.push(id);
             }
         }
@@ -4208,7 +4247,7 @@ impl App {
         let Some(at) = ids.iter().position(|t| t == id) else {
             return;
         };
-        self.ui.tabs = ids.iter().filter(|t| t.as_str() != id).cloned().collect();
+        self.ui.tabs.retain(|t| t != id);
         if self.viewed_root().as_deref() != Some(id) {
             return;
         }
@@ -4223,6 +4262,11 @@ impl App {
 
     /// Show the new-session screen: no session is created until a message is sent.
     fn show_new_session(&mut self) {
+        if let Some(project) = &self.ui.project {
+            self.ui
+                .last_project_session
+                .insert(project.clone(), String::new());
+        }
         let from = self.draft_key();
         self.ui.scrolls.insert(from, self.ui.scroll);
         self.state.model.select(None);
@@ -4425,6 +4469,9 @@ impl App {
                     .filter(|s| s.project_id == project && !s.archived)
                     .map(|s| s.id.clone());
                 let session = remembered.or_else(|| {
+                    if self.ui.last_project_session.contains_key(&project) {
+                        return None;
+                    }
                     self.state
                         .model
                         .sessions
@@ -4443,9 +4490,7 @@ impl App {
                 if let Some(id) = session {
                     self.open_session(&id);
                 } else {
-                    self.state.model.select(None);
-                    self.ui.view = View::Session;
-                    self.effects.push(Effect::Sync(SyncCommand::Select(None)));
+                    self.show_new_session();
                     self.after_open();
                 }
             }
@@ -4973,6 +5018,11 @@ impl App {
                     self.execute("waiting.go_to");
                 }
             }
+            "waiting.custom" => {
+                self.ui.focus = Focus::Waiting;
+                let on = self.ask_current().is_some_and(|c| !c.field());
+                self.ask_field(on);
+            }
             "waiting.go_to" => {
                 if let Some(first) = self.waiting_elsewhere().into_iter().next() {
                     self.open_session(&first);
@@ -5234,7 +5284,26 @@ impl App {
             // With a question waiting, Enter confirms the highlighted option
             // (or says the answer needs text) instead of being a silent no-op.
             if self.ask_current().is_some() {
-                return self.ask_confirm(true);
+                return self.ask_confirm();
+            }
+            return;
+        }
+        if let Some(command) = text.strip_prefix('!') {
+            if !self.writable() {
+                self.toast(Level::Warning, READ_ONLY);
+                return;
+            }
+            let command = command.trim();
+            match self.viewed_id().map(str::to_owned) {
+                Some(session) if !command.is_empty() => {
+                    self.composer().take();
+                    self.api(ApiCall::Shell {
+                        session,
+                        command: command.to_owned(),
+                    });
+                }
+                Some(_) => self.toast(Level::Info, "Type a command after ! to run it with bash"),
+                None => self.toast(Level::Info, "Open a session to run a shell command"),
             }
             return;
         }
@@ -5297,7 +5366,8 @@ impl App {
             }
         }
         if self.ask_current().is_some() {
-            return self.ask_confirm(true);
+            self.ask_adopt_composer();
+            return self.ask_confirm();
         }
         if !self.writable() {
             self.toast(Level::Warning, READ_ONLY);
@@ -6105,8 +6175,14 @@ impl App {
                     }
                 }
                 if let Some((session, text)) = done.call.draft() {
-                    let (session, text) = (session.map(str::to_owned), text.to_owned());
-                    self.restore_draft(session.as_deref(), &text);
+                    let key = match &done.call {
+                        ApiCall::NewAndPrompt { project, .. } => {
+                            Self::new_session_draft_key(project)
+                        }
+                        _ => session.unwrap_or("").to_owned(),
+                    };
+                    let text = text.to_owned();
+                    self.restore_draft(Some(&key), &text);
                 }
                 match &done.call {
                     ApiCall::Prompt {
@@ -6119,10 +6195,12 @@ impl App {
                         .images
                         .splice(0..0, images.clone())
                         .for_each(drop),
-                    ApiCall::NewAndPrompt { images, .. } => self
+                    ApiCall::NewAndPrompt {
+                        project, images, ..
+                    } => self
                         .ui
                         .drafts
-                        .entry(String::new())
+                        .entry(Self::new_session_draft_key(project))
                         .or_default()
                         .images
                         .splice(0..0, images.clone())
@@ -10192,6 +10270,14 @@ impl App {
                     self.toast(Level::Warning, READ_ONLY);
                 }
             }
+            Target::WaitInput => {
+                self.ui.focus = Focus::Waiting;
+                if self.writable() {
+                    self.ask_field(true);
+                } else {
+                    self.toast(Level::Warning, READ_ONLY);
+                }
+            }
             Target::Continue => self.run_command("session.continue"),
             Target::BannerAction(i) => {
                 if let Some((_, _, cmd)) = self.banners().get(i).and_then(|b| b.action.clone()) {
@@ -10294,6 +10380,12 @@ impl App {
             return;
         }
         if self.ui.dialog.is_some() || self.ui.view == View::Settings {
+            return;
+        }
+        if self.ui.focus == Focus::Waiting
+            && self.ask_current().is_some_and(|c| !c.sent && !c.review())
+        {
+            self.ask_input_paste(text);
             return;
         }
         // Pasting into the composer from anywhere is the least surprising place.
@@ -10581,6 +10673,7 @@ impl ActionDone {
             ApiCall::SwitchCost { .. } => "",
             ApiCall::Usage => "Plan limits failed to load",
             ApiCall::SaveFile { .. } => "Save failed",
+            ApiCall::Shell { .. } => "Shell command failed",
         }
     }
 }
@@ -10636,6 +10729,50 @@ fn message_text(m: &Message) -> String {
         .map(|p| p["text"].as_str().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Keys `edit_buffer` knows how to apply to a text field.
+fn edit_key(name: &str) -> bool {
+    matches!(
+        name,
+        "cmd+left"
+            | "cmd+right"
+            | "cmd+shift+left"
+            | "cmd+shift+right"
+            | "alt+left"
+            | "ctrl+left"
+            | "alt+shift+left"
+            | "ctrl+shift+left"
+            | "alt+b"
+            | "alt+right"
+            | "ctrl+right"
+            | "alt+shift+right"
+            | "ctrl+shift+right"
+            | "alt+f"
+            | "ctrl+home"
+            | "ctrl+shift+home"
+            | "ctrl+end"
+            | "ctrl+shift+end"
+            | "shift+left"
+            | "shift+right"
+            | "shift+up"
+            | "shift+down"
+            | "shift+home"
+            | "shift+end"
+            | "backspace"
+            | "delete"
+            | "left"
+            | "right"
+            | "home"
+            | "ctrl+a"
+            | "end"
+            | "ctrl+e"
+            | "ctrl+u"
+            | "alt+backspace"
+            | "up"
+            | "down"
+            | "ctrl+j"
+    )
 }
 
 fn edit_composer(buf: &mut Composer, ev: &KeyEvent, name: &str) {

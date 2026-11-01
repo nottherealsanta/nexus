@@ -602,12 +602,17 @@ refused. After writing, the observation is dropped. No approval is requested.
 
 `ask {questions: [...]}` asks the user one or more questions and waits for the
 answers. It is a task tool, not a control tool and not an approval. A request
-carries 1-5 questions. In the TUI they are pages: use Up/Down to move, Space to
-tick a multi-select option, and Enter to lock the answer and go on. Left/Right
-revisit any page (or an empty composer's Left/Right does); the last page is a
-review listing every question and its answer, where Enter sends the whole reply.
-Enter in the composer locks or sends exactly like the card, using the highlighted
-option or the text typed there. The question card does not show an elapsed timer.
+carries 1-5 questions. In the TUI they are pages and the question wraps to at
+most two lines. Every page has a custom answer field in the card: type there to
+answer in your own words, or to add context to a selected option. With options,
+Up/Down moves, Space ticks a multi-select option and a number picks one;
+`alt+a` moves between the option list and the field. Enter locks the answer and
+goes on. `Alt+Left`/`Alt+Right` revisit pages, while Left/Right move the caret
+in the answer field (or page when the option list has focus and the field is
+empty). The last page is a review listing every question and its answer, where
+Enter sends the whole reply. Enter in the composer locks or sends exactly like
+the card, adopting its text as the answer. The question card does not show an
+elapsed timer.
 
 ```jsonc
 // arguments
@@ -618,7 +623,7 @@ option or the text typed there. The question card does not show an elapsed timer
      {"id": "lite", "label": "SQLite"}
    ],
    "multiple": false,
-   "allow_free_text": false},
+   "allow_free_text": true},
   {"id": "notes", "question": "Anything else?"}   // no options: free text
 ]}
 
@@ -647,17 +652,18 @@ object; every question appears exactly once:
 | `question` (required) | Non-empty text, at most 2,000 characters. |
 | `options` | Up to 10 `{id, label, preview?}` entries; option IDs are unique within the question, labels are at most 100 characters and previews 1,000. Omit or use `[]` for free text. |
 | `multiple` | Boolean, default `false`. `true` allows several selected option IDs and requires options. |
-| `allow_free_text` | Boolean. Default `true` only when there are no options. With options, `true` lets the answer include a free-text note in addition to selections. |
+| `allow_free_text` | Accepted for compatibility. Every question accepts free text, alone or in addition to selections; the flag is normalized to `true`. |
 
 Limits are 5 questions per call and 2,000 characters per answer text. Tool
 arguments are validated completely before a pending request exists; a malformed
 request is an ordinary tool error, so the model can correct itself.
 
 Every question must be answered. `selected` holds option IDs (single-select
-allows at most one; multi-select at least one unless free text is also allowed),
-and `text` is the free-text answer. Unknown question or option IDs, duplicate or
-missing answers, invalid selection counts, text where none is allowed and
-oversized values are rejected before the wait resolves.
+allows at most one; multi-select at least one unless free text is also present),
+and `text` is the free-text answer. A question with options can be answered by
+text alone, so the user can write their own answer instead of choosing. Unknown
+question or option IDs, duplicate or missing answers, invalid selection counts
+and oversized values are rejected before the wait resolves.
 
 The wait has no tool-specific timeout: it ends with an answer, or with
 cancellation when the turn is interrupted, its session or project is deleted, the

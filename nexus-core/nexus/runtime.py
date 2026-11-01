@@ -64,7 +64,8 @@ from . import questions as question_contract
 from . import skills as skill_files
 from . import snapshot as snapshots
 from . import workspace as workspace_control
-from .bash_jobs import NOTICE_CHARS, Job, Jobs
+from .autoarchive import AutoArchive
+from .bash_jobs import NOTICE_CHARS, Job, Jobs, kill_process
 from .bus import Bus
 from .codec import message_to_json, to_json
 from .config import ConfigFile
@@ -241,6 +242,7 @@ class Runtime:
         self._mutation_locks: dict[str, tuple[asyncio.Lock, int]] = {}  # same idempotency key shares one acceptance
         self.retry_policy = RetryPolicy.from_env()
         self.retention = Retention(self)
+        self.autoarchive = AutoArchive(self)
         self.mutation_lifetime = self.retention.settings.mutation_lifetime
         store.pressure_bytes = self.retention.settings.wire_bytes
         store.on_pressure = self.retention.note_pressure
@@ -275,6 +277,7 @@ class Runtime:
         """Start bounded maintenance without doing a startup database scan."""
         self.retention.note_pressure()
         self.retention.start()
+        self.autoarchive.start()
 
     # -- idempotent mutations --------------------------------------------------
 
@@ -1246,6 +1249,34 @@ class Runtime:
         stored = self.store.append_message(session_id, Message("user", (Text(text),)))
         self._publish_message(session_id, stored)
 
+    async def shell(self, session_id: str, command: str, *, timeout: float = 600.0) -> dict[str, Any]:
+        """Composer `!` mode: run a user-typed command and add command and output to context.
+
+        It never starts a turn: idle sessions record the message at once, a running turn
+        sees it before its next model call.
+        """
+        session = self.session(session_id)
+        if not command.strip():
+            raise ValueError("Type a command after ! to run it with bash")
+        proc = await asyncio.create_subprocess_exec(
+            "/bin/bash", "-c", command, cwd=session.directory, stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            status = f"exit code {proc.returncode}"
+        except TimeoutError:
+            kill_process(proc)
+            out, _ = await proc.communicate()
+            status = f"timed out after {timeout:g}s"
+        except asyncio.CancelledError:
+            kill_process(proc)
+            raise
+        output = clip(out.decode("utf-8", "replace"))
+        text = (f"The user ran a shell command in the workspace (composer `!` mode). Command and output:\n"
+                f"$ {command}\n{output or '(no output)'}\n[{status}]")
+        self._forward_notice(session_id, text)
+        return {"status": status, "exit_code": proc.returncode}
+
     def _publish_message(self, session_id: str, stored: StoredMessage) -> None:
         """Announce a saved message once; keep its durable event id for recovery."""
         event = self.bus.publish("message.added", message_json(stored), session_id=session_id)
@@ -1599,6 +1630,40 @@ class Runtime:
                 session_id=session_id,
             )
         return self.session(session_id)
+
+    def archive_stale_sessions(self, *, older_than: float, now: float | None = None) -> list[str]:
+        """Archive whole root trees idle strictly longer than `older_than` seconds.
+
+        The transition is the same one the API uses, so each archived tree gets
+        one `session.archived` event and nothing is interrupted, stopped or
+        deleted. A tree is skipped while any session in it is running, waiting
+        for an approval or question, holding pending input, or running a
+        background job: those are activity, not idleness. `older_than` <= 0
+        disables the sweep.
+        """
+        if older_than <= 0:
+            return []
+        moment = time.time() if now is None else now
+        busy = set(self.turns)
+        busy |= {sid for sid, _, _ in self.approvals.values()}
+        busy |= {request.session_id for request in self.questions.values()}
+        busy |= {job.root for job in self.jobs.list() if job.finished is None}
+        busy |= {item["session_id"] for item in self.inputs.list()}
+        excluded = set()
+        for sid in busy:
+            ancestors = self.store.ancestors(sid)
+            excluded.add(ancestors[-1] if ancestors else sid)
+        archived = []
+        for root in self.store.stale_root_sessions(before=moment - older_than, exclude=excluded):
+            ids = set(self.store.tree_ids(root))
+            if ids & busy:
+                continue
+            try:
+                self.archive_session(root, archived=True)
+            except (Conflict, ValueError):
+                continue  # a race left it busy or already archived; the next sweep retries
+            archived.append(root)
+        return archived
 
     def context(self, session_id: str) -> dict[str, Any]:
         """The request body the next turn would send, with no new user message."""
@@ -3060,6 +3125,7 @@ class Runtime:
         for session_id in list(self.turns):
             await self.interrupt(session_id, reason="the daemon is shutting down")
         self.close_questions(None, "the daemon is shutting down")
+        await self.autoarchive.stop()
         await self.retention.stop()
         await self.jobs.shutdown()
         await self.kernels.shutdown()

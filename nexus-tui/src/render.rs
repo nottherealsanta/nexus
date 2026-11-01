@@ -539,6 +539,9 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
             m.body.y,
         ));
     }
+    if app.ui.focus == Focus::Waiting {
+        return ask_input_cursor(app, g);
+    }
     if app.ui.focus != Focus::Composer || !app.writable() {
         return None;
     }
@@ -559,6 +562,30 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
         inner.x + cc as u16,
         inner.y + (cr - first) as u16,
     ))
+}
+
+/// The terminal cursor in the question card's custom answer field.
+fn ask_input_cursor(app: &App, g: &Regions) -> Option<Position> {
+    if !app.writable() {
+        return None;
+    }
+    let c = app.ask_current()?;
+    if c.sent || c.review() || !c.field() {
+        return None;
+    }
+    let r = g.waiting;
+    if r.height < 3 || r.width < 12 {
+        return None;
+    }
+    let card = Rect::new(r.x + 2, r.y, r.width.saturating_sub(4), r.height);
+    let x = card.x + 3;
+    let end = card.right().saturating_sub(2);
+    let inner_w = end.saturating_sub(x);
+    let (_, (row, col)) = c.pick()?.input.layout(inner_w.saturating_sub(2) as usize);
+    let at = wait_rows(app, r.width, r.height as usize, "\u{2026}")
+        .iter()
+        .position(|line| matches!(line, WRow::Input(i, _) if *i == row))?;
+    Some(Position::new(x + 2 + col as u16, card.y + at as u16))
 }
 
 pub(crate) fn visible_first(total: usize, cursor_row: usize, h: usize) -> usize {
@@ -656,6 +683,8 @@ fn heights(app: &App, w: u16) -> Heights {
 
 /// Option rows the question card shows at most; the cursor scrolls the rest.
 const ASK_ROWS: usize = 5;
+/// Rows the custom answer field shows at most; it scrolls with the cursor.
+const ASK_INPUT_ROWS: usize = 3;
 
 // ============================================================================
 // header
@@ -1560,28 +1589,24 @@ fn rail_layout(cx: &Cx, r: Rect) -> Vec<(RailItem, Rect)> {
     let a = cx.app;
 
     let entries = a.rail_project_ids();
-    let room = (r.height.saturating_sub(1) / RAIL_ITEM) as usize;
     let mut items = vec![RailItem::Search];
-    let sessions = room.saturating_sub(2);
+    let sessions = (r.height.saturating_sub(7) / RAIL_ITEM) as usize;
     let cursor = a.cursor(Tab::Sessions).min(entries.len().saturating_sub(1));
     let top = (cursor + 1).saturating_sub(sessions);
     items.extend((top..entries.len()).take(sessions).map(RailItem::Project));
-    if items.len() < room {
-        items.push(RailItem::New);
-    }
+    items.push(RailItem::New);
+    let mut y = r.y;
     items
         .into_iter()
-        .enumerate()
-        .map(|(i, item)| {
-            (
-                item,
-                Rect::new(
-                    r.x,
-                    r.y + i as u16 * RAIL_ITEM + u16::from(i > 0),
-                    r.width,
-                    RAIL_ITEM,
-                ),
-            )
+        .filter_map(|item| {
+            let height = if matches!(item, RailItem::Project(_)) {
+                RAIL_ITEM
+            } else {
+                3
+            };
+            let band = Rect::new(r.x, y, r.width, height);
+            y = y.saturating_add(height + u16::from(item == RailItem::Search));
+            (band.bottom() <= r.bottom()).then_some((item, band))
         })
         .collect()
 }
@@ -1707,7 +1732,12 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             style = style.patch(cx.st(PRIMARY, RAISED));
         }
         if style.bg.is_some() && style.bg != cx.st(PRIMARY, SIDEBAR).bg {
-            let fill = Rect::new(band.x, band.y, band.width, 4).intersection(r);
+            let height = if matches!(item, RailItem::Project(_)) {
+                4
+            } else {
+                3
+            };
+            let fill = Rect::new(band.x, band.y, band.width, height).intersection(r);
             clear(buf, fill, Style::default().bg(style.bg.unwrap_or_default()));
         }
         let x = band.x + band.width.saturating_sub(1) / 2;
@@ -4410,12 +4440,28 @@ enum WRow {
     /// A review row's answer and whether the question was answered.
     Answer(String, bool),
     Opt(usize),
-    Field(String),
+    /// One visible row of the custom answer field: its row in the input and
+    /// the text on that row.
+    Input(usize, String),
     Choice(usize),
     Hint,
 }
 
 type ApprovalParts = (String, Vec<(String, String)>, Option<crate::diff::Diff>);
+
+/// A question in at most two rows; the second ends with the ellipsis when more
+/// text follows, instead of clipping the whole question to one line.
+fn ask_lines(text: &str, w: usize, ell: &str) -> Vec<String> {
+    let mut lines = text::wrap(&text.replace('\n', " "), w.max(1));
+    if lines.len() > 2 {
+        lines.truncate(2);
+        if let Some(last) = lines.last_mut() {
+            let room = w.max(1).saturating_sub(width(ell));
+            *last = format!("{}{}", truncate(last, room, ""), ell);
+        }
+    }
+    lines
+}
 
 /// The approval's tool, its parameters and, for edit, write and patch, the diff.
 fn approval_parts(app: &App, id: &str) -> ApprovalParts {
@@ -4473,11 +4519,13 @@ fn approval_parts(app: &App, id: &str) -> ApprovalParts {
 
 /// The rows of the focused waiting card for a region `w` cells wide, fitted to
 /// `limit` rows (`usize::MAX` for the natural height).
-fn wait_rows(app: &App, w: u16, limit: usize) -> Vec<WRow> {
+fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
     let Some(item) = app.wait_focused() else {
         return Vec::new();
     };
-    let inner = w.saturating_sub(8) as usize;
+    // The card's text column: `draw_waiting` starts three cells into the card
+    // and stops two cells before its right edge.
+    let inner = w.saturating_sub(9) as usize;
     let mut rows = vec![WRow::Pad, WRow::Head, WRow::Sub, WRow::Blank];
     match item.kind {
         WaitKind::Approval => {
@@ -4508,11 +4556,8 @@ fn wait_rows(app: &App, w: u16, limit: usize) -> Vec<WRow> {
             if let Some(c) = app.ask_current() {
                 if c.review() {
                     for (i, question) in c.questions.iter().enumerate() {
-                        rows.push(WRow::Ask(format!(
-                            "{}. {}",
-                            i + 1,
-                            json_str(&question["question"]).replace('\n', " ")
-                        )));
+                        let text = format!("{}. {}", i + 1, json_str(&question["question"]));
+                        rows.extend(ask_lines(&text, inner, ell).into_iter().map(WRow::Ask));
                         let answer = c.answer(i);
                         rows.push(WRow::Answer(
                             answer.clone().unwrap_or_else(|| "not answered".into()),
@@ -4520,9 +4565,11 @@ fn wait_rows(app: &App, w: u16, limit: usize) -> Vec<WRow> {
                         ));
                     }
                 } else if let Some(question) = c.question() {
-                    rows.push(WRow::Ask(
-                        json_str(&question["question"]).replace('\n', " "),
-                    ));
+                    rows.extend(
+                        ask_lines(&json_str(&question["question"]), inner, ell)
+                            .into_iter()
+                            .map(WRow::Ask),
+                    );
                     let opts = c.options().len();
                     let shown = opts.min(ASK_ROWS);
                     let cursor = c.pick().map_or(0, |p| p.cursor);
@@ -4530,15 +4577,18 @@ fn wait_rows(app: &App, w: u16, limit: usize) -> Vec<WRow> {
                         .saturating_sub(shown.saturating_sub(1))
                         .min(opts.saturating_sub(shown));
                     rows.extend((top..top + shown).map(WRow::Opt));
-                    if opts == 0 {
-                        rows.push(WRow::Field(
-                            "Type the answer in the composer below, then press enter.".into(),
-                        ));
-                    } else if c.allows_text() {
+                    if opts > 0 {
                         rows.push(WRow::Blank);
-                        rows.push(WRow::Field(
-                            "Or type your own answer in the composer below.".into(),
-                        ));
+                    }
+                    let field_w = inner.saturating_sub(2);
+                    let (lines, (row, _)) = c
+                        .pick()
+                        .map(|p| p.input.layout(field_w))
+                        .unwrap_or_else(|| (vec![String::new()], (0, 0)));
+                    let first = visible_first(lines.len(), row, ASK_INPUT_ROWS);
+                    let last = (first + ASK_INPUT_ROWS).min(lines.len());
+                    for (i, line) in lines.iter().enumerate().take(last).skip(first) {
+                        rows.push(WRow::Input(i, line.clone()));
                     }
                 }
             }
@@ -4547,8 +4597,8 @@ fn wait_rows(app: &App, w: u16, limit: usize) -> Vec<WRow> {
     }
     rows.push(WRow::Hint);
     rows.push(WRow::Pad);
-    // Fit: diff first, then blanks, pads, the field, table rows, option rows,
-    // then review answers one at a time.
+    // Fit: diff first, then blanks, pads, extra answer rows, table rows, option
+    // rows, then review answers one at a time. Question headings stay.
     fn drop_last(rows: &mut Vec<WRow>, pick: fn(&WRow) -> bool, keep: usize) -> bool {
         if rows.iter().filter(|r| pick(r)).count() > keep {
             if let Some(i) = rows.iter().rposition(pick) {
@@ -4565,7 +4615,7 @@ fn wait_rows(app: &App, w: u16, limit: usize) -> Vec<WRow> {
             0,
         ) || drop_last(&mut rows, |r| matches!(r, WRow::Blank), 0)
             || drop_last(&mut rows, |r| matches!(r, WRow::Pad), 0)
-            || drop_last(&mut rows, |r| matches!(r, WRow::Field(_)), 0)
+            || drop_last(&mut rows, |r| matches!(r, WRow::Input(..)), 1)
             || drop_last(&mut rows, |r| matches!(r, WRow::Table(..)), 1)
             || drop_last(&mut rows, |r| matches!(r, WRow::Opt(_)), 1)
             || {
@@ -4583,7 +4633,7 @@ fn wait_rows(app: &App, w: u16, limit: usize) -> Vec<WRow> {
 }
 
 fn waiting_height(app: &App, w: u16) -> u16 {
-    wait_rows(app, w, usize::MAX).len() as u16
+    wait_rows(app, w, usize::MAX, "\u{2026}").len() as u16
 }
 
 /// Key hints as `key label` pairs: the key bold, the label muted. Returns the
@@ -4658,7 +4708,7 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let x = card.x + 3;
     let end = card.right().saturating_sub(2);
     let inner_w = end.saturating_sub(x);
-    let rows = wait_rows(a, r.width, r.height as usize);
+    let rows = wait_rows(a, r.width, r.height as usize, cx.ell());
     let (wg, _, wt) = cx.t.status("waiting");
     let head = if w.kind == WaitKind::Question {
         mark
@@ -4862,16 +4912,48 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     hits.add(Rect::new(x, y, lw, 1), Target::WaitOption(*i));
                 }
             }
-            WRow::Field(text) => {
+            WRow::Input(_, text) => {
+                let active = ask
+                    .as_ref()
+                    .is_some_and(|c| !c.sent && !c.review() && c.field());
                 clear(buf, Rect::new(x, y, inner_w, 1), cx.st(MUTED, RAISED));
                 put(
                     buf,
-                    x + 1,
+                    x,
                     y,
-                    &truncate(text, inner_w.saturating_sub(2) as usize, cx.ell()),
-                    cx.st(MUTED, RAISED),
-                    inner_w.saturating_sub(2),
+                    marker,
+                    cx.st(if active { mark } else { MUTED }, RAISED),
+                    1,
                 );
+                let tx = x + 2;
+                let tw = inner_w.saturating_sub(2);
+                if text.is_empty() {
+                    let placeholder = if ask.as_ref().is_some_and(|c| c.options().is_empty()) {
+                        "Type your answer\u{2026}".replace('\u{2026}', cx.ell())
+                    } else {
+                        "Add context, or type your own answer\u{2026}".replace('\u{2026}', cx.ell())
+                    };
+                    put(
+                        buf,
+                        tx,
+                        y,
+                        &truncate(&placeholder, tw as usize, cx.ell()),
+                        cx.st(MUTED, RAISED),
+                        tw,
+                    );
+                } else {
+                    put(
+                        buf,
+                        tx,
+                        y,
+                        text,
+                        cx.st(if active { PRIMARY } else { SECONDARY }, RAISED),
+                        tw,
+                    );
+                }
+                if writable && !ask.as_ref().is_some_and(|c| c.sent) {
+                    hits.add(Rect::new(x, y, inner_w, 1), Target::WaitInput);
+                }
             }
             WRow::Choice(n) => {
                 let defs: [(&str, &str, Option<WaitButton>, &str); 4] = [
@@ -4972,16 +5054,29 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                         }
                         submit = Some(hints.len());
                         hints.push(("enter".into(), "submit".into()));
-                        hints.push(("esc".into(), "stops the turn".into()));
+                        hints.push(("esc".into(), "stop".into()));
                     }
                     (WaitKind::Question, Some(c)) if focused => {
+                        let field = c.field();
+                        let has_text = c
+                            .pick()
+                            .is_some_and(|p| !p.input.expanded_text().trim().is_empty());
                         if c.total > 1 {
-                            hints.push((leftright(cx).to_owned(), "pages".into()));
+                            hints.push((format!("alt+{}", leftright(cx)), "pages".into()));
+                        }
+                        if field && has_text {
+                            hints.push((leftright(cx).to_owned(), "caret".into()));
                         }
                         if !c.options().is_empty() {
-                            hints.push((updown(cx).to_owned(), "move".into()));
+                            hints.push((
+                                key("waiting.custom", "alt+a"),
+                                if field { "options" } else { "text" }.into(),
+                            ));
+                            if !field {
+                                hints.push((updown(cx).to_owned(), "move".into()));
+                            }
                         }
-                        if c.multiple() {
+                        if c.multiple() && !field {
                             hints.push(("space".into(), "tick".into()));
                         }
                         hints.push((
@@ -4993,7 +5088,7 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                             }
                             .into(),
                         ));
-                        hints.push(("esc".into(), "stops the turn".into()));
+                        hints.push(("esc".into(), "stop".into()));
                     }
                     (_, _) if !focused => {
                         hints.push((key("waiting.focus", "alt+w"), "answer".into()));
@@ -5455,7 +5550,12 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     // A new session starts with the build agent until one is chosen.
     let agent_owned = a.current_agent();
     let agent_name = agent_owned.as_str();
-    let mut agent_label = text::capitalize(agent_name);
+    let shell_mode = comp.text().starts_with('!');
+    let mut agent_label = if shell_mode {
+        "Shell".to_owned()
+    } else {
+        text::capitalize(agent_name)
+    };
     let reference = a.effective_model(session);
     // Until the catalog reports Core's default, the model is not known yet.
     let (provider, model_name, model_id) = if reference.is_empty() {
@@ -5647,6 +5747,9 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         ];
         let mut first = true;
         for (index, (label, target, modifier, token)) in fields.into_iter().enumerate() {
+            if shell_mode && index != 0 {
+                continue;
+            }
             if index == 3 && !effort_on {
                 continue;
             }
@@ -5689,7 +5792,9 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             } else {
                 truncate(&label, room as usize, cx.ell())
             };
-            let style = if target == Target::ComposerAgent {
+            let style = if shell_mode {
+                cx.st("status.warning", PANEL).add_modifier(Modifier::BOLD)
+            } else if target == Target::ComposerAgent {
                 cx.st(token, PANEL)
                     .patch(cx.t.agent_style(agent_name))
                     .add_modifier(modifier)

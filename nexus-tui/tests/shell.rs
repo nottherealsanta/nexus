@@ -1691,6 +1691,27 @@ fn question_card_shows_options_and_a_number_key_answers() {
 }
 
 #[test]
+fn a_long_question_wraps_to_two_lines_with_an_inline_answer_field() {
+    let question = format!("LONGQUESTION {}", "word ".repeat(200));
+    let q = serde_json::json!({"id": "long", "question": question});
+    let mut app = asking(&format!("[{q}]"), (120, 36));
+    press(&mut app, &["alt+w"]);
+    let (_, rows) = draw(&mut app, 120, 36);
+    let question_rows: Vec<&String> = rows
+        .iter()
+        .filter(|row| row.contains("LONGQUESTION") || row.contains("word"))
+        .collect();
+    assert_eq!(question_rows.len(), 2, "{rows:#?}");
+    assert!(
+        question_rows[1].contains('…'),
+        "the second line announces the rest: {question_rows:?}"
+    );
+    let all = joined(&rows);
+    assert!(all.contains("Type your answer"), "{all}");
+    assert!(!all.contains("composer below"), "{all}");
+}
+
+#[test]
 fn enter_in_an_empty_composer_locks_the_focused_question() {
     // Enter from the composer locks the answer (then the review submits): an
     // empty composer is not a reason to swallow the key while a question waits.
@@ -1738,7 +1759,7 @@ fn arrows_and_enter_pick_and_clicks_hit_options() {
 }
 
 #[test]
-fn free_text_goes_through_the_composer_and_several_questions_send_once() {
+fn free_text_goes_through_the_card_and_several_questions_send_once() {
     let notes = r#"{"id":"notes","question":"Anything else?"}"#;
     let multi = r#"{"id":"tags","question":"Which tags?","options":[{"id":"a","label":"alpha"},{"id":"b","label":"beta"}],"multiple":true,"allow_free_text":false}"#;
     let mut app = asking(&format!("[{DB},{multi},{notes}]"), (120, 36));
@@ -1758,9 +1779,12 @@ fn free_text_goes_through_the_composer_and_several_questions_send_once() {
         all.contains("Anything else?") && all.contains("question 3 of 3"),
         "{all}"
     );
-    // typing from the card lands in the composer; Enter locks and shows the review
+    // typing from the card lands in its own answer field; Enter locks and shows
+    // the review, and the message composer stays empty
     typing(&mut app, "keep it small");
-    assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Composer);
+    assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Waiting);
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("keep it small"), "{all}");
     press(&mut app, &["enter"]);
     assert!(answers_sent(&app).is_empty());
     let all = joined(&draw(&mut app, 120, 36).1);
@@ -1783,23 +1807,28 @@ fn free_text_goes_through_the_composer_and_several_questions_send_once() {
 }
 
 #[test]
-fn left_and_right_move_between_questions_and_keep_each_answer() {
+fn alt_left_and_right_move_between_questions_and_keep_each_answer() {
     let notes = r#"{"id":"notes","question":"Anything else?"}"#;
     let mut app = asking(&format!("[{DB},{notes}]"), (120, 36));
     press(&mut app, &["alt+w", "2", "enter"]);
     typing(&mut app, "a note");
-    // left goes back to the first question with its pick still marked
-    press(&mut app, &["alt+w", "left"]);
+    // alt+left goes back to the first question with its pick still marked
+    press(&mut app, &["alt+w", "alt+left"]);
     let all = joined(&draw(&mut app, 120, 36).1);
     assert!(
         all.contains("Which database?") && all.contains("2 SQLite"),
         "{all}"
     );
-    // right returns to the text question with its answer restored
-    press(&mut app, &["right"]);
-    assert_eq!(app.composer_ref().expanded_text(), "a note");
-    // one more right reaches the review; nothing is sent yet
-    press(&mut app, &["right"]);
+    // alt+right returns to the text question with its answer restored
+    press(&mut app, &["alt+right"]);
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        all.contains("Anything else?") && all.contains("a note"),
+        "{all}"
+    );
+    assert!(app.composer_ref().expanded_text().is_empty());
+    // one more alt+right reaches the review; nothing is sent yet
+    press(&mut app, &["alt+right"]);
     assert!(answers_sent(&app).is_empty());
     let all = joined(&draw(&mut app, 120, 36).1);
     assert!(
@@ -1876,14 +1905,66 @@ fn multi_select_is_violet_and_the_review_rail_is_white() {
 }
 
 #[test]
-fn typed_text_for_an_option_only_question_is_refused_and_kept() {
+fn typed_text_for_an_option_question_is_its_custom_answer() {
     let mut app = asking(&format!("[{DB}]"), (120, 36));
     press(&mut app, &["alt+w"]);
+    typing(&mut app, "postgres please");
+    assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Waiting);
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("postgres please"), "{all}");
+    assert!(app.composer_ref().expanded_text().is_empty());
+    press(&mut app, &["enter"]);
+    assert!(answers_sent(&app).is_empty());
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        answers_sent(&app),
+        vec![serde_json::json!([{"question_id": "db", "selected": [], "text": "postgres please"}])]
+    );
+}
+
+#[test]
+fn a_selected_option_and_custom_context_are_sent_together() {
+    let mut app = asking(&format!("[{DB}]"), (120, 36));
+    press(&mut app, &["alt+w", "1", "alt+a"]);
+    // The leading digit is text in the field, not another option pick.
+    typing(&mut app, "2nd choice");
+    press(&mut app, &["enter", "enter"]);
+    assert_eq!(
+        answers_sent(&app),
+        vec![serde_json::json!([{"question_id": "db", "selected": ["pg"], "text": "2nd choice"}])]
+    );
+}
+
+#[test]
+fn composer_text_is_adopted_as_the_custom_answer() {
+    let mut app = asking(&format!("[{DB}]"), (120, 36));
     app.ui.focus = nexus_tui::ui::Focus::Composer;
     typing(&mut app, "postgres please");
     press(&mut app, &["enter"]);
     assert!(answers_sent(&app).is_empty());
-    assert_eq!(app.composer_ref().expanded_text(), "postgres please");
+    assert!(app.composer_ref().expanded_text().is_empty());
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        answers_sent(&app),
+        vec![serde_json::json!([{"question_id": "db", "selected": [], "text": "postgres please"}])]
+    );
+}
+
+#[test]
+fn pasting_while_the_card_is_focused_goes_into_its_answer_field() {
+    let notes = r#"{"id":"notes","question":"Anything else?"}"#;
+    let mut app = asking(&format!("[{notes}]"), (120, 36));
+    press(&mut app, &["alt+w"]);
+    app.handle_paste("pasted answer");
+    assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Waiting);
+    assert!(app.composer_ref().expanded_text().is_empty());
+    press(&mut app, &["enter", "enter"]);
+    assert_eq!(
+        answers_sent(&app),
+        vec![
+            serde_json::json!([{"question_id": "notes", "selected": [], "text": "pasted answer"}])
+        ]
+    );
 }
 
 #[test]
@@ -2406,6 +2487,22 @@ fn dragging_the_left_sidebar_edge_resizes_it() {
     }
     draw(&mut app, 120, 36);
     assert!(app.regions.left.unwrap().width > before, "the sidebar grew");
+}
+
+#[test]
+fn tabs_are_isolated_by_project_when_closed() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let mut other = app.state.model.sessions[SESSION].clone();
+    other.id = "other-project-session".into();
+    other.project_id = "other-project".into();
+    app.state.model.sessions.insert(other.id.clone(), other);
+    app.open_session(SESSION);
+    app.open_session("other-project-session");
+    assert_eq!(app.tab_ids(), vec!["other-project-session"]);
+    app.close_tab("other-project-session");
+    assert!(app.ui.tabs.contains(&SESSION.to_owned()));
+    app.open_session(SESSION);
+    assert_eq!(app.tab_ids(), vec![SESSION]);
 }
 
 #[test]
@@ -4137,15 +4234,24 @@ fn project_rail_labels_activity_and_session_restoration() {
     click(&mut app, second.x + 2, second.y + 1);
     assert_eq!(app.current_project().as_deref(), Some("second"));
     assert_eq!(app.viewed_id(), None);
+    app.composer().set_text("Notes draft");
     draw(&mut app, 120, 36);
     click(&mut app, first.x + 2, first.y + 1);
     assert_eq!(app.viewed_id(), Some(SESSION));
+    app.run_command("session.new");
+    assert!(app.composer_ref().text().is_empty());
+    app.composer().set_text("Nexus draft");
 
     app.ui.focus = nexus_tui::ui::Focus::Sidebar;
     app.ui.cursor.insert(nexus_tui::ui::Tab::Sessions, 0);
     press(&mut app, &["down", "enter"]);
     assert_eq!(app.current_project().as_deref(), Some("second"));
     assert_eq!(app.viewed_id(), None);
+    assert_eq!(app.composer_ref().text(), "Notes draft");
+    draw(&mut app, 120, 36);
+    click(&mut app, first.x + 2, first.y + 1);
+    assert_eq!(app.viewed_id(), None);
+    assert_eq!(app.composer_ref().text(), "Nexus draft");
 
     let mut session = app.state.model.sessions[SESSION].clone();
     session.id = "recent".into();

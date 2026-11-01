@@ -48,7 +48,7 @@ import re
 import secrets
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -360,6 +360,7 @@ create table if not exists turn_tool (
 create index if not exists turn_tool_call on turn_tool(session_id, call_id);
 create index if not exists session_continued on session(continued_from);
 create index if not exists session_parent on session(parent_id);
+create index if not exists session_stale on session(updated) where archived = 0 and parent_id is null;
 create index if not exists message_event on message(event_id);
 """
 
@@ -978,6 +979,35 @@ class Store:
         )
         return [r["id"] for r in rows]
 
+    def stale_root_sessions(self, *, before: float, limit: int = 500,
+                            exclude: Iterable[str] = ()) -> list[str]:
+        """Unarchived root ids whose whole tree last changed before `before`, oldest first.
+
+        Activity is the `updated` column: message inserts and configuration
+        changes set it, while reads, listings and status polls never do. A tree
+        is stale only when no session in it changed after `before`, so work in a
+        child session keeps its root out of the result. `exclude` names roots a
+        caller already knows are busy; excluding them in SQL keeps a sweep from
+        repeatedly spending its limit on trees it cannot archive.
+        """
+        # Stay below SQLite builds that cap host parameters at 999. A caller's
+        # own busy check still skips any excluded root left out of this clause.
+        skip = sorted(set(exclude))[:900]
+        clause = f" and id not in ({', '.join('?' * len(skip))})" if skip else ""
+        rows = self.db.execute(
+            "with recursive candidates(id) as ("
+            f" select id from session where parent_id is null and archived = 0 and updated < ?{clause}"
+            " order by updated limit ?),"
+            " tree(root, id, updated) as ("
+            " select c.id, c.id, s.updated from candidates c join session s on s.id = c.id"
+            " union all"
+            " select tree.root, s.id, s.updated from session s join tree on s.parent_id = tree.id)"
+            " select root from tree group by root having max(updated) < ?"
+            " order by max(updated), root",
+            (before, *skip, limit, before),
+        )
+        return [row["root"] for row in rows]
+
     def tree_members(self, session_id: str) -> list[tuple[str, str | None]]:
         """`(id, parent_id)` for the session and its descendants (for stream filtering)."""
         rows = self.db.execute(
@@ -993,6 +1023,8 @@ class Store:
 
         Returns (tree ids, changed). Repeating the same state changes nothing and
         reports `changed: False`, so callers can avoid duplicate transition events.
+        Unarchiving counts as activity: it refreshes `updated`, so an explicitly
+        restored tree is not immediately picked up by the idle archive sweep.
         """
         ids = self.tree_ids(session_id)
         if not ids:
@@ -1001,10 +1033,14 @@ class Store:
         with self.db:
             rows = self.db.execute(f"select id, archived from session where id in ({marks})", ids).fetchall()
             changed = any(bool(row["archived"]) != archived for row in rows)
-            if changed:
+            if changed and archived:
                 self.db.execute(
-                    f"update session set archived = ?, revision = revision + 1 where id in ({marks})",
-                    (1 if archived else 0, *ids),
+                    f"update session set archived = 1, revision = revision + 1 where id in ({marks})", ids)
+            elif changed:
+                self.db.execute(
+                    f"update session set archived = 0, updated = ?, revision = revision + 1"
+                    f" where id in ({marks})",
+                    (time.time(), *ids),
                 )
         return ids, changed
 

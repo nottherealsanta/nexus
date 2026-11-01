@@ -35,6 +35,11 @@ pub enum ApiCall {
         images: Vec<crate::images::Image>,
         mode: String,
     },
+    /// Composer `!` mode: run a command in the workspace; Core adds it and its output to context.
+    Shell {
+        session: String,
+        command: String,
+    },
     Input {
         session: String,
         id: String,
@@ -240,6 +245,7 @@ impl ApiCall {
     /// Past-tense label for the success toast.
     pub fn done_label(&self) -> &'static str {
         match self {
+            ApiCall::Shell { .. } => "",
             ApiCall::Input { .. } => "Pending input updated",
             ApiCall::Provider { sign_out: true, .. } => "Signed out",
             ApiCall::Provider { .. } => "Sign-in started",
@@ -299,6 +305,7 @@ impl ApiCall {
         match self {
             ApiCall::Prompt { session, text, .. } => Some((Some(session), text)),
             ApiCall::NewAndPrompt { text, .. } => Some((None, text)),
+            ApiCall::Shell { session, command } => Some((Some(session), command)),
             _ => None,
         }
     }
@@ -522,6 +529,19 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                     .await
                     .map_err(e)?,
             )?;
+        }
+        ApiCall::Shell { session, command } => {
+            api.http
+                .call(
+                    reqwest::Method::POST,
+                    &format!("/api/session/{session}/shell"),
+                    &[],
+                    Some(&json!({ "command": command })),
+                    None,
+                    None,
+                )
+                .await
+                .map_err(e)?;
         }
         ApiCall::Input {
             session,

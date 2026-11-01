@@ -89,6 +89,18 @@ Core continues in a new session from a handoff summary (docs/api.md, "Handoff, t
 `title_models` (list of `provider/model`, default `copilot/gpt-6-luna`, then `codex/gpt-6-luna`): tried in order to
 write a session title. If none answers (each gets 20 s) the first words of the first message stay as the title.
 
+## `[sessions]` settings
+
+`auto_archive_idle_seconds` (integer 0 to 315360000, default 3600): the daemon
+archives a root session and its whole tree after no session in that tree has
+had activity for this long. `0` disables automatic archiving. The value is read
+on every sweep (about once a minute), so a config edit applies without a
+restart. A tree stays unarchived while any session in it is running a turn,
+waiting for an approval or question, holding pending input or running a
+background bash job. Archiving is the ordinary transition: nothing is stopped
+or deleted, and archived trees are shown by the clients' archived filter
+([daemon.md](daemon.md#session-archiving)).
+
 ## `[mcp]` settings
 
 `full_definitions` (boolean, default false) and `max_listed_tools` (integer 1 to 1000, default

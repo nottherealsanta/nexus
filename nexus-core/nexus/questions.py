@@ -13,7 +13,7 @@ HTTP replies are validated the same way:
      {"id": "lite", "label": "SQLite"}
    ],
    "multiple": false,                                    // optional; multi-select when true
-   "allow_free_text": true}                              // optional; default: true only when no options
+   "allow_free_text": true}                              // optional; accepted for compatibility
 ]}
 
 // reply submitted to Core
@@ -22,12 +22,14 @@ HTTP replies are validated the same way:
 ]}
 ```
 
-Every question must be answered. `selected` is empty for a free-text question,
-and `text` is null/absent when the question does not allow (or did not get) free
-text. IDs are stable ASCII: 1-64 characters from `[A-Za-z0-9_.:-]`, starting
-with a letter or digit. Unknown IDs, duplicate answers, invalid selection counts
-and oversized values are rejected before a pending request is created (tool
-arguments) or before a wait is resolved (replies).
+Every question must be answered. Every question also accepts free text: with
+options the user can add context or answer in their own words, and without
+options `text` is the answer. `selected` is empty for a free-text answer, and
+`text` is null/absent when the user did not write one. IDs are stable ASCII:
+1-64 characters from `[A-Za-z0-9_.:-]`, starting with a letter or digit.
+Unknown IDs, duplicate answers, invalid selection counts and oversized values
+are rejected before a pending request is created (tool arguments) or before a
+wait is resolved (replies).
 
 The tool result is one JSON object keyed by question id, so the mapping back to
 the model is unambiguous:
@@ -178,13 +180,11 @@ def normalize_request(args: Any) -> list[dict[str, Any]]:
             raise QuestionError(f"questions[{question_id}].multiple must be a boolean")
         if multiple and not options:
             raise QuestionError(f"questions[{question_id}].multiple requires options")
-        allow_free_text = raw.get("allow_free_text", not options)
-        if not isinstance(allow_free_text, bool):
+        if "allow_free_text" in raw and not isinstance(raw["allow_free_text"], bool):
             raise QuestionError(f"questions[{question_id}].allow_free_text must be a boolean")
-        if not options and not allow_free_text:
-            raise QuestionError(
-                f"questions[{question_id}] has no options, so it must allow_free_text"
-            )
+        # Every question has a custom answer field. The flag stays in the wire
+        # shape so older clients keep showing it; it is always true.
+        allow_free_text = True
         questions.append({
             "id": question_id,
             "question": text,
@@ -205,8 +205,8 @@ def validate_answers(questions: list[dict[str, Any]], raw_answers: Any) -> list[
     """Validate a complete reply; return it in question order.
 
     Every question needs exactly one answer. Unknown question or option IDs,
-    duplicates, invalid selection counts and text where none is allowed fail
-    before the waiting request is resolved.
+    duplicates and invalid selection counts fail before the waiting request is
+    resolved. Free text is always accepted, alone or with selections.
     """
     by_id = {question["id"]: question for question in questions}
     answers: dict[str, dict[str, Any]] = {}
@@ -242,8 +242,6 @@ def validate_answers(questions: list[dict[str, Any]], raw_answers: Any) -> list[
             text = _string(text, f"answers[{question_id}].text", limit=MAX_ANSWER_CHARS)
             if not text.strip():
                 text = None
-        if not question["allow_free_text"] and text is not None:
-            raise QuestionError(f"question {question_id!r} does not allow a free-text answer")
         if not question["options"]:
             if selected:
                 raise QuestionError(f"question {question_id!r} has no options to select")

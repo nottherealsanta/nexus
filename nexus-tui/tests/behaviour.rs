@@ -1483,6 +1483,26 @@ fn settings_navigation_follows_the_manifest_order() {
 }
 
 #[test]
+fn failed_new_session_send_restores_the_originating_projects_draft() {
+    let mut a = app();
+    a.run_command("session.new");
+    a.ui.project = Some("other-project".into());
+    a.composer().set_text("other draft");
+    a.apply_done(ActionDone {
+        call: ApiCall::NewAndPrompt {
+            project: "original-project".into(),
+            text: "failed prompt".into(),
+            images: Vec::new(),
+            fields: serde_json::json!({}),
+        },
+        result: Err("offline".into()),
+    });
+    assert_eq!(a.composer_ref().text(), "other draft");
+    a.ui.project = Some("original-project".into());
+    assert_eq!(a.composer_ref().text(), "failed prompt");
+}
+
+#[test]
 fn session_actions_are_wired_to_the_api() {
     use nexus_tui::actions::ApiCall;
     let mut a = app();
