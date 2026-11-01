@@ -67,7 +67,7 @@ export function FilePanel() {
         <View class="flex-row items-center gap-2 px-3 min-h-9 border-b border-border" testID="file-find">
           <Input autoFocus value={query()} onChange={({ value }) => query.set(value)} onSubmit={() => editor?.run("findNext")}
             placeholder="Find" accessibilityLabel="Find in file" testID="file-find-input"
-            class="h-7 flex-1 min-w-0 rounded-(--radius) border border-border bg-background px-2 font-mono text-xs text-foreground" />
+            class="h-7 flex-1 min-w-0 rounded-(--radius) bg-background px-2 font-mono text-xs text-foreground" />
           <Text class={`${T.meta} w-20 text-right`} testID="file-find-count">{matchCount()}</Text>
           <Btn label="Aa" kind={caseSensitive() ? "primary" : "ghost"} onPress={() => caseSensitive.set(!caseSensitive())} testID="file-find-case" />
           <Btn label="Previous" kind="ghost" onPress={() => editor?.run("findPrevious")} testID="file-find-prev" />

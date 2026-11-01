@@ -81,7 +81,7 @@ export function SessionRail() {
   const labels = () => projectLabels(projects());
   const activity = (id: string) => { m(); return projectActivity(id, model.sessions.values(), model.running, tick()); };
   const counts = (id: string) => { m(); return projectCounts(id, model.sessions.values(), model.approvals.values(), model.questions.values(), model.running, model.unreadSessions); };
-  // The rail popup (step 8): shorter wording than the TUI, two rows of two, in aligned columns.
+  // The rail popup: shorter wording than the TUI, two rows of two, in aligned columns.
   const details = (id: string) => {
     const c = counts(id);
     return [`${c[0]} attention`, `${c[1]} unread`, `${c[2]} running`, `${c[3]} idle`];

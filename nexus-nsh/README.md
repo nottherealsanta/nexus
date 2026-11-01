@@ -106,7 +106,8 @@ The chrome follows D02. The 44 px header band and both sidebars sit on `bg-sideb
 (the chrome surface) with no edge rules; the centre is `bg-background` (the canvas). The
 header is three slots that match the sidebars (the resizable left sidebar, the centre, 300 px when the right
 sidebar is open). Below the band the 44 px right rail (Session, and Git with its changed-file
-count) opens the panel on demand and pushes the page; the panel starts closed. Controls
+count) opens the panel on demand and pushes the page; the panel starts closed, and
+the rail yields while the editor's file panel takes the same right slot. Controls
 are 10 px and cards 16 px. A box rule runs a hairline along a rounded box's straight sides
 and stops before each corner's curve; a filled box needs no border. Round indicators and
 meters retain their shape. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.

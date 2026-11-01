@@ -72,7 +72,7 @@ function App() {
             <If when={leftPersistent()} else={<If when={!isNarrow()}><SessionRail /></If>}><LeftSidebar /></If>
             <Centre />
             <If when={rightPersistent()}><RightSidebar /></If>
-            <If when={!isNarrow()}><RightRail /></If>
+            <If when={!isNarrow() && !panelOpen()}><RightRail /></If>
           </View>
           <Drawers />
         </View>
