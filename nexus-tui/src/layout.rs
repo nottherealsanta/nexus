@@ -21,7 +21,7 @@ pub const RIGHT_OPEN_FROM: u16 = 120;
 pub const WIDE_FROM: u16 = 160;
 pub const MIN_CENTRE: u16 = 40;
 /// The collapsed left sidebar: initials per project.
-pub const RAIL_WIDTH: u16 = 8;
+pub const RAIL_WIDTH: u16 = 6;
 /// The full left sidebar's drag bounds; a drag below `RAIL_SNAP` collapses it
 /// to the rail.
 pub const LEFT_MIN: u16 = 20;

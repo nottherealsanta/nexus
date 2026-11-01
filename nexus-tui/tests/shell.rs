@@ -3097,7 +3097,7 @@ fn the_rail_marks_the_open_project_with_the_selection_band() {
     );
     app.mouse = Some((band.x + 2, band.y + 1));
     let (buf, _) = draw(&mut app, 120, 36);
-    for y in band.y..=band.y + 3 {
+    for y in band.y..=band.y + 2 {
         assert_eq!(
             Some(buf[(band.x + 1, y)].bg),
             app.theme.bg("surface.raised").bg
@@ -4321,24 +4321,27 @@ fn project_rail_counters_have_colors_overflow_and_hover_details() {
     app.ui.left_rail = true;
     let (buf, _) = draw(&mut app, 120, 50);
     let band = app.hits.rect_of(&Target::SideRow(0)).unwrap();
-    let row: String = (band.x..band.right())
-        .map(|x| buf[(x, band.y + 2)].symbol())
-        .collect();
-    assert!(row.contains("*234"), "{row:?}");
-    let x = (band.x..band.right())
-        .find(|x| buf[(*x, band.y + 2)].symbol() == "*")
-        .unwrap();
-    for (offset, token) in [
-        "interactive.multi",
-        "status.info",
-        "status.success",
-        "text.primary",
-    ]
-    .iter()
-    .enumerate()
-    {
+    // Attention and finished sit above the initials, running and idle below.
+    let row = |y: u16| -> String {
+        (band.x..band.right())
+            .map(|x| buf[(x, y)].symbol())
+            .collect()
+    };
+    assert!(row(band.y).contains("* 2"), "{:?}", row(band.y));
+    assert!(row(band.y + 2).contains("3 4"), "{:?}", row(band.y + 2));
+    let cell = |y: u16, symbol: &str| -> u16 {
+        (band.x..band.right())
+            .find(|x| buf[(*x, y)].symbol() == symbol)
+            .unwrap()
+    };
+    for (y, symbol, token) in [
+        (band.y, "*", "interactive.multi"),
+        (band.y, "2", "status.info"),
+        (band.y + 2, "3", "status.success"),
+        (band.y + 2, "4", "text.primary"),
+    ] {
         assert_eq!(
-            buf[(x + offset as u16, band.y + 2)].fg,
+            buf[(cell(y, symbol), y)].fg,
             app.theme.color(token).unwrap()
         );
     }

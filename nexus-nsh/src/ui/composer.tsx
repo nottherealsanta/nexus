@@ -287,7 +287,7 @@ export function Composer() {
           }}
         </If>
         <View
-          class={`w-full rounded-(--radius-card) border bg-card px-4 pt-5 pb-3 ${focused() ? "border-ring" : "border-border"}`}
+          class={`w-full rounded-(--radius-card) border bg-card px-4 ${isNarrow() ? "pt-3 pb-2" : "pt-5 pb-3"} ${focused() ? "border-ring" : "border-border"}`}
           accessibilityLabel="Composer" testID="composer-panel"
         >
           <If when={images().length > 0}>
@@ -350,7 +350,7 @@ export function Composer() {
               </If>
               <If when={dictationPhase() === "idle"}>
                 <IconButton icon="mic" label="Dictate into composer" testID="dictation-start" disabled={!canDictate()}
-                  onPress={() => void run("voice.dictate")} reason={!canDictate() ? (ses()?.archived ? "Unarchive this session first" : "Core is not connected") : undefined} />
+                  class={isNarrow() ? "size-12 bg-raised" : ""} onPress={() => void run("voice.dictate")} reason={!canDictate() ? (ses()?.archived ? "Unarchive this session first" : "Core is not connected") : undefined} />
               </If>
               <If when={dictationPhase() !== "idle" && dictationPhase() !== "recording" && dictationPhase() !== "stopping"}>
                 <Btn label="Cancel dictation" kind="ghost" onPress={cancelDictation} testID="dictation-cancel-pending" />

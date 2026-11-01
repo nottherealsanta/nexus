@@ -493,7 +493,7 @@ function SettingsPage(p: { sec: Section }) {
   </View>;
 }
 
-export function SettingsView() {
+export function SettingsView(p: { inline?: boolean }) {
   loadSettingsData();
   let seen = settingsReload();
   effect(() => { const n = settingsReload(); if (n !== seen) { seen = n; loadSettingsData(); } });
@@ -501,11 +501,9 @@ export function SettingsView() {
   const page = () => sections.find((s) => s.page && s.id === settingsPage()?.split("/")[0]);
   const list = () => (cur().row ?? []).filter((r) => r.clients !== "tui" || r.id === "appearance.timeline_detail");
   void m; void model; void compat; void colorScheme; void byId; void keyLabel;
-  return (
-    <Modal width={820} top="top-[8%]" label="Settings" testID="settings" onCancel={() => escape()} onOpenChange={(open) => { if (!open && centre() === "settings") void run("app.settings"); }}>
-      <View class="gap-3">
-        <ModalTitle title="Settings" />
-        <View class={`${isNarrow() || page() ? "" : "flex-row gap-4"} min-h-0`} style={{ height: Math.max(240, Math.min(520, Math.round(windowSize().height * 0.76) - 48 - 32 - 12 - 12 - 28)) }}>
+  const content = () => <View class={p.inline ? "flex-1 min-h-0 gap-3 p-4" : "gap-3"}>
+        <If when={!p.inline}><ModalTitle title="Settings" /></If>
+        <View class={`${isNarrow() || page() ? "" : "flex-row gap-4"} min-h-0 ${p.inline ? "flex-1" : ""}`} style={p.inline ? {} : { height: Math.max(240, Math.min(520, Math.round(windowSize().height * 0.76) - 48 - 32 - 12 - 12 - 28)) }}>
           <If when={page()}>{() => <SettingsPage sec={page()!} />}</If>
           <If when={!page()}><View class={isNarrow() ? "pb-2" : "w-[180px]"}>
             <Scroll horizontal={isNarrow()} scrollbar={false} class={isNarrow() ? "" : "flex-1"} contentClass={isNarrow() ? "flex-row gap-1" : "gap-0.5"}>
@@ -529,8 +527,7 @@ export function SettingsView() {
             <If when={!cur().page}><Each of={list()} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each></If>
           </Scroll></If>
         </View>
-        <ModalFooter hints={page() ? "esc back" : "esc close"} right={`Core ${info()?.version ?? "—"}`} />
-      </View>
-    </Modal>
-  );
+        <If when={!p.inline}><ModalFooter hints={page() ? "esc back" : "esc close"} right={`Core ${info()?.version ?? "—"}`} /></If>
+      </View>;
+  return p.inline ? content() : <Modal width={820} top="top-[8%]" label="Settings" testID="settings" onCancel={() => escape()} onOpenChange={(open) => { if (!open && centre() === "settings") void run("app.settings"); }}>{content()}</Modal>;
 }

@@ -1599,8 +1599,8 @@ enum RailItem {
     New,
 }
 
-/// Label and counters with top/bottom padding and one separating row.
-const RAIL_ITEM: u16 = 5;
+/// Counters above the label, the label, counters below, and a separating row.
+const RAIL_ITEM: u16 = 4;
 
 fn rail_layout(cx: &Cx, r: Rect) -> Vec<(RailItem, Rect)> {
     let a = cx.app;
@@ -1749,12 +1749,9 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             style = style.patch(cx.st(PRIMARY, RAISED));
         }
         if style.bg.is_some() && style.bg != cx.st(PRIMARY, SIDEBAR).bg {
-            let height = if matches!(item, RailItem::Project(_)) {
-                4
-            } else {
-                3
-            };
-            let fill = Rect::new(band.x, band.y, band.width, height).intersection(r);
+            // The counters and the label; a project's separating row stays on
+            // the sidebar surface.
+            let fill = Rect::new(band.x, band.y, band.width, 3).intersection(r);
             clear(buf, fill, Style::default().bg(style.bg.unwrap_or_default()));
         }
         let x = band.x + band.width.saturating_sub(1) / 2;
@@ -1765,7 +1762,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             let selected = a.current_project().as_deref() == Some(id.as_str());
             let bg = if selected || hovered { RAISED } else { SIDEBAR };
             if selected || (focused && i == cursor) {
-                for y in band.y..(band.y + 4).min(r.bottom()) {
+                for y in band.y..(band.y + 3).min(r.bottom()) {
                     put(
                         buf,
                         band.x,
@@ -1778,9 +1775,8 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             }
             let counts = rail_counts(a, id);
             let tokens = [MULTI, "status.info", "status.success", PRIMARY];
-            let nonzero: Vec<_> = counts.iter().enumerate().filter(|(_, n)| **n > 0).collect();
             let available = band.width.saturating_sub(1) as usize;
-            if nonzero.is_empty() {
+            if counts.iter().all(|n| *n == 0) {
                 let len = 3.min(available);
                 let glyph = if cx.t.opts.ascii { "-" } else { "─" };
                 put(
@@ -1792,19 +1788,30 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     len as u16,
                 );
             } else {
-                let gap =
-                    usize::from(nonzero.len().saturating_mul(2).saturating_sub(1) <= available);
-                let len = nonzero.len() + gap * nonzero.len().saturating_sub(1);
-                let start = band.x + 1 + available.saturating_sub(len) as u16 / 2;
-                for (position, (index, count)) in nonzero.iter().enumerate() {
-                    put(
-                        buf,
-                        start + (position * (1 + gap)) as u16,
-                        band.y + 2,
-                        &rail_count(**count),
-                        cx.st(tokens[*index], bg),
-                        1,
-                    );
+                // Four counters do not fit on one row of the narrow rail, so
+                // attention and finished sit above the initials and running
+                // and idle below them.
+                for (row, first) in [(band.y, 0usize), (band.y + 2, 2)] {
+                    let shown: Vec<_> = (first..first + 2)
+                        .filter(|i| counts[*i] > 0)
+                        .map(|i| (i, counts[i]))
+                        .collect();
+                    if shown.is_empty() {
+                        continue;
+                    }
+                    let gap = usize::from(shown.len() * 2 - 1 <= available);
+                    let len = shown.len() + gap * shown.len().saturating_sub(1);
+                    let start = band.x + 1 + available.saturating_sub(len) as u16 / 2;
+                    for (position, (index, count)) in shown.iter().enumerate() {
+                        put(
+                            buf,
+                            start + (position * (1 + gap)) as u16,
+                            row,
+                            &rail_count(*count),
+                            cx.st(tokens[*index], bg),
+                            1,
+                        );
+                    }
                 }
             }
         }

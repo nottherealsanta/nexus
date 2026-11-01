@@ -37,3 +37,5 @@ Linux needs, in the installer's checks and in `docs/development.md`: `pkg-config
 start are not covered).
   
 ## 2. on installed system nexus should launch the tui ( right now when another system installs nexus - they have todo nexus-tui )  
+
+## 3. show number of background shells below the composer. a session that has shells running cannot be archived.

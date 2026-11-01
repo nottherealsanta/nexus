@@ -170,6 +170,8 @@ export const toolOutputAll = signal<Record<string, boolean>>({});
 export const native = platform.os !== "web";
 /** A phone or tablet: hover-only affordances have to stay visible, and targets stay finger-sized. */
 export const touch = platform.idiom === "phone" || platform.idiom === "pad";
+export const phone = native && platform.idiom === "phone";
+export const phonePage = signal<"sessions" | "conversation" | "settings">("sessions");
 /** The saved Core address; null until the Connect screen has one. */
 export const coreUrl = signal<string | null>(null);
 /** True once the saved address has been read (immediately on the web, which has none). */
@@ -749,6 +751,7 @@ export function rememberNewSession(project: string | null | undefined) {
 }
 
 export async function selectSession(id: string) {
+  if (phone) phonePage.set("conversation");
   const ses = model.sessions.get(id);
   // Subagents have no tab: opening one keeps its root's tab (TUI parity).
   const tab = rootOf(id) ?? id;

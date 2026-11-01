@@ -4,7 +4,7 @@ import { Button, ContextMenu, MenuItem, Tab, Tabs, Input } from "nsh/base";
 import { Btn, Icon, IconButton, Status, AttentionMark, T, FOCUS, relTime, abbrev, midTruncate } from "./kit";
 import { manifest } from "../gen/manifest";
 import { availability, byId, commands, keyLabel, newSession, run, toggleLeft } from "../commands";
-import { archivedFilter, centre, connection, currentProject, focusedSidebarRow, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, projectWorktrees, worktreeForDirectory } from "../store";
+import { archivedFilter, centre, connection, currentProject, focusedSidebarRow, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, projectWorktrees, worktreeForDirectory, phone, phonePage } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
 import { fileListing, loadFiles, showFile } from "../store";
@@ -88,13 +88,15 @@ export function SessionRail() {
   const tones = ["text-multi", "text-info", "text-success", "text-foreground"];
   const kinds = ["attention", "finished", "running", "idle"];
   return (
-    <View class="w-14 bg-sidebar items-center pt-2" testID="session-rail" accessibilityLabel="Project rail">
+    <View class="w-[42px] bg-sidebar items-center pt-2" testID="session-rail" accessibilityLabel="Project rail">
       <IconButton icon="search" label="Search sessions" testID="rail-search" onPress={() => { leftTab.set("sessions"); toggleLeft(); }} />
       <IconButton icon="plus" label="New session" testID="rail-new-session" onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} />
       <Scroll class="flex-1" contentClass="items-center gap-1 pb-2">
         <Each of={projects()} key={(p) => p.id}>
           {(p) => {
-            const shown = () => counts(p().id).map((n, i) => ({ n, tone: tones[i], kind: kinds[i] })).filter((c) => c.n > 0);
+            const shown = () => counts(p().id).map((n, i) => ({ n, tone: tones[i], kind: kinds[i] }));
+            // Attention and finished sit above the initials, running and idle below.
+            const half = (first: number) => shown().slice(first, first + 2).filter((c) => c.n > 0);
             return (
               <Button onPress={() => { scopeAll.set(false); selectProject(p().id); }} accessibilityLabel={`${p().name} · ${details(p().id).join(", ")}`}
                 selected={currentProject() === p().id} testID={`rail-project-${p().id}`}
@@ -106,17 +108,20 @@ export function SessionRail() {
                 </View>}
                 class={`relative size-10 flex-col gap-0 items-center justify-center rounded-(--radius) hover:bg-accent ${currentProject() === p().id ? "bg-accent" : ""} ${FOCUS}`}>
                 <If when={currentProject() === p().id}><View class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary" /></If>
+                <View testID={`rail-counts-${p().id}-above`} class="flex-row items-center gap-px h-3">
+                  <Each of={half(0)} key={(c) => c.kind}>
+                    {(c) => <Text testID={`rail-count-${p().id}-${c().kind}`} class={`text-[10px] leading-3 tabular-nums ${c().tone}`}>{railCount(c().n)}</Text>}
+                  </Each>
+                </View>
                 <Text class={`text-[13px] leading-4 font-medium ${activity(p().id).active ? "text-foreground opacity-70" : "text-muted-foreground opacity-50"}`}>{labels().get(p().id)}</Text>
-                <If when={shown().length > 0}>
-                  <View testID={`rail-counts-${p().id}`} class="flex-row items-center gap-px">
-                    <Each of={shown()} key={(c) => c.kind}>
-                      {(c) => <Text testID={`rail-count-${p().id}-${c().kind}`} class={`text-[10px] leading-3 tabular-nums ${c().tone}`}>{railCount(c().n)}</Text>}
-                    </Each>
-                  </View>
-                </If>
-                <If when={shown().length === 0}>
-                  <View testID={`rail-placeholder-${p().id}`} class="w-3 h-px bg-muted-foreground opacity-50" />
-                </If>
+                <View testID={`rail-counts-${p().id}-below`} class="flex-row items-center gap-px h-3">
+                  <Each of={half(2)} key={(c) => c.kind}>
+                    {(c) => <Text testID={`rail-count-${p().id}-${c().kind}`} class={`text-[10px] leading-3 tabular-nums ${c().tone}`}>{railCount(c().n)}</Text>}
+                  </Each>
+                  <If when={half(0).length === 0 && half(2).length === 0}>
+                    <View testID={`rail-placeholder-${p().id}`} class="w-3 h-px bg-muted-foreground opacity-50" />
+                  </If>
+                </View>
               </Button>
             );
           }}
@@ -139,6 +144,8 @@ function Empty(p: { title: string; body?: string; action?: JSX.Element }) {
 function projectName(id: string) { return model.projects.get(id)?.name ?? "project"; }
 
 const sessionQuery = signal("");
+let sessionSearchInput: any;
+function dismissSessionSearch() { if (phone) { try { sessionSearchInput?.blur(); } catch {} } }
 /** Core's search (titles and user messages) for the query typed, when it has answered: the query and the best snippet per session. */
 const searchHits = signal<{ q: string; snippets: Map<string, string> } | null>(null);
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -191,21 +198,21 @@ export function attention(id: string): "waiting" | "error" | null {
   return null;
 }
 
-function SessionsTab() {
+export function SessionsTab() {
   return (
     <View class="flex-1 min-h-0">
-      <View class="gap-2 p-2">
-        <Input value={sessionQuery()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class="h-8 rounded-(--radius) bg-background px-2 text-[13px] text-foreground placeholder:text-muted-foreground" />
+      <View class={phone ? "gap-3 px-4 pt-4 pb-3" : "gap-2 p-2"}>
+        <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`${phone ? "h-11 bg-raised px-4" : "h-8 bg-background px-2"} rounded-(--radius-card) text-[13px] text-foreground placeholder:text-muted-foreground`} />
         <View class="flex-row items-center gap-2">
-          <Button onPress={() => run("project.switch")} accessibilityLabel="Current project" class={`flex-1 min-w-0 flex-row items-center gap-1.5 rounded-(--radius) px-2 hover:bg-accent ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}>
+          <Button onPress={() => run("project.switch")} accessibilityLabel="Current project" class={`flex-1 min-w-0 flex-row items-center gap-1.5 rounded-(--radius) hover:bg-accent ${phone ? "min-h-11 bg-raised px-4" : isNarrow() ? "min-h-11 px-2" : "min-h-8 px-2"} ${FOCUS}`}>
             <Text style={{ numberOfLines: 1 }} class="flex-1 text-[13px] leading-5 font-medium text-foreground">{scopeAll() ? "All projects" : currentProject() ? projectName(currentProject()!) : "No project"}</Text>
             <Icon name="chevron-down" size={14} class="tint-muted-foreground" />
           </Button>
-          <IconButton icon="plus" label="New session" testID="new-session" onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} reason={availability(byId.get("session.new")!).ok ? hint("session.new") ?? undefined : availability(byId.get("session.new")!).reason} />
+          <IconButton icon="plus" label="New session" testID="new-session" class={phone ? "bg-raised" : ""} onPress={() => { dismissSessionSearch(); if (phone) phonePage.set("conversation"); void run("session.new"); }} disabled={!availability(byId.get("session.new")!).ok} reason={availability(byId.get("session.new")!).ok ? hint("session.new") ?? undefined : availability(byId.get("session.new")!).reason} />
         </View>
         <View class="flex-row items-center gap-1">
           <Chip label="Project" on={!scopeAll()} onPress={() => scopeAll.set(false)} />
-          <Chip label="Global" on={scopeAll()} onPress={() => scopeAll.set(true)} />
+          <Chip label={phone ? "All projects" : "Global"} on={scopeAll()} onPress={() => scopeAll.set(true)} />
           <View class="flex-1" />
           <Chip label="Archived" on={archivedFilter()} onPress={() => run("sessions.archived_filter")} />
         </View>
@@ -215,7 +222,7 @@ function SessionsTab() {
           <Empty title="No projects yet" body="Add a project directory to start a session." action={<Btn label="Add project" icon="plus" onPress={() => run("project.add")} kind="primary" />} />
         </If>
       }>
-        <List each={rowItems()} keyExtractor={(x) => x.key} class="flex-1" contentStyle={{ paddingHorizontal: 8, paddingBottom: 8, gap: 2 }} testID="session-list">
+        <List each={rowItems()} keyExtractor={(x) => x.key} class="flex-1" contentStyle={{ paddingHorizontal: phone ? 16 : 8, paddingBottom: 8, gap: 2 }} testID="session-list">
           {(x) => (
             <If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}>
               <View class="px-2 pt-4 pb-1" testID="session-group">
@@ -231,8 +238,8 @@ function SessionsTab() {
 
 function Chip(p: { label: string; on: boolean; onPress: () => void }) {
   return (
-    <Button onPress={p.onPress} selected={p.on} accessibilityLabel={p.label} testID={`chip-${p.label.toLowerCase().replace(/ /g, "-")}`} class={`rounded-(--radius) px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}>
-      <Text class={`text-xs leading-4 ${p.on ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{p.on ? "✓ " : ""}{p.label}</Text>
+    <Button onPress={p.onPress} selected={p.on} accessibilityLabel={p.label} testID={`chip-${p.label.toLowerCase().replace(/ /g, "-")}`} class={`rounded-(--radius) px-2 ${phone ? "min-h-10" : "min-h-6"} justify-center hover:bg-accent ${phone && p.on ? "bg-raised" : ""} ${FOCUS}`}>
+      <Text class={`text-xs leading-4 ${p.on ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{p.on && !phone ? "✓ " : ""}{p.label}</Text>
     </Button>
   );
 }
@@ -256,7 +263,7 @@ function SessionRow(p: { s: () => Session }) {
         if (open) {
           focusedSidebarRow.set(ref());
           sidebarRowMenu.set(ref());
-          void selectSession(s().id);
+          if (!phone) void selectSession(s().id);
         } else if (sidebarRowMenu()?.id === s().id) sidebarRowMenu.set(null);
       }}
       popupClass="min-w-[188px] rounded-(--radius-card) border border-border bg-popover p-1 shadow-lg"
@@ -264,8 +271,8 @@ function SessionRow(p: { s: () => Session }) {
         <View role="button"
           onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== s().id && focusedSidebarRow()?.id === s().id) focusedSidebarRow.set(null); }}
-          onPress={() => { focusedSidebarRow.set(ref()); void selectSession(s().id); }} accessibilityState={{ selected: sel() }} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${s().status === "busy" ? "running" : "idle"}`}
-          class={`group/row relative rounded-(--radius) px-2 py-2 hover:bg-accent ${isNarrow() ? "min-h-[56px]" : "h-[48px]"} ${FOCUS}`}
+          onPress={() => { dismissSessionSearch(); focusedSidebarRow.set(ref()); void selectSession(s().id); }} accessibilityState={{ selected: sel() }} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${s().status === "busy" ? "running" : "idle"}`}
+          class={`group/row relative rounded-(--radius) px-2 hover:bg-accent ${phone ? "min-h-[72px] py-3 pr-14" : isNarrow() ? "min-h-[56px] py-2" : "h-[48px] py-2"} ${FOCUS}`}
         >
           <If when={focusedSidebarRow()?.id === s().id || sel()}>
             {() => <View class="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-primary" testID="row-focus-bar" />}
@@ -275,17 +282,19 @@ function SessionRow(p: { s: () => Session }) {
               <If when={att()} else={<If when={s().status === "busy"} else={<Text class="text-[13px] leading-5 text-transparent"> </Text>}><Status kind="running" /></If>}><AttentionMark kind="waiting" /></If>
             </View>
             <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[13px] leading-5 ${sel() ? "text-foreground font-semibold" : "text-foreground font-medium"}`}>{s().title || "Untitled"}</Text>
-            <Text class={`${T.meta} ${touch ? "opacity-0" : "group-hover/row:opacity-0"}`}>{relTime(s().updated, (tick(), Date.now()))}</Text>
+            <If when={!phone}><Text class={`${T.meta} ${touch ? "opacity-0" : "group-hover/row:opacity-0"}`}>{relTime(s().updated, (tick(), Date.now()))}</Text></If>
           </View>
           <View class="flex-row items-center gap-1 pl-[22px] h-4">
             <If when={place()}><Text style={{ numberOfLines: 1 }} testID={`session-place-${s().id}`} class={`${T.meta} min-w-0`}>{place()}</Text></If>
+            <If when={phone}><Text class={T.meta}>{` · ${relTime(s().updated, (tick(), Date.now()))}`}</Text></If>
             <If when={snippetOf(s().id)}>{(t) => <Text style={{ numberOfLines: 1 }} testID={`session-snippet-${s().id}`} class={`${T.meta} flex-1 min-w-0`}>{`· ${t()}`}</Text>}</If>
             <View class="flex-1" />
             <If when={n() > 0}><Text class={T.meta}>{`${n()} ↳`}</Text></If>
           </View>
-          <Button onPress={() => { focusedSidebarRow.set(ref()); sidebarRowMenu.set(ref()); void selectSession(s().id); }}
+          <If when={phone}><View class="absolute left-2 right-2 bottom-0 h-px bg-border" testID={`session-divider-${s().id}`} /></If>
+          <Button onPress={() => { focusedSidebarRow.set(ref()); sidebarRowMenu.set(ref()); if (!phone) void selectSession(s().id); }}
             accessibilityLabel={`Actions for ${s().title || "Untitled"}`} testID={`row-menu-${s().id}`}
-            class={`absolute right-1.5 top-1.5 ${touch ? "size-11 bg-sidebar" : "size-6 opacity-0 group-hover/row:opacity-100 focus:opacity-100"} items-center justify-center rounded-(--radius) hover:bg-hover ${FOCUS}`}>
+            class={`absolute right-1.5 ${phone ? "top-3 size-11" : touch ? "top-1.5 size-11 bg-sidebar" : "top-1.5 size-6 opacity-0 group-hover/row:opacity-100 focus:opacity-100"} items-center justify-center rounded-(--radius) hover:bg-hover ${FOCUS}`}>
             <Text class="text-[15px] leading-5 text-foreground-secondary">⋯</Text>
           </Button>
         </View>

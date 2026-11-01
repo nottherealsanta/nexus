@@ -189,11 +189,12 @@ describe("shell", () => {
     });
     await app.waitFor("text:demo");
     await app.press("id:toggle-left");
-    await app.waitFor("id:rail-counts-prj_1");
+    await app.waitFor("id:rail-counts-prj_1-below");
     expect(app.shows("id:rail-count-prj_1-running")).toBe(true);
     expect(app.shows("id:rail-count-prj_1-idle")).toBe(true);
     await app.waitFor("id:rail-placeholder-prj_2");
-    expect(app.shows("id:rail-counts-prj_2")).toBe(false);
+    expect(app.shows("id:rail-count-prj_2-attention")).toBe(false);
+    expect(app.shows("id:rail-count-prj_2-idle")).toBe(false);
   });
 
   test("session tabs open, switch and close without deleting their sessions", async () => {

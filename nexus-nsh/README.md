@@ -13,6 +13,14 @@ hand.
 
 The app itself is TSX (`App.tsx`, `src/`); `package.json` is tooling only.
 
+On native phones, Sessions and Settings are bottom tabs. Sessions offers the
+project picker, project/all-project scope, search and archive filter; selecting a
+session opens the conversation full screen, with a back control to the list.
+Subtle dividers separate the touch-sized session rows, which show the branch or
+project and relative activity time without covering the title. The search field is
+dismissed before opening a session. Desktop and tablet keep
+the sidebar-based navigation.
+
 **Status (PLAN.md Step 12.5, in progress):** the shell, session list and filters,
 workspace session tabs, new-session view, timeline, waiting card, composer,
 settings navigation, alerts, notifications and connection states are usable
@@ -160,15 +168,15 @@ newest request with known usage. A ledger that began counting well after the
 first message is labelled `Totals since …`, and requests that reported no usage
 are counted as unknown. It also counts descendant sessions. Right-click or Shift+F10 opens the
 manifest-driven session/project row menu, including confirmed project removal,
-and Projects has a trailing `+ Add project` row. The collapsed sidebar is a 56 px
+and Projects has a trailing `+ Add project` row. The collapsed sidebar is a 42 px
 rail that shows projects in creation order, with stable uppercase initials
 (collisions use the next available consonant, then a numeric suffix). Projects with running sessions or session activity
 within the last hour are lighter gray; inactive projects are darker. Selection has
 a separate background and edge marker. Each project also carries the TUI's four
-counters under its initials: needs attention (violet), finished and unread (info),
-running (success) and idle (primary), with any count past nine shown as `*`; a
-project with no counts shows a three-cell muted rule instead. Hover or focus
-spells out all four counts with the project name;
+counters around its initials: needs attention (violet) and finished and unread
+(info) above, running (success) and idle (primary) below, with any count past
+nine shown as `*`; a project with no counts shows a three-cell muted rule below
+its initials instead. Hover or focus spells out all four counts with the project name;
 clicking restores the project's last selected session in this client, or its newest
 unarchived root session, or the new-session view when empty.
 Projects also shows the selected
