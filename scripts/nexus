@@ -261,7 +261,7 @@ check_all() {
   printf '› TUI tests and lints\n'
   (cd "$TUI" && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check)
   printf '› Shared interface checks\n'
-  (cd "$ROOT" && python3 interface/check_theme.py && python3 interface/check_manifest.py)
+  (cd "$ROOT" && python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml && python3 interface/check_manifest.py)
   printf '› NSH checks\n'
   (cd "$NSH" && npm run check && npm run test:host)
 }

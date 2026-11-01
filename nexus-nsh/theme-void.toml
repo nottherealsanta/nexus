@@ -1,0 +1,80 @@
+# NSH's Void palette: an overlay on interface/theme.toml, merged before generation.
+# The shared file stays the source of glyphs, roles, agent colours and pins; only the
+# tokens below change for NSH. The TUI keeps the shared palette.
+# Check with: python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml
+
+# ---------------------------------------------------------------- dark
+[dark.surface]
+canvas = "#000000"      # the page: true black
+panel = "#0e0e10"       # cards, notices
+raised = "#161618"      # dialogs, menus, toasts, user message
+sidebar = "#0a0a0b"     # the chrome: header band, sidebars and rail
+
+[dark.text]
+primary = "#f4f4f5"     # titles, agent text, tool names
+secondary = "#a7a7ae"   # tool arguments, summaries, labels
+muted = "#85858d"       # metadata, counts, key hints, timestamps
+faint = "#6e6e76"       # unit suffixes, quieter than their counts
+
+[dark.border]
+default = "#1c1c1f"     # hairlines and dividers
+strong = "#2e2e33"      # spines, the activity bar, box edges
+focus = "#f4f4f5"       # focus ring (meaningful, >= 3:1)
+
+[dark.interactive]
+accent = "#f4f4f5"      # accent equals primary text in Void
+multi = "#a78bfa"       # multi-select questions
+on_accent = "#000000"   # text on an accent fill
+focus = "#f4f4f5"       # keyboard focus indicator
+selection = "#1a1a1d"   # selected row (the soft pill)
+hover = "#111113"       # pointer-hover background
+
+[dark.status]
+success = "#5ad58a"
+warning = "#e8c36a"
+error = "#f2707f"
+info = "#6aa8ff"
+
+[dark.diff]
+add = "#5ad58a"
+del = "#f2707f"
+add_bg = "#0c2015"
+del_bg = "#2a0f14"
+
+# ---------------------------------------------------------------- light
+[light.surface]
+canvas = "#fbfbfa"
+panel = "#efefed"
+raised = "#ffffff"
+sidebar = "#f1f1ef"
+
+[light.text]
+primary = "#0b0b0c"
+secondary = "#4b4b50"
+muted = "#5f5f65"
+faint = "#83838a"
+
+[light.border]
+default = "#e2e2df"
+strong = "#cfcfcb"
+focus = "#0b0b0c"
+
+[light.interactive]
+accent = "#0b0b0c"
+multi = "#6743ae"
+on_accent = "#ffffff"
+focus = "#0b0b0c"
+selection = "#e7e7e4"
+hover = "#ececea"
+
+[light.status]
+success = "#146f36"
+warning = "#8a5d00"
+error = "#c42b3d"
+info = "#1f62c9"
+
+[light.diff]
+add = "#146f36"
+del = "#c42b3d"
+add_bg = "#eef9f1"
+del_bg = "#fbe3e6"

@@ -4,6 +4,7 @@
   ../interface/theme.toml    -> gen/theme.json   (nsh.json "theme": cssVars, light + dark)
                              -> src/gen/theme.ts (roles, status glyphs, structure glyphs)
   ../interface/manifest.toml -> src/gen/manifest.ts (commands, settings, navigation, keymap)
+  theme-void.toml            -> merged over theme.toml first: NSH's palette overlay
 
 Stdlib only, Python 3.11+. Run: npm run gen
 """
@@ -14,7 +15,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 IFACE = ROOT.parent / "interface"
 
+
+def merge(base: dict, over: dict) -> dict:
+    """Merge `over` into `base`, table by table, so the overlay names only what changes."""
+    for key, value in over.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 theme = tomllib.loads((IFACE / "theme.toml").read_text())
+merge(theme, tomllib.loads((ROOT / "theme-void.toml").read_text()))
 manifest = tomllib.loads((IFACE / "manifest.toml").read_text())
 
 
@@ -80,10 +93,10 @@ def css(mode: str) -> dict[str, str]:
 
 
 # Radius and fonts are NSH-medium choices (scale proposal: see README.md); colours are not.
-RADIUS = {"radius": "0px", "radius-card": "2px"}
+RADIUS = {"radius": "10px", "radius-card": "16px"}
 FONTS = {
-    "font-sans": "Monaspace Neon, ui-monospace, monospace",
-    "font-mono": "Monaspace Neon, ui-monospace, monospace",
+    "font-sans": "Geist, ui-sans-serif, system-ui, sans-serif",
+    "font-mono": "Monaspace Argon, ui-monospace, monospace",
     "font-code": "Monaspace Argon, ui-monospace, monospace",
 }
 cssvars = {

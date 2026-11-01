@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Check interface/theme.toml: WCAG contrast, completeness, glyph sanity.
 
-Stdlib only. Usage: python3 interface/check_theme.py [path/to/theme.toml]
-Exit status 0 when every check passes.
+Stdlib only. Usage: python3 interface/check_theme.py [path/to/theme.toml] [--overlay path/to/overlay.toml]
+An overlay is merged over the theme before checking, so NSH's theme-void.toml is checked
+against the shared file's glyphs, roles and fallbacks. Exit status 0 when every check passes.
 """
+import argparse
 import sys
 import tomllib
 import unicodedata
@@ -48,8 +50,20 @@ def flatten(theme):
     return {f"{g}.{k}": v for g in GROUPS for k, v in theme[g].items()}
 
 
-def main(path):
+def merge(base, over):
+    """Merge `over` into `base`, table by table, so the overlay names only what changes."""
+    for key, value in over.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def main(path, overlay=None):
     data = tomllib.loads(Path(path).read_text())
+    if overlay:
+        merge(data, tomllib.loads(Path(overlay).read_text()))
     meta = data["meta"]
     tmin, nmin = meta["text_min"], meta["nontext_min"]
     errors, rows = [], 0
@@ -181,4 +195,8 @@ def main(path):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).with_name("theme.toml")))
+    parser = argparse.ArgumentParser(description="Check a theme, optionally over an overlay.")
+    parser.add_argument("path", nargs="?", default=Path(__file__).with_name("theme.toml"))
+    parser.add_argument("--overlay", help="a theme file merged over path before checking")
+    args = parser.parse_args()
+    sys.exit(main(args.path, args.overlay))

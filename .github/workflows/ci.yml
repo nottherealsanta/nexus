@@ -55,7 +55,7 @@ jobs:
       - run: uv run --project nexus-core --locked ruff check nexus-core/nexus nexus-core/tests
       - run: sh -n install.sh   # the installer is POSIX sh: it is piped from curl into `sh`
       - run: python3 interface/check_manifest.py
-      - run: python3 interface/check_theme.py
+      - run: python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml
       - run: cargo fmt --check --manifest-path nexus-tui/Cargo.toml
       - run: uv build --project nexus-core    # packaging check
   core:             # Python tests, macOS and Linux
