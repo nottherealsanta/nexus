@@ -201,7 +201,11 @@ export async function connectCore(raw: string): Promise<void> {
     if (e instanceof ApiError && e.status === 401) {
       throw new Error("This Core asks for a token. Restart it with NEXUS_HOST=0.0.0.0 so a native app can connect without one.");
     }
-    throw new Error(`Nexus Core did not answer at ${url}. Check the address, that Core is running with NEXUS_HOST=0.0.0.0, and that this device can reach it.`);
+    const reason = e instanceof Error ? e.message : String(e);
+    const hint = /transport security|secure connection/i.test(reason)
+      ? "iOS blocked plain HTTP here: use an https:// address."
+      : "Check the address, that Core is running with NEXUS_HOST=0.0.0.0, and that this device can reach it.";
+    throw new Error(`Nexus Core did not answer at ${url}. ${hint} (${reason})`);
   } finally {
     clearTimeout(timer);
   }

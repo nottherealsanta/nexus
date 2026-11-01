@@ -274,13 +274,15 @@ e2e/down.sh /tmp/nsh-e2e
   `nsh package App.tsx --target macos` writes a `.app`; `--target ios-simulator`
   a simulator `.app`, and `--target ios` an `.ipa`.
   App Transport Security blocks plain HTTP to a network address by default, so
-  `scripts/native-info.mjs` adds `NSAllowsLocalNetworking` (and, on iOS,
-  `NSLocalNetworkUsageDescription`) to the packaged plist and ad-hoc signs it
-  again; the scripts above run it for you. A device `.ipa` is signed before it
-  can be patched: package without `--sign`, run the script on the `.app`, then
-  sign with your identity and profile. The exception covers a LAN IP or a
-  `.local` name; a public DNS name (for example a Tailscale MagicDNS name) needs
-  an `https://` Core address. A simulator runtime is installed with
+  `scripts/native-info.mjs` adds `NSAllowsArbitraryLoads` (which also covers
+  LAN, `.local` and Tailscale IP addresses), plus `NSAllowsLocalNetworking` and,
+  on iOS, `NSLocalNetworkUsageDescription`, then ad-hoc signs the app again; the
+  scripts above run it for you. A device `.ipa` is signed before it can be
+  patched: package without `--sign`, run the script on the `.app`, then sign with
+  your identity and profile. `NSAllowsArbitraryLoads` permits plain HTTP to any
+  address, which is right for a self-installed client but needs justification for
+  App Store review; prefer an `https://` Core address (for example through
+  `tailscale serve`) for distributed builds. A simulator runtime is installed with
   `xcodebuild -downloadPlatform iOS`; the Catalyst host (`npm run ios:catalyst`)
   shows the iPhone layout without one.
 - **Connecting natively.** A native build has no host process and no token: it
@@ -383,7 +385,11 @@ local-network keys must be in `Info.plist` *before* that, so package without
    If it says Core is not reachable: check the Safari test from step 1, the
    Local Network switch for Nexus, and that Core is still bound to `0.0.0.0`
    (a daemon restart without `NEXUS_HOST` goes back to loopback + token). A
-   development profile expires; re-sign and reinstall when it does.
+   development profile expires; re-sign and reinstall when it does. The Connect
+   screen now probes the address before saving it and prints the failure, so
+   tap **Core**, re-enter the address and read the message. An App Transport
+   Security message means the build was patched after signing (redo steps 3–4
+   in order); a plain timeout means the phone cannot route to the Mac.
 
 ## Images and context notes
 

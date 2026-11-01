@@ -27,9 +27,11 @@ The sections below are the record of the release steps and the backlog that rema
   Connect screen stores `http://<mac-ip>:4747` in NSH Storage, and Core serves
   `/api/*` without a token when bound off loopback (`NEXUS_HOST` / `nexus serve
   --host`). Loopback keeps today's token behavior. Packaged apps get
-  `NSAllowsLocalNetworking` and (iOS) `NSLocalNetworkUsageDescription` from
-  `nexus-nsh/scripts/native-info.mjs`, because ATS blocks plain HTTP otherwise;
-  a device `.ipa` must be packaged unsigned, patched, then signed. Verified: the
+  `NSAllowsArbitraryLoads` (plus `NSAllowsLocalNetworking` and iOS's
+  `NSLocalNetworkUsageDescription`) from `nexus-nsh/scripts/native-info.mjs`:
+  ATS blocks plain HTTP to a Tailscale `100.x` address even with the local-only
+  exception. A device `.ipa` must be packaged unsigned, patched, then signed.
+  Verified: the
   packaged macOS app opens on the Connect screen, and `nsh test --target macos`
   connects it to an address over HTTP; the layout was checked at 390×844 in the
   web target and the connect flow headless as iOS. Not verified: a real iOS
