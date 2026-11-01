@@ -24,8 +24,7 @@ export function setApiBase(url: string) { base = url.trim().replace(/\/+$/, "");
 /** A loopback target: the only place a native app sends the token from daemon.json. */
 function loopbackBase(): boolean {
   try {
-    const host = new URL(base).hostname;
-    return host === "127.0.0.1" || host === "::1" || host === "[::1]" || host === "localhost";
+    return loopbackName(new URL(base).hostname);
   } catch { return false; }
 }
 
@@ -56,12 +55,15 @@ async function ensureAuth(refresh = false) {
   await localCore();
 }
 
+const loopbackName = (h: string) => h === "127.0.0.1" || h === "::1" || h === "[::1]" || h === "localhost";
 /** The token goes only to the daemon URL daemon.json names, never to another Core. */
 function authHeaders(headers: Record<string, string>) {
   if (!daemon || !loopbackBase()) return headers;
   try {
     const target = new URL(base), source = new URL(daemon.url);
-    if (target.protocol === source.protocol && target.host === source.host) headers.authorization = `Bearer ${daemon.token}`;
+    const same = target.protocol === source.protocol && target.port === source.port
+      && (target.hostname === source.hostname || (loopbackName(target.hostname) && loopbackName(source.hostname)));
+    if (same) headers.authorization = `Bearer ${daemon.token}`;
   } catch {}
   return headers;
 }
