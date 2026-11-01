@@ -1,6 +1,6 @@
-import { Image, Text, View, effect, safeArea, signal, untracked } from "nsh";
+import { Image, Scroll, Text, View, effect, platform, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, Edges, Icon, IconButton, FOCUS, Status, T, midTruncate } from "./kit";
+import { Btn, Icon, IconButton, FOCUS, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
 import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
@@ -15,7 +15,7 @@ import { detailOf, fmtDuration } from "./timeline";
 import { groupRequests, latestUsage, sumUsage, turnsIn } from "../core/turns";
 import type { ToolDetailLine } from "./timeline";
 import { DiffView, diffItems } from "./diff";
-import { TimelineColumn } from "./reading-column";
+import { TEXT_INSET, TimelineColumn } from "./reading-column";
 
 import { imageDrafts, readImage } from "../images";
 import { cancelDictation, stopDictation } from "../dictation";
@@ -74,6 +74,9 @@ export function Composer() {
   let ref: any;
   focusComposer.fn = () => { try { ref?.focus(); } catch {} };
   const h = signal(28);
+  // The dock's own width, measured rather than taken from the window: the provider label leaves
+  // when the controls would overprint, which the window width alone cannot say.
+  const dockWidth = signal(0);
   const key = () => draftKey();
   const text = () => draft()[key()] ?? "";
   const images = () => imageDrafts()[key()] ?? [];
@@ -97,6 +100,9 @@ export function Composer() {
   };
   const ses = () => viewed();
   const busy = () => { m(); return ses()?.status === "busy"; };
+  // While this session waits on the user, the waiting card owns the row: `Working · 2m 01s` above it
+  // would run into `waiting on you`.
+  const working = () => { m(); return busy() && waitItems().length === 0; };
   const reason = (): string | null => {
     const c = connection();
     if (c.kind !== "live") return c.kind === "reconnecting" ? "Reconnecting to Core: read-only" : c.kind === "offline" ? "Core is offline: read-only" : c.kind === "auth_failed" ? "Authentication failed: read-only" : c.kind === "incompatible" ? "Incompatible API: blocked" : "Connecting to Core…";
@@ -254,7 +260,7 @@ export function Composer() {
     <View class="w-full" testID="composer-area">
     <TimelineColumn class="items-center pt-3">
       <View class="w-full">
-        <If when={busy()}><WorkingRow /></If>
+        <If when={working()}><WorkingRow /></If>
         <PendingStack />
         <If when={open()}>
           {() => {
@@ -289,10 +295,12 @@ export function Composer() {
       </View>
     </TimelineColumn>
     <View class="w-full bg-sidebar border-t border-border" style={{ paddingBottom: safeArea().bottom }} testID="composer-dock">
-    <TimelineColumn class="items-center pt-3">
+    <TimelineColumn class="items-center">
+        <OtherWaits />
         <View
-          class={`w-full px-1 ${isNarrow() ? "pb-1" : "pb-1.5"}`}
+          class={`w-full ${TEXT_INSET} pt-3 ${isNarrow() ? "pb-1" : "pb-1.5"}`}
           accessibilityLabel="Composer" testID="composer-panel"
+          onLayout={(b: any) => dockWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}
         >
           <If when={images().length > 0}>
             <View class="flex-row flex-wrap gap-2 pb-3" testID="image-previews">
@@ -304,7 +312,7 @@ export function Composer() {
                     class={`w-24 h-24 items-center justify-center rounded-(--radius) overflow-hidden ${FOCUS}`}>
                     <Image class="w-24 h-24" src={image().data_url} style={{ width: 96, height: 96, objectFit: "cover" }} accessibilityLabel={image().name} />
                   </Button>
-                  <Btn label="Remove image" onPress={() => imageDrafts.update((d) => ({ ...d, [key()]: images().filter((i) => i !== image()) }))} />
+                  <Btn label="Remove image" testID={`remove-image-${image().id}`} onPress={() => imageDrafts.update((d) => ({ ...d, [key()]: images().filter((i) => i !== image()) }))} />
                 </View>}
               </Each>
             </View>
@@ -337,9 +345,9 @@ export function Composer() {
           <View class="flex-row items-center gap-1 min-w-0 min-h-8">
             <View class="flex-1 min-w-0 flex-row items-center gap-1">
               <Selector command="agent.change" label={agentName()} labelClass={`font-semibold ${agentColor(agent())}`} testID="composer-agent" alignStart />
-              <Selector command="model.change" label={modelParts().name} sub={isNarrow() || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
+              <Selector command="model.change" label={modelParts().name} sub={dockWidth() < 560 || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
               <If when={!isNarrow()}>
-                <Selector command="model.effort" label={effort()} testID="composer-effort" />
+                <Selector command="model.effort" label={effort()} testID="composer-effort" fixed />
               </If>
               <If when={!busy() && interrupted()}>
                 <Btn label="Continue" icon="play" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
@@ -354,7 +362,7 @@ export function Composer() {
               </If>
               <If when={dictationPhase() === "idle"}>
                 <IconButton icon="mic" label="Dictate into composer" testID="dictation-start" disabled={!canDictate()}
-                  class={isNarrow() ? "size-12 bg-raised" : ""} onPress={() => void run("voice.dictate")} reason={!canDictate() ? (ses()?.archived ? "Unarchive this session first" : "Core is not connected") : undefined} />
+                  onPress={() => void run("voice.dictate")} reason={!canDictate() ? (ses()?.archived ? "Unarchive this session first" : "Core is not connected") : undefined} />
               </If>
               <If when={dictationPhase() !== "idle" && dictationPhase() !== "recording" && dictationPhase() !== "stopping"}>
                 <Btn label="Cancel dictation" kind="ghost" onPress={cancelDictation} testID="dictation-cancel-pending" />
@@ -436,7 +444,7 @@ function compact(n: number): string {
 function capitalize(s: string): string { return s ? `${s[0].toUpperCase()}${s.slice(1)}` : "Build"; }
 
 /** A selector on the control row, with an optional muted sub-label. */
-function Selector(p: { command: string; label: string; labelClass?: string; sub?: string; testID: string; alignStart?: boolean }) {
+function Selector(p: { command: string; label: string; labelClass?: string; sub?: string; testID: string; alignStart?: boolean; fixed?: boolean }) {
   const c = byId.get(p.command);
   const state = () => c ? availability(c) : { ok: false, reason: "Command is unavailable." };
   const disabled = () => !state().ok;
@@ -446,10 +454,10 @@ function Selector(p: { command: string; label: string; labelClass?: string; sub?
       onPress={() => void run(p.command)} disabled={disabled()} testID={p.testID}
       accessibilityLabel={`${p.label}${disabled() ? `, unavailable: ${reason()}` : ""}`}
       tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{disabled() ? `${p.label}: ${reason()}` : p.label}</Text>}
-      class={`flex-row items-center gap-1.5 min-w-0 shrink h-7 ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
+      class={`flex-row items-center gap-1.5 ${p.fixed ? "shrink-0" : "min-w-0 shrink"} h-7 ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
     >
-      <Text style={{ numberOfLines: 1 }} class={`text-[13px] leading-5 ${p.labelClass ?? "text-foreground-secondary"}`}>{p.label}</Text>
-      <If when={!!p.sub}><Text style={{ numberOfLines: 1 }} class="text-[13px] leading-5 text-muted-foreground">{p.sub!}</Text></If>
+      <Text style={{ numberOfLines: 1 }} class={`min-w-0 shrink text-[13px] leading-5 ${p.labelClass ?? "text-foreground-secondary"}`}>{p.label}</Text>
+      <If when={!!p.sub}><Text style={{ numberOfLines: 1 }} class="min-w-0 shrink-[2] text-[13px] leading-5 text-muted-foreground">{p.sub!}</Text></If>
     </Button>
   );
 }
@@ -488,10 +496,15 @@ function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
     return () => clearInterval(id);
   });
   const left = () => 40 * (1 - Math.cos(phase() * Math.PI * 2));
-  return <View class="relative w-full h-px bg-border-strong" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`}>
-    <If when={p.busy} else={<View class={`absolute top-0 bottom-0 left-0 ${AGENT_TONE[p.slot] ?? "bg-primary text-primary"}`} testID="activity-fill" style={{ width: `${Math.min(100, p.fraction * 100)}%`, boxShadow: [{ x: 0, y: 0, blur: 4 }] }} />}>
-      <View class={`absolute top-0 bottom-0 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
-    </If>
+  // macOS draws the window's bottom corners over the bar: inset it, and let the lit fill overhang
+  // the 1 px track by half a pixel each side so a low percentage is still visible.
+  const inset = () => (platform.os === "macos" ? { paddingHorizontal: 10 } : {});
+  return <View class="relative w-full" style={inset()}>
+    <View class="relative w-full h-px bg-border-strong" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`}>
+      <If when={p.busy} else={<View class={`absolute -top-px h-0.5 left-0 ${AGENT_TONE[p.slot] ?? "bg-primary text-primary"}`} testID="activity-fill" style={{ width: `${Math.min(100, p.fraction * 100)}%`, boxShadow: [{ x: 0, y: 0, blur: 4 }] }} />}>
+        <View class={`absolute -top-px h-0.5 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
+      </If>
+    </View>
   </View>;
 }
 
@@ -566,6 +579,9 @@ function PendingStack() {
 
 /** The location strip shows the path, branch and linked-worktree icon. */
 function LocationStrip(p: { usageLabel: string }) {
+  // The row's measured width decides how much path fits; a fixed character count overflows a
+  // narrow column and truncates needlessly in a wide one.
+  const stripWidth = signal(0);
   const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
   const session = () => { m(); return viewed(); };
   const directory = () => session()?.directory ?? project()?.path ?? "";
@@ -580,8 +596,13 @@ function LocationStrip(p: { usageLabel: string }) {
     const dir = directory();
     const stateHome = info()?.home ?? "";
     const home = userHome() || (/\/\.nexus(10)?$/.test(stateHome) ? stateHome.replace(/\/\.nexus(10)?$/, "") : "");
-    const short = home && (dir === home || dir.startsWith(`${home.replace(/\/$/, "")}/`)) ? `~${dir.slice(home.replace(/\/$/, "").length)}` : dir;
-    return midTruncate(short, isNarrow() ? 32 : 54);
+    return midTruncate(shortPath(dir, home), pathLimit());
+  };
+  const pathLimit = () => {
+    const w = stripWidth();
+    if (!w) return isNarrow() ? 24 : 54;
+    const reserved = 16 + (branch() ? 104 : 0) + (p.usageLabel ? 88 : 0) + 32;
+    return Math.max(12, Math.floor((w - reserved) / 7.2));
   };
   const directoryAvailability = () => {
     const c = byId.get("session.change_directory");
@@ -594,31 +615,32 @@ function LocationStrip(p: { usageLabel: string }) {
   const tooltip = (text: string) => <Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{text}</Text>;
   return (
     <If when={(project() && directory()) || !!p.usageLabel}>
-      <View class="w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 px-1" testID="location-strip">
+      <View class={`w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 pb-1.5 ${TEXT_INSET}`} testID="location-strip"
+        onLayout={(b: any) => stripWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
         <If when={!!session()}>
           <Button
             disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
             accessibilityLabel={`Directory ${directory()}${directoryAvailability().ok ? "" : `, unavailable: ${directoryAvailability().reason ?? ""}`}`}
             tooltip={tooltip(directoryAvailability().reason ?? "Change session directory")}
             class={`min-w-0 shrink rounded-(--radius) ${FOCUS}`}
-          ><Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono min-w-0`}>{path()}</Text></Button>
+          ><Text style={{ numberOfLines: 1 }} class={`${T.mono} min-w-0`}>{path()}</Text></Button>
         </If>
-        <If when={!session()}><Text testID="location-directory" style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.meta} font-mono`}>{path()}</Text></If>
+        <If when={!session()}><Text testID="location-directory" style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.mono}`}>{path()}</Text></If>
         <If when={!!branch()}>
-          <If when={!!session()} else={<Text testID="location-branch" style={{ numberOfLines: 1 }} class={`${T.meta} font-mono min-w-0 shrink`}>{`⌥ ${branch()!}`}</Text>}>
+          <If when={!!session()} else={<Text testID="location-branch" style={{ numberOfLines: 1 }} class={`${T.mono} min-w-0 shrink`}>{`⌥ ${branch()!}`}</Text>}>
             <Button
               disabled={!worktreeAvailability().ok} onPress={() => void run("session.worktrees")} testID="location-branch"
               accessibilityLabel={`Branch ${branch()}${worktreeAvailability().ok ? "" : `, unavailable: ${worktreeAvailability().reason ?? ""}`}`}
               tooltip={tooltip(worktreeAvailability().reason ?? "Worktree controls")}
               class={`min-w-0 shrink rounded-(--radius) ${FOCUS}`}
-            ><Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono`}>{`⌥ ${branch()!}`}</Text></Button>
+            ><Text style={{ numberOfLines: 1 }} class={`${T.mono}`}>{`⌥ ${branch()!}`}</Text></Button>
           </If>
         </If>
-        <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={`${T.meta} font-mono`}>⑂</Text></If>
+        <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={T.mono}>⑂</Text></If>
         <View class="flex-1" />
         <If when={!!p.usageLabel}>
           <View class="shrink-0 flex-row items-center gap-2" testID="composer-meter">
-            <Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono`} testID="composer-usage">{p.usageLabel}</Text>
+            <Text style={{ numberOfLines: 1 }} class={`${T.meta}`} testID="composer-usage">{p.usageLabel}</Text>
           </View>
         </If>
       </View>
@@ -662,18 +684,25 @@ export function WaitingCard() {
   focusWaiting.fn = () => {};
   const items = () => { m(); return waitItems(); };
   const cur = () => { const l = items(); return l.length ? l[waitIndex() % l.length] : null; };
-  const others = () => { m(); return otherWaits(); };
   return (
-    <TimelineColumn class="items-center" testID="waiting-slot">
-      <If when={others().length > 0 && items().length === 0}>
-        <View class="w-full flex-row items-center gap-2 rounded-(--radius-card) bg-card px-3 py-2 mb-2">
-          <Status kind="waiting" />
-          <Text class={`flex-1 ${T.sec}`}>{`${others().length} other session${others().length === 1 ? " is" : "s are"} waiting for input`}</Text>
-          <Btn label="Go to" onPress={() => run("waiting.go_to")} testID="waiting-go-to" />
-        </View>
-      </If>
+    <TimelineColumn class="items-center mt-2" testID="waiting-slot">
       <If when={cur()}>{(w) => <WaitBody w={w} count={items().length} />}</If>
     </TimelineColumn>
+  );
+}
+
+/** A slim dock row for approvals and questions in other sessions while this one has none. */
+function OtherWaits() {
+  const others = () => { m(); return otherWaits(); };
+  const show = () => { m(); return waitItems().length === 0 && others().length > 0; };
+  return (
+    <If when={show()}>
+      <View class={`w-full flex-row items-center gap-2 h-8 border-b border-border ${TEXT_INSET}`} testID="other-waits">
+        <Status kind="waiting" word={false} />
+        <Text class={`flex-1 min-w-0 ${T.sec}`} style={{ numberOfLines: 1 }}>{`${others().length} other session${others().length === 1 ? " is" : "s are"} waiting`}</Text>
+        <Btn label="Go to" kind="ghost" onPress={() => run("waiting.go_to")} testID="waiting-go-to" />
+      </View>
+    </If>
   );
 }
 
@@ -736,10 +765,11 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
   });
   const multi = () => question()?.questions.some((x) => x.multiple) ?? false;
   return (
-    <View class="relative w-full mb-2 flex-row rounded-(--radius-card) bg-card" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
-      <Edges left={multi() ? "bg-multi" : "bg-primary"} leftWidth={2} testID="waiting-rail" />
-      <View class="flex-1 min-w-0 gap-2.5 px-3.5 py-3">
-        <View>
+    <View class="relative w-full mb-2 rounded-(--radius-card) bg-raised" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
+      <StatusRail color={multi() ? "bg-multi" : "bg-primary"} testID="waiting-rail" />
+      <Scroll style={{ maxHeight: Math.round(windowSize().height * 0.6) }}>
+        <View class="pl-4 pr-3 py-3 gap-2.5">
+          <View>
           <View class="flex-row items-center gap-2 min-h-6">
             <Text class={`text-[15px] leading-5 ${multi() ? "text-multi" : "text-primary"}`}>◆</Text>
             <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[15px] leading-5 font-semibold text-foreground" testID="waiting-title">
@@ -754,13 +784,14 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
             </If>
           </View>
           <Text class={`${T.sec} text-muted-foreground`} testID="waiting-sub">
-            {`waiting on you · ${clock(elapsed())}${question() ? ` · question 1 of ${question()!.questions.length}` : ""}${child() ? ` · in child: ${child()}` : ""}`}
+            {`Waiting on you · ${clock(elapsed())}${question() ? ` · question 1 of ${question()!.questions.length}` : ""}${child() ? ` · in child: ${child()}` : ""}`}
           </Text>
         </View>
         <If when={approval()}>{() => <ApprovalBody a={approval()!} />}</If>
         <If when={question()}>{() => <QuestionBody q={question()!} />}</If>
         <If when={waitError()}><View class="flex-row gap-1.5 items-center"><Status kind="error" /><Text class="text-[13px] leading-5 text-error">{waitError()!}</Text></View></If>
-      </View>
+        </View>
+      </Scroll>
     </View>
   );
 }
@@ -787,8 +818,8 @@ function ApprovalBody(p: { a: Approval }) {
           <Each of={parts().table} key={(r) => r[0]}>
             {(r) => (
               <View class="flex-row gap-3 min-h-5">
-                <Text class="w-16 shrink-0 text-xs leading-5 text-muted-foreground">{r()[0]}</Text>
-                <Text style={{ numberOfLines: 3, userSelect: "text" }} class="flex-1 min-w-0 font-mono text-[13px] leading-5 text-foreground">{r()[1]}</Text>
+                <Text class={`w-16 shrink-0 ${T.meta}`}>{r()[0]}</Text>
+                <Text style={{ numberOfLines: 3, userSelect: "text" }} class={`flex-1 min-w-0 ${T.mono} text-foreground`}>{r()[1]}</Text>
               </View>
             )}
           </Each>
@@ -809,11 +840,10 @@ function ApprovalBody(p: { a: Approval }) {
               return (
                 <Button onPress={() => r().run?.()} disabled={off()} testID={r().id}
                   accessibilityLabel={off() ? `${r().title}, unavailable: ${reason()}` : r().title}
-                  class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-8"} ${off() ? "" : "hover:bg-accent"} ${FOCUS}`}>
-                  <Text class={`w-3 text-[13px] leading-5 ${off() ? "text-transparent" : "text-primary"}`}>{i() === choice() && !off() ? "▸" : " "}</Text>
-                  <Text style={{ numberOfLines: 1 }} class={`w-16 shrink-0 text-center text-xs leading-5 font-bold rounded-(--radius) px-1.5 ${off() ? "bg-muted text-muted-foreground" : "bg-raised text-foreground"}`}>{keyLabel(byId.get(r().cmd)!) ?? ""}</Text>
-                  <Text class={`text-[13px] leading-5 ${off() ? "text-muted-foreground" : r().id === "allow-once" ? "font-semibold text-foreground" : "text-foreground"}`}>{r().title}</Text>
-                  <If when={off()}><Text testID={`${r().id}-reason`} class={`flex-1 min-w-0 ${T.meta}`}>{reason()}</Text></If>
+                  class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-8"} ${i() === choice() && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-accent"} ${FOCUS}`}>
+                  <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[13px] leading-5 ${off() ? "text-muted-foreground" : "text-foreground"}`}>{r().title}</Text>
+                  <If when={off()}><Text testID={`${r().id}-reason`} class={T.meta}>{reason()}</Text></If>
+                  <Text class={`shrink-0 rounded-(--radius) bg-muted px-1.5 text-xs leading-4 font-medium ${off() ? "text-muted-foreground" : "text-foreground"}`}>{keyLabel(byId.get(r().cmd)!) ?? ""}</Text>
                 </Button>
               );
             }}
@@ -822,6 +852,19 @@ function ApprovalBody(p: { a: Approval }) {
       </If>
     </View>
   );
+}
+
+/** A drawn radio mark: a 14 px ring with a filled centre when selected. */
+function RadioMark(p: { on: boolean; testID?: string }) {
+  return <View testID={p.testID} class={`size-3.5 shrink-0 items-center justify-center rounded-full border ${p.on ? "border-primary" : "border-muted-foreground"}`}>
+    <If when={p.on}><View class="size-1.5 rounded-full bg-primary" /></If>
+  </View>;
+}
+/** A drawn checkbox: a 14 px rounded box with a check icon when selected. */
+function CheckMark(p: { on: boolean; testID?: string }) {
+  return <View testID={p.testID} class={`size-3.5 shrink-0 items-center justify-center rounded-[4px] border ${p.on ? "border-primary bg-primary" : "border-muted-foreground"}`}>
+    <If when={p.on}><Icon name="check" size={10} class="tint-on-accent" /></If>
+  </View>;
 }
 
 function QuestionBody(p: { q: Question }) {
@@ -841,8 +884,8 @@ function QuestionBody(p: { q: Question }) {
                 {(o) => (
                   <Button role={qq().multiple ? "checkbox" : "radio"} selected={sel(o().id)} accessibilityLabel={o().label}
                     onPress={() => upd(id(), (a) => ({ ...a, selected: qq().multiple ? (a.selected.includes(o().id) ? a.selected.filter((x) => x !== o().id) : [...a.selected, o().id]) : [o().id] }))}
-                    class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 min-h-8 hover:bg-accent selected:bg-selection ${FOCUS}`}>
-                    <Text class={`text-[13px] w-4 ${qq().multiple && sel(o().id) ? "text-multi" : "text-foreground-secondary"}`}>{qq().multiple ? (sel(o().id) ? "[x]" : "[ ]") : sel(o().id) ? "(•)" : "( )"}</Text>
+                    class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 min-h-8 hover:bg-accent ${sel(o().id) ? "bg-selection" : ""} ${FOCUS}`}>
+                    <If when={qq().multiple} else={<RadioMark on={sel(o().id)} testID={`choice-mark-${o().id}`} />}><CheckMark on={sel(o().id)} testID={`choice-mark-${o().id}`} /></If>
                     <Text class="flex-1 text-[13px] leading-5 text-foreground">{o().label}</Text>
                   </Button>
                 )}

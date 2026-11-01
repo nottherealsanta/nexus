@@ -1,5 +1,6 @@
 import { Scroll, Text, View, effect } from "nsh";
-import { Btn, T, midTruncate } from "./kit";
+import { Button } from "nsh/base";
+import { FOCUS, T, midTruncate } from "./kit";
 import { currentProject, loadProjectMcp, m, model, projectMcp } from "../store";
 import { configMeta, configShape, stateLabel } from "../project-mcp";
 import type { ProjectMcpRow } from "../project-mcp";
@@ -18,7 +19,10 @@ export function ProjectMcpPanel() {
     <View class="shrink-0 border-t border-border p-2 gap-1.5" testID="project-mcp" accessibilityLabel="Project MCP servers">
       <View class="flex-row items-center gap-2">
         <Text class="flex-1 text-[13px] leading-5 font-medium text-foreground">Project MCP</Text>
-        <Btn label="Refresh" kind="ghost" testID="project-mcp-refresh" onPress={refresh} disabled={!!state()?.loading} />
+        <Button onPress={refresh} disabled={!!state()?.loading} testID="project-mcp-refresh" accessibilityLabel="Refresh"
+          class={`flex-row items-center justify-center rounded-(--radius) px-2 min-h-6 hover:bg-accent disabled:opacity-50 ${FOCUS}`}>
+          <Text class="text-[13px] leading-5 font-medium text-muted-foreground">Refresh</Text>
+        </Button>
       </View>
       <If when={!!project()}>
         <Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono`}>{midTruncate(data()?.file || project()!.path, 46)}</Text>

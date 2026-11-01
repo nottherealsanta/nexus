@@ -27,6 +27,7 @@ function network(sessions: object[], extra: Record<string, unknown> = {}) {
     "GET */api/snapshot*": { body: snapshot(sessions) },
     "GET */api/event*": { body: sse(connected), headers: { "content-type": "text/event-stream" } },
     "GET */api/provider": { body: [] },
+    "GET */api/project/prj_1/worktrees": { body: { worktrees: [{ path: "/work/demo", branch: "trunk", main: true }] } },
     "GET */api/model/last*": { body: { model: "scripted/m" } },
     "GET */api/model*": { body: { source: "t", models: [], model: "scripted/m" } },
     "GET */api/agent*": { body: { agents: [], problems: [] } },
@@ -47,9 +48,9 @@ describe("sessions sidebar (I6)", () => {
     expect(app.shows("id:session-ses_2")).toBe(false);
     await app.press("id:chip-project");
     expect(app.shows("id:session-ses_2")).toBe(false);
-    await app.press("id:chip-global");
+    await app.press("id:chip-all-projects");
     await app.waitFor("id:session-ses_2");
-    await app.press("id:chip-global");
+    await app.press("id:chip-all-projects");
     expect(app.shows("id:session-ses_2")).toBe(true);
     expect(app.shows("id:session-ses_1")).toBe(false);
     await app.press("id:chip-project");
@@ -61,11 +62,12 @@ describe("sessions sidebar (I6)", () => {
     const child = session("ses_2", "Child task", { parent_id: "ses_1" });
     const app = await open("./App.tsx", { network: network([parent, child]), width: 1440, height: 900, platform: "web" });
     await app.waitFor("text:Refactor loader");
-    await app.press("id:chip-global");
+    await app.press("id:chip-all-projects");
     await app.waitFor("id:session-group");
     expect(app.texts().includes("demo")).toBe(true);
-    // line 2 of the row: the place (the project in global scope), and the child count
+    // line 2 of the row: the branch (the heading above carries the project), and the child count
     expect(app.shows("id:session-place-ses_1")).toBe(true);
+    expect(app.texts().includes("trunk")).toBe(true);
     expect(app.texts().includes("orchestrate")).toBe(false);
     expect(app.texts().includes("1 ↳")).toBe(true);
     expect(app.shows("id:session-ses_2")).toBe(false); // children live under their parent

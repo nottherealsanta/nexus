@@ -45,7 +45,7 @@ describe("Older messages (K6)", () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
-    await app.waitFor("text:Older messages are not loaded");
+    await app.waitFor("text:Load older messages");
     // The row sits above the newest message, out of the viewport: the palette reaches the same command.
     await app.keyboard.press("mod+p");
     await app.waitFor("id:palette");

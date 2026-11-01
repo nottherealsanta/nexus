@@ -7,7 +7,7 @@ import { Dialog } from "nsh/base";
 import { T } from "./kit";
 import { config, isNarrow } from "../store";
 
-export const SCRIM = "bg-black/50";
+export const SCRIM = "bg-black/65";
 const SHADOW = "0 12px 40px rgb(0 0 0 / 0.4)";
 
 export function Modal(p: {

@@ -12,7 +12,7 @@ export function ImagePreview() {
           <Modal width={880} top="top-[8%]" label={`Image preview: ${p.name}`} testID="image-preview"
             onCancel={() => imagePreview.set(null)} onOpenChange={(open) => { if (!open) imagePreview.set(null); }}>
             <View class="gap-3">
-              <ModalTitle title={p.name} />
+              <ModalTitle title={p.name} esc={false} />
               <View class="items-center justify-center rounded-(--radius-card) bg-card p-2">
                 <Image src={p.src} style={{ width: "100%", height: 460, objectFit: "contain" }} accessibilityLabel={p.name} />
               </View>

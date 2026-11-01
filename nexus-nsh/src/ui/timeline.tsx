@@ -3,11 +3,11 @@ import { List, Scroll, computed, signal, Text, View } from "nsh";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
-import { Edges, FOCUS, Icon, IconButton, Status, T } from "./kit";
+import { FOCUS, Icon, IconButton, Status, StatusRail, T } from "./kit";
 import { DiffView } from "./diff";
-import { disabledOf, foldedMeta, startingSections, StartingContext } from "./newsession";
+import { disabledOf, startingSections, StartingContext } from "./newsession";
 import type { CtxSection } from "./newsession";
-import { ACTIVITY_CONTROL_INSET, ACTIVITY_INDENT, CARD_INSET, TEXT_INDENT, TimelineColumn } from "./reading-column";
+import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
 import { contextDetail, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed } from "../store";
 import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
@@ -34,7 +34,7 @@ type Row =
       tools: number; duration: string; status: TurnStatus;
     }
   | {
-      key: string; kind: "context"; meta: string; reconstructed?: boolean; open: boolean;
+      key: string; kind: "context"; reconstructed?: boolean;
       sections: CtxSection[]; total: number; window?: number;
     }
   | { key: string; kind: "notice"; text: string; label: string; tone: Tone }
@@ -57,7 +57,7 @@ type Row =
       key: string; kind: "child"; childId?: string; agent: string; title: string; status: string; tone: Tone;
       body: string; open: boolean; background: boolean; ack: boolean; meta: string;
     }
-  | { key: string; kind: "diag"; text: string; label: string; detail?: string; tone: Tone }
+  | { key: string; kind: "diag"; text: string; label: string; detail?: string; tone: Tone; count?: number }
   | { key: string; kind: "older"; text: string; action?: "load-older" }
   | { key: string; kind: "empty" };
 
@@ -365,8 +365,7 @@ function buildStableRows(): Row[] {
       t: -1,
       r: [{
         key: `context-${sid}`, kind: "context",
-        meta: foldedMeta(sections.length, total, true),
-        reconstructed: s.origin === "reconstructed", open: open(`context:${sid}`, true),
+        reconstructed: s.origin === "reconstructed",
         sections, total, window,
       }],
     });
@@ -537,7 +536,20 @@ function buildStableRows(): Row[] {
   }
   if (sel.messagesMore) flat.unshift({ key: "older-messages", kind: "older", text: "Older messages are not loaded", action: "load-older" });
   if (sel.turnsGap) flat.unshift({ key: "turns-gap", kind: "older", text: `${sel.turnsGap[0].toUpperCase()}${sel.turnsGap.slice(1)}.` });
-  return flat;
+  return mergeDiagnostics(flat);
+}
+
+/** Consecutive identical diagnostics are one fact: `×2` on the first card. */
+function mergeDiagnostics(flat: Row[]): Row[] {
+  const out: Row[] = [];
+  for (const row of flat) {
+    const prev = out.at(-1);
+    if (row.kind === "diag" && prev?.kind === "diag" && prev.text === row.text && prev.tone === row.tone) {
+      prev.count = (prev.count ?? 1) + 1;
+      if (row.detail && !prev.detail) prev.detail = row.detail;
+    } else out.push(row);
+  }
+  return out;
 }
 
 /** Append the live streaming rows without rebuilding the settled history. */
@@ -587,19 +599,20 @@ function groupActivities(rows: Row[]): Row[] {
     const key = `group:${items[0].key}`;
     const waiting = items.some((item) => item.kind === "tool" && item.state === "waiting");
     const running = items.some((item) => item.kind === "reasoning" ? item.running : item.state === "running" || item.state === "waiting");
+    const tools = items.filter((item): item is Extract<Row, { kind: "tool" }> => item.kind === "tool");
     const detail = timelineDetail();
-    const defaultOpen = waiting || detail === "high" || (running && detail !== "low");
+    const defaultOpen = waiting || detail === "high" || (running && detail !== "low") || tools.some((tool) => tool.media.length > 0);
     const expanded = waiting || open(key, defaultOpen);
     const explicit = timelineOpen()[key] === true;
     const hidden = running && !waiting && detail !== "high" && !explicit ? Math.max(0, items.length - 5) : 0;
-    const tools = items.filter((item): item is Extract<Row, { kind: "tool" }> => item.kind === "tool");
     const timed = tools.filter((tool) => tool.seconds !== undefined);
     const diffs = tools.filter((tool) => tool.diff !== undefined);
+    const totalSeconds = timed.reduce((sum, tool) => sum + (tool.seconds ?? 0), 0);
     result.push({
       key, kind: "activity", summary: running ? "Working" : activitySummary(items), items: items.slice(hidden),
       open: expanded, defaultOpen, hidden,
       failed: tools.filter((tool) => tool.state === "error").length,
-      duration: timed.length ? fmtDuration(timed.reduce((sum, tool) => sum + (tool.seconds ?? 0), 0)) : undefined,
+      duration: totalSeconds >= 0.1 ? fmtDuration(totalSeconds) : undefined,
       diff: diffs.length ? diffs.reduce<Diff>((sum, tool) => ({ add: sum.add + (tool.diff?.add ?? 0), del: sum.del + (tool.diff?.del ?? 0) }), { add: 0, del: 0 }) : undefined,
     });
     items = [];
@@ -613,7 +626,6 @@ function groupActivities(rows: Row[]): Row[] {
 }
 
 const RAIL: Record<string, string> = { info: "bg-info", accent: "bg-primary", warning: "bg-warning" };
-function Rail(p: { color: string }) { return <View class={`w-[3px] self-stretch rounded-full ${p.color}`} />; }
 
 /** Row heights for the sticky bar: an item's `onLayout` frame is relative to its own container, so content offsets are summed from the heights. */
 function reportHeight(row: Row, h: number) {
@@ -640,9 +652,9 @@ function RowView(p: { r: () => Row }) {
           {() => {
             const f = r() as Extract<Row, { kind: "footer" }>;
             return (
-              <View class="w-full items-end gap-0.5 pt-3 pb-1" testID="turn-footer">
+              <View class={`w-full items-start gap-0.5 pt-3 pb-1 ${TEXT_INDENT}`} testID="turn-footer">
                 <If when={!!f.error}><Text style={{ userSelect: "text" }} class="text-xs leading-4 text-error">{`✕ ${f.error}`}</Text></If>
-                <View class="flex-row flex-wrap justify-end items-center">
+                <View class="flex-row flex-wrap justify-start items-center">
                   <Each of={f.segments} key={(s, i) => `${i}`}>
                     {(s) => (
                       <Text class={META} tooltip={s().tip ? <Text class="text-xs leading-4 text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{s().tip!}</Text> : undefined}>
@@ -660,13 +672,12 @@ function RowView(p: { r: () => Row }) {
           <View class="py-1"><HandoffCard r={r as any} /></View>
         </If>
         <If when={r().kind === "notice" && (r() as any).text.startsWith("→ Background Shell Done:")}>
-          <Text style={{ userSelect: "text" }} class={`text-[13px] leading-5 text-muted-foreground py-2 ${TEXT_INDENT}`} testID="background-shell-done">{(r() as any).text}</Text>
+          {() => <BackgroundShellDone r={r} />}
         </If>
         <If when={r().kind === "notice" && !(r() as any).text.startsWith("→ Background Shell Done:")}>
-          <View class={`relative flex-row gap-3 rounded-(--radius-card) bg-card py-2.5 my-1 ${CARD_INSET}`}><Edges color="bg-border" />
-            <Rail color={RAIL[(r() as any).tone] ?? "bg-info"} />
+          <View class={`relative flex-row rounded-(--radius-card) bg-card py-2.5 my-1 ${CARD_INSET}`} accessible accessibilityLabel={(r() as any).label}>
+            <StatusRail color={RAIL[(r() as any).tone] ?? "bg-info"} />
             <View class="flex-1 min-w-0 gap-0.5">
-              <Text class="text-xs leading-4 font-medium text-muted-foreground">{(r() as any).label}</Text>
               <Text style={{ userSelect: "text" }} class={`${T.sec}`}>{(r() as any).text}</Text>
             </View>
           </View>
@@ -676,15 +687,15 @@ function RowView(p: { r: () => Row }) {
             <TextView
               selectable markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
               renderCodeBlock={(block) => <CodeFence block={block} />}
-              classes={{ root: "text-[14px] leading-[22px] text-foreground", code: "font-(family-name:--font-code) text-[13px] rounded-(--radius-card) bg-card text-foreground" }}
+              classes={{ root: "text-[14px] leading-[22px] text-foreground", code: "font-(family-name:--font-code) text-[12.5px] rounded-(--radius) bg-card text-foreground" }}
             />
           </View>
         </If>
         <If when={r().kind === "reasoning"}>
-          <View class={ACTIVITY_INDENT}><ReasoningRow x={r as () => Extract<Row, { kind: "reasoning" }>} /></View>
+          <ReasoningRow x={r as () => Extract<Row, { kind: "reasoning" }>} />
         </If>
         <If when={r().kind === "activity"}>
-          <View class={ACTIVITY_INDENT}><ActivityRow r={r as () => Extract<Row, { kind: "activity" }>} /></View>
+          <ActivityRow r={r as () => Extract<Row, { kind: "activity" }>} />
         </If>
         <If when={r().kind === "tool"}>
           <ToolRow r={r as () => Extract<Row, { kind: "tool" }>} />
@@ -694,8 +705,8 @@ function RowView(p: { r: () => Row }) {
             const c = r() as Extract<Row, { kind: "child" }>;
             const kind = c.tone === "accent" ? "waiting" : c.status === "running" || c.status === "starting…" || c.status === "started" ? "running" : c.status === "failed" ? "error" : "done";
             return (
-              <View class="relative flex-row rounded-(--radius-card) bg-card overflow-hidden my-1"><Edges color="bg-border" />
-                <Rail color={RAIL[c.tone] ?? "bg-info"} />
+              <View class="relative flex-row rounded-(--radius-card) bg-card my-1">
+                <StatusRail color={RAIL[c.tone] ?? "bg-info"} />
                 <View class={`flex-1 min-w-0 gap-1 py-2 ${CARD_INSET}`}>
                   <Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId}
                     class={`flex-row items-center gap-2 rounded-(--radius) px-1 -ml-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID="child-card">
@@ -717,19 +728,25 @@ function RowView(p: { r: () => Row }) {
           }}
         </If>
         <If when={r().kind === "diag"}>
-          <View class={`relative flex-row gap-3 rounded-(--radius-card) bg-card py-2.5 my-1 ${CARD_INSET}`} testID="msg-diag"><Edges color="bg-border" />
-            <Rail color={RAIL[(r() as any).tone] ?? "bg-warning"} />
-            <View class="flex-1 min-w-0 gap-0.5">
-              <Text class="text-xs leading-4 font-medium text-muted-foreground">{(r() as any).label}</Text>
-              <Text style={{ userSelect: "text" }} class={`${T.sec}`}>{(r() as any).text}</Text>
-              <If when={(r() as any).detail}><Text class={META}>{(r() as any).detail}</Text></If>
-            </View>
-          </View>
+          {() => {
+            const d = r() as Extract<Row, { kind: "diag" }>;
+            return (
+              <View class={`relative flex-row rounded-(--radius-card) bg-card py-2.5 my-1 ${CARD_INSET}`} testID="msg-diag" accessible accessibilityLabel={d.label}>
+                <StatusRail color={RAIL[d.tone] ?? "bg-warning"} />
+                <View class="flex-1 min-w-0 gap-0.5">
+                  <View class="flex-row items-start gap-2">
+                    <Text style={{ userSelect: "text" }} class={`flex-1 min-w-0 ${T.sec}`}>{d.text}</Text>
+                    <If when={(d.count ?? 1) > 1}><Text class={META}>{`×${d.count}`}</Text></If>
+                  </View>
+                  <If when={!!d.detail}><Text class={META}>{d.detail}</Text></If>
+                </View>
+              </View>
+            );
+          }}
         </If>
         <If when={r().kind === "older"}>
           <If when={(r() as any).action === "load-older"} else={<Text class={`${META} py-2 ${TEXT_INDENT}`} testID="timeline-older">{(r() as any).text}</Text>}>
-            <View class={`flex-row items-center gap-2 py-2 ${TEXT_INDENT}`}>
-              <Text class={META} testID="timeline-older">{(r() as any).text}</Text>
+            <View class={`flex-row items-center py-2 ${TEXT_INDENT}`} testID="timeline-older">
               <Button onPress={() => run("turn.load_older")} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 ${hit("min-h-6")} justify-center hover:bg-accent ${FOCUS}`}>
                 <Text class="text-xs leading-4 text-foreground">Load older messages</Text>
               </Button>
@@ -738,6 +755,23 @@ function RowView(p: { r: () => Row }) {
         </If>
       </View>
     </TimelineColumn>
+  );
+}
+
+/** The done notice for a background shell: the command on one line, expandable, in the code face. */
+function BackgroundShellDone(p: { r: () => Row }) {
+  const key = () => `shell:${(p.r() as any).key}`;
+  const command = () => String((p.r() as any).text).replace(/^→ Background Shell Done:\s*/, "");
+  const expanded = () => open(key(), false);
+  return (
+    <View class={`py-2 ${TEXT_INDENT}`} testID="background-shell-done">
+      <Button onPress={() => toggle(key(), false)} accessibilityLabel={`Background shell finished: ${command()}, ${expanded() ? "collapse" : "expand"}`} testID="background-shell-toggle"
+        class={`w-full flex-row items-start gap-2 rounded-(--radius) -mx-1 px-1 py-0.5 hover:bg-accent ${FOCUS}`}>
+        <Text class={`shrink-0 ${T.sec}`}>Background shell finished</Text>
+        <Text style={expanded() ? { userSelect: "text" } : { userSelect: "text", numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.mono}`}>{command()}</Text>
+        <Text class={META}>{expanded() ? "Show less" : "Show"}</Text>
+      </Button>
+    </View>
   );
 }
 
@@ -806,7 +840,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   return (
     <If when={r().folded} else={
       <View>
-      <View class={`group/band w-full bg-raised py-3 relative ${CARD_INSET}`} testID="msg-user"
+      <View class={`group/band w-full bg-band py-3 relative ${CARD_INSET}`} testID="msg-user"
         onFocus={() => focusedBand.set(r().key)} onBlur={() => { if (focusedBand() === r().key) focusedBand.set(null); }}>
         {/* The TUI's band rail stays visible; focus only changes its colour. */}
         <View class={`absolute left-0 top-0 bottom-0 w-0.5 ${focusedBand() === r().key ? "bg-primary" : "bg-border-strong"}`} />
@@ -825,23 +859,32 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
           </View>
         </If>
         <View class="flex-row items-start gap-3">
-          <Text style={big() && !full() ? { userSelect: "text", numberOfLines: 6 } : { userSelect: "text" }} class="flex-1 min-w-0 text-[14px] leading-[22px] text-foreground">{body()}</Text>
-          <View class="flex-row items-center gap-1 pt-0.5">
-            {/* Hover icons: kept mounted (keyboard reachable), shown while the card is hovered or focused;
-                a phone or tablet has no hover, so they stay visible there. */}
-            <View class={`flex-row items-center ${focusedBand() === r().key || touch ? "" : "opacity-0 group-hover/band:opacity-100"}`}>
+          <View class="flex-1 min-w-0">
+            <Text style={big() && !full() ? { userSelect: "text", numberOfLines: 6 } : { userSelect: "text" }} class="text-[14px] leading-[22px] text-foreground">{body()}</Text>
+            {/* A phone or tablet has no hover, so the icons and the stamp move below the text. */}
+            <If when={touch}>
+              <View class="flex-row items-center justify-end gap-1 pt-1">
+                <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
+                <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
+                <Text class={`${META} pt-[3px]`}>{meta()}</Text>
+              </View>
+            </If>
+          </View>
+          <If when={!touch}>
+            {/* Hover icons stay out of the flow: over a small backing, hiding the stamp while they show. */}
+            <Text class={`${META} pt-[3px] transition-opacity ${focusedBand() === r().key ? "opacity-0" : "group-hover/band:opacity-0"}`}>{meta()}</Text>
+            <View class={`absolute right-3 top-2 flex-row items-center gap-1 rounded-(--radius) bg-raised transition-opacity ${focusedBand() === r().key ? "opacity-100" : "opacity-0 group-hover/band:opacity-100"}`}>
               <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
               <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
             </View>
-            <Text class={`${META} pt-1`}>{meta()}</Text>
-          </View>
+          </If>
         </View>
       </View>
       <If when={big()}><Button onPress={() => toggle(`user:${r().key}`, false)} testID={`user-full-${r().n}`} class={`items-start py-3 ${TEXT_INDENT} ${FOCUS}`}><Text class={META}>{full() ? "▾ collapse message" : "▸ show full message (sent whole)"}</Text></Button></If>
       </View>
     }>
       <Button onPress={fold} accessibilityLabel={`${meta()} folded, show`} testID={`msg-user-folded-${r().n}`}
-        class={`w-full flex-row items-center gap-2 rounded-(--radius-card) bg-raised min-h-9 hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
+        class={`w-full flex-row items-center gap-2 rounded-(--radius) bg-band min-h-9 hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
         <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
         <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[14px] leading-[22px] text-foreground">{r().text}</Text>
         <If when={r().tools > 0 || !!r().duration}>
@@ -889,10 +932,11 @@ function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void })
         const lines = Math.max(0, Math.floor((Math.min(y, c.next?.top ?? Infinity) - c.band.top) / STICKY_LINE));
         const offset = c.next ? Math.min(0, c.next.top - y - STICKY_BAR) : 0;
         return (
-          <View class="absolute left-0 right-0 items-center" style={{ top: offset, pointerEvents: "box-none" }} testID="sticky-user">
+          <View class="absolute left-0 right-0 items-start" style={{ top: offset, pointerEvents: "box-none" }} testID="sticky-user">
             <TimelineColumn>
               <Button onPress={() => p.scrollTo(c.band.top)} accessibilityLabel="Scroll to this message" testID="sticky-user-button"
-                class={`w-full flex-row items-center gap-3 bg-raised border-b border-border ${hit("min-h-7")} hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
+                class={`relative w-full flex-row items-center gap-3 bg-band ${hit("min-h-7")} hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
+                <View class="absolute left-0 top-0 bottom-0 w-0.5 bg-border-strong" />
                 <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.band.text}</Text>
                 <Text class={META}>{`↑ ${lines} lines of this turn above`}</Text>
               </Button>
@@ -930,18 +974,19 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
   return (
     <View class="py-0.5">
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
-        class={`w-full flex-row items-center gap-2 rounded-(--radius) ${ACTIVITY_CONTROL_INSET} ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
-        <Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
+        class={`w-full flex-row items-center rounded-(--radius) -mx-1 px-1 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
+        <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>
         <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{r().summary}</Text>
         <If when={!!r().diff}>
-          {() => <Text class={META}><Text class="text-success">{`+${r().diff!.add}`}</Text>{" "}<Text class="text-error">{`−${r().diff!.del}`}</Text></Text>}
+          {() => <Text class={`${META} ml-2`}><Text class="text-success">{`+${r().diff!.add}`}</Text>{" "}<Text class="text-error">{`−${r().diff!.del}`}</Text></Text>}
         </If>
-        <If when={r().failed > 0}><Text class="text-xs leading-4 text-error">{`✕ ${r().failed} failed`}</Text></If>
-        <If when={!!r().duration}><Text class={META}>{r().duration!}</Text></If>
+        <If when={r().failed > 0}><Text class="ml-2 text-xs leading-4 text-error">{`✕ ${r().failed} failed`}</Text></If>
+        <If when={!!r().duration}><Text class={`${META} ml-2`}>{r().duration!}</Text></If>
       </Button>
       <If when={r().open}>
-        <View class="ml-[11px]">
-          <If when={r().hidden > 0}><Text class={`${META} pl-[18px]`}>{`… ${r().hidden} earlier activities hidden`}</Text></If>
+        <View class="relative pl-4">
+          <View class="absolute left-[7px] top-0 bottom-0 w-px bg-border-strong" />
+          <If when={r().hidden > 0}><Text class={`${META}`}>{`… ${r().hidden} earlier activities hidden`}</Text></If>
           <Each of={r().items} key={(item) => item.key}>
             {(item) => <ActivityItem item={item} last={() => r().items.at(-1)?.key === item().key} />}
           </Each>
@@ -955,8 +1000,7 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
 function ActivityItem(p: { item: () => ActivityEntry; last: () => boolean }) {
   const item = p.item;
   return (
-    <View class="relative pl-[18px]">
-      <View class="absolute left-0 top-0 bottom-0 w-px bg-border-strong" />
+    <View>
       <If when={item().kind === "tool"}>
         <ToolRow r={item as () => Extract<Row, { kind: "tool" }>} />
       </If>
@@ -977,23 +1021,25 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
     <View class="py-0.5">
       <If when={x().running} else={
         <Button onPress={() => toggle(`reason:${x().key}`, false)} accessibilityLabel={`${label()}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
-          class={`w-full flex-row items-center gap-2 rounded-(--radius) ${ACTIVITY_CONTROL_INSET} ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
-          <Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
+          class={`w-full flex-row items-center rounded-(--radius) -mx-1 px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
+          <View class={ACTIVITY_CHEVRON}><Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>
           <Text class={`text-[13px] leading-5 font-semibold text-muted-foreground`}>{label()}</Text>
           <If when={!!x().encrypted}>
-            {() => <Text class="text-[13px] leading-5 italic text-muted-foreground">encrypted, replayed to the provider</Text>}
+            {() => <Text class="ml-2 text-[13px] leading-5 italic text-muted-foreground">encrypted, replayed to the provider</Text>}
           </If>
           <If when={!x().encrypted}>
-            {() => <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground">{firstLine(x().text)}</Text>}
+            {() => <Text style={{ numberOfLines: 1 }} class="ml-2 flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground">{firstLine(x().text)}</Text>}
           </If>
         </Button>
       }>
-        <View class={`flex-row items-center gap-2 ${ACTIVITY_CONTROL_INSET} min-h-6`} testID="reasoning">
+        <View class="flex-row items-center -mx-1 px-1 min-h-6" testID="reasoning">
+          <View class={ACTIVITY_CHEVRON} />
           <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{"Thinking…"}</Text>
         </View>
       </If>
       <If when={x().running || (x().open && !x().encrypted)}>
-        <View class="ml-[7px] border-l-2 border-border pl-4 py-1">
+        <View class="relative pl-4 py-1">
+          <View class="absolute left-[7px] top-0 bottom-0 w-px bg-border-strong" />
           <If when={x().running && hidden() > 0}>
             {() => <Text class={META}>{`… ${hidden()} earlier lines`}</Text>}
           </If>
@@ -1026,12 +1072,12 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
   return (
     <View class="py-0.5">
       <View role="button" onFocus={markFocused} onBlur={clearFocused} onPress={() => { markFocused(); toggle(r().key, false); }} accessibilityLabel={`${r().name} ${r().state}`} accessibilityState={{ selected: open() }}
-        class={`flex-row items-center gap-2 rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
+        class={`flex-row items-center gap-2 rounded-(--radius) -mx-1 px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
         <If when={live()} else={<Icon name={verbIcon(r().name)} size={16} class="tint-foreground-secondary" />}>
           {() => <Status kind={stateKind()} />}
         </If>
         <Text class="min-w-[52px] text-[13px] leading-5 font-medium text-foreground">{verbLabel(r().name)}</Text>
-        <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground-secondary">{r().arg}</Text>
+        <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`flex-1 min-w-0 ${T.mono}`}>{r().arg}</Text>
         <If when={r().state !== "waiting" && !!r().summary}>
           <Text class={META}><Text class={r().summary.startsWith("+") ? "text-success" : r().summary.startsWith("−") ? "text-error" : "text-muted-foreground"}>{r().summary}</Text></Text>
         </If>
@@ -1039,10 +1085,10 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
         <If when={r().state === "waiting"}><Text class="text-[13px] text-primary">waiting</Text></If>
       </View>
       <If when={open()}>
-        <View class="ml-[18px] mt-1 mb-1 rounded-(--radius) bg-card overflow-hidden">
+        <View class="mt-1 mb-1 rounded-(--radius) bg-card overflow-hidden">
           <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
             <Text class="text-xs leading-4 font-semibold text-foreground">{verbLabel(r().name)}</Text>
-            <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 font-mono text-xs leading-4 text-foreground-secondary">{r().arg}</Text>
+            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.mono}`}>{r().arg}</Text>
             <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
               <Text class={META}>{r().raw ? "[raw]" : "raw · r"}</Text>
             </Button>

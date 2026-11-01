@@ -32,12 +32,6 @@ export function thousands(n: number): string {
   for (let i = 0; i < d.length; i++) { if (i > 0 && (d.length - i) % 3 === 0) out += ","; out += d[i]; }
   return out;
 }
-/** `17.6k` for the folded line; plain digits below a thousand. */
-export const compactTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
-/** The folded line after its fold marker: `Context · 4 items · ~17.6k tokens`. */
-export function foldedMeta(items: number, total: number, estimated: boolean): string {
-  return `· ${items} items · ${estimated ? "~" : ""}${compactTokens(total)} tokens`;
-}
 /** The first meaningful line of a system prompt: not blank, not a heading and not an HTML comment. */
 export function firstPromptLine(prompt: string): string {
   return prompt.split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#") && !l.startsWith("<!--")) ?? "";
@@ -160,56 +154,56 @@ function Count(p: { text: string; estimated: boolean; class: string }) {
   );
 }
 
-function Switch(p: { on: boolean }) {
-  return (
-    <View class={`size-[10px] shrink-0 rounded-full ${p.on ? "bg-muted-foreground" : "border border-muted-foreground"}`} />
-  );
-}
+/** One 196 px cell fits `change_session_directory` at 12.5 px; below 420 px the cells take their natural width. */
+const CELL = "w-[196px] shrink-0";
 
-function Section(p: { s: CtxSection; estimated: boolean; onOpen: () => void; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
+function Section(p: { s: CtxSection; estimated: boolean; wide: boolean; onOpen: () => void; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
   const s = p.s;
   return (
     <View class="py-1 gap-1" testID={`ctx-${s.key}`}>
-      <View class="flex-row items-center gap-2 min-h-5 rounded-(--radius) hover:bg-accent">
-        <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`} class={`rounded-(--radius) ${FOCUS}`}><Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{s.title}</Text></Button>
-        <If when={s.count !== undefined}><Text class="text-[13px] leading-5 text-muted-foreground tabular-nums">{`[${s.count}]`}</Text></If>
-        <If when={s.tokens !== undefined}>
-          <Count text={`${p.estimated ? "~" : ""}${contextTokens(s.tokens ?? 0)}`} estimated={p.estimated} class={`${T.sec} tabular-nums`} />
-        </If>
-        <If when={!!s.meta}><Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-muted-foreground tabular-nums">{s.meta}</Text></If>
+      <View class="flex-row items-center gap-2 min-h-5">
+        <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`} class={`flex-row items-baseline gap-1.5 rounded-(--radius) px-1 -mx-1 hover:bg-accent ${FOCUS}`}>
+          <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{s.title}</Text>
+          <If when={s.count !== undefined}><Text class="text-[13px] leading-5 text-muted-foreground tabular-nums">{s.count}</Text></If>
+        </Button>
+        <View class="flex-1" />
+        <View class="flex-row items-center gap-2">
+          <If when={!!s.meta}><Text style={{ numberOfLines: 1 }} class={T.meta}>{s.meta}</Text></If>
+          <If when={s.tokens !== undefined}>
+            <Count text={`${p.estimated ? "~" : ""}${contextTokens(s.tokens ?? 0)}`} estimated={p.estimated} class={`${T.sec} tabular-nums`} />
+          </If>
+        </View>
       </View>
       <If when={s.body.kind === "grid"}>
-        <View class="flex-row flex-wrap pl-5" testID={`ctx-${s.key}-grid`}>
+        <View class="flex-row flex-wrap gap-x-4 pl-3" testID={`ctx-${s.key}-grid`}>
           <Each of={(s.body as { items: { name: string; on: boolean }[] }).items} key={(c) => c.name}>
             {(c) => (
-              <View class="w-1/3 pr-1.5">
-                <View class={`h-6 flex-row items-center gap-1.5 px-2 ${c().on ? "" : "opacity-60"}`} testID={`ctx-chip-${c().name}`} accessibilityLabel={`${c().name} ${c().on ? "on" : "off"}`}>
-                  <Switch on={c().on} />
-                  <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 font-mono text-[13px] leading-5 ${c().on ? "text-foreground-secondary" : "text-muted-foreground line-through"}`}>{c().name}</Text>
-                </View>
+              <View class={`h-6 flex-row items-center ${p.wide ? CELL : ""}`} testID={`ctx-chip-${c().name}`} accessibilityLabel={`${c().name} ${c().on ? "on" : "off"}`}>
+                <Text class={`font-mono text-[12.5px] leading-5 ${c().on ? "text-foreground-secondary" : "text-muted-foreground line-through opacity-60"}`}>{c().name}</Text>
               </View>
             )}
           </Each>
         </View>
       </If>
       <If when={s.body.kind === "inventory"}>
-        <View class="gap-1 pl-5" testID={`ctx-${s.key}-inventory`}>
+        <View class="flex-row flex-wrap gap-x-4 pl-3" testID={`ctx-${s.key}-inventory`}>
           <Each of={(s.body as { items: InventoryRow[] }).items} key={(item) => item.name}>
             {(item) => {
               const status = () => [item().meta, item().tools === null || item().tools === undefined ? "" : `${item().tools} tools`].filter(Boolean).join(" · ");
               const idName = item().name.replace(/[^A-Za-z0-9_-]/g, "-");
+              // An error or a new-session lock needs the whole row and a second line.
+              const full = () => !!item().error || item().locked;
               return (
                 <Button role="switch" selected={item().on} onPress={() => p.onInventoryToggle?.(item().kind, item().name, item().locked)}
                   accessibilityLabel={`${item().name} ${item().on ? "on" : "off"}${item().locked ? ", new session" : ""}`} testID={`ctx-${item().kind}-row-${idName}`}
-                  class={`w-full flex-row items-start gap-2 rounded-(--radius) px-2 py-1 hover:bg-accent ${FOCUS} ${item().locked ? "opacity-60" : ""}`}>
-                  <View class="pt-1"><Switch on={item().on} /></View>
-                  <View class="flex-1 min-w-0 gap-0.5">
+                  class={`${full() ? "w-full" : p.wide ? CELL : ""} flex-row gap-2 rounded-(--radius) px-2 hover:bg-accent ${FOCUS} ${full() ? "items-start py-1" : "h-6 items-center"} ${item().locked ? "opacity-60" : ""}`}>
+                  <View class="flex-1 min-w-0 gap-0.5 items-start">
                     <View class="flex-row items-center gap-2">
-                      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 font-mono text-[13px] leading-5 ${item().on ? "text-foreground-secondary" : "text-muted-foreground line-through"}`}>{item().name}</Text>
-                      <If when={item().locked}><Text class="text-[13px] leading-5 text-muted-foreground">new session</Text></If>
+                      <Text style={{ numberOfLines: 1 }} class={`font-mono text-[12.5px] leading-5 ${item().on ? "text-foreground-secondary" : "text-muted-foreground line-through opacity-60"}`}>{item().name}</Text>
+                      <If when={!!status()}><Text class={T.meta}>{status()}</Text></If>
+                      <If when={full() && item().locked}><Text class={T.meta}>new session</Text></If>
                     </View>
-                    <If when={!!status()}><Text class="text-[13px] leading-5 text-muted-foreground">{status()}</Text></If>
-                    <If when={!!item().error}><Text style={{ numberOfLines: 2 }} class="text-[13px] leading-5 text-warning">{item().error}</Text></If>
+                    <If when={!!item().error}><Text style={{ numberOfLines: 2 }} class="text-[12.5px] leading-5 text-warning">{item().error}</Text></If>
                   </View>
                 </Button>
               );
@@ -231,14 +225,19 @@ export function ContextDetailModal() {
 export function ContextSections(p: { sections: CtxSection[]; total: number; estimated: boolean; window?: number; reconstructed?: boolean; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
   const pct = () => share(p.total, p.window);
   const detail = contextDetail;
+  const cardWidth = signal(0);
+  const wide = () => cardWidth() >= 420;
   return (
-    <View class="w-full rounded-(--radius-card) bg-card px-4 py-3" testID="context-sections">
+    <View class="w-full rounded-(--radius-card) bg-card px-4 py-3" testID="context-sections"
+      onLayout={(b: any) => cardWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
       <If when={!!p.reconstructed}><Text class="text-[13px] leading-5 text-warning">reconstructed</Text></If>
-      <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => <Section s={s()} estimated={p.estimated} onOpen={() => detail.set(s())} onInventoryToggle={p.onInventoryToggle} />}</Each>
-      <View class="flex-row items-center gap-2 pt-1" testID="context-total">
-        <Text class="text-[13px] leading-5 font-semibold text-foreground">total</Text>
-        <Count text={`${p.estimated ? "~" : ""}${thousands(p.total)}`} estimated={p.estimated} class="text-[13px] leading-5 text-foreground tabular-nums" />
-        <If when={!!pct()}><Text class="text-[13px] leading-5 text-muted-foreground tabular-nums">{`· ${pct()} of the window`}</Text></If>
+      <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => <Section s={s()} estimated={p.estimated} wide={wide()} onOpen={() => detail.set(s())} onInventoryToggle={p.onInventoryToggle} />}</Each>
+      <View class="h-px bg-border mt-2" />
+      <View class="flex-row items-center gap-2 pt-2" testID="context-total">
+        <Text class="text-[13px] leading-5 font-semibold text-foreground">Total</Text>
+        <View class="flex-1" />
+        <Count text={`${p.estimated ? "~" : ""}${contextTokens(p.total)}`} estimated={p.estimated} class="text-[13px] leading-5 text-foreground tabular-nums" />
+        <If when={!!pct()}><Text class={T.meta}>{`· ${pct()} of the window`}</Text></If>
       </View>
     </View>
   );
@@ -247,7 +246,7 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
 /** The starting context in the timeline and before a session starts: one card, one width. */
 export function StartingContext(p: { sections: CtxSection[]; total: number; estimated: boolean; window?: number; reconstructed?: boolean; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
   return (
-    <View class="w-full my-5" testID="context-section">
+    <View class="w-full my-3" testID="context-section">
       <ContextSections
         sections={p.sections} total={p.total} estimated={p.estimated} window={p.window} reconstructed={p.reconstructed}
         onInventoryToggle={p.onInventoryToggle}

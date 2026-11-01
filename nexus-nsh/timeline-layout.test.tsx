@@ -1,7 +1,7 @@
 // Regression coverage for the shared timeline reading column: the new-session
 // starting context and the started session use the same column, card and inset.
 import { describe, expect, open, test } from "nsh/test";
-import { ACTIVITY_CONTROL_INSET, ACTIVITY_INDENT, CARD_INSET, TEXT_INDENT, timelineColumnClass, timelineColumnPx } from "./src/ui/reading-column";
+import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TEXT_INSET, timelineColumnClass, timelineColumnPx } from "./src/ui/reading-column";
 
 const project = { id: "prj_1", path: "/work/demo", name: "demo", created: 1, updated: 2, revision: 1 };
 const session = {
@@ -60,8 +60,8 @@ describe("timeline reading column", () => {
   test("cards, prose and activity rows share one text edge", () => {
     expect(CARD_INSET).toBe("px-4");
     expect(TEXT_INDENT).toBe("pl-4");
-    expect(ACTIVITY_INDENT).toBe("pl-3");
-    expect(ACTIVITY_CONTROL_INSET).toBe("px-1");
+    expect(TEXT_INSET).toBe("px-4");
+    expect(ACTIVITY_CHEVRON).toBe("w-4 shrink-0");
   });
 
   test("the new-session starting context renders in the timeline's shared column and card", async () => {

@@ -28,12 +28,12 @@ export const columnClass = () => timelineColumnClass(width());
 
 /** A card's inner inset; assistant prose and activity rows start at this same text edge. */
 export const CARD_INSET = "px-4";
+/** The one text edge: prose, cards and full rows all start 16 px inside the column. */
+export const TEXT_INSET = "px-4";
 /** Prose and activity rows sit one card inset in from the column edge. */
 export const TEXT_INDENT = "pl-4";
-/** Activity rows keep a 4 px hover pad while their text lands on the prose edge. */
-export const ACTIVITY_INDENT = "pl-3";
-/** The activity row's hover pad, so `pl-3` plus this lands on the `pl-4` prose edge. */
-export const ACTIVITY_CONTROL_INSET = "px-1";
+/** The activity row's chevron slot; it hangs inside the inset so the label lands on the text edge. */
+export const ACTIVITY_CHEVRON = "w-4 shrink-0";
 
 export function TimelineColumn(p: { class?: string; style?: Record<string, string | number>; testID?: string; children?: JSX.Element; onLayout?: (b: any) => void }) {
   return (

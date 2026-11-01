@@ -129,7 +129,6 @@ function AlertDetailBody(p: { a: () => Toast }) {
         <View class="flex-row items-center min-h-8 gap-3">
           <Text class={`w-4 text-center text-[15px] font-semibold ${TG[a().level].t}`}>{TG[a().level].g}</Text>
           <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[15px] leading-5 font-semibold text-popover-foreground">{splitAlert(a().text).title}</Text>
-          <Text class={`${T.meta} rounded-(--radius) bg-muted px-1.5`}>esc</Text>
         </View>
         <Scroll class="max-h-[320px]">
           <Text testID="alert-detail-text" style={{ userSelect: "text" }} class="text-[13px] leading-5 text-foreground">{a().text}</Text>

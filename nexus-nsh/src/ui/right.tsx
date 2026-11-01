@@ -1,9 +1,10 @@
 import type { JSX } from "nsh";
-import { Scroll, Text, View } from "nsh";
-import { IconButton, Status, T, relTime, midTruncate } from "./kit";
+import { Scroll, Text, View, signal } from "nsh";
+import { Button } from "nsh/base";
+import { Icon, IconButton, Status, T, relTime, midTruncate, shortPath } from "./kit";
 import { manifest } from "../gen/manifest";
 import { rightIsOpen, run } from "../commands";
-import { contextBudget, gitStatus, m, model, modelCatalog, viewed, width } from "../store";
+import { contextBudget, gitStatus, info, m, model, modelCatalog, userHome, viewed, width } from "../store";
 import { agentColor } from "../agent-color";
 import type { SelectedView } from "../core/reduce";
 import { latestUsage, ledgerTotals, unknownRequests } from "../core/turns";
@@ -13,18 +14,18 @@ const sections = manifest.navigation.right_sidebar.section as unknown as { id: s
 
 function Field(p: { k: string; v?: string | null; mono?: boolean; children?: JSX.Element }) {
   return (
-    <View class="flex-row items-start gap-3 min-h-6 py-0.5">
-      <Text class={`w-24 shrink-0 ${T.meta} pt-0.5`}>{p.k}</Text>
+    <View class="flex-row items-baseline gap-3 min-h-6 py-0.5">
+      <Text class={`w-20 shrink-0 ${T.sec}`}>{p.k}</Text>
       <View class="flex-1 min-w-0">
-        {p.children ?? <Text style={{ userSelect: "text" }} class={`${p.mono ? "font-mono text-xs leading-5" : "text-[13px] leading-5"} text-foreground`}>{p.v || "—"}</Text>}
+        {p.children ?? <Text style={{ userSelect: "text" }} class={`${p.mono ? T.mono : T.sec} text-foreground`}>{p.v || "—"}</Text>}
       </View>
     </View>
   );
 }
 const LABEL = "text-[12.5px] leading-4 font-medium text-muted-foreground";
-function Section(p: { title: string; children?: JSX.Element }) {
+function Section(p: { title: string; children?: JSX.Element; onLayout?: (b: any) => void }) {
   return (
-    <View class="px-4 pt-5 pb-1" testID={`right-section-${p.title.toLowerCase().replace(/ /g, "-")}`}>
+    <View class="px-4 pt-5 pb-1" testID={`right-section-${p.title.toLowerCase().replace(/ /g, "-")}`} onLayout={p.onLayout}>
       <Text class={`${LABEL} pb-2`}>{p.title}</Text>
       {p.children}
     </View>
@@ -155,11 +156,16 @@ function GitRows(p: { data: () => any }) {
   );
 }
 
+/** Which section the panel is showing; the rail marks that one. */
+export const rightSection = signal<"session" | "git">("session");
+const gitOffset = signal(0);
+let sidebarScroll: any;
+
 export function RightSidebar(p: { drawer?: boolean }) {
   const s = () => viewed();
   return (
     <View class={`bg-sidebar ${p.drawer ? "flex-1" : "w-[300px] border-l border-border"}`} testID="right-sidebar" accessibilityLabel="Right sidebar">
-      <Scroll class="flex-1">
+      <Scroll ref={(n: any) => (sidebarScroll = n)} class="flex-1">
         <Section title={sections[0].label}>
           <If when={s()} else={<Text class={T.sec}>Select a session to see its details.</Text>}>
             {() => {
@@ -183,12 +189,14 @@ export function RightSidebar(p: { drawer?: boolean }) {
               return (
                 <View>
                   <Field k="Title" v={ses().title || "Untitled"} />
-                  <Field k="Id"><View class="flex-row items-center gap-1"><Text style={{ userSelect: "text" }} class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground">{midTruncate(ses().id, 15)}</Text><IconButton icon="copy" label="Copy session id" onPress={() => run("session.copy_id")} class="size-7" /></View></Field>
+                  <Field k="Id"><View class="flex-row items-center gap-1"><Text style={{ userSelect: "text" }} class={`flex-1 min-w-0 ${T.mono} text-foreground`}>{midTruncate(ses().id, 15)}</Text><Button onPress={() => run("session.copy_id")} accessibilityLabel="Copy session id" testID="copy-session-id" class="size-5 items-center justify-center rounded-(--radius) hover:bg-accent"><Icon name="copy" size={12} class="tint-muted-foreground" /></Button></View></Field>
                   <Field k="Status"><View class="flex-row"><Status kind={state().kind} word text={state().word} /></View></Field>
-                  <Field k="Agent"><Text class={agentColor(ses().agent)}>{ses().agent}</Text></Field>
+                  <Field k="Agent"><Text class={`${agentColor(ses().agent)} text-[13px] leading-5`}>{ses().agent}</Text></Field>
                   <Field k="Model" v={`${ses().model || "default"}${ses().model_source ? ` (${ses().model_source})` : ""}`} mono />
                   <Field k="Effort" v={(ses().effort as string) || "default"} />
-                  <Field k="Directory" v={midTruncate(ses().directory, 30)} mono />
+                  <Field k="Directory">
+                    <Text style={{ userSelect: "text", numberOfLines: 1 }} testID="session-directory" tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{ses().directory}</Text>} class={`${T.mono} text-foreground`}>{midTruncate(shortPath(ses().directory, userHome() || info()?.home || ""), 32)}</Text>
+                  </Field>
                   <Field k="Started" v={date(ses().created)} />
                   <Field k="Last activity" v={`${date(ses().updated)} · ${relTime(ses().updated)}`} />
                   <Field k="Turns" v={`${totals().turns}${totals().calls ? ` · ${totals().calls} calls` : ""}`} />
@@ -225,16 +233,18 @@ export function RightSidebar(p: { drawer?: boolean }) {
                     <Text class={`${T.meta} pt-1`} testID="usage-unknown">{`${totals().unknown} request${totals().unknown === 1 ? "" : "s"} reported no usage (unknown, not zero)`}</Text>
                   </If>
                   <If when={!totals().reported}><Field k="Tokens" v="not reported" /></If>
-                  <Text class={`${T.meta} pt-3`}>Kernel state is not reported by Core yet.</Text>
                 </View>
               );
             }}
           </If>
         </Section>
-        <Section title={sections[1].label}>
+        <View class="mx-4 h-px bg-border" />
+        <Section title={sections[1].label} onLayout={(b: any) => gitOffset.set((b.bounds?.y ?? b.y ?? 0) + 20)}>
           <If when={s()} else={<Text class={T.sec}>Select a session to see Git status.</Text>}>
             <If when={gitStatus()} else={<Text class={T.sec}>Loading Git status…</Text>}>
-              <If when={gitStatus()?.error}><Text class={T.sec}>{gitStatus()?.error}</Text></If>
+              <If when={gitStatus()?.error}>
+                <Text class={T.sec}>{/not a git repository/i.test(gitStatus()?.error ?? "") ? "Not a Git repository" : gitStatus()?.error}</Text>
+              </If>
               <If when={gitStatus()?.data}><GitRows data={() => gitStatus()!.data} /></If>
             </If>
           </If>
@@ -248,12 +258,24 @@ export function RightSidebar(p: { drawer?: boolean }) {
 export function RightRail() {
   const open = () => rightIsOpen(width());
   const changes = () => Number(gitStatus()?.data?.changes?.length ?? 0);
+  // Git opens the panel and scrolls to its section; the other icon shows the session facts.
+  const show = (section: "session" | "git") => {
+    rightSection.set(section);
+    if (!open()) void run("sidebar.right.toggle");
+    if (section === "git") setTimeout(() => { try { sidebarScroll?.scrollTo({ y: gitOffset(), animated: true }); } catch {} }, 140);
+  };
   return (
-    <View class="w-11 shrink-0 bg-sidebar border-l border-border items-center pt-2 gap-1" testID="right-rail">
-      <IconButton icon="info" label="Session" selected={open()} testID="rail-session" onPress={() => void run("sidebar.right.toggle")} />
+    <View class="w-12 shrink-0 bg-sidebar border-l border-border items-center pt-2 gap-1" testID="right-rail">
+      <IconButton icon="info" label="Session" selected={open() && rightSection() === "session"} testID="rail-session" onPress={() => show("session")}
+        class={open() && rightSection() === "session" ? "bg-selection" : ""} />
       <View class="relative">
-        <IconButton icon="branch" label="Git" testID="rail-git" onPress={() => void run("sidebar.right.toggle")} />
-        <If when={changes() > 0}><Text class="absolute right-0.5 top-0 text-[10px] leading-3 font-semibold text-foreground" testID="rail-git-count">{String(changes())}</Text></If>
+        <IconButton icon="branch" label="Git" selected={open() && rightSection() === "git"} testID="rail-git" onPress={() => show("git")}
+          class={open() && rightSection() === "git" ? "bg-selection" : ""} />
+        <If when={changes() > 0}>
+          <View class="absolute -right-0.5 -top-0.5 min-w-3.5 h-3.5 items-center justify-center rounded-full bg-border-strong px-1" testID="rail-git-count">
+            <Text class="text-[10px] leading-3 font-semibold text-foreground">{String(changes())}</Text>
+          </View>
+        </If>
       </View>
     </View>
   );

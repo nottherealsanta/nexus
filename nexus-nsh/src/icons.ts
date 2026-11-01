@@ -11,7 +11,9 @@ import more from "./icons/more.svg";
 import x from "./icons/x.svg";
 import chevron_right from "./icons/chevron-right.svg";
 import chevron_down from "./icons/chevron-down.svg";
+import chevron_up from "./icons/chevron-up.svg";
 import arrow_up from "./icons/arrow-up.svg";
+import arrow_left from "./icons/arrow-left.svg";
 import stop from "./icons/stop.svg";
 import play from "./icons/play.svg";
 import bell from "./icons/bell.svg";
@@ -46,7 +48,9 @@ export const icons = {
   "x": x,
   "chevron-right": chevron_right,
   "chevron-down": chevron_down,
+  "chevron-up": chevron_up,
   "arrow-up": arrow_up,
+  "arrow-left": arrow_left,
   "stop": stop,
   "play": play,
   "bell": bell,

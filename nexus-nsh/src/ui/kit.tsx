@@ -11,7 +11,7 @@ export const T = {
   body: "text-[14px] leading-[22px] text-foreground",
   sec: "text-[13px] leading-5 text-foreground-secondary",
   meta: "text-xs leading-4 text-muted-foreground tabular-nums",
-  mono: "font-mono text-[13px] leading-5 text-foreground-secondary",
+  mono: "font-mono text-[12.5px] leading-5 text-foreground-secondary",
 };
 export const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring";
 
@@ -33,14 +33,14 @@ export function IconButton(p: { icon: IconName; label: string; onPress?: () => v
 }
 
 /** Text button: primary (accent fill), default (raised, hairline) or danger. */
-export function Btn(p: { initial?: boolean; label: string; onPress?: () => void; kind?: "primary" | "default" | "danger" | "ghost"; disabled?: boolean; reason?: string; testID?: string; busy?: boolean; icon?: IconName }) {
+export function Btn(p: { initial?: boolean; label: string; onPress?: () => void; kind?: "primary" | "default" | "danger" | "ghost"; disabled?: boolean; reason?: string; testID?: string; busy?: boolean; icon?: IconName; class?: string }) {
   const k = p.kind ?? "default";
   const skin = k === "primary" ? "bg-primary" : k === "danger" ? "bg-secondary hover:bg-accent" : k === "ghost" ? "hover:bg-accent" : "bg-secondary hover:bg-accent";
   const fg = k === "primary" ? "text-on-accent" : k === "danger" ? "text-error" : "text-foreground";
   return (
     <Button
       onPress={p.onPress} disabled={p.disabled || p.busy} testID={p.testID} accessibilityLabel={p.reason && p.disabled ? `${p.label}, unavailable: ${p.reason}` : p.label}
-      class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 active:opacity-80 ${skin} ${p.initial ? "border-ring" : ""} ${FOCUS}`}
+      class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 active:opacity-80 ${skin} ${p.initial ? "border-ring" : ""} ${p.class ?? ""} ${FOCUS}`}
     >
       <If when={p.icon}>{() => <Icon name={p.icon!} class={k === "primary" ? "tint-on-accent" : k === "danger" ? "tint-error" : "tint-foreground-secondary"} />}</If>
       <Text class={`text-[13px] leading-5 font-medium ${fg}`}>{p.busy ? "Working…" : p.label}</Text>
@@ -69,18 +69,30 @@ export function AttentionMark(p: { kind: keyof typeof attention }) {
 }
 
 /**
- * The box rule: a hairline runs along a box's straight sides and stops before each corner's curve.
- * Put it in a `relative` box with `r` set to that box's radius (16 for `--radius-card`, 10 for `--radius`).
+ * The status rail on a card that carries status: 3 px wide, fully rounded, inset 6 px from the
+ * left and 12 px from the top and bottom. The parent must be `relative`. Only the square user
+ * band keeps its flush rail.
  */
-export function Edges(p: { r?: number; color?: string; left?: string; leftWidth?: number; testID?: string }) {
-  const r = p.r ?? 16, c = p.color ?? "bg-border-strong";
-  return <>
-    <View class={`absolute h-px ${c}`} style={{ top: 0, left: r, right: r }} />
-    <View class={`absolute h-px ${c}`} style={{ bottom: 0, left: r, right: r }} />
-    <View class={`absolute w-px ${c}`} style={{ right: 0, top: r, bottom: r }} />
-    <View class={`absolute ${p.left ?? c}`} style={{ left: 0, top: r, bottom: r, width: p.leftWidth ?? 1 }} testID={p.testID ?? (p.left ? "edge-rail" : undefined)} />
-  </>;
+export function StatusRail(p: { color?: string; testID?: string }) {
+  return <View class={`absolute left-[6px] top-3 bottom-3 w-[3px] rounded-full ${p.color ?? "bg-primary"}`} testID={p.testID} accessible={false} />;
 }
+
+/** The one segmented control: a muted well, an 8 px option, and the selected option as a soft pill. */
+export function Seg(p: { options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string; format?: (v: string) => string }) {
+  return (
+    <View class="flex-row rounded-(--radius) bg-muted p-0.5" role="radiogroup" accessibilityLabel={p.label}>
+      <Each of={p.options} key={(o) => o}>
+        {(o) => (
+          <Button role="radio" selected={p.value === o()} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${(p.format ?? identity)(o())}`}
+            class={`rounded-[8px] px-3 ${isNarrow() ? "min-h-10" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${p.value === o() ? "bg-selection" : ""} ${FOCUS}`}>
+            <Text class={`text-[13px] leading-5 ${p.value === o() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{(p.format ?? identity)(o())}</Text>
+          </Button>
+        )}
+      </Each>
+    </View>
+  );
+}
+const identity = (v: string) => v;
 
 export function Rule() { return <View class="h-px bg-border" />; }
 
@@ -101,4 +113,10 @@ export function midTruncate(t: string, max: number): string {
   if (t.length <= max) return t;
   const keep = max - 1, tail = Math.ceil(keep * 0.6), head = keep - tail;
   return `${t.slice(0, head)}…${t.slice(t.length - tail)}`;
+}
+
+/** A path with the user's home shortened to `~`, shared by the location strip and the project rows. */
+export function shortPath(path: string, home: string): string {
+  const h = (home ?? "").replace(/\/$/, "");
+  return h && (path === h || path.startsWith(`${h}/`)) ? `~${path.slice(h.length)}` : path;
 }

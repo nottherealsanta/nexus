@@ -1,7 +1,7 @@
 import { Scroll, Text, View, platform, safeArea } from "nsh";
 import { titleBar } from "nsh/desktop";
 import { Button } from "nsh/base";
-import { IconButton, Status, FOCUS, TONE } from "./kit";
+import { Icon, IconButton, Status, FOCUS, TONE } from "./kit";
 import { SidebarTabs, attention, leftSidebarWidth } from "./sidebar";
 import { byId, closeTab, keyLabel, run, rightIsOpen, rightWidthHint, tabIds } from "../commands";
 import { attention as attentionGlyph, statusGlyphs, structure } from "../gen/theme";
@@ -28,7 +28,8 @@ function SessionTab(p: { id: string }) {
     if (session()?.status === "busy") return { glyph: statusGlyphs.running.unicode, tone: TONE[statusGlyphs.running.token], label: "running" };
     if (model.failedSessions.has(p.id)) return { glyph: statusGlyphs.error.unicode, tone: TONE[statusGlyphs.error.token], label: "failed" };
     if (model.unreadSessions.has(p.id)) return { glyph: attentionGlyph.unread.unicode, tone: TONE[attentionGlyph.unread.token], label: "unread" };
-    return { glyph: structure.separator.unicode, tone: "text-muted-foreground", label: "idle" };
+    // An idle tab shows no glyph; the label still says it is idle.
+    return { glyph: "", tone: "text-muted-foreground", label: "idle" };
   };
   const activate = () => {
     if (onViewedSession()) void run("session.rename");
@@ -42,11 +43,13 @@ function SessionTab(p: { id: string }) {
         onPress={activate} selected={active()} accessibilityLabel={`${onViewedSession() ? "Rename" : "Open"} ${title()}, ${status().label}`}
         testID={`session-tab-${p.id}`} class={`flex-row min-w-0 flex-1 items-center gap-1.5 rounded-l-(--radius) px-2.5 ${isNarrow() ? "h-10" : "h-7"} ${FOCUS}`}
       >
-        <Text class={`shrink-0 text-[13px] leading-5 ${status().tone}`} accessibilityLabel={status().label}>{status().glyph}</Text>
+        <If when={!!status().glyph}>
+          <Text class={`shrink-0 text-[13px] leading-5 ${status().tone}`} accessibilityLabel={status().label}>{status().glyph}</Text>
+        </If>
         <Text testID={`tab-title-${p.id}`} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 text-[13px] leading-5 ${active() ? "font-medium text-foreground" : "text-muted-foreground"}`}>{title()}</Text>
       </Button>
       <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`shrink-0 items-center justify-center rounded-r-(--radius) ${isNarrow() ? "h-10 px-2.5" : "h-7 px-1.5"} text-muted-foreground hover:text-foreground ${active() || touch ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100 focus:opacity-100"} ${FOCUS}`}>
-        <Text class="text-[15px] leading-5">×</Text>
+        <Icon name="x" size={14} class="tint-muted-foreground" />
       </Button>
     </View>
   );
@@ -61,14 +64,14 @@ function WorkspaceTabs() {
       <Scroll horizontal scrollbar={false} class="flex-1 min-w-0" contentClass="flex-row items-center gap-1">
         <Each of={ids()} key={(id) => id}>{(id) => <SessionTab id={id()} />}</Each>
         <If when={current() === "new_session" || (current() === "session" && !viewed())}>
-          <Button selected onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab" class={`shrink-0 rounded-(--radius) bg-selection px-2.5 ${isNarrow() ? "h-10" : "h-7"} ${FOCUS}`}>
+          <Button selected onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab" class={`shrink-0 flex-row items-center justify-center rounded-(--radius) bg-selection px-2.5 ${isNarrow() ? "h-10" : "h-7"} ${FOCUS}`}>
             <Text class="text-[13px] leading-5 font-medium text-foreground">New session</Text>
           </Button>
         </If>
+        <Button onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab-add" class={`shrink-0 items-center justify-center rounded-(--radius) ${isNarrow() ? "size-10" : "size-7"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
+          <Text class="text-[17px] leading-5">+</Text>
+        </Button>
       </Scroll>
-      <Button onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab-add" class={`shrink-0 items-center justify-center rounded-(--radius) ${isNarrow() ? "size-10" : "size-7"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
-        <Text class="text-[17px] leading-5">+</Text>
-      </Button>
     </View>
   );
 }
@@ -173,7 +176,7 @@ export function Header() {
       style={{ paddingTop: safeArea().top, ...(lights() ? { paddingLeft: lights() + 8 } : {}) }}>
       <View class="flex-row items-center gap-0.5 shrink-0 px-2" style={leftDocked() ? { width: leftSidebarWidth() } : {}}>
         <IconButton icon="panel-left" label="Toggle left sidebar" testID="toggle-left" selected={isNarrow() ? drawer() === "left" : leftOpen()} onPress={() => run("sidebar.left.toggle")} reason={key("sidebar.left.toggle") ?? undefined} />
-        <If when={leftDocked()}><SidebarTabs /></If>
+        <If when={leftDocked()}><View class="mx-1 h-4 w-px shrink-0 bg-border" accessible={false} /><SidebarTabs /></If>
       </View>
       <View class="flex-1 min-w-0 h-full flex-row items-center px-2">
         <View class="flex-1 min-w-0 flex-row items-center gap-2">

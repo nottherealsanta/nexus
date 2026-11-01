@@ -21,8 +21,15 @@ The sections below are the record of the release steps and the backlog that rema
 
 - **NSH Void design (2026-11-01).** NSH web, desktop and iOS use the Void design in
   [VOID_DESIGN_PLAN.md](VOID_DESIGN_PLAN.md): `nexus-nsh/theme-void.toml` overrides the shared palette
-  for NSH only, and the layout changes are listed in the porting ledger's 2026-11-01 row. The TUI's
-  palette, layout and `interface/theme.toml` are unchanged.
+  for NSH only, and the layout changes are listed in the porting ledger's 2026-11-01 row. The second
+  pass (2026-11-01) settled the grid and the shared kit: one 16 px text edge and right edge, filled
+  borderless boxes with one inset status rail, one segmented control, 48 px rails whose icons line up
+  with the header toggles, status glyphs only where they mean something, a left sidebar with one edge
+  and one-line rows, a compact starting-context ledger, a left-aligned turn footer, a deliberate
+  waiting card with drawn radio and checkbox marks, a dock with the other-sessions row and measured
+  selectors, a resizable file panel with soft wrap, a session panel with one baseline and no developer
+  notes, and the light-theme band token. The TUI's palette, layout and `interface/theme.toml` are
+  unchanged.
 - **Phone navigation (2026-11-01).** Native phones use Sessions and Settings
   bottom tabs rather than the left sidebar drawer. Sessions retains project and
   all-project scopes; conversations open as a separate page with a back control,

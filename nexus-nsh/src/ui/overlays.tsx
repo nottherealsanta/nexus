@@ -37,7 +37,7 @@ function PaletteBody() {
   return (
     <Modal width={560} top="top-[12%]" label="Command palette" testID="palette" onCancel={() => escape()} onOpenChange={(open) => { if (!open) paletteOpen.set(false); }}>
       <View role="menu" class="gap-2">
-        <ModalTitle title="Commands" />
+        <ModalTitle title="Commands" esc={false} />
         <View class="border-b border-border">
           <Input autoFocus placeholder="Type a command…" accessibilityLabel="Search commands" testID="palette-input" onChange={({ value: t }) => { q.set(t); idx.set(0); }} onSubmit={() => { const it = items()[idx()]; if (it) pick(it.c); }} submitBehavior="submit" class="h-10 text-[14px] text-foreground placeholder:text-muted-foreground" />
         </View>
@@ -106,7 +106,7 @@ function PickerBody() {
   return (
     <Modal width={520} top="top-[14%]" label={p().title} onCancel={() => escape()} onOpenChange={(open) => { if (!open) picker.set(null); }}>
       <View testID="picker" accessibilityLabel={p().title} role="menu" class="gap-2">
-        <ModalTitle title={p().title} />
+        <ModalTitle title={p().title} esc={false} />
         <View class="border-b border-border">
           <Input autoFocus value={query()} placeholder={placeholder()} accessibilityLabel={placeholder()} testID="picker-input"
             onChange={({ value }) => { query.set(value); idx.set(0); }} onSubmit={() => choose()} submitBehavior="submit"
@@ -167,7 +167,7 @@ function SkillChecklistBody() {
   return (
     <Modal width={620} top="top-[10%]" label="Choose skills to install" testID="learn-checklist" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}>
       <View class="gap-3" testID="learn-checklist-body">
-        <ModalTitle title="Choose skills to install" />
+        <ModalTitle title="Choose skills to install" esc={false} />
         <Text class={T.meta}>{plan().source} · {plan().scope === "global" ? "every project" : "this project"}</Text>
         <View class="flex-row flex-wrap gap-1.5">
           <Btn label="Select all" onPress={() => selected.set(names())} testID="learn-select-all" />
@@ -292,7 +292,7 @@ function AddProjectBody() {
           <Text class="text-[15px] leading-5 font-semibold text-popover-foreground">Add project</Text>
           <Text class={T.sec}>Absolute path of a directory on the machine running Core. Core creates the project if it is new.</Text>
         </View>
-        <Input autoFocus placeholder="/path/to/repo" accessibilityLabel="Project path" testID="project-path" onChange={({ value: t }) => path.set(t)} onSubmit={() => void submit()} submitBehavior="submit" class={`h-9 rounded-(--radius) px-3 font-mono text-[13px] text-foreground ${err() ? "bg-error/10" : "bg-background"}`} />
+        <Input autoFocus placeholder="/path/to/repo" accessibilityLabel="Project path" testID="project-path" onChange={({ value: t }) => path.set(t)} onSubmit={() => void submit()} submitBehavior="submit" class={`h-9 rounded-(--radius) px-3 font-mono text-[12.5px] text-foreground ${err() ? "bg-error/10" : "bg-background"}`} />
         <If when={err()}><Text class="text-[13px] leading-5 text-error">{"✕ " + err()}</Text></If>
         <View class="flex-row justify-end gap-2">
           <Btn label="Cancel" onPress={() => addProjectOpen.set(false)} />
@@ -366,7 +366,7 @@ function RenameSessionBody() {
   return (
     <Modal width={440} label="Rename session" testID="rename-dialog" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}>
       <View class="gap-4">
-        <ModalTitle title="Rename session" />
+        <ModalTitle title="Rename session" esc={false} />
         <Input autoFocus defaultValue={initial} onChange={({ value }) => text.set(value)} onSubmit={save} submitBehavior="submit"
           accessibilityLabel="Session title" testID="rename-input" class="rounded-(--radius) bg-card px-3 h-10 text-foreground" />
         <View class="flex-row justify-end gap-2">

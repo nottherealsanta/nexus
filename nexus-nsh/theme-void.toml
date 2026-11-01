@@ -7,7 +7,8 @@
 [dark.surface]
 canvas = "#000000"      # the page: true black
 panel = "#0e0e10"       # cards, notices
-raised = "#161618"      # dialogs, menus, toasts, user message
+raised = "#161618"      # dialogs, menus, toasts
+band = "#161618"        # the user band, folded and pinned
 sidebar = "#0a0a0b"     # the chrome: header band, sidebars and rail
 
 [dark.text]
@@ -46,6 +47,7 @@ del_bg = "#2a0f14"
 canvas = "#fbfbfa"
 panel = "#efefed"
 raised = "#ffffff"
+band = "#f0f0ee"
 sidebar = "#f1f1ef"
 
 [light.text]
@@ -78,3 +80,20 @@ add = "#146f36"
 del = "#c42b3d"
 add_bg = "#eef9f1"
 del_bg = "#fbe3e6"
+
+# `surface.band` is NSH-only: the user band, folded and pinned, on the page.
+# The shared fallback maps and monochrome table need an entry for every token.
+[fallback256.dark]
+"surface.band" = 235
+
+[fallback256.light]
+"surface.band" = 255
+
+[fallback16.dark]
+"surface.band" = "default"
+
+[fallback16.light]
+"surface.band" = "default"
+
+[monochrome.tokens]
+"surface.band" = []

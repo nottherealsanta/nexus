@@ -74,7 +74,9 @@ def css(mode: str) -> dict[str, str]:
         "chart-5": g("interactive.accent"),
         # Nexus tokens beyond shadcn (names = token names, dots to dashes)
         "foreground-secondary": g("text.secondary"),
+        "faint": g("text.faint"),
         "raised": g("surface.raised"),
+        "band": g("surface.band"),
         "selection": g("interactive.selection"),
         "hover": g("interactive.hover"),
         "on-accent": g("interactive.on_accent"),

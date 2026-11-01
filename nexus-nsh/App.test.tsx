@@ -543,14 +543,7 @@ describe("context, composer and footer parity", () => {
     await app.waitFor("id:context-section");
     const shown = app.texts().join("\n");
     expect(shown.includes("Child agents")).toBe(false);
-    await app.press("id:context-fold");
-    expect(app.shows("id:ctx-system-open")).toBe(false);
-    await app.press("id:context-overview");
-    await app.waitFor("id:context-detail-text");
-    expect(app.shows("id:context-detail")).toBe(true);
-    expect(app.texts().join("\n").includes("You are coding in Nexus.")).toBe(true);
-    await app.keyboard.press("escape");
-    await app.press("id:context-fold");
+    // The starting context stays open once a session has messages, so its sections are always reachable.
     await app.press("id:ctx-system-open");
     await app.waitFor("id:context-detail-text");
     expect(app.shows("id:context-detail")).toBe(true);
@@ -899,7 +892,6 @@ describe("session info totals", () => {
       "Turns", "1 · 3 calls", "Used", "bash 12 · edit 4 · +2", "Tools", "9 on · 1 off",
       "Input", "61.0K", "Cached", "20.0K", "Output", "3.0K", "Reasoning", "500",
       "Context", "25%", "Cost", "$0.07+", "Children", "2 (1 running, 1 failed)",
-      "Kernel state is not reported by Core yet.",
     ]) expect(shown.includes(expected)).toBe(true);
   });
 
@@ -1089,8 +1081,8 @@ describe("image paste and background shell context", () => {
     await app.waitFor("id:image-preview");
     await app.keyboard.press("escape");
     await app.waitUntil(() => !app.shows("id:image-preview"));
-    await app.press("text:Remove image");
-    expect(app.shows("id:image-previews")).toBe(false);
+    await app.press("id:remove-image-1");
+    await app.waitUntil(() => !app.shows("id:image-previews"));
     await app.paste("id:composer-input", { files: ["./fixtures/clipboard.png"] });
     await app.waitFor("id:image-previews");
     await app.submit("id:composer-input");

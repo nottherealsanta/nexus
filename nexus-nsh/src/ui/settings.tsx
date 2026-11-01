@@ -1,7 +1,7 @@
 import type { JSX } from "nsh";
 import { Scroll, Text, View, effect, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, T, FOCUS } from "./kit";
+import { Btn, T, FOCUS, Seg } from "./kit";
 import { Heading, Modal, ModalFooter, ModalTitle } from "./modal";
 import { manifest } from "../gen/manifest";
 import { byId, commands, copyText, escape, keyLabel, loadProviders, run } from "../commands";
@@ -28,21 +28,6 @@ export function loadSettingsData() {
   void loadProviders().then((providers) => data.update((d) => ({ ...d, providers }))).catch(() => {});
   if (loaded) return; loaded = true;
   request<any>("GET", "/api/model").then((r) => data.update((d) => ({ ...d, models: r }))).catch(() => {});
-}
-
-function Seg(p: { options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string }) {
-  return (
-    <View class="flex-row rounded-(--radius) bg-background p-0.5" role="radiogroup" accessibilityLabel={p.label}>
-      <Each of={p.options} key={(o) => o}>
-        {(o) => (
-          <Button role="radio" selected={p.value === o()} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${o()}`}
-            class={`rounded-(--radius-card) px-3 ${isNarrow() ? "min-h-10" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${FOCUS}`}>
-            <Text class={`text-[13px] leading-5 ${p.value === o() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{o()}</Text>
-          </Button>
-        )}
-      </Each>
-    </View>
-  );
 }
 
 function Value(p: { text: string; mono?: boolean }) { return <Text style={{ userSelect: "text" }} class={`${p.mono ? "font-mono text-xs" : "text-[13px]"} leading-5 text-foreground-secondary ${isNarrow() ? "text-left" : "text-right"}`}>{p.text}</Text>; }
@@ -110,7 +95,7 @@ function HandoffPercent() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="0–100" accessibilityLabel="Automatic handoff threshold (percent, 0 is off)" testID="handoff-percent"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class="h-8 w-24 rounded-(--radius) bg-background px-2 text-right font-mono text-[13px] text-foreground" />
+        class="h-8 w-24 rounded-(--radius) bg-background px-2 text-right font-mono text-[12.5px] text-foreground" />
       <Btn label="Save" onPress={save} testID="handoff-percent-save" />
     </View>
   );
@@ -132,7 +117,7 @@ function TitleModels() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="copilot/gpt-6-luna, codex/gpt-6-luna" accessibilityLabel="Title models, provider/model separated by commas" testID="title-models"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class="h-8 min-w-0 flex-1 rounded-(--radius) bg-background px-2 font-mono text-[13px] text-foreground" />
+        class="h-8 min-w-0 flex-1 rounded-(--radius) bg-background px-2 font-mono text-[12.5px] text-foreground" />
       <Btn label="Save" onPress={save} testID="title-models-save" />
     </View>
   );
@@ -161,7 +146,7 @@ function McpToolsLimit() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="1–1000" accessibilityLabel="Tools listed by name (limit)" testID="mcp-max-listed-tools"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class="h-8 w-24 rounded-(--radius) bg-background px-2 text-right font-mono text-[13px] text-foreground" />
+        class="h-8 w-24 rounded-(--radius) bg-background px-2 text-right font-mono text-[12.5px] text-foreground" />
       <Btn label="Save" onPress={save} testID="mcp-max-listed-tools-save" />
     </View>
   );
@@ -390,7 +375,7 @@ function control(r: Row): JSX.Element {
     return <Btn label={r.label} onPress={() => void run(r.command!)} disabled={!!reason} reason={reason} testID={`setting-${r.id}-action`} />;
   }
   if (r.id === "appearance.theme") {
-    return <Seg label="Theme" options={["system", "light", "dark"]} value={themeChoice()} disabled={false}
+    return <Seg label="Theme" options={["system", "light", "dark"]} value={themeChoice()} disabled={false} format={(v) => `${v[0].toUpperCase()}${v.slice(1)}`}
       onPick={(v) => { themeChoice.set(v as any); setColorScheme(v as "light" | "dark" | "system"); savePrefs(); }} />;
   }
   if (r.id === "appearance.animations") return <Seg label={r.label} options={["on", "off"]} value={config()?.values?.ui?.reduced_motion ? "off" : "on"} onPick={(v) => void patchConfig("ui.reduced_motion", v === "off")} />;
@@ -433,19 +418,26 @@ function SettingRow(p: { r: Row; sec: Section }) {
   const wired = WIRED.has(r.id);
   const modelReason = voiceSettingReason(r.id);
   const disabled = !!reason || !wired || !!modelReason;
-  const why = reason ?? modelReason ?? (wired ? "" : "Not editable in this NSH increment yet.");
+  const notEditable = "Not editable in this NSH increment yet.";
+  const why = reason ?? modelReason ?? (wired ? "" : notEditable);
   const tag = r.clients === "nsh" ? "NSH only" : r.clients === "tui" && r.id !== "appearance.timeline_detail" ? "TUI only" : "";
+  const tooltip = <Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{notEditable}</Text>;
   return (
-    <View class={`${isNarrow() ? "gap-2" : "flex-row gap-6 items-start"} px-3 py-2 rounded-(--radius) hover:bg-accent`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
+    <View class={`${isNarrow() ? "gap-2" : "flex-row gap-3 items-start"} px-3 py-2 rounded-(--radius) hover:bg-accent`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
       <View class={isNarrow() ? "" : "w-[44%] pr-2"}>
         <View class="flex-row items-center gap-2">
           <Text class={`text-[14px] leading-[22px] ${disabled ? "text-muted-foreground" : "text-foreground"}`}>{r.label}</Text>
           <If when={tag}><Text class="text-xs leading-4 text-muted-foreground rounded-(--radius) px-1.5">{tag}</Text></If>
         </View>
-        <If when={disabled && why}><Text class={T.meta}>{why}</Text></If>
+        {/* A row with no control yet keeps that note in its tooltip, not in every row's second line. */}
+        <If when={disabled && why && wired}><Text class={T.meta}>{why}</Text></If>
         <If when={!disabled && r.note}><Text class={T.meta}>{r.note!}</Text></If>
       </View>
-      <View class={isNarrow() ? "items-start" : "flex-1 items-end"}>{disabled && r.kind !== "list" && r.kind !== "info" && r.kind !== "keymap" ? <View class="opacity-60">{control(r)}</View> : control(r)}</View>
+      <View class={isNarrow() ? "items-start" : "flex-1 items-end"}>
+        <If when={!wired} else={disabled && r.kind !== "list" && r.kind !== "info" && r.kind !== "keymap" ? <View class="opacity-60">{control(r)}</View> : control(r)}>
+          <View tooltip={tooltip}>{disabled && r.kind !== "list" && r.kind !== "info" && r.kind !== "keymap" ? <View class="opacity-60">{control(r)}</View> : control(r)}</View>
+        </If>
+      </View>
     </View>
   );
 }
@@ -502,7 +494,7 @@ export function SettingsView(p: { inline?: boolean }) {
   const list = () => (cur().row ?? []).filter((r) => r.clients !== "tui" || r.id === "appearance.timeline_detail");
   void m; void model; void compat; void colorScheme; void byId; void keyLabel;
   const content = () => <View class={p.inline ? "flex-1 min-h-0 gap-3 p-4" : "gap-3"}>
-        <If when={!p.inline}><ModalTitle title="Settings" /></If>
+        <If when={!p.inline}><ModalTitle title="Settings" esc={false} /></If>
         <View class={`${isNarrow() || page() ? "" : "flex-row gap-4"} min-h-0 ${p.inline ? "flex-1" : ""}`} style={p.inline ? {} : { height: Math.max(240, Math.min(520, Math.round(windowSize().height * 0.76) - 48 - 32 - 12 - 12 - 28)) }}>
           <If when={page()}>{() => <SettingsPage sec={page()!} />}</If>
           <If when={!page()}><View class={isNarrow() ? "pb-2" : "w-[180px]"}>
@@ -512,14 +504,13 @@ export function SettingsView(p: { inline?: boolean }) {
                   <Button onPress={() => { settingsSection.set(s().id); if (s().page) settingsPage.set(s().id); }} selected={cur().id === s().id} testID={`section-${s().id}`} accessibilityLabel={s().label + (s().page ? ", opens a page" : "") + (s().unavailable_reason ? " (unavailable)" : "")}
                     class={`relative flex-row items-center rounded-(--radius) px-3 hover:bg-accent ${cur().id === s().id ? "bg-selection" : ""} ${isNarrow() ? "min-h-10" : "min-h-8"} ${FOCUS}`}>
                     <Text class={`flex-1 text-[13px] leading-5 ${cur().id === s().id ? "text-foreground font-medium" : s().unavailable_reason ? "text-muted-foreground" : "text-foreground-secondary"}`}>{s().label}</Text>
-                    <If when={s().page && !isNarrow()}><Text class={T.meta}>›</Text></If>
                   </Button>
                 )}
               </Each>
             </Scroll>
           </View></If>
           <If when={!page()}><Scroll class="flex-1 min-h-0" contentClass="pb-4 w-full">
-            <Heading text={cur().label} first />
+            <If when={cur().id !== "appearance"}><Heading text={cur().label} first /></If>
             <Each of={config()?.errors ?? []} key={(e: string) => e}>{(e) => <Text class={T.meta}>{e()}</Text>}</Each>
             <If when={cur().unavailable_reason}><View class="flex-row gap-2 items-start pt-1 pb-1"><Text class="text-[13px] text-muted-foreground">⊖</Text><Text class={`flex-1 ${T.sec}`}>{cur().unavailable_reason!}</Text></View></If>
             <If when={cur().page}><PageEntry sec={cur()} /></If>

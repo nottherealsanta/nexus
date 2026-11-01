@@ -67,7 +67,7 @@ describe("waiting card (D14)", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:waiting-card");
     expect(app.texts().includes("Allow bash?")).toBe(true);
-    expect(app.texts().some((t) => /^waiting on you · \d+:\d\d$/.test(t))).toBe(true);
+    expect(app.texts().some((t) => /^Waiting on you · \d+:\d\d$/.test(t))).toBe(true);
     expect(app.texts().includes("pytest tests/test_loader.py -q")).toBe(true);
     expect(app.shows("id:waiting-rail")).toBe(true);
     for (const id of ["allow-once", "allow-session", "deny", "deny-note"]) expect(app.shows(`id:${id}`)).toBe(true);
@@ -93,8 +93,12 @@ describe("waiting card (D14)", () => {
     await app.waitFor("id:submit-answers");
     expect(app.texts().includes("Nexus asks")).toBe(true);
     expect(app.texts().includes("Which cache?")).toBe(true);
-    expect(app.texts().includes("( )")).toBe(true);
-    expect(app.texts().includes("[ ]")).toBe(true);
+    expect(app.shows("id:choice-mark-a")).toBe(true);
+    expect(app.shows("id:choice-mark-b")).toBe(true);
+    expect(app.shows("id:choice-mark-x")).toBe(true);
+    expect(app.shows("id:choice-mark-y")).toBe(true);
+    expect(app.texts().includes("( )")).toBe(false);
+    expect(app.texts().includes("[ ]")).toBe(false);
     expect(app.texts().some((t) => t.includes("submit · tab next question"))).toBe(true);
   });
 });
