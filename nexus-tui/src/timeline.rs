@@ -3911,14 +3911,14 @@ fn tool_summary(
         }),
         "read" => done.map(|d| {
             let n = d.output.lines().count();
-            vec![(format!("{n} lines"), summary_style)]
+            vec![(line_count(n), summary_style)]
         }),
         "bash" => {
             let cmd = a["command"].as_str().unwrap_or("");
             let _ = cmd;
             done.map(|d| {
                 let n = d.output.lines().count();
-                vec![(format!("{n} lines"), summary_style)]
+                vec![(line_count(n), summary_style)]
             })
         }
         "code" => Some(vec![("cell".to_string(), summary_style)]),
@@ -3929,10 +3929,7 @@ fn tool_summary(
     };
     let arg = match name {
         "edit" | "write" | "read" => path.to_owned(),
-        "patch" => a["patch"]
-            .as_str()
-            .map(|p| p.lines().next().unwrap_or("patch").to_owned())
-            .unwrap_or_default(),
+        "patch" => a["patch"].as_str().map(patch_arg).unwrap_or_default(),
         "bash" => a["command"]
             .as_str()
             .map(|c| c.lines().next().unwrap_or("").to_owned())
@@ -3961,9 +3958,76 @@ fn tool_summary(
     (arg, summary)
 }
 
+/// `1 line` or `{n} lines` for a tool's output summary.
+fn line_count(n: usize) -> String {
+    if n == 1 {
+        "1 line".to_owned()
+    } else {
+        format!("{n} lines")
+    }
+}
+
+/// The label for a `patch` argument: the first file the patch touches, plus
+/// ` +1 file` or ` +N files` for the other distinct paths. A patch with no
+/// file header keeps the old behaviour of showing its first line.
+fn patch_arg(patch: &str) -> String {
+    let mut paths: Vec<&str> = Vec::new();
+    for line in patch.lines() {
+        let line = line.trim();
+        let rest = ["*** Update File: ", "*** Add File: ", "*** Delete File: "]
+            .iter()
+            .find_map(|prefix| line.strip_prefix(prefix));
+        if let Some(path) = rest.map(str::trim) {
+            if !path.is_empty() && !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+    let Some(first) = paths.first() else {
+        return patch.lines().next().unwrap_or("patch").to_owned();
+    };
+    match paths.len() - 1 {
+        0 => (*first).to_owned(),
+        1 => format!("{first} +1 file"),
+        n => format!("{first} +{n} files"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{band_meta, fmt_count, fmt_duration};
+    use super::{band_meta, fmt_count, fmt_duration, line_count, patch_arg};
+
+    #[test]
+    fn patch_arg_names_the_file_and_counts_the_others() {
+        let one = "*** Begin Patch\n*** Update File: src/a.py\n@@\n-x\n+y\n*** End Patch";
+        assert_eq!(patch_arg(one), "src/a.py");
+
+        let two =
+            "*** Begin Patch\n*** Add File: a.py\n+x\n*** Update File: b.py\n@@\n*** End Patch";
+        assert_eq!(patch_arg(two), "a.py +1 file");
+
+        let three = "*** Begin Patch\n*** Delete File: a.py\n*** Update File: b.py\n*** Add File: c.py\n*** End Patch";
+        assert_eq!(patch_arg(three), "a.py +2 files");
+
+        // A repeated path is one file, not two.
+        let repeat =
+            "*** Begin Patch\n*** Update File: a.py\n@@\n*** Update File: a.py\n@@\n*** End Patch";
+        assert_eq!(patch_arg(repeat), "a.py");
+
+        // No file header: the old first-line label.
+        assert_eq!(
+            patch_arg("*** Begin Patch\n*** End Patch"),
+            "*** Begin Patch"
+        );
+        assert_eq!(patch_arg(""), "patch");
+    }
+
+    #[test]
+    fn line_counts_say_line_in_the_singular() {
+        assert_eq!(line_count(1), "1 line");
+        assert_eq!(line_count(0), "0 lines");
+        assert_eq!(line_count(2), "2 lines");
+    }
 
     #[test]
     fn counts_use_millions_at_one_million() {

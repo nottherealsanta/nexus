@@ -106,10 +106,11 @@ describe("timeline visual parity", () => {
       ],
       turns: [turn([request("req_1", "m2", 2.1), request("req_2", "m3", 9)])],
     });
-    await app.waitFor("text:Thought for 2.1s");
+    await app.waitFor("text:2.1s");
     const shown = app.texts().join("\n");
+    expect(shown.includes("Thought for")).toBe(false);
     expect(shown).toContain("Looking for the manifest");
-    expect(shown.includes("Thought for 9.0s")).toBe(false);
+    expect(shown.includes("9.0s")).toBe(false);
   });
 
   test("an idle background child does not mistake its acknowledgement for completion", async () => {

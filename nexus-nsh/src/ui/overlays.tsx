@@ -42,7 +42,8 @@ function PaletteBody() {
           <Input autoFocus placeholder="Type a command…" accessibilityLabel="Search commands" testID="palette-input" onChange={({ value: t }) => { q.set(t); idx.set(0); }} onSubmit={() => { const it = items()[idx()]; if (it) pick(it.c); }} submitBehavior="submit" class="h-10 text-[14px] text-foreground placeholder:text-muted-foreground" />
         </View>
         <If when={items().length > 0} else={<View class="py-4"><Text class={T.sec}>No command matches “{q()}”.</Text></View>}>
-          <Scroll class="max-h-[380px]" contentClass="gap-0.5" testID="palette-list">
+          <Scroll class="max-h-[380px]" testID="palette-list">
+            <View class="gap-0.5">
             <Each of={items()} key={(x) => x.c.id}>
               {(it, i) => {
                 const c = () => it().c;
@@ -59,6 +60,7 @@ function PaletteBody() {
                 );
               }}
             </Each>
+            </View>
           </Scroll>
         </If>
         <ModalFooter hints="↑↓ move · enter run · esc close" right={`${items().length} commands`} />
@@ -114,7 +116,8 @@ function PickerBody() {
         </View>
         <If when={p().items.length > 0} else={<View class="py-3"><Text class={T.sec}>{p().note ?? "Nothing to choose from."}</Text></View>}>
           <If when={filtered().length > 0} else={<View class="py-3"><Text class={T.sec}>Nothing matches “{query()}”.</Text></View>}>
-            <Scroll class="max-h-[340px]" contentClass="gap-0.5">
+            <Scroll class="max-h-[340px]">
+              <View class="gap-0.5">
               <Each of={filtered()} key={(x) => x.id}>
                 {(it, i) => (
                   <Button onPress={() => choose(it())} selected={idx() === clamp(i())} accessibilityLabel={it().label} testID={`pick-${i()}`}
@@ -126,6 +129,7 @@ function PickerBody() {
                   </Button>
                 )}
               </Each>
+              </View>
             </Scroll>
           </If>
         </If>
@@ -175,7 +179,8 @@ function SkillChecklistBody() {
           <Btn label="Invert" onPress={() => selected.set(names().filter((name) => !selected().includes(name)))} testID="learn-invert" />
         </View>
         <If when={plan().found.length > 0} else={<View class="py-3"><Text class={T.sec}>No skills were found in this source.</Text></View>}>
-          <Scroll class="max-h-[320px]" contentClass="gap-0.5" testID="learn-skills">
+          <Scroll class="max-h-[320px]" testID="learn-skills">
+            <View class="gap-0.5">
             <Each of={plan().found} key={(skill) => skill.name}>
               {(skill, i) => {
                 const checked = () => selected().includes(skill().name);
@@ -197,6 +202,7 @@ function SkillChecklistBody() {
                 );
               }}
             </Each>
+            </View>
           </Scroll>
         </If>
         <If when={plan().problems.length > 0}><Text style={{ numberOfLines: 3 }} class={T.meta}>{plan().problems.map((problem: any) => typeof problem === "string" ? problem : problem.message ?? JSON.stringify(problem)).join(" · ")}</Text></If>

@@ -476,11 +476,13 @@ function SettingsPage(p: { sec: Section }) {
       <Text class="text-[13px] leading-5 text-muted-foreground">/</Text>
       <Text class="text-[13px] leading-5 font-medium text-foreground">{agent() ?? p.sec.label}</Text>
     </View>
-    <Scroll class="flex-1 min-h-0" contentClass="pb-4 w-full gap-2">
+    <Scroll class="flex-1 min-h-0">
+      <View class="pb-4 w-full gap-2">
       <Each of={config()?.errors ?? []} key={(e: string) => e}>{(e) => <Text class={`px-3 ${T.meta}`}>{e()}</Text>}</Each>
       <If when={p.sec.id === "providers"}><ProvidersPage sec={p.sec} /></If>
       <If when={p.sec.id === "agents" && !agent()}><AgentsPage sec={p.sec} /></If>
       <If when={agent() && agentDef()}>{() => <AgentCard a={agentDef()} />}</If>
+      </View>
     </Scroll>
   </View>;
 }
@@ -498,7 +500,8 @@ export function SettingsView(p: { inline?: boolean }) {
         <View class={`${isNarrow() || page() ? "" : "flex-row gap-4"} min-h-0 ${p.inline ? "flex-1" : ""}`} style={p.inline ? {} : { height: Math.max(240, Math.min(520, Math.round(windowSize().height * 0.76) - 48 - 32 - 12 - 12 - 28)) }}>
           <If when={page()}>{() => <SettingsPage sec={page()!} />}</If>
           <If when={!page()}><View class={isNarrow() ? "pb-2" : "w-[180px]"}>
-            <Scroll horizontal={isNarrow()} scrollbar={false} class={isNarrow() ? "" : "flex-1"} contentClass={isNarrow() ? "flex-row gap-1" : "gap-0.5"}>
+            <Scroll horizontal={isNarrow()} scrollbar={false} class={isNarrow() ? "" : "flex-1"}>
+              <View class={isNarrow() ? "flex-row gap-1" : "gap-0.5"}>
               <Each of={sections} key={(s) => s.id}>
                 {(s) => (
                   <Button onPress={() => { settingsSection.set(s().id); if (s().page) settingsPage.set(s().id); }} selected={cur().id === s().id} testID={`section-${s().id}`} accessibilityLabel={s().label + (s().page ? ", opens a page" : "") + (s().unavailable_reason ? " (unavailable)" : "")}
@@ -507,14 +510,17 @@ export function SettingsView(p: { inline?: boolean }) {
                   </Button>
                 )}
               </Each>
+              </View>
             </Scroll>
           </View></If>
-          <If when={!page()}><Scroll class="flex-1 min-h-0" contentClass="pb-4 w-full">
+          <If when={!page()}><Scroll class="flex-1 min-h-0">
+            <View class="pb-4 w-full">
             <If when={cur().id !== "appearance"}><Heading text={cur().label} first /></If>
             <Each of={config()?.errors ?? []} key={(e: string) => e}>{(e) => <Text class={T.meta}>{e()}</Text>}</Each>
             <If when={cur().unavailable_reason}><View class="flex-row gap-2 items-start pt-1 pb-1"><Text class="text-[13px] text-muted-foreground">⊖</Text><Text class={`flex-1 ${T.sec}`}>{cur().unavailable_reason!}</Text></View></If>
             <If when={cur().page}><PageEntry sec={cur()} /></If>
             <If when={!cur().page}><Each of={list()} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each></If>
+            </View>
           </Scroll></If>
         </View>
         <If when={!p.inline}><ModalFooter hints={page() ? "esc back" : "esc close"} right={`Core ${info()?.version ?? "—"}`} /></If>

@@ -1237,7 +1237,12 @@ fn sidebar_tracks_unread_and_error_until_opened_or_retried() {
         app.apply_sync(SyncMsg::Event(event));
     }
     assert!(app.ui.unread_sessions.contains("other"));
-    let error = serde_json::json!({"id": 201, "type": "session.error", "session_id": "other", "cursor": "log_c915bfc9b6d826c4:201", "data": {"error": "failed"}});
+    let stopped = serde_json::json!({"id": 200, "type": "session.error", "session_id": "other", "cursor": "log_c915bfc9b6d826c4:200", "data": {"kind": "interrupted", "message": "interrupted by the user"}});
+    if let Ok(Frame::Event(event)) = Frame::from_value("session.error", None, &stopped) {
+        app.apply_sync(SyncMsg::Event(event));
+    }
+    assert!(!app.ui.failed_sessions.contains("other"));
+    let error = serde_json::json!({"id": 201,"type": "session.error", "session_id": "other", "cursor": "log_c915bfc9b6d826c4:201", "data": {"error": "failed"}});
     if let Ok(Frame::Event(event)) = Frame::from_value("session.error", None, &error) {
         app.apply_sync(SyncMsg::Event(event));
     }

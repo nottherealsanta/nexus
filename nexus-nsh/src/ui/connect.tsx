@@ -65,8 +65,8 @@ export function ConnectScreen() {
       <Each of={field()}>{(row) => <Text style={{ numberOfLines: 1 }} class="font-mono text-[11px] leading-4 text-border-strong">{row()}</Text>}</Each>
     </View>
     <Scroll class="flex-1" testID="connect"
-      contentClass="grow justify-center px-6"
       contentStyle={{ paddingTop: safeArea().top + 24, paddingBottom: safeArea().bottom + 24 + keyboardFrame().height }}>
+      <View class="grow justify-center px-6">
       <View class="w-full max-w-[420px] gap-4">
         <View class="gap-1.5">
           <Text class="text-[20px] leading-7 font-semibold text-foreground">Connect to Core</Text>
@@ -104,6 +104,7 @@ export function ConnectScreen() {
           <View class="flex-1" />
           <Text class={T.meta}>No token or pairing code</Text>
         </View>
+      </View>
       </View>
     </Scroll>
     </View>

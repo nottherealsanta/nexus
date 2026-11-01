@@ -4,7 +4,7 @@ import { manifest } from "./src/gen/manifest";
 import { agentSlot } from "./src/agent-color";
 import { Model, VIEW_CACHE, scratchOf, upsertTurn } from "./src/core/reduce";
 import { groupRequests, latestUsage, ledgerTotals, sumUsage } from "./src/core/turns";
-import { buildRows, capToolDetail, detailOf, fmtDuration } from "./src/ui/timeline";
+import { buildRows, capToolDetail, detailOf, errorText, fmtDuration, patchArg } from "./src/ui/timeline";
 import { model } from "./src/store";
 import { diffItems, splitRows } from "./src/ui/diff";
 import { defaultSkillSelection, draftInventoryRows, emptyGlobalToastState, globalEventToast, selectedSkillCounts, sessionInventoryRows, setDisabledTool, shouldInstallRequestedDirectly, toggleDisabledTool } from "./src/skills-mcp";
@@ -568,7 +568,7 @@ describe("context, composer and footer parity", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:turn-footer");
     const footer = app.texts().join("\n");
-    const parts = ["gpt-5", "0 tools", "100K in", "10.0K out", "1.0s", new Date(2000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })];
+    const parts = ["GPT-5", "0 tools", "100K in", "10.0K out", "1.0s", new Date(2000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })];
     let previous = -1;
     for (const part of parts) {
       const index = footer.indexOf(part, previous + 1);
@@ -605,6 +605,49 @@ describe("context, composer and footer parity", () => {
       model.running.delete("ses_1");
       model.streaming.delete("ses_1");
     }
+  });
+
+  test("a turn with background-shell notices has one footer, after its last notice", () => {
+    const message = (id: string, seq: number, role: "user" | "assistant" | "tool", parts: any[]) => ({
+      id, session_id: "ses_1", seq, role, parts, created: seq,
+    });
+    const notice = (id: string, seq: number) => message(id, seq, "user", [{ type: "text", text: "→ Background Shell Done: 'make'\nexit code 0" }]);
+    model.selected = {
+      sessionId: "ses_1",
+      messages: [
+        message("m1", 1, "user", [{ type: "text", text: "go" }]),
+        message("m2", 2, "assistant", [{ type: "text", text: "started" }]),
+        notice("n1", 3),
+        message("m3", 4, "assistant", [{ type: "text", text: "again" }]),
+        notice("n2", 5),
+        message("m4", 6, "user", [{ type: "text", text: "second" }]),
+        message("m5", 7, "assistant", [{ type: "text", text: "ok" }]),
+      ],
+      messagesMore: false, turns: [], floor: null, usage: null, usageMark: 0, scratch: [], loaded: true, starting: null, turnsGap: null,
+    };
+    try {
+      const rows = buildRows();
+      const footers = rows.filter((r) => r.kind === "footer").map((r) => r.key);
+      expect(footers).toEqual(["footer:ses_1:0", "footer:ses_1:1"]);
+      const at = (key: string) => rows.findIndex((r) => r.key === key);
+      expect(at("footer:ses_1:0")).toBe(at("n2") + 1);
+      expect(at("footer:ses_1:0")).toBeLessThan(at("m4"));
+    } finally {
+      model.selected = null;
+    }
+  });
+
+  test("patchArg shows the first patched path and counts the others", () => {
+    expect(patchArg("*** Begin Patch\n*** Update File: /a/b.rs\n@@\n-x\n+y\n*** End Patch")).toBe("/a/b.rs");
+    expect(patchArg("*** Begin Patch\n*** Add File: a.txt\n+x\n*** Delete File: b.txt\n*** Update File: a.txt\n*** End Patch")).toBe("a.txt +1 file");
+    expect(patchArg("*** Begin Patch\n*** Update File: a\n*** Update File: b\n*** Update File: c\n*** End Patch")).toBe("a +2 files");
+    expect(patchArg("not a patch")).toBe(null);
+  });
+
+  test("an error says its kind once", () => {
+    expect(errorText("interrupted", "interrupted by the user")).toBe("Interrupted by the user");
+    expect(errorText("rate_limit", "429 too many requests")).toBe("rate_limit: 429 too many requests");
+    expect(errorText("interrupted", "")).toBe("interrupted");
   });
 
   test("location strip shows the context meter", async () => {

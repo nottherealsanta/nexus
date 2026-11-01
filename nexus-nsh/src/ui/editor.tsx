@@ -21,12 +21,17 @@ function availableWidth(): number {
   return width() - left;
 }
 
-/** The panel is at most 55% of the space right of the left sidebar and 760 px, so the timeline keeps 480. */
-export const filePanelWidth = () => {
-  const space = availableWidth();
-  const max = Math.max(360, Math.min(Math.floor(space * 0.55), 760, space - 480));
-  return Math.max(360, Math.min(max, widthOverride() ?? max));
-};
+export const FILE_PANEL_MIN = 360;
+/** The widest the panel may be dragged in `space` px: everything but 480 px for the timeline (never under the minimum). */
+export const panelMaxFor = (space: number) => Math.max(FILE_PANEL_MIN, space - 480);
+/** The default is 55% of the space right of the left sidebar, at most 760 px, so the timeline keeps 480. */
+export const panelDefaultFor = (space: number) => Math.max(FILE_PANEL_MIN, Math.min(Math.floor(space * 0.55), 760, space - 480));
+/** The panel's width in `space` px: the dragged width between 360 px and the space minus 480 px, else the default. */
+export const panelWidthFor = (space: number, dragged: number | null) => Math.max(FILE_PANEL_MIN, Math.min(panelMaxFor(space), dragged ?? panelDefaultFor(space)));
+const filePanelMax = () => panelMaxFor(availableWidth());
+export const filePanelWidth = () => panelWidthFor(availableWidth(), widthOverride());
+/** Set the dragged width (clamped when read); null returns to the default. For the handle and tests. */
+export const setFilePanelWidth = (w: number | null) => widthOverride.set(w);
 
 /** The open project file, in the right-hand panel: read-only, or the code editor once `draft` is set (K10). */
 export function FilePanel() {
@@ -41,7 +46,7 @@ export function FilePanel() {
   const resize = PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onPanResponderGrant: () => { startWidth = filePanelWidth(); },
-    onPanResponderMove: (_event, gesture) => { widthOverride.set(Math.max(360, startWidth - gesture.dx)); },
+    onPanResponderMove: (_event, gesture) => { widthOverride.set(Math.max(FILE_PANEL_MIN, Math.min(filePanelMax(), startWidth - gesture.dx))); },
   });
   const showDiff = () => diff() && editing();
   const status = () => (f()?.saving ? "saving…" : f()?.stale ? "changed on disk · reload" : fileDirty() ? "● modified" : editing() ? "editing" : "");
@@ -67,7 +72,9 @@ export function FilePanel() {
   return (
     <View class="absolute flex-col bg-background border-l border-border" style={style()} testID="file-panel">
       <If when={panelWide()}>
-        <View {...resize.panHandlers} class="absolute left-0 top-0 bottom-0 z-10 w-1" testID="file-panel-resize" accessibilityLabel="Resize file panel" />
+        <View {...resize.panHandlers} class="group absolute -left-1.5 top-0 bottom-0 z-10 w-3 items-center cursor-col-resize" testID="file-panel-resize" accessibilityLabel="Resize file panel">
+          <View class="w-0.5 h-full bg-transparent group-hover:bg-border-strong" />
+        </View>
       </If>
       <View class="flex-row items-center gap-2 px-3 min-h-11 border-b border-border bg-sidebar" style={headerStyle()}
         {...(lights() ? { desktop: { windowDrag: true } } : {})}>

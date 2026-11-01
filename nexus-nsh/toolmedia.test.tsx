@@ -46,10 +46,16 @@ const network = {
 
 
 describe("Tool images (K8)", () => {
-  test("a tool row that returned an image is open and shows it with its name", async () => {
+  test("a tool row that returned an image stays folded, and shows it with its name once opened", async () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
+    expect(app.count("id:tool-media-c1")).toBe(0);
+    await app.press("id:activity-group-tool-c1");
+    await app.waitFor("id:tool-row-c1");
+    expect(app.count("id:tool-media-c1")).toBe(0);
+    expect(app.texts().some((t) => t.includes("1 image"))).toBe(true);
+    await app.press("id:tool-row-c1");
     await app.waitFor("id:tool-media-c1");
     expect(app.texts().includes("shot.png")).toBe(true);
     expect(app.texts().some((t) => t.includes("1 image"))).toBe(true);

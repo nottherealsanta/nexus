@@ -181,7 +181,8 @@ export class Model {
     v.usage = h.usage;
     v.usageMark = h.usageMark ?? this.lastId;
     const newest = turns.at(-1);
-    if (newest?.error) this.failedSessions.add(h.sessionId);
+    // A stop the user asked for is not a failure.
+    if (newest?.error && newest.error.kind !== "interrupted") this.failedSessions.add(h.sessionId);
     else if (newest) this.failedSessions.delete(h.sessionId);
     v.starting = h.starting;
     v.turnsGap = h.turnsGap;
@@ -255,7 +256,7 @@ export class Model {
         else { this.running.delete(sid); this.streaming.delete(sid); }
         break;
       }
-      case "session.error": if (sid) this.failedSessions.add(sid); break;
+      case "session.error": if (sid && d.kind !== "interrupted") this.failedSessions.add(sid); break;
       case "turn.recovered":
         if (sid) { this.running.delete(sid); this.streaming.delete(sid); }
         break;

@@ -94,7 +94,8 @@ export function SessionRail() {
     <View class="w-12 shrink-0 bg-sidebar border-r border-border items-center pt-2" testID="session-rail" accessibilityLabel="Project rail">
       <IconButton icon="search" label="Search sessions" testID="rail-search" onPress={() => { leftTab.set("sessions"); toggleLeft(); }} />
       <IconButton icon="plus" label="New session" testID="rail-new-session" onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} />
-      <Scroll class="flex-1" contentClass="items-center gap-2 pb-2">
+      <Scroll class="flex-1">
+        <View class="items-center gap-2 pb-2">
         <Each of={projects()} key={(p) => p.id}>
           {(p) => {
             const shown = () => counts(p().id).map((n, i) => ({ n, tone: tones[i], kind: kinds[i] }));
@@ -141,6 +142,7 @@ export function SessionRail() {
             );
           }}
         </Each>
+        </View>
       </Scroll>
     </View>
   );

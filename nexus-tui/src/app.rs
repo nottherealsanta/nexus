@@ -5864,7 +5864,8 @@ impl App {
             }
             if let Some((root, kind, data)) = attention {
                 let viewed_root = self.viewed_id().and_then(|id| self.root_session(id));
-                if kind == "session.error" {
+                // A stop the user asked for is not a failure.
+                if kind == "session.error" && data["kind"] != "interrupted" {
                     self.ui.failed_sessions.insert(root.clone());
                 }
                 if kind == "session.status" && data["status"] == "busy" {

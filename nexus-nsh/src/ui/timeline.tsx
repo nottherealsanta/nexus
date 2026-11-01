@@ -105,10 +105,24 @@ function toggleFold(key: string) {
   closedTurns.update((o) => ({ ...o, [key]: !(o[key] ?? false) }));
 }
 
+/**
+ * The target of a patch for a one-line arg: the path of the first `*** Update|Add|Delete File: <path>`
+ * header (trimmed), plus ` +N file(s)` when the patch names more than one distinct path. `null` when
+ * the text has no such header.
+ */
+export function patchArg(patch: string): string | null {
+  const paths: string[] = [];
+  for (const m of patch.matchAll(/^\s*\*\*\* (?:Update|Add|Delete) File:[ \t]*(.+?)[ \t]*$/gm)) {
+    if (!paths.includes(m[1])) paths.push(m[1]);
+  }
+  if (!paths.length) return null;
+  return paths.length > 1 ? `${paths[0]} +${paths.length - 1} file${paths.length === 2 ? "" : "s"}` : paths[0];
+}
 function toolArg(args: string | undefined): string {
   if (!args) return "";
   try {
     const o = JSON.parse(args);
+    if (typeof o.patch === "string") { const target = patchArg(o.patch); if (target) return target; }
     const v = o.command ?? o.path ?? o.file ?? o.pattern ?? o.query ?? o.directory ?? o.code ?? o.url ?? Object.values(o)[0];
     return typeof v === "string" ? v.replace(/\s+/g, " ") : JSON.stringify(v ?? "");
   } catch { return args.slice(0, 120); }
@@ -123,6 +137,11 @@ function fmtCount(n: number): string {
   return String(n);
 }
 function bareModel(ref: string): string { return ref.split("/").at(-1) ?? ref; }
+/** The catalog's name for a model, else its bare id (as the TUI does). */
+function modelName(ref: string): string {
+  const name = catalogModel(ref, true)?.name;
+  return typeof name === "string" && name ? name : bareModel(ref);
+}
 function effectiveModelRef(): string {
   const s = viewed();
   return s?.model ? String(s.model) : "";
@@ -172,13 +191,21 @@ function text(m: Message): string {
   return m.parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n");
 }
 
+/** `kind: message`, or the message alone (first letter capitalized) when it already says the kind. */
+export function errorText(kind: unknown, message: unknown): string {
+  const k = String(kind ?? "error");
+  const msg = String(message ?? "");
+  if (!msg) return k;
+  if (msg.toLowerCase().includes(k.toLowerCase())) return msg.charAt(0).toUpperCase() + msg.slice(1);
+  return `${k}: ${msg}`;
+}
 const DIAG_TYPES = new Set(["session.error", "retry_scheduled", "retry_started", "retry_exhausted", "turn.recovered", "session.directory_changed", "session.notified", "permission.replied", "question.replied"]);
 function diag(e: CoreEvent): Extract<Row, { kind: "diag" }> | null {
   const d = e.data ?? {};
   const k = `ev-${e.id}`;
   const label = roles.diagnostic.label;
   switch (e.type) {
-    case "session.error": return { key: k, kind: "diag", label, text: `${d.kind ?? "error"}: ${d.message ?? ""}`, detail: d.status ? `HTTP ${d.status}` : undefined, tone: "warning" };
+    case "session.error": return { key: k, kind: "diag", label, text: errorText(d.kind, d.message), detail: d.status ? `HTTP ${d.status}` : undefined, tone: "warning" };
     case "retry_scheduled": return { key: k, kind: "diag", label, text: `provider retry ${d.attempt ?? ""}/${d.max_attempts ?? ""} in ${d.delay ?? "?"}s`, detail: d.reason, tone: "warning" };
     case "retry_started": return { key: k, kind: "diag", label, text: `provider retry started (attempt ${d.attempt ?? ""})`, tone: "warning" };
     case "retry_exhausted": return { key: k, kind: "diag", label, text: "provider retries exhausted", detail: d.reason, tone: "warning" };
@@ -211,7 +238,7 @@ function summaryDiags(t: TurnSummary): { t: number; row: Extract<Row, { kind: "d
   }
   if (t.error) {
     const e = t.error;
-    out.push({ t: t.finished ?? t.started, row: { key: `error-${t.id}`, kind: "diag", label, text: `${e.kind ?? "error"}: ${e.message ?? ""}`, detail: e.status ? `HTTP ${e.status}` : undefined, tone: "warning" } });
+    out.push({ t: t.finished ?? t.started, row: { key: `error-${t.id}`, kind: "diag", label, text: errorText(e.kind, e.message), detail: e.status ? `HTTP ${e.status}` : undefined, tone: "warning" } });
   }
   if (t.recovery === "done") {
     out.push({ t: (t.finished ?? t.started) + 0.00005, row: { key: `recovered-${t.id}`, kind: "diag", label, text: `turn ${t.status}: recovered after a daemon restart`, tone: "warning" } });
@@ -234,6 +261,10 @@ type TurnMeta = {
  * message range (continuations and notice turns join the user turn they follow), and the live
  * scratch for the newest one.
  */
+/** A real user prompt opens a turn; notices, delivered steers and handoffs belong to the turn around them (the TUI's `is_turn_start`). */
+function isTurnStart(m: Message): boolean {
+  return m.role === "user" && m.delivery !== "steer" && m.delivery !== "handoff" && !NOTICE.test(text(m));
+}
 function turnMeta(msgs: Message[], turns: TurnSummary[], scratch: CoreEvent[], busy: boolean): TurnMeta[] {
   const starts: number[] = [];
   msgs.forEach((m, i) => { if (m.role === "user" && !NOTICE.test(text(m)) && !(m.delivery === "steer" && starts.length) && m.delivery !== "handoff") starts.push(i); });
@@ -256,7 +287,7 @@ function turnMeta(msgs: Message[], turns: TurnSummary[], scratch: CoreEvent[], b
       if (t.finished) meta.endTime = Math.max(meta.endTime, t.finished);
     }
     for (const r of reqs) {
-      const model = r.model ? bareModel(r.model) : null;
+      const model = r.model ? modelName(r.model) : null;
       if (model && !meta.models.includes(model)) meta.models.push(model);
       if (!r.running) meta.endTime = Math.max(meta.endTime, r.time);
     }
@@ -449,7 +480,7 @@ function buildStableRows(): Row[] {
             if (waiting.has(id)) summary = "waiting for approval";
             else if (p.name === "edit" || p.name === "patch") summary = res?.is_error ? "failed" : counts ? `+${counts.add} −${counts.del}` : "";
             else if (p.name === "write") { try { summary = `+${detailLines(String(JSON.parse(p.arguments ?? "{}").content ?? "")).length}`; } catch {} }
-            else if (res?.output) summary = `${detailLines(res.output).length} lines`;
+            else if (res?.output) { const n = detailLines(res.output).length; summary = `${n} line${n === 1 ? "" : "s"}`; }
             const media = ((res as any)?.media ?? []).filter((x: any) => /^image\//.test(x?.mime ?? ""));
             if (media.length && !waiting.has(id)) summary = [summary, `${media.length} image${media.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
             const seconds = tr?.start !== undefined && tr?.end !== undefined ? tr.end - tr.start : undefined;
@@ -469,7 +500,7 @@ function buildStableRows(): Row[] {
               diff: counts ?? undefined, output: res?.output,
               detail,
               raw: rawOpen ? JSON.stringify({ arguments: p.arguments ?? "", output: res?.output ?? "" }, null, 2) : "",
-              open: open(key, detailLevel === "high" || media.length > 0), clipped, showAll, media,
+              open: open(key, detailLevel === "high"), clipped, showAll, media,
             });
           }
         }
@@ -477,23 +508,23 @@ function buildStableRows(): Row[] {
     } // tool-role messages are shown through their call's row
     rows.push({ t: msg.created, r: out });
     // A turn's footer belongs after its last message.
-    if (turnAt > 0 && (msg === sel.messages[sel.messages.length - 1] || (() => { const next = sel.messages[sel.messages.indexOf(msg) + 1]; return next?.role === "user" && next.delivery !== "steer"; })())) {
+    if (turnAt > 0 && (msg === sel.messages[sel.messages.length - 1] || (() => { const next = sel.messages[sel.messages.indexOf(msg) + 1]; return !!next && isTurnStart(next); })())) {
       const meta = metas[turnAt - 1];
       // A running turn has no footer: it appears only once the turn is done, as in the TUI.
       if (meta && !foldedTurn && !meta.running) {
         const v = viewed();
         const segments: { text: string; tip?: string }[] = [];
         if (meta.models.length) segments.push({ text: meta.models.join(" → ") });
-        else if (v?.model && String(v.model) !== "default") segments.push({ text: String(v.model) });
+        else if (v?.model && String(v.model) !== "default") segments.push({ text: modelName(String(v.model)) });
         segments.push({ text: `${meta.tools} tool${meta.tools === 1 ? "" : "s"}` });
         if (meta.known > 0) {
           let tip = `input ${meta.input.toLocaleString()} · cached ${meta.cached.toLocaleString()} · output ${meta.output.toLocaleString()} · reasoning ${meta.reasoning.toLocaleString()}`;
           if (meta.input > 0) tip += ` · ${Math.round(100 * meta.cached / meta.input)}% cached${meta.unknown ? " (reported usage only)" : ""}`;
           // Unknown usage is never counted as zero: the total says it is a floor.
           if (meta.unknown) tip += ` · ${meta.unknown} request${meta.unknown === 1 ? "" : "s"} reported no usage`;
-          const suffix = meta.unknown ? " + unknown" : "";
-          segments.push({ text: `${fmtCount(meta.input)} in${suffix}`, tip });
-          segments.push({ text: `${fmtCount(meta.output)} out${suffix}`, tip });
+          segments.push({ text: `${fmtCount(meta.input)} in`, tip });
+          segments.push({ text: `${fmtCount(meta.output)} out`, tip });
+          if (meta.unknown) segments.push({ text: "some usage unknown", tip: `${meta.unknown} request${meta.unknown === 1 ? "" : "s"} reported no usage` });
         } else if (meta.unknown) {
           segments.push({ text: "tokens unknown", tip: `${meta.unknown} request${meta.unknown === 1 ? "" : "s"} reported no usage` });
         }
@@ -601,7 +632,7 @@ function groupActivities(rows: Row[]): Row[] {
     const running = items.some((item) => item.kind === "reasoning" ? item.running : item.state === "running" || item.state === "waiting");
     const tools = items.filter((item): item is Extract<Row, { kind: "tool" }> => item.kind === "tool");
     const detail = timelineDetail();
-    const defaultOpen = waiting || detail === "high" || (running && detail !== "low") || tools.some((tool) => tool.media.length > 0);
+    const defaultOpen = waiting || detail === "high" || (running && detail !== "low");
     const expanded = waiting || open(key, defaultOpen);
     const explicit = timelineOpen()[key] === true;
     const hidden = running && !waiting && detail !== "high" && !explicit ? Math.max(0, items.length - 5) : 0;
@@ -766,10 +797,9 @@ function BackgroundShellDone(p: { r: () => Row }) {
   return (
     <View class={`py-2 ${TEXT_INDENT}`} testID="background-shell-done">
       <Button onPress={() => toggle(key(), false)} accessibilityLabel={`Background shell finished: ${command()}, ${expanded() ? "collapse" : "expand"}`} testID="background-shell-toggle"
-        class={`w-full flex-row items-start gap-2 rounded-(--radius) -mx-1 px-1 py-0.5 hover:bg-accent ${FOCUS}`}>
+        class={`self-stretch flex-row items-start gap-2 rounded-(--radius) -ml-1 pl-1 pr-4 py-0.5 hover:bg-accent ${FOCUS}`}>
         <Text class={`shrink-0 ${T.sec}`}>Background shell finished</Text>
         <Text style={expanded() ? { userSelect: "text" } : { userSelect: "text", numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.mono}`}>{command()}</Text>
-        <Text class={META}>{expanded() ? "Show less" : "Show"}</Text>
       </Button>
     </View>
   );
@@ -974,13 +1004,13 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
   return (
     <View class="py-0.5">
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
-        class={`w-full flex-row items-center rounded-(--radius) -mx-1 px-1 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
+        class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>
         <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{r().summary}</Text>
         <If when={!!r().diff}>
           {() => <Text class={`${META} ml-2`}><Text class="text-success">{`+${r().diff!.add}`}</Text>{" "}<Text class="text-error">{`−${r().diff!.del}`}</Text></Text>}
         </If>
-        <If when={r().failed > 0}><Text class="ml-2 text-xs leading-4 text-error">{`✕ ${r().failed} failed`}</Text></If>
+        <If when={r().failed > 0}><Text class={`${META} ml-2`}>{`✕ ${r().failed} failed`}</Text></If>
         <If when={!!r().duration}><Text class={`${META} ml-2`}>{r().duration!}</Text></If>
       </Button>
       <If when={r().open}>
@@ -1005,36 +1035,51 @@ function ActivityItem(p: { item: () => ActivityEntry; last: () => boolean }) {
         <ToolRow r={item as () => Extract<Row, { kind: "tool" }>} />
       </If>
       <If when={item().kind === "reasoning"}>
-        <ReasoningRow x={item as () => Extract<Row, { kind: "reasoning" }>} />
+        <ReasoningRow x={item as () => Extract<Row, { kind: "reasoning" }>} nested />
       </If>
     </View>
   );
 }
 
-/** Thought rows (D07): `▸ Thought · preview`; running shows the last 5 lines behind a rule. */
-function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
+/**
+ * Thought rows (D07): `▸ Thought · preview`; running shows the last 5 lines behind a rule. Nested in an
+ * activity group it shares the tool row's grid (`◇ Thought · preview · duration`).
+ */
+function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?: boolean }) {
   const x = p.x;
   const lines = () => x().text.split("\n").filter((l) => l.trim().length > 0);
   const hidden = () => Math.max(0, lines().length - 5);
-  const label = () => x().duration && !x().running ? `${roles.reasoning.label} for ${x().duration}` : roles.reasoning.label;
+  const a11y = () => x().duration && !x().running ? `${roles.reasoning.label} for ${x().duration}` : roles.reasoning.label;
+  const rowClass = `self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`;
+  const label = (cls: string) => <Text class={`${cls} text-[13px] leading-5 font-medium text-muted-foreground`}>{roles.reasoning.label}</Text>;
+  const preview = (cls: string) => (
+    <>
+      <If when={!!x().encrypted}>
+        {() => <Text class={`${cls} flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground`}>encrypted, replayed to the provider</Text>}
+      </If>
+      <If when={!x().encrypted}>
+        {() => <Text style={{ numberOfLines: 1 }} class={`${cls} flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground`}>{firstLine(x().text)}</Text>}
+      </If>
+    </>
+  );
   return (
     <View class="py-0.5">
       <If when={x().running} else={
-        <Button onPress={() => toggle(`reason:${x().key}`, false)} accessibilityLabel={`${label()}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
-          class={`w-full flex-row items-center rounded-(--radius) -mx-1 px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
-          <View class={ACTIVITY_CHEVRON}><Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>
-          <Text class={`text-[13px] leading-5 font-semibold text-muted-foreground`}>{label()}</Text>
-          <If when={!!x().encrypted}>
-            {() => <Text class="ml-2 text-[13px] leading-5 italic text-muted-foreground">encrypted, replayed to the provider</Text>}
+        <Button onPress={() => toggle(`reason:${x().key}`, false)} accessibilityLabel={`${a11y()}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
+          class={`${rowClass} ${p.nested ? "gap-2" : ""}`}>
+          <If when={!!p.nested} else={<View class={ACTIVITY_CHEVRON}><Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>}>
+            <Icon name="diamond" size={16} class="tint-foreground-secondary" />
           </If>
-          <If when={!x().encrypted}>
-            {() => <Text style={{ numberOfLines: 1 }} class="ml-2 flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground">{firstLine(x().text)}</Text>}
-          </If>
+          {label(p.nested ? "min-w-[52px]" : "")}
+          {preview(p.nested ? "" : "ml-2")}
+          <If when={!!x().duration}><Text class={`${META} ${p.nested ? "" : "ml-2"}`}>{x().duration!}</Text></If>
         </Button>
       }>
-        <View class="flex-row items-center -mx-1 px-1 min-h-6" testID="reasoning">
-          <View class={ACTIVITY_CHEVRON} />
-          <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{"Thinking…"}</Text>
+        <View class={`flex-row items-center -ml-1 pl-1 pr-4 min-h-6 ${p.nested ? "gap-2" : ""}`} testID="reasoning">
+          <If when={!!p.nested} else={<View class={ACTIVITY_CHEVRON} />}>
+            <Icon name="diamond" size={16} class="tint-foreground-secondary" />
+          </If>
+          <Text class="text-[13px] leading-5 font-medium text-foreground-secondary">{"Thinking…"}</Text>
         </View>
       </If>
       <If when={x().running || (x().open && !x().encrypted)}>
@@ -1072,9 +1117,9 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
   return (
     <View class="py-0.5">
       <View role="button" onFocus={markFocused} onBlur={clearFocused} onPress={() => { markFocused(); toggle(r().key, false); }} accessibilityLabel={`${r().name} ${r().state}`} accessibilityState={{ selected: open() }}
-        class={`flex-row items-center gap-2 rounded-(--radius) -mx-1 px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
+        class={`flex-row items-center gap-2 rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
         <If when={live()} else={<Icon name={verbIcon(r().name)} size={16} class="tint-foreground-secondary" />}>
-          {() => <Status kind={stateKind()} />}
+          {() => <View class="w-4 shrink-0 items-center"><Status kind={stateKind()} /></View>}
         </If>
         <Text class="min-w-[52px] text-[13px] leading-5 font-medium text-foreground">{verbLabel(r().name)}</Text>
         <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`flex-1 min-w-0 ${T.mono}`}>{r().arg}</Text>
@@ -1093,14 +1138,16 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
               <Text class={META}>{r().raw ? "[raw]" : "raw · r"}</Text>
             </Button>
           </View>
-          <Scroll class="max-h-[320px]" contentClass="px-3 py-2 gap-0.5">
-            <If when={isDiff()} else={
-              <Each of={body()} key={(x, i) => `${i}`}>
-                {(x) => <ToolDetail line={x} />}
-              </Each>
-            }>
-              {() => <DiffView lines={body} />}
-            </If>
+          <Scroll class="max-h-[320px]">
+            <View class="px-3 py-2 gap-0.5">
+              <If when={isDiff()} else={
+                <Each of={body()} key={(x, i) => `${i}`}>
+                  {(x) => <ToolDetail line={x} />}
+                </Each>
+              }>
+                {() => <DiffView lines={body} />}
+              </If>
+            </View>
           </Scroll>
           <If when={r().media.length > 0}>
             <View class="flex-row flex-wrap gap-3 px-3 pb-2" testID={`tool-media-${r().id}`}>

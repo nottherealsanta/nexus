@@ -112,7 +112,7 @@ count) opens the panel on demand and pushes the page; the panel starts closed, a
 the rail yields while the editor's file panel takes the same right slot. Controls
 are 10 px and cards 16 px. A box rule runs a hairline along a rounded box's straight sides
 and stops before each corner's curve; a filled box needs no border. Round indicators and
-meters retain their shape. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
+meters retain their shape. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). Drag the file panel's left edge to resize it from 360 px up to what leaves the timeline 480 px. The reading column is centred and at most 1160 px wide. The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
 Over the docked left sidebar its left slot holds the 32 px toggle and
 the Sessions, Files and Projects icons (they follow the sidebar's open state; narrow, they
 are in the drawer with labels). The session tabs are 28 px tall, aligned with
@@ -460,5 +460,5 @@ estimate.
   asks before dropping changes. Not built: find (`editor.find`), syntax highlighting.
 - **Plan limits (K11).** `/usage` (palette: Show plan limits) shows `GET /api/usage` in the
   notification detail dialog.
-- **Tool images (K8).** A tool row whose result has `media` opens with its images
+- **Tool images (K8).** A tool row whose result has `media` stays folded and notes the image count; opening it shows the images
   (`/api/artifact/{id}`, same origin) under the output.

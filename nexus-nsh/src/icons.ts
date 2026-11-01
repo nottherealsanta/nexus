@@ -9,6 +9,7 @@ import plus from "./icons/plus.svg";
 import search from "./icons/search.svg";
 import more from "./icons/more.svg";
 import x from "./icons/x.svg";
+import diamond from "./icons/diamond.svg";
 import chevron_right from "./icons/chevron-right.svg";
 import chevron_down from "./icons/chevron-down.svg";
 import chevron_up from "./icons/chevron-up.svg";
@@ -71,5 +72,6 @@ export const icons = {
   "session": session,
   "web": web,
   "mic": mic,
+  "diamond": diamond,
 } as const;
 export type IconName = keyof typeof icons;

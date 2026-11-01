@@ -61,7 +61,8 @@ function WorkspaceTabs() {
   const current = () => centre();
   return (
     <View class="flex-1 min-w-0 flex-row items-center gap-1" accessibilityLabel="Session tabs" testID="workspace-tabs">
-      <Scroll horizontal scrollbar={false} class="flex-1 min-w-0" contentClass="flex-row items-center gap-1">
+      <Scroll horizontal scrollbar={false} class="flex-1 min-w-0">
+        <View class="flex-row items-center gap-1">
         <Each of={ids()} key={(id) => id}>{(id) => <SessionTab id={id()} />}</Each>
         <If when={current() === "new_session" || (current() === "session" && !viewed())}>
           <Button selected onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab" class={`shrink-0 flex-row items-center justify-center rounded-(--radius) bg-selection px-2.5 ${isNarrow() ? "h-10" : "h-7"} ${FOCUS}`}>
@@ -71,6 +72,7 @@ function WorkspaceTabs() {
         <Button onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab-add" class={`shrink-0 items-center justify-center rounded-(--radius) ${isNarrow() ? "size-10" : "size-7"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
           <Text class="text-[17px] leading-5">+</Text>
         </Button>
+        </View>
       </Scroll>
     </View>
   );
@@ -132,7 +134,8 @@ export function SubagentStrip() {
           </Each>
           <Text testID={`subagent-current-${session()?.id ?? ""}`} style={{ numberOfLines: 1 }} class="min-w-0 max-w-[180px] text-[13px] leading-5 font-semibold text-foreground">{session()?.title || "Untitled"}</Text>
           <View class="mx-1 h-4 w-px shrink-0 bg-border" accessible={false} />
-          <Scroll horizontal scrollbar={false} class="flex-1 min-w-0" contentClass="flex-row items-center gap-1">
+          <Scroll horizontal scrollbar={false} class="flex-1 min-w-0">
+            <View class="flex-row items-center gap-1">
             <Each of={children()} key={(child) => child.id}>
               {(child) => {
                 const state = () => childState(child().id);
@@ -152,6 +155,7 @@ export function SubagentStrip() {
                 );
               }}
             </Each>
+            </View>
           </Scroll>
         </View>
       </View>

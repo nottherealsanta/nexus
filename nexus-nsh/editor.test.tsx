@@ -1,5 +1,6 @@
 // PLAN K10: the built-in editor over a project file.
 import { describe, expect, open, test } from "nsh/test";
+import { FILE_PANEL_MIN, panelDefaultFor, panelMaxFor, panelWidthFor } from "./src/ui/editor";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -48,6 +49,27 @@ describe("Built-in editor (K10)", () => {
   // Native builds (the macOS run) start at the Connect screen without a saved
   // address; the web build ignores this key and uses its same-origin host.
   const core = { "nexus.core": "http://core.test" };
+  test("the file panel width can be dragged from 360 px up to the space minus 480 px", async () => {
+    const app = await open("./App.tsx", { network, storage: core, width: 1500, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.press("id:tab-files");
+    await app.waitFor("id:file-entry-hello.txt");
+    await app.press("id:file-entry-hello.txt");
+    await app.waitFor("id:file-panel-resize");
+    // 1500 px window, 264 px sidebar: the default stays 55% capped at 760; a drag may pass it.
+    const space = 1500 - 264;
+    const def = panelDefaultFor(space);
+    expect(panelWidthFor(space, null)).toBe(def);
+    expect(def).toBe(679);
+    expect(panelWidthFor(space, def + 50)).toBe(def + 50);
+    expect(panelWidthFor(space, 5000)).toBe(space - 480);
+    expect(panelMaxFor(1800)).toBeGreaterThan(760);
+    expect(panelWidthFor(1800, 1200)).toBe(1200);
+    expect(panelWidthFor(space, 100)).toBe(FILE_PANEL_MIN);
+    expect(panelMaxFor(700)).toBe(FILE_PANEL_MIN);
+  });
+
   test("a file opens read-only, edits, and saves against the revision it was read at", async () => {
     const app = await open("./App.tsx", { network, storage: core, width: 1100, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");

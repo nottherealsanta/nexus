@@ -2,10 +2,11 @@
 // every card shares the column's left edge, and prose/activity use the same inner inset.
 import { View } from "nsh";
 import type { JSX } from "nsh";
-import { NARROW, width } from "../store";
+import { NARROW, panelOpen, panelWide, width } from "../store";
 
-/** The reading column's content width; past it the design stays on the left instead of stretching. */
-export const READING_MAX = 880;
+/** The reading column's outer width (insets included); past it the column stays centred instead of stretching.
+ *  Keep it in step with the `max-w-[1160px]` class below (class names are scanned statically). */
+export const READING_MAX = 1160;
 
 /** Horizontal insets at a window width: 24 px narrow, then wider than the old fixed 40 px. */
 export function timelineColumnClass(w: number): string {
@@ -24,7 +25,7 @@ export function timelineColumnPx(w: number): number {
 }
 
 /** The same inset the timeline uses, for the new-session starting context. */
-export const columnClass = () => timelineColumnClass(width());
+export const columnClass = () => (panelOpen() && panelWide() ? "px-6" : timelineColumnClass(width()));
 
 /** A card's inner inset; assistant prose and activity rows start at this same text edge. */
 export const CARD_INSET = "px-4";
@@ -37,7 +38,7 @@ export const ACTIVITY_CHEVRON = "w-4 shrink-0";
 
 export function TimelineColumn(p: { class?: string; style?: Record<string, string | number>; testID?: string; children?: JSX.Element; onLayout?: (b: any) => void }) {
   return (
-    <View class={`w-full max-w-[880px] ${timelineColumnClass(width())} ${p.class ?? ""}`} style={p.style} testID={p.testID} onLayout={p.onLayout}>
+    <View class={`w-full max-w-[1160px] self-center mx-auto ${columnClass()} ${p.class ?? ""}`} style={p.style} testID={p.testID} onLayout={p.onLayout}>
       {p.children}
     </View>
   );

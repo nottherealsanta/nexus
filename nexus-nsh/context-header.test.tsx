@@ -29,4 +29,11 @@ describe("starting context presentation", () => {
     expect(contextTokens(1502)).toBe("1.5K");
     expect(contextTokens(829)).toBe("829");
   });
+
+  test("sections keep count, tokens and meta as separate fields for the header to lay out inline", () => {
+    const tools = Array.from({ length: 18 }, (_, i) => `tool${i}`);
+    const section = startingSections({ tools, system_prompt: "Prompt" }, ["tool2"]).sections[2];
+    expect([section.title, section.count, section.meta]).toEqual(["Tools", 18, "1 off"]);
+    expect(typeof section.tokens === "number" || section.tokens === undefined).toBe(true);
+  });
 });
