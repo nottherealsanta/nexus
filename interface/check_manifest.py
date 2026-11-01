@@ -179,8 +179,20 @@ def main() -> int:
     h = nav.get("header", {})
     if (h.get("leading"), h.get("trailing")) != ("sidebar.left.toggle", "sidebar.right.toggle"):
         err("navigation.header leading/trailing must be the left/right sidebar toggles")
-    if nav.get("centre", {}).get("views") != ["session", "new_session", "editor", "settings"]:
+    if nav.get("centre", {}).get("views") != ["session", "new_session", "settings"]:
         err("navigation.centre.views mismatch")
+    panel = nav.get("panel", {})
+    if panel.get("views") != ["file", "diff"]:
+        err("navigation.panel.views must be ['file', 'diff']")
+    if panel.get("anchored") != "right" or panel.get("default") != "file":
+        err("navigation.panel must be anchored right and default to file")
+    for term in ("panel.file", "panel.diff"):
+        if term not in terms:
+            err(f"navigation.panel needs the vocabulary term {term!r}")
+    if panel.get("wide") != "beside the timeline" or panel.get("narrow") != "covers the whole window, the composer included":
+        err("navigation.panel: wide must show beside the timeline and narrow must cover the whole window")
+    if panel.get("wide_share") != 55:
+        err("navigation.panel.wide_share must be 55")
     ref_ids = [h.get("leading"), h.get("trailing"), h.get("title_click"), nav.get("left_sidebar", {}).get("settings_entry"),
                nav.get("notifications", {}).get("command")]
     ref_ids += h.get("extra", []) + [t.get("command") for t in nav.get("left_sidebar", {}).get("tab", [])]

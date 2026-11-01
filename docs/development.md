@@ -62,6 +62,29 @@ tests/               offline tests (test_server.py drives the API with a scripte
 
 State lives in `~/.nexus` (`$NEXUS10_HOME`), once it is migrated (below). Use a scratch `$NEXUS10_HOME` for tests and experiments.
 
+## Vendored crates
+
+`nexus-tui/vendor/ratatui-code-editor/` is [ratatui-code-editor](https://github.com/vipmax/ratatui-code-editor)
+0.0.6 (MIT, credited in `nexus-tui/NOTICE`). It supplies the code editor's rope,
+Tree-sitter highlighting, selections, folds, marks and diff views. Nexus owns the
+key map, theme, find bar and clipboard; the changes are listed in its
+`Cargo.toml`. It renders with ratatui 0.29 (the crate itself targets
+`ratatui-core` 0.1) and has no crossterm or arboard dependency, so keys and
+OSC 52 are Nexus's. Languages are features: `lang-rust`, `lang-python`,
+`lang-javascript`, `lang-typescript`, `lang-go`, `lang-c`, `lang-html`,
+`lang-css`, `lang-yaml`, `lang-json`, `lang-toml`, `lang-shell` and
+`lang-markdown` are on by default. Measure the release binary before adding
+another grammar.
+
+The crate has its own tests; run them with its manifest so they do not share the
+TUI's target directory:
+
+```sh
+cd nexus-tui
+cargo test --manifest-path vendor/ratatui-code-editor/Cargo.toml
+cargo run --release --example editor_demo -- README.md
+```
+
 ### Migrating to `~/.nexus`
 
 Before 0.10.0, 0.10 builds kept state in `~/.nexus10` and old Nexus owned `~/.nexus`. A home is

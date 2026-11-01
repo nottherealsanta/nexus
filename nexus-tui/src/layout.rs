@@ -16,6 +16,11 @@ pub const NARROW_BELOW: u16 = 100;
 /// From this width the right sidebar is open by default; between
 /// `NARROW_BELOW` and here it is closed until the user opens it (D17).
 pub const RIGHT_OPEN_FROM: u16 = 120;
+/// From this width an open file or diff panel sits beside the timeline; below
+/// it the panel covers the whole window.
+pub const PANEL_WIDE_FROM: u16 = 140;
+/// The panel's share of the space right of the left sidebar in the wide layout.
+pub const PANEL_SHARE: u16 = 55;
 /// From this width the sidebars are 34 / 36 cells and the reading column is
 /// centred (D17); below it they are 28 / 30.
 pub const WIDE_FROM: u16 = 160;
@@ -36,6 +41,9 @@ pub struct Flags {
     pub left_rail: bool,
     /// Stored full width of the left sidebar; 0 means the default.
     pub left_width: u16,
+    /// A file or diff panel is open. It yields the right sidebar and, below
+    /// `PANEL_WIDE_FROM`, covers the whole window (composer included).
+    pub panel_open: bool,
 }
 
 /// Width of the docked left sidebar, bounded so the centre keeps `MIN_CENTRE`.
@@ -43,7 +51,7 @@ pub fn left_width(total: u16, flags: Flags) -> u16 {
     if flags.left_rail {
         return RAIL_WIDTH;
     }
-    let right = if flags.right_open {
+    let right = if flags.right_open && !flags.panel_open {
         right_width(total)
     } else {
         0
@@ -75,6 +83,9 @@ pub struct Regions {
     /// Docked sidebars (wide layouts only).
     pub left: Option<Rect>,
     pub right: Option<Rect>,
+    /// The file/diff panel: docked right in the wide layout, the whole window
+    /// otherwise.
+    pub panel: Option<Rect>,
     /// A drawer drawn over the centre (narrow layouts), with its side.
     pub drawer: Option<(Side, Rect)>,
     pub centre: Rect,
@@ -182,13 +193,28 @@ impl Regions {
                 x += lw;
                 w -= lw;
             }
-            if flags.right_open {
+            if flags.right_open && !flags.panel_open {
                 let rw = right_width(area.width);
                 w -= rw;
                 right = Some(r(x + w, body_y, rw, body_h));
             }
         }
-        let centre = r(x, body_y, w, body_h);
+        let mut centre = r(x, body_y, w, body_h);
+        let panel = if flags.panel_open {
+            if !narrow && area.width >= PANEL_WIDE_FROM {
+                let pw = (w * PANEL_SHARE / 100)
+                    .min(w.saturating_sub(MIN_CENTRE))
+                    .max(1);
+                let panel = r(x + w - pw, body_y, pw, body_h);
+                centre.width = w - pw;
+                Some(panel)
+            } else {
+                // Slides over everything: header, timeline and composer.
+                Some(area)
+            }
+        } else {
+            None
+        };
 
         let drawer = flags.drawer.filter(|_| narrow).map(|side| {
             let dw = drawer_width(side, area.width);
@@ -260,6 +286,7 @@ impl Regions {
             header,
             left,
             right,
+            panel,
             drawer,
             centre,
             strip,
@@ -357,6 +384,35 @@ mod tests {
             g.composer.y + g.composer.height,
             g.centre.y + g.centre.height
         );
+    }
+
+    #[test]
+    fn an_open_panel_yields_the_right_sidebar_and_takes_55_percent() {
+        let mut f = flags(true, true);
+        f.panel_open = true;
+        let g = Regions::compute(Rect::new(0, 0, 160, 40), f, heights);
+        assert!(g.right.is_none());
+        let left = g.left.unwrap();
+        let panel = g.panel.unwrap();
+        let right_of_left = 160 - left.width;
+        assert_eq!(panel.width, right_of_left * PANEL_SHARE / 100);
+        assert_eq!(panel.width + g.centre.width, right_of_left);
+        assert_eq!(panel.x, g.centre.right());
+        // The panel spans the whole body, not just the timeline.
+        assert_eq!(panel.y, g.header.bottom());
+        assert_eq!(panel.height, 40 - g.header.height);
+    }
+
+    #[test]
+    fn below_140_columns_the_panel_covers_the_window() {
+        let mut f = flags(true, true);
+        f.panel_open = true;
+        for width in [139, 120, 99] {
+            let g = Regions::compute(Rect::new(0, 0, width, 40), f, heights);
+            let panel = g.panel.unwrap();
+            assert_eq!(panel, g.area, "{width}");
+            assert!(g.right.is_none(), "{width}");
+        }
     }
 
     #[test]

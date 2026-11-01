@@ -1541,8 +1541,9 @@ fn clicking_a_changed_file_opens_its_diff_and_esc_returns() {
     let del = lines.iter().position(|l| l.contains("old line")).unwrap();
     assert!(lines[add].contains(" 8 + new line"), "{}", lines[add]);
     let x = col_of(&lines[add], "new line") as u16;
+    let dx = col_of(&lines[del], "old line") as u16;
     let add_bg = buf[(x, add as u16)].bg;
-    let del_bg = buf[(x, del as u16)].bg;
+    let del_bg = buf[(dx, del as u16)].bg;
     assert_ne!(add_bg, del_bg);
     assert_ne!(add_bg, Color::Reset);
     press(&mut app, &["esc"]);
@@ -3755,11 +3756,55 @@ fn the_files_root_header_and_indent_guides_follow_d16() {
 }
 
 #[test]
+fn the_file_panel_docks_at_160_and_covers_at_120() {
+    let mut app = open_file_view("hello\nworld\n");
+    let (_, rows) = draw(&mut app, 160, 48);
+    let panel = app.regions.panel.expect("the file panel");
+    assert!(app.regions.right.is_none(), "the right sidebar yields");
+    assert_eq!(panel.x + panel.width, 160);
+    assert_eq!(panel.y, app.regions.header.bottom());
+    assert!(rows[panel.y as usize].contains("Back"));
+    assert!(rows[panel.y as usize].contains("hello.txt"));
+
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert_eq!(app.regions.panel.unwrap(), app.regions.area);
+    assert!(rows[0].contains("Back"), "the panel covers the header too");
+    press(&mut app, &["esc"]);
+    assert!(!app.ui.file_open, "esc closes the panel");
+}
+
+#[test]
+fn a_covered_timeline_shows_its_waiting_badge() {
+    use nexus_tui::sync::SyncMsg;
+    let mut app = waiting_app();
+    let project = app.current_project().unwrap();
+    app.execute("sidebar.tab.files");
+    app.apply_sync(SyncMsg::Files {
+        project: project.clone(),
+        session: Some(SESSION.into()),
+        path: String::new(),
+        file: false,
+        data: Ok(serde_json::json!({"entries": [{"name": "hello.txt", "kind": "file"}]})),
+    });
+    draw(&mut app, 120, 36);
+    app.click(Target::SideRow(0));
+    app.apply_sync(SyncMsg::Files {
+        project,
+        session: Some(SESSION.into()),
+        path: "hello.txt".into(),
+        file: true,
+        data: Ok(serde_json::json!({"content": "hello\n", "revision": "rev1"})),
+    });
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(rows[0].contains("2 waiting"), "{:?}", rows[0]);
+}
+
+#[test]
 fn the_file_view_has_a_header_a_gutter_and_a_search_row() {
     let lines: String = (1..=40).map(|n| format!("line {n} needle\n")).collect();
     let mut app = open_file_view(&lines);
     let (buf, rows) = draw(&mut app, 120, 36);
-    let r = app.regions.timeline;
+    let r = app.regions.panel.expect("the file panel");
     let head = &rows[r.y as usize];
     assert!(head.contains("hello.txt"), "{head:?}");
     // the basename is bold, the directory is not

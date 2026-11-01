@@ -85,7 +85,7 @@ Terms are evaluated by each client from Core state plus view state.
 | `composer.has_text`, `composer.empty`, `has_queued` | Composer content; queued messages exist. |
 | `timeline.scrolled_up`, `timeline.has_older`, `tool.output_clipped_in_ui` | Following suspended; unloaded older turns; UI (not model) clipping. |
 | `focus.*` | The named item has keyboard focus or hover/selection (`turn`, `tool`, `user_message`, `assistant_block`, `code_block`, `file`, `project`, `session_row`, `child_card`, `git_file`). |
-| `view.editor`, `view.settings`, `editor.dirty` | Centre view and editor state. |
+| `panel.file`, `panel.diff`, `view.settings`, `editor.dirty` | The right-hand panel shows a file or a diff; the settings view; editor state. |
 | `overlay.open`, `dialog.open`, `alert.open`, `drawer.open`, `layout.narrow`, `text_edit.active` | Transient UI state; `text_edit.active` is an inline text field other than the composer. |
 | `connection.lost`, `connection.no_daemon` | Event stream dropped; no daemon found. |
 | `provider.signed_in`, `has_notifications` | At least one provider signed in; the notifications drawer is not empty. |

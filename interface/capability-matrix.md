@@ -89,7 +89,7 @@ Durations come from event `time`; Core sends no duration fields.
 | F1 | Project tree, lazy one level, gitignore aware | API ready | `GET /api/project/{id}/files`; TUI tree implemented | Entries include `ignored` |
 | F2 | Project/worktree selector for the tree | API ready | `GET /api/project/{id}/worktrees`; TUI root row | Main checkout or the open session's worktree |
 | F3 | Git status markers per file; ignored dimmed or hidden | API ready | entry `git_status`/`ignored`; TUI markers and toggle | |
-| F4 | Open file in built-in editor | Core work | 12a Files and git (read) | Read-only viewer exists; writes/editor remain |
+| F4 | Open file in the right panel | API ready | Files route; panel in both clients | Read-only and editor views exist; the merged edit mode and Git diffs reach the panel next |
 | F5 | Open in `$EDITOR` / OS default | Client only | TUI `$VISUAL`/`$EDITOR` action | Local clients only |
 | F6 | Copy path | Client only | TUI copies the absolute path | |
 | F7 | Insert `@path` into composer | API ready | TUI inserts from the selected row; `@` completion remains | Completion needs the F1 listing |
@@ -109,7 +109,7 @@ Durations come from event `time`; Core sends no duration fields.
 
 | ID | Feature | Class | Source / step | Notes |
 | --- | --- | --- | --- | --- |
-| E1 | Open, edit, line numbers, find, syntax highlight, dirty marker | Client only | | TUI: ratatui-code-editor. NSH: editor element |
+| E1 | Open, edit, line numbers, find, syntax highlight, dirty marker | Client only | | TUI vendors ratatui-code-editor 0.0.6 (keys, theme and find bar are Nexus's). NSH uses `Editor`/`DiffView` from `nsh/base` |
 | E2 | Read and write files confined to the project | Core work | 12a Files and git; Enforced read-before-edit | `GET`/`PUT` file endpoints do not exist |
 | E3 | Stale-save refusal with content revision; reload preserving unsaved text | Core work | 12a Enforced read-before-edit ("editor/API writes carry their own observed revision") | Revision is a content hash, not mtime. Unsaved-text recovery is client only |
 

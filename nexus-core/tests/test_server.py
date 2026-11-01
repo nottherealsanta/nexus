@@ -924,8 +924,22 @@ async def test_file_put_needs_the_revision_it_read_and_announces_the_change(setu
     assert [c["path"] for c in changed] == ["a.txt"] and changed[0]["revision"] == put.json()["revision"]
 
 
+async def test_a_file_just_under_one_mib_saves_through_its_json_escape(setup):
+    # A 1 MiB file of control characters is about 6 MiB as JSON: the save route
+    # allows the envelope more room while the content limit stays at 1 MiB.
+    rt, client, _provider, workspace = setup
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    url = f"/api/project/{rt.session(sid).project_id}/file"
+    content = "\x01" * (1024 * 1024 - 1)
+    put = await client.put(url, params={"path": "escaped.txt"}, json={"content": content, "expected_revision": "new"})
+    assert put.status_code == 200, put.text
+    assert (workspace / "escaped.txt").read_text() == content
+    too_big = await client.put(url, params={"path": "big.txt"}, json={"content": "a" * (1024 * 1024 + 1), "expected_revision": "new"})
+    assert too_big.status_code == 400
+
+
 async def test_shell_command_and_output_join_context_without_a_turn(setup):
-    rt, client, provider, workspace = setup
+    rt, client, _provider, workspace = setup
     sid = (await client.post('/api/session', json={'directory': str(workspace)})).json()['id']
     reply = await client.post(f'/api/session/{sid}/shell', json={'command': 'echo hi; exit 3'})
     assert reply.json()['exit_code'] == 3

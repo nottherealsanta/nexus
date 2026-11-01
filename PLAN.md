@@ -19,6 +19,8 @@ The sections below are the record of the release steps and the backlog that rema
 
 ## Where things stand (2026-10-30)
 
+- **Void redesign for NSH, planned (2026-11-01, user request).** The design is decided and implementation has not landed. The TUI stays as it is, so this is a deliberate difference for the porting ledger. See [VOID_DESIGN_PLAN.md](VOID_DESIGN_PLAN.md), with the mock-up in `nexus-design-mockup/stage/`.
+
 - **Phone navigation (2026-11-01).** Native phones use Sessions and Settings
   bottom tabs rather than the left sidebar drawer. Sessions retains project and
   all-project scopes; conversations open as a separate page with a back control,
@@ -241,6 +243,10 @@ The pages are in both clients ([config.md](docs/config.md#settings-layout)). Rem
 - Return per-section starting-context detail text from Core for session drafts.
 - Decide whether to persist session grants; expose grant listing and clearing in clients. Add a Settings section for provider limits and verify `/api/usage` with a real account.
 - Add editor find and syntax highlighting; test NSH save and stale-file paths in the browser harness. Make NSH tool-result images zoomable.
+
+### Editor and Git page
+
+File explorer, file editor and Git management for the TUI and NSH on desktop and web, not the iOS app. Agreed in [EDITOR_GIT_PLAN.md](EDITOR_GIT_PLAN.md). Step 0 (NSH `Editor`/`DiffView` and the vendored TUI crate) and Step 1 (the right-hand panel, manifest `[navigation.panel]`, waiting badge, composer coverage) are done. Next: Step 2, the two editors with TUI movement/undo/theme/find, the NSH find bar and the save-size fix.
 
 ### Worktrees
 

@@ -19,6 +19,19 @@ This product includes software ported from Grok Build.
 Only this file is copied from Grok Build. Other behaviour inspired by Grok Build
 is reimplemented independently.
 
+This product includes the ratatui-code-editor crate.
+
+  Files:      vendor/ratatui-code-editor/
+  Source:     https://github.com/vipmax/ratatui-code-editor
+              version 0.0.6
+  Copyright:  Copyright (c) vipmax and contributors
+  License:    MIT (see vendor/ratatui-code-editor/LICENSE)
+
+  Modified by Nexus: renders with ratatui 0.29 instead of ratatui-core 0.1;
+  the crossterm input and arboard clipboard dependencies are removed;
+  languages are optional features; Rust 2021 let-chain compatibility; key
+  handling, theme mapping and the find bar are Nexus's own.
+
 The full Apache License follows:
 
 Copyright 2023-2026 SpaceXAI

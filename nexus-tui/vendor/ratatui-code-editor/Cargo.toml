@@ -1,0 +1,81 @@
+[package]
+name = "ratatui-code-editor"
+version = "0.0.6"
+edition = "2021"
+rust-version = "1.85"
+authors = ["vipmax"]
+description = "A code editor widget for ratatui, with Tree-sitter syntax highlighting."
+homepage = "https://github.com/vipmax/ratatui-code-editor"
+readme = "README.md"
+keywords = ["ratatui", "terminal", "editor", "tree-sitter"]
+categories = ["command-line-interface", "text-editors"]
+license = "MIT"
+repository = "https://github.com/vipmax/ratatui-code-editor.git"
+
+# Vendored by Nexus from ratatui-code-editor 0.0.6:
+# - rendered with ratatui 0.29 instead of ratatui-core 0.1
+# - no crossterm input (Nexus maps its own keys to `apply(action)`)
+# - no arboard clipboard (Nexus uses OSC 52 and bracketed paste)
+# - languages are features, so unused grammars stay out of the binary
+[features]
+default = [
+    "lang-c",
+    "lang-css",
+    "lang-go",
+    "lang-html",
+    "lang-javascript",
+    "lang-json",
+    "lang-markdown",
+    "lang-python",
+    "lang-rust",
+    "lang-shell",
+    "lang-toml",
+    "lang-typescript",
+    "lang-yaml",
+]
+bench-internals = []
+lang-c = ["dep:tree-sitter-c"]
+lang-css = ["dep:tree-sitter-css"]
+lang-go = ["dep:tree-sitter-go"]
+lang-html = ["dep:tree-sitter-html"]
+lang-javascript = ["dep:tree-sitter-javascript"]
+lang-json = ["dep:tree-sitter-json"]
+lang-markdown = ["dep:tree-sitter-md"]
+lang-python = ["dep:tree-sitter-python"]
+lang-rust = ["dep:tree-sitter-rust"]
+lang-shell = ["dep:tree-sitter-bash"]
+lang-toml = ["dep:tree-sitter-toml-ng"]
+lang-typescript = ["dep:tree-sitter-javascript", "dep:tree-sitter-typescript"]
+lang-yaml = ["dep:tree-sitter-yaml"]
+
+[lib]
+name = "ratatui_code_editor"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "^1.0"
+ratatui = "0.29"
+ropey = "^1.6"
+rust-embed = { version = "^8.7", features = ["include-exclude"] }
+similar = "^2.7"
+streaming-iterator = "~0.1"
+tree-sitter = "~0.26"
+unicode-segmentation = "^1.12"
+unicode-width = "~0.2"
+
+tree-sitter-bash = { version = "~0.25.0", optional = true }
+tree-sitter-c = { version = "~0.24.1", optional = true }
+tree-sitter-css = { version = "~0.25", optional = true }
+tree-sitter-go = { version = "~0.25", optional = true }
+tree-sitter-html = { version = "~0.23.2", optional = true }
+tree-sitter-javascript = { version = "~0.25", optional = true }
+tree-sitter-json = { version = "~0.24.8", optional = true }
+tree-sitter-md = { version = "~0.5.1", optional = true }
+tree-sitter-python = { version = "~0.25", optional = true }
+tree-sitter-rust = { version = "~0.24", optional = true }
+tree-sitter-toml-ng = { version = "~0.7.0", optional = true }
+tree-sitter-typescript = { version = "~0.23", optional = true }
+tree-sitter-yaml = { version = "~0.7", optional = true }
+
+[dev-dependencies]
+ratatui = "0.29"

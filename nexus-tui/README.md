@@ -218,16 +218,20 @@ and a click or `files.root_toggle` switches between the project and the open ses
 worktree. Folders expand one level at a time, each level has a `│` guide in `border.default`,
 folders are bold, ignored entries are muted and can be hidden, and Git status letters are
 right-aligned and coloured (`M` warning, `A` and `?` success, `D` error). Enter opens a
-read-only file view on the page surface: the header row has the `~` path (the basename bold)
-and `lines 1-38 of 38` muted at the right, a blank row follows, then right-aligned line numbers
-and a `│` gutter; Esc returns to the timeline. The selected file can be copied as an absolute
+read-only file view in the right-hand panel: the header row has `‹ Back`, the `~` path (the
+basename bold) and `lines 1-38 of 38` muted at the right, a blank row follows, then
+right-aligned line numbers and a `│` gutter; Esc or Back returns to the timeline. From 140
+columns the panel sits beside the timeline, takes 55% of the space right of the left sidebar
+and the right sidebar yields; below that it covers the whole window, the composer included.
+When it hides a session that needs approval or an answer, its header shows `⚠ N waiting`.
+Resizing across the breakpoint keeps the open file, search and scroll. The selected file can be copied as an absolute
 path, inserted as `@path`, or opened in `$VISUAL`/`$EDITOR` with the terminal suspended. In the
 file view `/` opens the search on the bottom row (always reserved, so the text does not move):
 `/ query  3 of 12   n next · N prev · esc end`. Matches are on the selection band and the
 current one is reversed; typing filters, Enter or `n` goes to the next match and `N` to the
 previous one, and the first Esc ends the search while the next closes the file. Core serves
 whole files up to 1 MiB and has no offsets, so the header gives the exact range shown. The
-file view has no syntax highlighting yet.
+read-only view has no syntax highlighting yet; the vendored editor is wired next.
 
 **Editor (K10).** `e` in the file view starts the editor over a `Composer` buffer (cursor at
 the top, `ctrl+s` saves, `ctrl+z`/`ctrl+y` undo and redo, Tab inserts four spaces); the header
@@ -235,7 +239,8 @@ says `editing`, `● modified` or `changed on disk · reload`. Save is `PUT …/
 revision the file was read at; a stale write keeps the text. `editor.reload` (palette) re-reads,
 asking first when dirty; Esc leaves a clean editor and asks before dropping changes;
 `files.changed` reloads a clean editor and warns a dirty one. Opening another session or a Git
-diff is refused while the text is unsaved.
+diff is refused while the text is unsaved. `vendor/ratatui-code-editor` is checked in for the
+step that replaces this buffer; see [development.md](../docs/development.md#vendored-crates).
 
 **K5-K11 client parts.** The session switcher (`ctrl+k`) marks each session with the same status
 glyph as its tab (running spinner, attention/error dot or idle dot) beside the age, and also
@@ -322,8 +327,8 @@ field) and removal asks first. Settings shows provider connections and
 per-subagent model lists on their pages, and says why rows that need a Core
 setting cannot change.
 
-Still Step 12.4: the built-in editor, worktree management in the UI, `path:line`
-links, settings editing beyond the wired sections, and steering/queueing
+Still Step 12.4: the vendored code editor in the file panel, worktree management
+in the UI, `path:line` links, settings editing beyond the wired sections, and steering/queueing
 (blocked on Core, Step 12a). Unavailable commands are listed disabled with their
 reason.
 

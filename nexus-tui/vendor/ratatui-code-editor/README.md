@@ -1,0 +1,273 @@
+# Ratatui Code Editor widget
+
+A code editor widget for [Ratatui](https://github.com/ratatui/ratatui), built with syntax highlighting powered by Tree-sitter.
+
+This is the Nexus vendored copy of ratatui-code-editor 0.0.6. It renders with
+ratatui 0.29, has no crossterm or arboard dependency, and puts the grammars
+behind features; see `Cargo.toml` and `nexus-tui/NOTICE`. The upstream README
+below still mentions the original feature flags and demo that are not part of
+this copy.
+
+
+## Features
+
+- 🎨 **Syntax Highlighting** - Powered by Tree-sitter with support for multiple languages
+- 📝 **Text Editing** - Full text editing capabilities with cursor movement
+- 🖱️ **Mouse Support** - Mouse clicks, scroll, text selection, words and lines snapping supported
+- 📋 **Copy/Paste** - Clipboard integration with system clipboard
+- 🔄 **Undo/Redo** - Full history management for edit operations
+- 🎯 **Text Selection** - Visual text selection with keyboard and mouse
+- 🌈 **Themes** - Customizable color themes for syntax highlighting
+- 📱 **Responsive** - Adapts to terminal window size changes
+- 🔖 **Visual Marks** - Mark specific regions in the editor
+- 🧩 **Emoji/Unicode Aware** - Correct widths, cursor, and selection for grapheme clusters (e.g., ❤️)
+- 🧵 **Diff Views** - Show added/deleted lines and focused diffs with expandable unchanged sections
+- 📂 **Code Folding** - Tree-sitter powered fold ranges with keyboard and mouse gutter toggles
+
+## Syntax Highlighting: Fast, Cached, and Wide-Row Ready
+
+The Ratatui Code Editor features blazing fast syntax highlighting powered by [Tree-sitter](https://tree-sitter.github.io/). Tree-sitter incrementally parses your code in real time, enabling blazing fast,  accurate and context-aware highlighting for all supported languages.
+
+**Performance Features:**
+- **Super Fast:** Only the visible portion of the code is highlighted on each render, making even large files feel snappy.
+- **Smart Caching:** Highlighting results are cached per visible region, so scrolling and editing are smooth and efficient.
+- **Wide Row Support:** Handles long lines and wide code gracefully, ensuring correct highlighting and cursor placement even with complex Unicode or tab characters.
+
+This approach means you get instant, editor-quality highlighting in your terminal, with no lag—even for big files or wide code blocks.
+
+## Diff Views
+
+The editor can compare the current buffer with an original version and render added lines, deleted ghost lines, and focused diffs.
+
+```rust
+editor.set_original_code(original_content)?;
+editor.set_diff_enabled(true);
+editor.set_diff_focus_context(3);
+editor.set_diff_focus_enabled(true);
+```
+
+Focused diff mode keeps changed lines visible with a configurable amount of surrounding context. Hidden unchanged sections can be expanded from the rendered fold separator.
+
+## Code Folding
+
+Code folding is powered by Tree-sitter fold queries embedded alongside the highlight queries. The fold gutter is rendered next to the line numbers and can be toggled by mouse, or from code:
+
+```rust
+editor.toggle_fold_at_cursor();
+editor.toggle_fold_at_line(0);
+```
+
+Folding can be disabled or configured with ASCII indicators:
+
+```rust
+use ratatui_code_editor::types::{CodeFoldingOptions, FoldIndicators};
+
+editor.set_code_folding_options(CodeFoldingOptions {
+    enabled: true,
+    indicators: FoldIndicators::ascii(),
+});
+```
+
+## Supported Languages
+
+- Rust
+- Python
+- JavaScript
+- TypeScript
+- C
+- C++
+- Go
+- C#
+- Java
+- Html
+- Css
+- Yaml
+- Toml
+- Json
+- Bash
+- Markdown
+
+## Quick Start
+
+Add this to your `Cargo.toml`:
+
+```toml
+anyhow = "1.0"
+crossterm = "0.29"
+ratatui = "0.30" # needed by your app terminal setup
+ratatui-code-editor = { version = "0.0.6", features = ["crossterm"] }
+```
+
+### Basic Usage
+
+```rust
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{
+        enable_raw_mode, disable_raw_mode, 
+        EnterAlternateScreen, LeaveAlternateScreen
+    },
+};
+use ratatui::{Terminal, backend::CrosstermBackend, layout::{Position, Rect}};
+use ratatui_code_editor::editor::Editor;
+use ratatui_code_editor::theme::vesper;
+use std::io::stdout;
+
+fn main() -> anyhow::Result<()> {
+    enable_raw_mode()?;
+    execute!(stdout(), EnterAlternateScreen)?;
+    
+    let backend = CrosstermBackend::new(stdout());
+    let mut terminal = Terminal::new(backend)?;
+    
+    let content = "fn main() {\n    println!(\"Hello, world!\");\n}";
+    let mut editor = Editor::new("rust", content, vesper())?;
+    let mut editor_area = Rect::default();
+    
+    loop {
+        terminal.draw(|f| {
+            let area = f.area();
+            editor_area = area;
+            f.render_widget(&editor, editor_area);
+            
+            let cursor = editor.get_visible_cursor(&area);
+            if let Some((x,y)) = cursor {
+                f.set_cursor_position(Position::new(x, y));
+            }
+        })?;
+        
+        if let Event::Key(key) = event::read()? {
+            if key.code == KeyCode::Esc {
+                break;
+            }
+            editor.input(key, &editor_area)?;
+        }
+    }
+    
+    disable_raw_mode()?;
+    execute!(stdout(), LeaveAlternateScreen)?;
+    Ok(())
+}
+```
+
+## Examples
+
+Run the included examples to see the editor in action:
+
+```shell
+# Minimal editor example
+cargo run --release -p minimal
+
+# Half-screen editor
+cargo run --release -p half
+
+# Split-screen editor
+cargo run --release -p split
+
+# Editor
+cargo run --release -p editor -- <filename>
+
+# Diff demo (requires diff feature in the example)
+cargo run --release -p diff
+
+# Diff editor for a real file (loads original from git HEAD when available)
+cargo run --release -p diff_editor -- <filename>
+
+# Code folding editor
+cargo run --release -p fold_editor -- <filename>
+```
+
+## Key Bindings
+
+### Navigation
+- **Arrow Keys** - Move cursor
+
+### Editing
+- **Any printable character** - Insert character
+- **Delete** - Delete characters
+- **Enter** - Insert new line
+- **Tab** - Insert tab or spaces
+- **Ctrl+D** - Duplicate
+- **Ctrl+X** - Cut
+- **Alt+Enter** - go to next line 
+- **Alt+/** - comment/uncomment 
+
+
+### Selection
+- **Shift + Arrow Keys** - Select text
+- **Ctrl+A** - Select all
+- **Mouse drag** - Select text with mouse
+- **Mouse double click** - Select word with mouse
+- **Mouse triple click** - Select line with mouse
+
+### Clipboard
+- **Ctrl+C** - Copy selected text
+- **Ctrl+V** - Paste from clipboard
+- **Ctrl+X** - Cut selected text
+
+### History
+- **Ctrl+Z** - Undo
+- **Ctrl+Y** - Redo
+
+### Example-specific
+- **Ctrl+F** - Toggle fold at cursor in the `fold_editor` example
+- **1 / 2 / 3** - Switch plain, focused diff, and full diff modes in the `diff_editor` example
+
+## Themes
+
+The editor comes with built-in themes:
+
+- `vesper` - Dark theme default
+- Custom themes can be created by providing color mappings
+
+```rust
+let custom_theme = vec![
+    ("keyword", "#ff6b6b"),
+    ("string", "#4ecdc4"),
+    ("comment", "#95a5a6"),
+    ("function", "#f39c12"),
+];
+let editor = Editor::new("rust", content, custom_theme);
+```
+
+## Architecture
+
+The editor is built with several key components:
+
+- **Editor** - Main widget that handles rendering and input
+- **Code** - Text buffer with Tree-sitter integration for syntax highlighting
+- **History** - Undo/redo functionality with edit tracking
+- **Selection** - Text selection state management
+- **View** - Plain, diff, focused diff, and folded visual row mapping
+- **Theme** - Color scheme management
+
+## Dependencies
+
+- `ratatui-core` - Core terminal UI primitives used by the editor widget
+- `tree-sitter` - Syntax highlighting parser
+- `ropey` - Efficient text buffer
+- `crossterm` - Optional input backend (enable `crossterm` feature)
+- `arboard` - Clipboard access
+- `unicode-width`, `unicode-segmentation` - Unicode text width calculation
+
+## Built With This Widget
+
+- [redai](https://github.com/vipmax/redai) - a terminal AI code editor built on top of `ratatui-code-editor`.
+
+Using `ratatui-code-editor` in your own project? Feel free to open a PR and add it to this list.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues, feature requests, or pull requests.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- Built on top of the excellent [Ratatui](https://github.com/ratatui/ratatui) TUI framework
+- Syntax highlighting powered by [Tree-sitter](https://tree-sitter.github.io/)
+- Fast and efficient text buffer [Ropey](https://github.com/cessen/ropey)
+- Awesome list of ratatui crates and applications [awesome-ratatui](https://github.com/ratatui/awesome-ratatui)

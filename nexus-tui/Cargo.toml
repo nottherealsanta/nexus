@@ -32,3 +32,18 @@ image = { version = "=0.25.10", default-features = false, features = ["png", "jp
 ratatui-image = { version = "=8.1.1", default-features = false, features = ["crossterm"] }
 rodio = { version = "=0.23.0", default-features = false, features = ["playback"] }
 cpal = "=0.18.2"
+ratatui-code-editor = { path = "vendor/ratatui-code-editor", default-features = false, features = [
+    "lang-c",
+    "lang-css",
+    "lang-go",
+    "lang-html",
+    "lang-javascript",
+    "lang-json",
+    "lang-markdown",
+    "lang-python",
+    "lang-rust",
+    "lang-shell",
+    "lang-toml",
+    "lang-typescript",
+    "lang-yaml",
+] }

@@ -548,6 +548,8 @@ pub enum Target {
     ComposerWorktree,
     /// The Files tree root line (project checkout / session worktree).
     FilesRoot,
+    /// The panel header's `‹ Back`: close the file or diff panel.
+    PanelBack,
     Wait(WaitButton),
     /// Option `i` of the question the waiting card asks.
     WaitOption(usize),

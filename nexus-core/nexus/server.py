@@ -124,11 +124,17 @@ INSPECTOR = Path(__file__).parent / "inspector" / "index.html"
 INSPECTOR_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
 MAX_BODY_BYTES = 1024 * 1024
 MAX_PROMPT_BYTES = 12 * 1024 * 1024
+# A project file is limited to 1 MiB of UTF-8, but its JSON form can be larger:
+# every control character becomes six bytes and a 4-byte character twelve. The
+# route still enforces the content limit; only the envelope gets more room.
+MAX_FILE_BODY_BYTES = 8 * 1024 * 1024
 
 
 def _body_limit(request: Request) -> int:
     if request.url.path == "/api/voice/transcribe":
         return MAX_WAV_BYTES
+    if request.method == "PUT" and request.url.path.endswith("/file"):
+        return MAX_FILE_BODY_BYTES
     return MAX_PROMPT_BYTES if request.url.path.endswith("/prompt") else MAX_BODY_BYTES
 
 IDEMPOTENCY_MAX = 128

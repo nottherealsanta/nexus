@@ -6,6 +6,7 @@ import { SettingsView } from "./src/ui/settings";
 import { Icon, IconButton, FOCUS } from "./src/ui/kit";
 import { RightSidebar } from "./src/ui/right";
 import { Centre } from "./src/ui/centre";
+import { FilePanel, filePanelWidth } from "./src/ui/editor";
 import { ContextDetailModal } from "./src/ui/newsession";
 import { AlertDetail } from "./src/ui/alerts";
 import { UsageDialog } from "./src/ui/usage";
@@ -13,7 +14,7 @@ import { ImagePreview } from "./src/ui/image-preview";
 import { AddProject, Blocking, Confirm, Drawers, Palette, Picker, RenameSession, SkillChecklist } from "./src/ui/overlays";
 import { ConnectScreen, coreEditing } from "./src/ui/connect";
 import { bindKeys, rightIsOpen, rightWidthHint } from "./src/commands";
-import { coreReady, coreUrl, drawer, isNarrow, leftOpen, loadPrefs, native, phone, phonePage, startApp, themeChoice, viewed } from "./src/store";
+import { coreReady, coreUrl, drawer, isNarrow, leftOpen, loadPrefs, native, panelOpen, panelWide, phone, phonePage, startApp, themeChoice, viewed } from "./src/store";
 import { setColorScheme } from "nsh";
 import "./fonts/MonaspaceNeon-Regular.otf";
 import "./fonts/MonaspaceNeon-Medium.otf";
@@ -55,7 +56,7 @@ function App() {
   effect(() => { rightWidthHint.w = windowSize().width; });
   void colorScheme;
   const leftPersistent = () => !isNarrow() && leftOpen();
-  const rightPersistent = () => !isNarrow() && rightIsOpen(windowSize().width);
+  const rightPersistent = () => !isNarrow() && !panelOpen() && rightIsOpen(windowSize().width);
   const booting = () => native && !coreReady();
   const connect = () => native && (coreUrl() === null || coreEditing());
   return (
@@ -63,7 +64,7 @@ function App() {
       <If when={booting()} else={<If when={connect()} else={<View class="flex-1 min-h-0">
         <If when={phone} else={<>
         <Header />
-        <View class="flex-1 min-h-0">
+        <View class="flex-1 min-h-0" style={panelOpen() && panelWide() ? { paddingRight: filePanelWidth() } : {}}>
           <View class="flex-1 flex-row min-h-0">
             <If when={leftPersistent()} else={<If when={!isNarrow()}><SessionRail /></If>}><LeftSidebar /></If>
             <Centre />
@@ -71,6 +72,7 @@ function App() {
           </View>
           <Drawers />
         </View>
+        <If when={panelOpen()}><FilePanel /></If>
         </>}><PhoneShell /></If>
         <ContextDetailModal />
         <Palette />

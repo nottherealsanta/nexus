@@ -6,18 +6,17 @@ import { Composer, WaitingCard } from "./composer";
 import { NewSessionView } from "./newsession";
 import { SettingsView } from "./settings";
 import { Timeline } from "./timeline";
-import { FileView } from "./editor";
-import { centre, openFile, previousCentre, viewed } from "../store";
+import { centre, previousCentre, viewed } from "../store";
 
 export function Centre() {
   // Settings is a modal (D13): the view it opened over stays underneath.
-  const base = () => (centre() === "settings" ? previousCentre() : centre());
+  // A file lives in the right-hand panel; the session stays underneath it.
+  const base = () => (centre() === "settings" ? previousCentre() : centre() === "file" ? "session" : centre());
   return (
     <View class="flex-1 min-w-0 min-h-0 bg-background" testID="centre">
       <SubagentStrip />
       <Banners />
       <If when={centre() === "settings"}><SettingsView /></If>
-      <If when={base() === "file"}><FileView /></If>
       <If when={base() === "session" && !!viewed()}><Timeline /></If>
       <If when={base() === "new_session" || (base() === "session" && !viewed())}><NewSessionView /></If>
       <If when={true}>

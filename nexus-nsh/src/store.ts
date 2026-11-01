@@ -231,6 +231,9 @@ export async function loadCoreUrl(): Promise<void> {
 export const width = () => windowSize().width;
 export const NARROW = 820;
 export const isNarrow = computed(() => windowSize().width < NARROW);
+/** At or above this width an open file or diff panel sits beside the timeline; below it, it slides over the body. */
+export const PANEL_WIDE = 1100;
+export const panelWide = computed(() => width() >= PANEL_WIDE);
 
 // Per-client view settings (Settings rows with scope = "client") persist in NSH Storage.
 export async function loadPrefs() {
@@ -637,6 +640,10 @@ export const fileListing = signal<{ path: string; entries: FileEntry[]; error?: 
 /** The open project file. `draft` is set while editing (K10): the text in the editor, against `revision` as read. */
 export type OpenFile = { path: string; content?: string; revision?: string; error?: string; draft?: string; saving?: boolean; stale?: boolean; project?: string; session?: string };
 export const openFile = signal<OpenFile | null>(null);
+/** A file is open in the right-hand panel. */
+export const panelOpen = computed(() => openFile() !== null);
+/** The file panel's find bar is open (cmd+f / editor.find). */
+export const fileFindOpen = signal(false);
 export const fileDirty = () => { const f = openFile(); return !!f && f.draft !== undefined && f.draft !== f.content; };
 export const gitStatus = signal<{ session: string; data?: any; error?: string } | null>(null);
 let filesRequest = 0;
@@ -654,7 +661,7 @@ export async function showFile(path: string) {
   const project = currentProject(), session = viewed()?.id;
   if (!project) return;
   const seq = ++filesRequest;
-  openFile.set({ path, project, session }); centre.set("file");
+  openFile.set({ path, project, session }); centre.set("file"); drawer.set(null); fileFindOpen.set(false);
   try {
     const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${project}/file`, { query: { path, session } });
     if (seq === filesRequest) openFile.set({ path, project, session, content: data.content, revision: data.revision });

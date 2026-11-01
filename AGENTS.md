@@ -13,6 +13,8 @@ for deliberate changes from old Nexus.
   A change to a picker, modal, sidebar, shortcut or interaction in `nexus-tui` lands
   in `nexus-nsh` in the same change, and vice versa; record a deliberate difference
   in [docs/porting-ledger.md](docs/porting-ledger.md).
+- The file explorer, the file editor and Git management are for the TUI and NSH on
+  desktop and web only. They do not ship on iOS or any other mobile target.
 - One timeline: the "timeline" (or "context line"), which is what the user sees
   as a session in the UIs, reflects the agent's context. Everything the model
   receives is shown in order, and the UI shows nothing the model does not have.

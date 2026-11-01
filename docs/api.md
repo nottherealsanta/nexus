@@ -16,7 +16,9 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
   `?token=` for browser `EventSource`. A missing or wrong token gets 401.
   A non-loopback bind serves without a token, so a phone can connect to
   `http://<host>:<port>` by address alone; bind only on a trusted network.
-- **Bodies.** JSON objects, at most 1 MiB; prompt requests allow 12 MiB for inline image data.
+- **Bodies.** JSON objects, at most 1 MiB; prompt requests allow 12 MiB for inline image data,
+  and `PUT /api/project/{id}/file` allows 8 MiB so a 1 MiB UTF-8 file fits after JSON escaping
+  (the file itself is still limited to 1 MiB).
 - **Errors.** `{"error": "..."}` with 400 (bad input), 401, 404 (unknown id),
   409 (a turn is already running) or 410 (history no longer retained; see
   [Event stream](#event-stream)).
@@ -1214,6 +1216,8 @@ MiB) only if it is still at the `revision` a read returned; `"new"` creates a fi
 revision is 409 `stale_file` with `current_revision`. Paths are opened without following symlinks and cannot leave
 the workspace; the write is a temporary file renamed over the target and keeps the file's mode. The event
 `files.changed` follows. The model's own freshness guard sees the new content as a user change.
+The request body may be up to 8 MiB because JSON escaping can expand a 1 MiB file; the content limit itself is
+unchanged.
 
 ### Usage (K11)
 

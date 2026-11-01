@@ -127,6 +127,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         drawer: app.ui.drawer,
         left_rail: app.ui.left_rail,
         left_width: app.ui.left_width,
+        panel_open: app.ui.file_open || app.ui.diff_open.is_some(),
     };
     let regions = {
         let a: &App = app;
@@ -187,12 +188,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         }
         draw_subagents(&cx, buf, regions.strip, &mut hits);
         draw_banner(&cx, buf, regions.banner, &mut hits);
-        // The session stays drawn under the settings modal.
-        if a.ui.diff_open.is_some() {
-            draw_diff_view(&cx, buf, regions.timeline);
-        } else if a.ui.file_open {
-            draw_file_view(&cx, buf, regions.timeline);
-        } else if let Some(t) = &timeline {
+        // The session stays drawn under the settings modal and under a narrow panel.
+        if let Some(t) = &timeline {
             metrics = draw_timeline(&cx, buf, regions.timeline, &mut hits, t);
             let mut screen = Buffer::empty(regions.timeline);
             for y in regions.timeline.y..regions.timeline.bottom() {
@@ -243,6 +240,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             for y in r.y..r.bottom() {
                 put(buf, ex, y, cx.t.structure("rail"), cx.st(MUTED, PANEL), 1);
             }
+        }
+        if let Some(p) = regions.panel {
+            draw_panel(&cx, buf, p, &mut hits);
         }
         if let Some(e) = &a.ui.edit {
             let title = match &e.target {
@@ -502,7 +502,7 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
         &app.ui.overlay,
         app.ui.view,
     ) {
-        let geo = edit_geometry(edit, g.timeline);
+        let geo = edit_geometry(edit, g.panel.unwrap_or(g.timeline));
         return Some(Position::new(
             geo.base_x + (geo.cursor.1 - geo.hscroll) as u16,
             geo.top_y + (geo.cursor.0 - geo.first) as u16,
@@ -2067,11 +2067,66 @@ fn git_marker(code: &str) -> Option<(char, &'static str)> {
     }
 }
 
+/// The file/diff panel. Wide, it sits beside the timeline; narrow, it covers
+/// the whole window (the composer included). When it hides a live session's
+/// approvals or question, the header says so.
+fn draw_panel(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
+    // Below the wide panel breakpoint it covers the whole window.
+    let covers = cx.app.size.0 < crate::layout::PANEL_WIDE_FROM;
+    let bg = if covers { CANVAS } else { PANEL };
+    clear(buf, r, cx.st(PRIMARY, bg));
+    if !covers {
+        for y in r.y..r.bottom() {
+            put(
+                buf,
+                r.x,
+                y,
+                cx.t.structure("rail"),
+                cx.st("border.default", bg),
+                1,
+            );
+        }
+    }
+    if cx.app.ui.diff_open.is_some() {
+        draw_diff_view(cx, buf, r, true, hits);
+    } else if cx.app.ui.file_open {
+        draw_file_view(cx, buf, r, true, hits);
+    }
+    // A covered timeline must not hide a request that needs the user.
+    let waiting = cx.app.wait_items();
+    if covers && !waiting.is_empty() {
+        let label = if cx.t.opts.ascii {
+            format!("! {} waiting", waiting.len())
+        } else {
+            format!("\u{26a0} {} waiting", waiting.len())
+        };
+        let w = width(&label) as u16;
+        let x = r.right().saturating_sub(w + 1);
+        // Clear what the file view put at the right of its title row (the range).
+        put(
+            buf,
+            x,
+            r.y,
+            &" ".repeat(w as usize + 1),
+            cx.st(PRIMARY, bg),
+            w + 1,
+        );
+        put(
+            buf,
+            x,
+            r.y,
+            &label,
+            cx.st("status.warning", bg).add_modifier(Modifier::BOLD),
+            w,
+        );
+    }
+}
+
 /// The read-only file view (DESIGN_PLAN.md D16), on the page surface: a header
 /// row with the `~` path (the basename bold) and the shown line range at the
 /// right, a blank row, the numbered text behind a `│` gutter, and a bottom
 /// row that holds the search. The text is drawn up to the row above it.
-fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
+fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut HitMap) {
     clear(buf, r, cx.st(PRIMARY, CANVAS));
     let Some((project, session, path, result)) = &cx.app.state.file else {
         put(
@@ -2130,10 +2185,37 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
             range_w,
         );
     }
-    // The path in secondary, the basename bold; a long directory is cut in the
-    // middle and the basename is kept.
+    // The panel's back control sits at the start of the title row; the path
+    // follows it, in secondary with the basename bold.
+    let mut x = r.x + 1;
+    if back {
+        let label = if cx.t.opts.ascii {
+            "< Back"
+        } else {
+            "\u{2039} Back"
+        };
+        let w = width(label) as u16;
+        x = put(
+            buf,
+            x,
+            r.y,
+            label,
+            cx.st(ACCENT, CANVAS),
+            r.width.saturating_sub(1),
+        );
+        hits.add(Rect::new(r.x + 1, r.y, w, 1), Target::PanelBack);
+        x = put(
+            buf,
+            x,
+            r.y,
+            "  ",
+            cx.st(MUTED, CANVAS),
+            r.right().saturating_sub(x),
+        );
+    }
+    // A long directory is cut in the middle and the basename is kept.
     let room = (r.width as usize)
-        .saturating_sub(range_w as usize + 4)
+        .saturating_sub(range_w as usize + (x - r.x) as usize + 2)
         .max(8);
     let (dir, base) = match display.rfind('/') {
         Some(i) => display.split_at(i + 1),
@@ -2143,7 +2225,7 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
     let dir = truncate_middle(dir, room.saturating_sub(width(&base)), cx.ell());
     let x = put(
         buf,
-        r.x + 1,
+        x,
         r.y,
         &dir,
         cx.st(SECONDARY, CANVAS),
@@ -2332,19 +2414,45 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
 
 /// A read-only Git diff in the centre column, like the file view, drawn by
 /// `diff.rs`: split at 110 cells and wider, unified below.
-fn draw_diff_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
+fn draw_diff_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut HitMap) {
     clear(buf, r, cx.st(PRIMARY, SIDEBAR));
     let Some((path, group)) = &cx.app.ui.diff_open else {
         return;
     };
+    let mut x = r.x + 1;
+    if back {
+        let label = if cx.t.opts.ascii {
+            "< Back"
+        } else {
+            "\u{2039} Back"
+        };
+        let w = width(label) as u16;
+        x = put(
+            buf,
+            x,
+            r.y,
+            label,
+            cx.st(ACCENT, SIDEBAR),
+            r.width.saturating_sub(1),
+        );
+        hits.add(Rect::new(r.x + 1, r.y, w, 1), Target::PanelBack);
+        x = put(
+            buf,
+            x,
+            r.y,
+            "  ",
+            cx.st(MUTED, SIDEBAR),
+            r.right().saturating_sub(x),
+        );
+    }
     let title = format!("{path} {} {}", cx.t.structure("separator"), group.label());
     put(
         buf,
-        r.x + 1,
+        x,
         r.y,
-        &truncate_middle(&title, r.width.saturating_sub(2) as usize, cx.ell()),
+        &truncate_middle(&title, r.right().saturating_sub(x) as usize, cx.ell()),
         cx.st(PRIMARY, SIDEBAR).add_modifier(Modifier::BOLD),
-        r.width.saturating_sub(1),
+        r.right().saturating_sub(x),
     );
     let note = |buf: &mut Buffer, text: &str, token: &str| {
         put(

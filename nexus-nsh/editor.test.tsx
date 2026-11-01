@@ -45,8 +45,11 @@ const network = {
 
 
 describe("Built-in editor (K10)", () => {
+  // Native builds (the macOS run) start at the Connect screen without a saved
+  // address; the web build ignores this key and uses its same-origin host.
+  const core = { "nexus.core": "http://core.test" };
   test("a file opens read-only, edits, and saves against the revision it was read at", async () => {
-    const app = await open("./App.tsx", { network, width: 1100, height: 768, platform: "web" });
+    const app = await open("./App.tsx", { network, storage: core, width: 1100, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
     await app.press("id:tab-files");
@@ -59,5 +62,89 @@ describe("Built-in editor (K10)", () => {
     expect(app.shows("id:file-save")).toBe(true);
     await app.type("id:file-editor", "one\ntwo\nthree\n");
     await app.waitFor("text:● modified");
+    await app.press("id:file-diff");
+    await app.waitFor("id:file-diff-view");
+    expect(app.shows("id:file-editor")).toBe(false);
+    await app.press("id:file-diff");
+    await app.waitFor("id:file-editor");
+  });
+
+  test("find in file opens a bar with a case toggle and closes on Esc", async () => {
+    const app = await open("./App.tsx", { network, storage: core, width: 1100, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.press("id:tab-files");
+    await app.waitFor("id:file-entry-hello.txt");
+    await app.press("id:file-entry-hello.txt");
+    await app.waitFor("id:file-editor");
+    await app.keyboard.press("mod+f");
+    await app.waitFor("id:file-find-input");
+    await app.type("id:file-find-input", "one");
+    await app.waitFor("text:1 match");
+    await app.press("id:file-find-next");
+    await app.waitFor("text:1 of 1");
+    expect(app.shows("id:file-find-case")).toBe(true);
+    await app.keyboard.press("escape");
+    await app.waitFor("id:file-find", { state: "gone" });
+    expect(app.shows("id:file-panel")).toBe(true);
+  });
+
+  test("the panel keeps its editor and text across the layout breakpoint", async () => {
+    const app = await open("./App.tsx", { network, storage: core, width: 1200, height: 800, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.press("id:tab-files");
+    await app.waitFor("id:file-entry-hello.txt");
+    await app.press("id:file-entry-hello.txt");
+    await app.waitFor("id:file-panel");
+    await app.press("id:file-edit");
+    await app.waitFor("id:file-editor");
+    await app.type("id:file-editor", "one\ntwo\nthree\n");
+    await app.waitFor("text:● modified");
+    // Below 1100 the panel covers the body; above it, it sits beside the timeline.
+    await app.setViewport(900, 800);
+    await app.waitFor("id:file-editor");
+    expect(app.shows("id:file-panel")).toBe(true);
+    expect(app.shows("text:● modified")).toBe(true);
+    await app.setViewport(1200, 800);
+    await app.waitFor("id:file-editor");
+    expect(app.shows("text:● modified")).toBe(true);
+  });
+
+  test("Back closes a clean file panel", async () => {
+    const app = await open("./App.tsx", { network, storage: core, width: 1100, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.press("id:tab-files");
+    await app.waitFor("id:file-entry-hello.txt");
+    await app.press("id:file-entry-hello.txt");
+    await app.waitFor("id:file-panel");
+    await app.press("id:file-back");
+    await app.waitFor("id:file-panel", { state: "gone" });
+  });
+
+  test("the editor opens a 1 MiB file", async () => {
+    const line = "let value = compute(alpha, beta, gamma); // a line of source\n";
+    const content = line.repeat(Math.floor((1024 * 1024) / line.length));
+    const app = await open("./App.tsx", {
+      storage: core,
+      network: {
+        ...network,
+        "GET */api/project/prj_1/files*": { body: { path: "", entries: [{ name: "big.rs", kind: "file", ignored: false }] } },
+        "GET */api/project/prj_1/file*": { body: { path: "big.rs", content, revision: "rev1", language: "rust" } },
+      },
+      width: 1100,
+      height: 768,
+      platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.press("id:tab-files");
+    await app.waitFor("id:file-entry-big.rs");
+    await app.press("id:file-entry-big.rs");
+    await app.waitFor("id:file-editor", { timeout: 15000 });
+    expect(app.shows("id:file-editor")).toBe(true);
+    await app.press("id:file-edit");
+    await app.waitFor("id:file-save", { timeout: 15000 });
   });
 });

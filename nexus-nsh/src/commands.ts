@@ -6,7 +6,7 @@ import type { UsageProvider } from "./store";
 import { Clipboard, keymap, openUrl } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
-  editFile, fileDirty, openFile, reloadFile, saveFile,
+  editFile, fileDirty, fileFindOpen, openFile, reloadFile, saveFile,
   pendingInputs, contextDetail, imagePreview, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
@@ -92,9 +92,10 @@ function evalTerm(t: string): boolean {
     case "timeline.scrolled_up": return scrolledUp();
     case "timeline.has_older": return !!model.selected?.messagesMore;
     case "view.settings": return centre() === "settings";
-    case "view.editor": return centre() === "file";
+    case "panel.file": return openFile() !== null;
+    case "panel.diff": return false;
     case "editor.dirty": return fileDirty();
-    case "editor.readonly": return centre() === "file" && openFile()?.draft === undefined && openFile()?.content !== undefined;
+    case "editor.readonly": return openFile() !== null && openFile()?.draft === undefined && openFile()?.content !== undefined;
     case "overlay.open": return paletteOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
@@ -466,6 +467,7 @@ on("timeline.detail_cycle", () => {
 });
 on("session.switch", () => { tab("sessions"); });
 on("editor.edit", () => editFile());
+on("editor.find", () => { if (openFile()) fileFindOpen.set(true); });
 on("editor.save", () => saveFile(), true);
 on("editor.reload", () => {
   if (!fileDirty()) { void reloadFile(); return; }
@@ -474,7 +476,11 @@ on("editor.reload", () => {
 /** Esc / Close editor: a dirty editor asks first; a clean one leaves editing, then the file. */
 function closeEditor() {
   const f = openFile();
-  const leave = () => { if (f?.draft !== undefined) openFile.set({ ...f, draft: undefined, stale: false }); else centre.set(viewed() ? "session" : "new_session"); };
+  const leave = () => {
+    fileFindOpen.set(false);
+    if (f?.draft !== undefined) openFile.set({ ...f, draft: undefined, stale: false });
+    else { openFile.set(null); centre.set(viewed() ? "session" : "new_session"); }
+  };
   if (!fileDirty()) { leave(); return; }
   confirmDialog.set({ title: "Discard changes", body: "The file has unsaved changes. Leaving the editor drops them.", confirm: "Discard", destructive: true, run: () => { confirmDialog.set(null); leave(); } });
 }
@@ -736,6 +742,7 @@ export function escape() {
   if (isDictationBusy()) { cancelDictation(); return "dictation"; }
   if (imagePreview()) { imagePreview.set(null); return "image_preview"; }
   if (contextDetail()) { contextDetail.set(null); return "context_detail"; }
+  if (fileFindOpen()) { fileFindOpen.set(false); return "file_find"; }
   if (centre() === "settings" && settingsPage()) { settingsPage.set(settingsPage()!.includes("/") ? settingsPage()!.split("/")[0] : null); return "settings_page"; }
   for (const rule of manifest.keymap.escape as readonly { id: string; when: readonly string[]; action: string }[]) {
     if (rule.when.every(term)) {
@@ -780,11 +787,12 @@ export function bindKeys(): () => void {
       }, { when: "notEditing" }));
     } catch { /* the platform keeps this keystroke */ }
   }
-  // The editor's own keys act only while a file is open (cmd+s saves; cmd+e starts editing).
-  for (const id of ["editor.save", "editor.edit"]) {
+  // The editor's own keys act only while a file is open (cmd+s saves; cmd+e starts editing;
+  // cmd+f opens the find bar).
+  for (const id of ["editor.save", "editor.edit", "editor.find"]) {
     const k = byId.get(id)?.keys?.nsh;
     if (!k) continue;
-    try { offs.push(keymap.bind(toKeystroke(k), () => { if (centre() === "file") void run(id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+    try { offs.push(keymap.bind(toKeystroke(k), () => { if (openFile()) void run(id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
   }
   try { offs.push(keymap.bind("escape", () => { escape(); }, { when: "always" })); } catch {}
   return () => offs.forEach((f) => f());

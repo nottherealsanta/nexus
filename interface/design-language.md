@@ -78,6 +78,14 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   lifetime hairline), three at a time with `+N more`; clicking one opens its full text in
   the modal. The banner is one row at the top of the page and pushes the timeline down;
   the jump-to-latest pill is raised, right-aligned on the row above the composer card.
+- The file and diff panel is one right-anchored surface. From 140 columns (TUI)
+  or 1100 px (NSH) it sits beside the timeline and takes 55% of the space right
+  of the left sidebar; the right sidebar yields and the timeline keeps 45%. Below
+  that it covers the whole window, the composer included, with its own
+  `‹ Back  path  ●` header. The panel keeps its editor, undo history and scroll
+  across the breakpoint. When it hides a session that needs approval or an
+  answer, its header carries a `⚠ N waiting` badge. Wide mode appears without
+  motion; narrow mode slides in (NSH) or steps in over two 125 ms frames (TUI).
 - The location strip under the composer shows the path and branch in muted text.
   A linked worktree alone gets a muted, normal-weight worktree icon; there is no
   project-name prefix, checkout/worktree text, command hint or accent underline.

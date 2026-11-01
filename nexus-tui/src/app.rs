@@ -982,6 +982,11 @@ impl App {
         Regions::is_narrow(self.size.0)
     }
 
+    /// The area the file or diff view occupies: the panel when one is open.
+    fn view_rect(&self) -> ratatui::layout::Rect {
+        self.regions.panel.unwrap_or(self.regions.timeline)
+    }
+
     pub fn viewed_id(&self) -> Option<&str> {
         self.state
             .model
@@ -2415,7 +2420,8 @@ impl App {
                             b.kind == want || (name == "focus.child_card" && b.kind == K::Handoff)
                         })
             }
-            "view.editor" => self.ui.file_open,
+            "panel.file" => self.ui.file_open,
+            "panel.diff" => self.ui.diff_open.is_some(),
             "editor.dirty" => self.ui.file_edit.as_ref().is_some_and(FileEdit::dirty),
             "editor.readonly" => self.ui.file_open && self.ui.file_edit.is_none(),
             "view.settings" => self.ui.view == View::Settings,
@@ -2638,18 +2644,20 @@ impl App {
     }
 
     pub fn focus_order(&self) -> Vec<Focus> {
+        let panel_open = self.ui.file_open || self.ui.diff_open.is_some();
+        let covered = panel_open && self.size.0 < crate::layout::PANEL_WIDE_FROM;
         let mut v = vec![Focus::ToggleLeft];
-        if self.ui.left_open && !self.narrow() {
+        if self.ui.left_open && !self.narrow() && !covered {
             v.push(Focus::Sidebar);
         }
         v.push(Focus::Timeline);
-        if !self.wait_items().is_empty() && self.ui.view == View::Session {
+        if !covered && !self.wait_items().is_empty() && self.ui.view == View::Session {
             v.push(Focus::Waiting);
         }
-        if self.ui.view == View::Session {
+        if !covered && self.ui.view == View::Session {
             v.push(Focus::Composer);
         }
-        if self.ui.right_open && !self.narrow() {
+        if self.ui.right_open && !self.narrow() && !panel_open {
             v.push(Focus::Right);
         }
         v.push(Focus::ToggleRight);
@@ -4319,6 +4327,21 @@ impl App {
         dirty
     }
 
+    /// Close the file or diff panel. Unsaved text asks first; a search ends first.
+    fn close_panel(&mut self) {
+        if self.ui.file_search.take().is_some() {
+            return;
+        }
+        match self.ui.file_edit.as_ref().map(FileEdit::dirty) {
+            Some(true) => self.ask_discard_edit(),
+            Some(false) => self.ui.file_edit = None,
+            None => {
+                self.ui.file_open = false;
+                self.ui.diff_open = None;
+            }
+        }
+    }
+
     pub fn open_session(&mut self, id: &str) {
         if self.viewed_id() != Some(id) && self.edit_blocks() {
             return;
@@ -4563,6 +4586,7 @@ impl App {
             "app.help_keys" => self.open_overlay(OverlayKind::Help { top: 0 }),
             "editor.edit" => self.start_edit(),
             "editor.save" => self.save_file(),
+            "editor.close" => self.close_panel(),
             "editor.reload" => {
                 if self.ui.file_edit.as_ref().is_some_and(FileEdit::dirty) {
                     self.ask_reload_edit();
@@ -6920,7 +6944,7 @@ impl App {
     /// Keys of the editor (K10). Returns whether the key was taken; keys it does not
     /// know (global shortcuts) fall through.
     fn file_edit_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
-        let page = crate::paint::file_page(self.regions.timeline.height).max(1);
+        let page = crate::paint::file_page(self.view_rect().height).max(1);
         let Some(edit) = self.ui.file_edit.as_mut() else {
             return false;
         };
@@ -7202,7 +7226,7 @@ impl App {
                 .unwrap_or(count - 1),
         };
         search.hit = Some(next);
-        let page = crate::paint::file_page(self.regions.timeline.height);
+        let page = crate::paint::file_page(self.view_rect().height);
         let max = self.file_line_count().saturating_sub(page);
         self.ui.file_scroll = matches[next].min(max);
     }
@@ -7335,40 +7359,26 @@ impl App {
             return;
         }
         if name == "esc" {
-            if self.ui.diff_open.is_some()
-                && self.ui.overlay.is_none()
-                && self.ui.dialog.is_none()
-                && self.ui.edit.is_none()
-            {
-                self.ui.diff_open = None;
-                return;
-            }
-            if self.ui.file_open
+            if (self.ui.diff_open.is_some() || self.ui.file_open)
                 && self.ui.overlay.is_none()
                 && self.ui.dialog.is_none()
                 && self.ui.edit.is_none()
             {
                 // The first Esc ends a search, then leaves the editor (asking first when
                 // dirty); the next one closes the file.
-                if self.ui.file_search.take().is_none() {
-                    match self.ui.file_edit.as_ref().map(FileEdit::dirty) {
-                        Some(true) => self.ask_discard_edit(),
-                        Some(false) => self.ui.file_edit = None,
-                        None => self.ui.file_open = false,
-                    }
-                }
+                self.close_panel();
                 return;
             }
             return self.escape();
         }
         if self.ui.diff_open.is_some() && self.ui.overlay.is_none() && self.ui.dialog.is_none() {
             // The rows the view draws (split or unified at its width).
-            let width = self.regions.timeline.width.saturating_sub(2) as usize;
+            let width = self.view_rect().width.saturating_sub(2) as usize;
             let patch = self.diff_lines().join("\n");
             let lines = crate::diff::Diff::from_patch(&patch)
                 .render(width, &crate::diff::Look::default())
                 .len();
-            let page = self.regions.timeline.height.saturating_sub(2) as usize;
+            let page = self.view_rect().height.saturating_sub(2) as usize;
             let max = lines.saturating_sub(page);
             match name.as_str() {
                 "up" | "k" => self.ui.diff_scroll = self.ui.diff_scroll.saturating_sub(1),
@@ -7400,7 +7410,7 @@ impl App {
                 return self.run_command("editor.edit");
             }
             let lines = self.file_line_count();
-            let page = crate::paint::file_page(self.regions.timeline.height);
+            let page = crate::paint::file_page(self.view_rect().height);
             let max = lines.saturating_sub(page);
             match name.as_str() {
                 "up" | "k" => self.ui.file_scroll = self.ui.file_scroll.saturating_sub(1),
@@ -10109,6 +10119,24 @@ impl App {
                 self.ui.tab,
                 (c + delta.signum()).clamp(0, n.saturating_sub(1) as isize) as usize,
             );
+        } else if self.regions.panel.is_some_and(|p| contains(p, x, y)) {
+            let step = delta.signum();
+            if self.ui.diff_open.is_some() {
+                let width = self.view_rect().width.saturating_sub(2) as usize;
+                let rows = crate::diff::Diff::from_patch(&self.diff_lines().join("\n"))
+                    .render(width, &crate::diff::Look::default())
+                    .len();
+                let page = self.view_rect().height.saturating_sub(2) as usize;
+                self.ui.diff_scroll = self
+                    .ui
+                    .diff_scroll
+                    .saturating_add_signed(step)
+                    .min(rows.saturating_sub(page));
+            } else if self.ui.file_open {
+                let page = crate::paint::file_page(self.view_rect().height);
+                let max = self.file_line_count().saturating_sub(page);
+                self.ui.file_scroll = self.ui.file_scroll.saturating_add_signed(step).min(max);
+            }
         } else if contains(self.regions.timeline, x, y) && self.ui.view == View::Session {
             self.scroll_timeline(delta);
         }
@@ -10309,6 +10337,7 @@ impl App {
             Target::ComposerDirectory => self.run_command("session.change_directory"),
             Target::ComposerWorktree => self.run_command("session.worktrees"),
             Target::FilesRoot => self.run_command("files.root_toggle"),
+            Target::PanelBack => self.close_panel(),
             Target::Wait(b) => {
                 self.ui.focus = Focus::Waiting;
                 self.run_command(match b {

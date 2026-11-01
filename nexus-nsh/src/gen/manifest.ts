@@ -36,7 +36,8 @@ export const manifest = {
    "focus.session_row",
    "focus.child_card",
    "focus.git_file",
-   "view.editor",
+   "panel.file",
+   "panel.diff",
    "editor.dirty",
    "editor.readonly",
    "overlay.open",
@@ -64,7 +65,7 @@ export const manifest = {
    "banner",
    "dialog",
    "drawer",
-   "editor",
+   "panel",
    "settings",
    "menu"
   ],
@@ -170,10 +171,10 @@ export const manifest = {
    {
     "id": "editor",
     "when": [
-     "view.editor"
+     "panel.file"
     ],
     "action": "editor.close",
-    "note": "Close the built-in editor (asks if dirty); returns to the previous centre view."
+    "note": "Close the file panel (asks if dirty); the timeline underneath takes focus."
    },
    {
     "id": "back",
@@ -258,7 +259,6 @@ export const manifest = {
    "views": [
     "session",
     "new_session",
-    "editor",
     "settings"
    ],
    "default": "session",
@@ -267,9 +267,21 @@ export const manifest = {
    "view_note": {
     "session": "Timeline plus composer; a child session uses the same view with breadcrumbs and back.",
     "new_session": "Starting context (agent, model, effort, directory, system prompt, AGENTS.md, tools, skills, MCP, token count) with the composer below.",
-    "editor": "Built-in editor for a project file; closing returns to the previous view.",
     "settings": "Opened from app.settings (palette or fixed sidebar entry)."
    }
+  },
+  "panel": {
+   "views": [
+    "file",
+    "diff"
+   ],
+   "default": "file",
+   "anchored": "right",
+   "wide": "beside the timeline",
+   "narrow": "covers the whole window, the composer included",
+   "wide_from": 140,
+   "wide_share": 55,
+   "note": "Wide, the right sidebar yields and the panel takes 55% of the space right of the left sidebar. Narrow, it slides over the timeline and composer; the header keeps a waiting badge when a request needs the user. Back, or the escape chain, closes it; unsaved text asks first."
   },
   "waiting_card": {
    "position": "above_composer",
@@ -2463,12 +2475,12 @@ export const manifest = {
    },
    "key_context": "editor",
    "when": [
-    "view.editor",
+    "panel.file",
     "editor.readonly"
    ],
    "unavailable_reason": "No file is open, or it is already being edited.",
    "placement": [
-    "editor",
+    "panel",
     "palette"
    ],
    "note": "Turns the file view into the editor. Saving writes with the revision the file was read at (PUT, K10)."
@@ -2483,12 +2495,12 @@ export const manifest = {
    },
    "key_context": "editor",
    "when": [
-    "view.editor",
+    "panel.file",
     "editor.dirty"
    ],
    "unavailable_reason": "No unsaved changes.",
    "placement": [
-    "editor",
+    "panel",
     "palette"
    ],
    "note": "Refused if the file changed on disk; reload first, unsaved text is preserved."
@@ -2503,11 +2515,11 @@ export const manifest = {
    },
    "key_context": "editor",
    "when": [
-    "view.editor"
+    "panel.file"
    ],
    "unavailable_reason": "No file is open.",
    "placement": [
-    "editor",
+    "panel",
     "palette"
    ]
   },
@@ -2516,11 +2528,11 @@ export const manifest = {
    "title": "Reload file from disk",
    "category": "editor",
    "when": [
-    "view.editor"
+    "panel.file"
    ],
    "unavailable_reason": "No file is open.",
    "placement": [
-    "editor",
+    "panel",
     "palette"
    ]
   },
@@ -2534,11 +2546,11 @@ export const manifest = {
    },
    "key_context": "escape_chain",
    "when": [
-    "view.editor"
+    "panel.file"
    ],
    "unavailable_reason": "No file is open.",
    "placement": [
-    "editor",
+    "panel",
     "palette"
    ],
    "note": "Asks first if the file is dirty."
@@ -2846,7 +2858,7 @@ export const manifest = {
    ],
    "unavailable_reason": "No text field is being edited.",
    "placement": [
-    "editor",
+    "panel",
     "settings"
    ],
    "note": "Inline rename, find bar, settings field, key capture. Not the composer: Esc never clears composer text."

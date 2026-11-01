@@ -194,8 +194,13 @@ session view's `directory` differs from the one it was read for, as after a move
 and worktree actions remain disabled with a reason. Kernel state is the remaining
 session-info item not reported by Core.
 
+Files open in the right-hand panel with `Editor` and `DiffView` from `nsh/base`;
+it sits beside the timeline from 1100 px and slides over the body below. `cmd+f`
+opens a find bar (plain text, a case toggle, previous/next and the match count);
+Esc closes it before the panel.
+
 Still missing (shown disabled with their reason, never as a control that appears
-to work): the complete files/editor and Git workflows, worktree controls,
+to work): the file actions and live watcher, the Git workflow, worktree controls,
 steering/queueing, handoff and one-turn sessions, inspector wire controls,
 additional settings beyond the wired defaults and MCP context options,
 sign-in over the API and dictation. Those need Core increments (PLAN.md Steps
