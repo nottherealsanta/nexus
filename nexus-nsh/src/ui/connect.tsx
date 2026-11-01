@@ -73,13 +73,13 @@ export function ConnectScreen() {
           <If when={platform.os === "macos"} else={
             <Text class={`${T.sec} text-muted-foreground`}>
               This app talks to Core directly over your network. Enter the address Core serves on — for example
-              http://192.168.1.20:4747 — with Core started as `NEXUS_HOST=0.0.0.0 nexus serve`.
+              http://192.168.1.20:4747 — with Core started as NEXUS_HOST=0.0.0.0 nexus serve.
             </Text>
           }>
             <Text class={`${T.sec} text-muted-foreground`}>
-              A local Core is found automatically from `~/.nexus/daemon.json`, token included. To use a Core on
-              another machine, enter its address — for example http://192.168.1.20:4747 — started with
-              `NEXUS_HOST=0.0.0.0 nexus serve`.
+              A local Core is found automatically from ~/.nexus/daemon.json. To use a Core on another machine,
+              enter its address — for example http://192.168.1.20:4747 — started with
+              NEXUS_HOST=0.0.0.0 nexus serve.
             </Text>
           </If>
         </View>
