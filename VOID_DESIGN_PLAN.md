@@ -1,6 +1,7 @@
 # Plan: the Void design for NSH
 
-Status: design final 2026-11-01. Ready to implement. Nothing has landed.
+Status: design final 2026-11-01. Implemented in NSH on 2026-11-01; the TUI is unchanged
+(see [PLAN.md](PLAN.md) and the porting ledger).
 
 This changes NSH only: web, desktop and iOS. **The TUI stays exactly as it is**, so do not edit
 `nexus-tui/` or anything it reads. `AGENTS.md` asks the two clients to match, so record this as a

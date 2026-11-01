@@ -28,7 +28,7 @@ against a real Core. Tabs show running, unread, failed and idle state; they
 switch, rename and close without deleting sessions. Each project has its own open
 tabs and last viewed session or new-session screen, held locally while the client runs.
 The timeline has starting
-context, Markdown (prose 14/22 in Monaspace Neon; fenced code is a panel card with the language and
+context, Markdown (prose 14/22 in Geist; fenced code is a panel card with the language and
 a Copy button and padded code; inline code is 13 px Monaspace on the panel), and three detail levels: finished activity groups collapse in low and medium,
 while high expands their tools. Running groups show the latest five activities in medium (with earlier items announced), and waiting groups stay open. Each user
 message is the turn's header: a full-width raised card (`#n · time` on the right,
@@ -54,10 +54,9 @@ a 2 px rule; a thought with no tool beside it is a single `Thought · preview` r
 clipping is announced and the show-all control restores the whole inspection
 output.
 
-The app uses Monaspace Neon for its text, including chrome, prose and tool output;
-inline code, fenced code and diff content use Monaspace Argon. NSH imports the
-bundled regular, medium and bold faces so the packaged app registers them before
-rendering. Child cards label background calls, distinguish failed and
+The app uses Geist for interface text and prose; inline code, fenced code, paths
+and tool arguments use Monaspace Argon. NSH imports the bundled Geist and Argon
+faces so the packaged app registers them before rendering. Child cards label background calls, distinguish failed and
 running status, and allow the full tool result to be expanded without navigating
 away from the parent session.
 
@@ -66,7 +65,7 @@ frozen starting context and the turn summaries with the session's spend ledger
 (`GET /api/session/{id}/turn`: the newest 200, then `before=` pages to the oldest,
 at most 25 pages; more are announced). It never reads the event log. Footers
 (models, duration, tokens and cache share), tool timings, retry and error rows,
-the composer's context meter and the Working row's output count read the
+the dock's activity bar and the Working row's output count read the
 summaries; a user turn's footer covers every Core turn that starts in its message
 range, so continuations and notice turns join the turn they follow. A row marks
 `floor.seq`: turns above it have no details (pruned, or older than turn records),
@@ -88,8 +87,8 @@ keeps cached views of sessions that still exist and drops their scratch. Context
 reads (`GET …/context`) run one at a time per session; requests made meanwhile
 coalesce into one more read.
 
-The waiting card (D14) is docked above the composer in the timeline's reading column: a 3 px accent
-rail, `◆ Allow bash?` (`Nexus asks` for a question), `waiting on you · 0:42` counted from
+The waiting card (D14) is docked above the composer in the timeline's reading column: a 2 px accent
+edge whose border stops before the card's corners curve (purple for a multi-select question), `◆ Allow bash?` (`Nexus asks` for a question), `waiting on you · 0:42` counted from
 when the client first saw the request, the parameter table (at most six rows), for edit,
 write and patch the unified diff capped at 12 rows with `N more rows`, and a key-chip
 choice list: allow once, allow for session (`scope: "session"`), deny, and deny with a note
@@ -106,12 +105,15 @@ input; `NEXUS_COMPLETION_SOUNDS=off` silences both.
 The chrome follows D02. The 44 px header band and both sidebars sit on `bg-sidebar`
 (the chrome surface) with no edge rules; the centre is `bg-background` (the canvas). The
 header is three slots that match the sidebars (the resizable left sidebar, the centre, 300 px when the right
-sidebar is docked). Controls have square corners and cards use a subtle 2 px radius;
-round indicators and meters retain their shape. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
+sidebar is open). Below the band the 44 px right rail (Session, and Git with its changed-file
+count) opens the panel on demand and pushes the page; the panel starts closed. Controls
+are 10 px and cards 16 px. A box rule runs a hairline along a rounded box's straight sides
+and stops before each corner's curve; a filled box needs no border. Round indicators and
+meters retain their shape. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
 Over the docked left sidebar its left slot holds the 32 px toggle and
 the Sessions, Files and Projects icons (they follow the sidebar's open state; narrow, they
-are in the drawer with labels). The session tabs are 28 px and square, aligned with
-the end of the left sidebar: the viewed tab is on the canvas surface with primary text, the
+are in the drawer with labels). The session tabs are 28 px tall, aligned with
+the end of the left sidebar: the viewed tab has the selection pill with primary text, the
 others are muted with a hover fill. Their × shows on hover (and on the viewed tab). Tabs are
 root sessions only: opening a subagent keeps its root's tab in view. Under the header a
 subagent strip names the parent, offers the back button, repeats the root breadcrumb and lists
@@ -121,28 +123,27 @@ uses the full available centre width with responsive horizontal padding (24 px n
 48 px from 820 px, 64 px from 1200 px and 80 px from 1600 px). Every card shares the
 column's left edge, and assistant prose plus activity and thought rows start at the
 cards' 16 px text inset (activity rows keep a 4 px hover pad inside their 12 px indent).
-The composer and the waiting card sit in the same column with the same 16 px card inset,
-so a draft's first character lines up with the first character of the user message above it.
+The waiting card sits in the timeline's reading column, and the docked composer's content
+uses the same 16 px inset, so a draft's first character lines up with the first character of
+the user message above it.
 Glyphs and status
 tones come from `interface/theme.toml` (`glyphs.status`, `glyphs.attention`). The
 `border.strong` token is emitted as `border-strong` (`--border-strong`) for the decorative
 split rules and tool boxes.
 
-The composer is a card on the panel surface (2 px radius, 1 px border that turns
-to the focus colour) with compact selectors for agent (in its colour), model with
-its muted provider, and effort. The agent label aligns with the message input;
-the card spans the timeline's reading column and its input starts on the user band's
-16 px text edge; the control row ends with dictation and send buttons.
-While a session runs, a Working row above the card shows the elapsed time and
-output tokens (`Working · 12s · ↓4.1k`) with Stop. Typing `/` opens a completion
-block on the card's top edge (commands, with their key hints); `@` completes
-project paths from Core's file listing. Tab accepts, Enter runs a slash command,
-Esc closes. The location strip below the card shows the muted home-shortened path and
-branch; a linked worktree adds `⑂`. On the right, the context meter shows an
-80x4 px bar in the agent colour and `82k · 41%` when known (on narrow screens,
-the count is shown without the bar). Draft context is marked as an estimate.
-The strip has no project prefix, checkout label or commands
-hint. Before a session exists, the agent/model/effort pickers and slash commands
+The composer is a dock at the foot of the centre column, edge to edge on the chrome
+surface, with its input, controls and location strip in the timeline's reading column.
+The agent (in its colour), model with its muted provider, and effort are compact selectors;
+the input starts on the user band's 16 px text edge and the control row ends with dictation
+and send buttons. The location strip is its own row under the controls at every width: the
+muted home-shortened path and branch on the left, a linked worktree adding `⑂`, and the
+context reading (`82k · 41%`) on the right. The activity bar along the dock's foot fills to
+the context used in the agent's colour with a slight glow; while a turn runs it becomes a
+soft pulse a fifth of the width gliding back and forth. Draft context is marked as an estimate.
+While a session runs, a Working row above the dock shimmers the word and shows the elapsed
+time and output tokens (`Working · 12s · ↓4.1k`) with Stop. Typing `/` opens a completion
+block above the dock (commands, with their key hints); `@` completes project paths from
+Core's file listing. Tab accepts, Enter runs a slash command, Esc closes. Before a session exists, the agent/model/effort pickers and slash commands
 set draft creation fields. Timeline detail is a saved NSH preference. The
 agent, model and effort pickers carry the TUI's search field (fuzzy filtering),
 ↑↓ navigation and Enter to choose. The model picker names each model, puts its
@@ -171,8 +172,8 @@ manifest-driven session/project row menu, including confirmed project removal,
 and Projects has a trailing `+ Add project` row. The collapsed sidebar is a 42 px
 rail that shows projects in creation order, with stable uppercase initials
 (collisions use the next available consonant, then a numeric suffix). Projects with running sessions or session activity
-within the last hour are lighter gray; inactive projects are darker. Selection has
-a separate background and edge marker. Each project also carries the TUI's four
+within the last hour are lighter gray; inactive projects are darker. Selection is a soft
+filled pill with no edge marker. Each project also carries the TUI's four
 counters around its initials: needs attention (violet) and finished and unread
 (info) above, running (success) and idle (primary) below, with any count past
 nine shown as `*`; a project with no counts shows a three-cell muted rule below
@@ -269,7 +270,7 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, code fences, thoughts, groups and members, children, diagnostics (live, or from summaries), the floor row, footers, and the sticky user bar. |
 | `src/ui/diff.tsx` | Diffs of edit, write and patch details: split at window width 1100 px and up, unified below, built from the tool detail lines (so the detail cap still applies). The empty side of an add or remove is a flat fill: NSH views cannot draw the hatch. |
 | `src/ui/connect.tsx` | The native Connect screen: the Core address, saved in NSH Storage (and reopened from the header's Core button). |
-| `src/ui/*` | Header, sidebars, right sidebar, composer (with completion, Working row and project strip) and waiting card, settings, overlays, alerts. |
+| `src/ui/*` | Header, sidebars, the right panel and its icon rail, the docked composer (completion, Working row, location strip, activity bar) and waiting card, settings, overlays, alerts. |
 | `src/gen/*` | Generated from `interface/`; never edit. |
 
 ## Platform notes
@@ -308,7 +309,7 @@ e2e/down.sh /tmp/nsh-e2e
   `apiBase()`/`setApiBase()` in `src/core/transport.ts` are the single place the
   origin changes; `apiUrl()` prefixes URLs the platform loads itself (artifact
   images). The Core button in the header reopens the Connect screen.
-- **Safe areas and touch.** The header pads by `safeArea().top`, the composer and
+- **Safe areas and touch.** The header pads by `safeArea().top`, the composer dock and
   the sidebar footer by `safeArea().bottom`, so the status bar and home indicator
   never cover chrome. Phone and tablet idioms (`platform.idiom`) keep hover-only
   actions visible (the user card's Copy/Fold, tab close, session row menu) and

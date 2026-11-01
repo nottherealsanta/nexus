@@ -17,7 +17,10 @@ The clients speak only the HTTP API ([api.md](api.md)). They never read SQLite,
 provider credentials or Nexus state files; only the local bootstrap discovers and
 starts the daemon. Both build from `interface/manifest.toml` and
 `interface/theme.toml`; check edits with `python3 interface/check_manifest.py` and
-`python3 interface/check_theme.py`.
+`python3 interface/check_theme.py`. NSH's Void palette is `nexus-nsh/theme-void.toml`, merged
+over the shared file by `nexus-nsh/scripts/gen.py`; check it with
+`python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml`. The TUI reads only the
+shared file.
 
 Inside `nexus-core/` (a uv project: `pyproject.toml`, `uv.lock`, `.python-version`):
 

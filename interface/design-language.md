@@ -1,5 +1,9 @@
 # TUI design language
 
+NSH follows the Void design in [VOID_DESIGN_PLAN.md](../VOID_DESIGN_PLAN.md) instead:
+`nexus-nsh/theme-void.toml` overrides `theme.toml` for NSH only, and the NSH sections of
+these rules are historical. The rules below describe the TUI.
+
 The visual reference is the old Nexus TUI in `../nexus/rust/tui/src`. This
 client adapts its patterns to the Core API and the one-timeline model. The
 shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
