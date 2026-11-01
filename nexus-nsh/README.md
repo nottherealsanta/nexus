@@ -274,9 +274,9 @@ e2e/down.sh /tmp/nsh-e2e
   `nsh package App.tsx --target macos` writes a `.app`; `--target ios-simulator`
   a simulator `.app`, and `--target ios` an `.ipa`.
   App Transport Security blocks plain HTTP to a network address by default, so
-  `scripts/native-info.mjs` adds `NSAllowsArbitraryLoads` (which also covers
-  LAN, `.local` and Tailscale IP addresses), plus `NSAllowsLocalNetworking` and,
-  on iOS, `NSLocalNetworkUsageDescription`, then ad-hoc signs the app again; the
+  `scripts/native-info.mjs` adds `NSAllowsArbitraryLoads` (which covers LAN,
+  `.local` and Tailscale IP addresses) and, on iOS,
+  `NSLocalNetworkUsageDescription`, then ad-hoc signs the app again; the
   scripts above run it for you. A device `.ipa` is signed before it can be
   patched: package without `--sign`, run the script on the `.app`, then sign with
   your identity and profile. `NSAllowsArbitraryLoads` permits plain HTTP to any

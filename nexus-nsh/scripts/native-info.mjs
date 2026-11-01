@@ -31,9 +31,10 @@ function set(command, key) {
 
 try {
   set(["Add", ":NSAppTransportSecurity", "dict"], "NSAppTransportSecurity");
-  plistBuddy("Add", ":NSAppTransportSecurity:NSAllowsLocalNetworking", "bool", "true");
   // Core is reached by a bare address (often a private/tailnet IP), and ATS
   // treats some of those as public; allow plain HTTP for this direct connection.
+  // Arbitrary loads alone (no NSAllowsLocalNetworking, which overrides it for
+  // connections iOS classifies as local) covers every address the app may use.
   plistBuddy("Add", ":NSAppTransportSecurity:NSAllowsArbitraryLoads", "bool", "true");
   const device = plistBuddy("Print", ":CFBundleSupportedPlatforms:0").toString().includes("iPhone");
   if (device) {
