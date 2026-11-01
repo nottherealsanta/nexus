@@ -288,7 +288,7 @@ export function Composer() {
         </If>
       </View>
     </TimelineColumn>
-    <View class="w-full bg-sidebar" style={{ paddingBottom: safeArea().bottom }} testID="composer-dock">
+    <View class="w-full bg-sidebar border-t border-border" style={{ paddingBottom: safeArea().bottom }} testID="composer-dock">
     <TimelineColumn class="items-center pt-3">
         <View
           class={`w-full px-1 ${isNarrow() ? "pb-1" : "pb-1.5"}`}
