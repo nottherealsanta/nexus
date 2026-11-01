@@ -54,6 +54,8 @@ export interface SyncHost {
   setInfo(i: Info, c: Compat): void;
   addBanner(b: Banner): void;
   changed(): void;
+  /** A text or reasoning delta: only the live timeline rows change. */
+  streamed?(): void;
   /** Called once a fresh snapshot is applied, so views can reload selection. */
   snapshotApplied?(): void;
   configChanged?(): void;
@@ -81,11 +83,24 @@ export class Sync {
   private everLive = false;
   private startedOnce = false;
   private incompatibleKey = "";
+  /** Bumped by `start`/`stop`: a loop from an earlier address exits instead of racing the new one. */
+  private epoch = 0;
 
   constructor(private host: SyncHost, private pollMs = 2000) {}
 
-  start() { void this.loop(); }
-  stop() { this.stopped = true; this.abort?.abort(); this.wake?.(); }
+  start() { this.stopped = false; void this.loop(++this.epoch); }
+  stop() { this.stopped = true; this.epoch++; this.abort?.abort(); this.wake?.(); }
+  /** Point at a different Core (or reconnect once it is configured): drop the old loop and start over. */
+  restart() {
+    this.stop();
+    this.backoff.reset();
+    this.needSnapshot = true;
+    this.everLive = false;
+    this.startedOnce = false;
+    this.pid = null;
+    this.incompatibleKey = "";
+    this.start();
+  }
   /** Retry now (app.reconnect). */
   retryNow() { this.backoff.reset(); this.abort?.abort(); this.wake?.(); }
   forceSnapshot() { this.needSnapshot = true; this.abort?.abort(); }
@@ -94,15 +109,15 @@ export class Sync {
     return new Promise((r) => { const t = setTimeout(() => { this.wake = null; r(); }, ms); this.wake = () => { clearTimeout(t); this.wake = null; r(); }; });
   }
 
-  private async loop() {
+  private async loop(epoch: number) {
     const h = this.host;
     h.setConnection({ kind: "connecting" });
-    while (!this.stopped) {
+    while (!this.stopped && epoch === this.epoch) {
       try {
-        await this.session();
+        await this.session(epoch);
         throw new ApiError(0, "event stream closed");
       } catch (err) {
-        if (this.stopped) return;
+        if (this.stopped || epoch !== this.epoch) return;
         const e = err instanceof ApiError ? err : new ApiError(0, String((err as Error)?.message ?? err));
         if (e.isCursor || (e.code === "overflow")) {
           this.needSnapshot = true;
@@ -130,14 +145,15 @@ export class Sync {
           h.setConnection({ kind: "reconnecting", attempt, retryAt: Date.now() + delay * 1000, reason: e.message });
         }
         await this.pause(delay * 1000);
-        if (this.stopped) return;
+        if (this.stopped || epoch !== this.epoch) return;
       }
     }
   }
 
   /** One connected session: runs until the stream ends or errors (always throws or never returns normally). */
-  private async session(): Promise<void> {
+  private async session(epoch: number): Promise<void> {
     const h = this.host, m = h.model;
+    if (epoch !== this.epoch) throw new ApiError(0, "superseded");
     if (!this.everLive) h.setConnection({ kind: "connecting" });
     const info = await request<Info>("GET", "/api/info");
     const compat = checkCompat(parseApiVersion(info.api_version));
@@ -162,6 +178,7 @@ export class Sync {
         if (e instanceof ApiError && e.status === 404 && sel) { m.select(null); snap = await request<Snapshot>("GET", "/api/snapshot", { query: { message_limit: 200 } }); }
         else throw e;
       }
+      if (epoch !== this.epoch) throw new ApiError(0, "superseded");
       m.applySnapshot(snap);
       this.needSnapshot = false;
       h.snapshotApplied?.();
@@ -170,6 +187,7 @@ export class Sync {
       // history (it merges with whatever the stream applies meanwhile).
       if (m.selected) void this.loadSelected().catch(() => {});
     }
+    if (epoch !== this.epoch) throw new ApiError(0, "superseded");
     this.abort = new AbortController();
     const signal = this.abort.signal;
     let buf: CoreEvent[] = [];
@@ -188,7 +206,11 @@ export class Sync {
         return undefined;
       };
       const treeBusy = (id: string) => [...m.sessions.keys()].some((sid) => busy(sid) && root(sid) === id);
+      let affects = false;
+      let onlyDeltas = true;
       for (const ev of buf) {
+        if (ev.type !== "wire_event" && ev.type !== "wire_response") affects = true;
+        if (ev.type !== "text_delta" && ev.type !== "reasoning_delta") onlyDeltas = false;
         const sid = ev.session_id;
         const rootId = sid ? root(sid) : undefined;
         const wasBusy = !!rootId && treeBusy(rootId);
@@ -207,7 +229,8 @@ export class Sync {
       }
       if (closed) void this.refreshLedger(closed).catch(() => {});
       buf = [];
-      h.changed();
+      if (affects && onlyDeltas && h.streamed) h.streamed();
+      else if (affects || resync) h.changed();
       if (resync) { this.needSnapshot = true; h.addBanner({ kind: "resynced", why: resync }); this.abort?.abort(); }
     };
     try {
@@ -224,7 +247,7 @@ export class Sync {
         if (!scheduled) { scheduled = true; queueMicrotask(flush); }
       }
     } catch (e) {
-      if (signal.aborted && this.needSnapshot) { flush(); return this.session(); }
+      if (signal.aborted && this.needSnapshot) { flush(); return this.session(epoch); }
       if (signal.aborted && !this.stopped) { flush(); throw new ApiError(0, "reconnecting"); }
       flush();
       throw e;

@@ -85,6 +85,18 @@ def test_stt_status_rejects_an_unreviewed_runtime_version(monkeypatch, tmp_path)
     assert "reviewed: 2.6.1" in stt["error"]
 
 
+def test_mac_stt_rejects_incompatible_torch_without_importing_it(monkeypatch):
+    monkeypatch.setattr(status.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(status.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(status.metadata, "version", lambda _: "2.15.0")
+    assert "incompatible" in status._mac_torch_error()
+    monkeypatch.setattr(status.metadata, "version", lambda _: "2.14.1")
+    assert status._mac_torch_error() is None
+    monkeypatch.setattr(status.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(status.metadata, "version", lambda _: "2.15.0")
+    assert status._mac_torch_error() is None
+
+
 def test_stt_status_explains_the_bark_migration(monkeypatch, tmp_path):
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))

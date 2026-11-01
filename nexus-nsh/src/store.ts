@@ -1,10 +1,10 @@
 // Reactive app state: the model (a mutable cache, versioned by `rev`), connection, banners,
 // alerts (toasts + banner history), and view state (layout, tabs, centre view, overlays).
-import { Storage, computed, signal, windowSize } from "nsh";
+import { Storage, computed, platform, signal, windowSize } from "nsh";
 import { Model, normalizeSession } from "./core/reduce";
 import { Banner, ConnectionState, MESSAGE_PAGE, Sync, SyncHost } from "./core/sync";
 import { Compat, Info, Message, Session } from "./core/api";
-import { ApiError, request } from "./core/transport";
+import { ApiError, request, setApiBase } from "./core/transport";
 import type { ProjectMcpSummary } from "./project-mcp";
 import { emptyGlobalToastState, globalEventToast } from "./skills-mcp";
 import { receiveVoiceProgress } from "./voice-state";
@@ -15,7 +15,17 @@ export type Toast = { id: number; level: "success" | "info" | "warning" | "error
 
 export const model = new Model();
 export const contextDetail = signal<{ title: string; detail: string } | null>(null);
+/** The attachment open in the full-size preview modal (composer or timeline). */
+export const imagePreview = signal<{ name: string; src: string } | null>(null);
 export const rev = signal(0);
+/** Bumped by text/reasoning deltas; the settled timeline does not depend on it. */
+export const streamRev = signal(0);
+let streamFrame: ReturnType<typeof setTimeout> | null = null;
+/** Coalesce a burst of deltas into one live-row render (about one frame). */
+function bumpStream() {
+  if (streamFrame !== null) return;
+  streamFrame = setTimeout(() => { streamFrame = null; streamRev.update((n) => n + 1); }, 16);
+}
 export const connection = signal<ConnectionState>({ kind: "connecting" });
 export const info = signal<Info | null>(null);
 export const userHome = signal("");
@@ -108,7 +118,7 @@ export const archivedFilter = signal(false);
 export const drawer = signal<"left" | "right" | "notifications" | null>(null);
 export const paletteOpen = signal(false);
 /** A simple list picker for catalog-backed choices (model, effort, agent). */
-export type PickerItem = { id: string; label: string; hint?: string; run: () => void | Promise<void> };
+export type PickerItem = { id: string; label: string; hint?: string; detail?: string[]; run: () => void | Promise<void> };
 export const picker = signal<null | { title: string; items: PickerItem[]; note?: string }>(null);
 export const confirmDialog = signal<null | { title: string; body: string; confirm: string; destructive: boolean; run: () => Promise<void> | void; busy?: boolean; error?: string }>(null);
 export const renaming = signal(false);
@@ -155,6 +165,48 @@ export const focusedSidebarRow = signal<SidebarRowTarget | null>(null);
 export const sidebarRowMenu = signal<SidebarRowTarget | null>(null);
 export const focusedTool = signal<{ key: string; clipped: boolean; toggleRaw: () => void } | null>(null);
 export const toolOutputAll = signal<Record<string, boolean>>({});
+
+/** The native builds talk to a Core on the network; the web build's host proxies the same-origin API. */
+export const native = platform.os !== "web";
+/** A phone or tablet: hover-only affordances have to stay visible, and targets stay finger-sized. */
+export const touch = platform.idiom === "phone" || platform.idiom === "pad";
+/** The saved Core address; null until the Connect screen has one. */
+export const coreUrl = signal<string | null>(null);
+/** True once the saved address has been read (immediately on the web, which has none). */
+export const coreReady = signal(!native);
+const CORE_KEY = "nexus.core";
+
+/** `host:port`, with `http://` assumed when no scheme is given; a path prefix is kept. */
+export function normalizeCoreUrl(raw: string): string {
+  const text = raw.trim();
+  if (!text) throw new Error("Enter the Core address");
+  let url: URL;
+  try { url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `http://${text}`); }
+  catch { throw new Error("That is not a valid address"); }
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Use an http:// or https:// address");
+  return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
+}
+
+/** Save the address, point the transport at it and (re)connect. */
+export async function connectCore(raw: string): Promise<void> {
+  const url = normalizeCoreUrl(raw);
+  setApiBase(url);
+  coreUrl.set(url);
+  coreReady.set(true);
+  try { await Storage.setItem(CORE_KEY, url); } catch {}
+  sync.restart();
+  loadComposerData();
+}
+
+/** Read the saved address at startup; native builds stay on the Connect screen without one. */
+export async function loadCoreUrl(): Promise<void> {
+  if (!native) { coreReady.set(true); return; }
+  try {
+    const saved = await Storage.getItem(CORE_KEY);
+    if (saved) { setApiBase(saved); coreUrl.set(saved); }
+  } catch {}
+  coreReady.set(true);
+}
 
 export const width = () => windowSize().width;
 export const NARROW = 820;
@@ -413,6 +465,7 @@ const host: SyncHost = {
   setInfo(i, c) { info.set(i); compat.set(c); },
   addBanner(b) { banners.update((l) => [...l.filter((x) => x.kind !== b.kind), b]); },
   changed() { bump(); reconcileSelection(); autoLoadOlder(); },
+  streamed() { bumpStream(); },
   snapshotApplied() { reconcileSelection(); void loadConfig().catch(() => {}); },
   configChanged() { void loadConfig().catch(() => {}); },
   settingsEvent(e) {
@@ -470,12 +523,22 @@ function reconcileSelection() {
 }
 
 export function startApp() {
-  void fetch("/__nexus/host").then((r) => r.json()).then((h) => {
-    host.canStart = !!h.canStart;
-    if (typeof h.userHome === "string") userHome.set(h.userHome);
-  }).catch(() => {});
-  sync.start();
-  loadComposerData();
+  if (native) {
+    // A native app reaches Core directly and cannot start it; the Connect screen owns the rest.
+    host.canStart = false;
+    void loadCoreUrl().then(() => {
+      if (!coreUrl()) return;
+      sync.start();
+      loadComposerData();
+    });
+  } else {
+    void fetch("/__nexus/host").then((r) => r.json()).then((h) => {
+      host.canStart = !!h.canStart;
+      if (typeof h.userHome === "string") userHome.set(h.userHome);
+    }).catch(() => {});
+    sync.start();
+    loadComposerData();
+  }
   setInterval(() => { const c = connection(); if (c.kind === "reconnecting") tick.set(Date.now()); }, 1000);
 }
 

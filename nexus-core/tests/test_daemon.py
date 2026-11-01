@@ -36,6 +36,17 @@ def _write(data: dict) -> None:
     daemon.info_path().write_text(json.dumps(data))
 
 
+def test_the_bind_address_comes_from_the_flag_then_the_environment(home_dir, monkeypatch):
+    monkeypatch.delenv("NEXUS_HOST", raising=False)
+    assert daemon._host() == "127.0.0.1"
+    assert daemon._host("0.0.0.0") == "0.0.0.0"
+    monkeypatch.setenv("NEXUS_HOST", "100.64.0.5")
+    assert daemon._host() == "100.64.0.5"
+    assert daemon._host("192.168.1.20") == "192.168.1.20"
+    assert daemon.is_loopback("127.0.0.1") and daemon.is_loopback("::1") and daemon.is_loopback("localhost")
+    assert not daemon.is_loopback("0.0.0.0") and not daemon.is_loopback("100.64.0.5")
+
+
 def test_an_unreadable_file_is_not_a_daemon(home_dir):
     daemon.info_path().write_text("{not json")
     assert daemon.discover() is None

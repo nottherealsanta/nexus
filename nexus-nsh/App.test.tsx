@@ -4,7 +4,8 @@ import { manifest } from "./src/gen/manifest";
 import { agentSlot } from "./src/agent-color";
 import { Model, VIEW_CACHE, scratchOf, upsertTurn } from "./src/core/reduce";
 import { groupRequests, latestUsage, ledgerTotals, sumUsage } from "./src/core/turns";
-import { capToolDetail, detailOf, fmtDuration } from "./src/ui/timeline";
+import { buildRows, capToolDetail, detailOf, fmtDuration } from "./src/ui/timeline";
+import { model } from "./src/store";
 import { diffItems, splitRows } from "./src/ui/diff";
 import { defaultSkillSelection, draftInventoryRows, emptyGlobalToastState, globalEventToast, selectedSkillCounts, sessionInventoryRows, setDisabledTool, shouldInstallRequestedDirectly, toggleDisabledTool } from "./src/skills-mcp";
 
@@ -177,6 +178,22 @@ describe("shell", () => {
     expect(app.shows("id:tab-files")).toBe(false);
     await app.press("id:toggle-left");
     expect(app.shows("id:tab-files")).toBe(true);
+  });
+
+  test("the collapsed project rail counts sessions by state", async () => {
+    const busy = { ...snapshot.sessions[0], id: "ses_busy", title: "Busy task", status: "busy", created: 3, updated: 4 };
+    const empty = { id: "prj_2", path: "/work/empty", name: "empty", created: 0.5, updated: 0, revision: 1 };
+    const app = await open("./App.tsx", {
+      network: { ...core(), "GET */api/snapshot*": { body: { ...snapshot, projects: [...snapshot.projects, empty], sessions: [...snapshot.sessions, busy] } } },
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:demo");
+    await app.press("id:toggle-left");
+    await app.waitFor("id:rail-counts-prj_1");
+    expect(app.shows("id:rail-count-prj_1-running")).toBe(true);
+    expect(app.shows("id:rail-count-prj_1-idle")).toBe(true);
+    await app.waitFor("id:rail-placeholder-prj_2");
+    expect(app.shows("id:rail-counts-prj_2")).toBe(false);
   });
 
   test("session tabs open, switch and close without deleting their sessions", async () => {
@@ -563,6 +580,36 @@ describe("context, composer and footer parity", () => {
       const index = footer.indexOf(part, previous + 1);
       expect(index > previous).toBe(true);
       previous = index;
+    }
+  });
+
+  test("a running turn has no footer and its live thought stays in the activity group", () => {
+    const message = (id: string, seq: number, role: "user" | "assistant" | "tool", parts: any[]) => ({
+      id, session_id: "ses_1", seq, role, parts, created: seq,
+    });
+    model.selected = {
+      sessionId: "ses_1",
+      messages: [
+        message("m1", 1, "user", [{ type: "text", text: "go" }]),
+        message("m2", 2, "assistant", [{ type: "tool_call", id: "c1", name: "bash", arguments: "{}" }]),
+        message("m3", 3, "tool", [{ type: "tool_result", call_id: "c1", output: "ok" }]),
+      ],
+      messagesMore: false, turns: [], floor: null, usage: null, usageMark: 0, scratch: [], loaded: true, starting: null, turnsGap: null,
+    };
+    model.sessions.set("ses_1", { id: "ses_1", project_id: "prj_1", directory: "/", title: "T", agent: "build", parent_id: null, revision: 1, created: 1, updated: 1, status: "busy" });
+    model.running.set("ses_1", "trn_1");
+    model.streaming.set("ses_1", { text: "", reasoning: "Still thinking" });
+    try {
+      const rows = buildRows();
+      expect(rows.some((r) => r.kind === "footer")).toBe(false);
+      const group = rows.find((r) => r.kind === "activity");
+      expect(group?.kind === "activity" && group.summary === "Working").toBe(true);
+      expect(group?.kind === "activity" && group.items.some((r) => r.kind === "reasoning" && r.text === "Still thinking")).toBe(true);
+    } finally {
+      model.selected = null;
+      model.sessions.delete("ses_1");
+      model.running.delete("ses_1");
+      model.streaming.delete("ses_1");
     }
   });
 
@@ -1033,6 +1080,10 @@ describe("image paste and background shell context", () => {
     await app.paste("id:composer-input", { files: ["./fixtures/clipboard.png"] });
     await app.waitFor("id:image-previews");
     await app.screenshot("/private/tmp/nexus-image-preview.png");
+    await app.press("id:composer-image-1");
+    await app.waitFor("id:image-preview");
+    await app.keyboard.press("escape");
+    await app.waitUntil(() => !app.shows("id:image-preview"));
     await app.press("text:Remove image");
     expect(app.shows("id:image-previews")).toBe(false);
     await app.paste("id:composer-input", { files: ["./fixtures/clipboard.png"] });

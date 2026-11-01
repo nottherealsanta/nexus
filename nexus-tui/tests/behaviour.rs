@@ -2007,10 +2007,7 @@ fn image_paste_sends_an_image_only_prompt_and_restores_it_on_failure() {
     .unwrap();
     a.apply_image_paste(SESSION.into(), Ok(Some(image.clone())));
     let (_, rows) = draw(&mut a, 120, 36);
-    let preview_row = rows
-        .iter()
-        .position(|row| row.contains("1 attached"))
-        .unwrap();
+    let preview_row = rows.iter().position(|row| row.contains("Image A")).unwrap();
     let input_row = rows
         .iter()
         .position(|row| row.contains("[Image A]"))

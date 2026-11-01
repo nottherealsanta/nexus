@@ -14,10 +14,10 @@ use std::{
 use tokio::io::AsyncReadExt;
 
 const MAX_BYTES: usize = 8 * 1024 * 1024;
-/// A preview is a thumbnail: at most this wide and this tall, so an attachment
-/// cannot push the conversation off the screen.
-const PREVIEW_MAX_COLS: usize = 64;
-const PREVIEW_MAX_ROWS: usize = 14;
+/// Both the composer strip and the timeline use the same small square
+/// thumbnail: three rows (six columns).
+pub const COMPOSER_THUMB_ROWS: usize = 3;
+pub const COMPOSER_THUMB_COLS: usize = COMPOSER_THUMB_ROWS * 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Image {
@@ -47,6 +47,7 @@ pub struct Preview {
     pub width: usize,
     pub rows: usize,
     pub key: String,
+    pub name: String,
     pub data_url: String,
 }
 
@@ -126,19 +127,17 @@ impl Viewer {
     }
 }
 
-/// Cell size for an attachment preview, keeping its aspect ratio. `available`
-/// is the width left inside the timeline.
+/// Cell size for a timeline attachment preview: the composer's small square
+/// (cells are about twice as tall as they are wide), capped by the width.
 pub fn preview_size(data_url: &str, available: usize) -> Option<(usize, usize)> {
-    let (width, height) = dimensions(data_url)?;
-    let cols = available.clamp(1, PREVIEW_MAX_COLS);
-    let rows = ((cols as f64 * height as f64 / width as f64) / 2.0).ceil() as usize;
-    let rows = rows.clamp(1, PREVIEW_MAX_ROWS);
-    let cols = if rows == PREVIEW_MAX_ROWS {
-        ((rows as f64 * 2.0 * width as f64 / height as f64).ceil() as usize).clamp(1, cols)
-    } else {
-        cols
-    };
-    Some((cols, rows))
+    dimensions(data_url)?;
+    Some(square_size(available, COMPOSER_THUMB_ROWS))
+}
+
+/// A square thumbnail in cells, given the width available and the row cap.
+pub fn square_size(available: usize, max_rows: usize) -> (usize, usize) {
+    let rows = (available / 2).clamp(1, max_rows.max(1));
+    (rows * 2, rows)
 }
 
 /// Image dimensions from a data URL, reading only the header where possible.
@@ -236,4 +235,18 @@ if (data) { if (data.length > 8388608) throw Error('Image exceeds 8 MiB'); data.
         return Ok(None);
     }
     Image::from_png("clipboard.png".into(), &bytes).map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn previews_are_square_and_respect_the_width_and_row_cap() {
+        assert_eq!(square_size(0, 14), (2, 1));
+        assert_eq!(square_size(20, 14), (20, 10));
+        assert_eq!(square_size(200, 14), (28, 14));
+        assert_eq!(square_size(100, COMPOSER_THUMB_ROWS), (6, 3));
+        assert_eq!(COMPOSER_THUMB_COLS, COMPOSER_THUMB_ROWS * 2);
+    }
 }

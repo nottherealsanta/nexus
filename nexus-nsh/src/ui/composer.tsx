@@ -1,4 +1,4 @@
-import { Image, Text, View, effect, signal, untracked } from "nsh";
+import { Image, Text, View, effect, safeArea, signal, untracked } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Status, T, midTruncate } from "./kit";
 import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
@@ -6,7 +6,7 @@ import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
   agentCatalog, contextBudget, draftContext, draftContextKey, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, modelCatalog, tick,
-  projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast,
+  projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast, imagePreview,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question } from "../core/api";
@@ -15,6 +15,7 @@ import { detailOf, fmtDuration } from "./timeline";
 import { groupRequests, latestUsage, sumUsage, turnsIn } from "../core/turns";
 import type { ToolDetailLine } from "./timeline";
 import { DiffView, diffItems } from "./diff";
+import { TimelineColumn } from "./reading-column";
 
 import { imageDrafts, readImage } from "../images";
 import { cancelDictation, stopDictation } from "../dictation";
@@ -250,8 +251,8 @@ export function Composer() {
 
   const agentName = () => capitalize(agent());
   return (
-    <View class="px-4 pb-2 pt-3 items-center" testID="composer-area">
-      <View class="w-full max-w-[760px]">
+    <TimelineColumn class="items-center pb-2 pt-3" testID="composer-area" style={{ paddingBottom: safeArea().bottom + 8 }}>
+      <View class="w-full">
         <If when={busy()}><WorkingRow /></If>
         <PendingStack />
         <If when={open()}>
@@ -265,7 +266,7 @@ export function Composer() {
                     const sel = () => i() === Math.min(selected(), rows().length - 1);
                     return (
                       <Button onPress={() => accept(r())} selected={sel()} testID={`completion-${r().key}`}
-                        class={`flex-row items-center gap-3 h-8 px-3 hover:bg-accent ${FOCUS}`}>
+                        class={`flex-row items-center gap-3 ${isNarrow() ? "min-h-11" : "h-8"} px-3 hover:bg-accent ${FOCUS}`}>
                         <If when={sel()}>{() => <View class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary" />}</If>
                         <Text style={{ numberOfLines: 1 }} class={`font-mono text-[12.5px] leading-5 font-medium ${r().muted ? "text-muted-foreground" : "text-foreground"}`}>{r().value}</Text>
                         <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[12px] leading-4 text-muted-foreground">{r().muted ? `${r().help} · ${r().muted}` : r().help}</Text>
@@ -292,9 +293,13 @@ export function Composer() {
           <If when={images().length > 0}>
             <View class="flex-row flex-wrap gap-2 pb-3" testID="image-previews">
               <Each of={images()} key={(image) => image.id}>
-                {(image) => <View class="gap-1 w-28">
-                  <Image src={image().data_url} style={{ width: 112, height: 84, objectFit: "contain" }} accessibilityLabel={image().name} />
-                  <Text style={{ numberOfLines: 1 }} class={T.meta}>{image().name}</Text>
+                {(image) => <View class="gap-1 w-24 shrink-0">
+                  <Text style={{ numberOfLines: 1 }} class={`${T.meta} px-0.5`}>{image().name}</Text>
+                  <Button onPress={() => imagePreview.set({ name: image().name, src: image().data_url })}
+                    accessibilityLabel={`Open ${image().name}`} testID={`composer-image-${image().id}`}
+                    class={`w-24 h-24 items-center justify-center rounded-(--radius) overflow-hidden ${FOCUS}`}>
+                    <Image class="w-24 h-24" src={image().data_url} style={{ width: 96, height: 96, objectFit: "cover" }} accessibilityLabel={image().name} />
+                  </Button>
                   <Btn label="Remove image" onPress={() => imageDrafts.update((d) => ({ ...d, [key()]: images().filter((i) => i !== image()) }))} />
                 </View>}
               </Each>
@@ -356,7 +361,7 @@ export function Composer() {
         </View>
         <LocationStrip usageLabel={usageLabel()} meterPct={usage()?.pct == null ? null : meterPct()} meterColor={agentRailColor(agent())} />
       </View>
-    </View>
+    </TimelineColumn>
   );
 }
 
@@ -618,16 +623,16 @@ export function WaitingCard() {
   const cur = () => { const l = items(); return l.length ? l[waitIndex() % l.length] : null; };
   const others = () => { m(); return otherWaits(); };
   return (
-    <View class="px-4 items-center" testID="waiting-slot">
+    <TimelineColumn class="items-center" testID="waiting-slot">
       <If when={others().length > 0 && items().length === 0}>
-        <View class="w-full max-w-[760px] flex-row items-center gap-2 rounded-(--radius-card) border border-border bg-card px-3 py-2 mb-2">
+        <View class="w-full flex-row items-center gap-2 rounded-(--radius-card) border border-border bg-card px-3 py-2 mb-2">
           <Status kind="waiting" />
           <Text class={`flex-1 ${T.sec}`}>{`${others().length} other session${others().length === 1 ? " is" : "s are"} waiting for input`}</Text>
           <Btn label="Go to" onPress={() => run("waiting.go_to")} testID="waiting-go-to" />
         </View>
       </If>
       <If when={cur()}>{(w) => <WaitBody w={w} count={items().length} />}</If>
-    </View>
+    </TimelineColumn>
   );
 }
 
@@ -689,7 +694,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     return bindOpenKeys(map);
   });
   return (
-    <View class="w-full max-w-[760px] mb-2 flex-row rounded-(--radius-card) bg-card overflow-hidden" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
+    <View class="w-full mb-2 flex-row rounded-(--radius-card) bg-card overflow-hidden" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
       <View class="w-[3px] self-stretch bg-primary" testID="waiting-rail" />
       <View class="flex-1 min-w-0 gap-2.5 px-3.5 py-3">
         <View>

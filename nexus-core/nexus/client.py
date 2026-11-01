@@ -58,11 +58,16 @@ def _stream_error(status: int, body: str) -> ApiError:
     return ApiError(status, message)
 
 
+def _authorization(token: str) -> dict[str, str]:
+    """The bearer header, or none for a Core serving its network without a token."""
+    return {"authorization": f"Bearer {token}"} if token else {}
+
+
 class Client:
     def __init__(self, url: str, token: str) -> None:
         self.url = url.rstrip("/")
         self._local_discovery = False
-        self.http = httpx.AsyncClient(base_url=self.url, headers={"authorization": f"Bearer {token}"}, timeout=httpx.Timeout(60.0, connect=5.0))
+        self.http = httpx.AsyncClient(base_url=self.url, headers=_authorization(token), timeout=httpx.Timeout(60.0, connect=5.0))
 
     @classmethod
     def connect(cls) -> Client:
@@ -79,13 +84,16 @@ class Client:
         found = await asyncio.to_thread(daemon.discover)
         if found is None:
             return False
-        authorization = f"Bearer {found['token']}"
+        authorization = _authorization(found["token"]).get("authorization", "")
         url = found["url"].rstrip("/")
         if self.url == url and self.http.headers.get("authorization") == authorization:
             return False
         self.url = url
         self.http.base_url = httpx.URL(url)
-        self.http.headers["authorization"] = authorization
+        if authorization:
+            self.http.headers["authorization"] = authorization
+        else:
+            self.http.headers.pop("authorization", None)
         return True
 
     async def close(self) -> None:

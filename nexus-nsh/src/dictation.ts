@@ -1,4 +1,4 @@
-import { API_BASE, ApiError, request, sleep } from "./core/transport";
+import { ApiError, apiUrl, request, sleep } from "./core/transport";
 import { downmixChannels, MAX_RECORDING_SECONDS, MIN_RECORDING_SECONDS, PREVIEW_WINDOW_SECONDS, previewDue, recordingToWav, rmsLevel, transitionDictation } from "./dictation-logic";
 import type { DictationEvent, DictationPhase } from "./dictation-logic";
 import { confirmDialog, toast } from "./store";
@@ -248,7 +248,7 @@ async function responseError(response: Response): Promise<ApiError> {
 async function transcribe(wav: Uint8Array, partial: boolean, signal?: AbortSignal): Promise<string> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/api/voice/transcribe${partial ? "?partial=1" : ""}`, {
+    response = await fetch(apiUrl(`/api/voice/transcribe${partial ? "?partial=1" : ""}`), {
       method: "POST",
       headers: { accept: "application/json", "content-type": "audio/wav" },
       body: wav.buffer as ArrayBuffer,

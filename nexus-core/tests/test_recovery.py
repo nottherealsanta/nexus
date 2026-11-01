@@ -664,6 +664,51 @@ def test_nested_code_and_runtime_losses_are_reported(tmp_path):
         rt.store.close()
 
 
+def test_lost_jobs_are_closed_so_their_session_can_be_pruned(tmp_path):
+    """A crash leaves `bash.started` open; closing it unblocks event retention.
+
+    The job cannot still be running (it lives in the daemon's memory), and while
+    the pair is open `Store.protected_sessions` pins the session's whole log.
+    """
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    crash = Crash(tmp_path / "nexus.db", workspace)
+    session = crash.session()
+    turn = crash.turn(session)
+    request = crash.request(turn)
+    crash.assistant(session, turn, [], request=request)
+    crash.event(session, "bash.started", {
+        "id": "job_lost", "session_id": session.id, "root": session.id,
+        "command": "sleep 100", "directory": str(workspace), "started": time.time(),
+        "status": "running"})
+    assert session.id in crash.store.protected_sessions()
+    crash.close()
+
+    rt = restart(tmp_path / "nexus.db")
+    try:
+        # The notice still names the lost job…
+        [notice] = texts(rt.store, session.id, "user")
+        assert "job_lost" in notice
+        # …and the durable lifecycle is closed exactly once.
+        finished = [e for e in rt.store.events(session.id, limit=5000)
+                    if e["type"] == "bash.finished" and e["data"].get("id") == "job_lost"]
+        assert len(finished) == 1
+        assert finished[0]["data"]["outcome"] == "lost"
+        assert rt.store.open_bash_jobs() == []
+        assert session.id not in rt.store.protected_sessions()
+        # A second restart is a no-op, not a duplicate event.
+        rt.store.close()
+        again = restart(tmp_path / "nexus.db")
+        try:
+            count = [e for e in again.store.events(session.id, limit=5000)
+                     if e["type"] == "bash.finished" and e["data"].get("id") == "job_lost"]
+            assert len(count) == 1
+        finally:
+            again.store.close()
+    finally:
+        pass
+
+
 def test_code_with_a_durable_result_is_preserved_but_kernel_is_still_lost(tmp_path):
     workspace = tmp_path / "proj"
     workspace.mkdir()

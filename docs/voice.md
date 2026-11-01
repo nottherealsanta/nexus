@@ -31,7 +31,7 @@ real figure. The installed runtime must be exactly `moondream 2.6.1` with
 reinstall message.
 
 STT inference is supported on macOS 14 or newer on Apple silicon (the locked
-PyTorch 2.15 wheel is macOS 14+), and on glibc Linux x86-64 (glibc 2.28 or newer)
+PyTorch 2.14 wheel is macOS 14+), and on glibc Linux x86-64 (glibc 2.28 or newer)
 and aarch64 (glibc 2.34 or newer). The native Kestrel and PyTorch wheels have
 CPython 3.14 builds for those platforms. The model weights are CC-BY-4.0. The
 Photon runtime is installed separately from PyPI; at the version examined, its
@@ -39,6 +39,11 @@ Photon runtime is installed separately from PyPI; at the version examined, its
 enables basic usage telemetry by default. Nexus does not redistribute the
 runtime. Review those terms before enabling the voice extra; see
 `nexus-core/nexus/voice/NOTICE`.
+
+On Apple silicon, the voice extra restricts PyTorch to below 2.15: the current
+Kestrel Metal extension does not include a library for 2.15. Status reports an
+incompatible installed version as `runtime_missing`; rerun `nexus voice init`
+after updating Nexus and restart the daemon to repair an existing environment.
 
 ## Speech to text
 
@@ -210,5 +215,6 @@ Decision (2026-10-29): section I is accepted without a run against real audio, a
 model download or a browser. Everything above is covered by unit, fake-worker and API
 tests. The Bark path is gone; its cached files are left for the user to remove. The
 pinned Parakeet Redux hashes and allowlist come from the Hugging Face revision metadata.
-Real microphone capture, the real STT download and transcription, and playback and
+The real pinned model was prepared successfully on Apple silicon with PyTorch
+2.14.1. Real microphone capture, transcription, and playback and
 Settings in a browser are not verified. The opt-in benchmark above has not been run.

@@ -189,6 +189,11 @@ pub enum OverlayKind {
         text: String,
         top: usize,
     },
+    /// The full-size view of an attachment preview, over the scrim.
+    ImagePreview {
+        name: String,
+        data_url: String,
+    },
     /// Plan limits of the signed-in providers (`/usage`, ctrl+u); `r` reads them again.
     Usage {
         rows: Vec<crate::usage::Row>,
@@ -528,6 +533,11 @@ pub enum Target {
     CopyBlock(usize),
     /// The pinned copy of a user band (sticky header): scrolls back to the band, by block index.
     StickyUser(usize),
+    /// An attachment preview (timeline or composer): open its full-size modal.
+    ImagePreview {
+        name: String,
+        data_url: String,
+    },
     JumpLatest,
     Composer,
     ComposerAgent,

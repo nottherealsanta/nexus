@@ -547,7 +547,7 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
     }
     let inner = composer_inner(
         composer_without_pending(g.composer, app.pending_inputs().len()),
-        !app.composer_ref().images.is_empty(),
+        app.composer_ref().images.len(),
     );
     let (rows, (cr, cc)) = app.composer_view().layout(inner.width as usize);
     let input_height = inner.height as usize;
@@ -602,7 +602,7 @@ pub(crate) fn visible_first(total: usize, cursor_row: usize, h: usize) -> usize 
 
 /// The text area: inside the card (inset two cells from the column), three
 /// cells in and two rows down, below the top padding row.
-pub(crate) fn composer_inner(r: Rect, images: bool) -> Rect {
+pub(crate) fn composer_inner(r: Rect, images: usize) -> Rect {
     let r = composer_card(composer_content(r), images);
     Rect::new(
         r.x + 5,
@@ -630,12 +630,21 @@ mod composer_geometry_tests {
     #[test]
     fn pending_cards_shift_the_input_and_respect_small_terminals() {
         let r = Rect::new(10, 20, 80, 14);
-        assert_eq!(composer_inner(composer_without_pending(r, 0), false).y, 22);
-        assert_eq!(composer_inner(composer_without_pending(r, 1), false).y, 25);
-        assert_eq!(composer_inner(composer_without_pending(r, 8), false).y, 28);
-        assert_eq!(composer_inner(composer_without_pending(r, 1), true).y, 27);
+        assert_eq!(composer_inner(composer_without_pending(r, 0), 0).y, 22);
+        assert_eq!(composer_inner(composer_without_pending(r, 1), 0).y, 25);
+        assert_eq!(composer_inner(composer_without_pending(r, 8), 0).y, 28);
+        assert_eq!(composer_inner(composer_without_pending(r, 1), 1).y, 28);
         let short = Rect::new(0, 0, 80, 10);
         assert_eq!(composer_without_pending(short, 1), short);
+    }
+
+    #[test]
+    fn attachment_thumbnails_wrap_by_width_and_are_square() {
+        assert_eq!(composer_image_rows(80, 0), 0);
+        assert_eq!(composer_image_rows(80, 1), 4, "name + 3 rows");
+        assert_eq!(composer_image_rows(80, 9), 4, "nine fit one line");
+        assert_eq!(composer_image_rows(80, 10), 8, "the tenth wraps");
+        assert_eq!(composer_image_rows(40, 8), 8, "four per line");
     }
 }
 
@@ -643,12 +652,24 @@ fn composer_content(r: Rect) -> Rect {
     Rect::new(r.x, r.y, r.width, r.height.saturating_sub(1))
 }
 
-fn composer_card(r: Rect, images: bool) -> Rect {
-    let offset = if images {
-        2.min(r.height.saturating_sub(7))
-    } else {
-        0
-    };
+/// Rows the composer's attachment strip needs above the card: each thumbnail
+/// is a square with its muted name on the row above.
+fn composer_image_rows(width: u16, images: usize) -> u16 {
+    if images == 0 {
+        return 0;
+    }
+    let gap = 2u16;
+    let available = width.saturating_sub(6);
+    let per_line = (available + gap)
+        .checked_div(crate::images::COMPOSER_THUMB_COLS as u16 + gap)
+        .unwrap_or(0)
+        .max(1) as usize;
+    let lines = images.div_ceil(per_line);
+    (lines * (1 + crate::images::COMPOSER_THUMB_ROWS)) as u16
+}
+
+fn composer_card(r: Rect, images: usize) -> Rect {
+    let offset = composer_image_rows(r.width, images).min(r.height.saturating_sub(7));
     Rect::new(r.x, r.y + offset, r.width, r.height - offset)
 }
 
@@ -664,11 +685,7 @@ fn heights(app: &App, w: u16) -> Heights {
             } else {
                 app.pending_inputs().len().min(4) as u16 + 2
             }
-            + if app.composer_ref().images.is_empty() {
-                0
-            } else {
-                2
-            },
+            + composer_image_rows(w, app.composer_ref().images.len()),
     );
     Heights {
         banner,
@@ -1763,18 +1780,32 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             let tokens = [MULTI, "status.info", "status.success", PRIMARY];
             let nonzero: Vec<_> = counts.iter().enumerate().filter(|(_, n)| **n > 0).collect();
             let available = band.width.saturating_sub(1) as usize;
-            let gap = usize::from(nonzero.len().saturating_mul(2).saturating_sub(1) <= available);
-            let len = nonzero.len() + gap * nonzero.len().saturating_sub(1);
-            let start = band.x + 1 + available.saturating_sub(len) as u16 / 2;
-            for (position, (index, count)) in nonzero.iter().enumerate() {
+            if nonzero.is_empty() {
+                let len = 3.min(available);
+                let glyph = if cx.t.opts.ascii { "-" } else { "─" };
                 put(
                     buf,
-                    start + (position * (1 + gap)) as u16,
+                    band.x + 1 + available.saturating_sub(len) as u16 / 2,
                     band.y + 2,
-                    &rail_count(**count),
-                    cx.st(tokens[*index], bg),
-                    1,
+                    &glyph.repeat(len),
+                    cx.st(MUTED, bg),
+                    len as u16,
                 );
+            } else {
+                let gap =
+                    usize::from(nonzero.len().saturating_mul(2).saturating_sub(1) <= available);
+                let len = nonzero.len() + gap * nonzero.len().saturating_sub(1);
+                let start = band.x + 1 + available.saturating_sub(len) as u16 / 2;
+                for (position, (index, count)) in nonzero.iter().enumerate() {
+                    put(
+                        buf,
+                        start + (position * (1 + gap)) as u16,
+                        band.y + 2,
+                        &rail_count(**count),
+                        cx.st(tokens[*index], bg),
+                        1,
+                    );
+                }
             }
         }
         hits.add(band, target);
@@ -3649,6 +3680,32 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
     (sections, total)
 }
 
+/// The starting-context rows for the session that does not exist yet, memoized.
+///
+/// The rows are a pure function of the preview state (Core's draft plan, the
+/// catalog, the agent file, the project inventories and the local switches) and
+/// the layout; [`App::preview_key`] names exactly those inputs. Assembling them
+/// re-cloned all of that on every frame, and this screen redraws on every
+/// keystroke and animation tick.
+fn preview_rows(
+    cx: &Cx,
+    layout: &paint::CtxLayout,
+    window: Option<u64>,
+) -> std::rc::Rc<Vec<paint::CtxRow>> {
+    let a = cx.app;
+    let key = a.preview_key(layout.width, layout.sep, layout.ell, layout.ascii, window);
+    if let Some((cached, rows)) = a.preview_cache.borrow().as_ref() {
+        if *cached == key {
+            return std::rc::Rc::clone(rows);
+        }
+    }
+    let (sections, total) = preview_sections(cx);
+    let rows = std::rc::Rc::new(paint::context_rows(&sections, total, layout));
+    *a.preview_cache.borrow_mut() = Some((key, std::rc::Rc::clone(&rows)));
+    a.preview_builds.set(a.preview_builds.get() + 1);
+    rows
+}
+
 fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) -> usize {
     let a = cx.app;
     if r.height < 4 || r.width < 24 {
@@ -3656,8 +3713,6 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
     }
     let sep = cx.sep();
     let bold = |fg| cx.st(fg, PANEL).add_modifier(Modifier::BOLD);
-    // The sections.
-    let (sections, total) = preview_sections(cx);
     // The same box as the header after the first message: panel surface, one
     // padding row above and below the rows.
     let boxed = r;
@@ -3697,7 +3752,7 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
         .find(|ag| ag["name"].as_str() == Some(a.current_agent().as_str()))
         .and_then(|ag| ag["prompt"].as_str())
         .unwrap_or("Agent prompt unavailable.");
-    let rows = paint::context_rows(&sections, total, &layout);
+    let rows = preview_rows(cx, &layout, window);
     let total_rows = rows.len();
     let box_rows = (total_rows + 2).min(boxed.height as usize) as u16;
     clear(
@@ -4017,6 +4072,8 @@ fn draw_timeline(
         }
     }
     // Image previews draw over the blank band rows reserved by the builder.
+    // Their clicks are registered after the block targets so a preview wins.
+    let mut preview_hits: Vec<(Rect, Target)> = Vec::new();
     if !timeline.previews.is_empty() {
         let mut viewer = cx.app.image_viewer.borrow_mut();
         for preview in &timeline.previews {
@@ -4046,6 +4103,13 @@ fn draw_timeline(
                     state,
                 );
             }
+            preview_hits.push((
+                Rect::new(x, y0, width, y1 - y0),
+                Target::ImagePreview {
+                    name: preview.name.clone(),
+                    data_url: preview.data_url.clone(),
+                },
+            ));
         }
     }
     // Every visible block is clickable; a click selects it and (except for a
@@ -4151,6 +4215,9 @@ fn draw_timeline(
                 hits.add(button, Target::CopyBlock(bi));
             }
         }
+    }
+    for (rect, target) in preview_hits {
+        hits.add(rect, target);
     }
     // Section headings open the exact frozen snapshot.
     for b in timeline
@@ -4344,19 +4411,23 @@ fn draw_sticky(
         .enumerate()
         .filter(|(_, b)| b.kind == crate::timeline::BlockKind::Turn && b.end - b.start >= 3)
         .collect();
-    let cards: Vec<(usize, usize, usize)> = bands
+    let cards: Vec<(usize, usize, usize, usize)> = bands
         .iter()
         .map(|(_, b)| {
-            let previews: usize = timeline
+            // Attachments sit above the text; the pin starts after their labels
+            // and preview rows, so no image is ever copied into the header.
+            let text_start = timeline
                 .previews
                 .iter()
                 .filter(|p| p.start > b.start && p.start < b.end)
-                .map(|p| p.rows)
-                .sum();
+                .map(|p| p.start + p.rows)
+                .max()
+                .unwrap_or(b.start + 1);
             (
                 b.start,
                 b.end - b.start,
-                (b.end - b.start).saturating_sub(2 + previews).max(1),
+                b.end.saturating_sub(text_start + 1).max(1),
+                text_start - b.start,
             )
         })
         .collect();
@@ -4373,9 +4444,9 @@ fn draw_sticky(
         }
         if k < pin.body {
             let mut line = crate::timeline::TLine {
-                spans: timeline.lines[pin.first + 1 + k].spans.clone(),
-                bg: timeline.lines[pin.first + 1 + k].bg,
-                rail: timeline.lines[pin.first + 1 + k].rail,
+                spans: timeline.lines[pin.first + k].spans.clone(),
+                bg: timeline.lines[pin.first + k].bg,
+                rail: timeline.lines[pin.first + k].rail,
                 focus: false,
                 context_section: None,
                 context_items: Vec::new(),
@@ -5088,7 +5159,11 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                             }
                             .into(),
                         ));
-                        hints.push(("esc".into(), "stop".into()));
+                        // Keep the action hints whole at narrow widths; Esc is
+                        // the manifest's global chain and is documented elsewhere.
+                        if inner_w >= 60 {
+                            hints.push(("esc".into(), "stop".into()));
+                        }
                     }
                     (_, _) if !focused => {
                         hints.push((key("waiting.focus", "alt+w"), "answer".into()));
@@ -5330,6 +5405,58 @@ fn draw_working(cx: &Cx, buf: &mut Buffer, start: u16, y: u16, end: u16) {
     );
 }
 
+/// The composer's attachment strip: a muted name row over a square thumbnail
+/// for every image, wrapping when the width runs out.
+fn draw_composer_images(
+    cx: &Cx,
+    buf: &mut Buffer,
+    strip: Rect,
+    images: &[crate::images::Image],
+    hits: &mut HitMap,
+) {
+    if images.is_empty() || strip.height == 0 || strip.width < 8 {
+        return;
+    }
+    let gap = 2u16;
+    let cols = crate::images::COMPOSER_THUMB_COLS as u16;
+    let rows = crate::images::COMPOSER_THUMB_ROWS as u16;
+    let available = strip.width.saturating_sub(6);
+    let per_line = (available + gap)
+        .checked_div(cols + gap)
+        .unwrap_or(0)
+        .max(1) as usize;
+    let mut viewer = cx.app.image_viewer.borrow_mut();
+    for (i, image) in images.iter().enumerate() {
+        let x = strip.x + 3 + (i % per_line) as u16 * (cols + gap);
+        let y = strip.y + (i / per_line) as u16 * (1 + rows);
+        if y + 1 + rows > strip.bottom() {
+            break;
+        }
+        put(
+            buf,
+            x,
+            y,
+            &truncate(&image.name, (cols + gap - 1) as usize, cx.ell()),
+            cx.st(MUTED, CANVAS),
+            cols + gap - 1,
+        );
+        let rect = Rect::new(x, y + 1, cols, rows);
+        if let Some(state) = viewer.protocol(&format!("composer:{i}"), &image.data_url) {
+            let picture =
+                ratatui_image::StatefulImage::<ratatui_image::protocol::StatefulProtocol>::new()
+                    .resize(ratatui_image::Resize::Fit(None));
+            ratatui::widgets::StatefulWidget::render(picture, rect, buf, state);
+        }
+        hits.add(
+            rect,
+            Target::ImagePreview {
+                name: image.name.clone(),
+                data_url: image.data_url.clone(),
+            },
+        );
+    }
+}
+
 fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let inputs = cx.app.pending_inputs();
     let composer = composer_without_pending(r, inputs.len());
@@ -5356,7 +5483,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         clear(buf, card, cx.st(MUTED, PANEL));
         // The message text starts where the composer's input starts; the
         // `Q`/`S` marker sits two cells left of it, one cell of air between.
-        let input_x = composer_inner(composer, !cx.app.composer_ref().images.is_empty()).x;
+        let input_x = composer_inner(composer, cx.app.composer_ref().images.len()).x;
         let mark_x = input_x.saturating_sub(2);
         let end = card.right().saturating_sub(2);
         for (line, (idx, item)) in inputs
@@ -5422,7 +5549,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let base = cx.st(PRIMARY, PANEL);
     let comp_view = a.composer_view();
     let comp = &*comp_view;
-    let card = composer_card(r, !comp.images.is_empty());
+    let card = composer_card(r, comp.images.len());
     // Rows: the pill/attachment row, the top padding, the input, a blank row,
     // the control row, the bottom edge and the project strip.
     let panel = Rect::new(
@@ -5434,7 +5561,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     clear(buf, panel, base);
     hits.add(panel, Target::Composer);
     card_edge(cx, buf, panel, panel.bottom() - 1, "\u{2580}");
-    let inner = composer_inner(full_r, !comp.images.is_empty());
+    let inner = composer_inner(full_r, comp.images.len());
     let input_height = inner.height as usize;
     let cy = r.bottom() - 3;
     // The focus bar at the card's left edge, only where colour cannot carry
@@ -5457,25 +5584,15 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         }
     }
 
+    // A strip of square attachment thumbnails, each with its name above it.
+    draw_composer_images(
+        cx,
+        buf,
+        Rect::new(r.x, r.y, r.width, card.y.saturating_sub(r.y)),
+        &comp.images,
+        hits,
+    );
     // input
-    if !comp.images.is_empty() && card.y >= r.y + 2 {
-        let shown = comp.images.len();
-        put(
-            buf,
-            inner.x,
-            r.y + 1,
-            &format!(
-                "{shown} attached: {}",
-                comp.images
-                    .iter()
-                    .map(|image| image.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            cx.st(MUTED, CANVAS),
-            inner.width,
-        );
-    }
     if comp.is_empty() {
         let ph = if !a.writable() {
             match a.state.connection {
@@ -6859,6 +6976,9 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
         OverlayKind::ContextDetail { title, text, top } => {
             draw_context_detail(cx, buf, area, title, text, *top, hits)
         }
+        OverlayKind::ImagePreview { name, data_url } => {
+            draw_image_preview(cx, buf, area, name, data_url, hits)
+        }
         OverlayKind::AlertDetail { id, top, .. } => {
             draw_alert_detail(cx, buf, area, *id, *top, hits)
         }
@@ -7520,6 +7640,33 @@ fn context_detail_layout(area: Rect, text: &str) -> (Rect, Vec<String>) {
         modal_box(area, wide, (rows.len() + 6).clamp(10, 40) as u16),
         rows,
     )
+}
+
+fn draw_image_preview(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    name: &str,
+    data_url: &str,
+    hits: &mut HitMap,
+) {
+    let wide = (area.width as u32 * 85 / 100).clamp(24, area.width.saturating_sub(4).max(24) as u32)
+        as u16;
+    let high = (area.height as u32 * 80 / 100)
+        .clamp(10, area.height.saturating_sub(4).max(10) as u32) as u16;
+    let b = modal_box(area, wide, high);
+    let m = modal(cx, buf, area, b, name, hits);
+    if m.body.width == 0 || m.body.height == 0 {
+        return;
+    }
+    let key = format!("full:{name}");
+    if let Some(state) = cx.app.image_viewer.borrow_mut().protocol(&key, data_url) {
+        let image =
+            ratatui_image::StatefulImage::<ratatui_image::protocol::StatefulProtocol>::new()
+                .resize(ratatui_image::Resize::Fit(None));
+        ratatui::widgets::StatefulWidget::render(image, m.body, buf, state);
+    }
+    hint_row(cx, buf, &m, &[("esc", "close")]);
 }
 
 pub(crate) fn context_detail_max(area: Rect, text: &str) -> usize {

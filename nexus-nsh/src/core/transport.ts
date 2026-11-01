@@ -1,5 +1,7 @@
-// HTTP + SSE transport. Same-origin: the host (scripts/serve.mjs) adds the bearer token,
-// so nothing here sees credentials. Mirrors nexus-tui/src/transport.rs.
+// HTTP + SSE transport. The web build is same-origin: the host (scripts/serve.mjs) adds
+// the bearer token, so nothing here sees credentials. A native build (macOS/iOS) points
+// `apiBase()` at a Core on the network, which serves without a token. Mirrors
+// nexus-tui/src/transport.rs.
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public code?: string, public body?: any) { super(message); }
@@ -10,7 +12,12 @@ export class ApiError extends Error {
   get isUnreachable() { return this.status === 502 || this.status === 0; }
 }
 
-export const API_BASE = ""; // same origin; desktop sets an absolute Core/host URL (see README gaps)
+let base = "";
+/** The Core origin requests go to: "" on the web (the host proxies), an absolute URL natively. */
+export const apiBase = () => base;
+export function setApiBase(url: string) { base = url.trim().replace(/\/+$/, ""); }
+/** A Core URL outside `request`/`eventStream` (an image the platform fetches itself). */
+export const apiUrl = (path: string) => base + path;
 
 function parseError(status: number, text: string): ApiError {
   let body: any = null;
@@ -25,7 +32,7 @@ export const newKey = () => `nsh-${Date.now().toString(36)}-${(counter++).toStri
 export interface ReqOpts { body?: unknown; key?: string; ifMatch?: number; signal?: AbortSignal; query?: Record<string, string | number | undefined> }
 
 export async function request<T = any>(method: string, path: string, o: ReqOpts = {}): Promise<T> {
-  let url = API_BASE + path;
+  let url = apiUrl(path);
   if (o.query) {
     const q = Object.entries(o.query).filter(([, v]) => v !== undefined).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join("&");
     if (q) url += (url.includes("?") ? "&" : "?") + q;
@@ -95,7 +102,7 @@ export async function* eventStream(cursor: string | null, signal: AbortSignal): 
   const q = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}/api/event${q}`, { headers: { accept: "text/event-stream" }, signal });
+    res = await fetch(apiUrl(`/api/event${q}`), { headers: { accept: "text/event-stream" }, signal });
   } catch (e) {
     throw new ApiError(0, `network error: ${(e as Error)?.message ?? e}`);
   }

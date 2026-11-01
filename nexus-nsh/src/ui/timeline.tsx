@@ -1,5 +1,5 @@
 import { agentColor } from "../agent-color";
-import { List, Scroll, signal, Text, View } from "nsh";
+import { List, Scroll, computed, signal, Text, View } from "nsh";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
@@ -9,9 +9,10 @@ import { disabledOf, foldedMeta, startingSections, StartingContext } from "./new
 import type { CtxSection } from "./newsession";
 import { ACTIVITY_CONTROL_INSET, ACTIVITY_INDENT, CARD_INSET, TEXT_INDENT, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
-import { contextDetail, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
+import { contextDetail, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed } from "../store";
 import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
+import { apiUrl } from "../core/transport";
 import type { IconName } from "../icons";
 import { roles, statusGlyphs } from "../gen/theme";
 import "../../fonts/MonaspaceArgon-Regular.otf";
@@ -23,6 +24,8 @@ type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
 type Diff = { add: number; del: number };
 /** Timeline metadata uses the app's monospace face. */
 const META = `${T.meta} font-mono`;
+/** A tappable row: finger-sized on a phone, its desktop height otherwise. */
+const hit = (base: string) => (isNarrow() ? "min-h-11" : base);
 
 type Row =
   | { key: string; kind: "footer"; segments: { text: string; tip?: string }[]; error?: string; interrupted: boolean }
@@ -336,7 +339,7 @@ export function detailOf(name: string, args: string | undefined, output: string 
   return detailLines(output ?? "").map((l) => ({ text: l, tone: "plain" as const }));
 }
 
-export function buildRows(): Row[] {
+function buildStableRows(): Row[] {
   m();
   const sel = model.selected;
   if (!sel) return [];
@@ -477,7 +480,8 @@ export function buildRows(): Row[] {
     // A turn's footer belongs after its last message.
     if (turnAt > 0 && (msg === sel.messages[sel.messages.length - 1] || (() => { const next = sel.messages[sel.messages.indexOf(msg) + 1]; return next?.role === "user" && next.delivery !== "steer"; })())) {
       const meta = metas[turnAt - 1];
-      if (meta && !foldedTurn) {
+      // A running turn has no footer: it appears only once the turn is done, as in the TUI.
+      if (meta && !foldedTurn && !meta.running) {
         const v = viewed();
         const segments: { text: string; tip?: string }[] = [];
         if (meta.models.length) segments.push({ text: meta.models.join(" → ") });
@@ -531,12 +535,26 @@ export function buildRows(): Row[] {
     const i = flat.findIndex((r) => r.kind === "context");
     if (i > 0) flat.unshift(...flat.splice(i, 1));
   }
-  const st = model.streaming.get(sel.sessionId);
-  if (st?.reasoning) flat.push({ key: "stream-r", kind: "reasoning", text: st.reasoning, open: true, running: true });
-  if (st?.text) flat.push({ key: "stream-t", kind: "assistant", text: st.text, streaming: true });
   if (sel.messagesMore) flat.unshift({ key: "older-messages", kind: "older", text: "Older messages are not loaded", action: "load-older" });
   if (sel.turnsGap) flat.unshift({ key: "turns-gap", kind: "older", text: `${sel.turnsGap[0].toUpperCase()}${sel.turnsGap.slice(1)}.` });
-  return groupActivities(flat);
+  return flat;
+}
+
+/** Append the live streaming rows without rebuilding the settled history. */
+function withStreaming(flat: Row[], st?: { text: string; reasoning: string }): Row[] {
+  if (!st || (!st.reasoning && !st.text)) return flat;
+  const out = [...flat];
+  if (st.reasoning) out.push({ key: "stream-r", kind: "reasoning", text: st.reasoning, open: true, running: true });
+  if (st.text) out.push({ key: "stream-t", kind: "assistant", text: st.text, streaming: true });
+  return out;
+}
+
+/** The complete timeline, including the live stream (tests and non-memoized callers). */
+export function buildRows(): Row[] {
+  m();
+  const sel = model.selected;
+  if (!sel) return [];
+  return groupActivities(withStreaming(buildStableRows(), model.streaming.get(sel.sessionId)));
 }
 
 type ActivityEntry = Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>;
@@ -658,7 +676,7 @@ function RowView(p: { r: () => Row }) {
             <TextView
               selectable markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
               renderCodeBlock={(block) => <CodeFence block={block} />}
-              classes={{ root: "font-mono text-[15px] leading-6 text-foreground", code: "font-(family-name:--font-code) text-[13px] rounded-(--radius-card) bg-card text-foreground" }}
+              classes={{ root: "font-mono text-[14px] leading-[22px] text-foreground", code: "font-(family-name:--font-code) text-[13px] rounded-(--radius-card) bg-card text-foreground" }}
             />
           </View>
         </If>
@@ -680,7 +698,7 @@ function RowView(p: { r: () => Row }) {
                 <Rail color={RAIL[c.tone] ?? "bg-info"} />
                 <View class={`flex-1 min-w-0 gap-1 py-2 ${CARD_INSET}`}>
                   <Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId}
-                    class={`flex-row items-center gap-2 rounded-(--radius) px-1 -ml-1 min-h-6 hover:bg-accent ${FOCUS}`} testID="child-card">
+                    class={`flex-row items-center gap-2 rounded-(--radius) px-1 -ml-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID="child-card">
                     <Status kind={kind} />
                     <Text class="text-xs leading-4 text-muted-foreground">child</Text>
                     <If when={c.background}><Text class="text-xs leading-4 text-muted-foreground">Background</Text></If>
@@ -712,7 +730,7 @@ function RowView(p: { r: () => Row }) {
           <If when={(r() as any).action === "load-older"} else={<Text class={`${META} py-2 ${TEXT_INDENT}`} testID="timeline-older">{(r() as any).text}</Text>}>
             <View class={`flex-row items-center gap-2 py-2 ${TEXT_INDENT}`}>
               <Text class={META} testID="timeline-older">{(r() as any).text}</Text>
-              <Button onPress={() => run("turn.load_older")} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}>
+              <Button onPress={() => run("turn.load_older")} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 ${hit("min-h-6")} justify-center hover:bg-accent ${FOCUS}`}>
                 <Text class="text-xs leading-4 text-foreground font-mono">Load older messages</Text>
               </Button>
             </View>
@@ -731,7 +749,7 @@ function CodeFence(p: { block: TextViewCodeBlock }) {
       <View class="flex-row items-center h-8 pl-4 pr-2 gap-2">
         <Text class="flex-1 min-w-0 text-xs leading-4 text-muted-foreground font-mono">{p.block.language ?? ""}</Text>
         <Button onPress={() => copyText(code(), "Copied code")} accessibilityLabel="Copy code" testID="code-copy"
-          class={`flex-row items-center gap-1.5 rounded-(--radius) px-2 min-h-6 hover:bg-accent ${FOCUS}`}>
+          class={`flex-row items-center gap-1.5 rounded-(--radius) px-2 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
           <Icon name="copy" size={12} class="tint-muted-foreground" />
           <Text class={META}>Copy</Text>
         </Button>
@@ -793,17 +811,25 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
         {/* The TUI's band rail stays visible; focus only changes its colour. */}
         <View class={`absolute left-0 top-2 bottom-2 w-0.5 rounded-full ${focusedBand() === r().key ? "bg-primary" : "bg-border"}`} />
         <If when={!!r().images?.length}>
-          <View class="flex-row flex-wrap gap-2 pb-2">
+          <View class="flex-row flex-wrap gap-2 pb-2" testID="user-images">
             <Each of={r().images ?? []} key={(i) => i.data_url}>
-              {(i) => <View class="gap-1"><Image src={i().data_url} style={{ width: 240, height: 180, objectFit: "contain" }} accessibilityLabel={i().name} /><Text class={META}>{i().name}</Text></View>}
+              {(i, n) => <View class="gap-1 w-24 shrink-0">
+                <Text style={{ numberOfLines: 1 }} class={`${T.meta} px-0.5`}>{i().name}</Text>
+                <Button onPress={() => imagePreview.set({ name: i().name, src: i().data_url })}
+                  accessibilityLabel={`Open ${i().name}`} testID={`user-image-${r().n}-${n()}`}
+                  class={`w-24 h-24 items-center justify-center rounded-(--radius) overflow-hidden ${FOCUS}`}>
+                  <Image class="w-24 h-24" src={i().data_url} style={{ width: 96, height: 96, objectFit: "cover" }} accessibilityLabel={i().name} />
+                </Button>
+              </View>}
             </Each>
           </View>
         </If>
         <View class="flex-row items-start gap-3">
-          <Text style={big() && !full() ? { userSelect: "text", numberOfLines: 6 } : { userSelect: "text" }} class="flex-1 min-w-0 font-mono text-[15px] leading-6 text-foreground">{body()}</Text>
+          <Text style={big() && !full() ? { userSelect: "text", numberOfLines: 6 } : { userSelect: "text" }} class="flex-1 min-w-0 font-mono text-[14px] leading-[22px] text-foreground">{body()}</Text>
           <View class="flex-row items-center gap-1 pt-0.5">
-            {/* Hover icons: kept mounted (keyboard reachable), shown while the card is hovered or focused. */}
-            <View class={`flex-row items-center ${focusedBand() === r().key ? "" : "opacity-0 group-hover/band:opacity-100"}`}>
+            {/* Hover icons: kept mounted (keyboard reachable), shown while the card is hovered or focused;
+                a phone or tablet has no hover, so they stay visible there. */}
+            <View class={`flex-row items-center ${focusedBand() === r().key || touch ? "" : "opacity-0 group-hover/band:opacity-100"}`}>
               <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
               <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
             </View>
@@ -830,24 +856,31 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
 
 /** The sticky copy of the current turn's user band, under the header; the next band pushes it up. */
 function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void }) {
-  const list = (): Band[] => {
+  // One band scan per row/layout change, shared by the visibility check and the render.
+  const list = computed((): Band[] => {
     const h = rowHeights();
+    const rows = p.rows();
+    const lastUser = rows.reduce((last, r, i) => r.kind === "user" ? i : last, -1);
     let top = LIST_PAD;
     const out: Band[] = [];
-    for (const r of p.rows()) {
-      const height = h[r.key] ?? ROW_ESTIMATE;
-      if (r.kind === "user") out.push({ key: r.key, top, height, n: r.n, text: firstLine(r.text), turnKey: r.turnKey });
-      top += height;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      // The newest user band waits for its measured height: it is on an estimate for a
+      // frame, and using that estimate makes the header jump to the wrong band and blink
+      // until layout settles.
+      const height = h[r.key] ?? (i === lastUser ? undefined : ROW_ESTIMATE);
+      if (r.kind === "user" && height !== undefined) out.push({ key: r.key, top, height, n: r.n, text: firstLine(r.text), turnKey: r.turnKey });
+      top += height ?? ROW_ESTIMATE;
     }
     return out;
-  };
-  const current = () => {
+  });
+  const current = computed(() => {
     const y = scrollY();
     const all = list();
     let idx = -1;
     all.forEach((b, i) => { if (b.top + b.height <= y) idx = i; });
     return idx < 0 ? null : { band: all[idx], next: all[idx + 1] as Band | undefined };
-  };
+  });
   return (
     <If when={!!current()}>
       {() => {
@@ -859,7 +892,7 @@ function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void })
           <View class="absolute left-0 right-0 items-center" style={{ top: offset, pointerEvents: "box-none" }} testID="sticky-user">
             <TimelineColumn>
               <Button onPress={() => p.scrollTo(c.band.top)} accessibilityLabel="Scroll to this message" testID="sticky-user-button"
-                class={`w-full flex-row items-center gap-3 rounded-(--radius) bg-raised border-b border-border min-h-7 hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
+                class={`w-full flex-row items-center gap-3 rounded-(--radius) bg-raised border-b border-border ${hit("min-h-7")} hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
                 <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary font-mono">{c.band.text}</Text>
                 <Text class={META}>{`↑ ${lines} lines of this turn above`}</Text>
               </Button>
@@ -897,7 +930,7 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
   return (
     <View class="py-0.5">
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
-        class={`w-full flex-row items-center gap-2 rounded-(--radius) ${ACTIVITY_CONTROL_INSET} min-h-7 hover:bg-accent ${FOCUS}`}>
+        class={`w-full flex-row items-center gap-2 rounded-(--radius) ${ACTIVITY_CONTROL_INSET} ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
         <Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
         <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary font-mono">{r().summary}</Text>
         <If when={!!r().diff}>
@@ -947,7 +980,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
     <View class="py-0.5">
       <If when={x().running} else={
         <Button onPress={() => toggle(`reason:${x().key}`, false)} accessibilityLabel={`${label()}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
-          class={`w-full flex-row items-center gap-2 rounded-(--radius) ${ACTIVITY_CONTROL_INSET} min-h-6 hover:bg-accent ${FOCUS}`}>
+          class={`w-full flex-row items-center gap-2 rounded-(--radius) ${ACTIVITY_CONTROL_INSET} ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
           <Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
           <Text class={`text-[13px] leading-5 font-semibold text-muted-foreground font-mono`}>{label()}</Text>
           <If when={!!x().encrypted}>
@@ -996,7 +1029,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
   return (
     <View class="py-0.5">
       <View role="button" onFocus={markFocused} onBlur={clearFocused} onPress={() => { markFocused(); toggle(r().key, false); }} accessibilityLabel={`${r().name} ${r().state}`} accessibilityState={{ selected: open() }}
-        class={`flex-row items-center gap-2 rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
+        class={`flex-row items-center gap-2 rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
         <If when={live()} else={<Icon name={verbIcon(r().name)} size={16} class="tint-foreground-secondary" />}>
           {() => <Status kind={stateKind()} />}
         </If>
@@ -1013,7 +1046,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
           <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
             <Text class="text-xs leading-4 font-semibold text-foreground font-mono">{verbLabel(r().name)}</Text>
             <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 font-mono text-xs leading-4 text-foreground-secondary">{r().arg}</Text>
-            <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
+            <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
               <Text class={META}>{r().raw ? "[raw]" : "raw · r"}</Text>
             </Button>
           </View>
@@ -1029,7 +1062,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
           <If when={r().media.length > 0}>
             <View class="flex-row flex-wrap gap-3 px-3 pb-2" testID={`tool-media-${r().id}`}>
               <Each of={r().media} key={(x) => x.artifact}>
-                {(x) => <View class="gap-1"><Image src={`/api/artifact/${x().artifact}`} style={{ width: 320, height: 240, objectFit: "contain" }} accessibilityLabel={x().name || "image"} /><Text class={META}>{x().name || x().mime}</Text></View>}
+                {(x) => <View class="gap-1"><Image src={apiUrl(`/api/artifact/${x().artifact}`)} style={{ width: 320, height: 240, objectFit: "contain" }} accessibilityLabel={x().name || "image"} /><Text class={META}>{x().name || x().mime}</Text></View>}
               </Each>
             </View>
           </If>
@@ -1038,7 +1071,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
               <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
                 <Text class={META}>{`↑ ${hidden()} earlier lines`}</Text>
                 <View class="flex-1" />
-                <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID={`tool-show-all-${r().id}`}>
+                <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-show-all-${r().id}`}>
                   <Text class="text-[13px] leading-5 font-medium text-primary font-mono">Show all</Text>
                 </Button>
               </View>
@@ -1072,7 +1105,18 @@ function newBelow(rows: Row[]): number {
 
 export function Timeline() {
   let ref: any;
-  const rows = () => buildRows();
+  // Settled history is rebuilt only on structural changes; a text/reasoning delta just
+  // appends the two live rows (and regroups), so a long session does not re-walk every
+  // message and tool detail on every token. `computed` also stops the five or six JSX
+  // accesses below from rebuilding the same timeline within one frame.
+  const stable = computed(() => buildStableRows());
+  const rows = computed(() => {
+    streamRev();
+    const sel = model.selected;
+    if (!sel) return [];
+    return groupActivities(withStreaming(stable(), model.streaming.get(sel.sessionId)));
+  });
+  const below = computed(() => newBelow(rows()));
   jump.fn = () => { try { ref?.scrollToEnd({ animated: true }); } catch {} };
   return (
     <View class="flex-1 min-h-0" testID="timeline">
@@ -1093,9 +1137,9 @@ export function Timeline() {
       <If when={scrolledUp()}>
         <View class="absolute bottom-2 left-0 right-0 items-center" style={{ pointerEvents: "box-none" }}>
           <TimelineColumn class="items-end">
-            <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${newBelow(rows())} new`} testID="jump-latest" class={`flex-row items-center gap-1.5 rounded-full border border-border bg-popover px-3 min-h-8 shadow-md hover:bg-accent ${FOCUS}`}>
+            <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${below()} new`} testID="jump-latest" class={`flex-row items-center gap-1.5 rounded-full border border-border bg-popover px-3 min-h-8 shadow-md hover:bg-accent ${FOCUS}`}>
               <Text class="text-[13px] leading-5 text-foreground-secondary">↓</Text>
-              <Text class="text-[13px] leading-5 text-popover-foreground">{newBelow(rows()) > 0 ? `${newBelow(rows())} new` : "latest"}</Text>
+              <Text class="text-[13px] leading-5 text-popover-foreground">{below() > 0 ? `${below()} new` : "latest"}</Text>
               <Text class={META}>{`· ${keyLabel(byId.get("session.jump_latest")!) ?? "end"}`}</Text>
             </Button>
           </TimelineColumn>

@@ -90,7 +90,8 @@ function proxyApi(req, res) {
     if (["host", "origin", "referer", "authorization", "cookie", "connection", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest"].includes(k)) continue;
     headers[k] = v;
   }
-  headers.authorization = `Bearer ${d.token}`;
+  // A Core bound off loopback (`NEXUS_HOST`) serves without a token.
+  if (d.token) headers.authorization = `Bearer ${d.token}`;
   const out = http.request(target, { method: req.method, headers }, (up) => {
     const h = { ...up.headers, "cache-control": "no-store" };
     delete h.connection;

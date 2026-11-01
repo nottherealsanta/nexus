@@ -1,5 +1,5 @@
 import { signal } from "nsh";
-import { API_BASE, ApiError } from "./core/transport";
+import { ApiError, apiUrl } from "./core/transport";
 import { parseWavHeader, Pcm16Decoder, WAV_HEADER_SIZE } from "./speech-format";
 
 export const speechPlaying = signal(false);
@@ -98,7 +98,7 @@ async function responseError(response: Response): Promise<ApiError> {
 async function stopRequest(): Promise<void> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/api/voice/speak/stop`, {
+    response = await fetch(apiUrl("/api/voice/speak/stop"), {
       method: "POST",
       headers: { accept: "application/json", "content-type": "application/json" },
       body: "{}",
@@ -112,7 +112,7 @@ async function stopRequest(): Promise<void> {
 async function streamAnswer(playback: Playback, sessionId: string): Promise<void> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/api/voice/speak`, {
+    response = await fetch(apiUrl("/api/voice/speak"), {
       method: "POST",
       headers: { accept: "audio/wav", "content-type": "application/json" },
       body: JSON.stringify({ session_id: sessionId }),

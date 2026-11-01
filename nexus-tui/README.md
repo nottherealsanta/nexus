@@ -42,7 +42,8 @@ initials. The final edge column fades into the timeline in truecolor terminals. 
 have a blank row between them. The counter row shows nonzero root-session counts
 in order: needs attention (purple), finished/unread (blue), running (green), idle
 (white). Archived sessions are excluded; subagents contribute to their root's
-state rather than counting twice. Counts above nine display `*`. Hovering or
+state rather than counting twice. Counts above nine display `*`; a project with
+no counts shows a three-cell muted rule under its initials instead. Hovering or
 keyboard focus shows the full project name and exact counts with labels.
 Activating a project restores its open tabs and last selected session or new-session
 view in this client. On first selection it falls back to its newest unarchived root
@@ -546,8 +547,8 @@ at a time with `+N more`; a click, or Enter on the focused toast (`F6` to it), o
 the full text in a modal (`c` copies, Esc closes), and the notifications modal opens the
 same text for an entry. The `↓ N new · end` pill sits on the row above the composer card.
 The card also answers `ask` questions: `Alt+W` focuses it and the question wraps to at
-most two lines. Every page has a custom answer field in the card; typing answers in your
-own words or adds context to a selection, and each question keeps its own text. A
+most two lines. Every page has a custom answer field in the card; typing in it answers in
+your own words or adds context to a selection, and each question keeps its own text. A
 number key (1-9, 0 for the tenth) or Up/Down picks an option, clicking an option picks
 it, and `Alt+A` moves between the option list and the answer field. Enter locks the
 answer and moves to the next question; the last question leads to a review page whose
@@ -641,11 +642,14 @@ TUI can be driven by hand in a browser.
 - Clipboard images: **Ctrl+V** in the composer in a local macOS or Linux
   terminal (macOS reads PNG/TIFF through AppKit; Linux uses `wl-paste` or
   `xclip`; SSH clipboard reads are refused). Pasting inserts `[Image A]`,
-  `[Image B]`, … at the cursor; the attachment names appear on one row above the
-  card (no previews); deleting a marker removes its attachment. Up to eight
-  images, 8 MiB combined; image-only sends work and a failed send restores the
-  images. In the timeline the `[Image A]` marker in the text is highlighted and
-  its preview is drawn under the band (`ratatui-image`: kitty, iTerm2 or sixel
+  `[Image B]`, … at the cursor. The composer shows a square thumbnail for each
+  attachment above its input, with the muted name above the thumbnail; deleting
+  a marker removes its attachment. Up to eight images, 8 MiB combined; image-only
+  sends work and a failed send restores the images. In the timeline the
+  `[Image A]` marker stays ordinary message text (no accent colour) and the
+  attachment sits above the message as the same small square thumbnail with its
+  muted name above it; the sticky user header never shows it. Clicking a
+  thumbnail opens a full-size preview (`ratatui-image`: kitty, iTerm2 or sixel
   where the terminal supports it, half-blocks otherwise). Normal text paste is
   unchanged.
 - The top header omits the busy spinner, working label and elapsed time.

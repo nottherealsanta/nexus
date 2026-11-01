@@ -57,6 +57,15 @@ async def test_token_is_required(setup):
     assert response.status_code == 401
 
 
+async def test_an_anonymous_server_answers_without_a_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    app = build_app(make_runtime(remembering(Store(tmp_path / "anon.db"), "scripted/m")), token="", url="http://test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        assert (await client.get("/api/info")).status_code == 200
+        # A supplied token is ignored rather than rejected.
+        assert (await client.get("/api/info", headers={"authorization": "Bearer anything"})).status_code == 200
+
+
 async def test_info_reports_the_api_contract_clients_check(setup):
     _, client, _, _ = setup
     info = (await client.get("/api/info")).json()

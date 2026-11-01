@@ -8,7 +8,7 @@ AGENTS.md         instructions for agents; points to docs/
 docs/             this documentation
 nexus-core/       Python (uv): everything that is not a UI
 nexus-tui/        Rust Ratatui client (its README has build, run and test steps)
-nexus-nsh/        NSH web/desktop client (TSX; its README has build and test steps)
+nexus-nsh/        NSH web/macOS/iOS client (TSX; its README has build and test steps)
 interface/        shared command manifest, theme and capability matrix for both clients
 scripts/nexus     development launcher (tui, web, build, restart, checks)
 ```
@@ -110,6 +110,8 @@ Then, from any directory:
 | `nexus build` | `uv sync`, release TUI build (`--debug` for a debug build), NSH web build |
 | `nexus web` | Build the web app if needed, start Core, serve it on 4820 and open it (`--no-open`, `--port N`) |
 | `nexus dev web` | Start Core and the hot-reloading NSH web app, then open it through the API proxy; Ctrl-C stops both web servers (not Core). Use `--no-open`, `--port N` for the proxy, and `--dev-port N` for NSH (defaults 4820 and 8790). NSH's development host may also be reachable on the local network. |
+| `nexus macos` | Run the NSH app in a macOS (AppKit) window with hot reload (`nsh run App.tsx --target macos`; flags pass through). It needs the address of a Core on the network — see [the NSH README](../nexus-nsh/README.md#platform-notes) |
+| `nexus ios` | Run the same app in an iOS simulator (`nsh run App.tsx --target ios`), or in an iPhone-sized Mac Catalyst window (`--target catalyst`) when no iOS runtime is installed. `npm run ios` in `nexus-nsh/` packages, patches and launches the simulator app instead |
 | `nexus restart` | Stop and start the Core daemon |
 | `nexus stop` | Stop the Core daemon |
 | `nexus status` | Core daemon and provider status |

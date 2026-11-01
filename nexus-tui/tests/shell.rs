@@ -4364,3 +4364,31 @@ fn project_rail_counters_have_colors_overflow_and_hover_details() {
     assert_ne!(edge, before_hover[(band.right() - 1, band.y)].bg);
     assert_ne!(edge, app.theme.color("surface.canvas").unwrap());
 }
+
+#[test]
+fn project_rail_draws_a_three_cell_rule_under_a_project_without_counts() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let project_id = app.current_project().unwrap();
+    let mut empty = app.state.model.projects[&project_id].clone();
+    empty.id = "empty".into();
+    empty.name = "Empty".into();
+    empty.created += 1.0;
+    app.state.model.projects.insert(empty.id.clone(), empty);
+    app.ui.left_rail = true;
+    let (buf, _) = draw(&mut app, 120, 36);
+    let band = app.hits.rect_of(&Target::SideRow(1)).unwrap();
+    let row: String = (band.x..band.right())
+        .map(|x| buf[(x, band.y + 2)].symbol())
+        .collect();
+    assert!(row.contains("───"), "{row:?}");
+    assert_eq!(row.matches('─').count(), 3, "{row:?}");
+    let x = (band.x..band.right())
+        .find(|x| buf[(*x, band.y + 2)].symbol() == "─")
+        .unwrap();
+    for offset in 0..3 {
+        assert_eq!(
+            buf[(x + offset, band.y + 2)].fg,
+            app.theme.color("text.muted").unwrap()
+        );
+    }
+}

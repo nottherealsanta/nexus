@@ -89,7 +89,31 @@ class Recovery:
         for session_id, turns in by_session.items():
             for turn in turns:
                 summaries.append(self._recover(session_id, turn))
+        # After the notices, so an interrupted turn still reports the jobs it lost.
+        self._close_lost_bash_jobs()
         return summaries
+
+    def _close_lost_bash_jobs(self) -> list[str]:
+        """Publish the terminal `bash.finished` for jobs a restart discarded.
+
+        A job exists only in the daemon's memory, so nothing open at startup can
+        still be running. The recovery notice above already names the lost jobs;
+        this closes the durable lifecycle pair, without which
+        `Store.protected_sessions` pins that session's whole event log out of
+        retention and the database grows without bound.
+        """
+        closed: list[str] = []
+        for session_id, job_id in self.store.open_bash_jobs():
+            if self.store.session(session_id) is None:
+                continue  # the session's deletion covers its events
+            if self.store.has_event("bash.finished", {"id": job_id}, session_id=session_id):
+                continue
+            self.bus.publish("bash.finished", {
+                "id": job_id, "session_id": session_id, "root": session_id,
+                "status": "interrupted", "outcome": "lost", "reason": RECOVERY_REASON,
+            }, session_id=session_id)
+            closed.append(job_id)
+        return closed
 
     def _prepare_legacy(self) -> None:
         """Give an older dangling session a durable turn so recovery can label it once."""

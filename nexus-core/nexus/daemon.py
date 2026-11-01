@@ -1,10 +1,14 @@
 """Running Nexus Core as a daemon, and finding it.
 
-One daemon per Nexus home. `serve()` runs it in the foreground on 127.0.0.1 and
-writes `<home>/daemon.json` (`url`, `pid`, `token`; mode 0600) while it runs.
-Clients read that file (`discover()`), and `ensure()` starts the daemon in the
-background when none answers. The port is `$NEXUS_PORT`, default 4747.
-Logs go to `<home>/logs/daemon.log`.
+One daemon per Nexus home. `serve()` runs it in the foreground on 127.0.0.1 (or
+the address `$NEXUS_HOST` names) and writes `<home>/daemon.json` (`url`, `pid`,
+`token`; mode 0600) while it runs. Clients read that file (`discover()`), and
+`ensure()` starts the daemon in the background when none answers. The port is
+`$NEXUS_PORT`, default 4747. Logs go to `<home>/logs/daemon.log`.
+
+A non-loopback bind serves the API to the network without a token, so a client
+such as the iOS app can connect by address alone; only bind on a trusted
+network (a LAN or a Tailscale/private network).
 
 `serve()` binds the port before it writes `daemon.json`, so a second daemon that
 cannot get the port fails without touching the running daemon's file. `stop()`
@@ -15,6 +19,7 @@ so plainly when an unregistered process already holds the port.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import secrets
@@ -32,6 +37,7 @@ import httpx
 from .paths import home
 
 DEFAULT_PORT = 4747
+DEFAULT_HOST = "127.0.0.1"
 START_TIMEOUT_S = 15.0
 STOP_TIMEOUT_S = 10.0
 KILL_TIMEOUT_S = 2.0
@@ -66,6 +72,19 @@ def _read_info() -> dict[str, Any] | None:
 
 def _port() -> int:
     return int(os.environ.get("NEXUS_PORT") or DEFAULT_PORT)
+
+
+def _host(explicit: str | None = None) -> str:
+    """The interface to bind: `--host`, then `$NEXUS_HOST`, then loopback."""
+    return (explicit or os.environ.get("NEXUS_HOST") or DEFAULT_HOST).strip() or DEFAULT_HOST
+
+
+def is_loopback(host: str) -> bool:
+    """Whether `host` is the loopback interface (the token stays required there)."""
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host.lower() == "localhost"
 
 
 def _alive(pid: int) -> bool:
@@ -103,25 +122,27 @@ def _running(pid: int) -> bool:
     return _alive(pid) and _is_daemon(pid)
 
 
-def _listening(port: int) -> bool:
+def _listening(port: int, host: str = DEFAULT_HOST) -> bool:
+    probe = "127.0.0.1" if host in ("0.0.0.0", "::") else host
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+        with socket.create_connection((probe, port), timeout=0.5):
             return True
     except OSError:
         return False
 
 
-def _bind(port: int) -> socket.socket:
+def _bind(host: str, port: int) -> socket.socket:
     """Take the port before anything else runs, so a failed bind writes no state."""
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    listener = socket.socket(family, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        listener.bind(("127.0.0.1", port))
+        listener.bind((host, port))
     except OSError as exc:
         listener.close()
         reason = exc.strerror or str(exc)
         raise SystemExit(
-            f"nexus: cannot listen on 127.0.0.1:{port} ({reason}); another daemon or program holds it "
+            f"nexus: cannot listen on {host}:{port} ({reason}); another daemon or program holds it "
             f"(see `nexus ps` and {log_path()}), or set $NEXUS_PORT"
         ) from None
     return listener
@@ -130,28 +151,37 @@ def _bind(port: int) -> socket.socket:
 def port_conflict() -> str | None:
     """A sentence for a listener on the daemon port that this home's `daemon.json` does not name."""
     port = _port()
-    if _registered_pid() is not None or not _listening(port):
+    host = _host()
+    if _registered_pid() is not None or not _listening(port, host):
         return None
     return (
-        f"127.0.0.1:{port} is already in use by a process that is not this home's daemon: "
+        f"{host}:{port} is already in use by a process that is not this home's daemon: "
         f"no daemon.json points at it. Stop that process, or set $NEXUS_PORT to another port."
     )
 
 
-def serve(port: int | None = None) -> None:
+def serve(port: int | None = None, host: str | None = None) -> None:
     import uvicorn
 
     from .server import build_app, make_runtime
 
+    host = _host(host)
     port = port or _port()
-    url = f"http://127.0.0.1:{port}"
-    token = secrets.token_urlsafe(32)
-    listener = _bind(port)
+    # A local client reaches a wildcard bind over loopback; a specific address binds
+    # only itself, so its own address is what `daemon.json` must name.
+    url_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    url = f"http://{url_host}:{port}"
+    anonymous = not is_loopback(host)
+    token = "" if anonymous else secrets.token_urlsafe(32)
+    listener = _bind(host, port)
     _write_info({"url": url, "pid": os.getpid(), "token": token, "started": time.time()})
+    if anonymous:
+        print(f"nexus: serving on http://{host}:{port} without a token (NEXUS_HOST); "
+              "use this only on a trusted network", flush=True)
     try:
         app = build_app(make_runtime(), token=token, url=url)
         config = uvicorn.Config(
-            app, host="127.0.0.1", port=port, log_level="warning", timeout_graceful_shutdown=5
+            app, host=host, port=port, log_level="warning", timeout_graceful_shutdown=5
         )
         uvicorn.Server(config).run(sockets=[listener])
     finally:
@@ -166,8 +196,10 @@ def discover() -> dict[str, Any] | None:
     data = _read_info()
     if data is None:
         return None
+    token = data.get("token")
+    headers = {"authorization": f"Bearer {token}"} if token else {}
     try:
-        response = httpx.get(f"{data['url']}/api/info", headers={"authorization": f"Bearer {data['token']}"}, timeout=2)
+        response = httpx.get(f"{data['url']}/api/info", headers=headers, timeout=2)
     except (KeyError, httpx.HTTPError):
         return None
     return data if response.status_code == 200 else None

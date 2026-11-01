@@ -197,7 +197,8 @@ class VoiceManager:
             raise
         except ImportError as exc:
             await engine.close()
-            raise VoiceError("voice_dependency_missing", "STT needs the voice extra: nexus voice init") from exc
+            self._last_error = _describe(exc)
+            raise VoiceError("voice_dependency_missing", f"STT runtime failed: {self._last_error}. Run: nexus voice init") from exc
         except FileNotFoundError as exc:
             await engine.close()
             raise VoiceError("voice_model_not_cached", "The STT model is not downloaded") from exc

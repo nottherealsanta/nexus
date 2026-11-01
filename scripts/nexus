@@ -8,6 +8,8 @@
 #                             (after `nexus voice init`, syncs keep the voice extra)
 #   nexus web [flags]         serve the NSH web app and open it
 #   nexus dev web [flags]     run the hot-reloading web app and open it
+#   nexus macos [flags]       run the NSH app in a macOS window
+#   nexus ios [flags]         run the NSH app in an iOS simulator (Mac Catalyst when none is installed)
 #   nexus restart             restart the Core daemon
 #   nexus stop                stop the Core daemon
 #   nexus migrate             make ~/.nexus the Nexus 0.10 home (asks first; see docs/development.md)
@@ -132,6 +134,14 @@ build_all() {
   fi
   printf '› NSH web app\n'
   (cd "$NSH" && npm run gen && npm run build)
+}
+
+### The NSH app natively: the same TSX in AppKit (macos) or UIKit (an iPhone-sized
+### Catalyst window; `nsh run App.tsx --target ios` needs an iOS simulator runtime).
+native() {
+  ensure_nsh
+  local target="$1"; shift
+  (cd "$NSH" && npm run gen && nsh run App.tsx --target "$target" "$@")
 }
 
 web() {
@@ -302,6 +312,14 @@ case "${1:-}" in
   once)                shift; tui --once "$@" ;;
   build|b)             shift; build_all "$@" ;;
   web|w)               shift; web "$@" ;;
+  macos)               shift; native macos "$@" ;;
+  ios)                 shift
+    if command -v xcrun >/dev/null 2>&1 && xcrun simctl list runtimes 2>/dev/null | grep -qi "iOS"; then
+      native ios "$@"
+    else
+      native catalyst "$@"
+    fi ;;
+
   dev)                 shift; [ "${1:-}" = web ] || die "usage: nexus dev web [--no-open] [--port N] [--dev-port N]"; shift; dev_web "$@" ;;
   restart|r)           shift; restart "$@" ;;
   stop)                shift; ensure_home; core daemon stop "$@" ;;

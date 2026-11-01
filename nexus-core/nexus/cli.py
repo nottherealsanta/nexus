@@ -889,6 +889,10 @@ def _daemon(action: str) -> None:
     if action == "start":
         found = daemon.ensure()
         print(f"running at {found['url']} (pid {found['pid']})")
+        host = daemon._host()
+        if not daemon.is_loopback(host):
+            print(f"the network reaches it at http://<this machine>:{daemon._port()} without a token "
+                  f"({host}); only on a trusted LAN or Tailscale network")
     elif action == "stop":
         print("stopped" if daemon.stop() else "not running")
     else:
@@ -969,6 +973,7 @@ def main(argv: list[str] | None = None) -> int:
     update.add_argument("--json", action="store_true", help="print the result as JSON")
     serve = sub.add_parser("serve", help="run the daemon in the foreground")
     serve.add_argument("--port", type=int)
+    serve.add_argument("--host", help="address to bind (default 127.0.0.1, or $NEXUS_HOST); a non-loopback bind serves without a token")
     voice = sub.add_parser("voice", help="speech to text and text to speech")
     voice.add_argument("action", choices=["init", "status"], help="init installs the voice runtime; status shows the models")
     dmn = sub.add_parser("daemon", help="start, stop or check the background daemon")
@@ -1055,7 +1060,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result, indent=2) if args.json else
                   result["detail"] + (f"\n{result['url']}\nUpdate by pulling the checkout and running ./install.sh." if result["state"] == "available" else ""))
         elif args.command == "serve":
-            daemon.serve(args.port)
+            daemon.serve(args.port, args.host)
         elif args.command == "daemon":
             _daemon(args.action)
         elif args.command == "agent":

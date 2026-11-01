@@ -1,11 +1,12 @@
-import { Scroll, Text, View } from "nsh";
+import { Scroll, Text, View, safeArea } from "nsh";
 import { Button } from "nsh/base";
 import { IconButton, Status, FOCUS, TONE } from "./kit";
 import { SidebarTabs, attention, leftSidebarWidth } from "./sidebar";
 import { byId, closeTab, keyLabel, run, rightIsOpen, rightWidthHint, tabIds } from "../commands";
 import { attention as attentionGlyph, statusGlyphs, structure } from "../gen/theme";
-import { centre, connection, drawer, isNarrow, leftOpen, m, model, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
+import { centre, connection, coreUrl, drawer, isNarrow, leftOpen, m, model, native, touch, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
 import { agentColor } from "../agent-color";
+import { coreEditing } from "./connect";
 
 function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
 
@@ -34,16 +35,16 @@ function SessionTab(p: { id: string }) {
   };
   return (
     <View
-      class={`group/tab flex-row min-w-0 max-w-[224px] h-7 items-center rounded-(--radius) ${active() ? "bg-background" : "hover:bg-accent"}`}
+      class={`group/tab flex-row min-w-0 max-w-[224px] ${isNarrow() ? "h-10" : "h-7"} items-center rounded-(--radius) ${active() ? "bg-background" : "hover:bg-accent"}`}
     >
       <Button
         onPress={activate} selected={active()} accessibilityLabel={`${onViewedSession() ? "Rename" : "Open"} ${title()}, ${status().label}`}
-        testID={`session-tab-${p.id}`} class={`flex-row min-w-0 flex-1 items-center gap-1.5 rounded-l-(--radius) px-2.5 h-7 ${FOCUS}`}
+        testID={`session-tab-${p.id}`} class={`flex-row min-w-0 flex-1 items-center gap-1.5 rounded-l-(--radius) px-2.5 ${isNarrow() ? "h-10" : "h-7"} ${FOCUS}`}
       >
         <Text class={`shrink-0 text-[13px] leading-5 ${status().tone}`} accessibilityLabel={status().label}>{status().glyph}</Text>
         <Text testID={`tab-title-${p.id}`} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 text-[13px] leading-5 ${active() ? "font-semibold text-foreground" : "text-muted-foreground"}`}>{title()}</Text>
       </Button>
-      <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`shrink-0 items-center justify-center rounded-r-(--radius) px-1.5 h-7 text-muted-foreground hover:text-foreground ${active() ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100 focus:opacity-100"} ${FOCUS}`}>
+      <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`shrink-0 items-center justify-center rounded-r-(--radius) ${isNarrow() ? "h-10 px-2.5" : "h-7 px-1.5"} text-muted-foreground hover:text-foreground ${active() || touch ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100 focus:opacity-100"} ${FOCUS}`}>
         <Text class="text-[15px] leading-5">×</Text>
       </Button>
     </View>
@@ -59,12 +60,12 @@ function WorkspaceTabs() {
       <Scroll horizontal scrollbar={false} class="flex-1 min-w-0" contentClass="flex-row items-center gap-1">
         <Each of={ids()} key={(id) => id}>{(id) => <SessionTab id={id()} />}</Each>
         <If when={current() === "new_session" || (current() === "session" && !viewed())}>
-          <Button selected onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab" class={`shrink-0 rounded-(--radius) bg-background px-2.5 h-7 ${FOCUS}`}>
+          <Button selected onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab" class={`shrink-0 rounded-(--radius) bg-background px-2.5 ${isNarrow() ? "h-10" : "h-7"} ${FOCUS}`}>
             <Text class="text-[13px] leading-5 font-semibold text-foreground">New session</Text>
           </Button>
         </If>
       </Scroll>
-      <Button onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab-add" class={`shrink-0 items-center justify-center rounded-(--radius) w-7 h-7 text-muted-foreground hover:bg-accent ${FOCUS}`}>
+      <Button onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab-add" class={`shrink-0 items-center justify-center rounded-(--radius) ${isNarrow() ? "size-10" : "size-7"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
         <Text class="text-[17px] leading-5">+</Text>
       </Button>
     </View>
@@ -164,7 +165,8 @@ export function Header() {
   const leftDocked = () => !isNarrow() && leftOpen();
   const rightDocked = () => !isNarrow() && rightIsOpen(width());
   return (
-    <View class={`flex-row items-center bg-sidebar ${isNarrow() ? "h-14" : "h-11"}`} role="toolbar" accessibilityLabel="Workspace header" testID="header">
+    <View class={`flex-row items-center bg-sidebar ${isNarrow() ? "min-h-14" : "min-h-11"}`} role="toolbar" accessibilityLabel="Workspace header" testID="header"
+      style={{ paddingTop: safeArea().top }}>
       <View class="flex-row items-center gap-0.5 shrink-0 px-2" style={leftDocked() ? { width: leftSidebarWidth() } : {}}>
         <IconButton icon="panel-left" label="Toggle left sidebar" testID="toggle-left" selected={isNarrow() ? drawer() === "left" : leftOpen()} onPress={() => run("sidebar.left.toggle")} reason={key("sidebar.left.toggle") ?? undefined} />
         <If when={leftDocked()}><SidebarTabs /></If>
@@ -180,6 +182,12 @@ export function Header() {
         </View>
       </View>
       <View class={`flex-row items-center justify-end gap-1 shrink-0 px-2 ${rightDocked() ? "w-[300px]" : ""}`}>
+        <If when={native}>
+          <Button onPress={() => coreEditing.set(true)} accessibilityLabel={`Core connection, ${coreUrl() ?? ""}`} testID="core-connect"
+            class={`shrink-0 items-center justify-center rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "h-7"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
+            <Text class="text-[12px] leading-4 font-medium">Core</Text>
+          </Button>
+        </If>
         <View>
           <IconButton icon="bell" label="Notifications" testID="open-notifications" onPress={() => run("notifications.open")} reason={key("notifications.open") ?? undefined} />
           <If when={unread() > 0}><View class="absolute top-1 right-1 size-2 rounded-full bg-info" accessible={false} /></If>

@@ -767,6 +767,11 @@ pub struct App {
     pub timeline_revision: std::cell::Cell<u64>,
     /// Last built timeline and the key it was built for.
     pub timeline_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<crate::timeline::Timeline>)>>,
+    /// The new-session starting-context rows and the key they were built for:
+    /// assembling them clones the draft plan, catalog and every inventory row.
+    pub preview_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Vec<crate::paint::CtxRow>>)>>,
+    /// Test/diagnostic counter for real preview builds.
+    pub preview_builds: std::cell::Cell<u64>,
     /// Test/diagnostic counter for real timeline builds.
     pub timeline_builds: std::cell::Cell<u64>,
     /// Terminal image protocol and the decoded states behind timeline previews.
@@ -957,6 +962,8 @@ impl App {
             layout: std::cell::RefCell::new(crate::timeline::LayoutCache::default()),
             timeline_revision: std::cell::Cell::new(0),
             timeline_cache: std::cell::RefCell::new(None),
+            preview_cache: std::cell::RefCell::new(None),
+            preview_builds: std::cell::Cell::new(0),
             timeline_builds: std::cell::Cell::new(0),
             image_viewer: std::cell::RefCell::new(crate::images::Viewer::default()),
             bindings,
@@ -5431,20 +5438,32 @@ impl App {
     ///
     /// Model inputs are covered by `timeline_revision` (bumped by every sync
     /// message and result); the rest are hashed here: the viewed session, its
-    /// width, resolved theme, focus/selection, fold/raw state, detail level and
-    /// animation phase. Chrome-only changes (typing, scrolling, toasts, status)
+    /// width, resolved theme, focus/selection, fold/raw state and detail level.
+    /// Animation is an input only when the last build baked a spinner, shimmer
+    /// or flash into its lines, and wall-clock seconds only when it baked a live
+    /// duration; a settled timeline survives ticks and other sessions' turns
+    /// unchanged. Chrome-only changes (typing, scrolling, toasts, status)
     /// therefore reuse the lines, blocks and hit-target indices of the last
     /// build. Non-selected session events stay conservative: every sync message
     /// bumps the revision, so child cards and waits cannot go stale.
     pub fn timeline_for(&self, width: usize) -> std::rc::Rc<crate::timeline::Timeline> {
-        let key = self.timeline_cache_key(width);
-        if let Some((cached, timeline)) = self.timeline_cache.borrow().as_ref() {
+        let cache = self.timeline_cache.borrow();
+        if let Some((cached, timeline)) = cache.as_ref() {
+            // The animation frame and the wall clock only belong in the key when
+            // the last build actually baked them into a glyph or a duration.
+            // Otherwise a tick is a chrome-only change and reuse is exact.
+            let key = self.timeline_cache_key(width, timeline.animated, timeline.clocked);
             if *cached == key {
                 return std::rc::Rc::clone(timeline);
             }
         }
+        drop(cache);
         let timeline =
             std::rc::Rc::new(crate::timeline::build(self, &self.theme, self.frame, width));
+        // Key what was built, not what was assumed: the flags are only known
+        // after the build, and they are exactly the inputs a later frame may
+        // share or differ by.
+        let key = self.timeline_cache_key(width, timeline.animated, timeline.clocked);
         *self.timeline_cache.borrow_mut() = Some((key, std::rc::Rc::clone(&timeline)));
         self.timeline_builds.set(self.timeline_builds.get() + 1);
         timeline
@@ -5456,7 +5475,7 @@ impl App {
             .set(self.timeline_revision.get().wrapping_add(1));
     }
 
-    fn timeline_cache_key(&self, width: usize) -> u64 {
+    fn timeline_cache_key(&self, width: usize, animated: bool, clocked: bool) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.timeline_revision.get().hash(&mut h);
@@ -5467,7 +5486,9 @@ impl App {
         (self.ui.view as u8).hash(&mut h);
         self.ui.focus.hash(&mut h);
         self.ui.timeline_sel.hash(&mut h);
-        if !self.theme.opts.reduced_motion {
+        if animated && !self.theme.opts.reduced_motion {
+            // The spinner/shimmer phase is only an input when the cached lines
+            // actually baked one in (a settled session has no animated glyph).
             self.frame.hash(&mut h);
         }
         let mut opens: Vec<(&String, &bool)> = self.ui.timeline_open.iter().collect();
@@ -5488,10 +5509,44 @@ impl App {
             .selected
             .as_ref()
             .is_some_and(|view| self.is_busy(&view.session_id));
-        if busy || !self.state.model.running.is_empty() {
-            // Running durations are wall-clock seconds in turn footers.
+        if busy && clocked {
+            // A running tool or busy child card shows wall-clock seconds; a turn
+            // footer's duration comes from stored times and stays put.
             (crate::app::now_secs() as u64).hash(&mut h);
         }
+        h.finish()
+    }
+
+    /// The key for the new-session starting-context preview.
+    ///
+    /// Every sync message bumps `timeline_revision`, which covers the catalog,
+    /// the agent files, Core's draft plan and the project inventories; the
+    /// local draft switches and the layout parameters are hashed here. The
+    /// instruction file is read once per path (`render.rs`), so the project in
+    /// the key covers it.
+    pub fn preview_key(
+        &self,
+        width: usize,
+        sep: &str,
+        ell: &str,
+        ascii: bool,
+        window: Option<u64>,
+    ) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.timeline_revision.get().hash(&mut h);
+        self.viewed_id().hash(&mut h);
+        width.hash(&mut h);
+        sep.hash(&mut h);
+        ell.hash(&mut h);
+        ascii.hash(&mut h);
+        window.hash(&mut h);
+        self.current_project().hash(&mut h);
+        self.current_agent().hash(&mut h);
+        self.ui.draft.agent.hash(&mut h);
+        self.ui.draft.model.hash(&mut h);
+        self.ui.draft.effort.hash(&mut h);
+        self.ui.draft.disabled_tools.hash(&mut h);
         h.finish()
     }
 
@@ -7759,7 +7814,7 @@ impl App {
                     .clamp(0, checklist.skills.len().saturating_sub(1) as isize)
                     as usize;
             }
-            Some(OverlayKind::Usage { .. }) | None => {}
+            Some(OverlayKind::Usage { .. }) | Some(OverlayKind::ImagePreview { .. }) | None => {}
         }
     }
 
@@ -9906,7 +9961,7 @@ impl App {
                         self.regions.composer,
                         self.pending_inputs().len(),
                     ),
-                    !self.composer_ref().images.is_empty(),
+                    self.composer_ref().images.len(),
                 );
                 if self.ui.overlay.is_none()
                     && self.ui.dialog.is_none()
@@ -9982,7 +10037,7 @@ impl App {
                             self.regions.composer,
                             self.pending_inputs().len(),
                         ),
-                        !self.composer_ref().images.is_empty(),
+                        self.composer_ref().images.len(),
                     );
                     let row = ev
                         .row
@@ -10242,6 +10297,9 @@ impl App {
                 self.copy_selected();
             }
             Target::StickyUser(i) => self.select_block(i),
+            Target::ImagePreview { name, data_url } => {
+                self.open_overlay(OverlayKind::ImagePreview { name, data_url });
+            }
             Target::JumpLatest => self.run_command("session.jump_latest"),
             Target::Composer => self.ui.focus = Focus::Composer,
             Target::ComposerAgent => self.run_command("agent.change"),

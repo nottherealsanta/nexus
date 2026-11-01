@@ -62,8 +62,26 @@ describe("modal recipe (I7)", () => {
     await app.waitFor("id:cmd-model.change");
     await app.press("id:cmd-model.change");
     await app.waitFor("id:picker");
-    expect(app.texts().includes("enter choose · esc close")).toBe(true);
+    expect(app.texts().includes("↑↓ move · enter choose · esc close")).toBe(true);
     await app.waitFor("id:pick-0");
+  });
+
+  test("the model picker names models like the TUI, filters, and chooses with Enter", async () => {
+    const app = await open("./App.tsx", { network: network(), width: 1024, height: 768, platform: "web" });
+    await app.waitFor("text:demo");
+    await app.keyboard.press(`${mod}+p`);
+    await app.type("id:palette-input", "model");
+    await app.waitFor("id:cmd-model.change");
+    await app.press("id:cmd-model.change");
+    await app.waitFor("id:picker");
+    expect(app.texts().includes("GPT-5")).toBe(true);                 // display name, not the ref
+    expect(app.texts().includes("codex/gpt-5")).toBe(true);          // info panel ref
+    expect(app.texts().includes("Context: 200,000 tokens")).toBe(true);
+    expect(app.texts().includes("1 of 1")).toBe(true);
+    await app.type("id:picker-input", "gpt5");                        // fuzzy, as in the TUI
+    await app.waitFor("id:pick-0");
+    await app.keyboard.press("enter");
+    await app.waitFor("text:The new session will use model codex/gpt-5");
   });
 
   test("a destructive confirm has Cancel as its default: Enter cancels, nothing is deleted", async () => {

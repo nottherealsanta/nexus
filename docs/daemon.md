@@ -34,7 +34,15 @@ the latest GitHub release and never installs.
   only after `GET /api/info` answers with the token.
 - **Token.** A new random token is made on each start. It keeps other local
   users and web pages off the loopback port.
-- **Port.** `$NEXUS_PORT`, default 4747, bound to 127.0.0.1 only.
+- **Port and address.** `$NEXUS_PORT` (default 4747) on `$NEXUS_HOST` (default
+  `127.0.0.1`; `nexus serve --host` overrides it). `0.0.0.0` serves the whole
+  network; `daemon.json` still names the loopback URL for local clients.
+- **Remote clients.** A non-loopback bind serves `/api/*` without a token, so a
+  phone on the same LAN or Tailscale network connects to `http://<host>:<port>`
+  by address alone (the iOS NSH app asks for it once). Only bind on a trusted
+  network: anyone who can reach the address can use the API. A specific
+  non-loopback address is what `daemon.json` then names, since that bind does
+  not accept loopback connections.
 - **Logs.** `~/.nexus/logs/daemon.log`.
 - **Same code.** The background daemon runs `python -m nexus serve` with the
   same interpreter as the client that started it.
@@ -198,7 +206,12 @@ id into a cursor, `<generation>:<id>`, and serves the reconnect stream.
   after 14 days or the 256 MiB budget and advance `log.floor`
   (`NEXUS10_EVENT_RETENTION_DAYS`, `NEXUS10_EVENT_RETENTION_BYTES`). Events are
   pinned by an in-flight replay and protected by an unfinished turn/request, an
-  open wait or a live background job. Messages, snapshots, turn/request/tool
+  open wait or a live background job. A background job lives only in the
+  daemon's memory, so startup recovery closes every `bash.started` a restart
+  discarded with a terminal `bash.finished` (`outcome: "lost"`) after the
+  recovery notice names it; without that pair the protection would pin the
+  session's whole log forever and the database would grow without bound.
+  Messages, snapshots, turn/request/tool
   evidence and model context never expire with the wire log. Terminal
   turn/request/tool rows are pruned after 30 days while keeping 200 turns per
   session; mutation entries expire seven days after terminal resolution.
@@ -210,7 +223,11 @@ id into a cursor, `<generation>:<id>`, and serves the reconnect stream.
   (`NEXUS10_RETENTION_BATCH_SIZE` 2000, `NEXUS10_RETENTION_EVENT_BATCHES` 4),
   then yields for 50 ms
   (`NEXUS10_RETENTION_CATCHUP_DELAY_SECONDS`, default 0.05). Catch-up is
-  therefore not limited by an hourly cadence. `log.retention` announcements
+  therefore not limited by an hourly cadence. Every step is skipped when its
+  trigger-maintained counter says there is nothing to do: a pass used to walk
+  the whole measured suffix (hundreds of milliseconds on a 1.9 M-event log)
+  only to find no unmeasured row, which stalled the event loop and therefore
+  both clients once a minute. `log.retention` announcements
   are rate-limited to one per 60 seconds
   (`NEXUS10_RETENTION_ANNOUNCE_SECONDS`), so an impossible budget cannot make
   maintenance flood its own log. Deferred partial indexes are built at most one

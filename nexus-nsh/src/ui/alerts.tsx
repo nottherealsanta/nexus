@@ -3,7 +3,7 @@ import { Button } from "nsh/base";
 import { Btn, Icon, IconButton, T, FOCUS } from "./kit";
 import { Modal, ModalFooter, ModalTitle } from "./modal";
 import { run, availability, byId, copyText, escape } from "../commands";
-import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, openAlert, splitAlert, tick, TOAST_VISIBLE, toasts } from "../store";
+import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, native, openAlert, splitAlert, tick, TOAST_VISIBLE, toasts } from "../store";
 import type { Toast } from "../store";
 import { statusGlyphs } from "../gen/theme";
 
@@ -35,7 +35,13 @@ export function currentAlerts(): Alert[] {
       sub: c.noDaemon ? "Start it with `nexus daemon start` (or the button), then this view resyncs by itself." : `${c.reason}. Still retrying; the view is read-only.`,
       actions: [...(c.noDaemon ? [{ label: "Start Core", cmd: "app.start_daemon" }] : []), { label: "Retry now", cmd: "app.reconnect" }], dismissible: false,
     }); break;
-    case "auth_failed": out.push({ key: "conn", level: "error", text: "Authentication with Core failed", sub: `${c.reason}. The host re-reads daemon.json on every request; check NEXUS10_HOME of the host process.`, actions: [{ label: "Retry now", cmd: "app.reconnect" }], dismissible: false }); break;
+    case "auth_failed": out.push({
+      key: "conn", level: "error", text: "Authentication with Core failed",
+      sub: native
+        ? `${c.reason}. This Core requires a token: start it with NEXUS_HOST=0.0.0.0 so a native app connects without one, or check the address on the Core button.`
+        : `${c.reason}. The host re-reads daemon.json on every request; check NEXUS10_HOME of the host process.`,
+      actions: [{ label: "Retry now", cmd: "app.reconnect" }], dismissible: false,
+    }); break;
     default: break;
   }
   for (const b of banners()) {

@@ -39,6 +39,20 @@ def _version_error(versions: dict[str, str]) -> str | None:
     return None
 
 
+def _mac_torch_error() -> str | None:
+    if platform.system() != "Darwin" or platform.machine().lower() != "arm64":
+        return None
+    try:
+        version = metadata.version("torch")
+        parts = version.split("+", 1)[0].split(".")
+        major, minor = int(parts[0]), int(parts[1])
+    except (metadata.PackageNotFoundError, ValueError, IndexError):
+        return "Cannot determine the PyTorch version; run: nexus voice init"
+    if (major, minor) >= (2, 15):
+        return f"PyTorch {version} is incompatible with the STT Metal extension; run: nexus voice init"
+    return None
+
+
 def entry(spec: dict[str, Any], *, supported: bool = True) -> dict[str, Any]:
     repo, revision, _ = spec["repos"][0]
     cached = [hf_cache.find(r, rev, files) for r, rev, files in spec["repos"]]
@@ -114,6 +128,8 @@ def status() -> dict[str, Any]:
     stt_repo = values["voice"]["stt_model"]
     supported = _platform_stt_supported()
     stt = entry(_chosen(STT, stt_repo), supported=supported)
+    if stt["state"] == "ready" and (error := _mac_torch_error()):
+        stt.update(state="runtime_missing", error=error)
     reason = unsupported_reason(stt_repo)
     if reason is not None:
         stt.update(state="unsupported", error=reason)

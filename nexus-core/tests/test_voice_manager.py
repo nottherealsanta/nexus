@@ -148,6 +148,22 @@ async def test_runtime_missing_is_reported_without_constructing_engine() -> None
 
 
 @pytest.mark.asyncio
+async def test_load_import_error_explains_the_actual_runtime_failure() -> None:
+    class BrokenEngine(FakeEngine):
+        async def load(self):
+            raise ImportError("incompatible PyTorch extension")
+
+    manager, engine = make_manager(engine=BrokenEngine())
+    with pytest.raises(VoiceError) as error:
+        await manager.prepare()
+    assert error.value.code == "voice_dependency_missing"
+    assert "incompatible PyTorch extension" in str(error.value)
+    assert "nexus voice init" in str(error.value)
+    assert engine.closed
+    await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_idle_engine_is_unloaded() -> None:
     manager, engine = make_manager(idle_unload_seconds=0.01)
     await manager.transcribe(silence(0.5))

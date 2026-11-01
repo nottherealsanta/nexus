@@ -9,6 +9,10 @@ for deliberate changes from old Nexus.
   code from it deliberately, and add a row in docs/porting-ledger.md when you change a
   behavior. Its AGENTS.md and docs do not apply here.
 - Keep the context visible: wire events are never dropped, and clipping is announced.
+- TUI and NSH are peers: **everything developed in one is replicated in the other**.
+  A change to a picker, modal, sidebar, shortcut or interaction in `nexus-tui` lands
+  in `nexus-nsh` in the same change, and vice versa; record a deliberate difference
+  in [docs/porting-ledger.md](docs/porting-ledger.md).
 - One timeline: the "timeline" (or "context line"), which is what the user sees
   as a session in the UIs, reflects the agent's context. Everything the model
   receives is shown in order, and the UI shows nothing the model does not have.

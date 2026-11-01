@@ -662,6 +662,27 @@ fn stats(app: &App) -> (u64, u64, u64) {
     app.layout.borrow().stats()
 }
 
+/// The viewed session has an unfinished tool call and is busy: the tool row's
+/// spinner is baked into the timeline, so its frame phase is an input.
+fn with_running_tool(app: &mut App) {
+    app.apply_sync(SyncMsg::Event(event(
+        1500,
+        "message.added",
+        json!({
+            "id": "msg_live_tool", "session_id": SESSION,
+            "seq": 90, "created": 1793113700.0, "role": "assistant",
+            "parts": [{"type": "tool_call", "id": "call_live", "name": "bash",
+                       "arguments": "{\"command\":\"sleep 5\"}"}]
+        }),
+    )));
+    app.apply_sync(SyncMsg::Event(event(
+        1501,
+        "session.status",
+        json!({"status": "busy", "turn_id": "trn_live", "origin": "prompt"}),
+    )));
+    app.effects.clear();
+}
+
 #[test]
 fn cached_frames_match_a_cold_frame() {
     let (w, h) = (120u16, 36u16);
@@ -731,11 +752,31 @@ fn idle_ticks_reuse_the_timeline_but_animation_rebuilds() {
         "no animation, no rebuild"
     );
 
+    // A settled session bakes no animation into its lines, so advancing the
+    // frame is a chrome-only change even with motion on: previously a turn
+    // running in any session forced every view to rebuild eight times a second.
+    let mut settled = fresh();
+    settled.theme = settled.theme.with(nexus_tui::theme::Options {
+        reduced_motion: false,
+        ..settled.theme.opts
+    });
+    let _ = render(&mut settled, 120, 36);
+    let builds = settled.timeline_builds.get();
+    settled.frame += 1;
+    let _ = render(&mut settled, 120, 36);
+    assert_eq!(
+        settled.timeline_builds.get(),
+        builds,
+        "a settled timeline has no frame input"
+    );
+
+    // The spinner of a live turn is baked into the lines, so its phase is.
     let mut moving = fresh();
     moving.theme = moving.theme.with(nexus_tui::theme::Options {
         reduced_motion: false,
         ..moving.theme.opts
     });
+    with_running_tool(&mut moving);
     let _ = render(&mut moving, 120, 36);
     let builds = moving.timeline_builds.get();
     moving.frame += 1;
@@ -744,6 +785,106 @@ fn idle_ticks_reuse_the_timeline_but_animation_rebuilds() {
         moving.timeline_builds.get(),
         builds + 1,
         "the spinner phase is a timeline input"
+    );
+}
+
+#[test]
+fn a_turn_in_another_session_does_not_rebuild_the_viewed_timeline() {
+    let (w, h) = (120u16, 36u16);
+    let mut app = fresh();
+    app.theme = app.theme.with(nexus_tui::theme::Options {
+        reduced_motion: false,
+        ..app.theme.opts
+    });
+    let _ = render(&mut app, w, h);
+    // Another session becomes busy: the reducer bumps the revision, so the next
+    // draw rebuilds once (conservative, by design) while `tick` keeps advancing
+    // the animation frame for that turn.
+    app.state
+        .model
+        .running
+        .insert("ses_other".into(), "trn_other".into());
+    app.invalidate_timeline();
+    let _ = render(&mut app, w, h);
+    let builds = app.timeline_builds.get();
+    for _ in 0..4 {
+        app.tick(Instant::now());
+        let _ = render(&mut app, w, h);
+    }
+    assert!(
+        app.frame > 0,
+        "the tick advances the frame for the other session"
+    );
+    assert_eq!(
+        app.timeline_builds.get(),
+        builds,
+        "another session's spinner is not this timeline's input"
+    );
+}
+
+#[test]
+fn the_new_session_preview_is_built_once_per_state() {
+    let (w, h) = (120u16, 36u16);
+    let mut app = empty(opts(Mode::Dark, Tier::TrueColor), (w, h));
+    assert!(app.viewed_id().is_none(), "the new-session screen");
+    let base = app.preview_builds.get();
+    let first = render(&mut app, w, h);
+    assert_eq!(app.preview_builds.get(), base + 1, "the first frame builds");
+    let again = render(&mut app, w, h);
+    assert_eq!(first, again, "a cache hit cannot change the frame");
+
+    // Typing, scrolling and ticks are chrome-only: the rows are a pure
+    // function of the preview state and the layout.
+    typing(&mut app, "hello");
+    let _ = render(&mut app, w, h);
+    app.scroll_timeline(-2);
+    let _ = render(&mut app, w, h);
+    assert_eq!(
+        app.preview_builds.get(),
+        base + 1,
+        "typing and scrolling reuse the rows"
+    );
+
+    // A sync message is a preview input (catalog, draft plan, inventories).
+    app.apply_sync(SyncMsg::Config(Ok(json!({"values": {}}))));
+    let changed = render(&mut app, w, h);
+    assert_eq!(app.preview_builds.get(), base + 2, "new state, new rows");
+    assert_ne!(first, changed, "the frame follows the state");
+
+    // A draft switch is a preview input too.
+    app.ui.draft.disabled_tools.push("bash".into());
+    let toggled = render(&mut app, w, h);
+    assert_eq!(app.preview_builds.get(), base + 3, "a switch rebuilds");
+    assert_ne!(changed, toggled, "the switch shows");
+
+    // A resize re-lays the rows out.
+    let _ = render(&mut app, 96, 30);
+    assert_eq!(
+        app.preview_builds.get(),
+        base + 4,
+        "width is a layout input"
+    );
+}
+
+#[test]
+fn a_settled_frame_matches_a_cold_build_at_any_phase() {
+    let (w, h) = (120u16, 36u16);
+    let mut warm = fresh();
+    warm.theme = warm.theme.with(nexus_tui::theme::Options {
+        reduced_motion: false,
+        ..warm.theme.opts
+    });
+    let _ = render(&mut warm, w, h);
+    warm.frame = 3;
+    let warm_buf = render(&mut warm, w, h);
+
+    let mut cold = fresh();
+    cold.theme = warm.theme;
+    cold.frame = 3;
+    let cold_buf = render(&mut cold, w, h);
+    assert_eq!(
+        warm_buf, cold_buf,
+        "reusing a settled timeline cannot differ from building it"
     );
 }
 

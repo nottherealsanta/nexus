@@ -72,30 +72,74 @@ function PaletteBody() {
 export function Picker() {
   return <If when={picker() !== null}>{() => <PickerBody />}</If>;
 }
+
+/** TUI-style fuzzy filter: the query's characters appear in order. */
+function fuzzyMatch(query: string, text: string) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  let at = 0;
+  for (const ch of text.toLowerCase()) if (ch === q[at]) at++;
+  return at === q.length;
+}
+
 function PickerBody() {
   const p = () => picker()!;
-  const runItem = (i: { id: string; label: string; run: () => void | Promise<void> }) => { void i.run(); };
+  const query = signal("");
+  const idx = signal(0);
+  const filtered = () => {
+    const q = query();
+    return p().items.filter((it) => fuzzyMatch(q, it.label) || fuzzyMatch(q, it.id) || fuzzyMatch(q, it.hint ?? ""));
+  };
+  const clamp = (n: number) => Math.max(0, Math.min(filtered().length - 1, n));
+  const chosen = () => filtered()[clamp(idx())];
+  const choose = (item = chosen()) => { if (item) void item.run(); };
+  const placeholder = () => {
+    if (p().title === "Change model") return "Type to filter models…";
+    if (p().title === "Change agent") return "Type to filter agents…";
+    if (p().title === "Reasoning effort") return "Type to filter efforts…";
+    return "Type to filter…";
+  };
+  const keys = [
+    keymap.bind("down", () => idx.set(clamp(idx() + 1)), { when: "always" }),
+    keymap.bind("up", () => idx.set(clamp(idx() - 1)), { when: "always" }),
+  ];
+  void keys;
   return (
     <Modal width={520} top="top-[14%]" label={p().title} onCancel={() => escape()} onOpenChange={(open) => { if (!open) picker.set(null); }}>
       <View testID="picker" accessibilityLabel={p().title} role="menu" class="gap-2">
         <ModalTitle title={p().title} />
+        <View class="border-b border-border">
+          <Input autoFocus value={query()} placeholder={placeholder()} accessibilityLabel={placeholder()} testID="picker-input"
+            onChange={({ value }) => { query.set(value); idx.set(0); }} onSubmit={() => choose()} submitBehavior="submit"
+            class="h-10 text-[14px] text-foreground placeholder:text-muted-foreground" />
+        </View>
         <If when={p().items.length > 0} else={<View class="py-3"><Text class={T.sec}>{p().note ?? "Nothing to choose from."}</Text></View>}>
-          <Scroll class="max-h-[340px]" contentClass="gap-0.5">
-            <Each of={p().items} key={(x) => x.id}>
-              {(it, i) => (
-                <Button onPress={() => runItem(it())} accessibilityLabel={it().label} testID={`pick-${i()}`}
-                  class={`group/row relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent ${FOCUS}`}>
-                  <SelectBar hover />
-                  <View class="flex-row items-center gap-3">
-                    <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-6 ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{it().label}</Text>
-                    <If when={!!it().hint}><Text class={T.meta}>{it().hint}</Text></If>
-                  </View>
-                </Button>
-              )}
-            </Each>
-          </Scroll>
+          <If when={filtered().length > 0} else={<View class="py-3"><Text class={T.sec}>Nothing matches “{query()}”.</Text></View>}>
+            <Scroll class="max-h-[340px]" contentClass="gap-0.5">
+              <Each of={filtered()} key={(x) => x.id}>
+                {(it, i) => (
+                  <Button onPress={() => choose(it())} selected={idx() === clamp(i())} accessibilityLabel={it().label} testID={`pick-${i()}`}
+                    class={`group/row relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent ${FOCUS}`}>
+                    <SelectBar on={idx() === clamp(i())} hover />
+                    <View class="flex-row items-center gap-3">
+                      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-6 ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{it().label}</Text>
+                      <If when={!!it().hint}><Text style={{ numberOfLines: 1 }} class="text-[14px] leading-6 text-muted-foreground tabular-nums">{it().hint}</Text></If>
+                    </View>
+                  </Button>
+                )}
+              </Each>
+            </Scroll>
+          </If>
         </If>
-        <ModalFooter hints="enter choose · esc close" right={p().items.length ? `${p().items.length} of ${p().items.length}` : undefined} />
+        <If when={!!chosen()?.detail?.length}>
+          <View class="gap-0.5 border-t border-border px-3 pt-2">
+            <Text style={{ numberOfLines: 1 }} class="font-mono text-[14px] leading-6 text-popover-foreground">{chosen()!.id}</Text>
+            <Each of={chosen()!.detail!} key={(line) => line}>
+              {(line) => <Text style={{ numberOfLines: 2 }} class="text-[14px] leading-6 text-muted-foreground tabular-nums">{line()}</Text>}
+            </Each>
+          </View>
+        </If>
+        <ModalFooter hints="↑↓ move · enter choose · esc close" right={filtered().length ? `${clamp(idx()) + 1} of ${filtered().length}` : undefined} />
       </View>
     </Modal>
   );

@@ -1,9 +1,11 @@
 # nexus-nsh
 
-The shared NSH client for Nexus Core: browser and desktop today, iOS after the
-desktop interaction settles. It speaks only the Core HTTP API through the host
-proxy (`scripts/serve.mjs` adds the bearer token; the app itself never sees a
-credential) and reads the same shared interface data as the TUI:
+The shared NSH client for Nexus Core: web, macOS and iOS. It speaks only the Core
+HTTP API. The web build goes through the host proxy (`scripts/serve.mjs` adds the
+bearer token; the app itself never sees a credential); a native build connects
+straight to a Core on the network by address, with no token, pairing code or host
+process (the iOS and macOS builds ask for the address once and remember it). It
+reads the same shared interface data as the TUI:
 `../interface/manifest.toml` for commands, keys, `when` rules and settings order,
 and `../interface/theme.toml` for colours, roles and glyphs. Both are converted
 into typed modules by `scripts/gen.py`; no id, label, colour or key is copied by
@@ -18,17 +20,22 @@ against a real Core. Tabs show running, unread, failed and idle state; they
 switch, rename and close without deleting sessions. Each project has its own open
 tabs and last viewed session or new-session screen, held locally while the client runs.
 The timeline has starting
-context, Markdown (prose 15/24 in Monaspace Neon; fenced code is a panel card with the language and
+context, Markdown (prose 14/22 in Monaspace Neon; fenced code is a panel card with the language and
 a Copy button and padded code; inline code is 13 px Monaspace on the panel), and three detail levels: finished activity groups collapse in low and medium,
 while high expands their tools. Running groups show the latest five activities in medium (with earlier items announced), and waiting groups stay open. Each user
 message is the turn's header: a full-width raised card (`#n · time` on the right,
 with long messages previewed in six lines and expandable as sent,
 Copy and Fold on hover) that folds to one line. A sticky copy of the current
 user card sits under the header with `↑ N lines of this turn above`, pushed up by
-the next card and clicked to scroll back. Turn footers are a right-aligned meta
+the next card and clicked to scroll back; it pins only bands whose height has been
+measured, so a newly added message cannot make it jump or blink. Turn footers are a right-aligned meta
 row (`models · tools · input tokens · output tokens · elapsed · finished`) with no
 status word: a failed turn shows its first error line above it, and an
-interrupted one adds `/continue`. Durations read `0.4s`, `4.2s`, `1m 05s` and
+interrupted one adds `/continue`. A running turn has no footer; it appears only
+once the turn is done, and the live thought stays inside the active activity
+group. Settled history is rebuilt only on structural changes; text and reasoning
+deltas update a coalesced live tail, and wire-only events do not redraw, so a long
+session does not re-walk every message and tool detail per token. Durations read `0.4s`, `4.2s`, `1m 05s` and
 `1h 02m`. Hovering over token counts shows reported counts, reasoning tokens and
 cache share. The finish time is omitted when unavailable or while the turn is
 running. Activity groups are 28 px rows with `+N −M` and failures when folded;
@@ -73,7 +80,7 @@ keeps cached views of sessions that still exist and drops their scratch. Context
 reads (`GET …/context`) run one at a time per session; requests made meanwhile
 coalesce into one more read.
 
-The waiting card (D14) is docked above the composer in its 760 px column: a 3 px accent
+The waiting card (D14) is docked above the composer in the timeline's reading column: a 3 px accent
 rail, `◆ Allow bash?` (`Nexus asks` for a question), `waiting on you · 0:42` counted from
 when the client first saw the request, the parameter table (at most six rows), for edit,
 write and patch the unified diff capped at 12 rows with `N more rows`, and a key-chip
@@ -106,6 +113,8 @@ uses the full available centre width with responsive horizontal padding (24 px n
 48 px from 820 px, 64 px from 1200 px and 80 px from 1600 px). Every card shares the
 column's left edge, and assistant prose plus activity and thought rows start at the
 cards' 16 px text inset (activity rows keep a 4 px hover pad inside their 12 px indent).
+The composer and the waiting card sit in the same column with the same 16 px card inset,
+so a draft's first character lines up with the first character of the user message above it.
 Glyphs and status
 tones come from `interface/theme.toml` (`glyphs.status`, `glyphs.attention`). The
 `border.strong` token is emitted as `border-strong` (`--border-strong`) for the decorative
@@ -114,7 +123,8 @@ split rules and tool boxes.
 The composer is a card on the panel surface (2 px radius, 1 px border that turns
 to the focus colour) with compact selectors for agent (in its colour), model with
 its muted provider, and effort. The agent label aligns with the message input;
-the control row ends with dictation and send buttons.
+the card spans the timeline's reading column and its input starts on the user band's
+16 px text edge; the control row ends with dictation and send buttons.
 While a session runs, a Working row above the card shows the elapsed time and
 output tokens (`Working · 12s · ↓4.1k`) with Stop. Typing `/` opens a completion
 block on the card's top edge (commands, with their key hints); `@` completes
@@ -126,7 +136,11 @@ the count is shown without the bar). Draft context is marked as an estimate.
 The strip has no project prefix, checkout label or commands
 hint. Before a session exists, the agent/model/effort pickers and slash commands
 set draft creation fields. Timeline detail is a saved NSH preference. The
-starting-context section lists the prompt, tools, instructions, skills and MCP
+agent, model and effort pickers carry the TUI's search field (fuzzy filtering),
+↑↓ navigation and Enter to choose. The model picker names each model, puts its
+provider and `current` at the row's end, and shows the highlighted model's ref,
+context and efforts beneath the list.
+The starting-context section lists the prompt, tools, instructions, skills and MCP
 servers with estimates and the catalog window share. Its text uses a consistent
 13 px size, compact section counts, gray status dots and a three-column list of
 all tools. Disabled entries remain marked and counted. The system prompt row omits the agent name, and the instruction file
@@ -146,11 +160,15 @@ newest request with known usage. A ledger that began counting well after the
 first message is labelled `Totals since …`, and requests that reported no usage
 are counted as unknown. It also counts descendant sessions. Right-click or Shift+F10 opens the
 manifest-driven session/project row menu, including confirmed project removal,
-and Projects has a trailing `+ Add project` row. The collapsed sidebar shows projects
-in creation order, with stable uppercase initials (collisions use the next available
-consonant, then a numeric suffix). Projects with running sessions or session activity
+and Projects has a trailing `+ Add project` row. The collapsed sidebar is a 56 px
+rail that shows projects in creation order, with stable uppercase initials
+(collisions use the next available consonant, then a numeric suffix). Projects with running sessions or session activity
 within the last hour are lighter gray; inactive projects are darker. Selection has
-a separate background and edge marker. Hover/focus shows the full name and activity;
+a separate background and edge marker. Each project also carries the TUI's four
+counters under its initials: needs attention (violet), finished and unread (info),
+running (success) and idle (primary), with any count past nine shown as `*`; a
+project with no counts shows a three-cell muted rule instead. Hover or focus
+spells out all four counts with the project name;
 clicking restores the project's last selected session in this client, or its newest
 unarchived root session, or the new-session view when empty.
 Projects also shows the selected
@@ -209,7 +227,11 @@ npm run test:host                                    # host proxy hardening (nod
 ```
 
 Visual/interaction harness (a real `nexus daemon start` and a scripted Core,
-then Playwright at 390x844, 1024x768 and 1440x900 in dark and light):
+then Playwright at 390x844, 1024x768 and 1440x900 in dark and light). The scripted
+seed covers all scenarios: a multi-step turn with thoughts, tools, a patch, a failed
+read, a child session and an image; a live `think` turn; approval and question waits;
+a failed tool; and five projects for the rail's colliding initials and counters. The
+same seeded home can open in the TUI with `NEXUS10_HOME=<home> --dump-frame ...`:
 
 ```sh
 e2e/run.sh /tmp/nsh-e2e /tmp/nsh-shots                 # up, shots, down
@@ -233,6 +255,7 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/commands.ts` | The command registry from the manifest: availability terms, handlers, keys, Esc chain. |
 | `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, code fences, thoughts, groups and members, children, diagnostics (live, or from summaries), the floor row, footers, and the sticky user bar. |
 | `src/ui/diff.tsx` | Diffs of edit, write and patch details: split at window width 1100 px and up, unified below, built from the tool detail lines (so the detail cap still applies). The empty side of an add or remove is a flat fill: NSH views cannot draw the hatch. |
+| `src/ui/connect.tsx` | The native Connect screen: the Core address, saved in NSH Storage (and reopened from the header's Core button). |
 | `src/ui/*` | Header, sidebars, right sidebar, composer (with completion, Working row and project strip) and waiting card, settings, overlays, alerts. |
 | `src/gen/*` | Generated from `interface/`; never edit. |
 
@@ -244,19 +267,50 @@ e2e/down.sh /tmp/nsh-e2e
   It accepts only origin-form request targets, forwards path and query to the
   daemon's own origin, and answers malformed input (an `Origin: null`, a bad
   percent escape) with 4xx instead of failing.
-- **Desktop/iOS.** Use the same app and navigation; the remaining platform work
-  is window chrome, native menus, clipboard/notifications/file pickers and
-  remote-Core connection. `API_BASE` in `transport.ts` is the single place a
-  desktop build points at an absolute origin.
+- **macOS and iOS.** The same app, run by NSH's AppKit and UIKit hosts:
+  `npm run macos` (or `npm run macos:open` for hot reload) and `npm run ios`
+  (iOS simulator), `npm run ios:catalyst` (an iPhone-sized Mac window) or
+  `npm run ios:device` (a device build; add `--sign "Apple Development: …" --profile App.mobileprovision` for a signed `.ipa`).
+  `nsh package App.tsx --target macos` writes a `.app`; `--target ios-simulator`
+  a simulator `.app`, and `--target ios` an `.ipa`.
+  App Transport Security blocks plain HTTP to a network address by default, so
+  `scripts/native-info.mjs` adds `NSAllowsLocalNetworking` (and, on iOS,
+  `NSLocalNetworkUsageDescription`) to the packaged plist and ad-hoc signs it
+  again; the scripts above run it for you. A device `.ipa` is signed before it
+  can be patched: package without `--sign`, run the script on the `.app`, then
+  sign with your identity and profile. The exception covers a LAN IP or a
+  `.local` name; a public DNS name (for example a Tailscale MagicDNS name) needs
+  an `https://` Core address. A simulator runtime is installed with
+  `xcodebuild -downloadPlatform iOS`; the Catalyst host (`npm run ios:catalyst`)
+  shows the iPhone layout without one.
+- **Connecting natively.** A native build has no host process and no token: it
+  opens a Connect screen for the Core address (a Mac pre-fills
+  `http://127.0.0.1:4747`; a phone enters the Mac's LAN address), stores it
+  in NSH Storage and talks to it directly. Start Core on the network first with
+  `NEXUS_HOST=0.0.0.0 nexus serve` (or `nexus daemon start` with `NEXUS_HOST` set):
+  a non-loopback bind serves `/api/*` without a token, so the phone joins as an
+  ordinary client. Only do this on a trusted LAN or Tailscale/private network.
+  `apiBase()`/`setApiBase()` in `src/core/transport.ts` are the single place the
+  origin changes; `apiUrl()` prefixes URLs the platform loads itself (artifact
+  images). The Core button in the header reopens the Connect screen.
+- **Safe areas and touch.** The header pads by `safeArea().top`, the composer and
+  the sidebar footer by `safeArea().bottom`, so the status bar and home indicator
+  never cover chrome. Phone and tablet idioms (`platform.idiom`) keep hover-only
+  actions visible (the user card's Copy/Fold, tab close, session row menu) and
+  use finger-sized targets; session rows are 56 px and icon buttons 44 px below
+  820 px. `nsh.json` grants every network host, since the address is the user's.
 
 ## Images and context notes
 
 Paste images into the composer using the platform paste shortcut. The draft
-shows thumbnails, filenames and individual Remove image buttons. Image-only
-messages are supported; previews remain in the timeline after sending, and
-failed sends keep the draft. PNG, JPEG, GIF and WebP are supported, with up to
-eight images and 8 MiB combined. Bytes are stored by Core, so reload and
-continuation keep the same image context.
+shows a square thumbnail for each image above its input, with the muted filename
+above the thumbnail and an individual Remove image button. Image-only messages
+are supported; after sending, the same square thumbnail sits above the user
+message text, and failed sends keep the draft. Clicking a thumbnail in either
+place opens a full-size preview modal (`esc` closes it); the sticky user header
+never shows an image. PNG, JPEG, GIF and WebP are supported, with up to eight
+images and 8 MiB combined. Bytes are stored by Core, so reload and continuation
+keep the same image context.
 
 A background shell completion (`→ Background Shell Done: …`) is a plain context
 notice, without a user-message card or a new turn number.

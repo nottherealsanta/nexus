@@ -2111,7 +2111,7 @@ fn assistant_text_aligns_with_the_user_message() {
 }
 
 #[test]
-fn image_marker_is_highlighted_and_its_preview_is_drawn() {
+fn image_marker_is_neutral_and_its_preview_is_a_small_square() {
     use ratatui::style::Modifier;
     let mut a = app();
     let image = nexus_tui::images::Image::from_png(
@@ -2139,17 +2139,63 @@ fn image_marker_is_highlighted_and_its_preview_is_drawn() {
         })
         .expect("the marker is part of the message");
     let cell = &buf[(x as u16, y as u16)];
+    let text_style = a.theme.role_style("user_text");
     assert_eq!(
         cell.fg,
-        a.theme
-            .fg("interactive.accent")
-            .fg
-            .expect("the accent has a colour")
+        text_style.fg.expect("the user text has a colour"),
+        "the attachment marker is ordinary message text, not orange"
     );
-    assert!(cell.modifier.contains(Modifier::BOLD));
+    assert!(!cell.modifier.contains(Modifier::BOLD));
+    let label = rows
+        .iter()
+        .position(|row| row.contains("Image A"))
+        .expect("a muted name label above the image");
+    let preview = rows
+        .iter()
+        .position(|row| row.contains('▀') || row.contains('▄'))
+        .expect("the preview is drawn in the band");
     assert!(
-        rows.iter().any(|row| row.contains('▀')),
-        "the preview is drawn in the band"
+        label < preview,
+        "the name sits above the preview: {label} < {preview}"
+    );
+    assert!(
+        preview < y,
+        "the preview sits above the message text: {preview} < {y}"
+    );
+    let timeline = a.timeline_for(100);
+    let image = &timeline.previews[0];
+    assert_eq!(
+        (image.width, image.rows),
+        (
+            nexus_tui::images::COMPOSER_THUMB_COLS,
+            nexus_tui::images::COMPOSER_THUMB_ROWS
+        ),
+        "the timeline uses the composer's small square"
+    );
+    let target = a
+        .hits
+        .all()
+        .iter()
+        .find_map(|(_, target)| match target {
+            nexus_tui::ui::Target::ImagePreview { name, data_url } => {
+                Some(nexus_tui::ui::Target::ImagePreview {
+                    name: name.clone(),
+                    data_url: data_url.clone(),
+                })
+            }
+            _ => None,
+        })
+        .expect("the preview is clickable");
+    a.click(target);
+    assert!(
+        matches!(
+            a.ui.overlay,
+            Some(nexus_tui::ui::Overlay {
+                kind: nexus_tui::ui::OverlayKind::ImagePreview { .. },
+                ..
+            })
+        ),
+        "a click opens the full-size preview"
     );
 }
 

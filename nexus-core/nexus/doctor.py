@@ -39,7 +39,8 @@ def _row(name: str, status: str, detail: str) -> Row:
 
 
 def _get(found: dict[str, Any], path: str) -> Any:
-    response = httpx.get(f"{found['url']}{path}", headers={"authorization": f"Bearer {found['token']}"}, timeout=5)
+    token = found.get("token")
+    response = httpx.get(f"{found['url']}{path}", headers={"authorization": f"Bearer {token}"} if token else {}, timeout=5)
     response.raise_for_status()
     return response.json()
 

@@ -32,9 +32,9 @@ export const ACTIVITY_INDENT = "pl-3";
 /** The activity row's hover pad, so `pl-3` plus this lands on the `pl-4` prose edge. */
 export const ACTIVITY_CONTROL_INSET = "px-1";
 
-export function TimelineColumn(p: { class?: string; testID?: string; children?: JSX.Element; onLayout?: (b: any) => void }) {
+export function TimelineColumn(p: { class?: string; style?: Record<string, string | number>; testID?: string; children?: JSX.Element; onLayout?: (b: any) => void }) {
   return (
-    <View class={`w-full ${timelineColumnClass(width())} ${p.class ?? ""}`} testID={p.testID} onLayout={p.onLayout}>
+    <View class={`w-full ${timelineColumnClass(width())} ${p.class ?? ""}`} style={p.style} testID={p.testID} onLayout={p.onLayout}>
       {p.children}
     </View>
   );

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "nsh/test";
-import { projectActivity, projectLabels, railProjects } from "./src/project-rail";
+import { projectActivity, projectCounts, projectLabels, railCount, railProjects } from "./src/project-rail";
 import type { Project, Session } from "./src/core/api";
 
 const project = (name: string, created: number): Project => ({ id: name, name, created, updated: created, path: "/" + name, revision: 1 });
-const session = (updated: number, status = "idle"): Session => ({ id: "s", project_id: "Nexus", directory: "/", title: "", agent: "", parent_id: null, revision: 1, created: 1, updated, status });
+const session = (updated: number, status = "idle", extra: Partial<Session> = {}): Session => ({ id: "s", project_id: "Nexus", directory: "/", title: "", agent: "", parent_id: null, revision: 1, created: 1, updated, status, ...extra });
 
 describe("project rail", () => {
   test("assigns initials in creation order, skipping vowels and used consonants", () => {
@@ -20,5 +20,31 @@ describe("project rail", () => {
     expect(projectActivity("Nexus", [session(1, "busy")], new Map(), now).active).toBe(true);
     expect(projectActivity("Other", [session(9999)], new Map(), now).active).toBe(false);
     expect(projectActivity("Nexus", [], new Map(), now).active).toBe(false);
+  });
+
+  test("counts root sessions by state and marks a tree that is waiting", () => {
+    const root = (id: string, extra: Partial<Session> = {}) => session(1, "idle", { id, ...extra });
+    const sessions = [
+      root("attention"),
+      root("child", { parent_id: "attention" }),
+      root("unread"),
+      root("running"),
+      root("busy", { status: "busy" }),
+      root("failed", { status: "failed" }),
+      root("idle"),
+      root("archived", { archived: true }),
+      root("other", { project_id: "Other" }),
+    ];
+    const counts = projectCounts(
+      "Nexus",
+      sessions,
+      [{ session_id: "child" }],
+      [],
+      new Map([["running", "turn"]]),
+      new Set(["unread"]),
+    );
+    expect(counts).toEqual([1, 1, 2, 2]);
+    expect(railCount(9)).toBe("9");
+    expect(railCount(10)).toBe("*");
   });
 });

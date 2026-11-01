@@ -7,7 +7,7 @@ import { Clipboard, keymap, openUrl } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
   editFile, fileDirty, openFile, reloadFile, saveFile,
-  pendingInputs, contextDetail, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
+  pendingInputs, contextDetail, imagePreview, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
@@ -95,7 +95,7 @@ function evalTerm(t: string): boolean {
     case "view.editor": return centre() === "file";
     case "editor.dirty": return fileDirty();
     case "editor.readonly": return centre() === "file" && openFile()?.draft === undefined && openFile()?.content !== undefined;
-    case "overlay.open": return paletteOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog();
+    case "overlay.open": return paletteOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
     case "drawer.open": return !!drawer();
@@ -446,7 +446,7 @@ on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });
 on("notifications.mark_all_read", () => { notifications.set([]); unread.set(0); });
 on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[0].id); }); // the oldest, drawn on top
 on("alert.cancel", () => { const d = confirmDialog(); if (d) { if (!d.busy) confirmDialog.set(null); } else if (connection().kind !== "incompatible") addProjectOpen.set(false); });
-on("overlay.close", () => { if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
+on("overlay.close", () => { if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
 on("nav.drawer.close", () => drawer.set(null));
 on("sidebar.left.toggle", toggleLeft);
 on("sidebar.right.toggle", () => toggleRight(rightWidthHint.w));
@@ -611,12 +611,28 @@ function applyModel(model: string) {
 on("model.change", () => void pickOne("Change model", async () => {
   const cat = await request<any>("GET", "/api/model");
   const models = (cat.models ?? []) as any[];
-  return models.map((m) => ({
-    id: m.ref,
-    label: `${m.ref}${m.name ? ` · ${m.name}` : ""}`,
-    hint: [m.context ? `${Math.round(m.context / 1000)}k context` : "", (m.efforts ?? []).join("/")].filter(Boolean).join(" · "),
-    run: choose(m.ref, applyModel(m.ref)),
-  }));
+  const s = viewed();
+  const chosenAgent = s?.agent ?? sessionDraft().agent ?? "build";
+  const agentModel = agentCatalog().agents.find((a) => a.name === chosenAgent)?.model;
+  const selectedModel = s ? s.model : sessionDraft().model || agentModel || rememberedModel(currentProject(), chosenAgent);
+  return models.map((m) => {
+    const ref = String(m.ref ?? "");
+    const provider = ref.split("/")[0] ?? ref;
+    const context = Number(m.context);
+    const efforts = Array.isArray(m.efforts) ? m.efforts.map(String) : [];
+    return {
+      id: ref,
+      // The TUI shows the display name, with the provider at the row's end and the
+      // context and efforts in an info panel under the list.
+      label: String(m.name ?? "").trim() || ref.split("/").at(-1) || ref,
+      hint: `${provider}${ref === selectedModel ? " · current" : ""}`,
+      detail: [
+        `Context: ${Number.isFinite(context) && context > 0 ? `${context.toLocaleString()} tokens` : "unknown"}`,
+        `Efforts: ${efforts.join(" / ") || "none listed"}`,
+      ],
+      run: choose(ref, applyModel(ref)),
+    };
+  });
 }));
 on("agent.change", () => void pickOne("Change agent", async () => {
   const res = await request<any>("GET", "/api/agent", { query: { project: viewed()?.project_id ?? currentProject() ?? undefined } });
@@ -718,6 +734,7 @@ const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d
 /** Esc is not a per-command lookup: the manifest's ordered rules decide (interface/README.md "Esc precedence"). */
 export function escape() {
   if (isDictationBusy()) { cancelDictation(); return "dictation"; }
+  if (imagePreview()) { imagePreview.set(null); return "image_preview"; }
   if (contextDetail()) { contextDetail.set(null); return "context_detail"; }
   if (centre() === "settings" && settingsPage()) { settingsPage.set(settingsPage()!.includes("/") ? settingsPage()!.split("/")[0] : null); return "settings_page"; }
   for (const rule of manifest.keymap.escape as readonly { id: string; when: readonly string[]; action: string }[]) {

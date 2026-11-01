@@ -19,7 +19,8 @@ pub const MAX_ROWS: usize = 3;
 pub struct Pin {
     /// Index into the band list of the pinned user message.
     pub card: usize,
-    /// The band's first row (its top padding); text rows follow at `first + 1`.
+    /// The band's first text row; attachment labels and previews above it are
+    /// never part of the pinned copy.
     pub first: usize,
     /// The band's last row (its bottom padding).
     pub last: usize,
@@ -34,17 +35,21 @@ pub struct Pin {
 }
 
 /// The pinned band for a viewport starting at line `offset`. `cards` are the
-/// open user bands as `(top, rows, text rows)`, in order: a padding row, the
-/// text rows, any preview rows and a padding row.
-pub fn select(cards: &[(usize, usize, usize)], offset: usize, total: usize) -> Option<Pin> {
+/// open user bands as `(top, rows, text rows, first text row)`, in order: a
+/// padding row, any attachment labels and previews, the text rows and a
+/// padding row.
+pub fn select(cards: &[(usize, usize, usize, usize)], offset: usize, total: usize) -> Option<Pin> {
     if offset >= total {
         return None;
     }
-    // The first text row (top + 1) is the row that matters: once it is above the
-    // viewport the real message is gone.
-    let card = cards.iter().rposition(|&(top, _, _)| top + 1 < offset)?;
-    let (top, height, body) = cards[card];
+    // The first text row is the row that matters: once it is above the viewport
+    // the real message is gone.
+    let card = cards
+        .iter()
+        .rposition(|&(top, _, _, text_start)| top + text_start < offset)?;
+    let (top, height, body, text_start) = cards[card];
     // Never overlay a copy while the real band still occupies the viewport.
+    // Attachment previews above the text therefore leave the viewport first.
     if offset < top.saturating_add(height) {
         return None;
     }
@@ -53,14 +58,14 @@ pub fn select(cards: &[(usize, usize, usize)], offset: usize, total: usize) -> O
     // The next band pushes the pin up as it arrives, then replaces it.
     let room = cards
         .get(card + 1)
-        .map_or(usize::MAX, |&(next, _, _)| next.saturating_sub(offset));
+        .map_or(usize::MAX, |&(next, _, _, _)| next.saturating_sub(offset));
     let shown = rows.min(room);
     if shown == 0 {
         return None;
     }
     Some(Pin {
         card,
-        first: top,
+        first: top + text_start,
         last: top + height.saturating_sub(1),
         body: body_rows,
         rows,
@@ -117,7 +122,7 @@ pub fn shade(above: usize, cells: usize, ascii: bool) -> (String, String) {
 mod tests {
     use super::*;
 
-    const CARDS: [(usize, usize, usize); 2] = [(0, 5, 3), (20, 5, 3)];
+    const CARDS: [(usize, usize, usize, usize); 2] = [(0, 5, 3, 1), (20, 5, 3, 1)];
 
     #[test]
     fn nothing_is_pinned_at_the_top_or_while_the_band_is_on_screen() {
@@ -134,7 +139,7 @@ mod tests {
     #[test]
     fn scrolled_within_a_turn_pins_its_band_with_a_shade_row() {
         let pin = select(&CARDS, 6, 40).unwrap();
-        assert_eq!((pin.card, pin.first, pin.last), (0, 0, 4));
+        assert_eq!((pin.card, pin.first, pin.last), (0, 1, 4));
         assert_eq!((pin.body, pin.rows, pin.shown), (3, 4, 4));
         assert!(!pin.clipped);
         assert_eq!(above(&pin, 6), 1);
@@ -152,15 +157,26 @@ mod tests {
 
     #[test]
     fn long_messages_take_three_rows_and_end_in_an_ellipsis() {
-        assert_eq!(select(&[(0, 12, 10)], 5, 30), None);
-        let pin = select(&[(0, 12, 10)], 12, 30).unwrap();
+        assert_eq!(select(&[(0, 12, 10, 1)], 5, 30), None);
+        let pin = select(&[(0, 12, 10, 1)], 12, 30).unwrap();
         assert_eq!((pin.body, pin.rows, pin.clipped), (3, 4, true));
         assert_eq!(pin.last, 11, "the count starts after the whole band");
         let mut spans = vec![Span::raw(" "), Span::raw("▾"), Span::raw(" hello   ")];
         ellipsize(&mut spans, "…");
         assert_eq!(spans[2].content, " hell…   ");
-        let single = select(&[(0, 3, 1)], 5, 30).unwrap();
+        let single = select(&[(0, 3, 1, 1)], 5, 30).unwrap();
         assert_eq!((single.body, single.clipped), (1, false));
+    }
+
+    #[test]
+    fn attachment_previews_are_above_the_pinned_text_and_never_copied() {
+        // One label and a three-row preview, then the text: the pinned copy
+        // starts at row 5, after every preview row.
+        let card = [(0, 9, 3, 5)];
+        assert_eq!(select(&card, 5, 30), None, "first text row on screen");
+        assert_eq!(select(&card, 7, 30), None, "real band still visible");
+        let pin = select(&card, 9, 30).unwrap();
+        assert_eq!((pin.first, pin.last), (5, 8));
     }
 
     #[test]

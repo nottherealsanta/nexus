@@ -19,6 +19,26 @@ The sections below are the record of the release steps and the backlog that rema
 
 ## Where things stand (2026-10-30)
 
+- **NSH on macOS and iOS (2026-11-01).** The app packages for AppKit and UIKit
+  (`npm run macos`, `npm run ios` / `ios:catalyst` / `ios:device`;
+  `nsh package App.tsx --target macos|ios-simulator|ios`), with safe-area padding
+  in the header, composer and sidebar footer and touch-visible hover actions.
+  Native builds connect to Core directly by address (no token or pair code): a
+  Connect screen stores `http://<mac-ip>:4747` in NSH Storage, and Core serves
+  `/api/*` without a token when bound off loopback (`NEXUS_HOST` / `nexus serve
+  --host`). Loopback keeps today's token behavior. Packaged apps get
+  `NSAllowsLocalNetworking` and (iOS) `NSLocalNetworkUsageDescription` from
+  `nexus-nsh/scripts/native-info.mjs`, because ATS blocks plain HTTP otherwise;
+  a device `.ipa` must be packaged unsigned, patched, then signed. Verified: the
+  packaged macOS app opens on the Connect screen, and `nsh test --target macos`
+  connects it to an address over HTTP; the layout was checked at 390×844 in the
+  web target and the connect flow headless as iOS. Not verified: a real iOS
+  simulator runtime (none installed here) and a signed device build.
+- **STT startup on Apple silicon (2026-11-01).** The voice extra now keeps PyTorch
+  below 2.15 on macOS arm64, matching the Kestrel Metal extension; the previously
+  resolved 2.15 failed to load the cached model. Status identifies that mismatch,
+  and worker import errors retain their cause. A scratch environment with PyTorch
+  2.14.1 prepared the real cached model; microphone capture remains unverified.
 - **Idle auto-archive (2026-11-01).** The daemon archives a whole root session
   tree after no session in it has had activity for
   `[sessions] auto_archive_idle_seconds` (default 3,600; `0` disables). A sweep
@@ -27,6 +47,22 @@ The sections below are the record of the release steps and the backlog that rema
   running turn, pending approval/question/input or a live background bash job,
   and re-reads the config value every pass. Clients show archived trees through
   their existing archived filters. Core tests: `tests/test_auto_archive.py`.
+- **Retention no longer stalls the clients (2026-11-01).** The TUI and NSH both
+  froze for a few hundred milliseconds once a minute. The cause was Core, not
+  either client: retention runs on the event loop and its migration step scanned
+  the whole measured suffix of a 1.9 M-event log to find no unmeasured row
+  (≈0.6 s live, ≈0.9 s on a cold copy). That step now returns at once when the
+  trigger-maintained `pending_events` counter is zero, and the wire-turn-link
+  backfill advances its cursor to the head when it finds nothing (one 1 s scan
+  per start instead of every pass). A second cause kept the log from shrinking
+  at all: two sessions whose background `bash` jobs died with an earlier daemon
+  restart stayed protected forever, because recovery only reported the loss in
+  its notice and never closed the `bash.started` pair; `log.floor` could not
+  move past them, so 1.9 M events / 517 MiB stayed retained. Startup recovery
+  now publishes the terminal `bash.finished` (`outcome: "lost"`) after the
+  notice, so those sessions retire and the prefix prunes. Coverage:
+  `tests/test_recovery.py::test_lost_jobs_are_closed_so_their_session_can_be_pruned`
+  plus the existing retention suite; docs: [docs/daemon.md](docs/daemon.md#durable-event-log).
 - **TUI render performance (phases 1–3 landed 2026-10-31).** The loop draws
   only when the model changes, coalesces up to 64 queued sync messages within an
   8 ms soft budget, and treats input, effects and due ticks as barriers. Raw
@@ -40,14 +76,17 @@ The sections below are the record of the release steps and the backlog that rema
   a cache hit no longer deep-clones spans (5,000-message replay RSS ~1.1 GB →
   ~0.33 GB). Full viewport-only assembly is deferred: at 2,000 messages a
   stream draw is ~15 ms and at 5,000 ~33 ms, so it is worthwhile only for a
-  history that large. Details in
-  [TUI_PERFORMANCE_PLAN.md](TUI_PERFORMANCE_PLAN.md).
+  history that large. A follow-up (2026-11-01) keys the animation frame and the
+  wall-clock second only when the built lines actually baked them in, so a turn
+  in another session no longer rebuilds the viewed timeline 8×/s, and memoizes
+  the new-session starting-context preview (one build per state, not per frame).
+  Details in [TUI_PERFORMANCE_PLAN.md](TUI_PERFORMANCE_PLAN.md).
 - TUI turn footer token counts use `M` for millions instead of thousands of `K`.
 - TUI live assistant text renders Markdown as it streams, including an unclosed fence; these transient frames skip the layout cache so a long reply does not evict finished rows.
 - TUI live thoughts show the last ten wrapped lines and announce earlier hidden lines; completed thoughts remain fully expandable.
 - TUI and NSH activity headings are counts, not verbs: `3 thoughts, 50 commands, 8 tools, 9 reads`, with `1 command` singular; a folded group no longer names an unknown tool.
-- **Ask questions page (2026-10-31).** The TUI waiting card pages through an `ask` request's 1-5 questions: Up/Down moves, Space ticks a multi-select option (violet `interactive.multi` rail and ticks), Enter locks the answer and advances, and Left/Right revisit pages (as do Left/Right in an empty composer). The last page is a review listing every question and answer with a `text.primary` (white) rail, where Enter sends the reply; each parallel ask keeps its own picks across Tab.
-- **Ask custom answers (2026-11-01, user request).** Every TUI question page now has a custom answer field inside the card, and the question wraps to two lines instead of one clipped line. Typing answers in the user's own words or adds context to a selection; `Alt+A` moves between the options and the field, and Left/Right move the caret in a non-empty field. Core always accepts free text for every question (`allow_free_text` is normalized to true for compatibility), and NSH shows the same field on every question.
+- **Ask questions page (2026-10-31).** The TUI waiting card pages through an `ask` request's 1-5 questions: Up/Down moves, Space ticks a multi-select option (violet `interactive.multi` rail and ticks), Enter locks the answer and advances, and `Alt+Left`/`Alt+Right` revisit pages (as do Left/Right in an empty composer). The last page is a review listing every question and answer with a `text.primary` (white) rail, where Enter sends the reply; each parallel ask keeps its own picks across Tab.
+- **Ask custom answers (2026-11-01, user request).** Every TUI question page now has a custom answer field inside the card, and the question wraps to two lines instead of one clipped line. Typing in it answers in the user's own words or adds context to a selection; `Alt+A` moves between the options and the field, `Alt+Left`/`Alt+Right` page, and Left/Right move the caret. Core always accepts free text for every question (`allow_free_text` is normalized to true for compatibility), and NSH shows the same field on every question.
 - Session status stays busy while a sub agent is running, including between parent turns.
 - **Notification sounds and session state (2026-10-31).** Both clients play a rising cue only when a root session and all its subagents have finished; a subagent finishing while the root or another descendant is running is silent. Any session needing input still plays the distinct higher cue. Settings › Notifications › Notification sounds is on by default and `NEXUS_COMPLETION_SOUNDS=off` disables both. The TUI session switcher and both Session panels show `running`, `needs input`, `failed`, `finished`, `archived` or `idle`. Not verified through a real audio device or in a browser.
 - Appearance offers system, light and dark only; the unavailable named-theme setting and development-step references in client notices were removed.
@@ -58,6 +97,8 @@ The sections below are the record of the release steps and the backlog that rema
 - Project tab strips are isolated in both clients: switching projects restores that project's open tabs and last viewed session or new-session screen, and closing a tab leaves other projects' tabs alone. New-session composer text and images are also project-scoped, including TUI recovery after a failed send. Tab state is client-local and lasts for the client process; browser end-to-end coverage remains to be added.
 - TUI rail search and new-session controls use three-row tiles with vertically centered icons, independent of the taller project tiles.
 - TUI project rail labels and the sidebar toggle share a centered first-character column. Full-width selected/hover tiles have top/bottom padding, a thin white selected left border and white selected initials; the final edge column fades into the timeline. A second row counts attention (purple), finished/unread (blue), running (green) and idle (white), with `*` above nine and exact labeled counts on hover (no overflow legend). Counts exclude archived roots and avoid double-counting subagents.
+- **TUI/NSH parity (2026-11-01, user request).** NSH's collapsed project rail carries the TUI's four counters under each project's initials, with the same order, colors, `*` overflow and labeled hover details. The NSH model picker now matches the TUI: a fuzzy search field, ↑↓ selection, Enter to choose, display names with the provider (and `current`) at the row's end, and the highlighted model's ref, context and efforts beneath the list; the same search and keyboard navigation apply to the agent and effort pickers. AGENTS.md now states that everything developed in one client is replicated in the other. The collapsed rail is 56 px wide. A running turn no longer shows a footer, and its live reasoning joins the active activity group; the sticky user header only pins bands whose height is measured, so a new message cannot make it jump or blink. The mock harness (`nexus-nsh/e2e/scripted_core.py`, `seed.mjs`) now seeds a full scenario: a multi-step turn with thoughts, tools, a patch, a failed read, a child session and an image; a live "think" turn; approval and question waits; a failed tool; and five projects with colliding rail initials. Both clients were opened against it and screenshot for comparison. Agent replies and user messages now use the body scale (14/22) instead of 15/24, so prose no longer stands out from the rest of the timeline.
+- **Attachment previews (2026-11-01, user request).** Both clients show composer and user-message images as the same small square thumbnails with the muted name above each, above the message text. Clicking one opens a full-size preview modal. The TUI timeline uses the composer's 6×3-cell thumbnail instead of a large preview, and its `[Image A]` markers are ordinary text rather than orange accent. The sticky user header starts at the first text row, so it never pins or draws an attachment label or image while scrolling a turn. The TUI composer's thumbnail strip replaces the old one-line attachment name list.
 - Web typography uses Monaspace Neon throughout, reserving Monaspace Argon for inline and fenced code and diffs.
 - Draft TUI tool switches remain available when disabled and during context replanning.
 - **Project MCP is opt-out (core and docs done 2026-10-31).** Enabled, valid `<project>/.mcp.json` entries now start automatically with a new session; `enabled: false` is the opt-out, per-project connections and the enabled-global-name collision rule remain, and the approve/revoke API, fingerprints and `pending_approval` are gone. This is deliberate: the file is arbitrary code, so the docs warn that starting a session in an untrusted project runs it. Core tests cover automatic start, reload on the next session, disabled entries, isolation and collisions; the disabled-global `browser-use` draft case asserts the enabled project row wins and is connected. **Client cleanup is delegated:** remove the TUI/NSH project approval review and pending/approved state, and fix the new-session inventory merge so a global disabled row with the same name never overrides an enabled project row (the `browser-use` screenshot showed the global default beside "new session" even though the project entry was live).
@@ -184,7 +225,7 @@ The pages are in both clients ([config.md](docs/config.md#settings-layout)). Rem
 
 ### Context and sessions
 
-- Session switching is slow (2026-10-30). Fixed: Core re-parsed the 6.4 MB models.dev cache on every context, draft-context and image-input call (~300 ms on the event loop each), and NSH's new-session view asked for the draft context on every model bump, so a streaming turn kept Core at 100% CPU. The NSH composer also re-read prompt history on every bump (thousands of requests per turn), and the `@` listing asked again while a request was in flight; both are fixed. Still open: after a long streamed turn, NSH's main thread stays busy for 5-7 s rendering it (present in the committed code too), so clicks in that window wait. The TUI now caches the last 8 session views and keeps them current from the stream; select loads history in the background with no resync, and git/worktree reads no longer block a switch (`--bench`: a switch 260 → 10 ms, back to a cached view 0.8 ms to first frame). NSH caches session views the same way. Both clients now run context reads one at a time per session and coalesce the rest, and the TUI no longer reads git and worktrees inline at launch (first open ~115 → ~50 ms). Core still rebuilds the whole request body for each `GET …/context` (warm 5–12 ms for a 1.4 MB body, 30–130 ms on a session's first read) and sends all of it to clients that mostly show `used`/`window`; a Core-side cache was not added because its invalidation would have to track everything `agent.request()` reads, and a stale one would show context the model does not have. Next: a lighter context endpoint (budget only) if the cost shows up again.
+- Session switching is slow (2026-10-30). Fixed: Core re-parsed the 6.4 MB models.dev cache on every context, draft-context and image-input call (~300 ms on the event loop each), and NSH's new-session view asked for the draft context on every model bump, so a streaming turn kept Core at 100% CPU. The NSH composer also re-read prompt history on every bump (thousands of requests per turn), and the `@` listing asked again while a request was in flight; both are fixed. Still open: after a long streamed turn, NSH's main thread stays busy for 5-7 s rendering it (present in the committed code too), so clicks in that window wait. Follow-up 2026-11-01: the timeline now computes settled rows once per structural revision (not five or six times per JSX access), keeps a separate coalesced stream revision for text/reasoning deltas so settled messages and tool details are not re-walked per token, and skips a draw for wire-only events. The remaining cost is the live Markdown row and browser layout, not a full-history rebuild. The TUI now caches the last 8 session views and keeps them current from the stream; select loads history in the background with no resync, and git/worktree reads no longer block a switch (`--bench`: a switch 260 → 10 ms, back to a cached view 0.8 ms to first frame). NSH caches session views the same way. Both clients now run context reads one at a time per session and coalesce the rest, and the TUI no longer reads git and worktrees inline at launch (first open ~115 → ~50 ms). Core still rebuilds the whole request body for each `GET …/context` (warm 5–12 ms for a 1.4 MB body, 30–130 ms on a session's first read) and sends all of it to clients that mostly show `used`/`window`; a Core-side cache was not added because its invalidation would have to track everything `agent.request()` reads, and a stale one would show context the model does not have. Next: a lighter context endpoint (budget only) if the cost shows up again.
 - Model memory (no default model) is in core, TUI and NSH; check it in a real daemon with both clients: a draft with no model asks for one (Core's draft-context request returns 400 "no model selected", so the starting-context preview is empty until one is chosen: consider a provider-independent estimate), a remembered model whose provider is signed out is shown and not replaced, and a session stored before the change that holds no model asks for one. The TUI test `agent_and_model_chosen_before_a_session_exists_go_into_its_creation` already failed before this change.
 
 - Allow `/btw` during a running turn in both clients; add NSH browser coverage for opening the original session from a handoff.

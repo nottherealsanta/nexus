@@ -739,10 +739,16 @@ class Store:
         metric = self.db.execute(
             "select payload_cursor, pending_events from storage_metrics where id = 1").fetchone()
         cursor = metric["payload_cursor"] if metric else 0
+        pending = metric["pending_events"] if metric else 0
+        if pending == 0:
+            # Nothing anywhere is unmeasured (the trigger-maintained counter says
+            # so), and the scan below has no index on `payload_bytes`: it would
+            # walk every row after the cursor to find out it has nothing to do.
+            # Retention runs on the event loop, so that scan is a client stall.
+            return {"rows": 0, "remaining": 0}
         rows = self.db.execute(
             "select id, time, type, data from event where id > ? and payload_bytes < 0"
             " order by id limit ?", (cursor, max(0, limit))).fetchall()
-        pending = metric["pending_events"] if metric else 0
         if not rows:
             if cursor == 0:
                 with self.db:
@@ -791,11 +797,12 @@ class Store:
             " and turn_id is null and type in ('wire_request', 'wire_response', 'wire_event')"
             " order by id limit ?", (cursor, max(0, limit))).fetchall()
         if not rows:
-            if cursor == 0:
-                with self.db:
-                    self.db.execute(
-                        "update storage_metrics set turn_link_cursor ="
-                        " (select coalesce(max(id), 0) from event) where id = 1")
+            # Nothing left in the range: remember the head so the next pass starts
+            # from it instead of re-walking the whole suffix every minute.
+            with self.db:
+                self.db.execute(
+                    "update storage_metrics set turn_link_cursor ="
+                    " (select coalesce(max(id), 0) from event) where id = 1")
             return 0
         checked = 0
         with self.db:
@@ -2365,6 +2372,28 @@ class Store:
             else:
                 finished.add(job)
         return [job for job in started if job not in finished]
+
+    def open_bash_jobs(self) -> list[tuple[str, str]]:
+        """Every `(session_id, job_id)` with a durable `bash.started` and no `bash.finished`.
+
+        A background job lives only in the daemon's memory, so after a restart no
+        open pair can still be running. `protected_sessions` treats one as live
+        evidence and pins that session's whole log out of retention, so a pair left
+        open by a crash keeps the event log from ever being pruned.
+        """
+        jobs: dict[tuple[str, str], bool] = {}
+        for row in self.db.execute(
+                "select session_id, type, json_extract(data, '$.id') as job from event"
+                " where type in ('bash.started', 'bash.finished') and session_id is not null"):
+            job = row["job"]
+            if not job:
+                continue
+            key = (row["session_id"], job)
+            if row["type"] == "bash.started":
+                jobs.setdefault(key, True)
+            elif key in jobs:
+                jobs[key] = False
+        return [key for key, open_ in jobs.items() if open_]
 
     def wait_lifecycle(self, session_id: str, *, since: float | None = None) -> dict[str, Any]:
         """Durable asked/replied records for approvals and questions in one session."""

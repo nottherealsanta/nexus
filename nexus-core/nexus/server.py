@@ -1,9 +1,10 @@
 r"""The daemon's HTTP API, modelled on OpenCode's `/api/*` (opencode.ai/v2/docs/api).
 
-Loopback only. Every request needs `Authorization: Bearer <token>` (the token is
-in `<home>/daemon.json`, mode 0600). `GET /api/event` also accepts `?token=` so a
-browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
-404 or 409.
+Loopback only by default. Every request needs `Authorization: Bearer <token>` (the
+token is in `<home>/daemon.json`, mode 0600). `GET /api/event` also accepts
+`?token=` so a browser `EventSource` can connect. A non-loopback bind
+(`NEXUS_HOST`) serves the network without a token. Errors are `{"error": "..."}`
+with 400, 401, 404 or 409.
 
 | method | path | what |
 | --- | --- | --- |
@@ -461,11 +462,12 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             return JSONResponse(body, status_code=status, headers=headers)
 
         async def wrapped(request: Request) -> Response:
-            given = request.headers.get("authorization", "").removeprefix("Bearer ")
-            if request.url.path == "/api/event":
-                given = given or request.query_params.get("token", "")
-            if not hmac.compare_digest(given, token):
-                return _error(401, "missing or wrong token (see daemon.json)")
+            if token:
+                given = request.headers.get("authorization", "").removeprefix("Bearer ")
+                if request.url.path == "/api/event":
+                    given = given or request.query_params.get("token", "")
+                if not hmac.compare_digest(given, token):
+                    return _error(401, "missing or wrong token (see daemon.json)")
             try:
                 key = _idempotency_key(request)
                 if key is None or request.method not in _MUTATING:

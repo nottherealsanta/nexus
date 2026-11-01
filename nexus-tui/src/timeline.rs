@@ -97,6 +97,12 @@ pub struct Timeline {
     pub live_groups: Vec<String>,
     /// Image previews drawn over blank lines reserved in the user band.
     pub previews: Vec<crate::images::Preview>,
+    /// The build baked the animation frame into a glyph (a spinner, the group
+    /// shimmer or a flash), so only the same frame may reuse these lines.
+    pub animated: bool,
+    /// The build baked the wall clock into a live duration (a running tool or a
+    /// busy child card), so these lines are only current within one second.
+    pub clocked: bool,
 }
 
 /// Frames a finished group's glyph flashes the accent (DESIGN_PLAN.md D06).
@@ -481,6 +487,8 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
         denied: HashSet::new(),
         live_groups: Vec::new(),
         followups: HashMap::new(),
+        animated: std::cell::Cell::new(false),
+        clocked: std::cell::Cell::new(false),
     };
     b.run();
     Timeline {
@@ -489,6 +497,8 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
         turns: b.turn.map_or(0, |n| n + 1),
         live_groups: b.live_groups,
         previews: b.previews,
+        animated: b.animated.get(),
+        clocked: b.clocked.get(),
     }
 }
 
@@ -508,6 +518,10 @@ struct Builder<'a> {
     live_groups: Vec<String>,
     /// Child session id -> the last `message_session` call that re-rendered its card.
     followups: HashMap<String, String>,
+    /// Set when a frame-dependent glyph was emitted; see [`Timeline::animated`].
+    animated: std::cell::Cell<bool>,
+    /// Set when a duration read the wall clock; see [`Timeline::clocked`].
+    clocked: std::cell::Cell<bool>,
 }
 
 fn json_str(v: &Value) -> String {
@@ -868,33 +882,6 @@ impl Builder<'_> {
     fn selected(&self) -> bool {
         self.app.ui.focus == crate::ui::Focus::Timeline
             && self.app.ui.timeline_sel == Some(self.blocks.len())
-    }
-
-    /// A user-text row with its `[Image X]` attachment markers lifted.
-    fn marker_spans(&self, row: &str, base: Style, markers: &[String]) -> Vec<Span<'static>> {
-        let marker = self
-            .st(ACCENT, "surface.raised")
-            .add_modifier(Modifier::BOLD);
-        let mut spans = Vec::new();
-        let mut rest = row;
-        loop {
-            let hit = markers
-                .iter()
-                .filter_map(|m| rest.find(m.as_str()).map(|at| (at, m)))
-                .min_by_key(|(at, _)| *at);
-            let Some((at, m)) = hit else {
-                if !rest.is_empty() {
-                    spans.push(Span::styled(rest.to_owned(), base));
-                }
-                break;
-            };
-            if at > 0 {
-                spans.push(Span::styled(rest[..at].to_owned(), base));
-            }
-            spans.push(Span::styled(m.clone(), marker));
-            rest = &rest[at + m.len()..];
-        }
-        spans
     }
 
     fn line(&mut self, spans: Vec<Span<'static>>) {
@@ -1825,12 +1812,6 @@ impl Builder<'_> {
         } else {
             band_meta(&tags, n, clock.as_deref(), &sep)
         };
-        let image_markers: Vec<String> = message
-            .parts
-            .iter()
-            .filter(|part| part["type"] == "image")
-            .map(|part| format!("[{}]", part["name"].as_str().unwrap_or("image")))
-            .collect();
         self.block(key, BlockKind::Turn, Some(n), true, |b| {
             let pad = || TLine {
                 spans: vec![Span::styled(" ", bg)],
@@ -1842,6 +1823,55 @@ impl Builder<'_> {
             };
             b.out.push(Rc::new(pad()));
             let available = b.bw.saturating_sub(3);
+            // Image attachments sit above the message text: each name is a
+            // muted label directly over its square preview.
+            if !folded {
+                for (index, image) in message
+                    .parts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, part)| part["type"] == "image")
+                {
+                    let name = image["name"].as_str().unwrap_or("image");
+                    let data_url = image["data_url"].as_str().unwrap_or_default();
+                    let Some((width, rows)) = crate::images::preview_size(data_url, available)
+                    else {
+                        continue;
+                    };
+                    b.out.push(Rc::new(TLine {
+                        spans: vec![
+                            Span::styled(" ", bg),
+                            Span::styled(" ", gutter),
+                            Span::styled(" ", bg),
+                            Span::styled(name.to_owned(), b.st(MUTED, raised)),
+                        ],
+                        bg: Some(bg),
+                        rail: Some(rail),
+                        focus: false,
+                        context_section: None,
+                        context_items: Vec::new(),
+                    }));
+                    let start = b.out.len();
+                    for _ in 0..rows {
+                        b.out.push(Rc::new(TLine {
+                            spans: Vec::new(),
+                            bg: Some(bg),
+                            rail: Some(rail),
+                            focus: false,
+                            context_section: None,
+                            context_items: Vec::new(),
+                        }));
+                    }
+                    b.previews.push(crate::images::Preview {
+                        start,
+                        width,
+                        rows,
+                        key: format!("{}:{index}", message.id),
+                        name: name.to_owned(),
+                        data_url: data_url.to_owned(),
+                    });
+                }
+            }
             let meta_width = width(&metadata);
             let body_width = available.saturating_sub(meta_width + 2).max(1);
             let mut rows = if folded {
@@ -1859,7 +1889,7 @@ impl Builder<'_> {
                 // The band carries no fold marker; the text keeps its 2-cell inset.
                 let mut spans = vec![Span::styled(" ", bg), Span::styled(" ", gutter)];
                 spans.push(Span::styled(" ", bg));
-                spans.extend(b.marker_spans(row, bg, &image_markers));
+                spans.push(Span::styled(row.to_owned(), bg));
                 if i == 0 && meta_width + 3 < b.bw {
                     let padding = b.bw.saturating_sub(3 + width(row) + meta_width).max(1);
                     spans.push(Span::styled(" ".repeat(padding), bg));
@@ -1873,40 +1903,6 @@ impl Builder<'_> {
                     context_section: None,
                     context_items: Vec::new(),
                 }));
-            }
-            if !folded {
-                // Reserve blank band rows for the previews; the image protocol
-                // draws over them once the block has been laid out.
-                for (index, image) in message
-                    .parts
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, part)| part["type"] == "image")
-                {
-                    let data_url = image["data_url"].as_str().unwrap_or_default();
-                    let Some((width, rows)) = crate::images::preview_size(data_url, available)
-                    else {
-                        continue;
-                    };
-                    let start = b.out.len();
-                    for _ in 0..rows {
-                        b.out.push(Rc::new(TLine {
-                            spans: Vec::new(),
-                            bg: Some(bg),
-                            rail: Some(rail),
-                            focus: false,
-                            context_section: None,
-                            context_items: Vec::new(),
-                        }));
-                    }
-                    b.previews.push(crate::images::Preview {
-                        start,
-                        width,
-                        rows,
-                        key: format!("{}:{index}", message.id),
-                        data_url: data_url.to_owned(),
-                    });
-                }
             }
             b.out.push(Rc::new(pad()));
         });
@@ -1973,13 +1969,18 @@ impl Builder<'_> {
             vec![Span::styled(format!("{g} {l}"), self.status_style(tok))]
         };
         match self.turn_end(meta) {
-            End::Running => vec![
-                Span::styled(
-                    format!("{} ", self.t.spinner(self.frame)),
-                    self.st(PRIMARY, CANVAS),
-                ),
-                Span::styled("running".to_string(), self.primary()),
-            ],
+            End::Running => {
+                if !self.t.opts.reduced_motion {
+                    self.animated.set(true);
+                }
+                vec![
+                    Span::styled(
+                        format!("{} ", self.t.spinner(self.frame)),
+                        self.st(PRIMARY, CANVAS),
+                    ),
+                    Span::styled("running".to_string(), self.primary()),
+                ]
+            }
             End::Error => status("error"),
             End::StepLimit => {
                 let (g, _, tok) = self.t.status("interrupted");
@@ -2499,6 +2500,9 @@ impl Builder<'_> {
                 .join(", ")
         };
         self.block(key, BlockKind::Group, self.turn, !has_wait, |b| {
+            if flash {
+                b.animated.set(true);
+            }
             let marker = Span::styled(
                 format!("{}{} ", " ".repeat(ACTIVITY_INDENT), b.t.fold(open)),
                 if flash {
@@ -2542,6 +2546,7 @@ impl Builder<'_> {
             };
             let mut left = vec![marker];
             if running && !b.t.opts.reduced_motion && !b.t.mono() {
+                b.animated.set(true);
                 left.extend(crate::theme::shimmer(
                     &shown,
                     b.frame,
@@ -2774,7 +2779,15 @@ impl Builder<'_> {
         let duration = trace
             .and_then(|t| {
                 let start = t.start?;
-                let end = t.end.or_else(|| busy.then(crate::app::now_secs))?;
+                let end = match t.end {
+                    Some(end) => end,
+                    None if busy => {
+                        // A running tool's duration reads the clock every frame.
+                        self.clocked.set(true);
+                        crate::app::now_secs()
+                    }
+                    None => return None,
+                };
                 Some((end - start).max(0.0))
             })
             .filter(|seconds| name == "bash" && *seconds >= 1.0);
@@ -2880,6 +2893,9 @@ impl Builder<'_> {
                     b.st("status.error", CANVAS),
                 )
             } else if running {
+                if !b.t.opts.reduced_motion {
+                    b.animated.set(true);
+                }
                 (b.t.spinner(b.frame).to_owned(), b.st(PRIMARY, CANVAS))
             } else {
                 (crate::paint::verb_glyph(&name, ascii).to_owned(), b.meta())
@@ -3218,6 +3234,10 @@ impl Builder<'_> {
             }
             bits.extend(model);
             let end = if busy {
+                if c.created > 0.0 {
+                    // A busy child's elapsed time reads the clock every frame.
+                    self.clocked.set(true);
+                }
                 crate::app::now_secs()
             } else {
                 c.updated
@@ -3302,6 +3322,9 @@ impl Builder<'_> {
                 let mut spans = head.clone();
                 if busy && !waits && done.is_none() {
                     // The spinner sits in the margin, in the agent's colour.
+                    if !b.t.opts.reduced_motion {
+                        b.animated.set(true);
+                    }
                     spans[1] = Span::styled(b.t.spinner(b.frame).to_owned(), agent_style);
                 } else if done.is_some() {
                     // Finished: every dot on, no animation.

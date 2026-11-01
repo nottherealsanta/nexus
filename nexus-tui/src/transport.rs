@@ -213,6 +213,15 @@ impl Http {
         &self.base
     }
 
+    /// Bearer auth, unless Core serves the network without a token (`NEXUS_HOST`).
+    fn authorized(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if self.token.is_empty() {
+            req
+        } else {
+            req.bearer_auth(&self.token)
+        }
+    }
+
     /// One JSON API call. With a key, a transport failure is retried (three
     /// attempts) with the *same* key so the server can replay the acceptance.
     pub async fn call(
@@ -230,8 +239,8 @@ impl Http {
             let mut req = self
                 .calls
                 .request(method.clone(), format!("{}{}", self.base, path))
-                .bearer_auth(&self.token)
                 .query(query);
+            req = self.authorized(req);
             if let Some(key) = key {
                 req = req.header("idempotency-key", key);
             }
@@ -271,8 +280,8 @@ impl Http {
         let resp = self
             .calls
             .get(format!("{}{}", self.base, path))
-            .bearer_auth(&self.token)
-            .query(query)
+            .query(query);
+        let resp = self.authorized(resp)
             .send()
             .await?;
         let status = resp.status().as_u16();
@@ -297,8 +306,8 @@ impl Http {
         let resp = self
             .streams
             .post(format!("{}{}", self.base, path))
-            .bearer_auth(&self.token)
-            .json(body)
+            .json(body);
+        let resp = self.authorized(resp)
             .send()
             .await?;
         let status = resp.status().as_u16();
@@ -322,10 +331,10 @@ impl Http {
             // JSON mutations, this request has no client-side total deadline.
             .streams
             .post(format!("{}{}", self.base, path))
-            .bearer_auth(&self.token)
             .query(query)
             .header(reqwest::header::CONTENT_TYPE, content_type)
-            .body(body)
+            .body(body);
+        let resp = self.authorized(resp)
             .send()
             .await?;
         read_reply(resp).await
@@ -342,8 +351,8 @@ impl Http {
         let mut req = self
             .streams
             .get(format!("{}/api/event", self.base))
-            .bearer_auth(&self.token)
             .header("accept", "text/event-stream");
+        req = self.authorized(req);
         if let Some(s) = session {
             req = req.query(&[("session", s)]);
         }

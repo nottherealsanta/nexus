@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-let daemon, host, port, home;
+let daemon, host, port, home, daemonPort;
 let finishVoiceStream;
 const seen = [];
 
@@ -31,7 +31,7 @@ before(async () => {
       } else res.end("{}");
     });
   });
-  const daemonPort = await listen(daemon);
+  daemonPort = await listen(daemon);
   home = fs.mkdtempSync(path.join(os.tmpdir(), "nsh-host-"));
   fs.writeFileSync(path.join(home, "daemon.json"), JSON.stringify({ url: `http://127.0.0.1:${daemonPort}`, pid: 1, token: "secret" }));
   const probe = net.createServer();
@@ -107,4 +107,26 @@ test("the voice speak POST body and streamed WAV pass through the host proxy", a
     url: "/api/voice/speak", method: "POST", auth: "Bearer secret",
     body: JSON.stringify({ session_id: "ses_voice" }),
   }]);
+});
+
+test("an anonymous Core (NEXUS_HOST) is proxied without an Authorization header", async () => {
+  const anonHome = fs.mkdtempSync(path.join(os.tmpdir(), "nsh-host-anon-"));
+  fs.writeFileSync(path.join(anonHome, "daemon.json"), JSON.stringify({ url: `http://127.0.0.1:${daemonPort}`, pid: 1, token: "" }));
+  const probe = net.createServer();
+  const anonPort = await listen(probe);
+  await new Promise((r) => probe.close(r));
+  const anonHost = spawn(process.execPath, [path.join(here, "serve.mjs"), "--port", String(anonPort)], {
+    env: { ...process.env, NEXUS10_HOME: anonHome, NEXUS_NSH_NO_START: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  try {
+    await new Promise((r) => anonHost.stdout.once("data", r));
+    seen.length = 0;
+    const response = await fetch(`http://127.0.0.1:${anonPort}/api/info`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(seen, [{ url: "/api/info", method: "GET", auth: undefined, body: "" }]);
+  } finally {
+    anonHost.kill();
+    fs.rmSync(anonHome, { recursive: true, force: true });
+  }
 });

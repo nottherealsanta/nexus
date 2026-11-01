@@ -1,6 +1,7 @@
 # Plan: TUI render performance
 
-Status: phases 1–3 implemented 2026-10-31 (results below); phase 4 is deferred
+Status: phases 1–3 implemented 2026-10-31 (results below), with an animation-key
+and preview-cache follow-up on 2026-11-01; phase 4 is deferred
 until a larger reported workload (measurement in that section). The goal is to
 remove the TUI's stream backlog and long-session frame cost
 **without changing timeline content or interaction behavior**. Coalescing
@@ -375,6 +376,53 @@ keystrokes plus 10 scrolls) after the paced stream. Release:
 Chrome-only frames are 4–10× cheaper than a streamed frame at the same history
 size. Non-selected events still rebuild (correct but conservative); a full
 per-dependency graph is left for when profiling shows it matters.
+
+### Phase 3 follow-up: animation is a key input only when it is rendered (2026-11-01)
+
+A live profile of a 572-message session showed the TUI idle at 1.4–2.8 % CPU
+while a turn streamed, with the frame cache invalidating on every tick: the key
+hashed the animation frame whenever motion was on, and the wall-clock second
+whenever *any* turn was running. A turn in another session therefore rebuilt the
+viewed timeline 8×/s for a glyph that was not in it.
+
+`Timeline` now reports what its build baked in:
+
+- `animated`: a spinner, the group shimmer or a flash glyph was emitted (only
+  with motion on). The frame is hashed only for a cached timeline that animated.
+- `clocked`: a live duration read the wall clock (a running tool row or a busy
+  child card). Wall-clock seconds are hashed only then; a turn footer's duration
+  comes from stored times and no longer forces a per-second rebuild.
+
+`timeline_for` keys the build with the flags of the build itself, so the first
+frame after a change cannot disagree with the key it stored. A settled timeline
+now survives ticks and other sessions' turns unchanged; a viewed running turn
+still rebuilds per frame exactly as before, so the rendered buffer is unchanged
+(covered by `idle_ticks_reuse_the_timeline_but_animation_rebuilds`,
+`a_turn_in_another_session_does_not_rebuild_the_viewed_timeline` and
+`a_settled_frame_matches_a_cold_build_at_any_phase`).
+
+The new-session starting-context preview had the opposite problem: it is not
+part of the timeline cache and rebuilt its sections every frame, cloning Core's
+draft plan, the catalog and every tool/skill/MCP row (`context_items_for` ran
+three times per frame). `App::preview_rows` now memoizes the laid-out rows under
+`App::preview_key` (timeline revision, viewed session, draft switches, project,
+agent, width and the theme's separator/ellipsis/ASCII). There is **one** build
+per state, not per keystroke: typing and scrolling reuse it, and a sync message,
+a draft switch or a resize rebuilds (`the_new_session_preview_is_built_once_per_state`).
+On the fixture inventory the build is small (~0.03 ms); the cost it removes grows
+with the real tool/skill/MCP inventory, where the profile put this function at
+~40 % of render time.
+
+Measured on the same machine as the live session (release build, 112×76), which
+was also heavily loaded by unrelated background work at the time: TUI key →
+first frame byte p50 0.1 ms / p95 0.2 ms (12 keystrokes, isolated pty and the
+real daemon), draw mean 0.39–0.40 ms / p95 0.53–0.64 ms for the 200-message
+page. Neither the renders nor the input path were the user-visible bottleneck;
+the remaining work here is that a *viewed, running* turn still rebuilds the
+timeline per frame,
+because the spinner, shimmer and flash are baked into the lines. Making those a
+paint-time overlay (recording their cells and re-styling them on a cache hit) is
+the next step if that shows up in a profile.
 
 ## Phase 4: viewport layout
 

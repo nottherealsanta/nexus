@@ -8,10 +8,14 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 
 ## Basics
 
-- **Base URL.** `http://127.0.0.1:4747` (`$NEXUS_PORT`). Loopback only.
+- **Base URL.** `http://127.0.0.1:4747` (`$NEXUS_PORT`), loopback by default.
+  `$NEXUS_HOST` (or `nexus serve --host`) binds another address, such as
+  `0.0.0.0` for the LAN or a Tailscale/private network.
 - **Auth.** `Authorization: Bearer <token>`, with the token read from
   `~/.nexus/daemon.json` (mode 0600). `GET /api/event` also accepts
   `?token=` for browser `EventSource`. A missing or wrong token gets 401.
+  A non-loopback bind serves without a token, so a phone can connect to
+  `http://<host>:<port>` by address alone; bind only on a trusted network.
 - **Bodies.** JSON objects, at most 1 MiB; prompt requests allow 12 MiB for inline image data.
 - **Errors.** `{"error": "..."}` with 400 (bad input), 401, 404 (unknown id),
   409 (a turn is already running) or 410 (history no longer retained; see
