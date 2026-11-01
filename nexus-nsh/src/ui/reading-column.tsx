@@ -4,6 +4,9 @@ import { View } from "nsh";
 import type { JSX } from "nsh";
 import { NARROW, width } from "../store";
 
+/** The reading column's content width; past it the design stays on the left instead of stretching. */
+export const READING_MAX = 880;
+
 /** Horizontal insets at a window width: 24 px narrow, then wider than the old fixed 40 px. */
 export function timelineColumnClass(w: number): string {
   if (w < NARROW) return "px-6";
@@ -34,7 +37,7 @@ export const ACTIVITY_CONTROL_INSET = "px-1";
 
 export function TimelineColumn(p: { class?: string; style?: Record<string, string | number>; testID?: string; children?: JSX.Element; onLayout?: (b: any) => void }) {
   return (
-    <View class={`w-full ${timelineColumnClass(width())} ${p.class ?? ""}`} style={p.style} testID={p.testID} onLayout={p.onLayout}>
+    <View class={`w-full max-w-[880px] ${timelineColumnClass(width())} ${p.class ?? ""}`} style={p.style} testID={p.testID} onLayout={p.onLayout}>
       {p.children}
     </View>
   );

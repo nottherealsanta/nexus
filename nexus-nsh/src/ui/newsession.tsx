@@ -208,7 +208,6 @@ function Section(p: { s: CtxSection; estimated: boolean; onOpen: () => void; onI
                       <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 font-mono text-[13px] leading-5 ${item().on ? "text-foreground-secondary" : "text-muted-foreground line-through"}`}>{item().name}</Text>
                       <If when={item().locked}><Text class="text-[13px] leading-5 text-muted-foreground">new session</Text></If>
                     </View>
-                    <If when={!!item().description}><Text style={{ numberOfLines: 2 }} class="text-[13px] leading-5 text-muted-foreground">{item().description}</Text></If>
                     <If when={!!status()}><Text class="text-[13px] leading-5 text-muted-foreground">{status()}</Text></If>
                     <If when={!!item().error}><Text style={{ numberOfLines: 2 }} class="text-[13px] leading-5 text-warning">{item().error}</Text></If>
                   </View>
