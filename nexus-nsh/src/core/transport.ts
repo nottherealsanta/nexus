@@ -1,7 +1,11 @@
 // HTTP + SSE transport. The web build is same-origin: the host (scripts/serve.mjs) adds
 // the bearer token, so nothing here sees credentials. A native build (macOS/iOS) points
-// `apiBase()` at a Core on the network, which serves without a token. Mirrors
+// `apiBase()` at a Core on the network, which serves without a token; on macOS a loopback
+// Core is authenticated from ~/.nexus/daemon.json, the same file the TUI reads. Mirrors
 // nexus-tui/src/transport.rs.
+import { platform } from "nsh";
+import { exists, readFile } from "fs/promises";
+import { homedir } from "os";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public code?: string, public body?: any) { super(message); }
@@ -16,6 +20,51 @@ let base = "";
 /** The Core origin requests go to: "" on the web (the host proxies), an absolute URL natively. */
 export const apiBase = () => base;
 export function setApiBase(url: string) { base = url.trim().replace(/\/+$/, ""); }
+
+/** A loopback target: the only place a native app sends the token from daemon.json. */
+function loopbackBase(): boolean {
+  try {
+    const host = new URL(base).hostname;
+    return host === "127.0.0.1" || host === "::1" || host === "[::1]" || host === "localhost";
+  } catch { return false; }
+}
+
+let daemon: { url: string; token: string } | null = null;
+/** Read the local daemon's address and token on macOS (0600, the same file the TUI reads). */
+export async function localCore(): Promise<{ url: string; token: string } | null> {
+  if (platform.os !== "macos") return null;
+  const home = homedir();
+  // `~/.nexus` is 0.10's once `nexus migrate` marked it; before then `~/.nexus10` is.
+  let migrated = false;
+  try { migrated = await exists(`${home}/.nexus/.nexus10-home`); } catch {}
+  for (const dir of migrated ? [".nexus", ".nexus10"] : [".nexus10", ".nexus"]) {
+    try {
+      const raw = await readFile(`${home}/${dir}/daemon.json`, "utf8");
+      const data = JSON.parse(raw);
+      if (typeof data?.url === "string" && typeof data?.token === "string") {
+        daemon = { url: data.url.replace(/\/+$/, ""), token: data.token };
+        return daemon;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+async function ensureAuth(refresh = false) {
+  if (!loopbackBase()) return;
+  if (daemon && !refresh) return;
+  await localCore();
+}
+
+/** The token goes only to the daemon URL daemon.json names, never to another Core. */
+function authHeaders(headers: Record<string, string>) {
+  if (!daemon || !loopbackBase()) return headers;
+  try {
+    const target = new URL(base), source = new URL(daemon.url);
+    if (target.protocol === source.protocol && target.host === source.host) headers.authorization = `Bearer ${daemon.token}`;
+  } catch {}
+  return headers;
+}
 /** A Core URL outside `request`/`eventStream` (an image the platform fetches itself). */
 export const apiUrl = (path: string) => base + path;
 
@@ -44,13 +93,22 @@ export async function request<T = any>(method: string, path: string, o: ReqOpts 
   // Keyed mutations: up to 3 attempts on transport failure (same key). HTTP errors never retry.
   const attempts = o.key ? 3 : 1;
   let last: unknown;
+  let authenticated = false;
   for (let i = 0; i < attempts; i++) {
+    await ensureAuth();
     try {
-      const res = await fetch(url, { method, headers, body: o.body === undefined ? undefined : JSON.stringify(o.body), signal: o.signal });
+      const res = await fetch(url, { method, headers: authHeaders({ ...headers }), body: o.body === undefined ? undefined : JSON.stringify(o.body), signal: o.signal });
       const text = await res.text();
       if (!res.ok) throw parseError(res.status, text);
       return (text ? JSON.parse(text) : null) as T;
     } catch (e) {
+      // A restarted Core has a new token in daemon.json: re-read it once and repeat the request.
+      if (e instanceof ApiError && e.status === 401 && !authenticated && platform.os === "macos" && loopbackBase()) {
+        authenticated = true;
+        await ensureAuth(true);
+        i--;
+        continue;
+      }
       if (e instanceof ApiError && !e.isUnreachable) throw e;
       last = e;
       if (o.signal?.aborted) break;
@@ -100,11 +158,17 @@ export class SseParser {
 /** Streams frames from GET /api/event (authenticated by the host). Throws ApiError for non-200. */
 export async function* eventStream(cursor: string | null, signal: AbortSignal): AsyncGenerator<SseFrame> {
   const q = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+  const get = () => fetch(apiUrl(`/api/event${q}`), { headers: authHeaders({ accept: "text/event-stream" }), signal });
+  await ensureAuth();
   let res: Response;
   try {
-    res = await fetch(apiUrl(`/api/event${q}`), { headers: { accept: "text/event-stream" }, signal });
+    res = await get();
   } catch (e) {
     throw new ApiError(0, `network error: ${(e as Error)?.message ?? e}`);
+  }
+  if (res.status === 401 && platform.os === "macos" && loopbackBase()) {
+    await ensureAuth(true);
+    res = await get();
   }
   if (!res.ok) throw parseError(res.status, await res.text());
   const reader = res.body!.getReader();

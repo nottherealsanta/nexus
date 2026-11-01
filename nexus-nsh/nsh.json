@@ -9,6 +9,9 @@
   "capabilities": {
     "network": {
       "hosts": ["*"]
+    },
+    "fs": {
+      "read": ["${homeDir}/.nexus", "${homeDir}/.nexus10"]
     }
   }
 }

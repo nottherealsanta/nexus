@@ -4,7 +4,7 @@ import { Storage, computed, platform, signal, windowSize } from "nsh";
 import { Model, normalizeSession } from "./core/reduce";
 import { Banner, ConnectionState, MESSAGE_PAGE, Sync, SyncHost } from "./core/sync";
 import { Compat, Info, Message, Session } from "./core/api";
-import { ApiError, apiBase, request, setApiBase } from "./core/transport";
+import { ApiError, apiBase, localCore, request, setApiBase } from "./core/transport";
 import type { ProjectMcpSummary } from "./project-mcp";
 import { emptyGlobalToastState, globalEventToast } from "./skills-mcp";
 import { receiveVoiceProgress } from "./voice-state";
@@ -201,7 +201,9 @@ export async function connectCore(raw: string): Promise<void> {
   } catch (e) {
     setApiBase(previous);
     if (e instanceof ApiError && e.status === 401) {
-      throw new Error("This Core asks for a token. Restart it with NEXUS_HOST=0.0.0.0 so a native app can connect without one.");
+      throw new Error(platform.os === "macos"
+        ? "This Core asks for a token and ~/.nexus/daemon.json did not match it. Start Core from this Mac account, or use a LAN address."
+        : "This Core asks for a token. Restart it with NEXUS_HOST=0.0.0.0 so a native app can connect without one.");
     }
     const reason = e instanceof Error ? e.message : String(e);
     const hint = /transport security|secure connection/i.test(reason)
@@ -218,13 +220,24 @@ export async function connectCore(raw: string): Promise<void> {
   loadComposerData();
 }
 
-/** Read the saved address at startup; native builds stay on the Connect screen without one. */
+/** A loopback address, where the macOS app uses the token in daemon.json. */
+function isLoopbackUrl(url: string): boolean {
+  try { const host = new URL(url).hostname; return host === "127.0.0.1" || host === "::1" || host === "[::1]" || host === "localhost"; }
+  catch { return false; }
+}
+
+/**
+ * Read the saved address at startup. On macOS a running local Core's daemon.json wins
+ * when there is no saved address or the saved one is loopback: its token is then read
+ * by the transport, so the app never asks for one. A saved LAN address stays chosen.
+ */
 export async function loadCoreUrl(): Promise<void> {
   if (!native) { coreReady.set(true); return; }
-  try {
-    const saved = await Storage.getItem(CORE_KEY);
-    if (saved) { setApiBase(saved); coreUrl.set(saved); }
-  } catch {}
+  let saved = "";
+  try { saved = (await Storage.getItem(CORE_KEY)) ?? ""; } catch {}
+  const daemon = await localCore();
+  if (daemon && (!saved || isLoopbackUrl(saved))) { setApiBase(daemon.url); coreUrl.set(daemon.url); }
+  else if (saved) { setApiBase(saved); coreUrl.set(saved); }
   coreReady.set(true);
 }
 

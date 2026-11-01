@@ -2,9 +2,10 @@
 
 The shared NSH client for Nexus Core: web, macOS and iOS. It speaks only the Core
 HTTP API. The web build goes through the host proxy (`scripts/serve.mjs` adds the
-bearer token; the app itself never sees a credential); a native build connects
-straight to a Core on the network by address, with no token, pairing code or host
-process (the iOS and macOS builds ask for the address once and remember it). It
+bearer token; the app itself never sees a credential). A native build talks to
+Core directly: on macOS it finds a local Core in `~/.nexus/daemon.json` and reads
+its token, so there is no token or pairing code to enter; iOS connects to a Core
+on the network by address. Both remember an address once chosen. It
 reads the same shared interface data as the TUI:
 `../interface/manifest.toml` for commands, keys, `when` rules and settings order,
 and `../interface/theme.toml` for colours, roles and glyphs. Both are converted
@@ -301,22 +302,25 @@ e2e/down.sh /tmp/nsh-e2e
   `tailscale serve`) for distributed builds. A simulator runtime is installed with
   `xcodebuild -downloadPlatform iOS`; the Catalyst host (`npm run ios:catalyst`)
   shows the iPhone layout without one.
-- **Connecting natively.** A native build has no host process and no token: it
-  opens a Connect screen for the Core address (a Mac pre-fills
-  `http://127.0.0.1:4747`; a phone enters the Mac's LAN address), stores it
-  in NSH Storage and talks to it directly. Start Core on the network first with
-  `NEXUS_HOST=0.0.0.0 nexus serve` (or `nexus daemon start` with `NEXUS_HOST` set):
-  a non-loopback bind serves `/api/*` without a token, so the phone joins as an
-  ordinary client. Only do this on a trusted LAN or Tailscale/private network.
-  `apiBase()`/`setApiBase()` in `src/core/transport.ts` are the single place the
-  origin changes; `apiUrl()` prefixes URLs the platform loads itself (artifact
-  images). The Core button in the header reopens the Connect screen.
+- **Connecting natively.** A native build has no host process. On macOS it reads
+  `~/.nexus/daemon.json` (the same 0600 file the TUI uses) and connects to the
+  local Core with that token automatically; `~/.nexus10` is read until the home is
+  migrated. If no local Core is running, the Connect screen takes an address,
+  stores it in NSH Storage and the header's Core button reopens it. iOS opens the
+  Connect screen and enters the Mac's LAN address; start Core there with
+  `NEXUS_HOST=0.0.0.0 nexus serve` (or `nexus daemon start` with `NEXUS_HOST` set),
+  because a non-loopback bind serves `/api/*` without a token. Only do this on a
+  trusted LAN or Tailscale/private network. `apiBase()`/`setApiBase()` in
+  `src/core/transport.ts` are the single place the origin changes; `localCore()`
+  there reads the daemon file, and `apiUrl()` prefixes URLs the platform loads
+  itself (artifact images).
 - **Safe areas and touch.** The header pads by `safeArea().top`, the composer dock and
   the sidebar footer by `safeArea().bottom`, so the status bar and home indicator
   never cover chrome. Phone and tablet idioms (`platform.idiom`) keep hover-only
   actions visible (the user card's Copy/Fold, tab close, session row menu) and
   use finger-sized targets; session rows are 56 px and icon buttons 44 px below
-  820 px. `nsh.json` grants every network host, since the address is the user's.
+  820 px. `nsh.json` grants every network host, since the address is the user's,
+  and reads `~/.nexus` / `~/.nexus10` for the local daemon file.
 
 ## Install on an iPhone
 
