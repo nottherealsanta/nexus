@@ -4,7 +4,7 @@ import { Storage, computed, platform, signal, windowSize } from "nsh";
 import { Model, normalizeSession } from "./core/reduce";
 import { Banner, ConnectionState, MESSAGE_PAGE, Sync, SyncHost } from "./core/sync";
 import { Compat, Info, Message, Session } from "./core/api";
-import { ApiError, request, setApiBase } from "./core/transport";
+import { ApiError, apiBase, request, setApiBase } from "./core/transport";
 import type { ProjectMcpSummary } from "./project-mcp";
 import { emptyGlobalToastState, globalEventToast } from "./skills-mcp";
 import { receiveVoiceProgress } from "./voice-state";
@@ -187,10 +187,24 @@ export function normalizeCoreUrl(raw: string): string {
   return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
 }
 
-/** Save the address, point the transport at it and (re)connect. */
+/** Check that the address answers, then save it; the Connect screen shows the reason when it does not. */
 export async function connectCore(raw: string): Promise<void> {
   const url = normalizeCoreUrl(raw);
+  const previous = apiBase();
   setApiBase(url);
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 8000);
+  try {
+    await request("GET", "/api/info", { signal: abort.signal });
+  } catch (e) {
+    setApiBase(previous);
+    if (e instanceof ApiError && e.status === 401) {
+      throw new Error("This Core asks for a token. Restart it with NEXUS_HOST=0.0.0.0 so a native app can connect without one.");
+    }
+    throw new Error(`Nexus Core did not answer at ${url}. Check the address, that Core is running with NEXUS_HOST=0.0.0.0, and that this device can reach it.`);
+  } finally {
+    clearTimeout(timer);
+  }
   coreUrl.set(url);
   coreReady.set(true);
   try { await Storage.setItem(CORE_KEY, url); } catch {}

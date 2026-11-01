@@ -300,6 +300,91 @@ e2e/down.sh /tmp/nsh-e2e
   use finger-sized targets; session rows are 56 px and icon buttons 44 px below
   820 px. `nsh.json` grants every network host, since the address is the user's.
 
+## Install on an iPhone
+
+A physical iPhone needs a signed development build; a simulator does not (use
+`npm run ios`). The order matters: `nsh package` signs the app, and the
+local-network keys must be in `Info.plist` *before* that, so package without
+`--sign`, patch, then sign.
+
+1. **Make Core reachable.** On the Mac:
+
+   ```sh
+   nexus daemon stop
+   NEXUS_HOST=0.0.0.0 nexus daemon start
+   curl http://<mac-ip>:4747/api/info      # JSON, no token
+   ```
+
+   `<mac-ip>` is the LAN address (`ipconfig getifaddr en0`) or the Tailscale
+   address (`100.x.y.z`). Check the same URL from the iPhone's Safari first;
+   if it does not load, the problem is the network, not the app.
+
+2. **Find the signing assets.** `security find-identity -v -p codesigning` lists
+   the identity. The development provisioning profile must include the iPhone's
+   UDID and the app's bundle id. Xcode keeps its profiles here; the loop prints
+   each profile's App ID:
+
+   ```sh
+   for p in ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.mobileprovision; do
+     security cms -D -i "$p" > /tmp/profile.plist
+     printf '%s | %s | %s\n' "$(plutil -extract Name raw /tmp/profile.plist)" \
+       "$(plutil -extract Entitlements.application-identifier raw /tmp/profile.plist)" "$p"
+   done
+   ```
+
+   Pick the one whose App ID is `TEAMID.dev.nexus10.nsh` (or a wildcard). If
+   none matches, create one, or build with `--id` set to the App ID an existing
+   profile covers.
+
+3. **Package and patch.** From `nexus-nsh/`:
+
+   ```sh
+   npm run gen
+   nsh package App.tsx --target ios --out .nsh/out-ios [--id com.example.app]
+   node scripts/native-info.mjs .nsh/out-ios/Nexus.app
+   ```
+
+   `--id` overrides `nsh.json`'s `dev.nexus10.nsh` when the profile covers a
+   different App ID. The app is unsigned here and must not be installed yet.
+
+4. **Sign it.** Substitute the profile, identity and team from step 2:
+
+   ```sh
+   PROFILE="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/<UUID>.mobileprovision"
+   security cms -D -i "$PROFILE" > /tmp/profile.plist
+   plutil -extract Entitlements xml1 -o /tmp/entitlements.plist /tmp/profile.plist
+   cp "$PROFILE" .nsh/out-ios/Nexus.app/embedded.mobileprovision
+   codesign --force --deep --sign "Apple Development: Name (TEAMID)" \
+     --entitlements /tmp/entitlements.plist --timestamp=none .nsh/out-ios/Nexus.app
+   ```
+
+   `codesign -dv --verbose=2 .nsh/out-ios/Nexus.app` should show that identity,
+   not `adhoc`.
+
+5. **Install and launch.**
+
+   ```sh
+   xcrun devicectl list devices
+   xcrun devicectl device install app --device <UDID> .nsh/out-ios/Nexus.app
+   xcrun devicectl device process launch --device <UDID> dev.nexus10.nsh
+   ```
+
+   Xcode's **Window → Devices and Simulators → +** installs the same `.app`.
+
+6. **Trust it once on the phone.** **Settings → Privacy & Security → Developer
+   Mode → on** (restart), and **Settings → General → VPN & Device Management →
+   your Apple Development identity → Trust**. The app must be unlocked to launch
+   from `devicectl`.
+
+7. **Connect.** Enter `http://<mac-ip>:4747` (not `localhost`; that is the phone)
+   on the Connect screen and tap **Connect**. Allow **Local Network** when iOS
+   asks. The address is stored; the header's **Core** button reopens the screen.
+
+   If it says Core is not reachable: check the Safari test from step 1, the
+   Local Network switch for Nexus, and that Core is still bound to `0.0.0.0`
+   (a daemon restart without `NEXUS_HOST` goes back to loopback + token). A
+   development profile expires; re-sign and reinstall when it does.
+
 ## Images and context notes
 
 Paste images into the composer using the platform paste shortcut. The draft

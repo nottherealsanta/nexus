@@ -1,4 +1,4 @@
-import { Text, View, effect, platform, safeArea, signal } from "nsh";
+import { Scroll, Text, View, effect, keyboardFrame, platform, safeArea, signal } from "nsh";
 import { Input } from "nsh/base";
 import { Btn, FOCUS, T } from "./kit";
 import { connectCore, coreUrl } from "../store";
@@ -40,8 +40,9 @@ export function ConnectScreen() {
     }
   };
   return (
-    <View class="flex-1 bg-background items-center justify-center px-6" testID="connect"
-      style={{ paddingTop: safeArea().top + 24, paddingBottom: safeArea().bottom + 24 }}>
+    <Scroll class="flex-1 bg-background" testID="connect"
+      contentClass="grow justify-center px-6"
+      contentStyle={{ paddingTop: safeArea().top + 24, paddingBottom: safeArea().bottom + 24 + keyboardFrame().height }}>
       <View class="w-full max-w-[420px] gap-4">
         <View class="gap-1.5">
           <Text class="text-[20px] leading-7 font-semibold text-foreground">Connect to Nexus Core</Text>
@@ -72,6 +73,6 @@ export function ConnectScreen() {
           <Text class={T.meta}>No token or pairing code</Text>
         </View>
       </View>
-    </View>
+    </Scroll>
   );
 }
