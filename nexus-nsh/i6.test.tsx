@@ -56,7 +56,7 @@ describe("sessions sidebar (I6)", () => {
     expect(app.shows("id:session-ses_2")).toBe(false);
   });
 
-  test("groups sessions under an uppercase project header and shows the agent line", async () => {
+  test("groups sessions under a project header and shows the place line", async () => {
     const parent = session("ses_1", "Refactor loader", { agent: "orchestrate" });
     const child = session("ses_2", "Child task", { parent_id: "ses_1" });
     const app = await open("./App.tsx", { network: network([parent, child]), width: 1440, height: 900, platform: "web" });
@@ -64,10 +64,33 @@ describe("sessions sidebar (I6)", () => {
     await app.press("id:chip-global");
     await app.waitFor("id:session-group");
     expect(app.texts().includes("demo")).toBe(true);
-    // line 2 of the row: the agent in its colour, and the child count
-    expect(app.texts().includes("orchestrate")).toBe(true);
+    // line 2 of the row: the place (the project in global scope), and the child count
+    expect(app.shows("id:session-place-ses_1")).toBe(true);
+    expect(app.texts().includes("orchestrate")).toBe(false);
     expect(app.texts().includes("1 ↳")).toBe(true);
     expect(app.shows("id:session-ses_2")).toBe(false); // children live under their parent
+  });
+
+  test("the collapsed project rail shows each count on one line of a two-row card", async () => {
+    const app = await open("./App.tsx", { network: network([session("ses_1", "Refactor loader")]), width: 1440, height: 900, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:toggle-left");
+    await app.waitFor("id:rail-project-prj_1");
+    await app.hover("id:rail-project-prj_1");
+    await app.waitFor("id:rail-popup-prj_1");
+    expect(app.shows("id:rail-popup-prj_1-above")).toBe(true);
+    expect(app.shows("id:rail-popup-prj_1-below")).toBe(true);
+    const shown = app.texts();
+    for (const text of ["0 attention", "0 unread", "0 running", "1 idle"]) expect(shown.includes(text)).toBe(true);
+  });
+
+  test("keyboard focus on a rail project shows its card too", async () => {
+    const app = await open("./App.tsx", { network: network([session("ses_1", "Refactor loader")]), width: 1440, height: 900, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:toggle-left");
+    await app.waitFor("id:rail-project-prj_1");
+    for (let i = 0; i < 40 && !app.shows("id:rail-popup-prj_1"); i++) await app.keyboard.press("tab");
+    expect(app.shows("id:rail-popup-prj_1")).toBe(true);
   });
 
   test("the hover ⋯ button opens the same row menu as a right click", async () => {
@@ -85,9 +108,10 @@ describe("right sidebar (I6)", () => {
     const app = await open("./App.tsx", { network: network([session("ses_1", "Refactor loader")]), width: 1440, height: 900, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
+    await app.press("id:rail-session");
     await app.waitFor("id:right-sidebar");
     await app.waitFor("id:right-section-session-info");
-    expect(app.texts().includes("CONTEXT")).toBe(true);
+    expect(app.texts().includes("Context")).toBe(true);
     expect(app.texts().includes("not reported")).toBe(true);
     expect(app.shows("id:session-context")).toBe(false);
   });
@@ -101,6 +125,7 @@ describe("right sidebar (I6)", () => {
     const app = await open("./App.tsx", { network: network([session("ses_1", "Refactor loader")], { "GET */api/session/ses_1/git": { body: git } }), width: 1440, height: 900, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
+    await app.press("id:rail-session");
     await app.waitFor("id:git-group-staged");
     expect(app.count("id:git-row")).toBe(3);
     for (const t of ["⌥ main", "↑1", "Staged", "Unstaged", "Untracked", "src/staged.py", "+3", "−1"]) expect(app.texts().includes(t)).toBe(true);

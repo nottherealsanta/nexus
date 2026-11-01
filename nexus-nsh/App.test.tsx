@@ -891,13 +891,14 @@ describe("session info totals", () => {
     });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
+    await app.press("id:rail-session");
     await app.waitFor("id:right-sidebar");
     await app.waitFor("text:61.0K");
     const shown = app.texts().join("\n");
     for (const expected of [
       "Turns", "1 · 3 calls", "Used", "bash 12 · edit 4 · +2", "Tools", "9 on · 1 off",
       "Input", "61.0K", "Cached", "20.0K", "Output", "3.0K", "Reasoning", "500",
-      "CONTEXT", "25%", "Cost", "$0.07+", "Children", "2 (1 running, 1 failed)",
+      "Context", "25%", "Cost", "$0.07+", "Children", "2 (1 running, 1 failed)",
       "Kernel state is not reported by Core yet.",
     ]) expect(shown.includes(expected)).toBe(true);
   });
@@ -906,6 +907,7 @@ describe("session info totals", () => {
     const app = await open("./App.tsx", { network: selectedSessionNetwork(), width: 1440, height: 900, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
+    await app.press("id:rail-session");
     await app.waitFor("text:not reported");
     const shown = app.texts().join("\n");
     expect(shown.includes("Tokens") && shown.includes("not reported")).toBe(true);
@@ -930,6 +932,8 @@ describe("turn summaries", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:timeline-older");
     await app.waitFor("text:reply 4");
+    await app.press("id:rail-session");
+    await app.waitFor("text:1 request reported no usage (unknown, not zero)");
     const shown = app.texts().join("\n");
     expect(shown.includes("Turns above have no details")).toBe(true);
     expect(shown.includes("tokens unknown")).toBe(true);
