@@ -305,9 +305,10 @@ e2e/down.sh /tmp/nsh-e2e
 - **Connecting natively.** A native build has no host process. On macOS it reads
   `~/.nexus/daemon.json` (the same 0600 file the TUI uses) and connects to the
   local Core with that token automatically; `~/.nexus10` is read until the home is
-  migrated. If no local Core is running, the Connect screen takes an address,
-  stores it in NSH Storage and the header's Core button reopens it. iOS opens the
-  Connect screen and enters the Mac's LAN address; start Core there with
+  migrated. There is no Connect screen or Core button: without a local Core the
+  app starts offline and reconnects when `127.0.0.1:4747` (or the address in
+  `daemon.json`) appears. iOS opens the Connect screen and enters the Mac's LAN
+  address; start Core there with
   `NEXUS_HOST=0.0.0.0 nexus serve` (or `nexus daemon start` with `NEXUS_HOST` set),
   because a non-loopback bind serves `/api/*` without a token. Only do this on a
   trusted LAN or Tailscale/private network. `apiBase()`/`setApiBase()` in

@@ -61,7 +61,7 @@ function App() {
   const leftPersistent = () => !isNarrow() && leftOpen();
   const rightPersistent = () => !isNarrow() && !panelOpen() && rightIsOpen(windowSize().width);
   const booting = () => native && !coreReady();
-  const connect = () => native && (coreUrl() === null || coreEditing());
+  const connect = () => native && platform.os !== "macos" && (coreUrl() === null || coreEditing());
   return (
     <View class="flex-1 bg-background" testID="app">
       <If when={booting()} else={<If when={connect()} else={<View class="flex-1 min-h-0">

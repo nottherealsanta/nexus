@@ -186,7 +186,7 @@ export function Header() {
         </View>
       </View>
       <View class={`flex-row items-center justify-end gap-1 shrink-0 px-2 ${rightDocked() ? "w-[300px]" : ""}`}>
-        <If when={native}>
+        <If when={native && platform.os !== "macos"}>
           <Button onPress={() => coreEditing.set(true)} accessibilityLabel={`Core connection, ${coreUrl() ?? ""}`} testID="core-connect"
             class={`shrink-0 items-center justify-center rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "h-7"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
             <Text class="text-[12px] leading-4 font-medium">Core</Text>

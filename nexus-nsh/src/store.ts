@@ -177,6 +177,8 @@ export const coreUrl = signal<string | null>(null);
 /** True once the saved address has been read (immediately on the web, which has none). */
 export const coreReady = signal(!native);
 const CORE_KEY = "nexus.core";
+/** The local Core's default address; macOS retries it without a Connect screen. */
+const LOCAL_CORE = "http://127.0.0.1:4747";
 
 /** `host:port`, with `http://` assumed when no scheme is given; a path prefix is kept. */
 export function normalizeCoreUrl(raw: string): string {
@@ -238,6 +240,7 @@ export async function loadCoreUrl(): Promise<void> {
   const daemon = await localCore();
   if (daemon && (!saved || isLoopbackUrl(saved))) { setApiBase(daemon.url); coreUrl.set(daemon.url); }
   else if (saved) { setApiBase(saved); coreUrl.set(saved); }
+  else if (platform.os === "macos") { setApiBase(LOCAL_CORE); coreUrl.set(LOCAL_CORE); }
   coreReady.set(true);
 }
 
