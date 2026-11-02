@@ -909,8 +909,12 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
             </View>
           </If>
         </View>
+        <If when={big()}>
+          <Button onPress={() => toggle(`user:${r().key}`, false)} testID={`user-full-${r().n}`} class={`items-start pt-2 ${FOCUS}`}>
+            <Text class={META}>{full() ? "▾ collapse message" : "▸ show full message (sent whole)"}</Text>
+          </Button>
+        </If>
       </View>
-      <If when={big()}><Button onPress={() => toggle(`user:${r().key}`, false)} testID={`user-full-${r().n}`} class={`items-start py-3 ${TEXT_INDENT} ${FOCUS}`}><Text class={META}>{full() ? "▾ collapse message" : "▸ show full message (sent whole)"}</Text></Button></If>
       </View>
     }>
       <Button onPress={fold} accessibilityLabel={`${meta()} folded, show`} testID={`msg-user-folded-${r().n}`}

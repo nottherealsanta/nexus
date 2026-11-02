@@ -1812,6 +1812,7 @@ impl Builder<'_> {
         } else {
             band_meta(&tags, n, clock.as_deref(), &sep)
         };
+        let mut toggle_row = None;
         self.block(key, BlockKind::Turn, Some(n), true, |b| {
             let pad = || TLine {
                 spans: vec![Span::styled(" ", bg)],
@@ -1904,27 +1905,55 @@ impl Builder<'_> {
                     context_items: Vec::new(),
                 }));
             }
+            if big && !folded {
+                let label = if full {
+                    "collapse message"
+                } else {
+                    "show full message (sent whole)"
+                };
+                toggle_row = Some(b.out.len());
+                b.out.push(Rc::new(TLine {
+                    spans: vec![
+                        Span::styled("   ", bg),
+                        Span::styled(format!("{} {label}", b.t.fold(full)), b.st(MUTED, raised)),
+                    ],
+                    bg: Some(bg),
+                    rail: Some(rail),
+                    focus: false,
+                    context_section: None,
+                    context_items: Vec::new(),
+                }));
+            }
             b.out.push(Rc::new(pad()));
         });
         if let Some(block) = self.blocks.last_mut() {
             block.target = Some(message.id.clone());
         }
-        if big && !folded {
-            let label = if full {
-                "collapse message"
-            } else {
-                "show full message (sent whole)"
-            };
-            self.block(message_key, BlockKind::User, Some(n), true, |b| {
-                b.line(vec![Span::styled(
-                    format!("{} {label}", b.t.fold(full)),
-                    b.meta(),
-                )]);
-            });
-            if let Some(block) = self.blocks.last_mut() {
-                block.default_open = Some(false);
-                block.target = Some(message.id.clone());
+        if let Some(row) = toggle_row {
+            // The control sits in the band's last row but stays its own block:
+            // a click or Enter on it expands the message instead of folding
+            // the whole turn like the rest of the band.
+            let selected = self.selected();
+            if selected {
+                let line = Rc::make_mut(&mut self.out[row]);
+                line.focus = true;
+                line.rail = Some(self.st("interactive.focus", raised));
+                for span in &mut line.spans {
+                    span.style = span.style.add_modifier(Modifier::BOLD);
+                }
             }
+            self.blocks.push(Block {
+                key: message_key,
+                kind: BlockKind::User,
+                start: row,
+                end: row + 1,
+                turn: Some(n),
+                focusable: true,
+                toggle: true,
+                default_open: Some(false),
+                target: Some(message.id.clone()),
+                clipped: false,
+            });
         }
     }
 

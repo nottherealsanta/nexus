@@ -747,8 +747,8 @@ fn large_user_message_preview_expands_without_changing_context_or_turn_key() {
     let turn = t.blocks.iter().find(|b| b.kind == BlockKind::Turn).unwrap();
     let turn_key = turn.key.clone();
     assert!(
-        turn.end - turn.start <= 8,
-        "preview has at most six text rows and two padding rows"
+        turn.end - turn.start <= 9,
+        "preview has at most six text rows, the full-message control and two padding rows"
     );
     let control = t.blocks.iter().find(|b| b.kind == BlockKind::User).unwrap();
     assert_eq!(control.default_open, Some(false));
