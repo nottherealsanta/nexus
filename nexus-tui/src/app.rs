@@ -5290,6 +5290,15 @@ impl App {
                         self.toast(Level::Warning, READ_ONLY);
                     }
                 }
+                Confirmed::RemoveInput { session, id } => {
+                    self.api(ApiCall::Input {
+                        session,
+                        id,
+                        action: "delete".into(),
+                        before: None,
+                        parts: vec![],
+                    });
+                }
                 Confirmed::RemoveProject(id) => {
                     if self.writable() {
                         self.api(ApiCall::DeleteProject { project: id });
@@ -7925,7 +7934,45 @@ impl App {
             "down" | "esc" => self.ui.pending_selected = None,
             "enter" | "backspace" | "s" | "shift+up" | "shift+down" => {
                 let item = &inputs[at];
-                if (name == "enter" || name == "backspace") && !empty {
+                if name == "backspace" {
+                    // Removing is forever; Enter edits the input back into the composer.
+                    let text = item["parts"]
+                        .as_array()
+                        .and_then(|parts| parts.iter().find(|p| p["type"] == "text"))
+                        .and_then(|p| p["text"].as_str())
+                        .unwrap_or("[image]")
+                        .lines()
+                        .next()
+                        .unwrap_or("");
+                    let kind = if item["mode"] == "steer" {
+                        "steer"
+                    } else {
+                        "queued message"
+                    };
+                    let Some(session) = self.viewed_id().map(str::to_owned) else {
+                        return true;
+                    };
+                    let restore = self.restore_point();
+                    self.ui.dialog = Some(Dialog {
+                        title: "Remove pending input".into(),
+                        body: vec![
+                            format!("Remove the {kind} \"{text}\"?"),
+                            "This cannot be undone.".into(),
+                        ],
+                        cancel: "Cancel".into(),
+                        confirm: "Remove".into(),
+                        danger: true,
+                        action: Confirmed::RemoveInput {
+                            session,
+                            id: item["id"].as_str().unwrap_or("").to_owned(),
+                        },
+                        button: 0,
+                        restore,
+                    });
+                    self.ui.pending_selected = None;
+                    return true;
+                }
+                if name == "enter" && !empty {
                     self.toast(
                         Level::Warning,
                         "Clear the draft before restoring a pending input",
@@ -7939,7 +7986,7 @@ impl App {
                 let action = match name {
                     "s" if item["mode"] == "queue" => "steer",
                     "shift+up" | "shift+down" => "move",
-                    "enter" | "backspace" => "remove",
+                    "enter" => "remove",
                     _ => return true,
                 };
                 let before = match name {

@@ -272,6 +272,11 @@ pub enum Confirmed {
         revision: i64,
     },
     DeleteSession(String),
+    /// Remove one pending input for good, rather than editing it back into the composer.
+    RemoveInput {
+        session: String,
+        id: String,
+    },
     RemoveProject(String),
     /// Sign out of a provider whose models are listed for subagents.
     Disconnect(String),

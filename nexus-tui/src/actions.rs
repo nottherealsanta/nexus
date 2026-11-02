@@ -552,7 +552,7 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         } => {
             let base = format!("/api/session/{session}/input");
             let (method, path, body) = match action.as_str() {
-                "remove" => (reqwest::Method::DELETE, format!("{base}/{id}"), None),
+                "remove" | "delete" => (reqwest::Method::DELETE, format!("{base}/{id}"), None),
                 "steer" => (
                     reqwest::Method::PATCH,
                     format!("{base}/{id}"),

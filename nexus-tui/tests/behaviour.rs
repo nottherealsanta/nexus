@@ -2100,7 +2100,21 @@ fn busy_composer_steers_queues_and_completion_wins_tab() {
 }
 
 #[test]
-fn pending_input_is_selected_and_removed_for_restoration() {
+fn pending_input_is_selected_and_edited_for_restoration() {
+    use nexus_tui::actions::ApiCall;
+    let mut a = app();
+    a.state.inputs.insert(
+        SESSION.into(),
+        serde_json::json!({"held": true, "inputs": [
+            {"id": "in_1", "mode": "queue", "parts": [{"type": "text", "text": "follow up"}]}
+        ]}),
+    );
+    press(&mut a, &["up", "enter"]);
+    assert!(a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Input { id, action, .. }) if id == "in_1" && action == "remove")));
+}
+
+#[test]
+fn removing_a_pending_input_asks_first_and_deletes_it() {
     use nexus_tui::actions::ApiCall;
     let mut a = app();
     a.state.inputs.insert(
@@ -2110,7 +2124,18 @@ fn pending_input_is_selected_and_removed_for_restoration() {
         ]}),
     );
     press(&mut a, &["up", "backspace"]);
-    assert!(a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Input { id, action, .. }) if id == "in_1" && action == "remove")));
+    assert!(a.effects.is_empty(), "removing asks before it deletes");
+    let dialog = a.ui.dialog.as_ref().expect("remove requires confirmation");
+    assert_eq!(dialog.title, "Remove pending input");
+    let body = dialog.body.join(" ");
+    assert!(body.contains("follow up"), "{body}");
+    assert!(body.contains("This cannot be undone."), "{body}");
+    assert_eq!(dialog.button, 0, "Cancel is the default selection");
+    press(&mut a, &["right", "enter"]);
+    assert!(a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::Input { id, action, .. }) if id == "in_1" && action == "delete")));
 }
 
 #[test]
