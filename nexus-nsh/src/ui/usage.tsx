@@ -29,14 +29,14 @@ function Window(p: { w: NonNullable<UsageProvider["windows"]>[number] }) {
   );
 }
 
-/** `app.usage` (cmd+shift+u, `/usage`): the plan limits of the signed-in providers, one bar per window. */
+/** `app.usage` (cmd+shift+u, `/usage`): every connected provider, one bar per limit window. */
 export function UsageDialog() {
   keymap.bind("r", () => { if (usageDialog()) run("app.usage"); }, { when: "notEditing" });
   return (
     <If when={usageDialog()}>{(d) => (
-      <Modal width={520} top="top-[14%]" label="Plan limits" testID="usage" onCancel={() => escape()} onOpenChange={(open) => { if (!open) usageDialog.set(null); }}>
+      <Modal width={520} top="top-[14%]" label="Provider usage" testID="usage" onCancel={() => escape()} onOpenChange={(open) => { if (!open) usageDialog.set(null); }}>
         <View class="gap-2">
-          <ModalTitle title="Plan limits" esc={false} />
+          <ModalTitle title="Provider usage" esc={false} />
           <Each of={d().providers} key={(x: UsageProvider) => x.id}>{(item) => { const p = item(); return (
             <View class="gap-1 pt-2" testID="usage-provider">
               <View class="flex-row items-baseline gap-2">
@@ -45,11 +45,13 @@ export function UsageDialog() {
               </View>
               <If when={!p.error} else={<Text class={T.meta}>{`Could not read the limits: ${p.error}`}</Text>}>
                 <Each of={p.windows ?? []} key={(w: any) => w.label ?? ""}>{(w) => <Window w={w()} />}</Each>
+                <If when={!p.windows?.length && !p.notes?.length}><Text class={T.meta}>No limit windows reported.</Text></If>
+                <Each of={p.notes ?? []} key={(_: string, i: number) => `${i}`}>{(n) => <Text class={T.meta}>{n()}</Text>}</Each>
               </If>
             </View>
           ); }}</Each>
-          <If when={!d().providers.length && !d().loading}><Text class={T.meta}>No signed-in provider reports plan limits (codex and copilot do).</Text></If>
-          <If when={d().loading && !d().providers.length}><Text class={T.meta}>Reading plan limits…</Text></If>
+          <If when={!d().providers.length && !d().loading}><Text class={T.meta}>No provider is connected. Connect one in Settings.</Text></If>
+          <If when={d().loading && !d().providers.length}><Text class={T.meta}>Reading provider usage…</Text></If>
           <ModalFooter hints="r refresh · esc close" />
         </View>
       </Modal>

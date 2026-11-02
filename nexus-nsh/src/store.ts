@@ -9,12 +9,15 @@ import type { ProjectMcpSummary } from "./project-mcp";
 import { emptyGlobalToastState, globalEventToast } from "./skills-mcp";
 import { receiveVoiceProgress } from "./voice-state";
 import { playNotificationCue } from "./cues";
+import { splashDismiss, splashFinish, splashReach, splashStart } from "./ui/splash";
 
 export type CentreView = "session" | "new_session" | "settings" | "editor" | "file";
 export type Toast = { id: number; level: "success" | "info" | "warning" | "error"; text: string; at: number };
 
 export const model = new Model();
-export const contextDetail = signal<{ title: string; detail: string } | null>(null);
+/** A tool, skill or server in the context modal: its description, and its full definition once opened. */
+export type ContextEntry = { key: string; name: string; description: string; full?: string; load?: () => Promise<string>; markdown?: boolean };
+export const contextDetail = signal<{ title: string; detail: string; markdown?: boolean; entries?: ContextEntry[]; focus?: string } | null>(null);
 /** The attachment open in the full-size preview modal (composer or timeline). */
 export const imagePreview = signal<{ name: string; src: string } | null>(null);
 export const rev = signal(0);
@@ -86,6 +89,7 @@ export async function loadContext(id: string) {
 }
 function applyConfig(c: any) {
   config.set(c);
+  splashReach(3);
   const detail = c?.values?.ui?.detail;
   if (detail === "low" || detail === "medium" || detail === "high") timelineDetail.set(detail);
 }
@@ -97,6 +101,62 @@ export async function patchConfig(path: string, value: unknown) {
 export const agentCatalog = signal<{ project: string | null; agents: any[] }>({ project: null, agents: [] });
 export const sessionWorktrees = signal<Record<string, any | null>>({});
 export const projectWorktrees = signal<Record<string, any | null>>({});
+/** Live kernels (compact) and background bash jobs for the location strip and its modal. */
+export const kernels = signal<any[]>([]);
+export const bashJobs = signal<any[]>([]);
+export const resourcesError = signal<string | null>(null);
+export const resourcesOpen = signal(false);
+let resourcesInFlight = false;
+let resourcesAgain = false;
+let resourcesSeq = 0;
+/** Read both lists together; a burst of kernel/shell events coalesces into one more read. */
+export async function loadResources(): Promise<void> {
+  if (resourcesInFlight) { resourcesAgain = true; return; }
+  resourcesInFlight = true;
+  try {
+    do {
+      resourcesAgain = false;
+      const seq = ++resourcesSeq;
+      const [k, j] = await Promise.all([
+        request<any[]>("GET", "/api/kernel", { query: { summary: "1" } }),
+        request<any[]>("GET", "/api/bash"),
+      ]);
+      if (seq === resourcesSeq) { kernels.set(k); bashJobs.set(j); resourcesError.set(null); }
+    } while (resourcesAgain);
+  } catch (e) {
+    resourcesError.set(e instanceof Error ? e.message : String(e));
+  } finally {
+    resourcesInFlight = false;
+  }
+}
+export function rootSessionId(id: string): string | null {
+  let session = model.sessions.get(id);
+  for (let i = 0; session && i < model.sessions.size; i++) {
+    if (!session.parent_id) return session.id;
+    session = model.sessions.get(session.parent_id);
+  }
+  return null;
+}
+export function sessionTreeIds(id: string): string[] {
+  const root = rootSessionId(id);
+  return root ? model.tree(root) : [];
+}
+/** Kernels created by or used in, and shells started by, the viewed session tree. */
+export function viewResources(): { kernels: any[]; jobs: any[] } {
+  m();
+  const id = viewed()?.id;
+  if (!id) return { kernels: [], jobs: [] };
+  const tree = new Set(sessionTreeIds(id));
+  return {
+    kernels: kernels().filter((k) => tree.has(k.created_by) || (Array.isArray(k.users) && k.users.some((user: string) => tree.has(user)))),
+    jobs: bashJobs().filter((j) => tree.has(j.root) || tree.has(j.session_id)),
+  };
+}
+/** `(live kernels, running background shells)` for the strip. */
+export function resourceCounts(): { kernels: number; shells: number } {
+  const r = viewResources();
+  return { kernels: r.kernels.length, shells: r.jobs.filter((j) => j.status === "running").length };
+}
 export const compat = signal<Compat>({ kind: "unreported" });
 export const banners = signal<Banner[]>([]);
 export const dismissedBanners = signal<string[]>([]);
@@ -106,6 +166,8 @@ export const unread = signal(0);
 
 // --- view state ---------------------------------------------------------------------------
 export const leftOpen = signal(true);
+/** The project rail stays beside the sidebar, open or closed, wherever the window has room for it. */
+export const railShown = () => !phone && width() >= 500;
 export const rightOpen = signal<boolean | null>(null); // null = default by width
 export const leftTab = signal<"sessions" | "files" | "projects">("sessions");
 export const centre = signal<CentreView>("session");
@@ -117,6 +179,8 @@ export const scopeAll = signal(false);
 export const archivedFilter = signal(false);
 export const drawer = signal<"left" | "right" | "notifications" | null>(null);
 export const paletteOpen = signal(false);
+/** The session switcher (ctrl/cmd+k): every root session, or the current project's when `scopeAll` is off. */
+export const switcherOpen = signal(false);
 /** A simple list picker for catalog-backed choices (model, effort, agent). */
 export type PickerItem = { id: string; label: string; hint?: string; detail?: string[]; run: () => void | Promise<void> };
 export const picker = signal<null | { title: string; items: PickerItem[]; note?: string }>(null);
@@ -127,7 +191,7 @@ export const addProjectOpen = signal(false);
 export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string; disabled_tools?: string[] }>({});
 export const draft = signal<Record<string, string>>({});
 /** Core's starting context (PLAN K4) for the draft in `key`; a newer draft ignores a late older answer. */
-export const draftContext = signal<{ key: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: any[]; mcp: any[] } } | null>(null);
+export const draftContext = signal<{ key: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: any[]; mcp: any[]; session?: { effort: string | null } } } | null>(null);
 let draftSeq = 0;
 export const draftContextKey = (project: string, d = sessionDraft()) => JSON.stringify([project, d.agent ?? null, d.model ?? null, d.effort ?? null, d.disabled_tools ?? null]);
 /** The draft key last asked for: the same draft is asked once, until `force` or a failure. */
@@ -138,7 +202,7 @@ export async function loadDraftContext(project: string, force = false) {
   draftAsked = key;
   const seq = ++draftSeq;
   try {
-    const data = await request<any>("POST", "/api/draft/context", { body: { project, agent: d.agent, model: d.model || undefined, effort: d.effort || undefined, disabled_tools: d.disabled_tools } });
+    const data = await request<any>("POST", "/api/draft/context", { body: { project, agent: d.agent, model: d.model || undefined, effort: d.effort, disabled_tools: d.disabled_tools } });
     if (seq === draftSeq) draftContext.set({ key, data });
   } catch {
     if (seq === draftSeq) draftAsked = null; // the client-side estimate stays; the next change asks again
@@ -218,6 +282,7 @@ export async function connectCore(raw: string): Promise<void> {
   coreUrl.set(url);
   coreReady.set(true);
   try { await Storage.setItem(CORE_KEY, url); } catch {}
+  splashStart();
   sync.restart();
   loadComposerData();
 }
@@ -242,14 +307,13 @@ export async function loadCoreUrl(): Promise<void> {
   else if (saved) { setApiBase(saved); coreUrl.set(saved); }
   else if (platform.os === "macos") { setApiBase(LOCAL_CORE); coreUrl.set(LOCAL_CORE); }
   coreReady.set(true);
+  if (!coreUrl()) splashDismiss();
 }
 
 export const width = () => windowSize().width;
 export const NARROW = 820;
 export const isNarrow = computed(() => windowSize().width < NARROW);
 /** At or above this width an open file or diff panel sits beside the timeline; below it, it slides over the body. */
-export const PANEL_WIDE = 1100;
-export const panelWide = computed(() => width() >= PANEL_WIDE);
 
 // Per-client view settings (Settings rows with scope = "client") persist in NSH Storage.
 export async function loadPrefs() {
@@ -435,9 +499,9 @@ const TOAST_QUEUE = 20;
 const timed = new Set<number>();
 /** The alert whose full text is open in the detail modal (D15). */
 export const alertDetail = signal<Toast | null>(null);
-/** One row of `GET /api/usage` (K11): a provider with its plan and limit windows, or the reason it could not be read. */
+/** One row of `GET /api/usage` (K11): a connected provider with its plan and limit windows, notes, or why it could not be read. */
 export interface UsageProvider { id: string; label?: string; plan?: string; error?: string; notes?: string[]; windows?: { label?: string; used_percent?: number | null; resets_at?: number | null; detail?: string }[] }
-/** The open plan-limits dialog (`app.usage`); `null` when closed. */
+/** The open provider-usage dialog (`app.usage`); `null` when closed. */
 export const usageDialog = signal<{ providers: UsageProvider[]; loading: boolean } | null>(null);
 /**
  * The toast's `text` is the whole message and stays on the record (notifications, detail modal). The
@@ -500,13 +564,23 @@ function autoLoadOlder() {
 const host: SyncHost = {
   model,
   canStart: true,
-  setConnection(c) { connection.set(c); },
-  setInfo(i, c) { info.set(i); compat.set(c); },
+  setConnection(c) {
+    connection.set(c);
+    if (c.kind === "live") {
+      splashReach(4);
+      splashFinish();
+    } else if (c.kind === "offline" || c.kind === "auth_failed" || c.kind === "incompatible"
+      || (c.kind === "reconnecting" && c.attempt >= 2)) {
+      splashDismiss();
+    }
+  },
+  setInfo(i, c) { info.set(i); compat.set(c); splashReach(1); },
   addBanner(b) { banners.update((l) => [...l.filter((x) => x.kind !== b.kind), b]); },
   changed() { bump(); reconcileSelection(); autoLoadOlder(); },
   streamed() { bumpStream(); },
-  snapshotApplied() { reconcileSelection(); void loadConfig().catch(() => {}); },
+  snapshotApplied() { splashReach(2); reconcileSelection(); void loadConfig().catch(() => {}); void loadResources(); },
   configChanged() { void loadConfig().catch(() => {}); },
+  resourcesChanged() { void loadResources(); },
   settingsEvent(e) {
     if (e.type === "provider.login") {
       const d = e.data as { provider: string; status: string };
@@ -660,6 +734,11 @@ export const openFile = signal<OpenFile | null>(null);
 export const panelOpen = computed(() => openFile() !== null);
 /** The file panel's find bar is open (cmd+f / editor.find). */
 export const fileFindOpen = signal(false);
+/** The source of a Markdown file is shown instead of its rendered preview. */
+export const fileSource = signal(false);
+export const isMarkdownPath = (path?: string) => !!path && /\.(md|markdown)$/i.test(path);
+/** The open file is Markdown, so it can be read as prose. */
+export const markdownFile = () => isMarkdownPath(openFile()?.path);
 export const fileDirty = () => { const f = openFile(); return !!f && f.draft !== undefined && f.draft !== f.content; };
 export const gitStatus = signal<{ session: string; data?: any; error?: string } | null>(null);
 let filesRequest = 0;
@@ -677,7 +756,7 @@ export async function showFile(path: string) {
   const project = currentProject(), session = viewed()?.id;
   if (!project) return;
   const seq = ++filesRequest;
-  openFile.set({ path, project, session }); centre.set("file"); drawer.set(null); fileFindOpen.set(false);
+  openFile.set({ path, project, session }); centre.set("file"); drawer.set(null); fileFindOpen.set(false); fileSource.set(false);
   try {
     const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${project}/file`, { query: { path, session } });
     if (seq === filesRequest) openFile.set({ path, project, session, content: data.content, revision: data.revision });

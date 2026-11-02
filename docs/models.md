@@ -51,6 +51,8 @@ these hold:
 
 The result is sorted by `released` then `id`, newest first.
 
+`list_models` is `models_for`, except `ollama`, which ignores the catalog and lists names from the server's `GET /api/tags` (names containing `embed` are left out). Those rows have no context window, prices or reasoning efforts. `mock` lists its built-in scenarios when `NEXUS10_DEV` is set.
+
 ## `ModelInfo`
 
 Frozen dataclass.
@@ -69,6 +71,7 @@ Frozen dataclass.
 | `cache_read_cost` | `cost.cache_read` | USD per million tokens |
 | `tiers` | each `cost.tiers[].tier.size` with `type == "context"` | ascending prompt sizes where the input price rises; empty if none |
 | `released` | `release_date` | string |
+| `image_input` | `"image"` in `modalities.input` | false when unknown, including Ollama; tool-result images are skipped for text-only models |
 | `ref` (property) | | `"{provider}/{id}"` |
 
 In `nexus models`, the reasoning column shows the effort values, else `yes` or `no`.

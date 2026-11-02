@@ -282,5 +282,4 @@ and `scope: "project"`:
 MCP resources and prompts, OAuth, a circuit breaker beyond the retry delays,
 and Settings screens for adding or editing global servers. There is no project
 approval screen or CLI command: an enabled project entry starts with the next
-session. The old TUI/NSH project approval review is obsolete and must not be
-used; it is being removed in a separate client change.
+session. The old TUI/NSH project approval review is gone.

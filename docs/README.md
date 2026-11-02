@@ -7,10 +7,10 @@ doc and the code disagree, the code wins: fix the doc.
 
 | Doc | About |
 | --- | --- |
-| [llm-providers.md](llm-providers.md) | The four providers, the table, both dialects, quirks, replay, redaction, errors, examples |
+| [llm-providers.md](llm-providers.md) | The provider table, both dialects, Claude's Agent SDK, quirks, replay, redaction, errors, examples |
 | [porting-ledger.md](porting-ledger.md) | Historical changes from old Nexus and their rationale |
 | [turn-summary-benchmark.md](turn-summary-benchmark.md) | TUI turn-summary load and render-replay measurements |
-| [config.md](config.md) | Configuration file primitives (in progress) |
+| [config.md](config.md) | `config.toml`: defaults, agents, tools, context, sessions, UI, web, MCP, voice |
 | [auth.md](auth.md) | Sign-in flows, `auth.json`, locking, refresh-token rotation |
 | [models.md](models.md) | models.dev catalog, cache, filters, `provider/model` refs |
 | [stream-events.md](stream-events.md) | Conversation types, provider stream events, loop events, JSON codec |
@@ -29,7 +29,7 @@ doc and the code disagree, the code wins: fix the doc.
 
 | You are working on... | Read |
 | --- | --- |
-| Adding or changing a provider, its endpoint, default model or quirks | [llm-providers.md](llm-providers.md), [models.md](models.md) |
+| Adding or changing a provider, its endpoint, catalog id or quirks | [llm-providers.md](llm-providers.md), [models.md](models.md) |
 | The request body a provider sends, or replay of earlier turns | [llm-providers.md](llm-providers.md) |
 | Parsing a provider's stream, or a new event type | [llm-providers.md](llm-providers.md), [stream-events.md](stream-events.md) |
 | Header redaction or provider error handling | [llm-providers.md](llm-providers.md) |

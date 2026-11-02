@@ -2,10 +2,10 @@ import { Scroll, Text, View, platform, safeArea } from "nsh";
 import { titleBar } from "nsh/desktop";
 import { Button } from "nsh/base";
 import { Icon, IconButton, Status, FOCUS, TONE } from "./kit";
-import { SidebarTabs, attention, leftSidebarWidth } from "./sidebar";
-import { byId, closeTab, keyLabel, run, rightIsOpen, rightWidthHint, tabIds } from "../commands";
+import { RAIL_PX, SidebarTabs, attention, leftSidebarWidth } from "./sidebar";
+import { byId, closeTab, keyLabel, run, rightIsOpen, rightWidthHint, tabIds, waitItems } from "../commands";
 import { attention as attentionGlyph, statusGlyphs, structure } from "../gen/theme";
-import { centre, connection, coreUrl, drawer, isNarrow, leftOpen, m, model, native, touch, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
+import { centre, connection, coreUrl, drawer, isNarrow, leftOpen, m, model, native, railShown, touch, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
 import { agentColor } from "../agent-color";
 import { coreEditing } from "./connect";
 import { currentAlerts } from "./alerts";
@@ -182,14 +182,21 @@ export function Header() {
     <View class={`flex-row items-center bg-sidebar border-b border-border ${isNarrow() ? "min-h-14" : "min-h-11"}`} role="toolbar" accessibilityLabel="Workspace header" testID="header"
       {...(platform.os === "macos" ? { desktop: { windowDrag: true } } : {})}
       style={{ paddingTop: safeArea().top, ...(lights() ? { paddingLeft: lights() + 8 } : {}) }}>
-      <View class="flex-row items-center gap-0.5 shrink-0 px-2" style={leftDocked() ? { width: leftSidebarWidth() } : {}}>
+      <View class="flex-row items-center gap-0.5 shrink-0 px-2" style={leftDocked() ? { width: leftSidebarWidth() + (railShown() ? RAIL_PX : 0) } : {}}>
         <IconButton icon="panel-left" label="Toggle left sidebar" testID="toggle-left" selected={isNarrow() ? drawer() === "left" : leftOpen()} onPress={() => run("sidebar.left.toggle")} reason={key("sidebar.left.toggle") ?? undefined} />
         <If when={leftDocked()}><View class="mx-1 h-4 w-px shrink-0 bg-border" accessible={false} /><SidebarTabs /></If>
       </View>
       <View class="flex-1 min-w-0 h-full flex-row items-center px-2">
         <View class="flex-1 min-w-0 flex-row items-center gap-2">
           <WorkspaceTabs />
+          <View class="flex-1" />
           <View class="flex-row items-center gap-2 shrink-0">
+            <If when={conn().kind === "live" && !!viewed() && (m(), waitItems().length > 0)}>
+              <View class="flex-row items-center gap-1 pr-1" testID="header-waiting">
+                <Status kind="waiting" word={false} />
+                <Text class="text-xs leading-4 text-primary">waiting for you</Text>
+              </View>
+            </If>
             <If when={showStatus()}>
               <View class="flex-row items-center gap-1 pr-1" testID="header-status">
                 <Status kind={conn().kind === "starting" ? "running" : "error"} word={false} />

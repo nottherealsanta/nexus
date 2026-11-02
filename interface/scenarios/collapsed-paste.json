@@ -1,0 +1,12 @@
+{
+  "messages": [
+    { "id": "m1", "seq": 1, "created": 1, "role": "user", "parts": [
+      { "type": "text", "text": "Summarise this log:" },
+      { "type": "text", "text": "row 1: xxxxxxxxxxxxxxxxxxxx\nrow 2: xxxxxxxxxxxxxxxxxxxx\nrow 3: xxxxxxxxxxxxxxxxxxxx\nrow 4: xxxxxxxxxxxxxxxxxxxx\nrow 5: xxxxxxxxxxxxxxxxxxxx\nrow 6: xxxxxxxxxxxxxxxxxxxx\nrow 7: xxxxxxxxxxxxxxxxxxxx\nrow 8: xxxxxxxxxxxxxxxxxxxx", "collapsed": true }
+    ] },
+    { "id": "m2", "seq": 2, "created": 2, "role": "assistant", "parts": [{ "type": "text", "text": "Summary ready." }] }
+  ],
+  "expect": ["[Pasted ~55 tokens]", "Summarise this log:", "Summary ready."],
+  "absent": ["row 1:", "row 8:", "Pasted text"],
+  "expect_open": []
+}

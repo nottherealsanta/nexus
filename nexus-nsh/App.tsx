@@ -7,15 +7,18 @@ import { SettingsView } from "./src/ui/settings";
 import { Icon, IconButton, FOCUS } from "./src/ui/kit";
 import { RightRail, RightSidebar } from "./src/ui/right";
 import { Centre } from "./src/ui/centre";
-import { FilePanel, filePanelWidth } from "./src/ui/editor";
+import { FilePanel } from "./src/ui/editor";
 import { ContextDetailModal } from "./src/ui/newsession";
+import { ResourcesModal } from "./src/ui/resources";
 import { AlertDetail } from "./src/ui/alerts";
 import { UsageDialog } from "./src/ui/usage";
 import { ImagePreview } from "./src/ui/image-preview";
 import { AddProject, Blocking, Confirm, Drawers, Palette, Picker, RenameSession, SkillChecklist } from "./src/ui/overlays";
+import { SessionSwitcher } from "./src/ui/switcher";
 import { ConnectScreen, coreEditing } from "./src/ui/connect";
+import { Splash } from "./src/ui/splash";
 import { bindKeys, rightIsOpen, rightWidthHint } from "./src/commands";
-import { coreReady, coreUrl, drawer, isNarrow, leftOpen, loadPrefs, native, panelOpen, panelWide, phone, phonePage, startApp, themeChoice, viewed } from "./src/store";
+import { coreReady, coreUrl, drawer, isNarrow, leftOpen, loadPrefs, native, panelOpen, phone, phonePage, railShown, startApp, themeChoice, viewed } from "./src/store";
 import { setColorScheme } from "nsh";
 import "./fonts/Geist-Regular.ttf";
 import "./fonts/Geist-Medium.ttf";
@@ -59,7 +62,7 @@ function App() {
   effect(() => { if (platform.os === "macos") Window.setTitleBar({ style: "hidden", height: 44 }); });
   void colorScheme;
   const leftPersistent = () => !isNarrow() && leftOpen();
-  const rightPersistent = () => !isNarrow() && !panelOpen() && rightIsOpen(windowSize().width);
+  const rightPersistent = () => !isNarrow() && rightIsOpen(windowSize().width);
   const booting = () => native && !coreReady();
   const connect = () => native && platform.os !== "macos" && (coreUrl() === null || coreEditing());
   return (
@@ -67,19 +70,22 @@ function App() {
       <If when={booting()} else={<If when={connect()} else={<View class="flex-1 min-h-0">
         <If when={phone} else={<>
         <Header />
-        <View class="flex-1 min-h-0" style={panelOpen() && panelWide() ? { paddingRight: filePanelWidth() } : {}}>
+        <View class="flex-1 min-h-0">
           <View class="flex-1 flex-row min-h-0">
-            <If when={leftPersistent()} else={<If when={!isNarrow()}><SessionRail /></If>}><LeftSidebar /></If>
+            <If when={railShown()}><SessionRail /></If>
+            <If when={leftPersistent()}><LeftSidebar /></If>
             <Centre />
             <If when={rightPersistent()}><RightSidebar /></If>
-            <If when={!isNarrow() && !panelOpen()}><RightRail /></If>
+            <If when={!isNarrow()}><RightRail /></If>
           </View>
           <Drawers />
         </View>
         <If when={panelOpen()}><FilePanel /></If>
         </>}><PhoneShell /></If>
         <ContextDetailModal />
+        <ResourcesModal />
         <Palette />
+        <SessionSwitcher />
         <Picker />
         <SkillChecklist />
         <AlertDetail />
@@ -94,6 +100,7 @@ function App() {
       </If>}>
         <View class="flex-1 bg-background" />
       </If>
+      <Splash />
     </View>
   );
 }

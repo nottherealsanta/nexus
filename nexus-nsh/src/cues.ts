@@ -18,8 +18,8 @@ type AudioContextLike = {
 };
 type AudioContextConstructor = new () => AudioContextLike;
 
-/** Finished is the TUI's rising two-note cue; input is higher and distinct. */
-const CUES = { finished: [660, 1046.5], input: [880, 1174.7] } as const;
+/** Finished is a single note; input is higher and distinct. */
+const CUES = { finished: [660], input: [880, 1174.7] } as const;
 export type NotificationCue = keyof typeof CUES;
 
 export function playNotificationCue(kind: NotificationCue) {

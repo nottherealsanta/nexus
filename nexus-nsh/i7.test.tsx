@@ -25,21 +25,32 @@ const network = (extra: Record<string, unknown> = {}) => ({
 const mod = "mod";
 
 describe("modal recipe (I7)", () => {
+  test("Appearance offers the shared rows and leaves out the terminal's own", async () => {
+    const app = await open("./App.tsx", { network: network(), width: 1024, height: 768, platform: "web" });
+    await app.waitFor("id:rail-project-prj_1");
+    await app.keyboard.press(`${mod}+,`);
+    await app.waitFor("id:settings");
+    for (const id of ["sidebar", "details", "session_scope", "show_archived"]) expect(app.shows(`id:setting-appearance.${id}`)).toBe(true);
+    expect(app.shows("id:setting-appearance.monochrome")).toBe(false);
+    expect(app.shows("id:right-sidebar")).toBe(false);
+  });
+
   test("the palette is a modal with a title, a count and a key-hint footer; Esc closes it", async () => {
     const app = await open("./App.tsx", { network: network(), width: 1024, height: 768, platform: "web" });
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     await app.keyboard.press(`${mod}+p`);
     await app.waitFor("id:palette");
-    expect(app.texts().includes("Commands")).toBe(true);
+    expect(app.texts().includes("Command palette")).toBe(true);
+    expect(app.shows("id:palette-group-Session")).toBe(true);
     expect(app.texts().includes("↑↓ move · enter run · esc close")).toBe(true);
-    expect(app.texts().some((t) => /^\d+ commands$/.test(t))).toBe(true);
+    expect(app.texts().some((t) => /^\d+ of \d+$/.test(t))).toBe(true);
     await app.keyboard.press("escape");
     expect(app.shows("id:palette")).toBe(false);
   });
 
   test("Settings opens as a modal over the view, which keeps its composer; Esc returns", async () => {
     const app = await open("./App.tsx", { network: network(), width: 1024, height: 768, platform: "web" });
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     await app.keyboard.press(`${mod}+,`);
     await app.waitFor("id:settings");
     expect(app.count("id:composer-input")).toBe(1); // still mounted under the scrim
@@ -56,7 +67,7 @@ describe("modal recipe (I7)", () => {
 
   test("a picker lists its rows with the choose/close footer and a count", async () => {
     const app = await open("./App.tsx", { network: network(), width: 1024, height: 768, platform: "web" });
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     await app.keyboard.press(`${mod}+p`);
     await app.type("id:palette-input", "model");
     await app.waitFor("id:cmd-model.change");
@@ -68,7 +79,7 @@ describe("modal recipe (I7)", () => {
 
   test("the model picker names models like the TUI, filters, and chooses with Enter", async () => {
     const app = await open("./App.tsx", { network: network(), width: 1024, height: 768, platform: "web" });
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     await app.keyboard.press(`${mod}+p`);
     await app.type("id:palette-input", "model");
     await app.waitFor("id:cmd-model.change");
@@ -90,8 +101,8 @@ describe("modal recipe (I7)", () => {
       network: network({ "GET */api/snapshot*": { body: { ...snapshot, sessions: [child] } }, "DELETE */api/project/prj_1": { status: 204, body: null } }),
       width: 1024, height: 768, platform: "web",
     });
-    await app.waitFor("text:demo");
-    await app.press("id:tab-projects");
+    await app.waitFor("id:rail-project-prj_1");
+    await app.keyboard.press("mod+3");
     await app.waitFor("id:project-prj_1");
     await app.rightClick("id:project-prj_1");
     await app.press("id:row-action-project.remove");

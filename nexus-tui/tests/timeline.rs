@@ -426,7 +426,7 @@ fn a_user_band_folds_only_from_its_left_edge() {
 }
 
 #[test]
-fn footer_hover_and_click_reveal_usage_details() {
+fn footer_shows_usage_without_hover_and_click_reveals_details() {
     use nexus_tui::timeline::BlockKind;
     use nexus_tui::ui::{OverlayKind, Target};
     let mut a = app();
@@ -440,8 +440,9 @@ fn footer_hover_and_click_reveal_usage_details() {
     let rect = a.hits.rect_of(&Target::Block(index)).unwrap();
     a.mouse = Some((rect.x + 2, rect.y));
     let text = rows(&mut a).join("\n");
-    assert!(text.contains("Cached input: 4.0K tokens (33%)"), "{text}");
-    assert!(text.contains("Reasoning: 500 tokens"), "{text}");
+    assert!(text.contains("33%c"), "{text}");
+    assert!(text.contains("500r"), "{text}");
+    assert!(!text.contains("Turn details"), "{text}");
     click(&mut a, rect.x + 2, rect.y);
     assert!(
         matches!(a.ui.overlay.as_ref().map(|o| &o.kind), Some(OverlayKind::ContextDetail { text, .. }) if text.contains("Reasoning: 500 tokens"))
@@ -752,6 +753,11 @@ fn large_user_message_preview_expands_without_changing_context_or_turn_key() {
     );
     let control = t.blocks.iter().find(|b| b.kind == BlockKind::User).unwrap();
     assert_eq!(control.default_open, Some(false));
+    assert!(
+        control.start > turn.start && control.start < turn.end,
+        "the full-message control sits inside the band"
+    );
+    assert!(t.lines[control.start].bg.is_some());
     assert!(t.lines[control.start]
         .spans
         .iter()
@@ -1084,7 +1090,7 @@ fn context_headings_open_frozen_snapshot_details() {
         assert!(
             matches!(
                 &a.ui.overlay.as_ref().map(|o| &o.kind),
-                Some(OverlayKind::ContextDetail { .. })
+                Some(OverlayKind::ContextDoc { .. } | OverlayKind::ContextEntries { .. })
             ),
             "{heading} must open a modal"
         );
@@ -1152,7 +1158,7 @@ fn session_tool_grid_keeps_individual_click_targets_after_a_message() {
     click(&mut a, bash as u16, y as u16);
     assert!(matches!(
         a.ui.overlay.as_ref().map(|o| &o.kind),
-        Some(nexus_tui::ui::OverlayKind::ContextDetail { .. })
+        Some(nexus_tui::ui::OverlayKind::ContextEntries { open: Some(_), .. })
     ));
 }
 
@@ -1221,7 +1227,7 @@ fn the_turn_footer_shows_usage_without_cost() {
     let text = rows(&mut a).join("\n");
     assert!(text.contains("100Ki") && text.contains("10.0Ko"), "{text}");
     let footer = text.lines().find(|line| line.contains("100Ki")).unwrap();
-    assert!(!footer.contains("Build") && !footer.contains("50%c"));
+    assert!(!footer.contains("Build") && footer.contains("50%c"));
     let timeline = nexus_tui::timeline::build(&a, &a.theme, 0, 200);
     let details = timeline
         .blocks
@@ -1270,7 +1276,7 @@ fn the_turn_footers_usage_units_are_fainter_than_their_counts() {
         .iter()
         .filter(|s| matches!(s.content.as_ref(), "i" | "o" | "r" | "c"))
         .collect();
-    assert_eq!(units.len(), 2, "i and o: {:?}", footer.spans);
+    assert_eq!(units.len(), 3, "i, o and r: {:?}", footer.spans);
     for unit in units {
         assert_eq!(unit.style.fg, faint, "unit {unit:?}");
     }
@@ -2111,6 +2117,30 @@ fn assistant_text_aligns_with_the_user_message() {
 }
 
 #[test]
+fn image_previews_share_rows_and_wrap() {
+    let mut a = app();
+    let image = nexus_tui::images::Image::from_png(
+        "Image A".into(),
+        include_bytes!("../fixtures/clipboard.png"),
+    )
+    .unwrap();
+    let message = &mut a.state.model.selected.as_mut().unwrap().messages[0];
+    for i in 0..8 {
+        message.parts.push(serde_json::json!({
+            "type": "image", "name": format!("Image {}", (b'A' + i) as char), "data_url": image.data_url
+        }));
+    }
+    let (_, rows) = draw(&mut a, 50, 50);
+    assert!(rows.iter().any(|row| row.contains("┌──────┐ ┌──────┐")));
+    let timeline = a.timeline_for(50);
+    let previews = &timeline.previews;
+    assert_eq!(previews.len(), 8);
+    assert_eq!(previews[0].start, previews[1].start);
+    assert!(previews[1].column > previews[0].column);
+    assert!(previews[7].start > previews[0].start);
+}
+
+#[test]
 fn image_marker_is_neutral_and_its_preview_is_a_small_square() {
     use ratatui::style::Modifier;
     let mut a = app();
@@ -2121,11 +2151,19 @@ fn image_marker_is_neutral_and_its_preview_is_a_small_square() {
     .unwrap();
     let message = &mut a.state.model.selected.as_mut().unwrap().messages[0];
     message.parts[0]["text"] = serde_json::json!("[Image A] hi");
+    message
+        .parts
+        .push(serde_json::json!({"type": "text", "text": "[Image A]"}));
     message.parts.push(serde_json::json!({
         "type": "image", "name": image.name, "data_url": image.data_url
     }));
     let (buf, rows) = draw(&mut a, 120, 36);
     let text = rows.join("\n");
+    assert_eq!(
+        text.matches("[Image A]").count(),
+        1,
+        "only the inline marker is shown: {text}"
+    );
     assert!(
         !text.contains("Image |"),
         "no separate image label row: {text}"

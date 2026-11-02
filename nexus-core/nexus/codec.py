@@ -24,6 +24,12 @@ def to_json(value: Any) -> Any:
     """Dataclasses become dicts with a `type` tag; everything else passes through."""
     if isinstance(value, Media):  # the bytes (data_url) never leave the provider layer
         return {"artifact": value.artifact, "mime": value.mime, "name": value.name}
+    if isinstance(value, Text):
+        # Keep the existing shape for ordinary text; only a collapsed paste adds the flag.
+        out = {"type": "text", "text": value.text, "origin": value.origin, "raw": value.raw}
+        if value.collapsed:
+            out["collapsed"] = True
+        return out
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         name = _NAMES.get(type(value)) or snake(type(value).__name__)
         return {"type": name, **{f.name: to_json(getattr(value, f.name)) for f in dataclasses.fields(value)}}

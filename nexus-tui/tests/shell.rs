@@ -38,7 +38,8 @@ fn shell_anatomy_at_every_size_dark_and_mono() {
             // header: left toggle at the leading edge, right toggle trailing
             let head = &rows[0];
             assert!(
-                head.starts_with(" \u{25e7}") || head.starts_with(" \u{25a1}"),
+                head.trim_start().starts_with('\u{25e7}')
+                    || head.trim_start().starts_with('\u{25a1}'),
                 "{head:?}"
             );
             assert!(
@@ -143,12 +144,12 @@ fn dark_frames_use_the_theme_file_surfaces() {
     assert_eq!(buf[(100, 10)].bg, sidebar, "right sidebar");
     assert_eq!(buf[(27, 10)].symbol(), " ", "no edge rule in truecolor");
     assert_eq!(buf[(90, 10)].symbol(), " ");
-    assert_eq!(buf[(27, 10)].bg, sidebar);
+    assert_eq!(buf[(33, 10)].bg, sidebar);
     // surfaces collapse in ANSI-16 and mono: the edge is drawn there
     for tier in [Tier::Ansi16, Tier::Mono] {
         let mut low = with_turn(opts(Mode::Dark, tier), (120, 36));
         let (buf, _) = draw(&mut low, 120, 36);
-        assert_eq!(buf[(27, 10)].symbol(), "│", "{tier:?}");
+        assert_eq!(buf[(33, 10)].symbol(), "│", "{tier:?}");
         assert_eq!(buf[(90, 10)].symbol(), "│", "{tier:?}");
     }
     let mut light = with_turn(opts(Mode::Light, Tier::TrueColor), (120, 36));
@@ -165,7 +166,7 @@ fn ascii_mode_draws_only_ascii_chrome() {
     for r in &rows {
         assert!(r.is_ascii(), "{r:?}");
     }
-    assert!(rows[0].starts_with(" [|"), "{:?}", rows[0]);
+    assert!(rows[0].trim_start().starts_with("[|"), "{:?}", rows[0]);
 }
 
 #[test]
@@ -176,11 +177,11 @@ fn narrow_layout_uses_drawers_and_keeps_the_anchors() {
     let (_, rows) = draw(&mut app, 80, 24);
     // the drawer carries the tab icons
     use nexus_tui::ui::Tab;
-    for tab in [Tab::Sessions, Tab::Files, Tab::Projects] {
+    for tab in [Tab::Sessions, Tab::Files] {
         assert!(app.hits.rect_of(&Target::Tab(tab)).is_some(), "{tab:?}");
     }
     assert!(
-        rows[0].starts_with(" \u{25e7}"),
+        rows[0].trim_start().starts_with('\u{25e7}'),
         "toggle shows open: {:?}",
         rows[0]
     );
@@ -228,12 +229,12 @@ fn mouse_and_keyboard_reach_the_same_places() {
     press(&mut app, &["ctrl+b"]);
     assert!(app.ui.left_open);
     draw(&mut app, 120, 36);
-    let projects = app
+    let files = app
         .hits
-        .rect_of(&Target::Tab(nexus_tui::ui::Tab::Projects))
+        .rect_of(&Target::Tab(nexus_tui::ui::Tab::Files))
         .unwrap();
-    click(&mut app, projects.x, projects.y);
-    assert_eq!(app.ui.tab, nexus_tui::ui::Tab::Projects);
+    click(&mut app, files.x, files.y);
+    assert_eq!(app.ui.tab, nexus_tui::ui::Tab::Files);
     press(&mut app, &["alt+1"]);
     assert_eq!(app.ui.tab, nexus_tui::ui::Tab::Sessions);
 }
@@ -310,7 +311,7 @@ fn connection_states_become_banners_and_a_blocking_dialog() {
         retry_in: Duration::from_secs(4),
         reason: "stream closed".into(),
     }));
-    let (_, rows) = draw(&mut app, 120, 36);
+    let (_, rows) = draw(&mut app, 140, 36);
     let all = joined(&rows);
     assert!(
         all.contains("Disconnected from Core") && all.contains("retrying in 4s"),
@@ -658,7 +659,7 @@ fn files_tree_expands_with_git_marks_and_hides_ignored() {
         "the repository metadata is never a tree row"
     );
     let row = |name: &str| rows.iter().find(|row| row.contains(name)).unwrap();
-    let row = |name: &str| row(name).chars().take(28).collect::<String>();
+    let row = |name: &str| row(name).chars().skip(6).take(28).collect::<String>();
     assert!(row("a.rs").trim_end().ends_with('M'), "{all}");
     assert!(row("new.rs").trim_end().ends_with('?'), "{all}");
     assert!(row("gone.rs").trim_end().ends_with('D'), "{all}");
@@ -690,7 +691,11 @@ fn files_tree_expands_with_git_marks_and_hides_ignored() {
     let child = rows.iter().find(|row| row.contains("b.rs")).unwrap();
     // one indent guide per ancestor, then the row indented under its folder
     assert!(
-        child.starts_with(" \u{2502}"),
+        child
+            .chars()
+            .skip(6)
+            .collect::<String>()
+            .starts_with(" \u{2502}"),
         "child has an indent guide: {child:?}"
     );
     assert!(
@@ -856,8 +861,8 @@ fn session_rows_show_project_and_cached_branch_and_both_lines_are_clickable() {
         .position(|line| line.contains("⌥ main"))
         .unwrap();
     assert!(rows[row - 1].contains("New session"));
-    assert_eq!(app.hits.at(4, row as u16), Some(&Target::SideRow(0)));
-    assert_eq!(app.hits.at(4, row as u16 - 1), Some(&Target::SideRow(0)));
+    assert_eq!(app.hits.at(10, row as u16), Some(&Target::SideRow(0)));
+    assert_eq!(app.hits.at(10, row as u16 - 1), Some(&Target::SideRow(0)));
 }
 
 #[test]
@@ -894,6 +899,11 @@ fn files_list_open_read_and_return_to_timeline() {
 
 /// Opens `hello.txt` in the file view with `content` loaded.
 fn open_file_view(content: &str) -> nexus_tui::app::App {
+    open_named_file_view("hello.txt", content)
+}
+
+/// Opens `name` in the file view with `content` loaded.
+fn open_named_file_view(name: &str, content: &str) -> nexus_tui::app::App {
     use nexus_tui::sync::SyncMsg;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     let project = app.current_project().unwrap();
@@ -903,14 +913,14 @@ fn open_file_view(content: &str) -> nexus_tui::app::App {
         session: Some(SESSION.into()),
         path: String::new(),
         file: false,
-        data: Ok(serde_json::json!({"entries": [{"name": "hello.txt", "kind": "file"}]})),
+        data: Ok(serde_json::json!({"entries": [{"name": name, "kind": "file"}]})),
     });
     draw(&mut app, 120, 36);
     app.click(Target::SideRow(0));
     app.apply_sync(SyncMsg::Files {
         project,
         session: Some(SESSION.into()),
-        path: "hello.txt".into(),
+        path: name.into(),
         file: true,
         data: Ok(serde_json::json!({"content": content, "revision": "rev1"})),
     });
@@ -1311,7 +1321,7 @@ fn worktree_groups_keep_cursor_on_the_same_session_when_branch_data_arrives() {
     );
     assert!(entries
         .iter()
-        .any(|entry| entry.id == SESSION && entry.project.is_some() && entry.tree.is_none()));
+        .any(|entry| entry.id == SESSION && entry.project.is_none() && entry.tree.is_none()));
 }
 
 #[test]
@@ -1334,11 +1344,9 @@ fn settings_arrows_change_animations_monochrome_and_sidebar() {
     press(&mut app, &["esc"]);
     press(&mut app, &["s", "i", "d", "e", "b", "a", "r"]);
     press(&mut app, &["right"]);
-    assert!(app.ui.left_open && app.ui.left_rail);
+    assert!(!app.ui.left_open, "rail only");
     press(&mut app, &["right"]);
-    assert!(!app.ui.left_open);
-    press(&mut app, &["right"]);
-    assert!(app.ui.left_open && !app.ui.left_rail);
+    assert!(app.ui.left_open, "the sidebar beside the rail");
 }
 
 #[test]
@@ -1369,7 +1377,7 @@ fn session_rows_end_with_child_count_and_age_and_truncate_the_place_first() {
         .iter()
         .position(|line| line.contains("⌥ main"))
         .expect("parent row");
-    let side: String = rows[row].chars().take(28).collect();
+    let side: String = rows[row].chars().skip(6).take(28).collect();
     assert!(side.trim_end().ends_with("2 ↳"), "{side:?}");
     assert!(
         rows[row - 1].contains("3h"),
@@ -1986,14 +1994,14 @@ fn escape_on_a_question_follows_the_manifest_chain() {
 }
 
 #[test]
-fn files_and_projects_tabs_expand_the_rail() {
+fn a_sidebar_tab_opens_the_sidebar_beside_the_rail() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.ui.left_rail = true;
+    app.ui.left_open = false;
     app.execute("sidebar.tab.files");
-    assert!(!app.ui.left_rail);
-    app.ui.left_rail = true;
+    assert!(app.ui.left_open);
+    app.ui.left_open = false;
     app.execute("sidebar.tab.sessions");
-    assert!(app.ui.left_rail);
+    assert!(app.ui.left_open);
 }
 
 #[test]
@@ -2591,11 +2599,7 @@ fn sidebar_icons_sit_in_the_band_over_the_sidebar() {
     let left = app.regions.left.unwrap();
     let toggle = app.hits.rect_of(&Target::ToggleLeft).unwrap();
     let mut prev = toggle.right();
-    for tab in [
-        nexus_tui::ui::Tab::Sessions,
-        nexus_tui::ui::Tab::Files,
-        nexus_tui::ui::Tab::Projects,
-    ] {
+    for tab in [nexus_tui::ui::Tab::Sessions, nexus_tui::ui::Tab::Files] {
         let r = app.hits.rect_of(&Target::Tab(tab)).unwrap();
         assert_eq!(r.y, 0);
         assert!(r.x >= prev && r.right() <= left.right(), "{r:?}");
@@ -2843,7 +2847,8 @@ fn completion_is_a_block_as_wide_as_the_card_with_a_left_rail() {
 /// The left sidebar's text, cut at its width (the centre column starts after it).
 fn sidebar(rows: &[String], width: usize) -> Vec<String> {
     rows.iter()
-        .map(|r| r.chars().take(width).collect::<String>())
+        // The project rail takes the first cells of every body row.
+        .map(|r| r.chars().skip(6).take(width).collect::<String>())
         .collect()
 }
 
@@ -2880,7 +2885,7 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
             .iter()
             .position(|l| l.contains("⌕"))
             .expect("search row");
-        // search row, blank, project header, title line, detail line, spacer, new
+        // search row, blank, title line, detail line, spacer, new
         let key = col_of(&text[first], "ctrl+k");
         assert_eq!(
             text[first].find('⌕').map(|_| col_of(&text[first], "⌕")),
@@ -2892,11 +2897,10 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
             text[first]
         );
         assert!(text[first + 1].trim().is_empty(), "{w}");
-        assert!(text[first + 2].trim_end().ends_with('x') && text[first + 2].starts_with("  x"));
-        let title = &text[first + 3];
-        let detail = &text[first + 4];
-        assert!(text[first + 5].trim().is_empty(), "spacer {w}");
-        assert!(text[first + 6].contains("+ New session"), "{w}");
+        let title = &text[first + 2];
+        let detail = &text[first + 3];
+        assert!(text[first + 4].trim().is_empty(), "spacer {w}");
+        assert!(text[first + 5].contains("+ New session"), "{w}");
         // mark slot at x=2, title at x=4, time right-aligned with a margin of 1.
         assert!(title.starts_with("  ●"), "{w}: unread mark: {title:?}");
         assert_eq!(col_of(title, "Refactor"), 4, "{w}");
@@ -3091,11 +3095,11 @@ fn the_row_menu_is_a_raised_popover_beside_the_row_and_delete_asks_to_confirm() 
 fn the_rail_marks_the_open_project_with_the_selection_band() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.ui.left_width = 10;
-    app.ui.left_rail = true;
+    app.ui.left_open = false;
     let (buf, _) = draw(&mut app, 120, 36);
     let band = app
         .hits
-        .rect_of(&Target::SideRow(0))
+        .rect_of(&Target::RailProject(0))
         .expect("rail item for the open project");
     assert_eq!(
         Some(buf[(band.x + 1, band.y + 1)].bg),
@@ -3109,7 +3113,7 @@ fn the_rail_marks_the_open_project_with_the_selection_band() {
             app.theme.bg("surface.raised").bg
         );
         assert_eq!(
-            Some(buf[(band.right() - 1, y)].bg),
+            Some(buf[(band.right() - 2, y)].bg),
             app.theme.bg("surface.raised").bg
         );
         assert_eq!(buf[(band.x, y)].symbol(), "▏");
@@ -3377,7 +3381,7 @@ fn preview_context_headings_open_details_on_mouse_click() {
         assert!(
             matches!(
                 &app.ui.overlay.as_ref().map(|o| &o.kind),
-                Some(OverlayKind::ContextDetail { .. })
+                Some(OverlayKind::ContextDoc { .. } | OverlayKind::ContextEntries { .. })
             ),
             "{heading} must open a preview modal"
         );
@@ -3504,7 +3508,11 @@ fn new_session_preview_names_disabled_project_mcp_and_opens_its_details() {
     let x = col_of(&rows[y as usize], "switched-off");
     click(&mut app, x as u16, y);
     let detail = match app.ui.overlay.as_ref().map(|o| &o.kind) {
-        Some(OverlayKind::ContextDetail { text, .. }) => text.clone(),
+        Some(OverlayKind::ContextEntries {
+            entries,
+            open: Some(i),
+            ..
+        }) => entries[*i].full.clone().unwrap_or_default(),
         other => panic!("disabled row must open its details, got {other:?}"),
     };
     assert!(detail.contains("State: disabled"), "{detail}");
@@ -3641,6 +3649,22 @@ fn the_connecting_screen_uses_the_same_logo_rows() {
 }
 
 #[test]
+fn a_cold_launch_shows_the_logo_and_the_milestone_bar() {
+    let mut app = nexus_tui::app::App::new(
+        nexus_tui::state::AppState::new(),
+        nexus_tui::theme::Theme::new(opts(Mode::Dark, Tier::TrueColor)),
+        (120, 36),
+    );
+    let (_, rows) = draw(&mut app, 120, 36);
+    let all = joined(&rows);
+    for row in nexus_tui::paint::LOGO {
+        assert!(all.contains(row.trim()), "{row:?} missing:\n{all}");
+    }
+    assert!(all.contains("daemon"), "{all}");
+    assert!(all.contains("0%"), "{all}");
+}
+
+#[test]
 fn offline_says_so_in_the_header_the_banner_and_the_composer() {
     use nexus_tui::state::ConnectionState as C;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
@@ -3734,15 +3758,19 @@ fn the_files_root_header_and_indent_guides_follow_d16() {
     let (buf, rows) = draw(&mut app, 120, 36);
     let y = rows.iter().position(|r| r.contains("x.rs")).unwrap();
     assert!(
-        rows[y].starts_with(" \u{2502} \u{2502}"),
+        rows[y]
+            .chars()
+            .skip(6)
+            .collect::<String>()
+            .starts_with(" \u{2502} \u{2502}"),
         "two guides: {:?}",
         rows[y]
     );
     let border = app.theme.color("border.default").unwrap();
-    assert_eq!(buf[(1, y as u16)].fg, border, "guides use border.default");
+    assert_eq!(buf[(7, y as u16)].fg, border, "guides use border.default");
     let deep = rows.iter().position(|r| r.contains("deep")).unwrap();
     // (the selected row carries the focus bar in column 0)
-    let guides = |row: &str| row.chars().skip(1).take(4).collect::<String>();
+    let guides = |row: &str| row.chars().skip(7).take(4).collect::<String>();
     assert_eq!(
         guides(&rows[deep]),
         "\u{2502} \u{25be} ",
@@ -3761,21 +3789,74 @@ fn the_files_root_header_and_indent_guides_follow_d16() {
 }
 
 #[test]
-fn the_file_panel_docks_at_160_and_covers_at_120() {
+fn the_file_view_is_a_modal_at_every_width() {
     let mut app = open_file_view("hello\nworld\n");
-    let (_, rows) = draw(&mut app, 160, 48);
-    let panel = app.regions.panel.expect("the file panel");
-    assert!(app.regions.right.is_none(), "the right sidebar yields");
-    assert_eq!(panel.x + panel.width, 160);
-    assert_eq!(panel.y, app.regions.header.bottom());
-    assert!(rows[panel.y as usize].contains("Back"));
-    assert!(rows[panel.y as usize].contains("hello.txt"));
-
-    let (_, rows) = draw(&mut app, 120, 36);
-    assert_eq!(app.regions.panel.unwrap(), app.regions.area);
-    assert!(rows[0].contains("Back"), "the panel covers the header too");
+    for (w, h) in [(160, 48), (120, 36), (80, 24)] {
+        let (_, rows) = draw(&mut app, w, h);
+        let panel = app.regions.panel.expect("the file panel");
+        assert_eq!(panel, nexus_tui::layout::panel_rect(app.regions.area));
+        assert!(panel.x > 0 && panel.right() < w && panel.y > 0, "{w}");
+        assert!(rows[panel.y as usize].contains("Back"), "{w}");
+        assert!(rows[panel.y as usize].contains("hello.txt"), "{w}");
+        // The page keeps its place underneath and outside clicks close the modal.
+        assert_eq!(app.hits.at(0, h - 1), Some(&Target::PanelBack), "{w}");
+    }
+    let before = app.composer_ref().text();
+    press(&mut app, &["z"]);
+    assert_eq!(
+        app.composer_ref().text(),
+        before,
+        "typing stays out of the page behind"
+    );
     press(&mut app, &["esc"]);
-    assert!(!app.ui.file_open, "esc closes the panel");
+    assert!(!app.ui.file_open, "esc closes the modal");
+}
+
+#[test]
+fn long_lines_wrap_in_the_file_view_and_its_end_stays_reachable() {
+    let long = "abcdefghij".repeat(30);
+    let body: String = (0..40).map(|n| format!("{n} {long}\n")).collect();
+    let mut app = open_file_view(&body);
+    let (_, rows) = draw(&mut app, 120, 36);
+    let r = app.regions.panel.unwrap();
+    let all = joined(&rows);
+    assert!(!all.contains('\u{2026}'), "nothing is cut: {all}");
+    let first = rows
+        .iter()
+        .position(|row| row.contains("1 \u{2502} 0"))
+        .unwrap();
+    let next = &rows[first + 1];
+    assert!(
+        next.contains("\u{2502}") && !next.contains(" 2 \u{2502}"),
+        "a wrapped row has no number: {next:?}"
+    );
+    for _ in 0..200 {
+        press(&mut app, &["down"]);
+    }
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(
+        joined(&rows).contains("40 \u{2502} 39"),
+        "the last line shows"
+    );
+    assert_eq!(r, app.regions.panel.unwrap());
+}
+
+#[test]
+fn long_lines_wrap_while_editing_and_the_cursor_follows() {
+    let long = "abcdefghij".repeat(30);
+    let mut app = open_file_view(&format!("{long}\nshort\n"));
+    draw(&mut app, 120, 36);
+    app.execute("editor.edit");
+    let (_, rows) = draw(&mut app, 120, 36);
+    let r = app.regions.panel.unwrap();
+    let room = nexus_tui::paint::file_text_room(r.width, 3);
+    let first = rows
+        .iter()
+        .position(|row| row.contains("  1 \u{2502} abc"))
+        .unwrap();
+    assert!(rows[first + 1].contains("\u{2502} ") && !rows[first + 1].contains("  2 \u{2502}"));
+    assert!(rows.iter().any(|row| row.contains("  2 \u{2502} short")));
+    assert!(room < long.len());
 }
 
 #[test]
@@ -3801,7 +3882,102 @@ fn a_covered_timeline_shows_its_waiting_badge() {
         data: Ok(serde_json::json!({"content": "hello\n", "revision": "rev1"})),
     });
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(rows[0].contains("2 waiting"), "{:?}", rows[0]);
+    let top = rows[app.regions.panel.unwrap().y as usize].clone();
+    assert!(top.contains("2 waiting"), "{top:?}");
+}
+
+#[test]
+fn context_prompts_render_as_markdown_and_tools_list_their_descriptions() {
+    use nexus_tui::app::App;
+    use nexus_tui::sync::SyncMsg;
+    use nexus_tui::ui::OverlayKind;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let history = nexus_tui::api::History {
+        session_id: SESSION.into(),
+        messages: app.messages().to_vec(),
+        starting: Some(serde_json::json!({
+            "origin": "created",
+            "system_prompt": "# Rules\n\nUse **care**.",
+            "tools": ["read", "bash"],
+            "tool_definitions": {
+                "read": {"description": "Read a file.", "input_schema": {"type": "object", "marker": "schema-marker"}},
+                "bash": {"description": "Run a command."}
+            },
+            "agent": {"name": "build"},
+            "instruction_file": {"path": "/work/AGENTS.md", "status": "loaded", "bytes": 4, "content": "text"},
+            "workspace": {"entry": true, "active": false}
+        })),
+        ..Default::default()
+    };
+    app.apply_sync(SyncMsg::History(Box::new(history)));
+    draw(&mut app, 120, 36);
+
+    app.click(Target::ContextSection("System prompt".into()));
+    let (_, rows) = draw(&mut app, 120, 36);
+    let shown = joined(&rows);
+    assert!(
+        shown.contains("Use care."),
+        "bold markers are rendered away: {shown}"
+    );
+    assert!(!shown.contains("**care**"), "{shown}");
+    press(&mut app, &["esc"]);
+
+    app.click(Target::ContextSection("Tools".into()));
+    let (_, rows) = draw(&mut app, 120, 36);
+    let shown = joined(&rows);
+    assert!(
+        shown.contains("Read a file.") && shown.contains("Run a command."),
+        "{shown}"
+    );
+    assert!(
+        !shown.contains("schema-marker"),
+        "the schema waits to be opened: {shown}"
+    );
+    let row = app
+        .hits
+        .rect_of(&Target::ContextEntry(0))
+        .expect("an entry row");
+    click(&mut app, row.x + 1, row.y);
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(
+        joined(&rows).contains("schema-marker"),
+        "opening shows the schema"
+    );
+    assert!(matches!(
+        app.ui.overlay.as_ref().map(|o| &o.kind),
+        Some(OverlayKind::ContextEntries { open: Some(_), .. })
+    ));
+    let _ = App::viewed_id;
+}
+
+#[test]
+fn a_skill_entry_asks_core_for_its_full_text() {
+    use nexus_tui::actions::ApiCall;
+    use nexus_tui::ui::{ContextEntry, OverlayKind};
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.open_overlay(OverlayKind::ContextEntries {
+        title: "Skills".into(),
+        entries: vec![ContextEntry {
+            name: "design".into(),
+            description: "Draws things.".into(),
+            full: None,
+            markdown: true,
+            fetch: Some("skill"),
+        }],
+        cursor: 0,
+        open: None,
+        top: 0,
+    });
+    app.effects.clear();
+    press(&mut app, &["enter"]);
+    assert!(
+        format!("{:?}", app.effects).contains("ContextEntry"),
+        "{:?}",
+        app.effects
+    );
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("Loading"));
+    let _ = std::mem::size_of::<ApiCall>();
 }
 
 #[test]
@@ -3896,9 +4072,116 @@ fn the_file_view_has_a_header_a_gutter_and_a_search_row() {
 }
 
 #[test]
-fn from_100_to_119_columns_the_right_sidebar_starts_closed_and_still_opens() {
-    use nexus_tui::layout::Breakpoint;
-    assert!(!Breakpoint::of(110).right_open_by_default());
+fn markdown_files_open_as_prose_and_keep_the_source_behind_p() {
+    let content = "# Title\n\nSome **bold** text.\n";
+    let mut app = open_named_file_view("hello.md", content);
+    let (_, rows) = draw(&mut app, 120, 36);
+    let r = app.regions.panel.expect("the file panel");
+    let all = joined(&rows);
+    assert!(all.contains("Title"), "{all}");
+    assert!(
+        !all.contains("# Title"),
+        "the heading marker is gone: {all}"
+    );
+    assert!(
+        all.contains("Some bold text."),
+        "the emphasis markers are gone: {all}"
+    );
+    assert!(
+        rows[r.y as usize].contains("p source"),
+        "{:?}",
+        rows[r.y as usize]
+    );
+    assert!(
+        rows[r.y as usize].contains("e edit"),
+        "the header says how to edit: {:?}",
+        rows[r.y as usize]
+    );
+    assert!(!all.contains("\u{2502} # Title"), "no source gutter: {all}");
+
+    press(&mut app, &["p"]);
+    let (_, rows) = draw(&mut app, 120, 36);
+    let all = joined(&rows);
+    assert!(all.contains("# Title"), "the source is readable: {all}");
+    assert!(all.contains("1 \u{2502} # Title"), "{all}");
+    assert!(
+        rows[r.y as usize].contains("p preview"),
+        "{:?}",
+        rows[r.y as usize]
+    );
+
+    // Find reads the source, so it leaves the preview and opens the bar.
+    press(&mut app, &["p", "ctrl+f"]);
+    assert!(app.ui.file_source && app.ui.file_search.is_some());
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(
+        rows[r.bottom() as usize - 1].contains("/ "),
+        "{:?}",
+        rows[r.bottom() as usize - 1]
+    );
+    press(&mut app, &["esc", "e"]);
+    assert!(app.ui.file_edit.is_some(), "e edits after the preview");
+
+    let mut preview = open_named_file_view("hello.md", content);
+    assert!(preview.file_preview());
+    preview.click(Target::FileEdit);
+    assert!(
+        preview.ui.file_edit.is_some(),
+        "the header's edit control starts the editor"
+    );
+    let mut preview = open_named_file_view("hello.md", content);
+    press(&mut preview, &["e"]);
+    assert!(
+        preview.ui.file_edit.is_some(),
+        "e edits straight from the preview"
+    );
+
+    // A plain text file has no preview control.
+    let mut plain = open_file_view("hello\n");
+    let (_, rows) = draw(&mut plain, 120, 36);
+    let r = plain.regions.panel.expect("the file panel");
+    assert!(!rows[r.y as usize].contains("preview"));
+    press(&mut plain, &["p"]);
+    assert!(!plain.ui.file_source);
+}
+
+#[test]
+fn markdown_preview_scrolls_to_the_end() {
+    let body: String = (0..80)
+        .map(|n| format!("Paragraph {n} has enough words to take a row of its own.\n\n"))
+        .collect();
+    let mut app = open_named_file_view("long.md", &body);
+    let r = app.regions.panel.expect("the file panel");
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("Paragraph 0"), "{}", joined(&rows));
+    for _ in 0..20 {
+        press(&mut app, &["pagedown"]);
+    }
+    let (_, rows) = draw(&mut app, 120, 36);
+    let all = joined(&rows);
+    assert!(all.contains("Paragraph 79"), "the end is reachable: {all}");
+    assert!(
+        !all.contains("Paragraph 0 "),
+        "the first paragraph scrolled away: {all}"
+    );
+    assert_eq!(r, app.regions.panel.unwrap());
+}
+
+#[test]
+fn the_right_sidebar_starts_closed_at_every_width_and_still_opens() {
+    for width in [100u16, 120, 160, 200] {
+        let mut state = nexus_tui::state::AppState::new();
+        state.apply(nexus_tui::sync::SyncMsg::Connection(
+            nexus_tui::state::ConnectionState::Live,
+        ));
+        let mut app = nexus_tui::app::App::new(
+            state,
+            nexus_tui::theme::Theme::new(opts(Mode::Dark, Tier::TrueColor)),
+            (width, 40),
+        );
+        draw(&mut app, width, 40);
+        assert!(app.regions.right.is_none(), "{width}");
+    }
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (110, 30));
     let (_, rows) = draw(&mut app, 110, 30);
     assert!(app.regions.right.is_none(), "closed by default");
@@ -3953,7 +4236,7 @@ fn a_narrow_drawer_sits_over_the_scrim_and_hit_tests_inside_and_out() {
     draw(&mut app, 80, 24);
     let (side, rect) = app.regions.drawer.unwrap();
     assert_eq!((side, rect.width, rect.right()), (Side::Right, 36, 80));
-    assert_eq!(app.hits.at(2, rect.y + 3), Some(&Target::Scrim));
+    assert_eq!(app.hits.at(8, rect.y + 3), Some(&Target::Scrim));
 }
 
 #[test]
@@ -3962,7 +4245,7 @@ fn the_narrow_header_keeps_the_toggles_and_a_left_truncated_crumb() {
     let (_, rows) = draw(&mut app, 60, 24);
     let head = &rows[0];
     assert!(
-        head.starts_with(" \u{25e7}") || head.starts_with(" \u{25a1}"),
+        head.trim_start().starts_with('\u{25e7}') || head.trim_start().starts_with('\u{25a1}'),
         "{head:?}"
     );
     assert!(head.contains("New session"), "{head:?}");
@@ -4040,6 +4323,22 @@ fn session_search_uses_the_tab_status_glyph_instead_of_state_words() {
         .y as usize;
     assert!(rows[y].contains('\u{25d0}'), "{:?}", rows[y]);
     assert!(!rows[y].contains("running"), "{:?}", rows[y]);
+}
+
+#[test]
+fn session_search_leads_each_row_with_its_state_glyph() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.run_command("session.switch");
+    let (_, rows) = draw(&mut app, 120, 36);
+    let y = app
+        .hits
+        .rect_of(&Target::PaletteItem(0))
+        .expect("session row")
+        .y as usize;
+    let row = &rows[y];
+    let glyph = row.find('\u{b7}').unwrap_or_else(|| panic!("{row:?}"));
+    let title = row.find("New session").unwrap_or_else(|| panic!("{row:?}"));
+    assert!(glyph < title, "the glyph leads the title: {row:?}");
 }
 
 #[test]
@@ -4211,16 +4510,12 @@ fn bottom_rule_shows_context_and_activity() {
     assert!((active as f64 / width as f64 - 0.41).abs() < 0.02);
     busy(&mut app);
     let (buf, _) = draw(&mut app, 160, 48);
-    let active = (r.x + 2..r.right() - 2)
-        .filter(|&x| buf[(x, y)].fg == accent)
-        .count();
-    // The pulse has soft edges: a bright core plus cells fading to the rule colour.
+    // The pulse has soft edges: cells fading to the rule colour around its core.
     let rule = app.theme.fg("border.default").fg.unwrap();
     let lit = (r.x + 2..r.right() - 2)
         .filter(|&x| buf[(x, y)].fg != rule)
         .count();
-    assert!(active > 0 && active <= width / 5, "{active}");
-    assert!(lit > active && lit <= width / 5 + 4, "{lit}");
+    assert!(lit > 0 && lit <= width / 5 + 4, "{lit}");
 }
 
 #[test]
@@ -4259,6 +4554,38 @@ fn slash_sessions_opens_the_session_switcher() {
 }
 
 #[test]
+fn pressing_the_open_project_in_the_rail_opens_the_project_session_switcher() {
+    use nexus_tui::ui::{Overlay, OverlayKind, PaletteMode};
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let project_id = app.current_project().unwrap();
+    let mut other = app.state.model.sessions[SESSION].clone();
+    other.id = "other-project".into();
+    other.project_id = "another-project".into();
+    other.title = "Elsewhere".into();
+    app.state.model.sessions.insert(other.id.clone(), other);
+    app.ui.left_open = false;
+    draw(&mut app, 120, 36);
+    let rail = app.hits.rect_of(&Target::RailProject(0)).unwrap();
+    click(&mut app, rail.x + 2, rail.y + 1);
+    assert!(
+        matches!(
+            app.ui.overlay,
+            Some(Overlay {
+                kind: OverlayKind::Palette(ref p),
+                ..
+            }) if p.mode == PaletteMode::Sessions
+        ),
+        "the open project opens the session switcher"
+    );
+    assert!(!app.ui.scope_all, "the switcher opens in project scope");
+    let labels: Vec<String> = app.palette_items().into_iter().map(|i| i.label).collect();
+    assert!(labels.iter().any(|l| l == "New session"), "{labels:?}");
+    assert!(!labels.iter().any(|l| l == "Elsewhere"), "{labels:?}");
+    assert_eq!(app.current_project().as_deref(), Some(project_id.as_str()));
+    assert_eq!(app.viewed_id(), Some(SESSION));
+}
+
+#[test]
 fn project_rail_labels_activity_and_session_restoration() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     let project_id = app.current_project().unwrap();
@@ -4268,14 +4595,22 @@ fn project_rail_labels_activity_and_session_restoration() {
     project.name = "Notes".into();
     project.created += 1.0;
     app.state.model.projects.insert(project.id.clone(), project);
-    app.ui.left_rail = true;
+    app.ui.left_open = false;
     let (buf, _) = draw(&mut app, 120, 36);
-    let first = app.hits.rect_of(&Target::SideRow(0)).unwrap();
-    let second = app.hits.rect_of(&Target::SideRow(1)).unwrap();
-    let x = first.x + first.width.saturating_sub(1) / 2;
-    assert_eq!(buf[(x, first.y + 1)].symbol(), "N");
-    assert_eq!(buf[(x, second.y + 1)].symbol(), "N");
-    assert_eq!(buf[(x + 1, second.y + 1)].symbol(), "T");
+    let first = app.hits.rect_of(&Target::RailProject(0)).unwrap();
+    let second = app.hits.rect_of(&Target::RailProject(1)).unwrap();
+    let label = |y: u16| -> String {
+        (first.x + 1..first.right() - 1)
+            .map(|x| buf[(x, y)].symbol().to_owned())
+            .collect::<String>()
+            .trim()
+            .to_owned()
+    };
+    assert_eq!(label(first.y + 1), "N");
+    assert_eq!(label(second.y + 1), "NT");
+    let x = (second.x..second.right())
+        .find(|x| buf[(*x, second.y + 1)].symbol() == "N")
+        .unwrap();
     assert_eq!(
         buf[(x, second.y + 1)].fg,
         app.theme.color("text.muted").unwrap()
@@ -4292,9 +4627,8 @@ fn project_rail_labels_activity_and_session_restoration() {
     assert!(app.composer_ref().text().is_empty());
     app.composer().set_text("Nexus draft");
 
-    app.ui.focus = nexus_tui::ui::Focus::Sidebar;
-    app.ui.cursor.insert(nexus_tui::ui::Tab::Sessions, 0);
-    press(&mut app, &["down", "enter"]);
+    draw(&mut app, 120, 36);
+    click(&mut app, second.x + 2, second.y + 1);
     assert_eq!(app.current_project().as_deref(), Some("second"));
     assert_eq!(app.viewed_id(), None);
     assert_eq!(app.composer_ref().text(), "Notes draft");
@@ -4368,17 +4702,30 @@ fn project_rail_counters_have_colors_overflow_and_hover_details() {
             app.state.model.sessions.insert(session.id.clone(), session);
         }
     }
-    app.ui.left_rail = true;
+    app.ui.left_open = false;
     let (buf, _) = draw(&mut app, 120, 50);
-    let band = app.hits.rect_of(&Target::SideRow(0)).unwrap();
-    // Attention and finished sit above the initials, running and idle below.
+    let band = app.hits.rect_of(&Target::RailProject(0)).unwrap();
+    // One counter per corner: attention and unread on top, running and idle below.
     let row = |y: u16| -> String {
         (band.x..band.right())
             .map(|x| buf[(x, y)].symbol())
             .collect()
     };
-    assert!(row(band.y).contains("* 2"), "{:?}", row(band.y));
-    assert!(row(band.y + 2).contains("3 4"), "{:?}", row(band.y + 2));
+    let (left, right) = (band.x + 1, band.right() - 2);
+    assert_eq!(buf[(left, band.y)].symbol(), "*", "{:?}", row(band.y));
+    assert_eq!(buf[(right, band.y)].symbol(), "2", "{:?}", row(band.y));
+    assert_eq!(
+        buf[(left, band.y + 2)].symbol(),
+        "3",
+        "{:?}",
+        row(band.y + 2)
+    );
+    assert_eq!(
+        buf[(right, band.y + 2)].symbol(),
+        "4",
+        "{:?}",
+        row(band.y + 2)
+    );
     let cell = |y: u16, symbol: &str| -> u16 {
         (band.x..band.right())
             .find(|x| buf[(*x, y)].symbol() == symbol)
@@ -4398,12 +4745,7 @@ fn project_rail_counters_have_colors_overflow_and_hover_details() {
     app.mouse = Some((band.x + 2, band.y + 1));
     let (buf, _) = draw(&mut app, 120, 50);
     let screen: String = buf.content.iter().map(|cell| cell.symbol()).collect();
-    for label in [
-        "10 needs attention",
-        "2 finished (unread)",
-        "3 running",
-        "4 idle",
-    ] {
+    for label in ["10 needs attention", "2 unread", "3 running", "4 idle"] {
         assert!(screen.contains(label), "missing {label}");
     }
     assert!(!screen.contains("means 10"));
@@ -4419,6 +4761,73 @@ fn project_rail_counters_have_colors_overflow_and_hover_details() {
 }
 
 #[test]
+fn project_rail_counts_keep_their_corners_when_others_are_zero() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    let template = app.state.model.sessions[SESSION].clone();
+    app.state.model.sessions.clear();
+    app.state.model.running.clear();
+    app.state.model.approvals.clear();
+    app.state.model.questions.clear();
+    app.ui.unread_sessions.clear();
+    for (kind, count) in [("finished", 2), ("running", 1), ("idle", 6)] {
+        for n in 0..count {
+            let mut session = template.clone();
+            session.id = format!("{kind}-{n}");
+            session.parent_id = None;
+            session.archived = false;
+            match kind {
+                "finished" => {
+                    app.ui.unread_sessions.insert(session.id.clone());
+                }
+                "running" => {
+                    app.state
+                        .model
+                        .running
+                        .insert(session.id.clone(), "turn".into());
+                }
+                _ => {}
+            }
+            app.state.model.sessions.insert(session.id.clone(), session);
+        }
+    }
+    app.ui.left_open = false;
+    let (buf, _) = draw(&mut app, 120, 50);
+    let band = app.hits.rect_of(&Target::RailProject(0)).unwrap();
+    // Unread keeps the top right corner though attention is zero, and running
+    // and idle keep theirs.
+    let (left, right) = (band.x + 1, band.right() - 2);
+    assert_eq!(buf[(left, band.y)].symbol(), " ");
+    assert_eq!(buf[(right, band.y)].symbol(), "2");
+    assert_eq!(buf[(left, band.y + 2)].symbol(), "1");
+    assert_eq!(buf[(right, band.y + 2)].symbol(), "6");
+}
+#[test]
+fn the_rail_popup_sits_beside_the_rail_with_the_sidebar_open_or_closed() {
+    for open in [true, false] {
+        let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+        app.ui.left_open = open;
+        draw(&mut app, 120, 36);
+        let band = app.hits.rect_of(&Target::RailProject(0)).unwrap();
+        app.mouse = Some((band.x + 2, band.y + 1));
+        let (_, rows) = draw(&mut app, 120, 36);
+        let row = rows
+            .iter()
+            .find(|row| row.contains("needs attention"))
+            .unwrap_or_else(|| panic!("open {open}: {rows:#?}"));
+        // The rail's six cells, then the popup's two cells of padding and the count.
+        assert_eq!(col_of(row, "needs attention"), 10, "open {open}: {row:?}");
+    }
+}
+
+#[test]
+fn focusing_the_sidebar_opens_no_rail_popup() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.ui.focus = nexus_tui::ui::Focus::Sidebar;
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(!joined(&rows).contains("needs attention"));
+}
+
+#[test]
 fn project_rail_draws_a_three_cell_rule_under_a_project_without_counts() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     let project_id = app.current_project().unwrap();
@@ -4427,9 +4836,9 @@ fn project_rail_draws_a_three_cell_rule_under_a_project_without_counts() {
     empty.name = "Empty".into();
     empty.created += 1.0;
     app.state.model.projects.insert(empty.id.clone(), empty);
-    app.ui.left_rail = true;
+    app.ui.left_open = false;
     let (buf, _) = draw(&mut app, 120, 36);
-    let band = app.hits.rect_of(&Target::SideRow(1)).unwrap();
+    let band = app.hits.rect_of(&Target::RailProject(1)).unwrap();
     let row: String = (band.x..band.right())
         .map(|x| buf[(x, band.y + 2)].symbol())
         .collect();

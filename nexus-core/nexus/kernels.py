@@ -71,11 +71,15 @@ class Kernel:
     task: asyncio.Task[Any] | None = None  # the task running the current cell, if any
     closed: bool = False
 
-    def json(self) -> dict[str, Any]:
-        return {"id": self.id, "created_by": self.created_by, "created": self.created,
+    def json(self, *, summary: bool = False) -> dict[str, Any]:
+        """Kernel metadata; `summary` omits retained cell bodies for compact listings."""
+        data = {"id": self.id, "created_by": self.created_by, "created": self.created,
                 "cell_count": self.counter, "busy": self.lock.locked(), "users": sorted(self.users),
-                "cells": self.cells, "variables": self.variables,
+                "variables": self.variables,
                 "cells_clipped": max(0, self.counter - len(self.cells))}
+        if not summary:
+            data["cells"] = self.cells
+        return data
 
 
 class Kernels:
@@ -85,6 +89,7 @@ class Kernels:
         self.items: dict[str, Kernel] = {}
         self.main: dict[str, str] = {}
         self.creation_lock = asyncio.Lock()
+        self.closing: set[asyncio.Task[None]] = set()
 
     def get(self, kernel_id: str) -> Kernel:
         try:
@@ -104,7 +109,7 @@ class Kernels:
                 self.helper_dir = Path(tempfile.mkdtemp(prefix="nexus-monty-"))
                 launcher = write_launcher(self.helper_dir, find_monty_binary())
                 self.pool = AsyncMonty(binary_path=launcher, min_processes=0, max_processes=MAX_KERNELS,
-                                       request_timeout=None)
+                                       request_timeout=None, max_checkouts_per_worker=1)
                 await self.pool.__aenter__()
             worker = self.pool.checkout(limits=LIMITS)
             await worker.__aenter__()
@@ -136,6 +141,24 @@ class Kernels:
         # No await between checking the lock and removing the registry entry.
         await self._retire(kernel)
 
+    def owned_by_tree(self, root: str, sessions: set[str]) -> list[Kernel]:
+        return [k for k in self.items.values()
+                if k.created_by in sessions or self.main.get(root) == k.id]
+
+    def release_tree(self, root: str, sessions: set[str]) -> list[str]:
+        """Detach idle owned kernels immediately; drain worker cleanup at shutdown."""
+        owned = self.owned_by_tree(root, sessions)
+        if any(k.lock.locked() for k in owned):
+            raise ToolError("session tree has a busy kernel")
+        released = []
+        for kernel in owned:
+            self._forget(kernel)
+            task = asyncio.create_task(self._close(kernel))
+            self.closing.add(task)
+            task.add_done_callback(self.closing.discard)
+            released.append(kernel.id)
+        return released
+
     async def shutdown(self) -> None:
         # Shutdown must finish and close the pool even if a cell is still running: stop the cell (its
         # workspace tools included), then close its worker.
@@ -148,6 +171,8 @@ class Kernels:
             with contextlib.suppress(Exception):
                 await self._close(kernel)
         self.main.clear()
+        if self.closing:
+            await asyncio.gather(*self.closing)
         if self.pool is not None:
             pool, self.pool = self.pool, None
             with contextlib.suppress(Exception):

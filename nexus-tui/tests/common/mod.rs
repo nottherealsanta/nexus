@@ -44,7 +44,12 @@ pub fn empty(o: Options, size: (u16, u16)) -> App {
         snapshot: Box::new(snapshot()),
         cause: ResyncCause::Initial,
     });
-    App::new(state, Theme::new(o), size)
+    let mut app = App::new(state, Theme::new(o), size);
+    // The right sidebar starts closed; wide layouts here test the shell with it docked.
+    if size.0 >= 120 {
+        app.ui.right_open = true;
+    }
+    app
 }
 
 /// The fixture session selected with the documented turn applied (messages, an

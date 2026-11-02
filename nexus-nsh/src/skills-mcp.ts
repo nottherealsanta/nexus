@@ -1,5 +1,5 @@
 /** Pure helpers shared by the skills/MCP starting-context controls and /learn. */
-export type InventoryKind = "skill" | "mcp";
+export type InventoryKind = "skill" | "mcp" | "tool";
 export type InventoryRow = {
   kind: InventoryKind;
   name: string;
@@ -7,16 +7,17 @@ export type InventoryRow = {
   locked: boolean;
   description?: string;
   meta?: string;
+  scope?: string;
   error?: string | null;
   tools?: number | null;
   hint?: string;
 };
 
 export type SkillEntry = { name: string; description?: string; scope?: string; state?: string; locked?: boolean };
-export type McpEntry = { server: string; tools?: number | null; state?: string; locked?: boolean; error?: string | null; enabled?: boolean };
+export type McpEntry = { server: string; tools?: number | null; state?: string; locked?: boolean; error?: string | null; enabled?: boolean; scope?: string };
 
 export function disabledKey(kind: InventoryKind, name: string): string {
-  return `${kind}:${name}`;
+  return kind === "tool" ? name : `${kind}:${name}`;
 }
 
 /** Return a fresh disabled_tools list, preserving unrelated tools and stable ordering. */
@@ -71,7 +72,7 @@ export function sessionInventoryRows(
         on: skill.state === "on" && !disabled.includes(key),
         locked,
         description: skill.description,
-        meta: skill.scope,
+        scope: skill.scope,
         hint: locked ? "new session" : undefined,
       };
     }),
@@ -83,6 +84,7 @@ export function sessionInventoryRows(
         on: server.state === "on" && !disabled.includes(key),
         locked,
         tools: server.tools,
+        scope: server.scope,
         error: server.state === "unavailable" ? server.error : null,
         meta: server.state === "unavailable" ? "unavailable" : undefined,
         hint: locked ? "new session" : undefined,
@@ -101,12 +103,12 @@ export function draftInventoryRows(
     ...skills.map((skill): InventoryRow => ({
       kind: "skill", name: skill.name,
       on: !disabled.includes(disabledKey("skill", skill.name)),
-      locked: false, description: skill.description, meta: skill.scope,
+      locked: false, description: skill.description, scope: skill.scope,
     })),
     ...servers.filter((server) => server.enabled === true && server.state !== "invalid").map((server): InventoryRow => ({
       kind: "mcp", name: server.server,
       on: !disabled.includes(disabledKey("mcp", server.server)),
-      locked: false, tools: server.tools,
+      locked: false, tools: server.tools, scope: server.scope,
       error: server.state === "unavailable" ? server.error : null,
       meta: server.state === "unavailable" ? "unavailable" : undefined,
     })),

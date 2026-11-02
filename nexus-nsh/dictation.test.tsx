@@ -1,7 +1,13 @@
 import { describe, expect, test } from "nsh/test";
-import { appendTranscript, downmixChannels, encodeWav, previewDue, resampleMono, transitionDictation } from "./src/dictation-logic";
+import { appendTranscript, downmixChannels, encodeWav, hasMicrophoneCapture, previewDue, resampleMono, transitionDictation } from "./src/dictation-logic";
 
 describe("dictation audio and state logic", () => {
+  test("detects whether the client can capture a microphone", () => {
+    expect(hasMicrophoneCapture({ mediaDevices: { getUserMedia() {} } })).toBe(true);
+    expect(hasMicrophoneCapture({ mediaDevices: {} })).toBe(false);
+    expect(hasMicrophoneCapture(undefined)).toBe(false);
+  });
+
   test("downmixes two channels by averaging each frame", () => {
     expect(downmixChannels([new Float32Array([1, 0.5]), new Float32Array([-1, 0.5])])).toEqual(new Float32Array([0, 0.5]));
   });

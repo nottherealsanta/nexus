@@ -174,6 +174,18 @@ pub struct Palette {
     pub model_info: bool,
 }
 
+/// One tool, skill or server in the context entries modal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextEntry {
+    pub name: String,
+    pub description: String,
+    /// What opening it shows; `None` until Core has answered.
+    pub full: Option<String>,
+    pub markdown: bool,
+    /// `skill` or `mcp`: where to ask Core for the full text.
+    pub fetch: Option<&'static str>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverlayKind {
     Palette(Palette),
@@ -189,14 +201,34 @@ pub enum OverlayKind {
         text: String,
         top: usize,
     },
+    /// A system prompt or instruction file, rendered as Markdown.
+    ContextDoc {
+        title: String,
+        text: String,
+        top: usize,
+    },
+    /// The tools, skills or servers of the starting context: each with its
+    /// description, and its full definition under the row when opened.
+    ContextEntries {
+        title: String,
+        entries: Vec<ContextEntry>,
+        cursor: usize,
+        open: Option<usize>,
+        /// Rows scrolled inside the open entry.
+        top: usize,
+    },
     /// The full-size view of an attachment preview, over the scrim.
     ImagePreview {
         name: String,
         data_url: String,
     },
-    /// Plan limits of the signed-in providers (`/usage`, ctrl+u); `r` reads them again.
+    /// Usage of every connected provider (`/usage`, ctrl+u); `r` reads it again.
     Usage {
         rows: Vec<crate::usage::Row>,
+    },
+    /// Live kernels and background shells of the viewed session tree.
+    Resources {
+        top: usize,
     },
     /// The full text of one alert (a toast or a past notification), wrapped
     /// and scrollable (DESIGN_PLAN.md D15). `back` is the notifications row
@@ -514,6 +546,10 @@ pub enum Target {
     SidebarEdge,
     /// Rail search (opens the session switcher).
     RailSearch,
+    /// A row of the context entries modal.
+    ContextEntry(usize),
+    /// A project on the rail, by its place in creation order.
+    RailProject(usize),
     SessionScope,
     NewSession,
     /// The closing row of the Projects tab.
@@ -543,6 +579,8 @@ pub enum Target {
         name: String,
         data_url: String,
     },
+    /// A collapsed paste marker in a user message: open its full text.
+    TimelinePaste(std::rc::Rc<crate::timeline::PasteText>),
     JumpLatest,
     Composer,
     ComposerAgent,
@@ -551,10 +589,16 @@ pub enum Target {
     ComposerContext,
     ComposerDirectory,
     ComposerWorktree,
+    /// The kernel and running-shell counts on the location strip.
+    ComposerResources,
     /// The Files tree root line (project checkout / session worktree).
     FilesRoot,
     /// The panel header's `‹ Back`: close the file or diff panel.
     PanelBack,
+    /// The panel header's `p source` / `p preview`: switch a Markdown file.
+    FilePreview,
+    /// The panel header's `e edit`: start the file editor.
+    FileEdit,
     Wait(WaitButton),
     /// Option `i` of the question the waiting card asks.
     WaitOption(usize),

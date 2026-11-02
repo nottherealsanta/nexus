@@ -16,12 +16,19 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
   `?token=` for browser `EventSource`. A missing or wrong token gets 401.
   A non-loopback bind serves without a token, so a phone can connect to
   `http://<host>:<port>` by address alone; bind only on a trusted network.
-- **Bodies.** JSON objects, at most 1 MiB; prompt requests allow 12 MiB for inline image data,
+- **Bodies.** JSON objects, at most 1 MiB. Prompt requests allow 12 MiB for inline image data,
   and `PUT /api/project/{id}/file` allows 8 MiB so a 1 MiB UTF-8 file fits after JSON escaping
-  (the file itself is still limited to 1 MiB).
+  (the file itself is still limited to 1 MiB). `POST /api/voice/transcribe` is a raw WAV,
+  not JSON, up to 120 seconds ([voice.md](voice.md#speech-to-text)).
+- **Compression.** A response of 500 bytes or more is gzipped when the client sends
+  `Accept-Encoding: gzip`. The event stream (`text/event-stream`) and audio responses are never compressed. Browsers and
+  iOS's `NSURLSession` ask for and decode gzip on their own, so a phone on LTE
+  transfers a few times fewer bytes.
 - **Errors.** `{"error": "..."}` with 400 (bad input), 401, 404 (unknown id),
-  409 (a turn is already running) or 410 (history no longer retained; see
-  [Event stream](#event-stream)).
+  409 (a turn is already running, a stale revision, or another conflict below),
+  410 (history no longer retained; see [Event stream](#event-stream)),
+  413 (voice audio over 120 s), 422 (a voice request that cannot run, with `code`)
+  or 502 (a provider, auth or one-shot failure).
 
 ## Endpoints
 
@@ -30,7 +37,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/bash` | | Background bash jobs (metadata: status, command, exit code, counts) |
 | GET | `/api/bash/{id}` | | One job with its retained output (404 if missing) |
 | DELETE | `/api/bash/{id}` | | 204; kills it (a finished job is unchanged) |
-| GET | `/api/kernel` | | Live kernels, metadata, retained cells and variable previews |
+| GET | `/api/kernel` | `?summary=1` | Live kernels, metadata, retained cells and variable previews; `summary` omits the retained cell bodies |
 | GET | `/api/kernel/{id}` | | One kernel (404 if missing) |
 | DELETE | `/api/kernel/{id}` | | 204; 409 while busy |
 | GET | `/api/config` | | `{revision, values, defaults, schema, errors}` for the initial settings |
@@ -38,9 +45,12 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/info` | | `{name, version, api_version: {major, minor}, code, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retention_status, retry, idempotency}` |
 | GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
 | GET | `/api/search` | `?q=`, `?project=`, `?archived=exclude\|only\|include`, `?limit=` (1..100, default 30) | `{query, hits: [{session_id, kind: "title" or "user", message_id, snippet, rank, session}]}`: one hit per session, best first ([Search](#search-k5)) |
-| GET | `/api/usage` | | `{fetched, providers: [{id, label, plan, windows, notes, error}]}`: plan limits of signed-in codex and copilot ([Usage](#usage-k11)) |
+| GET | `/api/usage` | | `{fetched, providers: [{id, label, source, plan, windows, notes, error}]}`: every connected provider, with plan windows where reported ([Usage](#usage-k11)) |
 | GET | `/api/artifact/{id}` | | the stored bytes, served as an attachment with the stored media type ([Artifacts](#artifacts-k8)) |
 | GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, connected, verified, methods}]`; `methods` are the sign-ins a client can start (`device`, `local`, `api_key`); an API-key provider adds `key_hint`, `key_env` and `key_source` (`stored`, `env` or null) |
+| GET | `/api/provider/{id}/login` | | the in-progress sign-in, or `{status: "idle"}` ([Configuration](#configuration-provider-login-and-context-budget)) |
+| POST | `/api/provider/{id}/login` | `{method?, api_key?}` | 202 while a device or local flow runs; 200 `{status: "connected"}` for an accepted key. 409 if that provider is already signing in. `browser` is refused (it needs a local terminal) |
+| DELETE | `/api/provider/{id}/login` | | 204; cancels a pending flow and signs out |
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
 | GET | `/api/model/last` | `?project=`, `?agent=` | `{model, source}`: the model a new session for this agent starts with: `agent` (last selected for it in the project), `last` (last selected anywhere) or `none` with `""` ([daemon.md](daemon.md#model-selection)) |
 | GET | `/api/agent` | `?project=` or `?directory=` | `{agents: [Agent], problems: [{path, error}]}` |
@@ -68,6 +78,11 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | PATCH | `/api/project/{id}` | `{name, expected_revision?}` or `If-Match` | `Project`; a stale revision is 409 |
 | DELETE | `/api/project/{id}` | | 204; deletes its sessions too |
 | GET | `/api/project/{id}/worktrees` | | the project checkout's worktrees (`repository`, `main`, `worktrees[]`, `project_directory`); 400 outside Git |
+| GET | `/api/project/{id}/files` | `?path=`, `?session=` | one directory level ([Project files and Git](#project-files-and-git)) |
+| GET | `/api/project/{id}/file` | `?path=`, `?session=` | UTF-8 text, a SHA-256 `revision` and a language hint; binary or over 1 MiB is rejected |
+| PUT | `/api/project/{id}/file` | `?path=`, `?session=`; `{content, expected_revision}` | writes only if the revision still matches; `"new"` creates; 409 `stale_file` ([File writes](#file-writes-k10)) |
+| GET | `/api/project/{id}/files/search` | `?q=`, `?limit=`, `?directories=`, `?session=` | `{query, paths}`: visible paths containing `q` |
+| GET | `/api/project/{id}/prompts` | `?q=`, `?limit=`, `?before=` | prompt history for Up-arrow recall, newest first |
 | GET | `/api/project/{id}/mcp` | | this project's `.mcp.json`: `{project_id, file, exists, revision, error, warnings, servers}`; never starts a server ([mcp.md](mcp.md#project-servers)) |
 | GET | `/api/project/{id}/mcp/{name}` | | one project MCP row plus `tool_names` and `log`; never starts a server |
 | POST | `/api/project/{id}/mcp/{name}/restart` | | close and reconnect a project server; returns the row |
@@ -89,8 +104,15 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | POST | `/api/session/{id}/directory` | `{directory}` | `Session` + `change`; 200 applied/unchanged, 202 pending while a turn runs |
 | GET | `/api/session/{id}/worktrees` | | `{repository, main, session_directory, worktrees: [...]}` |
 | POST | `/api/session/{id}/worktrees` | `{action: "list" or "create" or "delete", path?, branch?, base?}` | the list, the created/reused worktree, or the deleted worktree |
+| GET | `/api/session/{id}/git` | | branch, ahead/behind and changed paths ([Project files and Git](#project-files-and-git)) |
+| GET | `/api/session/{id}/git/diff` | `?path=` | separate staged and unstaged diffs; untracked contents are not included |
 | POST | `/api/session/{id}/shell` | `{command}` | 200 `{status, exit_code}`; runs `bash -c` in the session directory (composer `!` mode), adds command and output to context as a user message, never starts a turn |
-| POST | `/api/session/{id}/prompt` | `{text}` | 202 `{status: "busy", turn_id, origin, idempotency_key?}`; 409 while a turn runs |
+| POST | `/api/session/{id}/prompt` | `{text?, images?, pastes?, mode?: "send"\|"steer"\|"queue"}` | 202. `send` (default) returns `{status: "busy", turn_id, origin, idempotency_key?}` and is 409 while a turn runs. `steer` and `queue` return `{input_id, mode, state: "pending"}`; while a turn runs they wait, and while idle the daemon starts that input immediately ([Pending inputs](#pending-inputs-steer-and-queue), [Image prompts](#image-prompts), [Collapsed text pastes](#collapsed-text-pastes)) |
+| GET | `/api/session/{id}/input` | | `{inputs, held}` |
+| POST | `/api/session/{id}/input/next` | | release a held queue and send its next item |
+| PATCH | `/api/session/{id}/input/{iid}` | `{text?, mode?}` | edit text, or promote `queue` to `steer` |
+| DELETE | `/api/session/{id}/input/{iid}` | | remove it and return its parts |
+| POST | `/api/session/{id}/input/{iid}/move` | `{before}` | reorder pending input |
 | POST | `/api/session/{id}/continue` | `{}` | 202 with turn provenance; starts a turn from the stored context and adds no user message. 409 busy/archived/unreconciled, 400 empty, 404 unknown |
 | POST | `/api/session/{id}/interrupt` | | 204 |
 | GET | `/api/session/{id}/message` | | `[Message]` in order |
@@ -100,11 +122,12 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/session/{id}/tree` | | the whole tree containing it, from its root: `Session` + nested `children` |
 | POST | `/api/session/{id}/btw` | `{question}` | 200 `{answer, usage}`. One request with the session's context up to its last completed tool call plus the question; no tool runs and nothing is stored (the request and reply are a `oneshot` event, kind `btw`). 400 empty, 502 provider failure |
 | POST | `/api/session/{id}/handoff` | `{}` | 201 `{from, to, reason, session, summary}`. Writes a summary with one tool-free request, then starts a new root session of the same agent, model, directory and switches whose first message (`delivery: "handoff"`) is that summary; `continued_from` links back. Like any new root session it reloads the global and project MCP configuration and connects enabled project servers; explicit MCP switches carry over, but servers that were only automatically switched off after a failed connect are retried. The old session is not changed. 409 busy/archived, 400 child or empty session |
+| POST | `/api/draft/context` | session-creation fields | the first request a new session would send, with nothing stored ([Configuration](#configuration-provider-login-and-context-budget)) |
 | GET | `/api/session/{id}/context` | | the provider request body plus `used`, `window`, `exact` context budget |
 | GET | `/api/session/{id}/snapshot` | | the full frozen session snapshot (agent, prompt, tools, instruction file, child catalog) |
 | GET | `/api/session/{id}/export` | `?format=markdown\|json&scope=session\|tree` | a read-only Markdown transcript or JSON document; see [Session export](#session-export) |
 | GET | `/api/session/{id}/permission` | | pending approvals |
-| POST | `/api/session/{id}/permission/{pid}` | `{reply: "allow" or "deny"}` | 204 |
+| POST | `/api/session/{id}/permission/{pid}` | `{reply: "allow" or "deny", scope?, note?}` | 204 ([Approvals](#approvals-k7)) |
 | GET | `/api/question` | | every pending `ask` question request |
 | GET | `/api/session/{id}/question` | | pending questions for that session (empty list when none) |
 | POST | `/api/session/{id}/question/{qid}` | `{answers: [{question_id, selected?, text?}, …]}` | 204; 400 invalid answer, 404 unknown question or session, 409 already resolved |
@@ -148,7 +171,8 @@ Configuration patch paths and polling behavior are described in [config.md](conf
 
 // Agent (see agents.md)
 {"name": "plan", "description": "…", "source": "builtin", "path": "…/plan.md",
- "mode": "all", "color": null, "model": null, "effort": null, "tools": ["read", "bash"], "steps": null}
+ "mode": "all", "color": null, "model": null, "effort": null, "tools": ["read", "bash"], "steps": null,
+ "permission": {}}   // a subagent-capable agent also has "subagent": {pool, fallbacks, …}
 
 // Message (parts encoded as in stream-events.md, including raw wire items)
 {"id": "msg_…", "session_id": "ses_…", "seq": 2, "created": 1793…, "role": "assistant",
@@ -402,9 +426,12 @@ one.
 
 Every mutating request may carry `Idempotency-Key`. The key is 1–128 characters
 from `A-Z a-z 0-9 . _ : -`. It is scoped to this daemon's database and log
-generation. The fingerprint is `sha256` of the method, normalized target and
-canonical JSON body plus the normalized `If-Match` revision precondition;
-credentials are not included.
+generation. The fingerprint is `sha256:` plus the hex digest of one string:
+a JSON array `[method, path, sorted query pairs, normalized If-Match revision]`,
+a newline, then the canonical JSON body (`sort_keys`, no extra space). An
+`expected_revision` field is covered because it is part of that body. The header
+is what the array records; a body-only revision is not also normalized into the
+array. Credentials are not included.
 
 | Situation | Result |
 | --- | --- |
@@ -491,10 +518,10 @@ immediately and serialize in the daemon's event loop; a stale expected revision
 is rejected before anything changes. A directory move requested while a call is
 running is queued and applied at the next model/tool dispatch boundary (or turn
 end), never inside the running call. An interrupt cancels the active turn and
-its descendants; it never answers a pending question or approval. New prompts
-while busy are **409** until Step 12a adds steer/queue, whose insertion point is
-after outstanding tool results and before the next model call (steer) or the
-next turn (queue).
+its descendants; it never answers a pending question or approval. A `send`
+prompt while busy is **409**. `steer` is inserted after outstanding tool results
+and before the next model call; `queue` starts a later turn. See
+[Pending inputs](#pending-inputs-steer-and-queue).
 
 #### Bounded provider retries
 
@@ -878,7 +905,9 @@ Deleting a project publishes one tombstone per deleted session, then
 | `worktree.created` / `worktree.deleted` | `{path, branch, head, repository, main, session_directory}` |
 | `session.error` | `{kind: "provider" or "auth" or "request" or "interrupted", message, status?, body?}` |
 | `bus.overflow` | `{dropped_after, generation, head}`: stream control, never stored; resume from your cursor or resync |
-| loop and stream events | unchanged from [stream-events.md](stream-events.md): `wire_request`, `wire_response`, `wire_event`, `text_delta`, `reasoning_delta`, `tool_call_started`, `tool_args_delta`, `part_done`, `usage`, `done`, `step_start`, `tool_start`, `tool_end`, `turn_end` |
+| `oneshot` | `{kind: "handoff" or "title" or "btw", request, text, usage, model?}`: a tool-free request and reply, stored, never model context |
+| `session.handoff` / `session.handoff_failed` | `{from, to, reason}` on the old session, or `{session_id, error}` when an automatic handoff failed |
+| loop and stream events | from [stream-events.md](stream-events.md): `wire_request`, `wire_response`, `wire_event`, `text_delta`, `reasoning_delta`, `tool_call_started`, `tool_args_delta`, `part_done`, `usage`, `done`, `step_start`, `tool_start`, `tool_end`, `turn_end`, `hook_fired` |
 
 `wire_request` carries the exact request body and headers, with credentials
 redacted. `wire_event` carries every provider SSE event as received. Nothing the
@@ -954,20 +983,19 @@ curl -H "authorization: Bearer $TOKEN" -X POST -d '{"path":"."}' http://127.0.0.
 
 ## Not yet
 
-Login over the API (sign-in is the local `nexus login`), files and diffs.
-
-Retention, idempotent mutation keys, bounded provider retries, the consistent
-snapshot and client reconnect/resync are implemented ([Mutations, retries,
-continuation and reconnect](#mutations-retries-continuation-and-reconnect)).
-Steer and queued prompts remain Step 12a; a prompt while busy is still 409.
-Automatic continuation after a crash is still not performed: recovery closes the
-turn and manual continuation is an explicit request. External Git effects are
+Automatic continuation after a crash is not performed: recovery closes the
+turn, and manual continuation is an explicit request. External Git effects are
 not transactional; an ambiguous worktree operation must be inspected rather
-than repeated.
+than repeated. Worktree merge, integration and branch cleanup do not exist.
+A session's directory can move anywhere the user can reach; it is not confined
+to its project.
 
-Worktree listing, creation and deletion exist, but merge/integration and branch
-cleanup are separate future operations. A session's directory can move anywhere
-the user can reach: it is not confined to its project.
+Provider sign-in, project files and diffs, and steer/queue are implemented
+(the tables above). Retention, idempotent mutation keys, bounded provider
+retries, the consistent snapshot and client reconnect/resync are implemented too
+([Mutations, retries, continuation and reconnect](#mutations-retries-continuation-and-reconnect)).
+
+## Switches, files and jobs
 
 Kernel execution and metadata limits: [tools.md](tools.md#code). `code.call` and
 `code.cell` are stored session events; `kernel.deleted` announces kernel removal.
@@ -1014,7 +1042,7 @@ not presented as the exact historical prompt; the reconstruction is stored once
 and stays stable. It also starts with `workspace: {entry: false, active: false}`;
 activate it explicitly if needed.
 
-### Project file browsing (initial read-only API)
+### Project files and Git
 
 `GET /api/project/{id}/worktrees` lists the worktrees of the project's own
 checkout (`repository`, `main`, `worktrees[]`, `project_directory`) when there
@@ -1027,7 +1055,7 @@ kind, byte size, modification time, Git status and ignored status. Symlinks are
 listed as links and are not followed when opening files or directories. `GET /api/project/{id}/file?path=&session=` returns UTF-8 text,
 a SHA-256 content revision and a MIME-based language hint. Reads reject binary
 or non-UTF-8 data and files over 1 MiB. Paths are relative to the selected root;
-the session must belong to the project. File edits and change notifications are not yet provided.
+the session must belong to the project. Writes are `PUT /api/project/{id}/file` and publish `files.changed` ([File writes](#file-writes-k10)).
 
 `GET /api/project/{id}/files/search?q=&limit=&directories=&session=` returns
 `{"query", "paths"}`: visible file paths under the selected root (relative,
@@ -1072,6 +1100,17 @@ turn. Images become ordered `image` parts alongside the user text, stored in
 SQLite with their bytes for reload, continuation, export and provider replay.
 They are not workspace files or ephemeral browser URLs.
 
+### Collapsed text pastes
+
+A client that shows a large paste as `[Pasted ~N tokens]` sends the marker in
+`text` and the full content in `pastes`: `[{marker: string, text: string}]`. Core
+replaces each marker with a `text` part carrying the full text and
+`collapsed: true`, in marker order. Providers receive that text as ordinary
+context; clients render the marker instead and may show the part in a modal.
+Markers must be unique and present in `text`. A prompt allows at most eight
+pastes, 1,000,000 characters each and 4,000,000 in total. Ordinary text parts
+keep their existing JSON shape; only a collapsed part includes the flag.
+
 ## Configuration, provider login and context budget
 
 See [Configuration](config.md) for the config revision/patch contract and the
@@ -1106,9 +1145,11 @@ context from these lists alone: they keep no tool list of their own and show
 ## Pending inputs: steer and queue
 
 `POST /api/session/{id}/prompt` accepts `mode: "send" | "steer" | "queue"`.
-The default `send` retains its busy-session 409 behavior. During a running turn,
-`steer` and `queue` return an `input_id` and remain outside model context until
-delivery. Steers are inserted before the next model request, after all results
+The default `send` retains its busy-session 409 behavior. `steer` and `queue`
+return 202 `{input_id, mode, state: "pending"}` and stay outside model context
+until delivery. While the session is idle the daemon starts that input as a turn
+immediately; the response is still the pending input, not `{turn_id}`. During a running turn,
+they wait. Steers are inserted before the next model request, after all results
 from the current tool step. A steer arriving during a final answer causes
 another model step. Queued inputs start subsequent turns in order.
 
@@ -1227,6 +1268,7 @@ unchanged.
 ### Usage (K11)
 
 Per-session totals are the `session_usage` ledger (`GET /api/session/{id}/usage`, and in `/turn`). `GET /api/usage`
-asks the providers that report plan limits (codex, copilot) for their windows; a window is `{label, used_percent,
-resets_at, period_seconds, kind, detail}`. A provider that fails has an `error` in its row and the others still
-answer. Nothing in the response is a credential.
+returns one row per connected provider. Codex, Copilot, OpenCode, Grok and Claude are asked for their plan windows; a
+window is `{label, used_percent, resets_at, period_seconds, kind, detail}`. Providers that expose no plan limits
+(OpenAI, Groq, NVIDIA, Ollama) still get a row with a note saying so and no windows. A provider that fails has an
+`error` in its row and the others still answer. Nothing in the response is a credential.

@@ -1,6 +1,6 @@
 # LLM providers
 
-`nexus/llmhub/` turns four live providers and an optional dev mock into one conversation shape and one stream
+`nexus/llmhub/` turns the providers in the table below, plus an optional dev mock, into one conversation shape and one stream
 shape ([stream-events.md](stream-events.md)). There is one module per wire dialect
 and a table that says which provider speaks which, with what quirks.
 
@@ -11,8 +11,8 @@ and a table that says which provider speaks which, with what quirks.
 | `llmhub/providers.py` | `PROVIDERS` table and `make(provider_id, auth, model=None)` |
 | `mock/` | Dev-only scripted provider and scenarios (`NEXUS10_DEV=1`; [scenarios](#offline-mock-provider)) |
 | `llmhub/claude.py`, `llmhub/_claude_worker.py` | Claude through the Agent SDK (`claude`; [below](#claude-agent-sdk)) |
-| `llmhub/responses.py` | OpenAI Responses dialect (codex, grok) and `ResponsesQuirks` |
-| `llmhub/chat.py` | OpenAI Chat Completions dialect (copilot, opencode) and `ChatQuirks` |
+| `llmhub/responses.py` | OpenAI Responses dialect (codex, grok, openai, and Copilot's GPT models) and `ResponsesQuirks` |
+| `llmhub/chat.py` | OpenAI Chat Completions dialect (copilot, opencode, groq, nvidia, ollama) and `ChatQuirks` |
 | `llmhub/sse.py` | Server-sent events parser |
 | `llmhub/hub.py` | Joins sign-ins to the table; `provider/model` refs ([models.md](models.md)) |
 
@@ -34,22 +34,24 @@ Adapters never read stored credentials. They take a header source
 | `openai` | OpenAI (API key) | responses | `https://api.openai.com/v1` | `{base}/responses` | `openai` |
 | `groq` | Groq | chat | `https://api.groq.com/openai/v1` | `{base}/chat/completions` | `groq` |
 | `nvidia` | NVIDIA | chat | `https://integrate.api.nvidia.com/v1` | `{base}/chat/completions` | `nvidia` |
-| `ollama` | Ollama (local) | chat | `http://localhost:11434` (from `$OLLAMA_HOST`) | `{base}/v1/chat/completions` | none; models from `GET /api/tags` |
+| `ollama` | Ollama (local) | chat | `http://localhost:11434` (from `$OLLAMA_HOST`) | `{base}/v1/chat/completions` | unused (`catalog_id` is `ollama`); models from `GET /api/tags` |
 
 A provider has no default model ([models.md](models.md#no-default-model)); the mock's scripted
-scenario defaults to `hello` inside `MockProvider`. `ProviderInfo` also has `verified` (a live multi-step tool turn has run through
-the adapter). It is `True` for all four. Sign-in itself is not verified for
+scenario defaults to `hello` inside `MockProvider`. `ProviderInfo.verified` is true when a live multi-step tool turn has run through
+the adapter: `codex`, `grok`, `copilot`, `opencode`, `groq`, `nvidia` and the dev `mock`. It is false for `claude`, `openai` and `ollama`. Sign-in itself is not verified for
 copilot, grok and opencode (PLAN.md, step 3).
 
 ### Quirks per provider
 
 | id | Quirks |
 | --- | --- |
-| `codex` |
-| `grok` |
-| `copilot` |
-| `opencode` |
-| `mock` |
+| `codex` | `encrypted_reasoning`, `replay_raw`, `prompt_cache_key`, session header `session_id` |
+| `grok` | session header `x-grok-conv-id` |
+| `claude` | none (Agent SDK; no HTTP quirks) |
+| `copilot` | Chat: `initiator_header`, `vision_header`. Catalog models with `provider.npm = @ai-sdk/openai` (its GPT models) are sent to `{base}/responses` with those two headers and no encrypted-reasoning replay |
+| `opencode` | session header `x-opencode-session` |
+| `openai` | `encrypted_reasoning`, `replay_raw`, `prompt_cache_key` (codex, without the session header) |
+| `groq`, `nvidia`, `ollama`, `mock` | no extra chat quirks |
 
 ### What each quirk field does
 

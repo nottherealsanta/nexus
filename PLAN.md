@@ -19,7 +19,34 @@ The sections below are the record of the release steps and the backlog that rema
 
 ## Where things stand (2026-10-30)
 
-- **NSH closer to the TUI (2026-11-02).** After review of the Void design: centred, wider reading column; context counts beside their headers; finished groups stay folded; one footer per turn; draggable file panel; plain diagnostic rows; one row-spacing rule; the queue inside the dock; calmer disconnect banner. See [docs/porting-ledger.md](docs/porting-ledger.md).
+- **Kernel and shell counts (2026-11-02).** The location strip shows a centred, highlighted count of the viewed session tree's live kernels and running background shells; a kernel is omitted at zero and shells appear only while one runs. Clicking the count opens a read-only modal listing every kernel and retained shell in the tree, with ownership, cells, variables, command, status, exit code and output size. Both clients refresh on `code.cell`, `kernel.deleted`, `bash.started` and `bash.finished`, while the tree is busy, and while the modal is open; `/api/kernel?summary=1` keeps the list compact.
+
+- **Project rail and session switcher (2026-11-02).** Pressing the project already open on either client's rail opens the session switcher scoped to that project; NSH gains the switcher modal (`⌘K`), and both clients lead each row with the session's state glyph, then the title.
+
+- **Launch splash (2026-11-02).** Both clients open with the white `_/` logo and a 30-segment milestone bar (`daemon`, `workspace`, `providers`, `session`, `ready`), ported from old Nexus's splash. The bar follows startup, not the clock; the TUI paints the logo before terminal capability probes, keeps the ambient field, flash and curtain, and NSH fades into the first live frame. A failed start dismisses the splash so the error is readable.
+
+- **Kernels on archive (2026-11-02).** Manual and automatic archive release idle kernels owned by the root tree and publish the state-loss reason. A busy owned kernel refuses archive. Kernel variables are memory-only; unarchive starts fresh on next use while durable cell history remains.
+
+- **Code mode guidance (2026-11-02).** Built-in agents prefer code when available for multi-step inspection, concurrent calls and result processing; scouts grant code with only read-only nested tools. Direct reads remain required before edits, and existing snapshots stay frozen. A global or project agent file replaces the built-in prompt, so the live `~/.nexus/agents/build.md` override needs the same guidance; editing `builtin_agents/build.md` alone does not affect sessions that load it. The audit baseline and evaluation criteria are in [docs/agents.md](docs/agents.md#choosing-code-mode). Still to measure: comparable real-provider tasks for correctness, requests, tokens and elapsed time.
+
+- **Turn footer usage.** TUI and NSH show reasoning tokens and cache percentage directly in the footer without hover tooltips.
+
+- **Image markers.** TUI and NSH show inline image markers and bordered square previews, arranged side by side and wrapped as needed, without repeating generated attachment labels at the end of user messages.
+
+- **Collapsed text pastes (2026-11-02).** A paste of at least 200 characters or three lines becomes one atomic `[Pasted ~N tokens]` marker in both composers. Core stores the full text as a collapsed part, so the model reads it while the user message shows only a clickable marker chip above its text; clicking it opens the full text in a modal, with no inline content or preview. A failed send restores the collapsed draft.
+
+- **Reasoning effort memory.** Explicit root-session effort choices are remembered across new sessions and daemon restarts; choosing default clears the override while leaving subagents independent.
+
+- **Completion sound (2026-11-02).** The TUI and NSH now play a single note when a session tree finishes; the input-needed cue remains distinct.
+
+- **NSH web visual iteration.** The square composer and activity line share the timeline column; input actions sit beside the input, usage sits on the selector row, and Working is right-aligned beside the location. The `nexus-nsh-web-screenshots` skill documents seeded screenshot capture and a hot-reload loop using the existing visual harness.
+
+- **NSH closer to the TUI (2026-11-02).** After review of the Void design: centred, wider reading column; context counts beside their headers; running activity groups show the latest five at normal detail and fold when finished; one footer per turn; draggable file panel; plain diagnostic rows; one row-spacing rule; the queue inside the dock; calmer disconnect banner. See [docs/porting-ledger.md](docs/porting-ledger.md).
+- **UI parity rule (2026-11-02, user decision).** Every UI change, including layout, lands in the TUI and NSH in the same change; a client-specific difference needs the user's approval and a ledger row. The workflow and mock scenario recipes are in [.agents/skills/nexus-ui-parity/SKILL.md](.agents/skills/nexus-ui-parity/SKILL.md). Shared scenarios live in `interface/scenarios/`.
+- **Markdown in the file view (2026-11-02).** `.md` and `.markdown` files open as rendered prose in both clients; `p` in the TUI and Source in NSH switch to the numbered source, and find returns to it. The timeline's Markdown cache renders the preview, so a large file is laid out once per width and theme.
+- **TUI/NSH audit (2026-11-02), with the TUI as the reference.** Tool groups, the palette, child rows, the header's waiting state, the waiting-sessions banner, the always-visible project rail, the sidebar's `+ New session` and search hint, turn footer tokens, the composer's provider, the starting context, waiting cards and notices are aligned; `interface/scenarios/activity-group.json` checks both clients. NSH keeps its two-pane Settings by decision and shows every setting except the terminal-only ones. The Details sidebar starts closed in both.
+  NSH test files that import `src/` directly (`App`, `i8`, `editor`, `context-header`, `voice-settings`) cannot load `nexus/native` under `nsh test`, added with `nexus-nsh/native/`; fix that before relying on them. They were last checked with the microphone stubbed in a scratch copy.
+  Navigation, pickers and panel interactions are still to audit.
 - **NSH Void design (2026-11-01).** NSH web, desktop and iOS use the Void design in
   [VOID_DESIGN_PLAN.md](VOID_DESIGN_PLAN.md): `nexus-nsh/theme-void.toml` overrides the shared palette
   for NSH only, and the layout changes are listed in the porting ledger's 2026-11-01 row. The second
@@ -38,6 +65,14 @@ The sections below are the record of the release steps and the backlog that rema
   phone's touch-sized session list easier to scan; row actions no longer overlap
   titles, and relative activity times are visible. Desktop and TUI retain their
   sidebar navigation (the phone-specific difference is in the porting ledger).
+- **Faster session opens on a phone (2026-11-02).** Core now gzips JSON
+  responses over 500 bytes when the client accepts it (the event stream stays
+  uncompressed). The iPhone's `NSURLSession` already asks for gzip and decodes
+  it; the 588 KB message page of a long session drops to about 171 KB, and the
+  initial snapshot from 92 KB to 13 KB. Session opens still fetch the newest
+  200 messages plus turns and the starting snapshot before painting, and a
+  cellular tailnet round trip is ~300 ms; a smaller first page on phones is
+  the next candidate if it still feels slow.
 - **NSH on macOS and iOS (2026-11-01).** The app packages for AppKit and UIKit
   (`npm run macos`, `npm run ios` / `ios:catalyst` / `ios:device`;
   `nsh package App.tsx --target macos|ios-simulator|ios`), with safe-area padding
@@ -54,7 +89,11 @@ The sections below are the record of the release steps and the backlog that rema
   packaged macOS app opens on the Connect screen, and `nsh test --target macos`
   connects it to an address over HTTP; the layout was checked at 390×844 in the
   web target and the connect flow headless as iOS. Not verified: a real iOS
-  simulator runtime (none installed here) and a signed device build.
+  simulator runtime (none installed here) and a signed device build. A signed
+  iPhone build was installed on 2026-11-02; it connects to Core but cannot use
+  the composer's mic because native NSH has no `getUserMedia` or Web Audio. The
+  mic button now focuses the composer and points to the iOS keyboard's
+  dictation; in-app capture stays web/TUI until the runtime gains audio input.
 - **STT startup on Apple silicon (2026-11-01).** The voice extra now keeps PyTorch
   below 2.15 on macOS arm64, matching the Kestrel Metal extension; the previously
   resolved 2.15 failed to load the cached model. Status identifies that mismatch,
@@ -64,7 +103,7 @@ The sections below are the record of the release steps and the backlog that rema
   tree after no session in it has had activity for
   `[sessions] auto_archive_idle_seconds` (default 3,600; `0` disables). A sweep
   runs at startup and about once a minute, uses the ordinary archive transition
-  (one `session.archived` event, nothing stopped or deleted), skips trees with a
+  (one `session.archived` event, idle owned kernels released, stored history preserved), skips trees with a
   running turn, pending approval/question/input or a live background bash job,
   and re-reads the config value every pass. Clients show archived trees through
   their existing archived filters. Core tests: `tests/test_auto_archive.py`.
@@ -117,7 +156,7 @@ The sections below are the record of the release steps and the backlog that rema
 - Web and TUI collapsed sidebars now navigate projects, with creation-order initials and consonant/numeric collision handling, one-hour activity shading, activity tooltips and per-project session restoration.
 - Project tab strips are isolated in both clients: switching projects restores that project's open tabs and last viewed session or new-session screen, and closing a tab leaves other projects' tabs alone. New-session composer text and images are also project-scoped, including TUI recovery after a failed send. Tab state is client-local and lasts for the client process; browser end-to-end coverage remains to be added.
 - TUI rail search and new-session controls use three-row tiles with vertically centered icons, independent of the taller project tiles.
-- TUI project rail labels and the sidebar toggle share a centered first-character column. A project tile is three rows: attention (purple) and finished/unread (blue) counts above the initials, the initials, then running (green) and idle (white) counts below, with `*` above nine and exact labeled counts on hover (no overflow legend); the row after it separates the tiles, so no blank row precedes a project (2026-11-01, user request). Full-width selected/hover tiles have a thin white selected left border and white selected initials; the final edge column fades into the timeline. Counts exclude archived roots and avoid double-counting subagents.
+- TUI project rail labels and the sidebar toggle share a centered first-character column; the first shown counter in each row shares that column and a second counter sits immediately to its right. A project tile is three rows: attention (purple) and finished/unread (blue) counts above the initials, the initials, then running (green) and idle (white) counts below, with `*` above nine and exact labeled counts on hover (no overflow legend); the row after it separates the tiles, so no blank row precedes a project (2026-11-01, user request; counter alignment 2026-11-02). Full-width selected/hover tiles have a thin white selected left border and white selected initials; the final edge column fades into the timeline. Counts exclude archived roots and avoid double-counting subagents.
 - **TUI/NSH parity (2026-11-01, user request).** NSH's collapsed project rail carries the TUI's four counters around each project's initials, attention and finished above and running and idle below, with the same order, colors, `*` overflow and labeled hover details. The NSH model picker now matches the TUI: a fuzzy search field, ↑↓ selection, Enter to choose, display names with the provider (and `current`) at the row's end, and the highlighted model's ref, context and efforts beneath the list; the same search and keyboard navigation apply to the agent and effort pickers. AGENTS.md now states that everything developed in one client is replicated in the other. The collapsed rail is 6 cells in the TUI and 42 px in NSH (2026-11-01, user request: narrower by two). A running turn no longer shows a footer, and its live reasoning joins the active activity group; the sticky user header only pins bands whose height is measured, so a new message cannot make it jump or blink. The mock harness (`nexus-nsh/e2e/scripted_core.py`, `seed.mjs`) now seeds a full scenario: a multi-step turn with thoughts, tools, a patch, a failed read, a child session and an image; a live "think" turn; approval and question waits; a failed tool; and five projects with colliding rail initials. Both clients were opened against it and screenshot for comparison. Agent replies and user messages now use the body scale (14/22) instead of 15/24, so prose no longer stands out from the rest of the timeline.
 - **Attachment previews (2026-11-01, user request).** Both clients show composer and user-message images as the same small square thumbnails with the muted name above each, above the message text. Clicking one opens a full-size preview modal. The TUI timeline uses the composer's 6×3-cell thumbnail instead of a large preview, and its `[Image A]` markers are ordinary text rather than orange accent. The sticky user header starts at the first text row, so it never pins or draws an attachment label or image while scrolling a turn. The TUI composer's thumbnail strip replaces the old one-line attachment name list.
 - Web typography used Monaspace Neon throughout, reserving Monaspace Argon for inline and fenced code and diffs. Superseded 2026-11-01 by the Void design: Geist carries interface text and prose, and Monaspace Argon carries code, paths and tool arguments.
@@ -196,7 +235,7 @@ Remaining:
 1. Say in Settings/docs which Claude Code version is needed (2.1.248 or newer) and show "Claude Code is not installed" on the Providers page when `cli_path()` is empty. Hidden additions vary with the user's CLI version (about 175 more tokens on 2.1.314 than on 2.1.285), so record the CLI version in the wire request.
 2. Done 2026-10-30: a Claude Haiku 5.5 session ran in the real TUI (Providers page, connect, a buffered reply). Not re-checked in NSH.
 3. Show the limits in the timeline: a "buffered, no thinking" note for a Claude model and a clear failure for images (the error text exists; check how each client renders it).
-4. Plan-limit usage through the CLI (`-p /usage`, a local command that makes no model request) in `provider_usage.py` and `/api/usage`.
+4. Done 2026-11-02: plan-limit usage through the CLI (`-p /usage`, a local command that makes no model request) in `provider_usage.py` and `/api/usage`, beside codex, copilot, opencode and grok. Every connected provider now has a row; those without a limit source say so.
 5. Interrupts: confirm cancelling a turn kills the worker's process group and the CLI child.
 6. Mark the provider `verified` after a multi-tool turn with a real model; add wire fixtures from that run.
 

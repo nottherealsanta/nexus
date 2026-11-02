@@ -4,14 +4,16 @@ Loopback only by default. Every request needs `Authorization: Bearer <token>` (t
 token is in `<home>/daemon.json`, mode 0600). `GET /api/event` also accepts
 `?token=` so a browser `EventSource` can connect. A non-loopback bind
 (`NEXUS_HOST`) serves the network without a token. Errors are `{"error": "..."}`
-with 400, 401, 404 or 409.
+with 400, 401, 404, 409, 410, 413, 422 or 502. The table is not the whole API:
+files, git, pending inputs, draft context, provider login and the rest of voice
+are in docs/api.md.
 
 | method | path | what |
 | --- | --- | --- |
 | GET | /api/info | daemon identity: version, pid, home, url, log generation and head |
 | GET | /api/provider | the provider table, with `connected` |
 | GET | /api/model | models of connected providers (models.dev); `?provider=` |
-| GET | /api/model/default | the default `provider/model` |
+| GET | /api/model/last | `{model, source}`: the model a new session for this project and agent starts with |
 | GET | /api/agent | agents for `?project=` or `?directory=` (built-in, global, project) and file problems |
 | GET | /api/agent/{name} | one agent, with its full prompt |
 | GET | /api/skill | skills for `?project=` or `?directory=` (project over global) and file problems |
@@ -45,7 +47,7 @@ with 400, 401, 404 or 409.
 | POST | /api/session/{id}/directory | `{directory}`; 200 applied or 202 pending while a call runs |
 | GET | /api/session/{id}/worktrees | list the repository's worktrees with branch and working-tree state |
 | POST | /api/session/{id}/worktrees | `{action: "list" or "create" or "delete", path?, branch?, base?}` |
-| POST | /api/session/{id}/prompt | `{text}` → 202; 409 while a turn runs |
+| POST | /api/session/{id}/prompt | `{text?, images?, mode?}` → 202; `send` is 409 while a turn runs, `steer`/`queue` return an input id |
 | POST | /api/session/{id}/continue | start a turn from the stored context with no new user message → 202 |
 | POST | /api/session/{id}/interrupt | cancel the running turn → 204 |
 | GET | /api/session/{id}/message | saved messages, in order |
@@ -83,6 +85,8 @@ from typing import Any
 from anyio import CancelScope
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware import Middleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
@@ -978,6 +982,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 effort=body.get("effort"), agent=body.get("agent"), parent=parent, disabled_tools=body.get("disabled_tools"))
             if parent is None and body.get("model"):
                 runtime.remember_model(session.project_id, session.agent, body["model"])
+            if parent is None and isinstance(body.get("effort"), str):
+                runtime.store.set_preference("effort.last", body["effort"])
             return JSONResponse(runtime.session_json(session))
         archived = _archive_filter(request)
         if request.query_params.get("parent"):
@@ -1000,6 +1006,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             session = runtime.update_session(sid, **fields)
             if body.get("model"):
                 runtime.remember_model(session.project_id, session.agent, body["model"])
+            if not session.parent_id and isinstance(body.get("effort"), str):
+                runtime.store.set_preference("effort.last", body["effort"])
             return JSONResponse(runtime.session_json(session))
         if request.method == "DELETE":
             body = await _body(request)
@@ -1116,7 +1124,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     async def prompt(request: Request) -> Response:
         body = await _body(request)
         mutation = getattr(request.state, "mutation", None)
-        result = runtime.prompt(p(request, "id"), str(body.get("text", "")), images=body.get("images"), mutation=mutation, mode=body.get("mode", "send"), typed=True)
+        result = runtime.prompt(p(request, "id"), str(body.get("text", "")), images=body.get("images"), pastes=body.get("pastes"), mutation=mutation, mode=body.get("mode", "send"), typed=True)
         if mutation is not None:
             result = {**result, "idempotency_key": mutation["key"]}
         return JSONResponse(result, status_code=202)
@@ -1280,7 +1288,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         return Response(status_code=204)
 
     async def kernels(request: Request) -> Response:
-        return JSONResponse([k.json() for k in runtime.kernels.items.values()])
+        summary = request.query_params.get("summary", "").lower() in ("1", "true", "yes")
+        return JSONResponse([k.json(summary=summary) for k in runtime.kernels.items.values()])
 
     async def bash_jobs(request: Request) -> Response:
         return JSONResponse([job.json() for job in runtime.jobs.list()])
@@ -1444,7 +1453,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             await voice.close()
             await runtime.shutdown()
 
-    return Starlette(routes=routes, lifespan=lifespan)
+    return Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(GZipMiddleware)])
 
 
 def make_runtime(store: Store | None = None) -> Runtime:

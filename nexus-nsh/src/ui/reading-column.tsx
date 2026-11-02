@@ -2,7 +2,7 @@
 // every card shares the column's left edge, and prose/activity use the same inner inset.
 import { View } from "nsh";
 import type { JSX } from "nsh";
-import { NARROW, panelOpen, panelWide, width } from "../store";
+import { NARROW, width } from "../store";
 
 /** The reading column's outer width (insets included); past it the column stays centred instead of stretching.
  *  Keep it in step with the `max-w-[1160px]` class below (class names are scanned statically). */
@@ -25,7 +25,7 @@ export function timelineColumnPx(w: number): number {
 }
 
 /** The same inset the timeline uses, for the new-session starting context. */
-export const columnClass = () => (panelOpen() && panelWide() ? "px-6" : timelineColumnClass(width()));
+export const columnClass = () => timelineColumnClass(width());
 
 /** A card's inner inset; assistant prose and activity rows start at this same text edge. */
 export const CARD_INSET = "px-4";
@@ -33,8 +33,8 @@ export const CARD_INSET = "px-4";
 export const TEXT_INSET = "px-4";
 /** Prose and activity rows sit one card inset in from the column edge. */
 export const TEXT_INDENT = "pl-4";
-/** The activity row's chevron slot; it hangs inside the inset so the label lands on the text edge. */
-export const ACTIVITY_CHEVRON = "w-4 shrink-0";
+/** The activity row's chevron slot: the glyph's ink starts on the text edge, under the user message and the reply. */
+export const ACTIVITY_CHEVRON = "w-4 shrink-0 -ml-[3px]";
 
 export function TimelineColumn(p: { class?: string; style?: Record<string, string | number>; testID?: string; children?: JSX.Element; onLayout?: (b: any) => void }) {
   return (

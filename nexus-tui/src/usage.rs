@@ -1,4 +1,4 @@
-//! The plan-limits text for `GET /api/usage` (K11): one block per provider, one line per window.
+//! The provider-usage text for `GET /api/usage` (K11): one block per connected provider, one line per window.
 
 use serde_json::Value;
 
@@ -31,9 +31,9 @@ pub enum Row {
     Gap,
 }
 
-pub const EMPTY: &str = "No signed-in provider reports plan limits (codex and copilot do).";
+pub const EMPTY: &str = "No provider is connected. Connect one in Settings.";
 
-/// The modal's rows for `GET /api/usage`: a heading per provider, one row per window.
+/// The modal's rows for `GET /api/usage`: a heading per connected provider, one row per window, then its notes.
 /// Reserve, pace marks and absolute reset times are left out; the bar and "resets in" say it.
 pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
     let mut out = Vec::new();
@@ -54,7 +54,12 @@ pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
             out.push(Row::Note(format!("Could not read the limits: {error}")));
             continue;
         }
-        for w in p["windows"].as_array().into_iter().flatten() {
+        let windows = p["windows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        for w in &windows {
             let detail = w["detail"].as_str().filter(|s| !s.is_empty());
             let reset = match (w["resets_at"].as_f64(), detail) {
                 (Some(at), Some(d)) => format!("resets in {} · {d}", until(at, now)),
@@ -68,6 +73,19 @@ pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
                     .map(|u| u.round().clamp(0.0, 100.0) as u8),
                 reset,
             });
+        }
+        let notes = p["notes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|n| n.as_str())
+            .filter(|n| !n.is_empty())
+            .collect::<Vec<_>>();
+        if windows.is_empty() && notes.is_empty() {
+            out.push(Row::Note("No limit windows reported.".into()));
+        }
+        for note in notes {
+            out.push(Row::Note(note.to_owned()));
         }
     }
     if out.is_empty() {
@@ -85,7 +103,8 @@ mod tests {
         let usage = serde_json::json!({"providers": [
             {"id": "codex", "label": "ChatGPT (Codex)", "plan": "plus", "notes": [], "windows": [
                 {"label": "5-hour", "used_percent": 42.4, "resets_at": 10_800.0 + 600.0}]},
-            {"id": "copilot", "label": "GitHub Copilot", "error": "timed out", "windows": []}]});
+            {"id": "copilot", "label": "GitHub Copilot", "error": "timed out", "windows": []},
+            {"id": "openai", "label": "OpenAI (API key)", "notes": ["No plan limits; token usage is in the session totals."], "windows": []}]});
         assert_eq!(
             rows(&usage, 0.0),
             vec![
@@ -104,6 +123,12 @@ mod tests {
                     plan: String::new()
                 },
                 Row::Note("Could not read the limits: timed out".into()),
+                Row::Gap,
+                Row::Provider {
+                    name: "OpenAI (API key)".into(),
+                    plan: String::new()
+                },
+                Row::Note("No plan limits; token usage is in the session totals.".into()),
             ]
         );
         assert_eq!(until(90_000.0, 0.0), "1d 1h");

@@ -123,6 +123,11 @@ pub enum SyncMsg {
         project: String,
         data: Result<Value, String>,
     },
+    /// Live kernels and background bash jobs, compact (no cell bodies or output).
+    Resources {
+        kernels: Result<Vec<Value>, String>,
+        jobs: Result<Vec<Value>, String>,
+    },
     /// Project skills, global MCP servers and this project's `.mcp.json` inventory
     /// for a new-session preview. None of the reads starts a server.
     SkillMcp {
@@ -157,6 +162,8 @@ pub enum Command {
     Worktrees(String),
     /// The project's own checkout, for a session that does not exist yet.
     ProjectWorktrees(String),
+    /// Refresh live kernels and background bash jobs.
+    Resources,
     SkillMcp(String),
     Git(String),
     GitDiff {
@@ -239,6 +246,7 @@ struct Ctx {
     config_patch: Option<(String, String, Value)>,
     worktrees: Option<String>,
     project_worktrees: Vec<String>,
+    resources: bool,
     skill_mcp: Option<String>,
     git: Option<String>,
     git_diff: Option<(String, String)>,
@@ -282,6 +290,7 @@ impl Ctx {
                     self.project_worktrees.push(project);
                 }
             }
+            Command::Resources => self.resources = true,
             Command::SkillMcp(project) => self.skill_mcp = Some(project),
             Command::Git(session) => self.git = Some(session),
             Command::GitDiff { session, path } => self.git_diff = Some((session, path)),
@@ -354,6 +363,7 @@ pub async fn run(
         config_patch: None,
         worktrees: None,
         project_worktrees: Vec::new(),
+        resources: false,
         skill_mcp: None,
         git: None,
         git_diff: None,
@@ -431,6 +441,7 @@ pub async fn run(
                         snapshot: Box::new(snapshot),
                         cause,
                     });
+                    cx.resources = true;
                     // Messages in the snapshot are bounded; the timeline wants
                     // the whole history and the diagnostics that carry turn
                     // durations and usage. Loaded before the stream opens, so
@@ -500,6 +511,7 @@ pub async fn run(
         load_config(&mut cx, &api).await;
         load_context(&mut cx, &api);
         load_draft(&mut cx, &api).await;
+        load_resources(&mut cx, &api).await;
         load_inputs(&mut cx, &api).await;
         // A request received while reconnecting must not be stranded until a
         // later command arrives on the live stream.
@@ -723,6 +735,17 @@ async fn load_draft(cx: &mut Ctx, api: &CoreApi) {
             .map_err(|e| e.to_string());
         cx.send(SyncMsg::DraftContext { request, data });
     }
+}
+
+async fn load_resources(cx: &mut Ctx, api: &CoreApi) {
+    if !std::mem::take(&mut cx.resources) {
+        return;
+    }
+    let (kernels, jobs) = tokio::join!(api.kernels(), api.bash_jobs());
+    cx.send(SyncMsg::Resources {
+        kernels: kernels.map_err(|e| e.to_string()),
+        jobs: jobs.map_err(|e| e.to_string()),
+    });
 }
 
 async fn load_config(cx: &mut Ctx, api: &CoreApi) {
@@ -1102,6 +1125,7 @@ async fn stream(
                     Ok(Frame::Event(e)) => {
                         if e.kind.starts_with("input.") { if let Some(id) = e.session_id.as_ref() { cx.inputs = Some(id.clone()); load_inputs(cx, api).await; } }
                         if e.kind == "config.changed" { cx.config = true; load_config(cx, api).await; }
+                        let resources_changed = matches!(e.kind.as_str(), "code.cell" | "kernel.deleted" | "bash.started" | "bash.finished");
                         if matches!(e.kind.as_str(), "turn.summary" | "message.added" | "session.updated") {
                             if let Some(id) = e.session_id.as_ref().filter(|id| cx.selected.as_ref() == Some(*id)) {
                                 cx.context = Some(id.clone());
@@ -1121,6 +1145,10 @@ async fn stream(
                         if !cx.send(SyncMsg::Event(e)) {
                             return StreamEnd::Stop;
                         }
+                        if resources_changed {
+                            cx.resources = true;
+                            load_resources(cx, api).await;
+                        }
                         // Advance only after the app has the event.
                         if next.is_some() {
                             *cursor = next;
@@ -1134,7 +1162,7 @@ async fn stream(
             cmd = cx.cmds.recv() => {
                 match cmd {
                     Some(c) => {
-                        let was_catalog = matches!(c, Command::Config | Command::Context(_) | Command::DraftContext(_) | Command::PatchConfig { .. } | Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::SkillMcp(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
+                        let was_catalog = matches!(c, Command::Config | Command::Context(_) | Command::DraftContext(_) | Command::PatchConfig { .. } | Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Resources | Command::SkillMcp(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
                         cx.handle(c);
                         if cx.shutdown { return StreamEnd::Stop; }
                         // History loads beside the stream, which keeps applying
@@ -1150,6 +1178,7 @@ async fn stream(
                         load_config(cx, api).await;
                         load_context(cx, api);
                         load_draft(cx, api).await;
+                        load_resources(cx, api).await;
                         load_inputs(cx, api).await;
                         if let Some(project) = cx.catalog.take() {
                             if let Some((models, agents, source, last_model, providers, problems)) = load_catalog(api, project.as_deref()).await {

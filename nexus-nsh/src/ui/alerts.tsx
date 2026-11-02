@@ -2,8 +2,8 @@ import { Scroll, Text, View, keymap } from "nsh";
 import { Button } from "nsh/base";
 import { Btn, Icon, IconButton, T, FOCUS } from "./kit";
 import { Modal, ModalFooter, ModalTitle } from "./modal";
-import { run, availability, byId, copyText, escape } from "../commands";
-import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, native, openAlert, splitAlert, tick, TOAST_VISIBLE, toasts } from "../store";
+import { run, availability, byId, copyText, escape, otherWaits } from "../commands";
+import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, m, native, openAlert, splitAlert, tick, TOAST_VISIBLE, toasts } from "../store";
 import type { Toast } from "../store";
 import { statusGlyphs } from "../gen/theme";
 import { TEXT_INSET, TimelineColumn } from "./reading-column";
@@ -53,6 +53,8 @@ export function currentAlerts(): Alert[] {
     if (b.kind === "daemon_restarted") out.push({ key, level: "warning", text: "Core restarted: state was resynced", sub: "Turns that were running show as interrupted.", actions: [], dismissible: true });
     if (b.kind === "resynced") out.push({ key, level: "info", text: "Resynced with Core", sub: b.why, actions: [], dismissible: true });
   }
+  const others = (m(), otherWaits());
+  if (others.length > 0) out.push({ key: "other-waits", level: "info", text: `${others.length} other session${others.length === 1 ? "" : "s"} waiting for input`, actions: [{ label: "go", cmd: "waiting.go_to" }], dismissible: false });
   return out.sort((a, b) => rank[b.level] - rank[a.level]);
 }
 

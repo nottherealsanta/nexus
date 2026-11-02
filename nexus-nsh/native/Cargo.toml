@@ -1,0 +1,25 @@
+[package]
+name = "nexus-nsh-native"
+description = "Native iOS services for the Nexus NSH client: microphone capture for dictation."
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "09c16321c09c938ffcc2c5703ed18befb8c0338c" }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+block2 = "0.6.2"
+futures-channel = "0.3"
+objc2 = "0.6.5"
+objc2-core-audio-types = { version = "0.3.2", default-features = false, features = ["CoreAudioBaseTypes"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+  "std", "NSData", "NSDictionary", "NSError", "NSObject", "NSPathUtilities",
+  "NSString", "NSURL", "NSUUID", "NSValue",
+] }
+objc2-avf-audio = { version = "0.3.2", default-features = false, features = [
+  "std", "block2", "AVAudioRecorder", "AVAudioSession", "AVAudioSessionTypes", "AVAudioSettings",
+] }

@@ -148,7 +148,7 @@ otherwise the first loaded agent allowed as a root is used (normally
 | `orchestrate` | primary | read, bash, code + `session` | Breaks a task down, delegates it to sub agents, checks the results, reports. The only agent with the `session` tool. Its prompt says not to edit files. |
 | `build` (default) | all | all | The grunt work: writes and edits code, runs and checks it. Prompt adapted from OpenCode's GPT system prompt (MIT; see `builtin_agents/NOTICE`). |
 | `quick` | subagent | all (effort low, 20 steps) | Small self-contained tasks whose details the parent should not carry in its context. Returns only what the parent needs. |
-| `scout` | subagent | read, grep, glob, ls | Reads the material and returns a context brief: answer, relevant files with line ranges and quotes, how they fit, gotchas, what was checked, open questions. |
+| `scout` | subagent | read, grep, glob, ls, code | Reads the material and returns a context brief: answer, relevant files with line ranges and quotes, how they fit, gotchas, what was checked, open questions. |
 | `plan` | subagent | all | Designs a change. Its prompt allows writing Markdown plan files only, never code. This is advice in the prompt, not enforced by the harness. |
 
 So a root session runs `orchestrate` or `build`, and a sub agent runs
@@ -173,6 +173,36 @@ never ask. In-directory `edit` and `write` are approval-free by fixed policy,
 with path confinement and read freshness still enforced. bash (including
 background) still asks unless the session is `allow`. Nested code calls follow
 the same rules.
+
+## Choosing code mode
+
+Built-in agents prefer code when available for multi-step inspection, concurrent
+independent calls and filtering results down to relevant evidence. Single simple
+operations stay direct. Scouts can use code, but nested functions remain limited
+to read, grep, glob and ls: no shell, network or mutation tools. Reads inside
+cells do not establish read coverage, even when printed; read affected lines
+directly before edits. Tool definitions carry API examples; prompts give
+conditional workflow advice. New sessions pick this up; existing snapshots stay
+frozen until an explicit agent switch. A global or project agent file replaces
+the built-in prompt entirely, so an override such as
+`~/.nexus/agents/build.md` must be updated too: changing
+`builtin_agents/build.md` alone does not affect it.
+
+### Evaluating efficiency
+
+The read-only DB audit on 2026-11-02 covered 198 sessions created October 30–November 2:
+147 exposed code and 51 scouts did not. Assistant messages contained zero code
+calls, 7,274 bash calls and 4,347 read calls. Of 15,042 messages with tool calls,
+14,700 contained only one. This is a usage baseline, not a performance benchmark.
+
+Compare equivalent tasks with the same model and effort on correctness first,
+then provider requests (`turn_request`), input/cached/output tokens and elapsed
+time (`turn` and `turn_request`). Count outer code calls separately from nested
+`code.call` events; more code calls alone is not success. Review read-coverage
+failures and whether printed evidence supports the answer. Account for human
+waits, tool failures and retries when comparing time. No before/after provider
+benchmark has been run yet. Direct tool batches execute sequentially; nested
+calls can run concurrently using `asyncio.gather`.
 
 ## Commands
 

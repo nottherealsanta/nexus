@@ -116,3 +116,21 @@ async def test_subagent_inherits_the_parent_model(env):
     assert rt.session_json(child)["model"] == "scripted/b"
     assert rt.remembered_model(project.id, "scout") == ("", "none")  # a subagent's model is never "selected"
 
+
+async def test_effort_selection_is_remembered_for_new_root_sessions(env):
+    make, workspace = env
+    _, client = make()
+    first = (await client.post("/api/session", json={"directory": str(workspace), "effort": "high"})).json()
+    project = first["project_id"]
+    second = (await client.post("/api/session", json={"project": project})).json()
+    assert second["effort"] == "high"
+    await client.patch(f"/api/session/{second['id']}", json={"effort": "low"})
+    _, restarted = make()
+    third = (await restarted.post("/api/session", json={"project": project})).json()
+    assert third["effort"] == "low"
+    child = (await restarted.post("/api/session", json={"parent": third["id"], "agent": "scout", "effort": "high"})).json()
+    await restarted.patch(f"/api/session/{child['id']}", json={"effort": "medium"})
+    assert (await restarted.post("/api/session", json={"project": project})).json()["effort"] == "low"
+    await restarted.patch(f"/api/session/{third['id']}", json={"effort": ""})
+    assert (await restarted.post("/api/session", json={"project": project})).json()["effort"] is None
+

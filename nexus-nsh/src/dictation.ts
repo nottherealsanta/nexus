@@ -1,5 +1,6 @@
 import { ApiError, apiUrl, request, sleep } from "./core/transport";
-import { downmixChannels, MAX_RECORDING_SECONDS, MIN_RECORDING_SECONDS, PREVIEW_WINDOW_SECONDS, previewDue, recordingToWav, rmsLevel, transitionDictation } from "./dictation-logic";
+import { Microphone } from "nexus/native";
+import { downmixChannels, hasMicrophoneCapture, MAX_RECORDING_SECONDS, MIN_RECORDING_SECONDS, PREVIEW_WINDOW_SECONDS, previewDue, recordingToWav, rmsLevel, transitionDictation } from "./dictation-logic";
 import type { DictationEvent, DictationPhase } from "./dictation-logic";
 import { confirmDialog, toast } from "./store";
 import { dictationLevel, dictationPhase, dictationPreview, voiceDownloadProgress } from "./voice-state";
@@ -25,6 +26,7 @@ type AudioContextLike = {
 type AudioContextConstructor = new () => AudioContextLike;
 type MediaStreamLike = { getTracks(): { stop(): void }[] };
 type Recorder = { stop(): Promise<void> };
+type NativeCapture = { started: number; timer: ReturnType<typeof setInterval> };
 type Capture = {
   generation: number;
   sampleRate: number;
@@ -38,6 +40,7 @@ type Capture = {
   previewWarningShown: boolean;
   stopPromise?: Promise<void>;
   finalController?: AbortController;
+  native?: NativeCapture;
 };
 
 let generation = 0;
@@ -53,6 +56,11 @@ export function isDictationRecording(): boolean {
 
 export function isDictationBusy(): boolean {
   return dictationPhase() !== "idle";
+}
+
+/** Whether this client can open a microphone at all. */
+export function microphoneAvailable(): boolean {
+  return hasMicrophoneCapture(environment().navigator) || Microphone.available();
 }
 
 function environment() {
@@ -350,6 +358,31 @@ function beginCapture(insert: (text: string) => void, expectedGeneration: number
         if (loadingCue) clearInterval(loadingCue);
       }
       if (generation !== expectedGeneration || dictationPhase() !== "requesting") return;
+      if (!hasMicrophoneCapture(environment().navigator) && Microphone.available()) {
+        await Microphone.start();
+        if (generation !== expectedGeneration || dictationPhase() !== "requesting") {
+          await Microphone.cancel();
+          return;
+        }
+        const timer = setInterval(() => dictationLevel.set(Microphone.level()), 100);
+        move("ready");
+        capture = {
+          generation: expectedGeneration,
+          sampleRate: 16_000,
+          chunks: [],
+          sampleCount: 0,
+          previousPreviewCount: 0,
+          recorder: { stop: async () => { clearInterval(timer); } },
+          insert,
+          active: true,
+          cancelled: false,
+          previewWarningShown: false,
+          native: { started: Date.now(), timer },
+        };
+        dictationPreview.set("");
+        dictationLevel.set(0);
+        return;
+      }
       const opened = await openRecorder((samples) => {
         const current = capture;
         if (current && current.generation === expectedGeneration) addSamples(current, samples);
@@ -508,12 +541,31 @@ export async function stopDictation() {
   if (!current || dictationPhase() !== "recording") return;
   move("stop");
   current.active = false;
-  await stopRecorder(current);
-  cue([660, 440]);
+  let wav: Uint8Array | null = null;
+  let duration: number;
+  if (current.native) {
+    clearInterval(current.native.timer);
+    duration = (Date.now() - current.native.started) / 1000;
+    try {
+      wav = await Microphone.stop();
+    } catch (error) {
+      if (current.generation === generation) {
+        move("fail");
+        capture = null;
+        dictationLevel.set(0);
+        toast("error", error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
+  } else {
+    await stopRecorder(current);
+    cue([660, 440]);
+    duration = current.sampleCount / current.sampleRate;
+    if (duration >= MIN_RECORDING_SECONDS) wav = recordingToWav(allSamples(current.chunks, current.sampleCount), current.sampleRate);
+  }
   if (previewInFlight) await previewInFlight.catch(() => {});
   if (current.cancelled || current.generation !== generation || dictationPhase() !== "stopping") return;
-  const duration = current.sampleCount / current.sampleRate;
-  if (duration < MIN_RECORDING_SECONDS) {
+  if (duration < MIN_RECORDING_SECONDS || !wav) {
     move("finish");
     capture = null;
     dictationPreview.set("");
@@ -521,8 +573,6 @@ export async function stopDictation() {
     toast("info", "Record at least 0.2 seconds of audio to dictate.");
     return;
   }
-  const samples = allSamples(current.chunks, current.sampleCount);
-  const wav = recordingToWav(samples, current.sampleRate);
   const controller = new AbortController();
   current.finalController = controller;
   try {
@@ -559,7 +609,12 @@ export function cancelDictation() {
     current.active = false;
     current.cancelled = true;
     current.finalController?.abort();
-    void stopRecorder(current).then(() => { if (wasActive) cue([660, 440]); });
+    if (current.native) {
+      clearInterval(current.native.timer);
+      void Microphone.cancel();
+    } else {
+      void stopRecorder(current).then(() => { if (wasActive) cue([660, 440]); });
+    }
   }
   if (phase === "checking" || phase === "consent" || phase === "downloading" || phase === "requesting") move("cancel");
   else if (phase === "recording" || phase === "stopping") move("cancel");

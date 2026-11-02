@@ -41,6 +41,8 @@ try {
     set(["Add", ":NSLocalNetworkUsageDescription", "string",
       "Nexus connects to Nexus Core on your local network."], "NSLocalNetworkUsageDescription");
   }
+  set(["Add", ":NSMicrophoneUsageDescription", "string",
+    "Nexus records your voice for dictation and sends it to Nexus Core for speech recognition."], "NSMicrophoneUsageDescription");
 } catch (error) {
   console.error(`native-info: cannot edit ${plist}: ${error.message}`);
   process.exit(1);

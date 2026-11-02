@@ -13,7 +13,7 @@ other native mobile target (`AGENTS.md`). The web app is not restricted, at any 
 | Editor size | Replaces the user's editor, but stays small: very good highlighting, undo/redo and the `ratatui-code-editor` feature set. No tabs, language servers or Vim mode. |
 | TUI editor | Vendor `ratatui-code-editor` and adapt it (see [TUI editor](#tui-editor)). |
 | NSH editor | Use `Editor` and `DiffView` from `nsh/base` (see [NSH editor](#nsh-editor)). |
-| Placement | A panel on the right. Narrow: slides over the timeline and composer, with a back button top left. Wide: sits beside the timeline. |
+| Placement | A centred modal over the dimmed page at every width (changed from a right-hand panel on 2026-11-02; the panel sections below are history). Long lines wrap. |
 | Git scope | Worktrees, changes and branches, with actions. No merge, stash, rebase, conflict UI or hunk staging. |
 | Agents | The editor and Git page are silent to the model. No timeline notices and no new agent tools. |
 | Git confirmation | Every Git action except stage and unstage opens one popup after the click, and says so when a session is live on that worktree. |

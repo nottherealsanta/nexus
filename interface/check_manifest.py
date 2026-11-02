@@ -13,7 +13,7 @@ SECTION_ORDER = [
     "appearance", "providers", "agents", "tools", "skills", "mcp",
     "context", "dictation", "keybindings", "notifications", "about",
 ]
-TABS = ["sessions", "files", "projects"]
+TABS = ["sessions", "files"]
 RIGHT = ["session_info", "git_status"]
 ROW_KINDS = {"choice", "toggle", "number", "text", "list", "action", "info", "keymap"}
 SCOPES = {"core", "client"}
@@ -184,15 +184,11 @@ def main() -> int:
     panel = nav.get("panel", {})
     if panel.get("views") != ["file", "diff"]:
         err("navigation.panel.views must be ['file', 'diff']")
-    if panel.get("anchored") != "right" or panel.get("default") != "file":
-        err("navigation.panel must be anchored right and default to file")
+    if panel.get("anchored") != "centre" or panel.get("default") != "file":
+        err("navigation.panel must be anchored centre and default to file")
     for term in ("panel.file", "panel.diff"):
         if term not in terms:
             err(f"navigation.panel needs the vocabulary term {term!r}")
-    if panel.get("wide") != "beside the timeline" or panel.get("narrow") != "covers the whole window, the composer included":
-        err("navigation.panel: wide must show beside the timeline and narrow must cover the whole window")
-    if panel.get("wide_share") != 55:
-        err("navigation.panel.wide_share must be 55")
     ref_ids = [h.get("leading"), h.get("trailing"), h.get("title_click"), nav.get("left_sidebar", {}).get("settings_entry"),
                nav.get("notifications", {}).get("command")]
     ref_ids += h.get("extra", []) + [t.get("command") for t in nav.get("left_sidebar", {}).get("tab", [])]

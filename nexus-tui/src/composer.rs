@@ -52,6 +52,10 @@ impl Composer {
     pub fn expanded_text(&self) -> String {
         self.editor.expanded()
     }
+    /// The collapsed pastes to preview above the input, in marker order.
+    pub fn pastes(&self) -> Vec<(&str, &str)> {
+        self.editor.paste_entries()
+    }
     pub fn is_empty(&self) -> bool {
         self.editor.text.is_empty()
     }
@@ -207,6 +211,10 @@ impl Composer {
         let row = self.cursor().0;
         self.editor.vertical(true);
         self.cursor().0 > row
+    }
+    /// Move one wrapped row at this width.
+    pub fn vertical_wrapped(&mut self, down: bool, width: usize) {
+        self.editor.vertical_wrapped(down, width);
     }
     pub fn home(&mut self) {
         self.editor.home();

@@ -24,13 +24,12 @@ pub const SETTLE_FRAMES: u8 = 3;
 const MAX_SAMPLES: usize = MAX_SECONDS * TARGET_RATE as usize;
 const LEVEL_WINDOW: usize = TARGET_RATE as usize / 20;
 const CUE_RATE: u32 = 44_100;
-const CUE_NOTES: [(&str, [f32; 2]); 5] = [
-    ("start", [660.0, 880.0]),
-    ("stop", [880.0, 587.0]),
-    ("loading", [440.0, 440.0]),
-    // Old Nexus's completion cue, then a higher two-note cue for a wait.
-    ("complete", [660.0, 1046.5]),
-    ("input", [880.0, 1174.7]),
+const CUE_NOTES: [(&str, &[f32]); 5] = [
+    ("start", &[660.0, 880.0]),
+    ("stop", &[880.0, 587.0]),
+    ("loading", &[440.0, 440.0]),
+    ("complete", &[660.0]),
+    ("input", &[880.0, 1174.7]),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -915,6 +914,15 @@ mod tests {
             assert!(samples.last().is_some_and(|sample| sample.abs() < 1e-5));
             assert!(samples.iter().any(|sample| sample.abs() > 0.1));
         }
+    }
+
+    #[test]
+    fn completion_cue_is_one_note() {
+        assert_eq!(cue_pcm("complete").len(), (CUE_RATE as f32 * 0.07) as usize);
+        assert_eq!(
+            cue_pcm("input").len(),
+            2 * (CUE_RATE as f32 * 0.07) as usize
+        );
     }
 
     #[test]

@@ -16,15 +16,11 @@ const network = {
 };
 
 describe("session sidebar location", () => {
-  test("shows the branch in both scopes, with the project only as the group heading", async () => {
+  test("shows the branch, with the project left to the rail", async () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
     await app.waitFor("text:feature/sidebar");
     expect(app.shows("id:session-place-ses_1")).toBe(true);
-    await app.press("id:chip-all-projects");
-    await app.waitFor("id:session-group");
-    await app.waitFor("id:session-place-ses_1");
-    expect(app.texts().includes("feature/sidebar")).toBe(true);
-    // The row no longer repeats the project name: the heading above it carries it once.
-    expect(app.texts().filter((t) => t === "demo").length).toBe(1);
+    expect(app.shows("id:session-group")).toBe(false);
+    expect(app.texts().includes("demo")).toBe(false);
   });
 });

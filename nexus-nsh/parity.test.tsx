@@ -25,17 +25,15 @@ const network = {
 };
 
 describe("timeline parity", () => {
-  test("child result can be expanded without opening the child session", async () => {
+  test("a child is one row in the flow, and pressing it opens the child session", async () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
     await app.waitFor("id:session-ses_1");
     await app.press("id:session-ses_1");
-    await app.waitFor("id:child-result-toggle");
-    expect(app.texts().includes("Background")).toBe(true);
-    expect(app.texts().includes("“Research”")).toBe(true);
-    await app.press("id:child-result-toggle");
-    await app.waitFor("text:Show less");
-    expect(app.texts().join("\n").includes("last line")).toBe(true);
-    await app.press("id:child-result-toggle");
-    await app.waitFor("text:Show result");
+    await app.waitFor("id:child-card");
+    const shown = app.texts();
+    expect(shown.includes("Background")).toBe(true);
+    expect(shown.includes("Research")).toBe(true);
+    expect(shown.join("\n").includes("last line")).toBe(false);
+    expect(app.shows("id:child-result-toggle")).toBe(false);
   });
 });

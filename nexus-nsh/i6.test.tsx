@@ -37,40 +37,43 @@ function network(sessions: object[], extra: Record<string, unknown> = {}) {
 }
 
 describe("sessions sidebar (I6)", () => {
-  test("search follows the current-project and all-projects scope", async () => {
+  test("the sidebar lists the current project: the rail switches it and search stays inside it", async () => {
     const local = session("ses_1", "Find local");
     const remote = session("ses_2", "Find remote", { project_id: "prj_2" });
     const data = snapshot([local, remote]);
     data.projects.push({ id: "prj_2", path: "/work/other", name: "other", created: 1, updated: 2, revision: 1 });
     const app = await open("./App.tsx", { network: { ...network([local, remote]), "GET */api/snapshot*": { body: data } }, width: 1440, height: 900, platform: "web" });
     await app.waitFor("id:session-ses_1");
+    expect(app.shows("id:chip-all-projects")).toBe(false);
+    expect(app.shows("id:session-ses_2")).toBe(false);
     await app.type("id:session-search", "remote");
     expect(app.shows("id:session-ses_2")).toBe(false);
-    await app.press("id:chip-project");
-    expect(app.shows("id:session-ses_2")).toBe(false);
-    await app.press("id:chip-all-projects");
+    await app.press("id:rail-project-prj_2");
     await app.waitFor("id:session-ses_2");
-    await app.press("id:chip-all-projects");
-    expect(app.shows("id:session-ses_2")).toBe(true);
     expect(app.shows("id:session-ses_1")).toBe(false);
-    await app.press("id:chip-project");
-    expect(app.shows("id:session-ses_2")).toBe(false);
   });
 
-  test("groups sessions under a project header and shows the place line", async () => {
+  test("the row shows its branch and child count, and the list ends in New session", async () => {
     const parent = session("ses_1", "Refactor loader", { agent: "orchestrate" });
     const child = session("ses_2", "Child task", { parent_id: "ses_1" });
     const app = await open("./App.tsx", { network: network([parent, child]), width: 1440, height: 900, platform: "web" });
     await app.waitFor("text:Refactor loader");
-    await app.press("id:chip-all-projects");
-    await app.waitFor("id:session-group");
-    expect(app.texts().includes("demo")).toBe(true);
-    // line 2 of the row: the branch (the heading above carries the project), and the child count
-    expect(app.shows("id:session-place-ses_1")).toBe(true);
-    expect(app.texts().includes("trunk")).toBe(true);
+    expect(app.shows("id:session-group")).toBe(false);
+    expect(app.shows("id:new-session-row")).toBe(true);
+    await app.waitFor("id:session-place-ses_1");
+    await app.waitFor("text:trunk");
     expect(app.texts().includes("orchestrate")).toBe(false);
     expect(app.texts().includes("1 ↳")).toBe(true);
     expect(app.shows("id:session-ses_2")).toBe(false); // children live under their parent
+  });
+
+  test("the rail stays with the sidebar open or closed, with one counter in each corner", async () => {
+    const app = await open("./App.tsx", { network: network([session("ses_1", "Refactor loader")]), width: 1440, height: 900, platform: "web" });
+    await app.waitFor("id:rail-count-prj_1-idle");
+    expect(app.shows("id:left-sidebar") && app.shows("id:session-rail")).toBe(true);
+    await app.press("id:toggle-left");
+    expect(app.shows("id:left-sidebar")).toBe(false);
+    expect(app.shows("id:session-rail") && app.shows("id:rail-count-prj_1-idle") && app.shows("id:rail-settings")).toBe(true);
   });
 
   test("the collapsed project rail shows each count on one line of a two-row card", async () => {
@@ -83,7 +86,7 @@ describe("sessions sidebar (I6)", () => {
     expect(app.shows("id:rail-popup-prj_1-above")).toBe(true);
     expect(app.shows("id:rail-popup-prj_1-below")).toBe(true);
     const shown = app.texts();
-    for (const text of ["0 attention", "0 unread", "0 running", "1 idle"]) expect(shown.includes(text)).toBe(true);
+    for (const text of ["0 needs attention", "0 unread", "0 running", "1 idle"]) expect(shown.includes(text)).toBe(true);
   });
 
   test("keyboard focus on a rail project shows its card too", async () => {

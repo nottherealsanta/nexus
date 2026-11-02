@@ -9,7 +9,9 @@ yields events ([stream-events.md](stream-events.md)).
 ```python
 Agent(provider, *, model, workspace, tools=DEFAULT_TOOLS, instructions=None,
       reasoning_effort=None, approve=None, max_steps=50, messages=None,
-      conversation_id=None, files=None, cwd_changed=False)
+      conversation_id=None, inbox=None, steering=None, refresh=None,
+      files=None, cwd_changed=False, save_media=None, hooks=None, turn_id=None,
+      render=None, fallback_models=None, model_ref="", retry_policy=None)
 ```
 
 | Argument | Meaning |
@@ -26,6 +28,15 @@ Agent(provider, *, model, workspace, tools=DEFAULT_TOOLS, instructions=None,
 | `conversation_id` | Default is a new `uuid4().hex`; used for prompt caching and session headers |
 | `files` | The session's read observations and mutation lock, passed to tools |
 | `cwd_changed` | The live directory differs from the one in the frozen prompt; tools report absolute paths |
+| `inbox` | Notices to add, as a user message, before the next model call |
+| `steering` | Pending steer messages to take before the next model call |
+| `refresh` | Called before each model and tool dispatch; the daemon rebinds stored settings here |
+| `hooks` | Command hooks for this turn ([hooks.md](hooks.md)); each run yields `HookFired` |
+| `fallback_models` | A child's frozen `(ref, provider, model)` list, tried only before any response stream event |
+| `model_ref` | The `provider/model` ref recorded with the step; the request itself still uses the bare `model` |
+| `render` | Fills tool-result image bytes before the provider sees the request |
+| `save_media` | Stores tool-result media and returns an artifact id |
+| `retry_policy` | Pre-stream retry bounds; `retry_clock`, `retry_sleep` and `retry_random` are injectable |
 
 `default_instructions` states the workspace path, today's date and the tools,
 and tells the model to read before it edits and keep answers short.
@@ -73,6 +84,8 @@ attached) for `POST …/prompt`, through the same turn lifecycle.
 
 Calls run sequentially, even when a step has several (`parallel_tool_calls` is
 sent as `false` on the wire). The next `turn()` call continues the same history.
+Command hooks, when set, run at the points in [hooks.md](hooks.md) and each run
+yields `HookFired` before any context they add.
 
 ## Explicit configuration updates
 
@@ -131,7 +144,8 @@ approval.
 ## Stop reasons
 
 `TurnEnd.stop` is the last `Done.stop` (`end_turn`, `max_tokens`, `other`; a final
-step has no tool calls) or `max_steps`. A `max_tokens` stop that also has tool
+step has no tool calls), `max_steps`, or `blocked` when a `UserPromptSubmit` hook
+refuses the prompt before any model call (`steps` is 0). A `max_tokens` stop that also has tool
 calls continues the loop, since the tool-call check is what decides.
 
 ## Not covered (PLAN.md, known gaps)

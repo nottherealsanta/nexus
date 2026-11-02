@@ -28,32 +28,40 @@ settings navigation, alerts, notifications and connection states are usable
 against a real Core. Tabs show running, unread, failed and idle state; they
 switch, rename and close without deleting sessions. Each project has its own open
 tabs and last viewed session or new-session screen, held locally while the client runs.
+Startup shows the launch splash (`src/ui/splash.tsx`): the `_/` logo in white, a 30-segment
+milestone bar (`daemon`, `workspace`, `providers`, `session`, `ready`), its percentage and the
+next step. It fades into the first live frame and is dismissed when a start fails.
 The timeline has starting
 context, Markdown (prose 14/22 in Geist; fenced code is a panel card with the language and
 a Copy button and padded code; inline code is 13 px Monaspace on the panel), and three detail levels: finished activity groups collapse in low and medium,
 while high expands their tools. Running groups show the latest five activities in medium (with earlier items announced), and waiting groups stay open. Each user
 message is the turn's header: a full-width raised card (`#n · time` on the right,
 with long messages previewed in six lines and expandable as sent,
-Copy and Fold on hover) that folds to one line. A sticky copy of the current
+Copy and Fold on hover) that folds to one line. Image previews and inline markers
+remain visible without repeating generated attachment labels below the text; previews sit side by side in bordered squares and wrap as needed. A sticky copy of the current
 user card sits under the header with `↑ N lines of this turn above`, pushed up by
 the next card and clicked to scroll back; it pins only bands whose height has been
-measured, so a newly added message cannot make it jump or blink. Turn footers are a right-aligned meta
-row (`models · tools · input tokens · output tokens · elapsed · finished`) with no
+measured, so a newly added message cannot make it jump or blink. Turn footers are a right-aligned meta row (`models · tools · 24.5Ki · 570o · 90r · 58%c · elapsed · finished`) with no
 status word: a failed turn shows its first error line above it, and an
-interrupted one adds `/continue`. A running turn has no footer; it appears only
+interrupted one adds `/continue`. A turn with no usage says `usage unknown`. A running turn has no footer; it appears only
 once the turn is done, and the live thought stays inside the active activity
 group. Settled history is rebuilt only on structural changes; text and reasoning
 deltas update a coalesced live tail, and wire-only events do not redraw, so a long
-session does not re-walk every message and tool detail per token. Durations read `0.4s`, `4.2s`, `1m 05s` and
-`1h 02m`. Hovering over token counts shows reported counts, reasoning tokens and
-cache share. The finish time is omitted when unavailable or while the turn is
-running. Activity groups are 28 px rows with `+N −M` and failures when folded;
-members are 24 px rows on a tree line with verb icons (the status glyph replaces
-the icon while running, failed or waiting), and a member's output sits in a
-320 px box with Show all. Thoughts show `Thought · preview`, with the body behind
-a 2 px rule; a thought with no tool beside it is a single `Thought · preview` row, never a group. High-detail output keeps the first 30 and last 20 lines;
-clipping is announced and the show-all control restores the whole inspection
-output.
+session does not re-walk every message and tool detail per token. A session opens at its latest message and follows new content while at the end. Durations read `0.4s`, `4.2s`, `1m 05s` and
+`1h 02m`. The finish time is omitted when unavailable or while the turn is
+running. Activity groups are 28 px rows with the TUI's content: counts in first-seen
+order (edits count the files they touch), `+N −M` beside the summary from
+edits that were neither failed nor denied, and `· N denied`; a failed member keeps its `✕`, first error line and a muted `failed`,
+and the folded heading never counts failures. A live group reads `Working` with a shimmer, and a group that has just finished
+flashes its chevron the accent, unless animations are off. Members hang on a tree line with verb
+icons (the status glyph replaces the icon while running, failed, denied or waiting) and read
+`Shell  make  exit 2 · 1.2s`: the argument comes from the same field per tool as in the TUI, a failed
+call adds its first error line, and read, edit, write, code and ask carry their summary. An open
+member's detail sits behind the tree line with `raw` on its row: `$ command` rows, then the last 8 output rows
+behind `↑ N earlier lines · enter show all` (a press, Enter or `o` restores them), while a diff or the raw view keeps a head and
+a tail, 100 lines each or 30 and 20 at high detail. Thoughts show `Thought · preview`, with the body behind a rail, and no time;
+a thought still arriving stays open and keeps its last 10 lines; a thought with no tool beside it is a single row, never a group.
+Clipping is announced and the control restores the whole output. In the context card, the system prompt and instruction file open as rendered Markdown; Tools, Skills and MCP open a list of entries with their descriptions, and opening an entry shows a tool's schema, a skill's full text or a server's facts. The group's chevron starts on the text edge shared by the user message and the reply. A child session is one row, `Scout <prompt>` with `Background`, then its model and time, and a failure or a wait below; pressing it opens the child. A notice is one row, `context · … · show details`, whose text opens in a dialog.
 
 The app uses Geist for interface text and prose; inline code, fenced code, paths
 and tool arguments use Monaspace Argon. NSH imports the bundled Geist and Argon
@@ -109,12 +117,12 @@ sidebar (or its rail) and the page. The centre is `bg-background` (the canvas). 
 header is three slots that match the sidebars (the resizable left sidebar, the centre, 300 px when the right
 sidebar is open). Below the band the 44 px right rail (Session, and Git with its changed-file
 count) opens the panel on demand and pushes the page; the panel starts closed, and
-the rail yields while the editor's file panel takes the same right slot. Controls
+Controls
 are 10 px and cards 16 px. A box rule runs a hairline along a rounded box's straight sides
 and stops before each corner's curve; a filled box needs no border. Round indicators and
 meters retain their shape. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). Drag the file panel's left edge to resize it from 360 px up to what leaves the timeline 480 px. The reading column is centred and at most 1160 px wide. The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
 Over the docked left sidebar its left slot holds the 32 px toggle and
-the Sessions, Files and Projects icons (they follow the sidebar's open state; narrow, they
+the Sessions and Files icons (they follow the sidebar's open state; narrow, they
 are in the drawer with labels). The session tabs are 28 px tall, aligned with
 the end of the left sidebar: the viewed tab has the selection pill with primary text, the
 others are muted with a hover fill. Their × shows on hover (and on the viewed tab). Tabs are
@@ -139,8 +147,9 @@ surface, with its input, controls and location strip in the timeline's reading c
 The agent (in its colour), model with its muted provider, and effort are compact selectors;
 the input starts on the user band's 16 px text edge and the control row ends with dictation
 and send buttons. The location strip is its own row under the controls at every width: the
-muted home-shortened path and branch on the left, a linked worktree adding `⑂`, and the
-context reading (`82k · 41%`) on the right. The activity line along the dock's foot sits on the text edges. While a turn runs it is a
+muted home-shortened path and branch on the left, a centred highlighted count of live
+kernels and running background shells (it opens their details), a linked worktree
+adding `⑂`, and the context reading (`82k · 41%`) on the right. The activity line along the dock's foot sits on the text edges. While a turn runs it is a
 soft pulse in the agent's colour, a fifth of the width, gliding back and forth. At rest it stays
 hidden until context reaches 80% (warning) or 95% (error). Draft context is marked as an estimate.
 While a session runs, a Working row at the top of the dock shimmers the word and shows the elapsed
@@ -172,17 +181,17 @@ newest request with known usage. A ledger that began counting well after the
 first message is labelled `Totals since …`, and requests that reported no usage
 are counted as unknown. It also counts descendant sessions. Right-click or Shift+F10 opens the
 manifest-driven session/project row menu, including confirmed project removal,
-and Projects has a trailing `+ Add project` row. The collapsed sidebar is a 42 px
-rail that shows projects in creation order, with stable uppercase initials
+and Projects, opened by its command, has a trailing `+ Add project` row. A 48 px project rail stays beside the sidebar whether it is open or
+closed, except on phones and below 500 px, which keep the project picker in the Sessions tab. It shows projects in creation order, with stable uppercase initials
 (collisions use the next available consonant, then a numeric suffix). Projects with running sessions or session activity
 within the last hour are lighter gray; inactive projects are darker. Selection is a soft
-filled pill with no edge marker. Each project also carries the TUI's four
-counters around its initials: needs attention (violet) and finished and unread
-(info) above, running (success) and idle (primary) below, with any count past
-nine shown as `*`; a project with no counts shows a three-cell muted rule below
-its initials instead. Hover or focus spells out all four counts with the project name;
+filled pill with no edge marker. Each project has a counter in each corner: needs attention (violet) and unread
+(info) on top, running (success) and idle (primary) below, with any count past
+nine shown as `*`. A project with
+no counts shows a muted rule below its initials instead. Hover or
+focus spells out all four counts with the project name;
 clicking restores the project's last selected session in this client, or its newest
-unarchived root session, or the new-session view when empty.
+unarchived root session, or the new-session view when empty; pressing the project already open opens the session switcher scoped to it. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and Settings sits at the rail's foot while the sidebar is closed. The sidebar lists the current project's sessions only and ends in `+ New session`.
 Projects also shows the selected
 project's `.mcp.json` servers. Enabled, valid entries start automatically with a
 new session, and the panel warns that their commands run then without asking;
@@ -198,10 +207,11 @@ session view's `directory` differs from the one it was read for, as after a move
 and worktree actions remain disabled with a reason. Kernel state is the remaining
 session-info item not reported by Core.
 
-Files open in the right-hand panel with `Editor` and `DiffView` from `nsh/base`;
-it sits beside the timeline from 1100 px and slides over the body below. `cmd+f`
-opens a find bar (plain text, a case toggle, previous/next and the match count);
-Esc closes it before the panel.
+Files open in a centred modal over the dimmed page, with long lines wrapped, using `Editor` and `DiffView` from `nsh/base`;
+below 1100 px it fills the window. Markdown files (`.md`, `.markdown`) open as rendered prose, and the header's
+Source control shows the numbered source, returning to the preview on a second press. `cmd+f`
+opens a find bar (plain text, a case toggle, previous/next and the match count) after returning to the source;
+Esc closes the bar before the panel.
 
 Still missing (shown disabled with their reason, never as a control that appears
 to work): the file actions and live watcher, the Git workflow, worktree controls,
@@ -273,6 +283,7 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, code fences, thoughts, groups and members, children, diagnostics (live, or from summaries), the floor row, footers, and the sticky user bar. |
 | `src/ui/diff.tsx` | Diffs of edit, write and patch details: split at window width 1100 px and up, unified below, built from the tool detail lines (so the detail cap still applies). The empty side of an add or remove is a flat fill: NSH views cannot draw the hatch. |
 | `src/ui/connect.tsx` | The native Connect screen: the Core address, saved in NSH Storage (and reopened from the header's Core button). |
+| `src/ui/splash.tsx` | The launch splash: logo, five milestone stages, 30-segment bar and the fade into the first live frame. |
 | `src/ui/*` | Header, sidebars, the right panel and its icon rail, the docked composer (completion, Working row, location strip, activity bar) and waiting card, settings, overlays, alerts. |
 | `src/gen/*` | Generated from `interface/`; never edit. |
 
@@ -424,6 +435,14 @@ never shows an image. PNG, JPEG, GIF and WebP are supported, with up to eight
 images and 8 MiB combined. Bytes are stored by Core, so reload and continuation
 keep the same image context.
 
+A large text paste (at least 200 characters or three lines) collapses into one
+`[Pasted ~N tokens]` marker at the caret, as in the TUI, and the composer shows
+only that marker. Sending sends the marker and the full text separately: Core
+stores the text as a collapsed part, so the model reads it while the user
+message shows a clickable chip above its text, with no preview. Clicking the
+chip opens the full pasted text in a modal. A failed send keeps the collapsed
+draft. Smaller pastes stay inline.
+
 A background shell completion (`→ Background Shell Done: …`) is a plain context
 notice, without a user-message card or a new turn number.
 
@@ -458,7 +477,7 @@ estimate.
   (`stale_file`) keeps the text and marks the file `changed on disk · reload`; Reload re-reads
   (asking first when dirty); `files.changed` reloads a clean editor and warns a dirty one. Esc
   asks before dropping changes. Not built: find (`editor.find`), syntax highlighting.
-- **Plan limits (K11).** `/usage` (palette: Show plan limits) shows `GET /api/usage` in the
-  notification detail dialog.
+- **Provider usage (K11).** `/usage` (palette: Show provider usage) shows every connected provider from
+  `GET /api/usage`, with plan windows where reported and a note where not.
 - **Tool images (K8).** A tool row whose result has `media` stays folded and notes the image count; opening it shows the images
   (`/api/artifact/{id}`, same origin) under the output.

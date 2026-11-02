@@ -281,9 +281,7 @@ impl Http {
             .calls
             .get(format!("{}{}", self.base, path))
             .query(query);
-        let resp = self.authorized(resp)
-            .send()
-            .await?;
+        let resp = self.authorized(resp).send().await?;
         let status = resp.status().as_u16();
         let name = resp
             .headers()
@@ -307,9 +305,7 @@ impl Http {
             .streams
             .post(format!("{}{}", self.base, path))
             .json(body);
-        let resp = self.authorized(resp)
-            .send()
-            .await?;
+        let resp = self.authorized(resp).send().await?;
         let status = resp.status().as_u16();
         if status >= 400 {
             let text = resp.text().await.unwrap_or_default();
@@ -334,9 +330,7 @@ impl Http {
             .query(query)
             .header(reqwest::header::CONTENT_TYPE, content_type)
             .body(body);
-        let resp = self.authorized(resp)
-            .send()
-            .await?;
+        let resp = self.authorized(resp).send().await?;
         read_reply(resp).await
     }
 

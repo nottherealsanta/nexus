@@ -1444,6 +1444,48 @@ fn dictation_strip_shot() {
     .unwrap();
 }
 
+/// Writes an SVG snapshot of a collapsed paste in a user message when `PASTE_SHOTS` is set.
+#[test]
+#[ignore]
+fn paste_message_shot() {
+    let Ok(dir) = std::env::var("PASTE_SHOTS") else {
+        return;
+    };
+    let mut a = app();
+    let log = "2026-11-02 10:00:01 INFO  worker started\n\
+         2026-11-02 10:00:02 INFO  connected to Core\n\
+         2026-11-02 10:00:03 WARN  retrying request after timeout\n\
+         2026-11-02 10:00:04 ERROR request failed: connection reset\n\
+         2026-11-02 10:00:05 INFO  reconnecting in 250 ms\n\
+         2026-11-02 10:00:06 INFO  connected to Core\n\
+         2026-11-02 10:00:07 INFO  worker ready";
+    a.state
+        .model
+        .selected
+        .as_mut()
+        .unwrap()
+        .messages
+        .push(nexus_tui::api::Message {
+            id: "m_paste".into(),
+            session_id: SESSION.into(),
+            seq: 999,
+            created: 1.0,
+            role: "user".into(),
+            parts: vec![
+                serde_json::json!({"type": "text", "text": "Summarise this log:", "origin": null, "raw": null}),
+                serde_json::json!({"type": "text", "text": log, "origin": null, "raw": null, "collapsed": true}),
+            ],
+            delivery: None,
+        });
+    let (buf, _) = draw(&mut a, 140, 44);
+    let (fg, bg) = nexus_tui::svg::page_colors(false);
+    std::fs::write(
+        format!("{dir}/paste-message-140x44.svg"),
+        nexus_tui::svg::to_svg(&buf, fg, bg),
+    )
+    .unwrap();
+}
+
 #[test]
 fn every_vocabulary_term_is_known_to_this_client() {
     let a = app();
@@ -1493,7 +1535,9 @@ fn failed_new_session_send_restores_the_originating_projects_draft() {
             project: "original-project".into(),
             text: "failed prompt".into(),
             images: Vec::new(),
+            pastes: Vec::new(),
             fields: serde_json::json!({}),
+            draft: None,
         },
         result: Err("offline".into()),
     });
@@ -1517,8 +1561,10 @@ fn session_actions_are_wired_to_the_api() {
         call: ApiCall::Prompt {
             mode: "send".into(),
             images: Vec::new(),
+            pastes: Vec::new(),
             session: SESSION.into(),
             text: "hello there".into(),
+            draft: None,
         },
         result: Err("busy".into()),
     });
@@ -1572,11 +1618,12 @@ fn composer_paste_selection_undo_and_send_preserve_full_text() {
     assert!(a.composer_ref().is_empty());
     press(&mut a, &["ctrl+y"]);
     assert_eq!(a.composer_ref().expanded_text(), pasted);
+    let marker = a.composer_ref().text();
     press(&mut a, &["enter"]);
-    assert!(a
-        .effects
-        .iter()
-        .any(|e| matches!(e, Effect::Api(ApiCall::Prompt { text, .. }) if text == pasted)));
+    assert!(a.effects.iter().any(
+        |e| matches!(e, Effect::Api(ApiCall::Prompt { text, pastes, .. })
+            if text == &marker && pastes == &vec![(marker.clone(), pasted.to_owned())])
+    ));
 
     let mut a = app();
     typing(&mut a, "hello");
@@ -1639,8 +1686,10 @@ fn failed_send_restores_expanded_pending_paste() {
         call: ApiCall::Prompt {
             mode: "send".into(),
             images: Vec::new(),
+            pastes: Vec::new(),
             session: SESSION.into(),
             text: "sent".into(),
+            draft: None,
         },
         result: Err("offline".into()),
     });
@@ -1954,7 +2003,9 @@ fn a_created_session_has_its_tab_before_its_event_arrives() {
             project: "prj_1a17de160d3c070dfda".into(),
             text: "hello".into(),
             images: vec![],
+            pastes: Vec::new(),
             fields: serde_json::json!({}),
+            draft: None,
         },
         result: Ok(Done {
             open: Some("ses_new".into()),
@@ -2039,6 +2090,91 @@ fn image_paste_sends_an_image_only_prompt_and_restores_it_on_failure() {
     assert_eq!(a.composer_ref().images, vec![image]);
     press(&mut a, &["backspace"]);
     assert!(a.composer_ref().images.is_empty());
+}
+
+#[test]
+fn big_pastes_collapse_into_a_preview_and_send_their_text() {
+    use nexus_tui::actions::ApiCall;
+    let big = (1..=8)
+        .map(|i| format!("row {i}: {}", "x".repeat(20)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut a = app();
+    a.composer().paste(&big);
+    let marker = format!("[Pasted ~{} tokens]", big.chars().count() / 4);
+    assert_eq!(a.composer_ref().text(), marker);
+    let (_, rows) = draw(&mut a, 120, 40);
+    assert!(rows.iter().any(|row| row.contains(&marker)));
+    assert!(!rows.iter().any(|row| row.contains("Pasted text")));
+    press(&mut a, &["enter"]);
+    let call = a
+        .effects
+        .iter()
+        .find_map(|e| {
+            if let Effect::Api(c @ ApiCall::Prompt { text, pastes, .. }) = e {
+                assert_eq!(text, &marker);
+                assert_eq!(pastes, &vec![(marker.clone(), big.clone())]);
+                Some(c.clone())
+            } else {
+                None
+            }
+        })
+        .expect("the marker and the full text are sent");
+    a.apply_done(nexus_tui::actions::ActionDone {
+        call,
+        result: Err("offline".into()),
+    });
+    assert_eq!(
+        a.composer_ref().text(),
+        marker,
+        "a failed send keeps the draft"
+    );
+    assert_eq!(a.composer_ref().pastes().len(), 1);
+}
+
+#[test]
+fn a_collapsed_paste_in_a_user_message_opens_in_a_modal() {
+    let big = (1..=8)
+        .map(|i| format!("row {i}: {}", "x".repeat(20)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let marker = format!("[Pasted ~{} tokens]", big.chars().count() / 4);
+    let mut a = app();
+    a.state
+        .model
+        .selected
+        .as_mut()
+        .unwrap()
+        .messages
+        .push(nexus_tui::api::Message {
+            id: "m_paste".into(),
+            session_id: SESSION.into(),
+            seq: 999,
+            created: 1.0,
+            role: "user".into(),
+            parts: vec![
+                serde_json::json!({"type": "text", "text": "Summarise this log:", "origin": null, "raw": null}),
+                serde_json::json!({"type": "text", "text": big.clone(), "origin": null, "raw": null, "collapsed": true}),
+            ],
+            delivery: None,
+        });
+    let (_, rows) = draw(&mut a, 120, 40);
+    let marker_row = rows
+        .iter()
+        .position(|row| row.contains(&marker))
+        .expect("the collapsed paste shows its marker");
+    assert!(
+        !rows.iter().any(|row| row.contains("row 1:")),
+        "the pasted text is not shown inline"
+    );
+    click(&mut a, 40, marker_row as u16);
+    assert!(
+        matches!(
+            a.ui.overlay.as_ref().map(|overlay| &overlay.kind),
+            Some(OverlayKind::ContextDetail { text, .. }) if text == &big
+        ),
+        "clicking the marker opens the full text"
+    );
 }
 
 #[test]
@@ -2454,7 +2590,7 @@ fn ctrl_u_reads_plan_limits_into_a_bar_modal() {
     ));
     let (_, rows) = draw(&mut app, 120, 36);
     let text = rows.join("\n");
-    assert!(text.contains("Plan limits"), "{text}");
+    assert!(text.contains("Provider usage"), "{text}");
     assert!(text.contains("ChatGPT (Codex)"), "{text}");
     assert!(text.contains(" 42%"), "{text}");
     assert!(text.contains(" 95%"), "{text}");

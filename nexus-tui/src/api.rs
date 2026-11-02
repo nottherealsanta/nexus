@@ -989,13 +989,19 @@ impl CoreApi {
         id: &str,
         text: &str,
         images: &[crate::images::Image],
+        pastes: &[(String, String)],
         mode: &str,
         key: &RequestId,
     ) -> Result<Outcome<Value>, Error> {
         self.mutate(
             Method::POST,
             &format!("/api/session/{id}/prompt"),
-            Some(json!({ "text": text, "images": images, "mode": mode })),
+            Some(json!({
+                "text": text,
+                "images": images,
+                "pastes": pastes.iter().map(|(marker, text)| json!({"marker": marker, "text": text})).collect::<Vec<_>>(),
+                "mode": mode,
+            })),
             key,
             None,
         )
@@ -1275,6 +1281,21 @@ impl CoreApi {
         self.http
             .get(&format!("/api/project/{project}/mcp"), &[])
             .await
+    }
+
+    /// Live kernels, compact: metadata and variable previews, without retained cell bodies.
+    pub async fn kernels(&self) -> Result<Vec<Value>, Error> {
+        serde_json::from_value(
+            self.http
+                .get("/api/kernel", &[("summary", "1".to_owned())])
+                .await?,
+        )
+        .map_err(dec)
+    }
+
+    /// Background bash jobs, newest first, without their retained output.
+    pub async fn bash_jobs(&self) -> Result<Vec<Value>, Error> {
+        serde_json::from_value(self.http.get("/api/bash", &[]).await?).map_err(dec)
     }
 
     /// The connected providers' model catalog (`{source, models}`).

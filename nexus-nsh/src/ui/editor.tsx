@@ -1,39 +1,18 @@
-import { PanResponder, Scroll, Text, View, createMotion, platform, safeArea, signal } from "nsh";
+import { Scroll, Text, View, platform, signal } from "nsh";
 import { titleBar } from "nsh/desktop";
-import { Button, DiffView as CodeDiffView, Editor, Input, type EditorRef } from "nsh/base";
-import { Btn, FOCUS, IconButton, T } from "./kit";
-import { availability, byId, keyLabel, run, waitItems } from "../commands";
-import { fileDirty, fileFindOpen, isNarrow, leftOpen, openFile, panelWide, setDraft, width } from "../store";
-import { leftSidebarWidth } from "./sidebar";
+import { Button, Dialog, DiffView as CodeDiffView, Editor, Input, TextView, type EditorRef } from "nsh/base";
+import { Btn, FOCUS, IconButton, PROSE, T } from "./kit";
+import { availability, byId, escape, keyLabel, run, waitItems } from "../commands";
+import { config, fileDirty, fileFindOpen, fileSource, isNarrow, markdownFile, openFile, setDraft, width } from "../store";
+import { SCRIM } from "./modal";
 
 const hint = (id: string) => { const c = byId.get(id); return c ? keyLabel(c) : null; };
 /** The built-in code editor's font. It measures its text in this family, so set it here. */
 const FONT = "Monaspace Argon";
-/** The header is 44 pt in the wide layout; the panel starts under it. */
-const HEADER = 44;
-/** The collapsed left sidebar's rail. */
-const RAIL = 48;
-/** The width the user dragged the panel to; null means the default share of the space. */
-const widthOverride = signal<number | null>(null);
-
-function availableWidth(): number {
-  const left = isNarrow() ? 0 : leftOpen() ? leftSidebarWidth() : RAIL;
-  return width() - left;
-}
-
-export const FILE_PANEL_MIN = 360;
-/** The widest the panel may be dragged in `space` px: everything but 480 px for the timeline (never under the minimum). */
-export const panelMaxFor = (space: number) => Math.max(FILE_PANEL_MIN, space - 480);
-/** The default is 55% of the space right of the left sidebar, at most 760 px, so the timeline keeps 480. */
-export const panelDefaultFor = (space: number) => Math.max(FILE_PANEL_MIN, Math.min(Math.floor(space * 0.55), 760, space - 480));
-/** The panel's width in `space` px: the dragged width between 360 px and the space minus 480 px, else the default. */
-export const panelWidthFor = (space: number, dragged: number | null) => Math.max(FILE_PANEL_MIN, Math.min(panelMaxFor(space), dragged ?? panelDefaultFor(space)));
-const filePanelMax = () => panelMaxFor(availableWidth());
-export const filePanelWidth = () => panelWidthFor(availableWidth(), widthOverride());
-/** Set the dragged width (clamped when read); null returns to the default. For the handle and tests. */
-export const setFilePanelWidth = (w: number | null) => widthOverride.set(w);
-
-/** The open project file, in the right-hand panel: read-only, or the code editor once `draft` is set (K10). */
+/** The modal is this wide at most, and keeps this margin from the window. */
+const MODAL_MAX = 1100;
+const MODAL_MARGIN = 32;
+/** The open project file, in a modal over the whole window: read-only, or the code editor once `draft` is set (K10). Long lines wrap. */
 export function FilePanel() {
   const f = () => openFile();
   const editing = () => f()?.draft !== undefined;
@@ -42,13 +21,8 @@ export function FilePanel() {
   const caseSensitive = signal(false);
   const found = signal<{ count: number; current?: number | null; error?: string | null }>({ count: 0 });
   let editor!: EditorRef;
-  let startWidth = 0;
-  const resize = PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onPanResponderGrant: () => { startWidth = filePanelWidth(); },
-    onPanResponderMove: (_event, gesture) => { widthOverride.set(Math.max(FILE_PANEL_MIN, Math.min(filePanelMax(), startWidth - gesture.dx))); },
-  });
   const showDiff = () => diff() && editing();
+  const preview = () => markdownFile() && !editing() && !fileSource();
   const status = () => (f()?.saving ? "saving…" : f()?.stale ? "changed on disk · reload" : fileDirty() ? "● modified" : editing() ? "editing" : "");
   const can = (id: string) => availability(byId.get(id)!).ok;
   const loaded = () => editing() || f()?.content !== undefined;
@@ -59,31 +33,28 @@ export function FilePanel() {
     if (r.current == null) return `${r.count} ${r.count === 1 ? "match" : "matches"}`;
     return `${r.current + 1} of ${r.count}`;
   };
-  // Wide, the panel is a column beside the timeline and appears at once.
-  // Narrow, it slides in from the right over the whole body, the composer included.
-  const slide = createMotion({ enter: { duration: 220, easing: "easeOut", keyframes: { translateX: [1200, 0] } } });
-  const style = () => panelWide()
-    ? { position: "absolute" as const, top: HEADER + safeArea().top, right: 0, bottom: 0, width: filePanelWidth() }
-    : { position: "absolute" as const, top: 0, right: 0, bottom: 0, left: 0, ...slide.style };
-  // Narrow, the panel covers the whole window, traffic lights included: its header makes room
+  // Below this the modal takes the whole window, traffic lights included: its header makes room
   // for them and drags the window, as the app's own band does.
-  const lights = () => (!panelWide() && platform.os === "macos" ? titleBar().left : 0);
+  const full = () => isNarrow();
+  const lights = () => (full() && platform.os === "macos" ? titleBar().left : 0);
   const headerStyle = () => (lights() ? { paddingLeft: lights() + 8 } : {});
   return (
-    <View class="absolute flex-col bg-background border-l border-border" style={style()} testID="file-panel">
-      <If when={panelWide()}>
-        <View {...resize.panHandlers} class="group absolute -left-1.5 top-0 bottom-0 z-10 w-3 items-center cursor-col-resize" testID="file-panel-resize" accessibilityLabel="Resize file panel">
-          <View class="w-0.5 h-full bg-transparent group-hover:bg-border-strong" />
-        </View>
-      </If>
+    <Dialog open closeOnEscape={false} onCancel={() => escape()} onOpenChange={({ open }) => { if (!open) void run("editor.close"); }}
+      animation={config()?.values?.ui?.reduced_motion ? "none" : "fade"} backdropClass={SCRIM} testID="file-panel-shell"
+      style={full() ? {} : { width: Math.min(MODAL_MAX, width() - 2 * MODAL_MARGIN), boxShadow: "0 12px 40px rgb(0 0 0 / 0.4)" }}
+      class={full() ? "absolute inset-0 bg-background" : "absolute left-0 right-0 top-[5%] bottom-[5%] mx-auto rounded-(--radius-card) border border-border bg-background overflow-hidden"}>
+    <View class="flex-1 min-h-0 flex-col" testID="file-panel">
       <View class="flex-row items-center gap-2 px-3 min-h-11 border-b border-border bg-sidebar" style={headerStyle()}
         {...(lights() ? { desktop: { windowDrag: true } } : {})}>
         <IconButton icon="arrow-left" label="Back to the session" onPress={() => void run("editor.close")} testID="file-back" />
         <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`flex-1 min-w-0 ${T.mono} text-foreground`} testID="file-path">{f()?.path ?? ""}</Text>
-        <If when={!panelWide() && waitItems().length > 0}>
+        <If when={waitItems().length > 0}>
           <Text class="text-[12px] leading-4 font-medium text-warning" testID="file-panel-waiting">{`${waitItems().length} waiting`}</Text>
         </If>
         <If when={!!status()}><Text class={`${T.meta} ${f()?.stale ? "text-warning" : ""}`} testID="file-status">{status()}</Text></If>
+        <If when={markdownFile() && !editing()}>
+          <Btn label={fileSource() ? "Preview" : "Source"} kind="ghost" onPress={() => void run("editor.preview")} testID="file-preview" />
+        </If>
         <If when={!editing()}>
           <Btn label="Edit" kind="ghost" onPress={() => void run("editor.edit")} disabled={!can("editor.edit")} reason={availability(byId.get("editor.edit")!).reason} testID="file-edit" />
         </If>
@@ -93,7 +64,7 @@ export function FilePanel() {
           <Btn label={hint("editor.save") ? `Save ${hint("editor.save")}` : "Save"} kind="primary" onPress={() => void run("editor.save")} disabled={!can("editor.save")} reason={availability(byId.get("editor.save")!).reason} busy={!!f()?.saving} testID="file-save" />
         </If>
       </View>
-      <If when={fileFindOpen()}>
+      <If when={fileFindOpen() && !preview()}>
         <View class="flex-row items-center gap-2 px-3 min-h-9 border-b border-border bg-sidebar" testID="file-find">
           <Input autoFocus value={query()} onChange={({ value }) => query.set(value)} onSubmit={() => editor?.run("findNext")}
             placeholder="Find" accessibilityLabel="Find in file" testID="file-find-input"
@@ -110,17 +81,23 @@ export function FilePanel() {
           <IconButton icon="x" label="Close find" onPress={() => fileFindOpen.set(false)} testID="file-find-close" />
         </View>
       </If>
-      <View class="flex-1 min-h-0" testID="file-view">
+      <View class="flex-1 min-h-0 pr-3" testID="file-view">
         <If when={!!f()?.error} else={
           <If when={!loaded()} else={
-            <If when={showDiff()} else={
-              <Editor ref={(r) => (editor = r)} value={f()?.draft ?? f()?.content ?? ""} onChange={({ value }) => setDraft(value)} readOnly={!editing()} softWrap
-                search={{ query: query(), caseSensitive: caseSensitive() }} onSearchChange={({ result }) => found.set(result)}
-                language={f()?.path} fontFamily={FONT} accessibilityLabel={`Editing ${f()?.path ?? "file"}`}
-                class="flex-1 min-h-0 bg-background" testID="file-editor" />
+            <If when={preview()} else={
+              <If when={showDiff()} else={
+                <Editor ref={(r) => (editor = r)} value={f()?.draft ?? f()?.content ?? ""} onChange={({ value }) => setDraft(value)} readOnly={!editing()} softWrap
+                  search={{ query: query(), caseSensitive: caseSensitive() }} onSearchChange={({ result }) => found.set(result)}
+                  language={f()?.path} fontFamily={FONT} accessibilityLabel={`Editing ${f()?.path ?? "file"}`}
+                  class="flex-1 min-h-0 bg-background" testID="file-editor" />
+              }>
+                <CodeDiffView oldValue={f()?.content ?? ""} newValue={f()?.draft ?? ""} language={f()?.path} fontFamily={FONT}
+                  class="flex-1 min-h-0 bg-background" testID="file-diff-view" />
+              </If>
             }>
-              <CodeDiffView oldValue={f()?.content ?? ""} newValue={f()?.draft ?? ""} language={f()?.path} fontFamily={FONT}
-                class="flex-1 min-h-0 bg-background" testID="file-diff-view" />
+              <Scroll class="flex-1"><View class="px-6 py-4" testID="file-markdown">
+                <TextView selectable markdown={f()?.content ?? ""} classes={PROSE} />
+              </View></Scroll>
             </If>
           }>
             <Scroll class="flex-1"><Text class={`${T.sec} px-4 py-3`}>Loading file…</Text></Scroll>
@@ -130,5 +107,6 @@ export function FilePanel() {
         </If>
       </View>
     </View>
+    </Dialog>
   );
 }

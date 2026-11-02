@@ -199,3 +199,64 @@ def test_unreadable_config_keeps_the_default(env, tmp_path):
     assert configured_idle_seconds(ConfigFile(home / "config.toml")) == HOUR
     (home / "config.toml").write_text("not toml")
     assert configured_idle_seconds(ConfigFile(home / "config.toml")) == HOUR
+
+
+@pytest.mark.parametrize("automatic", [False, True])
+async def test_archive_releases_tree_kernels_and_unarchive_starts_fresh(env, automatic):
+    rt, store, project, _ = env
+    root = _session(store, project, "root", idle=5 * HOUR)
+    child = store.create_session(project, title="child", agent="build", parent=root)
+    other = _session(store, project, "other", idle=0)
+    from nexus.tools import ToolContext
+
+    async def allow(call, args):
+        return True
+
+    async def run(session, code):
+        return await rt.kernels.run({"code": code}, root=root.id, caller=session.id,
+                                    ctx=ToolContext(project.path, "cell"), tools=[], approve=allow,
+                                    publish=lambda kind, data: rt.bus.publish(kind, data, session_id=session.id))
+
+    try:
+        await run(child, "saved = 42")
+        owned = rt.kernels.get(rt.kernels.main[root.id])
+        foreign = await rt.kernels.select(other.id, other.id, None)
+        # Creating the child refreshed the root; make the whole tree stale again.
+        with store.db:
+            store.db.execute("update session set updated = ? where id in (?, ?)",
+                             (NOW - 5 * HOUR, root.id, child.id))
+        if automatic:
+            assert rt.archive_stale_sessions(older_than=HOUR, now=NOW) == [root.id]
+        else:
+            rt.archive_session(root.id, archived=True)
+        assert owned.id not in rt.kernels.items and root.id not in rt.kernels.main
+        assert foreign.id in rt.kernels.items
+        rt.archive_session(root.id, archived=True)
+        events = [e for e in store.events(root.id, limit=100) if e["type"] == "kernel.deleted"]
+        assert len(events) == 1 and "state discarded" in events[0]["data"]["reason"]
+        await asyncio.gather(*rt.kernels.closing)
+        assert owned.closed
+        rt.archive_session(root.id, archived=False)
+        assert root.id not in rt.kernels.main
+        await run(root, "fresh = 1")
+        fresh = rt.kernels.get(rt.kernels.main[root.id])
+        assert fresh.id != owned.id and {v["name"] for v in fresh.variables} == {"fresh"}
+    finally:
+        await rt.kernels.shutdown()
+
+
+async def test_archive_refuses_busy_shared_kernel(env):
+    from nexus.runtime import Conflict
+
+    rt, store, project, _ = env
+    root = _session(store, project, "root", idle=5 * HOUR)
+    kernel = await rt.kernels.select(root.id, root.id, None)
+    try:
+        async with kernel.lock:
+            with pytest.raises(Conflict, match="kernel is busy"):
+                rt.archive_session(root.id, archived=True)
+            assert rt.archive_stale_sessions(older_than=HOUR, now=NOW) == []
+            assert not store.session(root.id).archived
+            assert kernel.id in rt.kernels.items
+    finally:
+        await rt.kernels.shutdown()

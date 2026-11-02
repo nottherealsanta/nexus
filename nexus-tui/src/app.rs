@@ -140,6 +140,7 @@ pub const WIRED: &[&str] = &[
     "composer.queue",
     "session.export",
     "session.change_directory",
+    "session.resources",
     "turn.go_to",
     "model.change",
     "model.effort",
@@ -174,6 +175,9 @@ pub const WIRED: &[&str] = &[
     "editor.edit",
     "editor.save",
     "editor.reload",
+    "editor.find",
+    "editor.preview",
+    "editor.close",
     "app.usage",
     "waiting.allow_once",
     "waiting.allow_session",
@@ -622,8 +626,6 @@ pub struct Ui {
     pub focus: Focus,
     pub left_open: bool,
     pub last_project_session: HashMap<String, String>,
-    /// The docked left sidebar shows project initials instead of session rows.
-    pub left_rail: bool,
     /// Width of the full left sidebar (dragged by its edge).
     pub left_width: u16,
     /// A drag of the left sidebar's edge is in progress.
@@ -642,6 +644,8 @@ pub struct Ui {
     /// The editor over the open file, when editing (K10).
     pub file_edit: Option<FileEdit>,
     pub file_scroll: usize,
+    /// Show the source of a Markdown file instead of its rendered preview.
+    pub file_source: bool,
     /// The Git diff open in the centre column: its path and group.
     pub diff_open: Option<(String, GitGroup)>,
     pub diff_scroll: usize,
@@ -745,6 +749,9 @@ pub struct Ui {
     pub monochrome_before: Option<Tier>,
     /// Client preferences file state; `None` until `App::apply_prefs`.
     pub prefs: Option<PrefsSync>,
+    /// The launch splash: logo, milestone bar and the wipe into the first
+    /// live frame. It is over for the rest of the run once it finishes.
+    pub splash: crate::splash::Splash,
 }
 
 pub struct App {
@@ -778,6 +785,8 @@ pub struct App {
     pub image_viewer: std::cell::RefCell<crate::images::Viewer>,
     bindings: HashMap<(String, String), String>,
     shortcut_leader: Option<Instant>,
+    /// Last kernel/shell refresh while a session tree was busy.
+    last_resources_at: Option<Instant>,
     /// First Ctrl+C on an empty composer; a second within two seconds quits.
     ctrl_c: Option<Instant>,
 }
@@ -858,6 +867,8 @@ impl App {
             },
             |_| Default::default(),
         );
+        let splash =
+            crate::splash::Splash::new(Instant::now(), !theme.opts.reduced_motion && !theme.mono());
         App {
             manifest,
             theme,
@@ -868,11 +879,10 @@ impl App {
                 draft: Draft::default(),
                 focus: Focus::Composer,
                 left_open: true,
-                left_rail: false,
                 last_project_session: HashMap::new(),
                 left_width: 0,
                 left_drag: false,
-                right_open: crate::layout::Breakpoint::of(size.0).right_open_by_default(),
+                right_open: false,
                 right_chosen: false,
                 sized: false,
                 drawer: None,
@@ -882,6 +892,7 @@ impl App {
                 file_open: false,
                 file_edit: None,
                 file_scroll: 0,
+                file_source: false,
                 diff_open: None,
                 diff_scroll: 0,
                 git_cursor: 0,
@@ -949,6 +960,7 @@ impl App {
                 last_mcp_changed_toast: None,
                 monochrome_before: None,
                 prefs: None,
+                splash,
             },
             hits: HitMap::default(),
             regions,
@@ -968,6 +980,7 @@ impl App {
             image_viewer: std::cell::RefCell::new(crate::images::Viewer::default()),
             bindings,
             shortcut_leader: None,
+            last_resources_at: None,
             ctrl_c: None,
         }
     }
@@ -1383,6 +1396,131 @@ impl App {
     }
 
     /// What a context entry is, for its info modal: title and text.
+    /// The modal behind a context heading: Markdown for the prompt and the
+    /// instruction file; a list of entries for tools, skills and servers.
+    fn open_context_section(&mut self, section: &str, focus: Option<usize>, text: Option<String>) {
+        if matches!(section, "Tools" | "Skills" | "MCP") {
+            let items = self.context_items_for(section);
+            let entries: Vec<crate::ui::ContextEntry> =
+                items.iter().map(|item| self.context_entry(item)).collect();
+            let open = focus.and_then(|index| items.iter().position(|item| item.index == index));
+            self.open_overlay(OverlayKind::ContextEntries {
+                title: section.to_owned(),
+                entries,
+                cursor: open.unwrap_or(0),
+                open: None,
+                top: 0,
+            });
+            if let Some(i) = open {
+                self.context_entry_toggle(i);
+            }
+            return;
+        }
+        if let Some(text) = text {
+            self.open_overlay(OverlayKind::ContextDoc {
+                title: section.to_owned(),
+                text,
+                top: 0,
+            });
+        }
+    }
+
+    fn context_entry(&self, item: &crate::paint::CtxItem) -> crate::ui::ContextEntry {
+        let info = |row: Option<Value>| {
+            row.and_then(|row| row["description"].as_str().map(str::to_owned))
+                .unwrap_or_default()
+        };
+        let session = self.viewed();
+        if let Some(name) = item.key.strip_prefix("skill:") {
+            let values = match session {
+                Some(s) => s.extra.get("skills").and_then(Value::as_array).cloned(),
+                None => Some(self.draft_values("skills")),
+            }
+            .unwrap_or_default();
+            let row = values
+                .into_iter()
+                .find(|s| s["name"].as_str() == Some(name));
+            return crate::ui::ContextEntry {
+                name: name.to_owned(),
+                description: info(row),
+                full: None,
+                markdown: true,
+                fetch: Some("skill"),
+            };
+        }
+        if let Some(name) = item.key.strip_prefix("mcp:") {
+            let facts = self.context_item_info(item.index).map(|(_, text)| text);
+            let description = facts
+                .as_deref()
+                .map(|text| text.lines().next().unwrap_or("").to_owned())
+                .unwrap_or_default();
+            return crate::ui::ContextEntry {
+                name: name.to_owned(),
+                description,
+                full: facts,
+                markdown: false,
+                fetch: Some("mcp"),
+            };
+        }
+        let definition = self
+            .state
+            .model
+            .selected
+            .as_ref()
+            .and_then(|view| view.starting.as_ref())
+            .map(|starting| starting["tool_definitions"][&item.key].clone())
+            .filter(|definition| !definition.is_null());
+        crate::ui::ContextEntry {
+            name: item.key.clone(),
+            description: definition
+                .as_ref()
+                .and_then(|d| d["description"].as_str())
+                .map(|text| text.lines().next().unwrap_or("").to_owned())
+                .unwrap_or_default(),
+            full: Some(definition.map_or_else(
+                || "The schema is recorded when the session starts.".to_owned(),
+                |d| serde_json::to_string_pretty(&d).unwrap_or_default(),
+            )),
+            markdown: false,
+            fetch: None,
+        }
+    }
+
+    /// Open or close an entry; the first open asks Core for what it does not have.
+    fn context_entry_toggle(&mut self, index: usize) {
+        let project = self.current_project();
+        let Some(Overlay {
+            kind:
+                OverlayKind::ContextEntries {
+                    entries,
+                    cursor,
+                    open,
+                    top,
+                    ..
+                },
+            ..
+        }) = self.ui.overlay.as_mut()
+        else {
+            return;
+        };
+        let Some(entry) = entries.get_mut(index) else {
+            return;
+        };
+        *cursor = index;
+        *top = 0;
+        *open = (*open != Some(index)).then_some(index);
+        let call = open
+            .and(entry.fetch.take())
+            .map(|kind| ApiCall::ContextEntry {
+                kind,
+                name: entry.name.clone(),
+                project,
+            });
+        if let Some(call) = call {
+            self.api(call);
+        }
+    }
+
     pub fn context_item_info(&self, index: usize) -> Option<(String, String)> {
         let item = self.context_items().into_iter().nth(index)?;
         let session = self.viewed();
@@ -2199,6 +2337,69 @@ impl App {
             })
     }
 
+    /// Session ids of the viewed session's tree (its root and every descendant).
+    pub fn resource_tree(&self) -> HashSet<String> {
+        let Some(id) = self.viewed_id() else {
+            return HashSet::new();
+        };
+        let Some(root) = self.root_session(id) else {
+            return HashSet::new();
+        };
+        self.state
+            .model
+            .sessions
+            .keys()
+            .filter(|sid| self.root_session(sid).as_deref() == Some(root.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    /// Live kernels created by or used in the viewed session tree.
+    pub fn view_kernels(&self) -> Vec<&Value> {
+        let tree = self.resource_tree();
+        self.state
+            .kernels
+            .iter()
+            .filter(|kernel| {
+                kernel["created_by"]
+                    .as_str()
+                    .is_some_and(|id| tree.contains(id))
+                    || kernel["users"].as_array().is_some_and(|users| {
+                        users
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .any(|id| tree.contains(id))
+                    })
+            })
+            .collect()
+    }
+
+    /// Background bash jobs started by the viewed session tree.
+    pub fn view_jobs(&self) -> Vec<&Value> {
+        let tree = self.resource_tree();
+        self.state
+            .jobs
+            .iter()
+            .filter(|job| {
+                job["root"].as_str().is_some_and(|id| tree.contains(id))
+                    || job["session_id"]
+                        .as_str()
+                        .is_some_and(|id| tree.contains(id))
+            })
+            .collect()
+    }
+
+    /// `(live kernels, running background shells)` for the location strip.
+    pub fn resource_counts(&self) -> (usize, usize) {
+        (
+            self.view_kernels().len(),
+            self.view_jobs()
+                .iter()
+                .filter(|job| job["status"].as_str() == Some("running"))
+                .count(),
+        )
+    }
+
     pub fn side_entries(&self) -> Vec<SideEntry> {
         let m = &self.state.model;
         let cur = self.current_project();
@@ -2207,7 +2408,7 @@ impl App {
             .into_iter()
             .filter(|s| s.parent_id.is_none())
             .filter(|s| self.ui.show_archived || !s.archived)
-            .filter(|s| self.ui.scope_all || cur.as_deref() == Some(s.project_id.as_str()))
+            .filter(|s| cur.as_deref() == Some(s.project_id.as_str()))
             .collect();
         let project_order = self.project_ids();
         let root = |s: &Session| {
@@ -2247,17 +2448,10 @@ impl App {
                 let multiple = roots
                     .get(&s.project_id)
                     .is_some_and(|items| items.len() > 1);
-                let new_project = last.as_ref().map(|g| &g.0) != Some(&group.0);
                 let new_root = last.as_ref() != Some(&group);
                 let linked = self
                     .session_worktree(s)
                     .is_some_and(|tree| tree["main"].as_bool() == Some(false));
-                let project = new_project.then(|| {
-                    m.projects
-                        .get(&s.project_id)
-                        .map_or(s.project_id.as_str(), |p| p.name.as_str())
-                        .to_owned()
-                });
                 let tree = (new_root && multiple && linked).then(|| {
                     let label = self
                         .session_worktree(s)
@@ -2274,7 +2468,7 @@ impl App {
                 last = Some(group);
                 SideEntry {
                     id: s.id.clone(),
-                    project,
+                    project: None,
                     tree,
                 }
             })
@@ -2303,7 +2497,6 @@ impl App {
 
     fn list_len(&self, tab: Tab) -> usize {
         match tab {
-            Tab::Sessions if self.ui.left_rail => self.state.model.projects.len(),
             Tab::Sessions => self.side_entries().len(),
             Tab::Projects => self.state.model.projects.len(),
             Tab::Files => self.file_rows().len(),
@@ -2424,6 +2617,7 @@ impl App {
             "panel.diff" => self.ui.diff_open.is_some(),
             "editor.dirty" => self.ui.file_edit.as_ref().is_some_and(FileEdit::dirty),
             "editor.readonly" => self.ui.file_open && self.ui.file_edit.is_none(),
+            "editor.markdown" => self.ui.file_open && self.file_is_markdown(),
             "view.settings" => self.ui.view == View::Settings,
             "overlay.open" => self.ui.overlay.is_some(),
             "dialog.open" => self.ui.dialog.is_some() || self.blocking().is_some(),
@@ -2565,7 +2759,10 @@ impl App {
             v.push(BannerItem {
                 level: Level::Info,
                 loading: false,
-                text: format!("{elsewhere} other session(s) waiting for input"),
+                text: format!(
+                    "{elsewhere} other session{} waiting for input",
+                    if elsewhere == 1 { "" } else { "s" }
+                ),
                 action: Some(("".into(), "go".into(), "waiting.go_to".into())),
                 hide: None,
             });
@@ -2629,6 +2826,24 @@ impl App {
         }
     }
 
+    /// Put a sent draft back exactly: a collapsed paste keeps its marker and
+    /// preview instead of coming back as the whole pasted text.
+    fn restore_composer(&mut self, session: Option<&str>, saved: &crate::composer::Composer) {
+        let c = self
+            .ui
+            .drafts
+            .entry(session.unwrap_or("").to_owned())
+            .or_default();
+        if c.is_empty() {
+            let typed_images = std::mem::take(&mut c.images);
+            *c = saved.clone();
+            c.images = typed_images;
+        } else {
+            let rest = c.expanded_text();
+            c.set_text(&format!("{}\n{rest}", saved.expanded_text()));
+        }
+    }
+
     /// Put removed pending input back in a session's composer: its text and
     /// images, with an existing draft below it on a new line. Parts from several
     /// inputs arrive in queue order, so steers and queued messages come back the
@@ -2679,8 +2894,8 @@ impl App {
     }
 
     pub fn focus_order(&self) -> Vec<Focus> {
-        let panel_open = self.ui.file_open || self.ui.diff_open.is_some();
-        let covered = panel_open && self.size.0 < crate::layout::PANEL_WIDE_FROM;
+        // The file and diff modal covers everything but its own view.
+        let covered = self.ui.file_open || self.ui.diff_open.is_some();
         let mut v = vec![Focus::ToggleLeft];
         if self.ui.left_open && !self.narrow() && !covered {
             v.push(Focus::Sidebar);
@@ -2692,7 +2907,7 @@ impl App {
         if !covered && self.ui.view == View::Session {
             v.push(Focus::Composer);
         }
-        if self.ui.right_open && !self.narrow() && !panel_open {
+        if self.ui.right_open && !self.narrow() && !covered {
             v.push(Focus::Right);
         }
         v.push(Focus::ToggleRight);
@@ -2725,7 +2940,7 @@ impl App {
         }
     }
 
-    fn open_overlay(&mut self, kind: OverlayKind) {
+    pub fn open_overlay(&mut self, kind: OverlayKind) {
         let restore = match self.ui.overlay.take() {
             Some(o) => o.restore,
             None => self.restore_point(),
@@ -3034,10 +3249,6 @@ impl App {
         self.ui.side_top = 0;
         if tab == Tab::Files {
             self.request_files(String::new(), false);
-        }
-        // The rail replaces the session list with projects; other tabs need full rows.
-        if tab != Tab::Sessions {
-            self.ui.left_rail = false;
         }
         if self.narrow() {
             self.ui.drawer = Some(Side::Left);
@@ -4520,47 +4731,56 @@ impl App {
         }
     }
 
-    fn sidebar_activate(&mut self, index: usize) {
-        if self.ui.left_rail && self.ui.tab == Tab::Sessions {
-            if self.edit_blocks() {
-                return;
-            }
-            if let Some(project) = self.rail_project_ids().get(index).cloned() {
-                let remembered = self
-                    .ui
-                    .last_project_session
-                    .get(&project)
-                    .and_then(|id| self.state.model.sessions.get(id))
-                    .filter(|s| s.project_id == project && !s.archived)
-                    .map(|s| s.id.clone());
-                let session = remembered.or_else(|| {
-                    if self.ui.last_project_session.contains_key(&project) {
-                        return None;
-                    }
-                    self.state
-                        .model
-                        .sessions
-                        .values()
-                        .filter(|s| s.project_id == project && s.parent_id.is_none() && !s.archived)
-                        .max_by(|a, b| {
-                            a.updated
-                                .total_cmp(&b.updated)
-                                .then_with(|| a.id.cmp(&b.id))
-                        })
-                        .map(|s| s.id.clone())
-                });
-                self.select_project_quietly(&project);
-                self.ui.cursor.insert(Tab::Sessions, index);
-                self.ui.scope_all = false;
-                if let Some(id) = session {
-                    self.open_session(&id);
-                } else {
-                    self.show_new_session();
-                    self.after_open();
-                }
-            }
+    /// Switch to a rail project: its remembered session, or its newest root
+    /// session the first time, or an empty new-session view.
+    fn rail_activate(&mut self, index: usize) {
+        if self.edit_blocks() {
             return;
         }
+        let Some(project) = self.rail_project_ids().get(index).cloned() else {
+            return;
+        };
+        // Clicking the project already open asks for a session in it: the
+        // switcher, scoped to the project, instead of restoring the same view.
+        if self.current_project().as_deref() == Some(project.as_str()) {
+            self.ui.scope_all = false;
+            self.open_palette(PaletteMode::Sessions);
+            return;
+        }
+        let remembered = self
+            .ui
+            .last_project_session
+            .get(&project)
+            .and_then(|id| self.state.model.sessions.get(id))
+            .filter(|s| s.project_id == project && !s.archived)
+            .map(|s| s.id.clone());
+        let session = remembered.or_else(|| {
+            if self.ui.last_project_session.contains_key(&project) {
+                return None;
+            }
+            self.state
+                .model
+                .sessions
+                .values()
+                .filter(|s| s.project_id == project && s.parent_id.is_none() && !s.archived)
+                .max_by(|a, b| {
+                    a.updated
+                        .total_cmp(&b.updated)
+                        .then_with(|| a.id.cmp(&b.id))
+                })
+                .map(|s| s.id.clone())
+        });
+        self.select_project_quietly(&project);
+        self.ui.scope_all = false;
+        if let Some(id) = session {
+            self.open_session(&id);
+        } else {
+            self.show_new_session();
+            self.after_open();
+        }
+    }
+
+    fn sidebar_activate(&mut self, index: usize) {
         match self.ui.tab {
             Tab::Sessions => {
                 if let Some(e) = self.side_entries().get(index) {
@@ -4593,6 +4813,7 @@ impl App {
                         self.ui.diff_open = None;
                         self.ui.file_open = true;
                         self.ui.file_scroll = 0;
+                        self.ui.file_source = false;
                         self.ui.file_search = None;
                         self.request_files(row.path.clone(), true);
                         self.ui.focus = Focus::Timeline;
@@ -4622,6 +4843,8 @@ impl App {
             "editor.edit" => self.start_edit(),
             "editor.save" => self.save_file(),
             "editor.close" => self.close_panel(),
+            "editor.preview" => self.toggle_file_preview(),
+            "editor.find" => self.open_file_find(),
             "editor.reload" => {
                 if self.ui.file_edit.as_ref().is_some_and(FileEdit::dirty) {
                     self.ask_reload_edit();
@@ -4751,19 +4974,6 @@ impl App {
             }
             "project.remove" => self.ask_remove_project(),
             "sidebar.row_menu" => {
-                if self.ui.left_rail {
-                    let project = self
-                        .rail_project_ids()
-                        .get(self.cursor(Tab::Sessions))
-                        .cloned();
-                    self.ui.left_rail = false;
-                    self.ui.tab = Tab::Projects;
-                    if let Some(index) =
-                        project.and_then(|id| self.project_ids().iter().position(|p| p == &id))
-                    {
-                        self.ui.cursor.insert(Tab::Projects, index);
-                    }
-                }
                 self.open_palette(PaletteMode::RowMenu);
             }
             "session.switch" => self.open_palette(PaletteMode::Sessions),
@@ -4805,6 +5015,10 @@ impl App {
                         restore,
                     });
                 }
+            }
+            "session.resources" => {
+                self.effects.push(Effect::Sync(SyncCommand::Resources));
+                self.open_overlay(OverlayKind::Resources { top: 0 });
             }
             "session.archive" | "session.unarchive" => {
                 if let Some(sid) = self.viewed_id().map(str::to_owned) {
@@ -5354,7 +5568,7 @@ impl App {
             self.toast(Level::Info, "Preparing clipboard image…");
             return;
         }
-        let text = self.composer_ref().expanded_text();
+        let text = self.composer_ref().text();
         if text.trim().is_empty() && self.composer_ref().images.is_empty() {
             // With a question waiting, Enter confirms the highlighted option
             // (or says the answer needs text) instead of being a silent no-op.
@@ -5453,26 +5667,42 @@ impl App {
                 let mode = requested
                     .unwrap_or(if self.is_busy(&id) { "steer" } else { "send" })
                     .to_owned();
+                let draft = Box::new(self.composer_ref().clone());
+                let pastes = draft
+                    .pastes()
+                    .iter()
+                    .map(|(marker, text)| ((*marker).to_owned(), (*text).to_owned()))
+                    .collect();
                 self.composer().take();
                 let images = std::mem::take(&mut self.composer().images);
                 self.api(ApiCall::Prompt {
                     session: id,
                     text,
                     images,
+                    pastes,
                     mode,
+                    draft: Some(draft),
                 });
             }
             None => match self.current_project() {
                 Some(project) => {
+                    let draft = Box::new(self.composer_ref().clone());
+                    let pastes = draft
+                        .pastes()
+                        .iter()
+                        .map(|(marker, text)| ((*marker).to_owned(), (*text).to_owned()))
+                        .collect();
                     self.composer().take();
                     let fields = self.ui.draft.fields();
                     self.ui.draft = Draft::default();
                     let images = std::mem::take(&mut self.composer().images);
                     self.api(ApiCall::NewAndPrompt {
                         images,
+                        pastes,
                         project,
                         text,
                         fields,
+                        draft: Some(draft),
                     });
                 }
                 None => self.toast(
@@ -6057,6 +6287,32 @@ impl App {
                 self.ui.learn_suppress_until = Some(self.clock + std::time::Duration::from_secs(5));
             }
         }
+        if let ApiCall::ContextEntry { name, .. } = &done.call {
+            let text = match &done.result {
+                Ok(r) => Ok(r.answer.clone().unwrap_or_default()),
+                Err(error) => Err(format!("Could not load this: {error}")),
+            };
+            if let Some(Overlay {
+                kind: OverlayKind::ContextEntries { entries, .. },
+                ..
+            }) = self.ui.overlay.as_mut()
+            {
+                if let Some(entry) = entries.iter_mut().find(|entry| &entry.name == name) {
+                    // A server's facts are already there; Core's answer adds to them.
+                    entry.full = match (entry.full.take(), text) {
+                        (Some(facts), Ok(more)) if !more.trim().is_empty() => {
+                            Some(format!("{facts}\n\n{more}"))
+                        }
+                        (Some(facts), _) => Some(facts),
+                        (None, Ok(more)) if more.trim().is_empty() => {
+                            Some("Nothing more recorded.".to_owned())
+                        }
+                        (None, Ok(more)) | (None, Err(more)) => Some(more),
+                    };
+                }
+            }
+            return;
+        }
         if let ApiCall::Btw { question, .. } = &done.call {
             match done.result {
                 Ok(r) => self.open_overlay(OverlayKind::ContextDetail {
@@ -6111,9 +6367,10 @@ impl App {
                         _ => self.open_overlay(OverlayKind::Usage { rows }),
                     }
                 }
-                Err(error) => {
-                    self.toast(Level::Error, format!("Plan limits failed to load: {error}"))
-                }
+                Err(error) => self.toast(
+                    Level::Error,
+                    format!("Provider usage failed to load: {error}"),
+                ),
             }
             return;
         }
@@ -6286,15 +6543,16 @@ impl App {
                         draft.sent = false;
                     }
                 }
-                if let Some((session, text)) = done.call.draft() {
-                    let key = match &done.call {
-                        ApiCall::NewAndPrompt { project, .. } => {
-                            Self::new_session_draft_key(project)
-                        }
-                        _ => session.unwrap_or("").to_owned(),
-                    };
-                    let text = text.to_owned();
-                    self.restore_draft(Some(&key), &text);
+                let key = match &done.call {
+                    ApiCall::NewAndPrompt { project, .. } => Self::new_session_draft_key(project),
+                    ApiCall::Prompt { session, .. } => session.clone(),
+                    ApiCall::Shell { session, .. } => session.clone(),
+                    _ => String::new(),
+                };
+                if let Some(saved) = done.call.saved_draft() {
+                    self.restore_composer(Some(&key), saved);
+                } else if let Some((_, text)) = done.call.draft() {
+                    self.restore_draft(Some(&key), text);
                 }
                 match &done.call {
                     ApiCall::Prompt {
@@ -6834,6 +7092,21 @@ impl App {
             self.frame = self.frame.wrapping_add(1);
             changed = true;
         }
+        // Kernels appear during a code cell and shells start and finish between
+        // turns; refresh while the viewed tree is busy or its list is open.
+        let resources_open = matches!(
+            self.ui.overlay.as_ref().map(|o| &o.kind),
+            Some(OverlayKind::Resources { .. })
+        );
+        let busy_tree = self.viewed_id().is_some_and(|id| self.is_busy(id));
+        if (busy_tree || resources_open)
+            && self
+                .last_resources_at
+                .is_none_or(|at| now.duration_since(at) >= std::time::Duration::from_secs(2))
+        {
+            self.last_resources_at = Some(now);
+            self.effects.push(Effect::Sync(SyncCommand::Resources));
+        }
         if !self.theme.opts.reduced_motion {
             changed |= self.ui.dictation.settle_tick();
         }
@@ -6899,9 +7172,6 @@ impl App {
     pub fn set_size(&mut self, w: u16, h: u16) {
         self.size = (w, h);
         // The first real size picks the right sidebar's default (D17).
-        if !self.ui.sized && !self.ui.right_chosen {
-            self.ui.right_open = crate::layout::Breakpoint::of(w).right_open_by_default();
-        }
         self.ui.sized = true;
         // Targets from the old geometry are stale until the next draw.
         self.hits.clear();
@@ -6945,6 +7215,38 @@ impl App {
             .map_or(0, |content| content.lines().count())
     }
 
+    /// The open file is Markdown, so it can be read as prose.
+    pub fn file_is_markdown(&self) -> bool {
+        self.state
+            .file
+            .as_ref()
+            .is_some_and(|(_, _, path, _)| is_markdown_path(path))
+    }
+
+    /// The rendered Markdown preview is what the file view shows.
+    pub fn file_preview(&self) -> bool {
+        self.ui.file_open
+            && self.ui.file_edit.is_none()
+            && !self.ui.file_source
+            && self.file_is_markdown()
+    }
+
+    /// The preview's rows at `width`, cached until the text, width or theme changes.
+    pub fn file_preview_rows(
+        &self,
+        width: usize,
+    ) -> std::rc::Rc<Vec<ratatui::text::Line<'static>>> {
+        let content = self
+            .state
+            .file
+            .as_ref()
+            .and_then(|(_, _, _, data)| data.as_ref().ok())
+            .and_then(|data| data["content"].as_str())
+            .unwrap_or("");
+        let palette = crate::markdown::Palette::from_theme(&self.theme);
+        self.layout.borrow_mut().document(content, width, &palette)
+    }
+
     /// Indices of the open file's lines that contain the search query, ignoring ASCII case.
     pub fn file_matches(&self) -> Vec<usize> {
         let Some(query) = self
@@ -6977,10 +7279,12 @@ impl App {
     /// Keys of the editor (K10). Returns whether the key was taken; keys it does not
     /// know (global shortcuts) fall through.
     fn file_edit_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
-        let page = crate::paint::file_page(self.view_rect().height).max(1);
+        let rect = self.view_rect();
+        let page = crate::paint::file_page(rect.height).max(1);
         let Some(edit) = self.ui.file_edit.as_mut() else {
             return false;
         };
+        let room = crate::paint::file_text_room(rect.width, edit.buf.lines().len());
         match name {
             "ctrl+s" => {
                 self.save_file();
@@ -6990,13 +7294,11 @@ impl App {
             "tab" => edit.buf.insert_str("    "),
             "ctrl+z" => edit.buf.undo(),
             "ctrl+y" | "ctrl+shift+z" => edit.buf.redo(),
+            "up" => edit.buf.vertical_wrapped(false, room),
+            "down" => edit.buf.vertical_wrapped(true, room),
             "pageup" | "pagedown" => {
                 for _ in 0..page {
-                    if name == "pageup" {
-                        edit.buf.up();
-                    } else {
-                        edit.buf.down();
-                    }
+                    edit.buf.vertical_wrapped(name == "pagedown", room);
                 }
             }
             _ => {
@@ -7203,6 +7505,9 @@ impl App {
         let typed = keys::printable(ev);
         let Some(search) = self.ui.file_search.as_mut() else {
             if typed == Some('/') {
+                // Search reads the source, so a preview steps aside.
+                self.ui.file_source = true;
+                self.ui.file_scroll = 0;
                 self.ui.file_search = Some(FileSearch {
                     typing: true,
                     ..FileSearch::default()
@@ -7237,6 +7542,57 @@ impl App {
         true
     }
 
+    /// The file view's last scroll position at its current width.
+    fn file_scroll_limit(&self) -> usize {
+        let rect = self.view_rect();
+        let page = crate::paint::file_page(rect.height);
+        if self.file_preview() {
+            return self
+                .file_preview_rows(rect.width.saturating_sub(2) as usize)
+                .len()
+                .saturating_sub(page);
+        }
+        let content = self
+            .state
+            .file
+            .as_ref()
+            .and_then(|(_, _, _, data)| data.as_ref().ok())
+            .and_then(|data| data["content"].as_str())
+            .unwrap_or("");
+        crate::paint::file_scroll_max(
+            content,
+            crate::paint::file_text_room(rect.width, self.file_line_count()),
+            page,
+        )
+    }
+
+    /// Rendered prose or numbered source for a Markdown file.
+    fn toggle_file_preview(&mut self) {
+        if !self.file_is_markdown() || self.ui.file_edit.is_some() {
+            return;
+        }
+        self.ui.file_source = !self.ui.file_source;
+        self.ui.file_scroll = 0;
+        if !self.ui.file_source {
+            self.ui.file_search = None;
+        }
+    }
+
+    /// Find reads the source, so a preview steps aside before the bar opens.
+    fn open_file_find(&mut self) {
+        if !self.ui.file_open || self.ui.file_edit.is_some() {
+            return;
+        }
+        if self.file_is_markdown() {
+            self.ui.file_source = true;
+            self.ui.file_scroll = 0;
+        }
+        self.ui.file_search = Some(FileSearch {
+            typing: true,
+            ..FileSearch::default()
+        });
+    }
+
     /// Moves the search to the next or previous match and scrolls it to the top of the view.
     fn file_goto(&mut self, forward: bool) {
         let matches = self.file_matches();
@@ -7259,8 +7615,7 @@ impl App {
                 .unwrap_or(count - 1),
         };
         search.hit = Some(next);
-        let page = crate::paint::file_page(self.view_rect().height);
-        let max = self.file_line_count().saturating_sub(page);
+        let max = self.file_scroll_limit();
         self.ui.file_scroll = matches[next].min(max);
     }
 
@@ -7439,12 +7794,17 @@ impl App {
             if self.file_search_key(&ev, &name) {
                 return;
             }
+            if name == "ctrl+f" {
+                return self.open_file_find();
+            }
             if name == "e" && self.ui.file_edit.is_none() {
                 return self.run_command("editor.edit");
             }
-            let lines = self.file_line_count();
+            if name == "p" && self.file_is_markdown() && self.ui.file_edit.is_none() {
+                return self.run_command("editor.preview");
+            }
             let page = crate::paint::file_page(self.view_rect().height);
-            let max = lines.saturating_sub(page);
+            let max = self.file_scroll_limit();
             match name.as_str() {
                 "up" | "k" => self.ui.file_scroll = self.ui.file_scroll.saturating_sub(1),
                 "down" | "j" => self.ui.file_scroll = (self.ui.file_scroll + 1).min(max),
@@ -7466,6 +7826,13 @@ impl App {
             return self.edit_key(&ev, &name);
         }
         if self.ui.overlay.is_some() && self.overlay_key(&ev, &name) {
+            return;
+        }
+        // Typing never reaches the page behind the file or diff modal.
+        if (self.ui.file_open || self.ui.diff_open.is_some())
+            && self.ui.overlay.is_none()
+            && keys::printable(&ev).is_some()
+        {
             return;
         }
         // Old Nexus's Ctrl+X leader and direct aliases, only outside modal input.
@@ -7790,6 +8157,24 @@ impl App {
                     }
                 }
             }
+            "enter"
+                if matches!(
+                    self.ui.overlay,
+                    Some(Overlay {
+                        kind: OverlayKind::ContextEntries { .. },
+                        ..
+                    })
+                ) =>
+            {
+                if let Some(Overlay {
+                    kind: OverlayKind::ContextEntries { cursor, .. },
+                    ..
+                }) = &self.ui.overlay
+                {
+                    let index = *cursor;
+                    self.context_entry_toggle(index);
+                }
+            }
             "enter" => match &self.ui.overlay {
                 Some(Overlay {
                     kind: OverlayKind::Palette(_),
@@ -7845,12 +8230,41 @@ impl App {
                     .clamp(0, n_notices.saturating_sub(1) as isize)
                     as usize;
             }
-            Some(OverlayKind::Help { top } | OverlayKind::AlertDetail { top, .. }) => {
+            Some(
+                OverlayKind::Help { top }
+                | OverlayKind::AlertDetail { top, .. }
+                | OverlayKind::Resources { top },
+            ) => {
                 *top = (*top as isize + delta).max(0) as usize;
             }
             Some(OverlayKind::ContextDetail { text, top, .. }) => {
                 let max = crate::render::context_detail_max(area, text);
                 *top = (*top as isize + delta).clamp(0, max as isize) as usize;
+            }
+            Some(OverlayKind::ContextDoc { text, top, .. }) => {
+                let max = crate::render::context_doc_max(area, &self.theme, text);
+                *top = (*top as isize + delta).clamp(0, max as isize) as usize;
+            }
+            Some(OverlayKind::ContextEntries {
+                entries,
+                cursor,
+                open,
+                top,
+                ..
+            }) => {
+                // Inside an open entry the arrows read it first, then leave it.
+                let extra = open.filter(|o| o == cursor).map_or(0, |_| {
+                    crate::render::context_entry_overflow(area, &self.theme, entries, *cursor)
+                });
+                let inside = *top as isize + delta;
+                if open.is_some_and(|o| o == *cursor) && (0..=extra as isize).contains(&inside) {
+                    *top = inside as usize;
+                } else {
+                    *cursor = (*cursor as isize + delta)
+                        .clamp(0, entries.len().saturating_sub(1) as isize)
+                        as usize;
+                    *top = 0;
+                }
             }
             Some(OverlayKind::LearnChecklist(checklist)) => {
                 checklist.cursor = (checklist.cursor as isize + delta)
@@ -8614,11 +9028,7 @@ impl App {
                 self.set_tab(t);
             }
             "right" | "l" => {
-                let tab = match self.ui.tab {
-                    Tab::Sessions => Tab::Files,
-                    _ => Tab::Projects,
-                };
-                self.set_tab(tab);
+                self.set_tab(Tab::Files);
             }
             "tab" => self.cycle_focus(false),
             "shift+tab" => self.cycle_focus(true),
@@ -9109,14 +9519,8 @@ impl App {
             | "dictation.tts_remove" => {}
             "appearance.timeline_detail" => self.set_detail(self.ui.detail.step(step)),
             "appearance.sidebar" => {
-                let modes = [(true, false), (true, true), (false, false)];
-                let now = modes
-                    .iter()
-                    .position(|m| *m == (self.ui.left_open, self.ui.left_rail))
-                    .unwrap_or(0) as isize;
-                let (open, rail) = modes[(now + step).rem_euclid(3) as usize];
-                self.ui.left_open = open;
-                self.ui.left_rail = rail;
+                let _ = step;
+                self.ui.left_open = !self.ui.left_open;
             }
             "keybindings.list" | "about.versions" | "about.daemon" => {}
             _ => self.settings_activate_row(row),
@@ -9892,7 +10296,7 @@ impl App {
         Prefs {
             ui: UiPrefs {
                 left_width: Some(self.ui.left_width),
-                left_rail: Some(self.ui.left_rail),
+                left_rail: None,
                 left_open: Some(self.ui.left_open),
                 right_open: Some(self.ui.right_open),
                 detail: Some(self.ui.detail.label().to_owned()),
@@ -9926,11 +10330,12 @@ impl App {
         if let Some(w) = prefs.ui.left_width {
             self.ui.left_width = w;
         }
-        if let Some(v) = prefs.ui.left_rail {
-            self.ui.left_rail = v;
-        }
         if let Some(v) = prefs.ui.left_open {
             self.ui.left_open = v;
+        }
+        // Older preferences collapsed the sidebar to the rail, which now always shows.
+        if prefs.ui.left_rail == Some(true) {
+            self.ui.left_open = false;
         }
         if let Some(v) = prefs.ui.right_open {
             self.ui.right_chosen = true;
@@ -10087,7 +10492,18 @@ impl App {
                 if self.ui.overlay.is_some() || self.ui.dialog.is_some() {
                     return;
                 }
-                if let Some(Target::SideRow(i)) = self.hits.at(ev.column, ev.row).cloned() {
+                if let Some(Target::RailProject(i)) = self.hits.at(ev.column, ev.row).cloned() {
+                    let project = self.rail_project_ids().get(i).cloned();
+                    self.ui.focus = Focus::Sidebar;
+                    self.ui.left_open = true;
+                    self.ui.tab = Tab::Projects;
+                    if let Some(index) =
+                        project.and_then(|id| self.project_ids().iter().position(|p| *p == id))
+                    {
+                        self.ui.cursor.insert(Tab::Projects, index);
+                    }
+                    self.execute("sidebar.row_menu");
+                } else if let Some(Target::SideRow(i)) = self.hits.at(ev.column, ev.row).cloned() {
                     self.ui.focus = Focus::Sidebar;
                     self.ui.cursor.insert(self.ui.tab, i);
                     if self.ui.tab == Tab::Sessions {
@@ -10100,9 +10516,9 @@ impl App {
                 let x0 = self.regions.left.map_or(0, |l| l.x);
                 let want = ev.column.saturating_sub(x0) + 1;
                 if want < crate::layout::RAIL_SNAP {
-                    self.ui.left_rail = true;
+                    self.ui.left_open = false;
+                    self.ui.left_drag = false;
                 } else {
-                    self.ui.left_rail = false;
                     self.ui.left_width =
                         want.clamp(crate::layout::LEFT_MIN, crate::layout::LEFT_MAX);
                 }
@@ -10204,8 +10620,7 @@ impl App {
                     .saturating_add_signed(step)
                     .min(rows.saturating_sub(page));
             } else if self.ui.file_open {
-                let page = crate::paint::file_page(self.view_rect().height);
-                let max = self.file_line_count().saturating_sub(page);
+                let max = self.file_scroll_limit();
                 self.ui.file_scroll = self.ui.file_scroll.saturating_add_signed(step).min(max);
             }
         } else if contains(self.regions.timeline, x, y) && self.ui.view == View::Session {
@@ -10286,6 +10701,7 @@ impl App {
                 self.ui.cursor.insert(self.ui.tab, i);
                 self.sidebar_activate(i);
             }
+            Target::RailProject(i) => self.rail_activate(i),
             Target::SidebarEdge => self.ui.left_drag = true,
             Target::RailSearch => self.run_command("session.switch"),
             Target::SessionScope => self.run_command("sessions.scope_toggle"),
@@ -10298,75 +10714,52 @@ impl App {
             }
             Target::Timeline => self.ui.focus = Focus::Timeline,
             Target::ContextPreview { title, text } => {
-                self.open_overlay(OverlayKind::ContextDetail {
-                    title: format!("{title} · preview"),
-                    text,
-                    top: 0,
-                })
+                self.open_context_section(&title, None, Some(text));
             }
+            Target::ContextEntry(index) => self.context_entry_toggle(index),
             Target::ContextToggle(index) => self.toggle_context_item(index),
             Target::ContextInfo(index) => {
-                if let Some((title, text)) = self.context_item_info(index) {
-                    self.open_overlay(OverlayKind::ContextDetail {
-                        title,
-                        text,
-                        top: 0,
-                    });
+                let section = self.context_items().into_iter().nth(index).map(|item| {
+                    match item.key.split_once(':') {
+                        Some(("skill", _)) => "Skills",
+                        Some(("mcp", _)) => "MCP",
+                        _ => "Tools",
+                    }
+                });
+                if let Some(section) = section {
+                    self.open_context_section(section, Some(index), None);
                 }
             }
             Target::ContextSection(section) => {
-                if let Some(starting) = self
+                if matches!(section.as_str(), "Tools" | "Skills" | "MCP") {
+                    self.open_context_section(&section, None, None);
+                } else if let Some(starting) = self
                     .state
                     .model
                     .selected
                     .as_ref()
                     .and_then(|view| view.starting.as_ref())
                 {
-                    let value = match section.as_str() {
-                        "System prompt" => &starting["system_prompt"],
-                        "Tools" => &starting["tool_definitions"],
-                        "Workspace tools" => &starting["workspace"],
-                        _ => &starting["instruction_file"],
-                    };
-                    let text = if section == "Skills" || section == "MCP" || section == "Tools" {
-                        self.context_items_for(&section)
-                            .iter()
-                            .map(|item| {
-                                format!(
-                                    "[{}] {}{}",
-                                    if item.on { "x" } else { " " },
-                                    item.label,
-                                    if item.locked { " · new session" } else { "" }
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    } else if section != "System prompt"
-                        && section != "Tools"
-                        && section != "Workspace tools"
-                    {
-                        let path = value["path"].as_str().unwrap_or("unknown path");
-                        let status = value["status"].as_str().unwrap_or("unknown");
-                        let detail = value["content"]
+                    let text = match section.as_str() {
+                        "System prompt" => starting["system_prompt"]
                             .as_str()
-                            .or_else(|| value["error"].as_str())
-                            .unwrap_or("No content recorded.");
-                        format!("{path} · {status}\n\n{detail}")
-                    } else {
-                        value.as_str().map(str::to_owned).unwrap_or_else(|| {
-                            serde_json::to_string_pretty(value).unwrap_or_default()
-                        })
+                            .unwrap_or("No system prompt was recorded.")
+                            .to_owned(),
+                        "Workspace tools" => {
+                            serde_json::to_string_pretty(&starting["workspace"]).unwrap_or_default()
+                        }
+                        _ => {
+                            let file = &starting["instruction_file"];
+                            let path = file["path"].as_str().unwrap_or("?");
+                            let status = file["status"].as_str().unwrap_or("?");
+                            let body = file["content"]
+                                .as_str()
+                                .or_else(|| file["text"].as_str())
+                                .unwrap_or("No content recorded.");
+                            format!("`{path}` · {status}\n\n{body}")
+                        }
                     };
-                    let title = if section == "Tools" {
-                        "Stored tool definitions".to_owned()
-                    } else {
-                        section
-                    };
-                    self.open_overlay(OverlayKind::ContextDetail {
-                        title,
-                        text,
-                        top: 0,
-                    });
+                    self.open_context_section(&section, None, Some(text));
                 }
             }
             Target::Block(i) => {
@@ -10399,6 +10792,13 @@ impl App {
             Target::ImagePreview { name, data_url } => {
                 self.open_overlay(OverlayKind::ImagePreview { name, data_url });
             }
+            Target::TimelinePaste(paste) => {
+                self.open_overlay(OverlayKind::ContextDetail {
+                    title: "Pasted text".into(),
+                    text: paste.text.clone(),
+                    top: 0,
+                });
+            }
             Target::JumpLatest => self.run_command("session.jump_latest"),
             Target::Composer => self.ui.focus = Focus::Composer,
             Target::ComposerAgent => self.run_command("agent.change"),
@@ -10407,8 +10807,14 @@ impl App {
             Target::ComposerContext => self.ui.focus = Focus::Composer,
             Target::ComposerDirectory => self.run_command("session.change_directory"),
             Target::ComposerWorktree => self.run_command("session.worktrees"),
+            Target::ComposerResources => {
+                self.effects.push(Effect::Sync(SyncCommand::Resources));
+                self.open_overlay(OverlayKind::Resources { top: 0 });
+            }
             Target::FilesRoot => self.run_command("files.root_toggle"),
             Target::PanelBack => self.close_panel(),
+            Target::FilePreview => self.run_command("editor.preview"),
+            Target::FileEdit => self.run_command("editor.edit"),
             Target::Wait(b) => {
                 self.ui.focus = Focus::Waiting;
                 self.run_command(match b {
@@ -10801,6 +11207,7 @@ impl ActionDone {
             ApiCall::Speak { .. } => "Speak failed",
             ApiCall::Handoff { .. } => "Handoff failed",
             ApiCall::Btw { .. } => "Side question failed",
+            ApiCall::ContextEntry { .. } => "Could not load the details",
             ApiCall::SpeakStop => "Stop failed",
             ApiCall::VoiceStatus { .. } => "Voice status failed",
             ApiCall::VoicePrepare { .. } => "Voice model loading failed",
@@ -10829,7 +11236,7 @@ impl ActionDone {
             ApiCall::Prompts { .. } | ApiCall::Search { .. } => "",
             ApiCall::OlderMessages { .. } => "Older messages failed to load",
             ApiCall::SwitchCost { .. } => "",
-            ApiCall::Usage => "Plan limits failed to load",
+            ApiCall::Usage => "Provider usage failed to load",
             ApiCall::SaveFile { .. } => "Save failed",
             ApiCall::Shell { .. } => "Shell command failed",
         }
@@ -10840,6 +11247,16 @@ pub fn now_secs() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// `.md` and `.markdown` files open as rendered prose; everything else is source.
+pub fn is_markdown_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
+        })
 }
 
 pub(crate) fn format_bytes(bytes: u64) -> String {

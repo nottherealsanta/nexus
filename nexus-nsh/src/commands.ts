@@ -3,22 +3,24 @@ import type { UsageProvider } from "./store";
 // Command registry built from interface/manifest.toml (generated to src/gen/manifest.ts).
 // Ids, titles, keys, `when` rules, reasons and placements come from the manifest; this file
 // only evaluates terms and binds handlers for the actions whose Core API exists.
-import { Clipboard, keymap, openUrl } from "nsh";
+import { Clipboard, keymap, openUrl, platform } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
-  editFile, fileDirty, fileFindOpen, openFile, reloadFile, saveFile,
+  editFile, fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   pendingInputs, contextDetail, imagePreview, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
+  focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsSection, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
 import { Message } from "./core/api";
 import { normalizeSession } from "./core/reduce";
 import { imageDrafts } from "./images";
+import { pasteDrafts } from "./pastes";
+import type { InventoryKind } from "./skills-mcp";
 import { disabledKey, selectedSkillCounts, setDisabledTool, shouldInstallRequestedDirectly, toggleDisabledTool } from "./skills-mcp";
 import { speakAnswer, speechPlaying, stopSpeaking } from "./speech";
-import { cancelDictation, isDictationBusy, startDictation, stopDictation } from "./dictation";
+import { cancelDictation, isDictationBusy, microphoneAvailable, startDictation, stopDictation } from "./dictation";
 import { appendTranscript } from "./dictation-logic";
 import { dictationPhase } from "./voice-state";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
@@ -96,7 +98,8 @@ function evalTerm(t: string): boolean {
     case "panel.diff": return false;
     case "editor.dirty": return fileDirty();
     case "editor.readonly": return openFile() !== null && openFile()?.draft === undefined && openFile()?.content !== undefined;
-    case "overlay.open": return paletteOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview();
+    case "editor.markdown": return openFile() !== null && markdownFile();
+    case "overlay.open": return paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
     case "drawer.open": return !!drawer();
@@ -119,13 +122,13 @@ export async function loadProviders() { try { const p = await request<any[]>("GE
 /** Handlers for commands whose Core API exists (or that are pure client navigation). `mutates` = needs a live connection. */
 interface Handler { run: () => void | Promise<void>; mutates?: boolean }
 export const handlers = new Map<string, Handler>();
-/** `app.usage`: the plan windows of the providers that report them (K11), in the plan-limits dialog; again while open refreshes. */
+/** `app.usage`: every connected provider's usage (K11), in the provider-usage dialog; again while open refreshes. */
 async function showUsage() {
   usageDialog.set({ providers: usageDialog()?.providers ?? [], loading: true });
   try {
     const u = await request<{ providers: UsageProvider[] }>("GET", "/api/usage");
     usageDialog.set({ providers: u.providers ?? [], loading: false });
-  } catch (e) { usageDialog.set(null); toast("error", `Plan limits failed to load: ${e instanceof ApiError ? e.message : String(e)}`); }
+  } catch (e) { usageDialog.set(null); toast("error", `Provider usage failed to load: ${e instanceof ApiError ? e.message : String(e)}`); }
 }
 
 const on = (id: string, run: Handler["run"], mutates = false) => handlers.set(id, { run, mutates });
@@ -192,10 +195,13 @@ export function stepTab(step: number) {
   if (next !== ids[at]) void selectSession(next);
 }
 
-export async function sendPrompt(text: string, images: import("./images").DraftImage[] = [], mode: "send" | "steer" | "queue" = "send"): Promise<boolean> {
-  text = text.trim();
-  if (!text && !images.length) return false;
+export async function sendPrompt(rawText: string, images: import("./images").DraftImage[] = [], mode: "send" | "steer" | "queue" = "send"): Promise<boolean> {
   const source = draftKey();
+  const raw = rawText.trim();
+  // Core stores each paste as a collapsed text part: the model gets the full text,
+  // the timeline shows the marker.
+  const pastes = (pasteDrafts()[source] ?? []).filter((p) => raw.includes(p.marker));
+  if (!raw && !images.length) return false;
   let createdId: string | null = null;
   try {
     let ses = viewed();
@@ -206,7 +212,7 @@ export async function sendPrompt(text: string, images: import("./images").DraftI
       const fields: Record<string, unknown> = {};
       if (selected.agent) fields.agent = selected.agent;
       if (selected.model) fields.model = selected.model;
-      if (selected.effort) fields.effort = selected.effort;
+      if (selected.effort !== undefined) fields.effort = selected.effort;
       if (selected.disabled_tools !== undefined) fields.disabled_tools = selected.disabled_tools;
       const created = await request<any>("POST", "/api/session", { body: { project, ...fields }, key: newKey() });
       createdId = created.id;
@@ -218,13 +224,18 @@ export async function sendPrompt(text: string, images: import("./images").DraftI
       await selectSession(created.id);
       ses = created;
     }
-    await request("POST", `/api/session/${ses!.id}/prompt`, { body: { text, images, mode }, key: newKey() });
+    await request("POST", `/api/session/${ses!.id}/prompt`, {
+      body: { text: raw, images, pastes: pastes.map(({ marker, text }) => ({ marker, text })), mode },
+      key: newKey(),
+    });
     return true;
   } catch (e) {
     if (createdId) {
       const target = createdId;
       imageDrafts.update((d) => ({ ...d, [source]: (d[source] ?? []).filter((i) => !images.includes(i)), [target]: [...images, ...(d[target] ?? [])] }));
-      draft.update((d) => ({ ...d, [source]: (d[source] ?? "").trim() === text ? "" : d[source] ?? "", [target]: [text, d[target] ?? ""].filter(Boolean).join("\n") }));
+      const pastes = pasteDrafts()[source] ?? [];
+      if (pastes.length) pasteDrafts.update((d) => ({ ...d, [source]: [], [target]: [...pastes, ...(d[target] ?? [])] }));
+      draft.update((d) => ({ ...d, [source]: (d[source] ?? "").trim() === raw ? "" : d[source] ?? "", [target]: [raw, d[target] ?? ""].filter(Boolean).join("\n") }));
     }
     toast("error", e instanceof ApiError ? e.message : String(e));
     return false;
@@ -320,7 +331,7 @@ export function installLearnChecklist(selected: string[]) {
 }
 export function closeLearnChecklist() { if (!learnChecklist()?.busy) learnChecklist.set(null); }
 
-export function toggleDraftInventory(kind: "skill" | "mcp", name: string, locked = false) {
+export function toggleDraftInventory(kind: InventoryKind, name: string, locked = false) {
   if (locked) { toast("info", "Available in a new session."); return; }
   const key = disabledKey(kind, name);
   sessionDraft.update((draft) => ({
@@ -330,7 +341,7 @@ export function toggleDraftInventory(kind: "skill" | "mcp", name: string, locked
 }
 
 /** Switch one skill or MCP server in a running session using its optimistic revision. */
-export async function toggleSessionInventory(kind: "skill" | "mcp", name: string, locked = false) {
+export async function toggleSessionInventory(kind: InventoryKind, name: string, locked = false) {
   if (locked) { toast("info", "Available in a new session."); return; }
   const session = viewed();
   if (!session) return;
@@ -481,7 +492,7 @@ on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });
 on("notifications.mark_all_read", () => { notifications.set([]); unread.set(0); });
 on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[0].id); }); // the oldest, drawn on top
 on("alert.cancel", () => { const d = confirmDialog(); if (d) { if (!d.busy) confirmDialog.set(null); } else if (connection().kind !== "incompatible") addProjectOpen.set(false); });
-on("overlay.close", () => { if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
+on("overlay.close", () => { if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (switcherOpen()) { switcherOpen.set(false); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
 on("nav.drawer.close", () => drawer.set(null));
 on("sidebar.left.toggle", toggleLeft);
 on("sidebar.right.toggle", () => toggleRight(rightWidthHint.w));
@@ -499,9 +510,15 @@ on("timeline.detail_cycle", () => {
   const levels = ["low", "medium", "high"] as const;
   setTimelineDetail(levels[(levels.indexOf(timelineDetail()) + 1) % levels.length]);
 });
-on("session.switch", () => { tab("sessions"); });
+/** Open the session switcher over the current view (the rail's second click opens it project-scoped). */
+export function openSessionSwitcher() {
+  if (isNarrow()) drawer.set(null);
+  switcherOpen.set(true);
+}
+on("session.switch", openSessionSwitcher);
 on("editor.edit", () => editFile());
-on("editor.find", () => { if (openFile()) fileFindOpen.set(true); });
+on("editor.find", () => { if (openFile()) { if (markdownFile()) fileSource.set(true); fileFindOpen.set(true); } });
+on("editor.preview", () => { if (openFile() && markdownFile()) { fileSource.set(!fileSource()); fileFindOpen.set(false); } });
 on("editor.save", () => saveFile(), true);
 on("editor.reload", () => {
   if (!fileDirty()) { void reloadFile(); return; }
@@ -558,6 +575,13 @@ function dictateFromComposer() {
   if (phase !== "idle") return;
   if (!live()) { toast("warning", "Core is not connected: dictation is unavailable."); return; }
   if (viewed()?.archived) { toast("warning", "Unarchive this session before dictating."); return; }
+  if (!microphoneAvailable()) {
+    focusComposer.fn?.();
+    toast("info", platform.os === "ios"
+      ? "This build has no in-app microphone capture. Tap the microphone on the iOS keyboard to dictate."
+      : "This build has no in-app microphone capture. Use the keyboard's dictation or the TUI.");
+    return;
+  }
   const target = draftKey();
   startDictation((transcript) => {
     draft.update((all) => ({ ...all, [target]: appendTranscript(all[target] ?? "", transcript) }));
@@ -599,6 +623,7 @@ on("session.export", () => {
   const url = new URL(`/api/session/${s.id}/export?format=markdown&scope=session`, import.meta.url);
   void openUrl(url.href).catch(() => toast("info", "Export is served at /api/session/{id}/export on the host."));
 });
+on("session.resources", () => { resourcesOpen.set(true); void loadResources(); });
 
 /** Replace the picker with a Core-backed list. */
 async function pickOne(title: string, load: () => Promise<{ id: string; label: string; hint?: string; run: () => void | Promise<void> }[]>) {
@@ -776,6 +801,8 @@ export function escape() {
   if (isDictationBusy()) { cancelDictation(); return "dictation"; }
   if (imagePreview()) { imagePreview.set(null); return "image_preview"; }
   if (contextDetail()) { contextDetail.set(null); return "context_detail"; }
+  if (resourcesOpen()) { resourcesOpen.set(false); return "resources"; }
+  if (switcherOpen()) { switcherOpen.set(false); return "session_switcher"; }
   if (fileFindOpen()) { fileFindOpen.set(false); return "file_find"; }
   if (centre() === "settings" && settingsPage()) { settingsPage.set(settingsPage()!.includes("/") ? settingsPage()!.split("/")[0] : null); return "settings_page"; }
   for (const rule of manifest.keymap.escape as readonly { id: string; when: readonly string[]; action: string }[]) {
@@ -823,7 +850,7 @@ export function bindKeys(): () => void {
   }
   // The editor's own keys act only while a file is open (cmd+s saves; cmd+e starts editing;
   // cmd+f opens the find bar).
-  for (const id of ["editor.save", "editor.edit", "editor.find"]) {
+  for (const id of ["editor.save", "editor.edit", "editor.find", "editor.preview"]) {
     const k = byId.get(id)?.keys?.nsh;
     if (!k) continue;
     try { offs.push(keymap.bind(toKeystroke(k), () => { if (openFile()) void run(id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }

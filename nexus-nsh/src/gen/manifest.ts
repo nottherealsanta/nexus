@@ -40,6 +40,7 @@ export const manifest = {
    "panel.diff",
    "editor.dirty",
    "editor.readonly",
+   "editor.markdown",
    "overlay.open",
    "dialog.open",
    "alert.open",
@@ -231,12 +232,6 @@ export const manifest = {
      "label": "Files",
      "command": "sidebar.tab.files",
      "order": 2
-    },
-    {
-     "id": "projects",
-     "label": "Projects",
-     "command": "sidebar.tab.projects",
-     "order": 3
     }
    ]
   },
@@ -276,12 +271,8 @@ export const manifest = {
     "diff"
    ],
    "default": "file",
-   "anchored": "right",
-   "wide": "beside the timeline",
-   "narrow": "covers the whole window, the composer included",
-   "wide_from": 140,
-   "wide_share": 55,
-   "note": "Wide, the right sidebar yields and the panel takes 55% of the space right of the left sidebar. Narrow, it slides over the timeline and composer; the header keeps a waiting badge when a request needs the user. Back, or the escape chain, closes it; unsaved text asks first."
+   "anchored": "centre",
+   "note": "The page keeps its layout underneath; a click outside closes it, and long lines wrap."
   },
   "waiting_card": {
    "position": "above_composer",
@@ -376,14 +367,13 @@ export const manifest = {
       "label": "Sidebar",
       "kind": "choice",
       "scope": "client",
-      "clients": "tui",
+      "clients": "both",
       "default": "full",
       "options": [
        "full",
-       "rail",
-       "hidden"
+       "rail"
       ],
-      "note": "Rail shows one letter per session; hover a letter for its title. Drag the edge to resize."
+      "note": "The project rail always shows; this opens or closes the sidebar beside it. Drag the edge to resize."
      },
      {
       "id": "appearance.timeline_detail",
@@ -405,15 +395,15 @@ export const manifest = {
       "label": "Details sidebar",
       "kind": "toggle",
       "scope": "client",
-      "clients": "tui",
-      "default": true
+      "clients": "both",
+      "default": false
      },
      {
       "id": "appearance.session_scope",
       "label": "Sessions shown",
       "kind": "choice",
       "scope": "client",
-      "clients": "tui",
+      "clients": "both",
       "default": "this project",
       "options": [
        "this project",
@@ -426,7 +416,7 @@ export const manifest = {
       "label": "Archived sessions",
       "kind": "toggle",
       "scope": "client",
-      "clients": "tui",
+      "clients": "both",
       "default": false,
       "command": "sessions.archived_filter"
      }
@@ -721,7 +711,7 @@ export const manifest = {
       "label": "Push-to-talk key",
       "kind": "keymap",
       "scope": "client",
-      "clients": "tui",
+      "clients": "both",
       "command": "voice.dictate"
      }
     ]
@@ -877,7 +867,7 @@ export const manifest = {
   },
   {
    "id": "app.usage",
-   "title": "Show plan limits",
+   "title": "Show provider usage",
    "category": "app",
    "slash": "usage",
    "keys": {
@@ -892,7 +882,7 @@ export const manifest = {
     "palette",
     "menu"
    ],
-   "note": "Plan windows for the providers that report them (codex, copilot): GET /api/usage. Nothing here is a credential. In the TUI ctrl+u here wins over the composer's kill-to-line-start."
+   "note": "Usage for every connected provider, with plan windows where reported (codex, copilot, opencode, grok, claude): GET /api/usage. Nothing here is a credential. In the TUI ctrl+u here wins over the composer's kill-to-line-start."
   },
   {
    "id": "app.quit",
@@ -1578,6 +1568,19 @@ export const manifest = {
    "title": "Worktrees",
    "category": "session",
    "slash": "worktree",
+   "when": [
+    "has_session"
+   ],
+   "unavailable_reason": "Open a session first.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "session.resources",
+   "title": "Kernels and shells",
+   "category": "session",
+   "slash": "resources",
    "when": [
     "has_session"
    ],
@@ -2522,6 +2525,27 @@ export const manifest = {
     "panel",
     "palette"
    ]
+  },
+  {
+   "id": "editor.preview",
+   "title": "Toggle Markdown preview",
+   "category": "editor",
+   "keys": {
+    "tui": "p",
+    "nsh": "cmd+shift+p"
+   },
+   "key_context": "editor",
+   "when": [
+    "panel.file",
+    "editor.readonly",
+    "editor.markdown"
+   ],
+   "unavailable_reason": "No Markdown file is open, or the file is being edited.",
+   "placement": [
+    "panel",
+    "palette"
+   ],
+   "note": "Renders Markdown files as prose; the source keeps line numbers and find."
   },
   {
    "id": "editor.reload",

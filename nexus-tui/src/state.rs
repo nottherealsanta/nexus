@@ -135,6 +135,11 @@ pub struct AppState {
     pub worktrees: std::collections::BTreeMap<String, serde_json::Value>,
     /// Last worktree listing per project's own checkout (no session yet).
     pub project_worktrees: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Live kernels (compact, without retained cell bodies) and background bash jobs.
+    pub kernels: Vec<serde_json::Value>,
+    pub jobs: Vec<serde_json::Value>,
+    /// Why the last resource read failed; the previous lists stay visible.
+    pub resources_error: Option<String>,
     /// Directory listings for the Files tree, keyed by relative path (`""` is
     /// the selected root). A failure is kept so an expanded folder can say why.
     pub file_dirs: std::collections::BTreeMap<String, Result<Vec<serde_json::Value>, String>>,
@@ -171,6 +176,9 @@ impl Default for AppState {
             config_error: None,
             worktrees: std::collections::BTreeMap::new(),
             project_worktrees: std::collections::BTreeMap::new(),
+            kernels: Vec::new(),
+            jobs: Vec::new(),
+            resources_error: None,
             file_dirs: std::collections::BTreeMap::new(),
             file_scope: None,
             git: None,
@@ -258,6 +266,17 @@ impl AppState {
                 }
                 Err(_) => {
                     self.project_worktrees.remove(&project);
+                }
+            },
+            SyncMsg::Resources { kernels, jobs } => match (kernels, jobs) {
+                (Ok(kernels), Ok(jobs)) => {
+                    self.kernels = kernels;
+                    self.jobs = jobs;
+                    self.resources_error = None;
+                }
+                (kernels, jobs) => {
+                    let error = kernels.err().or_else(|| jobs.err());
+                    self.resources_error = error;
                 }
             },
             // The TUI owns this view-only inventory cache; it is applied in

@@ -15,15 +15,24 @@ import { defaultSkillSelection, selectedSkillCounts } from "../skills-mcp";
 export function Palette() {
   return <If when={paletteOpen()}><PaletteBody /></If>;
 }
+const PALETTE_ORDER = ["session", "project", "model", "composer", "tools", "timeline", "tool", "waiting", "navigation", "files", "editor", "git", "copy", "inspect", "notifications", "connection", "auth", "appearance", "dictation", "app"];
+const paletteKey = (category: string) => category === "sessions" ? "session" : category === "agent" ? "model" : category;
+const paletteRank = (category: string) => { const at = PALETTE_ORDER.indexOf(paletteKey(category)); return at < 0 ? PALETTE_ORDER.length : at; };
+/** The palette heading for a manifest category: the session categories share one, and so do model and agent. */
+const paletteGroup = (category: string) => { const key = paletteKey(category); return key === "model" ? "Model and agent" : key.charAt(0).toUpperCase() + key.slice(1); };
+
 function PaletteBody() {
   const q = signal("");
   const idx = signal(0);
+  const grouped = () => !q().trim();
   const items = () => {
     const needle = q().trim().toLowerCase();
-    const all = commands.filter((c) => c.placement.includes("palette") && !c.key_context?.startsWith("escape"));
-    const scored = all.map((c) => ({ c, a: availability(c) })).filter(({ c }) => !needle || c.title.toLowerCase().includes(needle) || c.id.includes(needle) || (c.slash ?? "").includes(needle.replace(/^\//, "")));
-    // available first (manifest order inside each group), then disabled with their reason
-    return [...scored.filter((x) => x.a.ok), ...scored.filter((x) => !x.a.ok)];
+    const all = commands.filter((c) => c.placement.includes("palette") && !c.key_context?.startsWith("escape") && c.key_context !== "dialog" && c.id !== "palette.open");
+    const scored = all.map((c) => ({ c, a: availability(c) })).filter(({ c }) => !needle || c.title.toLowerCase().includes(needle) || c.id.includes(needle) || c.category.includes(needle) || (c.slash ?? "").includes(needle.replace(/^\//, "")));
+    // Unfiltered: by group, in manifest order, each command with its reason when it is unavailable. Filtered: available first.
+    return needle
+      ? [...scored.filter((x) => x.a.ok), ...scored.filter((x) => !x.a.ok)]
+      : scored.map((x, i) => ({ x, i })).sort((a, b) => paletteRank(a.x.c.category) - paletteRank(b.x.c.category) || a.i - b.i).map(({ x }) => x);
   };
   const clamp = (n: number) => Math.max(0, Math.min(items().length - 1, n));
   const pick = (c: Cmd) => {
@@ -37,9 +46,9 @@ function PaletteBody() {
   return (
     <Modal width={560} top="top-[12%]" label="Command palette" testID="palette" onCancel={() => escape()} onOpenChange={(open) => { if (!open) paletteOpen.set(false); }}>
       <View role="menu" class="gap-2">
-        <ModalTitle title="Commands" esc={false} />
+        <ModalTitle title="Command palette" />
         <View class="border-b border-border">
-          <Input autoFocus placeholder="Type a command…" accessibilityLabel="Search commands" testID="palette-input" onChange={({ value: t }) => { q.set(t); idx.set(0); }} onSubmit={() => { const it = items()[idx()]; if (it) pick(it.c); }} submitBehavior="submit" class="h-10 text-[13px] text-foreground placeholder:text-muted-foreground" />
+          <Input autoFocus placeholder="type to filter commands" accessibilityLabel="Search commands" testID="palette-input" onChange={({ value: t }) => { q.set(t); idx.set(0); }} onSubmit={() => { const it = items()[idx()]; if (it) pick(it.c); }} submitBehavior="submit" class="h-10 text-[13px] text-foreground placeholder:text-muted-foreground" />
         </View>
         <If when={items().length > 0} else={<View class="py-4"><Text class={T.sec}>No command matches “{q()}”.</Text></View>}>
           <Scroll class="max-h-[380px]" testID="palette-list">
@@ -48,22 +57,25 @@ function PaletteBody() {
               {(it, i) => {
                 const c = () => it().c;
                 const dis = () => !it().a.ok;
+                const heading = () => grouped() && (i() === 0 || paletteGroup(items()[i() - 1].c.category) !== paletteGroup(c().category));
                 return (
-                  <Button onPress={() => pick(c())} selected={idx() === i()} accessibilityLabel={`${c().title}${dis() ? `, unavailable: ${it().a.reason}` : ""}`} testID={`cmd-${c().id}`}
-                    class={`group/row relative rounded-(--radius) px-3 py-1 min-h-8 justify-center hover:bg-accent ${idx() === i() ? "bg-selection" : ""} ${FOCUS}`}>
-                    <View class="flex-row items-center gap-3">
-                      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[13px] leading-5 ${dis() ? "text-muted-foreground" : "text-popover-foreground"}`}>{c().title}</Text>
-                      <Text class={T.meta}>{keyLabel(c()) ?? (c().slash ? `/${c().slash}` : "")}</Text>
-                    </View>
-                    <If when={dis() && idx() === i()}><Text style={{ numberOfLines: 2 }} class={T.meta}>{it().a.reason!}</Text></If>
-                  </Button>
+                  <View>
+                    <If when={heading()}><Text class={`px-3 text-xs leading-4 font-semibold uppercase text-muted-foreground ${i() === 0 ? "pb-1" : "pt-3 pb-1"}`} testID={`palette-group-${paletteGroup(c().category)}`}>{paletteGroup(c().category)}</Text></If>
+                    <Button onPress={() => pick(c())} selected={idx() === i()} accessibilityLabel={`${c().title}${dis() ? `, unavailable: ${it().a.reason}` : ""}`} testID={`cmd-${c().id}`}
+                      class={`group/row relative rounded-(--radius) px-3 py-0.5 min-h-7 justify-center hover:bg-accent ${idx() === i() ? "bg-selection" : ""} ${FOCUS}`}>
+                      <View class="flex-row items-center gap-3">
+                        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[13px] leading-5 ${dis() ? "text-muted-foreground" : "text-popover-foreground"}`}>{dis() ? `${c().title} · ${it().a.reason}` : c().title}</Text>
+                        <Text class={T.meta}>{keyLabel(c()) ?? ""}</Text>
+                      </View>
+                    </Button>
+                  </View>
                 );
               }}
             </Each>
             </View>
           </Scroll>
         </If>
-        <ModalFooter hints="↑↓ move · enter run · esc close" right={`${items().length} commands`} />
+        <ModalFooter hints="↑↓ move · enter run · esc close" right={`${items().length ? idx() + 1 : 0} of ${items().length}`} />
       </View>
     </Modal>
   );

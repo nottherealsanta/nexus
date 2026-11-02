@@ -9,10 +9,12 @@ for deliberate changes from old Nexus.
   code from it deliberately, and add a row in docs/porting-ledger.md when you change a
   behavior. Its AGENTS.md and docs do not apply here.
 - Keep the context visible: wire events are never dropped, and clipping is announced.
-- TUI and NSH are peers: **everything developed in one is replicated in the other**.
-  A change to a picker, modal, sidebar, shortcut or interaction in `nexus-tui` lands
-  in `nexus-nsh` in the same change, and vice versa; record a deliberate difference
-  in [docs/porting-ledger.md](docs/porting-ledger.md).
+- TUI and NSH are peers: **every UI change must be reflected in both, in the same
+  change**, including layout, styling, wording, pickers, modals, sidebars, shortcuts
+  and interactions. Follow
+  [.agents/skills/nexus-ui-parity/SKILL.md](.agents/skills/nexus-ui-parity/SKILL.md).
+  A client-specific difference needs the user's explicit approval first, and is then
+  recorded in [docs/porting-ledger.md](docs/porting-ledger.md).
 - The file explorer, the file editor and Git management are for the TUI and NSH on
   desktop and web only. They do not ship on iOS or any other mobile target.
 - One timeline: the "timeline" (or "context line"), which is what the user sees

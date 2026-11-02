@@ -4,6 +4,13 @@ export const MAX_RECORDING_SECONDS = 120;
 export const PREVIEW_INTERVAL_SECONDS = 0.4;
 export const PREVIEW_WINDOW_SECONDS = 20;
 
+type NavigatorLike = { mediaDevices?: { getUserMedia?: unknown } };
+
+/** Native NSH has no `navigator.mediaDevices`; only the web client can capture audio. */
+export function hasMicrophoneCapture(navigator: NavigatorLike | undefined): boolean {
+  return typeof navigator?.mediaDevices?.getUserMedia === "function";
+}
+
 export type DictationPhase = "idle" | "checking" | "consent" | "downloading" | "requesting" | "recording" | "stopping";
 export type DictationEvent = "start" | "consent" | "download" | "request" | "ready" | "stop" | "finish" | "cancel" | "fail";
 

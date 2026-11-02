@@ -167,6 +167,18 @@ impl Editor {
         out
     }
 
+    /// Collapsed pastes whose marker is still in the draft, in marker order.
+    pub fn paste_entries(&self) -> Vec<(&str, &str)> {
+        let mut entries: Vec<(&str, &str)> = self
+            .pastes
+            .iter()
+            .filter(|(marker, _)| self.text.contains(marker.as_str()))
+            .map(|(marker, content)| (marker.as_str(), content.as_str()))
+            .collect();
+        entries.sort_by_key(|(marker, _)| self.text.find(*marker).unwrap_or(usize::MAX));
+        entries
+    }
+
     /// Wrap whitespace-delimited words using terminal display columns. Words
     /// that fit a row move intact; only oversized tokens split at grapheme
     /// boundaries. Whitespace is retained, including at soft row boundaries.

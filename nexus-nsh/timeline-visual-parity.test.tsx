@@ -94,23 +94,18 @@ describe("timeline visual parity", () => {
     expect(shown).toContain("queued · #2");
   });
 
-  test("completed thought duration comes from its request, and is not attributed across several parts", async () => {
+  test("a thought shows its preview and no duration, as in the TUI", async () => {
     const app = await openSession({
       messages: [
         user("m1", 1, "inspect the loader"),
         assistant("m2", 2, "done", [{ type: "reasoning", summary: "Looking for the manifest" }]),
-        assistant("m3", 3, "more", [
-          { type: "reasoning", summary: "First thought" },
-          { type: "reasoning", summary: "Second thought" },
-        ]),
       ],
-      turns: [turn([request("req_1", "m2", 2.1), request("req_2", "m3", 9)])],
+      turns: [turn([request("req_1", "m2", 2.1)])],
     });
-    await app.waitFor("text:2.1s");
+    await app.waitFor("text:Thought");
     const shown = app.texts().join("\n");
-    expect(shown.includes("Thought for")).toBe(false);
     expect(shown).toContain("Looking for the manifest");
-    expect(shown.includes("9.0s")).toBe(false);
+    expect(shown.includes("2.1s")).toBe(false);
   });
 
   test("an idle background child does not mistake its acknowledgement for completion", async () => {
@@ -130,15 +125,8 @@ describe("timeline visual parity", () => {
     const shown = app.texts().join("\n");
     expect(shown).toContain("Background");
     expect(shown).toContain("scripted/m/high");
-    expect(shown).toContain("started");
-    expect(shown).toContain("Show start");
-    expect(shown.includes("55s")).toBe(false);
     expect(shown.includes("1.2K tok")).toBe(false);
-    await app.press("id:child-result-toggle");
-    await app.waitFor("text:Show less");
-    expect(app.texts().join("\n")).toContain("last line");
-    await app.press("id:child-result-toggle");
-    await app.waitFor("text:Show start");
+    expect(shown.includes("first line")).toBe(false);
   });
 
   test("a running background child keeps its start acknowledgement apart from completion", async () => {
@@ -155,14 +143,10 @@ describe("timeline visual parity", () => {
         { id: "m3", session_id: "ses_1", seq: 3, role: "tool", parts: [{ type: "tool_result", call_id: "call_1", output: "started in the background" }], created: 3 },
       ],
     });
-    await app.waitFor("text:Show start");
+    await app.waitFor("id:child-meta");
     const shown = app.texts().join("\n");
-    expect(shown).toContain("running");
     expect(shown).toContain("scripted/m/high");
     expect(shown.includes("tok")).toBe(false);
-    expect(shown.includes("Show result")).toBe(false);
-    await app.press("id:child-result-toggle");
-    await app.waitFor("text:Show less");
-    expect(app.texts().join("\n")).toContain("started in the background");
+    expect(shown.includes("started in the background")).toBe(false);
   });
 });

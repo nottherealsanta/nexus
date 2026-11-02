@@ -3,11 +3,11 @@
 // row (the frozen snapshot). Every preview line comes from text the model receives (the system
 // prompt); an agent's description is never sent, so it is never shown here.
 import { Scroll, Text, View, effect, signal, windowSize } from "nsh";
-import { Button } from "nsh/base";
-import { Btn, FOCUS, T } from "./kit";
+import { Button, TextView } from "nsh/base";
+import { Btn, FOCUS, Icon, PROSE, T } from "./kit";
 import { run, toggleDraftInventory } from "../commands";
 import {
-  contextDetail, agentCatalog, currentProject, info, rememberedModel, draftContext, draftContextKey, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome,
+  type ContextEntry, contextDetail, agentCatalog, currentProject, info, rememberedModel, draftContext, draftContextKey, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome,
 } from "../store";
 import { request } from "../core/transport";
 import { Modal, ModalFooter, ModalTitle } from "./modal";
@@ -23,7 +23,7 @@ export type CtxBody =
   | { kind: "grid"; items: { name: string; on: boolean }[] }
   | { kind: "inventory"; items: InventoryRow[] }
   | { kind: "none" };
-export interface CtxSection { key: string; title: string; tokens?: number; count?: number; meta: string; body: CtxBody; detail: string }
+export interface CtxSection { key: string; title: string; tokens?: number; count?: number; meta: string; body: CtxBody; detail: string; markdown?: boolean; entries?: ContextEntry[] }
 
 /** `17580` reads `17,580`. */
 export function thousands(n: number): string {
@@ -62,12 +62,13 @@ export function previewSections(i: {
   const promptTokens = i.core?.parts.instructions ?? PROMPT_BASE_TOKENS + Math.ceil(Array.from(i.prompt).length / 4) + fileTokens;
   const toolTokens = i.core?.parts.tools;
   const sections: CtxSection[] = [
-    { key: "system", title: "System prompt", tokens: promptTokens, meta: "", body: { kind: "none" }, detail: `Agent prompt preview (the full starting context is available after the session starts):\n\n${i.prompt}` },
+    { key: "system", title: "System prompt", tokens: promptTokens, meta: "", body: { kind: "none" }, markdown: true, detail: `Agent prompt preview (the full starting context is available after the session starts):\n\n${i.prompt}` },
     i.file
-      ? { key: "instructions", title: "AGENTS.md", tokens: fileTokens, meta: "", body: { kind: "none" }, detail: `Project instruction preview: ${i.file.path}\n\n${i.file.line}` }
-      : { key: "instructions", title: "AGENTS.md", meta: "not available in this preview", body: { kind: "none" }, detail: "The project instruction file is not available in this preview; the starting context will be known when the session starts." },
+      ? { key: "instructions", title: "AGENTS.md", tokens: fileTokens, meta: "", body: { kind: "none" }, markdown: true, detail: `Project instruction preview: ${i.file.path}\n\n${i.file.line}` }
+      : { key: "instructions", title: "AGENTS.md", meta: "unavailable or not read", body: { kind: "none" }, detail: "The project instruction file is not available in this preview; the starting context will be known when the session starts." },
     {
       key: "tools", title: "Tools", tokens: toolTokens, count: tools.length, meta: tools.some((t) => off.includes(t)) ? `${tools.filter((t) => off.includes(t)).length} off` : "",
+      entries: tools.map((t) => ({ key: t, name: t, description: "", full: "The schema is recorded when the session starts." })),
       body: { kind: "grid", items: tools.map((t) => ({ name: t, on: !off.includes(t) })) }, detail: `Estimated tool inventory; schemas are available after the session starts.\n\n${tools.map((t) => `${t}${off.includes(t) ? " (off)" : ""}`).join("\n")}`,
     },
   ];
@@ -88,6 +89,26 @@ function itemDetail(item: InventoryRow): string {
   return lines.join("\n");
 }
 
+/** A skill's full text and a server's facts come from Core when the entry is opened. */
+function entryOf(item: InventoryRow): ContextEntry {
+  const name = encodeURIComponent(item.name);
+  const project = currentProject() ?? undefined;
+  if (item.kind === "skill") {
+    return {
+      key: item.name, name: item.name, description: item.description ?? "", markdown: true,
+      load: async () => (await request<any>("GET", `/api/skill/${name}`, { query: { project } })).body || "This skill has no body.",
+    };
+  }
+  return {
+    key: item.name, name: item.name,
+    description: [item.meta, item.tools === null || item.tools === undefined ? "" : `${item.tools} tools`, item.error ?? ""].filter(Boolean).join(" · "),
+    load: async () => {
+      const row = await request<any>("GET", `/api/mcp/${name}`).catch(() => request<any>("GET", `/api/project/${project}/mcp/${name}`)).catch(() => null);
+      return row ? `${itemDetail(item)}\n\n${JSON.stringify(row, null, 2)}` : itemDetail(item);
+    },
+  };
+}
+
 export function inventorySections(items: InventoryRow[], loading?: string, error?: string): CtxSection[] {
   return (["skill", "mcp"] as const).map((kind) => {
     const rows = items.filter((item) => item.kind === kind);
@@ -97,6 +118,7 @@ export function inventorySections(items: InventoryRow[], loading?: string, error
     const meta = loading ?? error ?? (rows.length === 0 ? "none" : off ? `${off} off` : "");
     return {
       key: kind === "skill" ? "skills" : "mcp", title, count: loading || error ? undefined : rows.length, meta,
+      entries: rows.map((item) => entryOf(item)),
       body: rows.length ? { kind: "inventory", items: rows } : { kind: "none" },
       detail: rows.length ? rows.map(itemDetail).join("\n\n") : error ?? (loading ? "Loading…" : `No ${noun} found.`),
     };
@@ -125,13 +147,18 @@ export function startingSections(s: any, off: string[], inventory?: { skills?: S
   const path = String(file.path ?? "");
   const base = path.split("/").filter(Boolean).at(-1) ?? "AGENTS.md";
   const sections: CtxSection[] = [
-    { key: "system", title: "System prompt", tokens: sysTokens, meta: "", body: { kind: "none" }, detail: sys || "No system prompt was recorded." },
+    { key: "system", title: "System prompt", tokens: sysTokens, meta: "", body: { kind: "none" }, markdown: true, detail: sys || "No system prompt was recorded." },
     {
       key: "instructions", title: base, tokens: fileBytes === undefined ? undefined : Math.ceil(fileBytes / 4),
-      meta: status === "loaded" ? "" : status, body: { kind: "none" }, detail: typeof file.content === "string" ? file.content : JSON.stringify(file, null, 2),
+      meta: [status, path].filter(Boolean).join(" · "), body: { kind: "none" }, markdown: typeof file.content === "string", detail: typeof file.content === "string" ? file.content : JSON.stringify(file, null, 2),
     },
     {
       key: "tools", title: "Tools", tokens: toolTokens || undefined, count: names.length, meta: names.some((n) => off.includes(n)) ? `${names.filter((n) => off.includes(n)).length} off` : "",
+      entries: names.map((n) => ({
+        key: n, name: n,
+        description: typeof schemas[n]?.description === "string" ? firstPromptLine(schemas[n].description) : "",
+        full: schemas[n] ? JSON.stringify(schemas[n], null, 2) : "No schema was recorded for this tool.",
+      })),
       body: { kind: "grid", items: names.map((n) => ({ name: n, on: !off.includes(n) })) }, detail: schemaText ? `Stored tool definitions (definitions may change during a session):\n\n${JSON.stringify(schemas, null, 2)}` : names.join("\n") || "No tool definitions were recorded.",
     },
   ];
@@ -143,69 +170,115 @@ export function startingSections(s: any, off: string[], inventory?: { skills?: S
 // --- the renderer -----------------------------------------------------------------------------
 const ESTIMATED = "estimated: characters ÷ 4 of Core's starting context";
 
-/** An estimated count says so on hover. */
-function Count(p: { text: string; estimated: boolean; class: string }) {
+/** Up to `most` columns, filled downward: five items in two columns read three and two. */
+export function inColumns<T>(items: T[], most: number): T[][] {
+  const count = Math.max(1, Math.min(most, items.length));
+  const height = Math.ceil(items.length / count);
+  return Array.from({ length: count }, (_, x) => items.slice(x * height, (x + 1) * height)).filter((c) => c.length);
+}
+
+/** One 196 px cell fits `change_session_directory` at 12.5 px. */
+const CELL_PX = 196;
+const HEAD = "text-[13px] leading-5";
+
+/** A switch cell, as the TUI draws it: the marker switches and the name opens its information. */
+function Cell(p: { name: string; on: boolean; locked?: boolean; status?: string; error?: string | null; label: string; testID: string; onToggle: () => void; onInfo: () => void }) {
   return (
-    <If when={p.estimated} else={<Text class={p.class}>{p.text}</Text>}>
-      <Button accessibilityLabel={`${p.text}, ${ESTIMATED}`} testID="ctx-estimate"
-        tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{ESTIMATED}</Text>}
-        class="rounded-(--radius)"><Text class={p.class}>{p.text}</Text></Button>
-    </If>
+    <View class="w-full min-w-0">
+      <View class="flex-row items-center min-w-0 h-6">
+        <Button role="switch" selected={p.on} onPress={p.onToggle} accessibilityLabel={p.label} testID={p.testID} class={`shrink-0 w-5 h-6 items-center justify-center rounded-(--radius) hover:bg-accent ${FOCUS}`}>
+          <Text class={`text-[10px] leading-5 ${p.on ? "text-muted-foreground" : "text-muted-foreground opacity-60"}`}>{p.on ? "●" : "○"}</Text>
+        </Button>
+        <Button onPress={p.onInfo} accessibilityLabel={`${p.name} details`} testID={`${p.testID}-info`} class={`shrink min-w-0 flex-row items-center gap-2 rounded-(--radius) px-1 h-6 hover:bg-accent ${FOCUS} ${p.locked ? "opacity-60" : ""}`}>
+          <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 font-mono text-[12.5px] leading-5 ${p.on ? "text-foreground-secondary" : "text-muted-foreground line-through opacity-60"}`}>{p.name}</Text>
+          <If when={!!p.status}><Text style={{ numberOfLines: 1 }} class={T.meta}>{p.status!}</Text></If>
+        </Button>
+      </View>
+      <If when={!!p.error}><Text style={{ numberOfLines: 2 }} class="pl-6 text-[12.5px] leading-5 text-warning">{p.error!}</Text></If>
+    </View>
   );
 }
 
-/** One 196 px cell fits `change_session_directory` at 12.5 px; below 420 px the cells take their natural width. */
-const CELL = "w-[196px] shrink-0";
-
-function Section(p: { s: CtxSection; estimated: boolean; wide: boolean; onOpen: () => void; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
+function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: () => void; onItem: (name: string) => void; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
   const s = p.s;
+  const offNote = /\boff$/.test(s.meta);
+  // Tools take up to four columns and skills and servers two, as many as fit.
+  const fit = (most: number) => Math.max(1, Math.min(most, Math.floor((p.width - 32) / (CELL_PX + 16))));
+  const shownMeta = !offNote && !!s.meta && s.tokens === undefined;
   return (
-    <View class="py-1 gap-1" testID={`ctx-${s.key}`}>
-      <View class="flex-row items-baseline gap-2 min-h-5">
-        <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`} class={`flex-row items-baseline gap-1.5 rounded-(--radius) px-1 -mx-1 hover:bg-accent ${FOCUS}`}>
-          <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{s.title}</Text>
-          <If when={s.count !== undefined}><Text class={T.meta}>{s.count}</Text></If>
-        </Button>
-        <If when={s.tokens !== undefined}>
-          <Count text={`${p.estimated ? "~" : ""}${contextTokens(s.tokens ?? 0)}`} estimated={p.estimated} class="text-xs leading-4 text-foreground-secondary tabular-nums" />
-        </If>
-        <If when={!!s.meta}><Text style={{ numberOfLines: 1 }} class={T.meta}>{s.meta}</Text></If>
-      </View>
+    <View class="py-1 gap-0.5" testID={`ctx-${s.key}`}>
+      <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`}
+        tooltip={p.estimated && s.tokens !== undefined ? <Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{ESTIMATED}</Text> : undefined}
+        class={`self-stretch flex-row items-center gap-1.5 min-h-6 rounded-(--radius) px-1 -mx-1 hover:bg-accent ${FOCUS}`}>
+        <Text class={`shrink-0 ${HEAD} font-semibold text-foreground-secondary`}>{s.title}</Text>
+        <If when={s.count !== undefined}><Text class={`shrink-0 ${HEAD} text-muted-foreground tabular-nums`}>{`[${s.count}]`}</Text></If>
+        <If when={offNote}><Text class={`shrink-0 ${HEAD} text-muted-foreground`}>{`(${s.meta})`}</Text></If>
+        <If when={s.tokens !== undefined}><Text class={`shrink-0 ${HEAD} text-foreground-secondary tabular-nums`}>{`${p.estimated ? "~" : ""}${contextTokens(s.tokens ?? 0)}`}</Text></If>
+        <If when={shownMeta}><Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`shrink min-w-0 ml-1 ${HEAD} text-muted-foreground`}>{s.meta}</Text></If>
+      </Button>
       <If when={s.body.kind === "grid"}>
-        <View class="flex-row flex-wrap gap-x-4 pl-3" testID={`ctx-${s.key}-grid`}>
-          <Each of={(s.body as { items: { name: string; on: boolean }[] }).items} key={(c) => c.name}>
-            {(c) => (
-              <View class={`h-5 flex-row items-center ${p.wide ? CELL : ""}`} testID={`ctx-chip-${c().name}`} accessibilityLabel={`${c().name} ${c().on ? "on" : "off"}`}>
-                <Text class={`font-mono text-[12.5px] leading-5 ${c().on ? "text-foreground-secondary" : "text-muted-foreground line-through opacity-60"}`}>{c().name}</Text>
+        <View class="flex-row gap-x-4 pl-1" testID={`ctx-${s.key}-grid`}>
+          <Each of={inColumns((s.body as { items: { name: string; on: boolean }[] }).items, fit(4))} key={(_, i) => `${i}`}>
+            {(column) => (
+              <View class="flex-1 min-w-0">
+                <Each of={column()} key={(c) => c.name}>
+                  {(c) => <Cell name={c().name} on={c().on} label={`${c().name} ${c().on ? "on" : "off"}`} testID={`ctx-chip-${c().name}`}
+                    onToggle={() => p.onInventoryToggle?.("tool", c().name, false)} onInfo={() => p.onItem(c().name)} />}
+                </Each>
               </View>
             )}
           </Each>
         </View>
       </If>
       <If when={s.body.kind === "inventory"}>
-        <View class="flex-row flex-wrap gap-x-4 pl-1" testID={`ctx-${s.key}-inventory`}>
-          <Each of={(s.body as { items: InventoryRow[] }).items} key={(item) => item.name}>
-            {(item) => {
-              const status = () => [item().meta, item().tools === null || item().tools === undefined ? "" : `${item().tools} tools`].filter(Boolean).join(" · ");
-              const idName = item().name.replace(/[^A-Za-z0-9_-]/g, "-");
-              // An error or a new-session lock needs the whole row and a second line.
-              const full = () => !!item().error || item().locked;
-              return (
-                <Button role="switch" selected={item().on} onPress={() => p.onInventoryToggle?.(item().kind, item().name, item().locked)}
-                  accessibilityLabel={`${item().name} ${item().on ? "on" : "off"}${item().locked ? ", new session" : ""}`} testID={`ctx-${item().kind}-row-${idName}`}
-                  class={`${full() ? "w-full" : p.wide ? CELL : ""} flex-row gap-2 rounded-(--radius) px-2 hover:bg-accent ${FOCUS} ${full() ? "items-start py-1" : "h-6 items-center"} ${item().locked ? "opacity-60" : ""}`}>
-                  <View class="flex-1 min-w-0 gap-0.5 items-start">
-                    <View class="flex-row items-center gap-2">
-                      <Text style={{ numberOfLines: 1 }} class={`font-mono text-[12.5px] leading-5 ${item().on ? "text-foreground-secondary" : "text-muted-foreground line-through opacity-60"}`}>{item().name}</Text>
-                      <If when={!!status()}><Text class={T.meta}>{status()}</Text></If>
-                      <If when={full() && item().locked}><Text class={T.meta}>new session</Text></If>
-                    </View>
-                    <If when={!!item().error}><Text style={{ numberOfLines: 2 }} class="text-[12.5px] leading-5 text-warning">{item().error}</Text></If>
-                  </View>
-                </Button>
-              );
-            }}
+        <View class="flex-row gap-x-4 pl-1" testID={`ctx-${s.key}-inventory`}>
+          <Each of={inColumns((s.body as { items: InventoryRow[] }).items, fit(2))} key={(_, i) => `${i}`}>
+            {(column) => (
+              <View class="flex-1 min-w-0">
+                <Each of={column()} key={(item) => item.name}>
+                  {(item) => <Cell name={item().name} on={item().on} locked={item().locked} error={item().error}
+                    status={[item().meta, item().tools === null || item().tools === undefined ? "" : `${item().tools} tools`, item().locked ? "new session" : ""].filter(Boolean).join(" · ")}
+                    label={`${item().name} ${item().on ? "on" : "off"}${item().locked ? ", new session" : ""}`} testID={`ctx-${item().kind}-row-${item().name.replace(/[^A-Za-z0-9_-]/g, "-")}`}
+                    onToggle={() => p.onInventoryToggle?.(item().kind, item().name, item().locked)} onInfo={() => p.onItem(item().name)} />}
+                </Each>
+              </View>
+            )}
           </Each>
+        </View>
+      </If>
+    </View>
+  );
+}
+
+/** One entry of the context modal: name and description; opening it shows its schema or its full text. */
+function EntryRow(p: { entry: () => ContextEntry; focus: boolean }) {
+  const e = p.entry;
+  const open = signal(p.focus);
+  const loaded = signal<string | undefined>(e().full);
+  const load = () => {
+    const fn = e().load;
+    if (!fn || loaded() !== undefined) return;
+    fn().then((text) => loaded.set(text)).catch((error) => loaded.set(`Could not load this: ${error instanceof Error ? error.message : String(error)}`));
+  };
+  if (p.focus) load();
+  const id = e().key.replace(/[^A-Za-z0-9_-]/g, "-");
+  return (
+    <View testID={`context-entry-${id}`}>
+      <Button onPress={() => { const next = !open(); open.set(next); if (next) load(); }} accessibilityLabel={`${e().name}, ${open() ? "collapse" : "expand"}`} testID={`context-entry-${id}-toggle`}
+        class={`self-stretch flex-row items-start gap-2 rounded-(--radius) px-1 py-1 hover:bg-accent ${FOCUS}`}>
+        <View class="w-4 h-5 shrink-0 items-center justify-center"><Icon name={open() ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>
+        <View class="flex-1 min-w-0">
+          <Text class="font-mono text-[12.5px] leading-5 text-foreground">{e().name}</Text>
+          <If when={!!e().description}><Text style={{ numberOfLines: 2 }} class={T.sec}>{e().description}</Text></If>
+        </View>
+      </Button>
+      <If when={open()}>
+        <View class="ml-6 mr-1 mb-2" testID={`context-entry-${id}-full`}>
+          <If when={loaded() !== undefined} else={<Text class={T.meta}>Loading…</Text>}>
+            {() => <If when={!!e().markdown} else={<Text style={{ userSelect: "text" }} class="font-mono text-[12.5px] leading-5 text-foreground-secondary">{loaded()!}</Text>}>
+              <TextView selectable markdown={loaded()!} classes={PROSE} />
+            </If>}
+          </If>
         </View>
       </If>
     </View>
@@ -215,7 +288,25 @@ function Section(p: { s: CtxSection; estimated: boolean; wide: boolean; onOpen: 
 /** A single detail dialog remains mounted even when the context section is folded. */
 export function ContextDetailModal() {
   const detail = contextDetail;
-  return <If when={detail()}>{() => <Modal width={760} label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}><View class="gap-3"><ModalTitle title={detail()!.title} esc={false} /><Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }}><Text testID="context-detail-text" style={{ userSelect: "text" }} class="font-mono text-[12.5px] leading-5 text-foreground">{detail()!.detail}</Text></Scroll><ModalFooter hints="esc close" /></View></Modal>}</If>;
+  const body = () => detail()!;
+  return <If when={detail()}>{() => <Modal width={760} label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}>
+    <View class="gap-3">
+      <ModalTitle title={body().title} esc={false} />
+      <Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }}>
+        <If when={!!body().entries} else={
+          <If when={!!body().markdown} else={<Text testID="context-detail-text" style={{ userSelect: "text" }} class="font-mono text-[12.5px] leading-5 text-foreground-secondary">{body().detail}</Text>}>
+            <View testID="context-detail-markdown"><TextView selectable markdown={body().detail} classes={PROSE} /></View>
+          </If>
+        }>
+          <View class="gap-0.5">
+            <If when={(body().entries ?? []).length === 0}><Text class={T.sec}>{body().detail}</Text></If>
+            <Each of={body().entries ?? []} key={(entry) => entry.key}>{(entry) => <EntryRow entry={entry} focus={body().focus === entry().key} />}</Each>
+          </View>
+        </If>
+      </Scroll>
+      <ModalFooter hints="esc close" />
+    </View>
+  </Modal>}</If>;
 }
 
 /** The sections and the total as text (no bar). */
@@ -223,17 +314,16 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
   const pct = () => share(p.total, p.window);
   const detail = contextDetail;
   const cardWidth = signal(0);
-  const wide = () => cardWidth() >= 420;
-  return (
-    <View class="w-full rounded-(--radius-card) bg-card px-4 py-3" testID="context-sections"
+    return (
+    <View class="w-full bg-card px-4 py-3" testID="context-sections"
       onLayout={(b: any) => cardWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
       <If when={!!p.reconstructed}><Text class="text-[13px] leading-5 text-warning">reconstructed</Text></If>
-      <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => <Section s={s()} estimated={p.estimated} wide={wide()} onOpen={() => detail.set(s())} onInventoryToggle={p.onInventoryToggle} />}</Each>
+      <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => <Section s={s()} estimated={p.estimated} width={cardWidth()} onOpen={() => detail.set(s())} onItem={(name) => detail.set({ ...s(), focus: name })} onInventoryToggle={p.onInventoryToggle} />}</Each>
       <View class="h-px bg-border mt-2" />
       <View class="flex-row items-center gap-2 pt-2" testID="context-total">
-        <Text class="text-[13px] leading-5 font-semibold text-foreground">Total</Text>
-        <Count text={`${p.estimated ? "~" : ""}${contextTokens(p.total)}`} estimated={p.estimated} class="text-[13px] leading-5 text-foreground tabular-nums" />
-        <If when={!!pct()}><Text class={T.meta}>{`· ${pct()} of the window`}</Text></If>
+        <Text class={`${HEAD} font-semibold text-foreground-secondary`}>total</Text>
+        <Text class={`${HEAD} text-foreground-secondary tabular-nums`}>{`${p.estimated ? "~" : ""}${thousands(p.total)} tok`}</Text>
+        <If when={!!pct()}><Text class={`${HEAD} text-muted-foreground`}>{`· ${pct()} of the window`}</Text></If>
       </View>
     </View>
   );

@@ -44,6 +44,7 @@ impl Image {
 #[derive(Clone)]
 pub struct Preview {
     pub start: usize,
+    pub column: usize,
     pub width: usize,
     pub rows: usize,
     pub key: String,

@@ -26,16 +26,24 @@ Inside `nexus-core/` (a uv project: `pyproject.toml`, `uv.lock`, `.python-versio
 
 ```
 nexus/
-  llmhub/            types, sse, responses, chat, providers, catalog, hub
-  llmhub/auth/       store, device, codex, copilot, grok, opencode, errors
-  tools/             base, read, bash, edit, write, ask, code
+  llmhub/            types, sse, responses, chat, claude, providers, catalog, hub
+  llmhub/auth/       store, device, api_key, codex, copilot, grok, opencode, claude, ollama, errors
+  mock/              dev-only scripted provider (NEXUS10_DEV)
+  tools/             base, read, grep, glob, ls, bash, edit, patch, write, web_search, web_fetch, ask, code
+  mcp/               MCP client, global manager, project .mcp.json
+  skills/            skill files, /learn install, the skill tool
+  voice/             speech-to-text and text-to-speech
   observations.py    per-session read observations and the read-before-edit guard
   workspace.py       control tools: expose, session-directory moves, worktree specs
   worktrees.py       Git worktree list/create/delete through argument arrays
   questions.py       the ask contract: schema, bounds, validation, result text
+  permissions.py     permission rules (config and agent frontmatter)
+  shell_syntax.py    shell control-syntax detection for glob permission rules
   snapshot.py        serializable session configuration and instruction-file records
   agents.py          agent files: parse, load (builtin, global, project)
   builtin_agents/    orchestrate, build, quick, scout, plan (.md) + NOTICE
+  extensions.py      user tools loaded beside the built-in tools
+  hooks.py           command hooks from config.toml
   loop.py            the agent loop
   codec.py           JSON encoding of messages and events
   config.py          TOML config, schema, revision-checked patches and MCP import
@@ -45,11 +53,21 @@ nexus/
   store.py           SQLite: projects, sessions, messages, observations, turn lifecycle, mutation journal, durable event log (~/.nexus/nexus.db)
   bus.py             in-process event bus; persists before publishing, bounded per subscriber
   eventlog.py        log generation, cursors, session filtering, atomic replay-to-live stream
+  payloads.py        compressed, deduplicated wire-event bodies and their expiry markers
   retention.py       bounded event/lifecycle retention and the retention floor
   autoarchive.py     scheduled archive of whole session trees idle past the configured threshold
   retry.py           bounded, visible provider-request retry policy
   recovery.py        startup reconciliation of turns a crash left unfinished
   continuation.py    explicit manual continuation and provider-valid context reconciliation
+  inputs.py          pending steer and queue messages
+  oneshot.py         tool-free requests: handoff summaries, titles, /btw
+  counting.py        context-window estimates beside measured provider usage
+  images.py          prompt image validation
+  files.py           project file browse, search and editor writes
+  artifacts.py       stored media from tool results
+  net.py             public-internet-only GET for web_fetch
+  provider_usage.py  every connected provider's usage; plan windows where reported
+  doctor.py          `nexus doctor` and the release check
   kernels.py         daemon-owned persistent Monty kernels
   bash_jobs.py       daemon-owned background bash jobs
   runtime.py         projects, sessions, turns, approvals, questions, workspace controls, interrupts
@@ -58,7 +76,7 @@ nexus/
   inspector/         index.html: the session inspector page — docs/inspector.md
   client.py          HTTP client for the API, used by the CLI
   cli.py             plain `nexus` (or `nexus tui [flags]`) execs the installed nexus-tui
-                     local: login | logout | status | models | migrate | serve | daemon
+                     local: login | logout | status | models | migrate | serve | daemon | config | doctor | update | voice | agent
                      daemon clients: project | session | workspace | run | chat
 tests/               offline tests (test_server.py drives the API with a scripted provider)
 ```
@@ -299,8 +317,10 @@ posting, renders the turn (including questions and approvals), and accepts
 | `test_loop.py` | The loop with a scripted provider |
 
 Loop tests use a small scripted provider that replays one reply per request.
-`test_catalog.py` also covers `split_ref`. The table is from the test names and
-file headers; the tests were not read in full.
+`test_catalog.py` also covers `split_ref`. The table is a selection, from the
+test names and file headers, not the whole suite: other files cover agents,
+skills, MCP, hooks, voice, files, images, search and the HTTP API
+(`test_server.py`). Those tests were not read in full for this page.
 
 ## Style
 

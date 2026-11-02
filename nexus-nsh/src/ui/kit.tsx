@@ -54,6 +54,35 @@ export const TONE: Record<string, string> = {
   "text.primary": "text-foreground", "status.success": "text-success", "status.error": "text-error", "interactive.accent": "text-primary",
   "status.warning": "text-warning", "text.muted": "text-muted-foreground", "status.info": "text-info",
 };
+/** TextView part classes: a calm hierarchy on the 14/22 base (headings only a step above, semibold, tight to what they introduce). */
+export const PROSE = {
+  root: "text-[14px] leading-[22px] text-foreground",
+  heading1: "text-[17px] leading-6 font-semibold",
+  heading2: "text-[15px] leading-6 font-semibold",
+  heading3: "text-[14px] leading-[22px] font-semibold",
+  heading4: "text-[14px] leading-[22px] font-semibold",
+  heading5: "text-[14px] leading-[22px] font-semibold text-foreground-secondary",
+  heading6: "text-[14px] leading-[22px] font-semibold text-foreground-secondary",
+  listMarker: "text-[14px] leading-[22px] text-foreground-secondary",
+  table: "border-0",
+  tableScroll: "border-0",
+  tableRow: "border-0",
+  tableCell: "border-0 text-[13px] leading-5",
+  tableHeaderCell: "text-muted-foreground font-medium",
+  tableHead: "bg-card rounded-(--radius)",
+  code: "font-(family-name:--font-code) text-[12.5px] rounded-[6px] bg-card text-foreground",
+};
+
+/** The TUI's soft shimmer: a light passes through the word, letter by letter. */
+export function Shimmer(p: { text: string; reduced: boolean; testID?: string }) {
+  return <View class="flex-row" accessibilityLabel={p.text} testID={p.testID ?? "working-shimmer"}>
+    <Each of={[...p.text]}>{(c, i) => <Text
+      class="text-[13px] leading-5 font-medium text-foreground"
+      style={p.reduced ? {} : { animationName: "pulse", animationDuration: 1800, animationDelay: i() * 110, animationIterationCount: "infinite" }}
+    >{c()}</Text>}</Each>
+  </View>;
+}
+
 export function Status(p: { kind: keyof typeof statusGlyphs; word?: boolean; class?: string; text?: string }) {
   const g = statusGlyphs[p.kind];
   const label = p.text ?? g.label;

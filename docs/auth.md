@@ -6,13 +6,16 @@ adapters a header source; adapters never see stored credentials
 
 | File | Role |
 | --- | --- |
-| `auth/__init__.py` | `SIGN_INS = {"codex", "copilot", "grok", "opencode"}` |
+| `auth/__init__.py` | `SIGN_INS`: `codex`, `claude`, `copilot`, `grok`, `opencode`, `openai`, `groq`, `nvidia`, `ollama` |
 | `auth/store.py` | `CredentialStore`: `~/.nexus/auth.json` |
 | `auth/device.py` | RFC 8628 device flow (copilot, grok) |
+| `auth/api_key.py` | Pasted keys: `opencode`, `openai`, `groq`, `nvidia` |
 | `auth/codex.py` | ChatGPT OAuth: browser PKCE and device code |
 | `auth/copilot.py` | GitHub.com device sign-in |
 | `auth/grok.py` | SuperGrok device sign-in and Grok CLI proxy headers |
-| `auth/opencode.py` | OpenCode Go API key |
+| `auth/opencode.py` | OpenCode Go API key (`api_key_auth`) |
+| `auth/claude.py` | Claude Code CLI sign-in; Nexus stores no token |
+| `auth/ollama.py` | Records the local server; no key |
 | `auth/errors.py` | `AuthError`: short messages, never token material |
 
 ## Sign-in from clients
@@ -36,16 +39,18 @@ Every sign-in class takes an optional `CredentialStore` and has:
 | --- | --- |
 | `methods` | Tuple of sign-in methods. First is the default |
 | `async login(method, notify=print)` | Run the flow; `notify(str)` shows a URL or code to the user |
-| `logged_in() -> bool` | Credentials exist (stored; opencode also accepts `$OPENCODE_API_KEY`) |
+| `logged_in() -> bool` | Credentials exist. An API-key provider also counts its `$<ENV>` when nothing is stored. Claude asks the CLI. Ollama is signed in once a server address is stored |
 | `logout()` | Delete the stored entry (under the lock) |
 | `async headers() -> dict[str, str]` | Auth headers for one request; refreshes tokens when needed |
 
 | Provider | `methods` | Flow |
 | --- | --- | --- |
-| `codex` | `("browser", "device")` | PKCE in a browser, or a device code |
+| `codex` | `("browser", "device")` | PKCE in a browser, or a device code. The API accepts `device` only |
+| `claude` | `("cli",)` | The user's Claude Code (`claude auth login`) |
 | `copilot` | `("device",)` | GitHub device code (RFC 8628) |
 | `grok` | `("device",)` | auth.x.ai device code (RFC 8628) |
-| `opencode` | `("api_key",)` | Paste a key |
+| `opencode`, `openai`, `groq`, `nvidia` | `("api_key",)` | Paste a key, or set `$OPENCODE_API_KEY`, `$OPENAI_API_KEY`, `$GROQ_API_KEY`, `$NVIDIA_API_KEY` |
+| `ollama` | `("local",)` | Record `$OLLAMA_HOST`, or `http://localhost:11434` |
 
 CLI: `nexus login <provider> [--method M | --device]`, `nexus logout <provider>`,
 `nexus status`. An unknown method for a provider raises `AuthError`.
@@ -158,7 +163,9 @@ entry per provider id.
 | `codex` | `refresh_token`, `account_id`, `residency` | access token, id token |
 | `copilot` | `github_token` | n/a |
 | `grok` | `refresh_token` | access token |
-| `opencode` | `api_key` | n/a (an env key is not stored) |
+| `opencode`, `openai`, `groq`, `nvidia` | `api_key` | an env key is not stored; a stored key wins over `$<ENV>` |
+| `ollama` | `base_url` | n/a |
+| `claude` | nothing | the CLI owns the credential store |
 
 Access tokens live in memory on the sign-in object only.
 

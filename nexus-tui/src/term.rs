@@ -10,8 +10,8 @@ use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, BeginSynchronizedUpdate,
-    EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate,
+    EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute};
 use ratatui::backend::CrosstermBackend;
@@ -32,12 +32,14 @@ fn setup() -> io::Result<()> {
         EnableBracketedPaste
     )?;
     // Lets shift+enter and ctrl+enter be told apart where the terminal can.
-    if supports_keyboard_enhancement().unwrap_or(false)
-        && execute!(
-            out,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        )
-        .is_ok()
+    // Push unconditionally: a terminal without the protocol ignores the
+    // sequence, and asking first (`supports_keyboard_enhancement`) can block the
+    // first frame for up to two seconds while it waits for an answer.
+    if execute!(
+        out,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    )
+    .is_ok()
     {
         ENHANCED.store(true, Ordering::SeqCst);
     }

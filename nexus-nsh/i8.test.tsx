@@ -67,7 +67,7 @@ describe("waiting card (D14)", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:waiting-card");
     expect(app.texts().includes("Allow bash?")).toBe(true);
-    expect(app.texts().some((t) => /^Waiting on you · \d+:\d\d$/.test(t))).toBe(true);
+    expect(app.texts().some((t) => /^waiting on you · \d+:\d\d$/.test(t))).toBe(true);
     expect(app.texts().includes("pytest tests/test_loader.py -q")).toBe(true);
     expect(app.shows("id:waiting-rail")).toBe(true);
     for (const id of ["allow-once", "allow-session", "deny", "deny-note"]) expect(app.shows(`id:${id}`)).toBe(true);
@@ -121,7 +121,7 @@ describe("alerts (D15)", () => {
 
   test("toasts stack three high with +N more; clicking one opens the full text, Esc closes it", async () => {
     const app = await view(snapshot());
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     await fire(app, "app.sign_in", 4);
     await app.waitFor("id:toasts-more");
     expect(app.count("id:toast")).toBe(3);
@@ -136,7 +136,7 @@ describe("alerts (D15)", () => {
 
   test("the notifications drawer opens the same dialog for an entry", async () => {
     const app = await view(snapshot());
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     await fire(app, "app.sign_out");
     await app.press("id:open-notifications");
     await app.waitFor("id:notification-open");

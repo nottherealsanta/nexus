@@ -877,7 +877,9 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
                 let style = w.style();
                 w.text(&value, style);
             }
-            Event::SoftBreak | Event::HardBreak => {
+            // A soft break is a space: the paragraph wraps to the column.
+            Event::SoftBreak => w.text(" ", Style::default()),
+            Event::HardBreak => {
                 if w.table.is_some() {
                     w.text(" ", Style::default());
                 } else {

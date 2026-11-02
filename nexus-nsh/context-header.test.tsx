@@ -14,7 +14,7 @@ describe("starting context presentation", () => {
     const result = startingSections({ agent: { name: "build" }, system_prompt: "First\nSecond", instruction_file: { path: "/work/AGENTS.md", content: "Instructions" } }, []);
     expect(result.sections[0].meta).toBe("");
     expect(result.sections[0].detail).toBe("First\nSecond");
-    expect(result.sections[1].meta).toBe("not read");
+    expect(result.sections[1].meta).toBe("not read · /work/AGENTS.md");
     expect(result.sections[1].detail).toBe("Instructions");
   });
 

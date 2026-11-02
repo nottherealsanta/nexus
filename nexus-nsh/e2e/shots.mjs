@@ -37,7 +37,9 @@ for (const scheme of ["dark", "light"]) for (const [label, w, h] of sizes) {
   { const { ctx, p } = await open(browser, REAL, w, h, scheme); await shot(p, "01-empty-workspace", tag); if (w < 820) { await openDrawerLeft(p, w); await shot(p, "01b-empty-drawer", tag); } await ctx.close(); }
   const { ctx, p } = await open(browser, SCRIPTED, w, h, scheme);
   await openDrawerLeft(p, w);
-  await tid(p, "chip-all-projects").click(); await settle(p, 400);
+  if (w >= 500) await tid(p, `rail-project-${ids.projectA}`).click();
+  else await tid(p, "chip-all-projects").click();
+  await settle(p, 400);
   await shot(p, "02-sessions-list", tag);
   await tid(p, `session-${ids.refactor}`).click(); await settle(p, 1200);
   await shot(p, "03-session-messages", tag);

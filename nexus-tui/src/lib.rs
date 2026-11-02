@@ -33,6 +33,7 @@ pub mod reduce;
 pub mod render;
 pub mod selection;
 pub mod speech;
+pub mod splash;
 pub mod state;
 pub mod stats;
 pub mod sticky;

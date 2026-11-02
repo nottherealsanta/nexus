@@ -6,6 +6,7 @@
   "icon": "../interface/brand/nexus-1024.png",
   "appearance": "system",
   "theme": "gen/theme.json",
+  "rust": "native",
   "capabilities": {
     "network": {
       "hosts": ["*"]

@@ -1,0 +1,27 @@
+{
+  "messages": [
+    { "id": "m1", "seq": 1, "created": 1, "role": "user", "parts": [{ "type": "text", "text": "fix the build" }] },
+    { "id": "m2", "seq": 2, "created": 2, "role": "assistant", "parts": [
+      { "type": "tool_call", "id": "call_1", "name": "bash", "arguments": "{\"command\":\"make\"}" },
+      { "type": "tool_call", "id": "call_2", "name": "edit", "arguments": "{\"path\":\"a.py\",\"old_string\":\"x\",\"new_string\":\"y\\nz\"}" },
+      { "type": "tool_call", "id": "call_3", "name": "edit", "arguments": "{\"path\":\"a.py\",\"old_string\":\"p\",\"new_string\":\"q\"}" },
+      { "type": "tool_call", "id": "call_4", "name": "edit", "arguments": "{\"path\":\"b.py\",\"old_string\":\"nope\",\"new_string\":\"never\"}" },
+      { "type": "tool_call", "id": "call_5", "name": "write", "arguments": "{\"path\":\"c.py\",\"content\":\"1\\n2\\n3\"}" },
+      { "type": "tool_call", "id": "call_6", "name": "read", "arguments": "{\"path\":\"r.txt\"}" },
+      { "type": "tool_call", "id": "call_7", "name": "bash", "arguments": "{\"command\":\"rm -rf build\"}" }
+    ] },
+    { "id": "m3", "seq": 3, "created": 3, "role": "tool", "parts": [
+      { "type": "tool_result", "call_id": "call_1", "output": "[exit code 2]\nboom" },
+      { "type": "tool_result", "call_id": "call_2", "output": "edited" },
+      { "type": "tool_result", "call_id": "call_3", "output": "edited" },
+      { "type": "tool_result", "call_id": "call_4", "output": "no match in b.py", "is_error": true },
+      { "type": "tool_result", "call_id": "call_5", "output": "written" },
+      { "type": "tool_result", "call_id": "call_6", "output": "only line" },
+      { "type": "tool_result", "call_id": "call_7", "output": "the user declined this tool call", "is_error": true }
+    ] },
+    { "id": "m4", "seq": 4, "created": 4, "role": "assistant", "parts": [{ "type": "text", "text": "Partly fixed." }] }
+  ],
+  "expect": ["fix the build", "2 commands, 3 edits, 1 read", "+6", "−2", "1 denied", "Partly fixed."],
+  "absent": ["failed", "make"],
+  "expect_open": ["Shell", "make", "exit 2", "Edit", "a.py", "+2", "−1", "no match in b.py", "Write", "c.py", "+3", "Read", "r.txt", "1 line", "denied", "failed"]
+}

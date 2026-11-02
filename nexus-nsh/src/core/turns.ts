@@ -127,8 +127,8 @@ export function unknownRequests(turns: TurnSummary[]): number {
 }
 
 /** Tool timing by call id: summaries, then live `tool_start`/`tool_end` of the running turn. */
-export function toolTimes(turns: TurnSummary[], scratch: CoreEvent[]): Map<string, { start?: number; end?: number; isError?: boolean }> {
-  const out = new Map<string, { start?: number; end?: number; isError?: boolean }>();
+export function toolTimes(turns: TurnSummary[], scratch: CoreEvent[]): Map<string, { start?: number; end?: number; isError?: boolean; error?: string }> {
+  const out = new Map<string, { start?: number; end?: number; isError?: boolean; error?: string }>();
   for (const t of turns) for (const tool of t.tools ?? []) {
     out.set(tool.call_id, { start: tool.started ?? undefined, end: tool.finished ?? undefined, isError: tool.is_error });
   }
@@ -136,7 +136,10 @@ export function toolTimes(turns: TurnSummary[], scratch: CoreEvent[]): Map<strin
     const id = e.data?.call?.id;
     if (!id) continue;
     if (e.type === "tool_start") out.set(id, { ...(out.get(id) ?? {}), start: e.time });
-    else if (e.type === "tool_end") out.set(id, { ...(out.get(id) ?? {}), end: e.time });
+    else if (e.type === "tool_end") {
+      const failure = e.data?.result?.is_error ? { isError: true, error: String(e.data.result.output ?? "") } : {};
+      out.set(id, { ...(out.get(id) ?? {}), end: e.time, ...failure });
+    }
   }
   return out;
 }

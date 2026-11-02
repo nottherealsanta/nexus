@@ -114,10 +114,9 @@ offline (`HF_HUB_OFFLINE=1`), unloaded after 10 idle minutes. Errors are JSON
 ## Notification sounds
 
 Both clients play two generated cues, best effort through the default audio
-device: a rising two-note cue when a session finishes, and a higher two-note cue
+device: a single note when a session finishes, and a higher two-note cue
 when a session waits for an approval or an answer. The finished cue follows the
-session state, so a subagent finishing sounds when its own turn ends and the
-root sounds again only when its whole tree is idle. Replayed events, snapshots
+session state, sounding only when the root and its whole tree are idle. Replayed events, snapshots
 and services without an output device stay silent. `NEXUS_COMPLETION_SOUNDS=off`
 (also `0` or `false`) disables both cues. Settings › Notifications › Notification
 sounds is the per-client switch; it is on by default. The TUI plays them through
@@ -172,6 +171,11 @@ client prepares the model, playing a gentle repeating tone while a cold model lo
 and falling tones mark capture starting and stopping. A denied microphone is
 a toast. Not yet checked in a browser.
 
+Native NSH (macOS and iOS) has no `navigator.mediaDevices` or Web Audio, so it cannot
+capture audio. There the mic button focuses the composer and points to the system
+keyboard's dictation; in-app capture remains a web-client and TUI feature until the NSH
+runtime provides audio input.
+
 ## Installing the runtime
 
 The heavy packages (Moondream Photon, PyTorch, numpy, Hugging Face Hub and ptts) are
@@ -190,7 +194,8 @@ Both clients show the models in Settings → Voice and speech (manifest section 
 state, repo, size, cache path and any error (for example `nexus voice init`) per model, from
 `GET /api/voice`. Download asks for consent first (repo, about 179 MB for speech to text and
 65 MB for text to speech, from Hugging Face into the standard cache), then calls
-`POST /api/voice/stt/download` or `/tts/download` and follows `voice.progress`. Remove
+`POST /api/voice/stt/download` or `/tts/download` and follows `voice.progress`
+(STT events use `model: "stt"`; TTS events use `target: "tts"`, with `state`, `repo` and `error`). Remove
 confirms (Cancel is the default) and calls `DELETE /api/voice/{stt|tts}`, which deletes only
 that repo's folder from the cache; it is refused while a download runs or speech plays. Rows
 are disabled with a reason when they make no sense in the current state. The settings are

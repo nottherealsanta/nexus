@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, KeyEvent, KeyEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use nexus_tui::actions::{self, ActionDone};
 use nexus_tui::api::{Event as ApiEvent, History, Message, Snapshot};
 use nexus_tui::app::{App, Effect, Sound};
@@ -215,13 +215,16 @@ struct Interactive {
     program_status: nexus_tui::program_status::Tracker,
 }
 
+/// Draw one frame; shared by the first splash paint and the main loop.
+fn draw_terminal(terminal: &mut term::Term, app: &mut App) -> std::io::Result<()> {
+    term::synchronized_update(&mut std::io::stdout(), || {
+        terminal.draw(|f| render::render(f, app)).map(|_| ())
+    })
+}
+
 impl Interactive {
     fn draw(&mut self) -> std::io::Result<()> {
-        let terminal = &mut self.terminal;
-        let app = &mut self.app;
-        term::synchronized_update(&mut std::io::stdout(), || {
-            terminal.draw(|f| render::render(f, app)).map(|_| ())
-        })
+        draw_terminal(&mut self.terminal, &mut self.app)
     }
 
     /// Reconcile program status and run this item's effects, in order. Effects
@@ -362,6 +365,15 @@ impl Interactive {
     /// One input event. Input is a render boundary: its result is always drawn
     /// before another input is handled, so hit maps and scrolls are current.
     fn apply_input(&mut self, ev: Event) -> std::io::Result<Applied> {
+        if self
+            .app
+            .ui
+            .splash
+            .holds_input(Instant::now(), self.app.size.0)
+            && !splash_lets_through(&ev)
+        {
+            return Ok(Applied::dirty(false));
+        }
         match ev {
             Event::Key(k) if k.kind != KeyEventKind::Release => self.app.handle_key(k),
             Event::Mouse(m) => self.app.handle_mouse(m),
@@ -456,7 +468,21 @@ enum Wake {
     Image(Option<(String, Result<Option<nexus_tui::images::Image>, String>)>),
     Done(Option<Box<ActionDone>>),
     Capture(Option<nexus_tui::dictation::CaptureEvent>),
+    Splash,
     Tick,
+}
+
+/// Ctrl-Q and Ctrl-C always work; resize is a terminal event, not input. All
+/// other input waits while the splash covers the chat.
+fn splash_lets_through(ev: &Event) -> bool {
+    match ev {
+        Event::Resize(..) => true,
+        Event::Key(k) if k.kind != KeyEventKind::Release => {
+            k.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(k.code, KeyCode::Char('q') | KeyCode::Char('c'))
+        }
+        _ => false,
+    }
 }
 
 async fn run(
@@ -465,13 +491,15 @@ async fn run(
     opts: Options,
     over: prefs::Overrides,
 ) -> std::io::Result<()> {
-    let terminal = term::enter()?;
+    let mut terminal = term::enter()?;
     let _guard = term::Guard;
     let size = terminal.size()?;
     let mut app = App::new(AppState::new(), Theme::new(opts), (size.width, size.height));
     app.apply_prefs(&home, prefs::load(&home), over);
-    // Query graphics support after entering the alternate screen but before
-    // the input thread starts, so the terminal's replies are not eaten.
+    // Paint the splash before the terminal capability queries: those wait for
+    // an answer, and the launch must not look blank while they do. The query
+    // still runs before the input thread starts, so its replies are not eaten.
+    draw_terminal(&mut terminal, &mut app)?;
     let picker = ratatui_image::picker::Picker::from_query_stdio()
         .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((10, 20)));
     app.image_viewer.borrow_mut().set_picker(picker);
@@ -514,6 +542,10 @@ async fn run(
 
     let mut tick = tokio::time::interval(frames::TICK_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The splash runs on its own 8 ms clock and needs smooth frames; the shell
+    // itself redraws on the slower tick.
+    let mut splash_tick = tokio::time::interval(Duration::from_millis(16));
+    splash_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // The first interval tick is ready immediately, as before. Tracking the
     // deadline lets a batch stop before taking more sync work when a tick is
     // due; the tick itself still runs at the next service opportunity.
@@ -530,6 +562,11 @@ async fn run(
             inter.draw()?;
             dirty = false;
         }
+        let splash_animating = inter
+            .app
+            .ui
+            .splash
+            .animating(Instant::now(), inter.app.size.0);
         // tokio's select! picks a ready branch at random, so a continuously
         // ready input channel cannot starve sync or the tick (or the reverse).
         // Ready input is also a batch barrier, so a long sync queue cannot
@@ -540,6 +577,7 @@ async fn run(
             res = image_rx.recv(), if image_open => Wake::Image(res),
             res = done_rx.recv(), if done_open => Wake::Done(res.map(Box::new)),
             res = capture_rx.recv(), if capture_open => Wake::Capture(res),
+            _ = splash_tick.tick(), if splash_animating => Wake::Splash,
             _ = tick.tick() => Wake::Tick,
         };
         match wake {
@@ -609,6 +647,7 @@ async fn run(
                 }
             }
             Wake::Capture(None) => capture_open = false,
+            Wake::Splash => dirty = true,
             Wake::Tick => {
                 let applied = inter.apply_tick(Instant::now())?;
                 dirty |= applied.dirty;

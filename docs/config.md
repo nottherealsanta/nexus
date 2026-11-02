@@ -9,7 +9,8 @@ The initial inventory is `defaults.effort`, `defaults.agent`,
 `defaults.permission` (`allow` or `ask`) and `tools.disabled`. New root sessions
 apply these values; explicit creation fields override them, and existing
 sessions keep their frozen configuration. Child sessions retain inheritance.
-Other plan items add their own operational settings as those features land.
+The sections below are the settings the file has now. A key that is not one of
+them is listed in `errors` and ignored.
 
 There is no default model ([daemon.md](daemon.md#model-selection)) and no model setting: a `defaults.model`
 in the file is listed in `errors` as an unknown setting and ignored.
@@ -106,3 +107,13 @@ or deleted, and archived trees are shown by the clients' archived filter
 `full_definitions` (boolean, default false) and `max_listed_tools` (integer 1 to 1000, default
 25) choose how a **new** session lists MCP tools in its context; running sessions keep theirs
 ([mcp.md](mcp.md#what-the-model-sees)). Servers are `[mcp.servers.<name>]` tables.
+
+## `[voice]` and `[speech]`
+
+`stt_model` (default `moondream/parakeet-redux`) and `tts_model` (default
+`gradium/phonon-31m-en`) are `owner/name` Hugging Face repos. Both clients edit
+them from Settings → Voice and speech. Downloads still need an explicit consent
+call ([voice.md](voice.md)).
+
+Command hooks are `[[hooks.<Event>]]` tables in the same file. They are not
+schema paths: a bad entry is listed in `errors` and skipped ([hooks.md](hooks.md)).

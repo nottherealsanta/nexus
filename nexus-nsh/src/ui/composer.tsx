@@ -1,12 +1,13 @@
-import { Image, Scroll, Text, View, effect, safeArea, signal, untracked, windowSize } from "nsh";
+import { Image, Scroll, Text, View, effect, keymap, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, Icon, IconButton, FOCUS, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
+import { Btn, Icon, IconButton, FOCUS, Shimmer, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
 import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, restorePendingParts, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
   agentCatalog, contextBudget, draftContext, draftContextKey, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
   projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast, imagePreview,
+  loadResources, resourceCounts, resourcesOpen,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question } from "../core/api";
@@ -18,6 +19,7 @@ import { DiffView, diffItems } from "./diff";
 import { TEXT_INSET, TimelineColumn } from "./reading-column";
 
 import { imageDrafts, readImage } from "../images";
+import { isBigPaste, makePaste, normalisePaste, pasteDrafts, pasteLabel, prunePastes } from "../pastes";
 import { cancelDictation, stopDictation } from "../dictation";
 import { formatBytes } from "../dictation-logic";
 import { dictationLevel, dictationPhase, dictationPreview, voiceDownloadProgress } from "../voice-state";
@@ -114,7 +116,11 @@ export function Composer() {
   const canDictate = () => live() && !ses()?.archived;
   const send = async (mode: "send" | "steer" | "queue" = busy() ? "steer" : "send") => {
     const t = text().trim();
-    if (t && !images().length && runSlashCommand(t)) { draft.update((d) => ({ ...d, [key()]: "" })); return; }
+    if (t && !images().length && runSlashCommand(t)) {
+      draft.update((d) => ({ ...d, [key()]: "" }));
+      prunePastes(key(), "");
+      return;
+    }
     if (!canSend()) { const r = reason(); if (r) toast("info", r); return; }
     const target = key();
     const sent = images();
@@ -124,6 +130,7 @@ export function Composer() {
     if (ok) {
       draft.update((d) => ({ ...d, [target]: (d[target] ?? "").trim() === t ? "" : d[target] ?? "" }));
       imageDrafts.update((d) => ({ ...d, [target]: (d[target] ?? []).filter((i) => !sent.includes(i)) }));
+      prunePastes(target, draft()[target] ?? "");
     }
   };
   const interrupted = () => term("session.interrupted");
@@ -141,12 +148,14 @@ export function Composer() {
     const ref = modelRef();
     if (!ref) return { name: "default", provider: "" };
     const entry = modelCatalog().find((item) => item.ref === ref);
-    if (!entry) return { name: ref.split("/").at(-1) ?? ref, provider: "" };
+    if (!entry) return { name: ref.split("/").at(-1) ?? ref, provider: ref.includes("/") ? ref.split("/")[0] : "" };
     return { name: entry.name || ref.split("/").at(-1) || ref, provider: entry.provider || ref.split("/")[0] };
   };
   const effort = () => {
     const s: any = ses();
-    return s ? (s.effort || s.extra?.effort || "default") : (sessionDraft().effort || "default");
+    const project = currentProject(), answer = draftContext();
+    const planned = project && answer?.key === draftContextKey(project) ? answer.data.session?.effort : null;
+    return s ? (s.effort || s.extra?.effort || "default") : ((sessionDraft().effort ?? planned) || "default");
   };
   /** The latest request's input occupancy, as a count and a share of the model's window. */
   const usage = (): { input: number; pct: number | null } | null => {
@@ -202,6 +211,26 @@ export function Composer() {
   const caretAt = () => { const t = text(); const c = caret(); return c.start === c.end ? Math.min(c.end, t.length) : -1; };
   const onFirstLine = () => { const at = caretAt(); return at >= 0 && !text().slice(0, at).includes("\n"); };
   const onLastLine = () => { const at = caretAt(); return at >= 0 && !text().slice(at).includes("\n"); };
+  // The input reports a paste instead of inserting it: small text goes in at the caret, and a
+  // big paste becomes one atomic marker, as it does in the TUI.
+  const insertAtCaret = (insert: string) => {
+    const value = text();
+    const c = caret();
+    const start = Math.min(c.start, value.length);
+    const end = Math.max(start, Math.min(c.end, value.length));
+    draft.update((d) => ({ ...d, [key()]: value.slice(0, start) + insert + value.slice(end) }));
+    caret.set({ start: start + insert.length, end: start + insert.length });
+    try { ref?.setSelection(start + insert.length, start + insert.length); } catch { /* the platform keeps the caret */ }
+  };
+  const pasteText = (raw: string) => {
+    if (!raw || reason()) return;
+    const clean = normalisePaste(raw);
+    if (!isBigPaste(clean)) { insertAtCaret(clean); return; }
+    const target = key();
+    const entry = makePaste(clean, pasteDrafts()[target] ?? [], text());
+    pasteDrafts.update((d) => ({ ...d, [target]: [...(d[target] ?? []), entry] }));
+    insertAtCaret(entry.marker);
+  };
   // `viewed()` changes on every model bump; reload only when the project or the viewed session changes.
   let historyKey = "";
   effect(() => {
@@ -292,15 +321,13 @@ export function Composer() {
         </If>
       </View>
     </TimelineColumn>
-    <View class="w-full bg-sidebar border-t border-border" style={{ paddingBottom: safeArea().bottom }} testID="composer-dock">
+    <View class="w-full bg-background" style={{ paddingBottom: safeArea().bottom }} testID="composer-dock">
     <TimelineColumn class="items-center">
-        <OtherWaits />
         <View
-          class={`w-full ${TEXT_INSET} pt-3 ${isNarrow() ? "pb-1" : "pb-1.5"}`}
+          class={`w-full pt-3 ${isNarrow() ? "pb-1" : "pb-1.5"}`}
           accessibilityLabel="Composer" testID="composer-panel"
           onLayout={(b: any) => dockWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}
         >
-          <If when={working()}><WorkingRow /></If>
           <PendingStack />
           <If when={images().length > 0}>
             <View class="flex-row flex-wrap gap-2 pb-3" testID="image-previews">
@@ -309,7 +336,7 @@ export function Composer() {
                   <View class="relative w-20 h-20">
                     <Button onPress={() => imagePreview.set({ name: image().name, src: image().data_url })}
                       accessibilityLabel={`Open ${image().name}`} testID={`composer-image-${image().id}`}
-                      class={`w-20 h-20 items-center justify-center rounded-(--radius) overflow-hidden ${FOCUS}`}>
+                      class={`w-20 h-20 items-center justify-center border border-border-strong overflow-hidden ${FOCUS}`}>
                       <Image class="w-20 h-20" src={image().data_url} style={{ width: 80, height: 80, objectFit: "cover" }} accessibilityLabel={image().name} />
                     </Button>
                     <Button onPress={() => imageDrafts.update((d) => ({ ...d, [key()]: images().filter((i) => i !== image()) }))}
@@ -325,8 +352,15 @@ export function Composer() {
           </If>
           <If when={pasting()}><Text class={T.meta}>Preparing image…</Text></If>
           <DictationStatus />
+          <View class="w-full bg-card px-4 pt-3 pb-2" testID="composer-surface">
+          <View class="w-full flex-row items-center gap-3" testID="composer-input-row">
           <Input
-            onPaste={(e) => void pasteImages((e.files ?? []).filter((f) => f.type.startsWith("image/")))}
+            onPaste={(e) => {
+              const files = (e.files ?? []).filter((f) => f.type.startsWith("image/"));
+              if (files.length) { void pasteImages(files); return; }
+              pasteText(e.text ?? "");
+            }}
+            pasteBehavior="report"
             ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
             placeholder={reason() ?? (centre() === "new_session" ? "Message to start a new session" : "Type a message…")}
             readonly={!live() || !!ses()?.archived}
@@ -335,7 +369,7 @@ export function Composer() {
               if (dictationPhase() !== "idle") return;
               void send();
             }}
-            onChange={({ value: t }) => { selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); }}
+            onChange={({ value: t }) => { selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); prunePastes(key(), t); }}
             onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
             onSelectionChange={({ start, end }) => caret.set({ start, end })}
             onKeyPress={(e: { key: string }) => {
@@ -345,20 +379,8 @@ export function Composer() {
             }}
             onContentSizeChange={(s) => h.set(Math.min(220, Math.max(28, Math.ceil(s.size?.height ?? (s as any).height ?? 22) + 4)))}
             style={{ height: h() }}
-            class="px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
+            class="flex-1 min-w-0 px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
           />
-          <View class="h-1" />
-          <View class="flex-row items-center gap-1 min-w-0 min-h-8">
-            <View class="flex-1 min-w-0 flex-row items-center gap-1">
-              <Selector command="agent.change" label={agentName()} labelClass={`font-semibold ${agentColor(agent())}`} testID="composer-agent" alignStart />
-              <Selector command="model.change" label={modelParts().name} sub={dockWidth() < 560 || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
-              <If when={!isNarrow()}>
-                <Selector command="model.effort" label={effort()} testID="composer-effort" fixed />
-              </If>
-              <If when={!busy() && interrupted()}>
-                <Btn label="Continue" icon="play" kind="ghost" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
-              </If>
-            </View>
             <View class="shrink-0 flex-row items-center gap-3">
               <If when={dictationPhase() === "recording" || dictationPhase() === "stopping"}>
                 <IconButton icon="stop" label={dictationPhase() === "recording" ? "Stop and insert transcript" : "Finishing transcription"}
@@ -376,10 +398,27 @@ export function Composer() {
               <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={canSend() ? "bg-primary hover:bg-primary" : "bg-raised"} tint={canSend() ? "tint-on-accent" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
             </View>
           </View>
+          <View class="h-2" />
+          <View class="flex-row items-center gap-1 min-w-0 min-h-8">
+            <View class="flex-1 min-w-0 flex-row items-center gap-1">
+              <Selector command="agent.change" label={agentName()} labelClass={`font-semibold ${agentColor(agent())}`} testID="composer-agent" alignStart />
+              <Text class={T.meta}>·</Text>
+              <Selector command="model.change" label={modelParts().name} sub={dockWidth() < 560 || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
+              <If when={!isNarrow()}>
+                <Text class={T.meta}>·</Text>
+                <Selector command="model.effort" label={effort()} testID="composer-effort" fixed />
+              </If>
+              <If when={!busy() && interrupted()}>
+                <Btn label="Continue" icon="play" kind="ghost" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
+              </If>
+            </View>
+            <If when={!!usageLabel()}><View class="shrink-0" testID="composer-meter"><Text style={{ numberOfLines: 1 }} class={T.meta} testID="composer-usage">{usageLabel()}</Text></View></If>
+          </View>
+          </View>
         </View>
-        <LocationStrip usageLabel={usageLabel()} />
+        <LocationStrip working={working()} />
+        <ActivityBar busy={busy()} fraction={usage()?.pct == null ? 0 : meterPct() / 100} slot={agentSlot(agent())} />
     </TimelineColumn>
-    <ActivityBar busy={busy()} fraction={usage()?.pct == null ? 0 : meterPct() / 100} slot={agentSlot(agent())} />
     </View>
     </View>
   );
@@ -468,16 +507,6 @@ function Selector(p: { command: string; label: string; labelClass?: string; sub?
   );
 }
 
-/** The TUI's soft shimmer: a light passes through the word, letter by letter. */
-function Shimmer(p: { text: string; reduced: boolean }) {
-  return <View class="flex-row" accessibilityLabel={p.text} testID="working-shimmer">
-    <Each of={[...p.text]}>{(c, i) => <Text
-      class="text-[13px] leading-5 font-medium text-foreground"
-      style={p.reduced ? {} : { animationName: "pulse", animationDuration: 1800, animationDelay: i() * 110, animationIterationCount: "infinite" }}
-    >{c()}</Text>}</Each>
-  </View>;
-}
-
 const AGENT_TEXT: Record<string, string> = {
   amber: "text-agent-amber", blue: "text-agent-blue", violet: "text-agent-violet", green: "text-agent-green",
   teal: "text-agent-teal", rose: "text-agent-rose", sky: "text-agent-sky", gold: "text-agent-gold",
@@ -507,8 +536,7 @@ function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
   const full = () => !p.busy && p.fraction >= 0.8;
   const tone = () => (p.fraction >= 0.95 ? "bg-error" : "bg-warning");
   // The 1 px track is always laid out, so the dock does not move when the line appears.
-  return <TimelineColumn>
-    <View class={`w-full ${TEXT_INSET}`}>
+  return <View class="w-full">
       <View class={`relative w-full h-px ${p.busy || full() ? "bg-border-strong" : ""}`} testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`}>
         <If when={p.busy}>
           <View class={`absolute -top-px h-0.5 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
@@ -517,8 +545,7 @@ function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
           <View class={`absolute -top-px h-0.5 left-0 ${tone()}`} testID="activity-fill" style={{ width: `${Math.min(100, p.fraction * 100)}%`, boxShadow: [{ x: 0, y: 0, blur: 4 }] }} />
         </If>
       </View>
-    </View>
-  </TimelineColumn>;
+    </View>;
 }
 
 function WorkingRow() {
@@ -542,15 +569,20 @@ function WorkingRow() {
     return () => clearInterval(id);
   });
   return (
-    <View class="flex-row items-center gap-2 h-7 mb-2" testID="working-row">
+    <View class="shrink-0 flex-row items-center gap-2 h-7" testID="working-row">
       <Status kind="running" />
       <Shimmer text="Working" reduced={!!config()?.values?.ui?.reduced_motion} />
       <Text class={T.sec}>{`· ${fmtDuration(elapsed())}`}</Text>
       <Text class={T.sec} testID="working-output">{`· ↓${compact(output())}`}</Text>
-      <View class="flex-1" />
-
     </View>
   );
+}
+
+/** A queued item's one-line label: its first text line, or a collapsed paste's marker. */
+function pendingLabel(item: any): string {
+  const part = item?.parts?.find((p: any) => p.type === "text");
+  if (!part) return "[image]";
+  return part.collapsed === true ? pasteLabel(part.text ?? "") : (part.text ?? "").split("\n")[0];
 }
 
 function PendingStack() {
@@ -561,7 +593,7 @@ function PendingStack() {
     try {
       if (action === "remove") {
         const item = (stack()?.inputs ?? []).find((i: any) => i.id === id);
-        const text = item?.parts?.find((p: any) => p.type === "text")?.text?.split("\n")[0] ?? "[image]";
+        const text = pendingLabel(item);
         const kind = item?.mode === "steer" ? "steer" : "queued message";
         const sid = s.id;
         confirmDialog.set({
@@ -609,10 +641,10 @@ function PendingStack() {
     </View>
     <Each of={stack()?.inputs ?? []} key={(i) => i.id}>{(i) => <View class="group/pend relative" testID={`pending-${i().id}`}>
       <Button disabled={!always()} onPress={() => opened.set(opened() === i().id ? null : i().id)} selected={opened() === i().id}
-        accessibilityLabel={`${i().mode === "steer" ? "Steer" : "Queued"}: ${i().parts.find((p: any) => p.type === "text")?.text?.split("\n")[0] ?? "[image]"}`}
+        accessibilityLabel={`${i().mode === "steer" ? "Steer" : "Queued"}: ${pendingLabel(i())}`}
         class={`flex-row items-center gap-3 min-h-8 rounded-(--radius) ${FOCUS}`}>
         <Text class={`w-12 shrink-0 ${T.meta}`}>{i().mode === "steer" ? "steer" : "queued"}</Text>
-        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec}`}>{i().parts.find((p: any) => p.type === "text")?.text?.split("\n")[0] ?? "[image]"}</Text>
+        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec}`}>{pendingLabel(i())}</Text>
       </Button>
       <If when={always()} else={<View class="absolute right-0 top-0 bottom-0 flex-row items-center gap-0.5 pl-2 group-hover/pend:bg-sidebar"><PendingActions i={i} /></View>}>
         <If when={opened() === i().id}><View class="flex-row items-center justify-end gap-0.5"><PendingActions i={i} /></View></If>
@@ -621,8 +653,10 @@ function PendingStack() {
   </View></If>;
 }
 
-/** The location strip shows the path, branch and linked-worktree icon. */
-function LocationStrip(p: { usageLabel: string }) {
+let resourcesTimer: ReturnType<typeof setInterval> | undefined;
+
+/** The location strip shows the path, branch, live kernel/shell counts and linked-worktree icon. */
+function LocationStrip(p: { working: boolean }) {
   // The row's measured width decides how much path fits; a fixed character count overflows a
   // narrow column and truncates needlessly in a wide one.
   const stripWidth = signal(0);
@@ -645,9 +679,22 @@ function LocationStrip(p: { usageLabel: string }) {
   const pathLimit = () => {
     const w = stripWidth();
     if (!w) return isNarrow() ? 24 : 54;
-    const reserved = 16 + (branch() ? 104 : 0) + (p.usageLabel ? 88 : 0) + 32;
+    const c = resourceCounts();
+    const chip = c.kernels || c.shells ? 120 : 0;
+    const reserved = 16 + (branch() ? 104 : 0) + (p.working ? 190 : 0) + chip + 32;
     return Math.max(12, Math.floor((w - reserved) / 7.2));
   };
+  // A kernel appears while a code cell runs, and a shell finishes between turns:
+  // refresh while the tree is busy or this list is open.
+  effect(() => {
+    const watch = session()?.status === "busy" || resourcesOpen();
+    if (watch && resourcesTimer === undefined) {
+      resourcesTimer = setInterval(() => { if (connection().kind === "live") void loadResources(); }, 2000);
+    } else if (!watch && resourcesTimer !== undefined) {
+      clearInterval(resourcesTimer);
+      resourcesTimer = undefined;
+    }
+  });
   const directoryAvailability = () => {
     const c = byId.get("session.change_directory");
     return c ? availability(c) : { ok: false, reason: "Directory changes are not available in NSH." };
@@ -657,36 +704,52 @@ function LocationStrip(p: { usageLabel: string }) {
     return c ? availability(c) : { ok: false, reason: "Worktree controls are not available in NSH." };
   };
   const tooltip = (text: string) => <Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{text}</Text>;
+  const chipLabel = () => {
+    const c = resourceCounts();
+    return [
+      c.kernels ? `${c.kernels} ${c.kernels === 1 ? "kernel" : "kernels"}` : "",
+      c.shells ? `${c.shells} ${c.shells === 1 ? "shell" : "shells"}` : "",
+    ].filter(Boolean).join(" · ");
+  };
+  const openResources = () => {
+    resourcesOpen.set(true);
+    void loadResources();
+  };
   return (
-    <If when={(project() && directory()) || !!p.usageLabel}>
-      <View class={`w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 pb-1.5 ${TEXT_INSET}`} testID="location-strip"
+    <If when={(project() && directory()) || p.working}>
+      <View class="w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 pb-1.5" testID="location-strip"
         onLayout={(b: any) => stripWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
-        <If when={!!session()}>
-          <Button
-            disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
-            accessibilityLabel={`Directory ${directory()}${directoryAvailability().ok ? "" : `, unavailable: ${directoryAvailability().reason ?? ""}`}`}
-            tooltip={tooltip(directoryAvailability().reason ?? "Change session directory")}
-            class={`min-w-0 shrink rounded-(--radius) ${FOCUS}`}
-          ><Text style={{ numberOfLines: 1 }} class={`${T.mono} min-w-0`}>{path()}</Text></Button>
-        </If>
-        <If when={!session()}><Text testID="location-directory" style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.mono}`}>{path()}</Text></If>
-        <If when={!!branch()}>
-          <If when={!!session()} else={<Text testID="location-branch" style={{ numberOfLines: 1 }} class={`${T.mono} min-w-0 shrink`}>{`⌥ ${branch()!}`}</Text>}>
+        <View class="flex-1 min-w-0 flex-row items-center gap-2">
+          <If when={!!session()}>
             <Button
-              disabled={!worktreeAvailability().ok} onPress={() => void run("session.worktrees")} testID="location-branch"
-              accessibilityLabel={`Branch ${branch()}${worktreeAvailability().ok ? "" : `, unavailable: ${worktreeAvailability().reason ?? ""}`}`}
-              tooltip={tooltip(worktreeAvailability().reason ?? "Worktree controls")}
+              disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
+              accessibilityLabel={`Directory ${directory()}${directoryAvailability().ok ? "" : `, unavailable: ${directoryAvailability().reason ?? ""}`}`}
+              tooltip={tooltip(directoryAvailability().reason ?? "Change session directory")}
               class={`min-w-0 shrink rounded-(--radius) ${FOCUS}`}
-            ><Text style={{ numberOfLines: 1 }} class={`${T.mono}`}>{`⌥ ${branch()!}`}</Text></Button>
+            ><Text style={{ numberOfLines: 1 }} class={`${T.mono} min-w-0`}>{path()}</Text></Button>
           </If>
+          <If when={!session()}><Text testID="location-directory" style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.mono}`}>{path()}</Text></If>
+          <If when={!!branch()}>
+            <If when={!!session()} else={<Text testID="location-branch" style={{ numberOfLines: 1 }} class={`${T.mono} min-w-0 shrink`}>{`⌥ ${branch()!}`}</Text>}>
+              <Button
+                disabled={!worktreeAvailability().ok} onPress={() => void run("session.worktrees")} testID="location-branch"
+                accessibilityLabel={`Branch ${branch()}${worktreeAvailability().ok ? "" : `, unavailable: ${worktreeAvailability().reason ?? ""}`}`}
+                tooltip={tooltip(worktreeAvailability().reason ?? "Worktree controls")}
+                class={`min-w-0 shrink rounded-(--radius) ${FOCUS}`}
+              ><Text style={{ numberOfLines: 1 }} class={`${T.mono}`}>{`⌥ ${branch()!}`}</Text></Button>
+            </If>
+          </If>
+          <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={T.mono}>⑂</Text></If>
+        </View>
+        <If when={!!chipLabel()}>
+          <Button onPress={openResources} accessibilityLabel={`Kernels and shells: ${chipLabel()}`} testID="location-resources"
+            class={`rounded-(--radius) bg-selection px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}>
+            <Text style={{ numberOfLines: 1 }} class="text-xs leading-4 font-semibold text-primary tabular-nums">{chipLabel()}</Text>
+          </Button>
         </If>
-        <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={T.mono}>⑂</Text></If>
-        <View class="flex-1" />
-        <If when={!!p.usageLabel}>
-          <View class="shrink-0 flex-row items-center gap-2" testID="composer-meter">
-            <Text style={{ numberOfLines: 1 }} class={`${T.meta}`} testID="composer-usage">{p.usageLabel}</Text>
-          </View>
-        </If>
+        <View class="flex-1 min-w-0 flex-row items-center justify-end">
+          <If when={p.working}><WorkingRow /></If>
+        </View>
       </View>
     </If>
   );
@@ -732,21 +795,6 @@ export function WaitingCard() {
     <TimelineColumn class="items-center mt-2" testID="waiting-slot">
       <If when={cur()}>{(w) => <WaitBody w={w} count={items().length} />}</If>
     </TimelineColumn>
-  );
-}
-
-/** A slim dock row for approvals and questions in other sessions while this one has none. */
-function OtherWaits() {
-  const others = () => { m(); return otherWaits(); };
-  const show = () => { m(); return waitItems().length === 0 && others().length > 0; };
-  return (
-    <If when={show()}>
-      <View class={`w-full flex-row items-center gap-2 h-8 border-b border-border ${TEXT_INSET}`} testID="other-waits">
-        <Status kind="waiting" word={false} />
-        <Text class={`flex-1 min-w-0 ${T.sec}`} style={{ numberOfLines: 1 }}>{`${others().length} other session${others().length === 1 ? " is" : "s are"} waiting`}</Text>
-        <View class="-mr-3"><Btn label="Go to" kind="ghost" onPress={() => run("waiting.go_to")} testID="waiting-go-to" /></View>
-      </View>
-    </If>
   );
 }
 
@@ -805,11 +853,17 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
       map["enter"] = () => { if (!(draft()[draftKey()] ?? "").length) approvalChoices(a)[choice()]?.run?.(); };
     }
     if (q && live()) bind("waiting.submit_answers", () => void submitQuestion(q));
-    return bindOpenKeys(map);
+    const offs: (() => void)[] = [];
+    const letter = (key: string, fn: () => void) => { try { offs.push(keymap.bind(key, fn, { when: "notEditing" })); } catch { /* the platform keeps this keystroke */ } };
+    if (a && live()) for (const row of approvalChoices(a)) { const key = byId.get(row.cmd)?.keys?.tui; if (key && row.run) letter(key, row.run); }
+    const one = q?.questions[0];
+    if (q && one && !one.multiple && live()) one.options.slice(0, 9).forEach((o, i) => letter(String(i + 1), () => answers.update((all) => ({ ...all, [`${q.id}:${one.id}`]: { selected: [o.id], text: all[`${q.id}:${one.id}`]?.text ?? "" } }))));
+    const off = bindOpenKeys(map);
+    return () => { off(); offs.forEach((f) => f()); };
   });
   const multi = () => question()?.questions.some((x) => x.multiple) ?? false;
   return (
-    <View class="relative w-full mb-2 rounded-(--radius-card) bg-raised" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
+    <View ref={(n: any) => { focusWaiting.fn = () => { try { n?.focus(); } catch { /* not focusable here */ } }; }} focusable class="relative w-full mb-2 rounded-(--radius-card) bg-raised" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
       <StatusRail color={multi() ? "bg-multi" : "bg-primary"} testID="waiting-rail" />
       <Scroll style={{ maxHeight: Math.round(windowSize().height * 0.6) }}>
         <View class="pl-4 pr-4 py-3 gap-2.5">
@@ -828,7 +882,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
             </If>
           </View>
           <Text class={`${T.sec} text-muted-foreground`} testID="waiting-sub">
-            {`Waiting on you · ${clock(elapsed())}${question() ? ` · question 1 of ${question()!.questions.length}` : ""}${child() ? ` · in child: ${child()}` : ""}`}
+            {`waiting on you · ${clock(elapsed())}${child() ? ` · in child: ${child()}` : ""}`}
           </Text>
         </View>
         <If when={approval()}>{() => <ApprovalBody a={approval()!} />}</If>
@@ -885,17 +939,23 @@ function ApprovalBody(p: { a: Approval }) {
                 <Button onPress={() => r().run?.()} disabled={off()} testID={r().id}
                   accessibilityLabel={off() ? `${r().title}, unavailable: ${reason()}` : r().title}
                   class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-8"} ${i() === choice() && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-accent"} ${FOCUS}`}>
+                  <Text class={`shrink-0 w-5 text-center rounded-(--radius) bg-muted text-xs leading-5 font-medium ${off() ? "text-muted-foreground" : "text-foreground"}`}>{byId.get(r().cmd)?.keys?.tui ?? ""}</Text>
                   <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[13px] leading-5 ${off() ? "text-muted-foreground" : "text-foreground"}`}>{r().title}</Text>
                   <If when={off()}><Text testID={`${r().id}-reason`} class={T.meta}>{reason()}</Text></If>
-                  <Text class={`shrink-0 rounded-(--radius) bg-muted px-1.5 text-xs leading-4 font-medium ${off() ? "text-muted-foreground" : "text-foreground"}`}>{keyLabel(byId.get(r().cmd)!) ?? ""}</Text>
                 </Button>
               );
             }}
           </Each>
         </View>
+        <AnswerHint />
       </If>
     </View>
   );
+}
+
+function AnswerHint() {
+  const c = byId.get("waiting.focus");
+  return <If when={!!c}><Text class={T.meta} testID="waiting-answer-hint"><Text class="font-medium text-foreground">{c ? keyLabel(c) ?? "" : ""}</Text>{" answer"}</Text></If>;
 }
 
 /** A drawn radio mark: a 14 px ring with a filled centre when selected. */
@@ -925,12 +985,12 @@ function QuestionBody(p: { q: Question }) {
             <View class="gap-1.5">
               <Text class="text-[14px] leading-[22px] font-medium text-foreground">{qq().question}</Text>
               <Each of={qq().options} key={(o) => o.id}>
-                {(o) => (
+                {(o, n) => (
                   <Button role={qq().multiple ? "checkbox" : "radio"} selected={sel(o().id)} accessibilityLabel={o().label}
                     onPress={() => upd(id(), (a) => ({ ...a, selected: qq().multiple ? (a.selected.includes(o().id) ? a.selected.filter((x) => x !== o().id) : [...a.selected, o().id]) : [o().id] }))}
                     class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 min-h-8 hover:bg-accent ${sel(o().id) ? "bg-selection" : ""} ${FOCUS}`}>
-                    <If when={qq().multiple} else={<RadioMark on={sel(o().id)} testID={`choice-mark-${o().id}`} />}><CheckMark on={sel(o().id)} testID={`choice-mark-${o().id}`} /></If>
-                    <Text class="flex-1 text-[13px] leading-5 text-foreground">{o().label}</Text>
+                    <If when={qq().multiple} else={<Text testID={`choice-mark-${o().id}`} class={`shrink-0 w-3.5 text-center text-[13px] leading-5 ${sel(o().id) ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>}><CheckMark on={sel(o().id)} testID={`choice-mark-${o().id}`} /></If>
+                    <Text class={`flex-1 text-[13px] leading-5 ${sel(o().id) ? "font-semibold text-foreground" : "text-foreground"}`}>{o().label}</Text>
                   </Button>
                 )}
               </Each>
@@ -942,6 +1002,7 @@ function QuestionBody(p: { q: Question }) {
       <View class="flex-row items-center gap-3">
         <Btn label="Submit answers" kind="primary" busy={busyWait()} onPress={() => void submitQuestion(q)} testID="submit-answers" disabled={!live()} />
         <Text class={T.meta}>{`${keyLabel(byId.get("waiting.submit_answers")!) ?? "enter"} submit · tab next question`}</Text>
+        <AnswerHint />
       </View>
     </View>
   );

@@ -6,6 +6,11 @@ tool approvals, pending questions, workspace control operations, session
 archiving, pending directory moves and startup recovery, and exposes them over
 the [HTTP API](api.md). Clients never read Nexus state files.
 
+An explicit reasoning-effort selection on a root session is remembered for new
+root sessions, including after a daemon restart. Selecting default remembers the
+absence of an override; otherwise the configured default applies until a choice
+is made. Subagent selections do not change this memory.
+
 ## Lifecycle (`nexus/daemon.py`)
 
 | Command | What it does |
@@ -127,8 +132,8 @@ the latest GitHub release and never installs.
   A `message` row also records the id of the `message.added` event that announced it.
   Deleting a project or session deletes everything under it, including its child
   sessions, snapshots, observations, execution records and session events.
-  Archiving only changes one `archived` column on every session in the tree; it
-  deletes nothing.
+  Archiving changes the `archived` column on every session in the tree and
+  releases its idle owned kernels; stored history is preserved.
 
 ## Model selection
 
@@ -285,8 +290,14 @@ one `session.archived` or `session.unarchived` event (stored in the root's event
 log) with the tree ids; repeating the same state publishes nothing.
 
 - **Refusals.** A root or any descendant running a turn, or waiting for an
-  approval or question, gives 409 and is left alone. Archiving never interrupts
-  or stops anything, and never removes a worktree, branch or background job.
+  approval or question, gives 409 and is left alone. A busy owned kernel (including use by another tree) also gives 409. Archive
+  releases idle owned kernels, and never removes a worktree, branch or background job.
+- **Kernels.** Archive detaches kernels created by the tree (including children)
+  and its default kernel immediately, then closes their workers asynchronously.
+  It publishes `kernel.deleted` with the state-loss reason. Variables have no
+  saved checkpoint; cell history and outputs remain durable. Unarchive leaves
+  kernels absent until the next code call creates fresh state. Borrowing another
+  tree's kernel does not transfer ownership.
 - **While archived.** Messages, events, snapshots, file observations,
   directories and tree relationships stay readable. A prompt gets 409 with the
   unarchive command, and a new child in the tree gets 409, until the root is
@@ -310,7 +321,7 @@ it, while reads, listings and status polls do not. Work in a child keeps its
 root unarchived.
 
 A sweep uses the ordinary archive transition, so each tree gets one
-`session.archived` event and nothing is stopped or deleted. Trees with a
+`session.archived` event and releases its idle owned kernels; stored history remains. Trees with a
 running turn, a pending approval or question, pending input or a live
 background bash job are skipped and retried by a later sweep. The config value
 is re-read every sweep, so changing it does not require a daemon restart. A
@@ -656,8 +667,10 @@ unarchive command.
 - **Retries and replay.** Provider attempts are bounded and visible; clients can
   replay keyed mutations and reconnect from a durable cursor. An ambiguous
   external Git effect is still unknown, not transactional.
-- **Daemon version.** Nothing checks that a running daemon runs the same code
-  as the client. Run `nexus daemon stop` after changing core.
+- **Daemon code.** Clients check `api_version` before they send anything else.
+  They do not compare source. `nexus doctor` does: `/api/info` `code` is a hash
+  of `nexus/**/*.py`, and a mismatch with the checkout is a failure. Run
+  `nexus daemon stop` after changing core.
 
 ## Kernels
 

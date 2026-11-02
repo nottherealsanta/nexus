@@ -76,6 +76,15 @@ async def test_info_reports_the_api_contract_clients_check(setup):
     assert info["retention_status"]["storage"]["events"] >= 0
 
 
+async def test_json_responses_are_gzipped_when_the_client_accepts_it(setup):
+    _, client, _, _ = setup
+    plain = await client.get("/api/info", headers={"accept-encoding": "identity"})
+    assert plain.status_code == 200 and "content-encoding" not in plain.headers
+    zipped = await client.get("/api/info", headers={"accept-encoding": "gzip"})
+    assert zipped.status_code == 200 and zipped.headers["content-encoding"] == "gzip"
+    assert zipped.json() == plain.json()
+
+
 async def test_projects_are_unique_by_path_and_own_sessions(setup):
     _, client, _, workspace = setup
     first = (await client.post("/api/project", json={"path": str(workspace)})).json()
@@ -224,6 +233,8 @@ async def test_code_nested_write_needs_no_approval_and_kernel_api(setup):
     assert write_call["parent_call_id"] == "code1" and write_call["output"].startswith("created")
     details = (await client.get(f"/api/kernel/{kid}")).json()
     assert details["cell_count"] == 1 and details["variables"][0]["name"] == "x"
+    summary = (await client.get("/api/kernel", params={"summary": "1"})).json()[0]
+    assert summary["cell_count"] == 1 and "cells" not in summary
     await client.delete(f"/api/session/{sid}")
     assert (await client.get(f"/api/kernel/{kid}")).status_code == 200
     assert (await client.delete(f"/api/kernel/{kid}")).status_code == 204

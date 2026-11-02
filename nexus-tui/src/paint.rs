@@ -345,6 +345,68 @@ pub fn compact(n: u64) -> String {
     }
 }
 
+/// The cells left for file text in a view `width` wide over `lines` lines: its
+/// margin, the line numbers and the rail come off.
+pub fn file_text_room(width: u16, lines: usize) -> usize {
+    let digits = lines.to_string().len().max(3);
+    (width as usize)
+        .saturating_sub(1 + digits + 1 + 2 + 1)
+        .max(1)
+}
+
+/// A line of a file cut to `room` cells: the byte range of each row. Rows break
+/// after a space when there is one, as the editor's do, and every character stays.
+pub fn wrap_ranges(line: &str, room: usize) -> Vec<std::ops::Range<usize>> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut rows = Vec::new();
+    let (mut start, mut used, mut space) = (0, 0, None);
+    for (at, grapheme) in line.grapheme_indices(true) {
+        let w = crate::text::width(grapheme);
+        if used + w > room && at > start {
+            let cut = space.filter(|&s| s > start).unwrap_or(at);
+            rows.push(start..cut);
+            start = cut;
+            used = crate::text::width(&line[cut..at]);
+            space = None;
+        }
+        used += w;
+        if grapheme == " " || grapheme == "\t" {
+            space = Some(at + grapheme.len());
+        }
+    }
+    rows.push(start..line.len());
+    rows
+}
+
+/// How many lines from `scroll` fit in `page` rows at this width; a line that
+/// only partly fits counts, because its first rows show.
+pub fn file_lines_shown(content: &str, scroll: usize, room: usize, page: usize) -> usize {
+    let mut rows = 0;
+    let mut shown = 0;
+    for line in content.lines().skip(scroll) {
+        if rows >= page {
+            break;
+        }
+        rows += wrap_ranges(line, room).len();
+        shown += 1;
+    }
+    shown
+}
+
+/// The last scroll position, in lines, that still fills the page, so the end of
+/// a file with wrapped lines can be reached.
+pub fn file_scroll_max(content: &str, room: usize, page: usize) -> usize {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut rows = 0;
+    for (index, line) in lines.iter().enumerate().rev() {
+        rows += wrap_ranges(line, room).len();
+        if rows > page {
+            return (index + 1).min(lines.len().saturating_sub(1));
+        }
+    }
+    0
+}
+
 /// Rows of file text in a file view `height` rows high: the view has a header
 /// row, a blank row under it (when there is room) and the search row at the
 /// bottom, which is always reserved so the text does not shift (DESIGN_PLAN.md D16).
@@ -357,8 +419,8 @@ pub fn file_page(height: u16) -> usize {
 }
 
 /// The Nexus splash logo (DESIGN_PLAN.md D18): an `N` of `_/` strokes, five
-/// rows. Shared by the connecting screen and the empty workspace, in the
-/// accent colour (bold in mono). ASCII mode needs no fallback.
+/// rows. Shared by the launch splash (`text.primary`), the connecting screen
+/// and the empty workspace (accent, bold in mono). ASCII mode needs no fallback.
 pub const LOGO: [&str; 5] = [
     "    _/      _/",
     "   _/_/    _/",
@@ -446,8 +508,10 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
         }
         rows.push(clip_row(head, layout));
         if let CtxBody::Inventory(items) = &section.body {
-            if layout.columns && section.title == "Tools" {
-                grid_rows(items, layout, &mut rows);
+            if layout.columns {
+                // Tools take up to four columns; skills and servers two.
+                let most = if section.title == "Tools" { 4 } else { 2 };
+                grid_rows(items, layout, most, &mut rows);
                 continue;
             }
             for item in items {
@@ -510,9 +574,10 @@ fn switch_marker(on: bool, ascii: bool) -> &'static str {
     }
 }
 
-/// Switch cells in columns: `● name` padded to the widest, as many columns
-/// as fit up to four (at least one).
-fn grid_rows(items: &[CtxItem], layout: &CtxLayout, rows: &mut Vec<CtxRow>) {
+/// Switch cells in columns: `● name` padded to the widest, as many columns as
+/// fit up to `most` (at least one). Items fill each column downward, so five in
+/// two columns read three and two.
+fn grid_rows(items: &[CtxItem], layout: &CtxLayout, most: usize, rows: &mut Vec<CtxRow>) {
     use crate::text::width;
     let label = |item: &CtxItem| {
         if item.locked && !layout.preview {
@@ -523,10 +588,11 @@ fn grid_rows(items: &[CtxItem], layout: &CtxLayout, rows: &mut Vec<CtxRow>) {
     };
     let mw = width(switch_marker(true, layout.ascii));
     let cell = items.iter().map(|i| width(&label(i))).max().unwrap_or(0) + 2 + mw + 2;
-    let columns = (layout.width / cell.max(1)).clamp(1, 4);
-    for chunk in items.chunks(columns) {
+    let columns = (layout.width / cell.max(1)).clamp(1, most);
+    let height = items.len().div_ceil(columns);
+    for y in 0..height {
         let mut row: CtxRow = Vec::new();
-        for item in chunk {
+        for item in (0..columns).filter_map(|x| items.get(x * height + y)) {
             let text = label(item);
             let role = if item.locked {
                 CtxRole::ToggleLocked(item.index)

@@ -1,20 +1,21 @@
 import { agentColor } from "../agent-color";
-import { List, Scroll, computed, signal, Text, View } from "nsh";
+import { List, Scroll, computed, effect, signal, Text, View } from "nsh";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
-import { FOCUS, Icon, IconButton, Status, StatusRail, T } from "./kit";
+import { FOCUS, Icon, IconButton, PROSE, Shimmer, Status, StatusRail, T } from "./kit";
 import { DiffView } from "./diff";
 import { disabledOf, startingSections, StartingContext } from "./newsession";
 import type { CtxSection } from "./newsession";
 import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
-import { contextDetail, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed } from "../store";
+import { config, contextDetail, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed } from "../store";
 import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import { apiUrl } from "../core/transport";
 import type { IconName } from "../icons";
 import { roles, statusGlyphs } from "../gen/theme";
+import { pasteLabel } from "../pastes";
 import "../../fonts/MonaspaceArgon-Regular.otf";
 import "../../fonts/MonaspaceArgon-Medium.otf";
 import "../../fonts/MonaspaceArgon-Bold.otf";
@@ -28,9 +29,9 @@ const META = `${T.meta}`;
 const hit = (base: string) => (isNarrow() ? "min-h-11" : base);
 
 type Row =
-  | { key: string; kind: "footer"; segments: { text: string; tip?: string }[]; error?: string; interrupted: boolean }
+  | { key: string; kind: "footer"; segments: { text: string }[]; error?: string; interrupted: boolean }
   | {
-      key: string; kind: "user"; delivery?: string | null; images?: { name: string; data_url: string }[]; n: number; time: string; text: string; turnKey: string; folded: boolean;
+      key: string; kind: "user"; delivery?: string | null; images?: { name: string; data_url: string }[]; pastes?: { marker: string; text: string }[]; n: number; time: string; text: string; turnKey: string; folded: boolean;
       tools: number; duration: string; status: TurnStatus;
     }
   | {
@@ -40,33 +41,44 @@ type Row =
   | { key: string; kind: "notice"; text: string; label: string; tone: Tone }
   | { key: string; kind: "handoff"; from: string; summary: string; time: string }
   | { key: string; kind: "assistant"; text: string; streaming?: boolean }
-  | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean; running?: boolean; duration?: string }
+  | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean; running?: boolean }
   | {
       key: string; kind: "activity"; summary: string; items: (Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>)[];
-      open: boolean; defaultOpen: boolean; hidden: number; failed: number; diff?: Diff;
+      open: boolean; defaultOpen: boolean; running: boolean; hidden: number; denied: number; diff?: Diff;
     }
   | {
       key: string; kind: "tool"; id: string; name: string; arg: string; summary: string; tone: Tone;
-      state: "running" | "done" | "error" | "waiting"; duration?: string; seconds?: number; diff?: Diff; output?: string;
-      detail: { text: string; tone: "plain" | "add" | "del" | "info" | "error" | "accent" }[];
+      state: "running" | "done" | "error" | "waiting" | "denied"; duration?: string; seconds?: number; diff?: Diff; output?: string;
+      /** The file an edit counts toward in its group's summary (the call id without a path). */
+      editFile?: string; exit?: number; errorLine?: string;
+      detail: ToolDetailLine[];
       raw: string; open: boolean; clipped: boolean; showAll: boolean;
       /** Images the tool returned (K8): artifacts Core stored, shown beside the output. */
       media: { artifact: string; mime: string; name: string }[];
     }
   | {
-      key: string; kind: "child"; childId?: string; agent: string; title: string; status: string; tone: Tone;
-      body: string; open: boolean; background: boolean; ack: boolean; meta: string;
+      key: string; kind: "child"; childId?: string; agent: string; title: string; state: "running" | "done" | "idle";
+      background: boolean; meta: string; outcome: string;
     }
   | { key: string; kind: "diag"; text: string; label: string; detail?: string; tone: Tone; count?: number }
   | { key: string; kind: "older"; text: string; action?: "load-older" }
   | { key: string; kind: "empty" };
 
-export type ToolDetailLine = { text: string; tone: "plain" | "add" | "del" | "info" | "error" | "accent" };
+export type ToolDetailLine = { text: string; tone: "plain" | "add" | "del" | "info" | "error" | "accent" | "command" | "muted" | "show-all" | "show-less" };
 const DETAIL_HEAD = 100;
 const DETAIL_TAIL = 100;
 const HIGH_HEAD = 30;
 const HIGH_TAIL = 20;
 const HIDDEN_MARK = "lines hidden · show all (o)";
+/** Output rows kept at the end of a tool's detail, and the command rows kept at its start (the TUI's `OUTPUT_TAIL` and `COMMAND_ROWS`). */
+const OUTPUT_TAIL = 8;
+const COMMAND_ROWS = 2;
+/** The result Core stores when the user declines a tool call. */
+const DECLINED = "the user declined this tool call";
+/** How long a finished group's chevron flashes the accent (the TUI's six animation frames). */
+const FLASH_MS = 600;
+/** Verb and thought icons in an open group: quieter than the 16 px chrome icons. */
+const MEMBER_ICON = 13;
 
 /** UI-only cap: the model's separate output clip stays untouched. */
 export function capToolDetail(lines: ToolDetailLine[], showAll: boolean, head = DETAIL_HEAD, tail = DETAIL_TAIL): ToolDetailLine[] {
@@ -74,8 +86,20 @@ export function capToolDetail(lines: ToolDetailLine[], showAll: boolean, head = 
   const hidden = lines.length - head - tail;
   return [
     ...lines.slice(0, head),
-    { text: `… ${hidden} ${HIDDEN_MARK}`, tone: "accent" },
+    { text: `… ${hidden} ${HIDDEN_MARK}`, tone: "show-all" },
     ...lines.slice(-tail),
+  ];
+}
+
+/** Command and output detail: `head` command rows are never cut, and long output keeps its last rows. */
+export function capToolOutput(lines: ToolDetailLine[], showAll: boolean, head: number): ToolDetailLine[] {
+  const rows = lines.length - head;
+  if (rows <= OUTPUT_TAIL + 2) return lines;
+  if (showAll) return [...lines.slice(0, head), { text: `↑ showing all ${rows} lines · o show less`, tone: "show-less" }, ...lines.slice(head)];
+  return [
+    ...lines.slice(0, head),
+    { text: `↑ ${rows - OUTPUT_TAIL} earlier lines · enter show all`, tone: "show-all" },
+    ...lines.slice(-OUTPUT_TAIL),
   ];
 }
 
@@ -118,15 +142,35 @@ export function patchArg(patch: string): string | null {
   if (!paths.length) return null;
   return paths.length > 1 ? `${paths[0]} +${paths.length - 1} file${paths.length === 2 ? "" : "s"}` : paths[0];
 }
-function toolArg(args: string | undefined): string {
-  if (!args) return "";
-  try {
-    const o = JSON.parse(args);
-    if (typeof o.patch === "string") { const target = patchArg(o.patch); if (target) return target; }
-    const v = o.command ?? o.path ?? o.file ?? o.pattern ?? o.query ?? o.directory ?? o.code ?? o.url ?? Object.values(o)[0];
-    return typeof v === "string" ? v.replace(/\s+/g, " ") : JSON.stringify(v ?? "");
-  } catch { return args.slice(0, 120); }
+function preview80(line: string): string {
+  const chars = [...line];
+  return chars.length > 80 ? `${chars.slice(0, 80).join("")}...` : line;
 }
+/** A row's argument: which field names the call, by tool, as the TUI's `tool_summary`. */
+function toolArg(name: string, args: string | undefined): string {
+  let o: any;
+  try { o = JSON.parse(args ?? "null"); } catch { return ""; }
+  if (!o || typeof o !== "object") return "";
+  const first = (v: unknown) => typeof v === "string" ? (v.split(/\r?\n/)[0] ?? "") : "";
+  const str = (v: unknown) => typeof v === "string" ? v : "";
+  switch (name) {
+    case "edit": case "write": case "read": return str(o.path);
+    case "patch": return typeof o.patch === "string" ? patchArg(o.patch) ?? "" : "";
+    case "bash": return preview80(first(o.command));
+    case "code": return first(o.code);
+    case "ask": return str(o.questions?.[0]?.question);
+    default: return str(o.pattern ?? o.path ?? o.query ?? o.url ?? o.name);
+  }
+}
+/** The code from a bash result's `[exit code N]` status line (after an optional cwd line). */
+function bashExit(output: string | undefined): number | undefined {
+  for (const line of (output ?? "").split("\n").slice(0, 2)) {
+    const m = line.match(/^\[exit code (-?\d+)\]/);
+    if (m) return Number(m[1]);
+  }
+  return undefined;
+}
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 function firstLine(s: string): string {
   return (s.split("\n").find((l) => l.trim().length > 0) ?? "").trim();
 }
@@ -154,10 +198,10 @@ function catalogModel(ref: string, matchBareId = false): any | undefined {
 /** Durations: `0.4s`, `4.2s`, `12s`, `1m 05s`, `1h 02m`. Never `<1 s`. */
 export function fmtDuration(s: number): string {
   if (!isFinite(s) || s < 0) s = 0;
-  if (s < 10) return `${s.toFixed(1)}s`;
+  if (s < 9.95) return `${s.toFixed(1)}s`;
   const whole = Math.round(s);
-  if (whole < 60) return `${whole}s`;
-  if (whole < 3600) return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
+  if (s < 59.5) return `${whole}s`;
+  if (s < 3599.5) return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
   return `${Math.floor(whole / 3600)}h ${String(Math.floor((whole % 3600) / 60)).padStart(2, "0")}m`;
 }
 function clock(sec: number): string {
@@ -174,21 +218,14 @@ function childModel(child: any): string {
   return [model, effort].filter(Boolean).join("/");
 }
 /** Thinking seconds per assistant message: only when one completed request produced that message. */
-function thoughtSeconds(turns: TurnSummary[]): Map<string, number> {
-  const seen = new Map<string, number | null>();
-  for (const turn of turns) for (const request of turn.requests ?? []) {
-    const id = request.message_id;
-    const seconds = request.reasoning_seconds;
-    if (!id) continue;
-    const valid = request.status === "completed" && typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0;
-    seen.set(id, seen.has(id) || !valid ? null : seconds!);
-  }
-  const out = new Map<string, number>();
-  for (const [id, seconds] of seen) if (seconds !== null) out.set(id, seconds);
-  return out;
-}
 function text(m: Message): string {
-  return m.parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n");
+  const parts = m.parts.filter((p, i) => p.type === "text" && !(m.role === "user" && p.collapsed === true) && !(m.role === "user" && /^\[Image [A-Z]\]$/.test(p.text ?? "") && m.parts[i + 1]?.type === "image")).map((p) => p.text ?? "");
+  // A user prompt's text parts are the pieces around its pastes and images, not paragraphs.
+  return parts.join(m.role === "user" ? "" : "\n");
+}
+/** The collapsed pastes of a user message, as clickable markers. */
+function pastesOf(m: Message): { marker: string; text: string }[] {
+  return m.parts.filter((p) => p.type === "text" && p.collapsed === true).map((p) => ({ marker: pasteLabel(p.text ?? ""), text: p.text ?? "" }));
 }
 
 /** `kind: message`, or the message alone (first letter capitalized) when it already says the kind. */
@@ -328,9 +365,10 @@ function diffCounts(args: string | undefined): Diff | null {
       }
       return { add, del };
     }
+    if (typeof o.content === "string") return { add: detailLines(o.content).length, del: 0 };
     const oldS = (o.old_string ?? o.old ?? "") as string;
     const newS = (o.new_string ?? o.new ?? "") as string;
-    return { add: newS ? newS.split("\n").length : 0, del: oldS ? oldS.split("\n").length : 0 };
+    return { add: detailLines(newS).length, del: detailLines(oldS).length };
   } catch { return null; }
 }
 function detailLines(value: string): string[] {
@@ -339,10 +377,23 @@ function detailLines(value: string): string[] {
   if (lines[lines.length - 1] === "") lines.pop();
   return lines;
 }
-export function detailOf(name: string, args: string | undefined, output: string | undefined, raw: boolean): ToolDetailLine[] {
+/** A command's first rows, ahead of its output: `$ cmd`, then a continuation. */
+function commandRows(name: string, args: string | undefined): ToolDetailLine[] {
+  if (name !== "bash" && name !== "code") return [];
+  let command: unknown;
+  try { const o = JSON.parse(args ?? "{}"); command = name === "bash" ? o.command : o.code; } catch { return []; }
+  if (typeof command !== "string") return [];
+  const lines = detailLines(command);
+  return lines.slice(0, COMMAND_ROWS).map((line, i) => ({
+    text: `${i === 0 && name === "bash" ? "$ " : "  "}${line}${i + 1 === COMMAND_ROWS && lines.length > COMMAND_ROWS ? " …" : ""}`,
+    tone: "command" as const,
+  }));
+}
+export function detailOf(name: string, args: string | undefined, output: string | undefined, raw: boolean, failed = false, error?: string, finished = output !== undefined): ToolDetailLine[] {
+  const outputTone = "plain" as const;
   if (raw) {
     const lines = detailLines(args ?? "").map((l) => ({ text: l, tone: "plain" as const }));
-    return [...lines, ...detailLines(output ?? "").map((l) => ({ text: l, tone: "plain" as const }))];
+    return [...lines, ...detailLines(output ?? "").map((l) => ({ text: l, tone: outputTone }))];
   }
   if (name === "edit" || name === "patch") {
     try {
@@ -367,7 +418,9 @@ export function detailOf(name: string, args: string | undefined, output: string 
       return out;
     } catch { /* fall through */ }
   }
-  return detailLines(output ?? "").map((l) => ({ text: l, tone: "plain" as const }));
+  const head = commandRows(name, args);
+  if (finished) return [...head, ...detailLines(output ?? "").map((l) => ({ text: l, tone: outputTone }))];
+  return [...head, error ? { text: error, tone: "plain" as const } : { text: "no output", tone: "muted" as const }];
 }
 
 function buildStableRows(): Row[] {
@@ -377,10 +430,18 @@ function buildStableRows(): Row[] {
   const results = new Map<string, Part>();
   for (const msg of sel.messages) for (const p of msg.parts) if (p.type === "tool_result" && p.call_id) results.set(p.call_id, p);
   const traces = toolTimes(sel.turns, sel.scratch);
-  const waiting = new Set([...model.approvals.values()].map((a) => a.call_id));
+  const waiting = new Set([...model.approvals.values(), ...model.questions.values()].map((a: any) => a.call_id));
+  // Approval replies name approvals, not calls, so join the live records; a stored denial is the result the model received.
+  const approvalCalls = new Map<string, string>();
+  const denied = new Set<string>();
+  for (const e of sel.scratch) {
+    const d: any = e.data;
+    if (e.type === "permission.asked" && d?.id && d?.call_id) approvalCalls.set(d.id, d.call_id);
+    if (e.type === "permission.replied" && d?.outcome === "denied" && approvalCalls.has(d.id)) denied.add(approvalCalls.get(d.id)!);
+  }
+  for (const [id, res] of results) if (res.is_error && res.output === DECLINED) denied.add(id);
   const busy = viewed()?.status === "busy";
   const metas = turnMeta(sel.messages, sel.turns, sel.scratch, busy);
-  const thoughts = thoughtSeconds(sel.turns);
   const sid = sel.sessionId;
   const rows: { t: number; r: Row[] }[] = [];
 
@@ -427,7 +488,7 @@ function buildStableRows(): Row[] {
         const folded = closedTurns()[key] ?? false;
         foldedTurn = folded;
         out.push({
-          key: msg.id, kind: "user", delivery: msg.delivery, images: msg.parts.filter((p) => p.type === "image") as any, n: n + 1, time: clock(msg.created), text: body, turnKey: key, folded,
+          key: msg.id, kind: "user", delivery: msg.delivery, images: msg.parts.filter((p) => p.type === "image") as any, pastes: pastesOf(msg), n: n + 1, time: clock(msg.created), text: body, turnKey: key, folded,
           tools: meta?.tools ?? 0, duration: meta ? fmtDuration(meta.endTime - meta.startTime) : "",
           status: meta ? statusOf(meta) : "running",
         });
@@ -435,52 +496,54 @@ function buildStableRows(): Row[] {
       }
     } else if (msg.role === "assistant") {
       if (foldedTurn) { rows.push({ t: msg.created, r: out }); continue; }
-      const reasoningParts = msg.parts.filter((p) => p.type === "reasoning").length;
       msg.parts.forEach((p, i) => {
         const key = `${msg.id}-${i}`;
         if (p.type === "text" && (p.text ?? "").trim()) out.push({ key, kind: "assistant", text: p.text ?? "" });
         else if (p.type === "reasoning") {
           const summary = p.summary ?? "";
-          // One completed request reports one thinking duration; several parts share it, so none is attributed.
-          const seconds = reasoningParts === 1 && summary.trim() ? thoughts.get(msg.id) : undefined;
-          out.push({
-            key, kind: "reasoning", text: summary, encrypted: !summary.trim(), open: open(`reason:${key}`, false),
-            duration: seconds !== undefined ? fmtDuration(seconds) : undefined,
-          });
+          out.push({ key, kind: "reasoning", text: summary, encrypted: !summary.trim(), open: !!summary.trim() && open(`reason:${key}`, false) });
         } else if (p.type === "tool_call") {
           const id = p.id ?? key;
-          if (p.name === "session") {
+          if (p.name === "session" || p.name === "message_session") {
             let a: any = {};
             try { a = JSON.parse(p.arguments ?? "{}"); } catch {}
-            const child = [...model.sessions.values()].find((c) => c.parent_id === sid && c.parent_call_id === id);
+            const follow = p.name === "message_session";
+            const child = follow ? model.sessions.get(a.session) : [...model.sessions.values()].find((c) => c.parent_id === sid && c.parent_call_id === id);
             const res = results.get(id);
             const waits = child ? [...model.approvals.values(), ...model.questions.values()].some((w) => w.session_id === child.id) : false;
             const running = child ? model.running.has(child.id) || child.status === "busy" : false;
-            const failed = !!res?.is_error || !!child && (child.status === "failed" || model.failedSessions.has(child.id));
-            const background = a.wait === false;
-            // A successful background result is always a start acknowledgement, not an outcome.
-            const ack = background && !!res && !res.is_error;
-            const status = waits ? "waiting for input" : running ? "running" : failed ? "failed" : res ? (ack ? "started" : "done") : "starting…";
-            const body = res ? (res.output ?? "") : waits ? "waiting for input" : running ? "running…" : "starting…";
-            const meta = childModel(child);
+            const background = follow || a.wait === false;
+            // A background start returns at once with a start notice, not the outcome: the row follows the child until it stops.
+            const done = res && !(background && running && !res.is_error) ? res : undefined;
+            const failure = done?.is_error ? (firstLine(done.output ?? "").split("failed:").at(-1) ?? "").trim() : "";
+            const end = running ? Date.now() / 1000 : child?.updated ?? 0;
+            const meta = child ? [childModel(child), child.created > 0 ? fmtDuration(end - child.created) : ""].filter(Boolean).join(" · ") : "";
             const key = `child:${id}`;
+            const title = (follow ? "" : a.title || firstLine(a.prompt ?? "")) || child?.title || "";
             out.push({
-              key, kind: "child", childId: child?.id, agent: a.agent ?? "child",
-              title: a.title || child?.title || firstLine(a.prompt ?? ""), status,
-              tone: waits ? "accent" : running ? "info" : failed ? "warning" : "info",
-              body, open: open(key, false), background, ack, meta,
+              key, kind: "child", childId: child?.id, agent: follow ? child?.agent ?? a.agent ?? "child" : a.agent ?? "child",
+              title: title.length > 48 ? `${title.slice(0, 47)}…` : title,
+              state: running && !waits && !done ? "running" : done ? "done" : "idle", background: background && !follow, meta,
+              outcome: done?.is_error ? (failure ? `failed ${failure.length > 60 ? `${failure.slice(0, 59)}…` : failure}` : "failed") : waits && !done ? "waiting for input" : "",
             });
           } else {
             const res = results.get(id);
             const tr = traces.get(id);
-            const state: "running" | "done" | "error" | "waiting" = waiting.has(id) ? "waiting"
-              : res?.is_error ? "error" : res || tr?.end ? "done" : "running";
-            const counts = (p.name === "edit" || p.name === "patch") && !res?.is_error ? diffCounts(p.arguments) : null;
+            const isDenied = denied.has(id);
+            const state: "running" | "done" | "error" | "waiting" | "denied" = waiting.has(id) ? "waiting" : isDenied ? "denied"
+              : res?.is_error || tr?.isError ? "error" : res || tr?.end || !busy ? "done" : "running";
+            const name = p.name ?? "tool";
+            const isEdit = name === "edit" || name === "patch" || name === "write";
+            const counts = isEdit && state !== "error" && state !== "denied" ? diffCounts(p.arguments) : null;
             let summary = "";
-            if (waiting.has(id)) summary = "waiting for approval";
-            else if (p.name === "edit" || p.name === "patch") summary = res?.is_error ? "failed" : counts ? `+${counts.add} −${counts.del}` : "";
-            else if (p.name === "write") { try { summary = `+${detailLines(String(JSON.parse(p.arguments ?? "{}").content ?? "")).length}`; } catch {} }
-            else if (res?.output) { const n = detailLines(res.output).length; summary = `${n} line${n === 1 ? "" : "s"}`; }
+            let args: any = {};
+            try { args = JSON.parse(p.arguments ?? "{}") ?? {}; } catch {}
+            if (state === "waiting" || state === "denied" || state === "error" || name === "bash") summary = "";
+            else if (name === "edit" || name === "patch") summary = counts ? `+${counts.add} −${counts.del}` : "";
+            else if (name === "write") summary = typeof args.content === "string" ? `+${detailLines(args.content).length}` : "";
+            else if (name === "read") { if (res) { const n = detailLines(res.output ?? "").length; summary = `${n} line${n === 1 ? "" : "s"}`; } }
+            else if (name === "code") summary = "cell";
+            else if (name === "ask" && Array.isArray(args.questions) && args.questions.length) summary = "question";
             const media = ((res as any)?.media ?? []).filter((x: any) => /^image\//.test(x?.mime ?? ""));
             if (media.length && !waiting.has(id)) summary = [summary, `${media.length} image${media.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
             const seconds = tr?.start !== undefined && tr?.end !== undefined ? tr.end - tr.start : undefined;
@@ -490,13 +553,24 @@ function buildStableRows(): Row[] {
             const detailLevel = timelineDetail();
             const head = detailLevel === "high" ? HIGH_HEAD : DETAIL_HEAD;
             const tail = detailLevel === "high" ? HIGH_TAIL : DETAIL_TAIL;
-            const allDetail = detailOf(p.name ?? "tool", p.arguments, res?.output, rawOpen);
-            const clipped = allDetail.length > head + tail + 20;
-            const detail = capToolDetail(allDetail, showAll, head, tail);
+            const failed = state === "error";
+            const allDetail = detailOf(name, p.arguments, res?.output, rawOpen, failed, tr?.error, !!res);
+            // Output keeps its command rows and last rows; a diff or the raw view keeps a head and a tail.
+            const tailCap = !rawOpen && !isEdit;
+            const commandHead = tailCap ? commandRows(name, p.arguments).length : 0;
+            const clipped = tailCap ? allDetail.length - commandHead > OUTPUT_TAIL + 2 : allDetail.length > head + tail + 20;
+            const capped = tailCap ? capToolOutput(allDetail, showAll, commandHead) : capToolDetail(allDetail, showAll, head, tail);
+            const detail: ToolDetailLine[] = !tailCap && clipped && showAll
+              ? [{ text: `↑ showing all ${allDetail.length} lines · o show less`, tone: "show-less" }, ...capped]
+              : capped;
+            const exitCode = name === "bash" ? bashExit(res?.output) : undefined;
             out.push({
-              key, kind: "tool", id, name: p.name ?? "tool", arg: toolArg(p.arguments), summary,
+              key, kind: "tool", id, name, arg: toolArg(name, p.arguments), summary,
+              editFile: isEdit ? (typeof args.path === "string" ? args.path : id) : undefined,
+              exit: exitCode !== undefined && exitCode !== 0 ? exitCode : undefined,
+              errorLine: failed ? preview80(firstLine(res?.output ?? "")) : undefined,
               tone: counts ? (counts.add >= 0 ? "accent" : "info") : "info",
-              state, duration: p.name === "bash" && seconds !== undefined && seconds >= 1 ? fmtDuration(seconds) : undefined, seconds,
+              state, duration: name === "bash" && seconds !== undefined && seconds >= 1 ? fmtDuration(seconds) : undefined, seconds,
               diff: counts ?? undefined, output: res?.output,
               detail,
               raw: rawOpen ? JSON.stringify({ arguments: p.arguments ?? "", output: res?.output ?? "" }, null, 2) : "",
@@ -513,23 +587,21 @@ function buildStableRows(): Row[] {
       // A running turn has no footer: it appears only once the turn is done, as in the TUI.
       if (meta && !foldedTurn && !meta.running) {
         const v = viewed();
-        const segments: { text: string; tip?: string }[] = [];
+        const segments: { text: string }[] = [];
         if (meta.models.length) segments.push({ text: meta.models.join(" → ") });
         else if (v?.model && String(v.model) !== "default") segments.push({ text: modelName(String(v.model)) });
         segments.push({ text: `${meta.tools} tool${meta.tools === 1 ? "" : "s"}` });
         if (meta.known > 0) {
-          let tip = `input ${meta.input.toLocaleString()} · cached ${meta.cached.toLocaleString()} · output ${meta.output.toLocaleString()} · reasoning ${meta.reasoning.toLocaleString()}`;
-          if (meta.input > 0) tip += ` · ${Math.round(100 * meta.cached / meta.input)}% cached${meta.unknown ? " (reported usage only)" : ""}`;
           // Unknown usage is never counted as zero: the total says it is a floor.
-          if (meta.unknown) tip += ` · ${meta.unknown} request${meta.unknown === 1 ? "" : "s"} reported no usage`;
-          segments.push({ text: `${fmtCount(meta.input)} in`, tip });
-          segments.push({ text: `${fmtCount(meta.output)} out`, tip });
-          if (meta.unknown) segments.push({ text: "some usage unknown", tip: `${meta.unknown} request${meta.unknown === 1 ? "" : "s"} reported no usage` });
+          segments.push({ text: `${fmtCount(meta.input)}i` });
+          segments.push({ text: `${fmtCount(meta.output)}o` });
+          segments.push({ text: `${fmtCount(meta.reasoning)}r` });
+          if (meta.input > 0) segments.push({ text: `${Math.round(100 * meta.cached / meta.input)}%c` });
         } else if (meta.unknown) {
-          segments.push({ text: "tokens unknown", tip: `${meta.unknown} request${meta.unknown === 1 ? "" : "s"} reported no usage` });
+          segments.push({ text: "usage unknown" });
         }
-        segments.push({ text: fmtDuration(meta.endTime - meta.startTime), tip: "Elapsed time" });
-        if (!meta.running && meta.finishedTime != null) segments.push({ text: clock(meta.finishedTime), tip: "Finished time" });
+        segments.push({ text: fmtDuration(meta.endTime - meta.startTime) });
+        if (!meta.running && meta.finishedTime != null) segments.push({ text: clock(meta.finishedTime) });
         const status = statusOf(meta);
         const error = status === "error" ? (firstLine(meta.error?.message ?? "") || meta.error?.kind) : undefined;
         rows.push({
@@ -599,7 +671,7 @@ function mergeDiagnostics(flat: Row[]): Row[] {
 function withStreaming(flat: Row[], st?: { text: string; reasoning: string }): Row[] {
   if (!st || (!st.reasoning && !st.text)) return flat;
   const out = [...flat];
-  if (st.reasoning) out.push({ key: "stream-r", kind: "reasoning", text: st.reasoning, open: true, running: true });
+  if (st.reasoning) out.push({ key: "stream-r", kind: "reasoning", text: st.reasoning, open: open("reason:streaming", true), running: true });
   if (st.text) out.push({ key: "stream-t", kind: "assistant", text: st.text, streaming: true });
   return out;
 }
@@ -609,18 +681,19 @@ export function buildRows(): Row[] {
   m();
   const sel = model.selected;
   if (!sel) return [];
-  return groupActivities(withStreaming(buildStableRows(), model.streaming.get(sel.sessionId)));
+  return groupActivities(withStreaming(buildStableRows(), model.streaming.get(sel.sessionId)), model.running.has(sel.sessionId));
 }
 
 type ActivityEntry = Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>;
 function activitySummary(items: ActivityEntry[]): string {
-  const tools = items.filter((item): item is Extract<Row, { kind: "tool" }> => item.kind === "tool");
-  if (tools.some((tool) => tool.state === "running" || tool.state === "waiting")) return "Working";
+  // Nouns in first-seen order. Edits count the files they touch, not the calls.
   const counts = new Map<string, number>();
+  const editFiles = new Set<string>();
   for (const item of items) {
     let noun: string;
     if (item.kind === "reasoning") noun = "thought";
     else {
+      if (item.editFile !== undefined) editFiles.add(item.editFile);
       noun = ({
         bash: "command", read: "read", edit: "edit", patch: "edit", write: "edit",
         code: "cell", ask: "question", web_search: "search", web_fetch: "page", session: "session",
@@ -628,20 +701,21 @@ function activitySummary(items: ActivityEntry[]): string {
     }
     counts.set(noun, (counts.get(noun) ?? 0) + 1);
   }
+  if (counts.has("edit")) counts.set("edit", Math.max(editFiles.size, 1));
   // `3 thoughts, 50 commands, 8 tools, 9 reads`; a `search` takes `es`.
   return [...counts.entries()].map(([noun, count]) => `${count} ${noun}${count === 1 ? "" : noun === "search" ? "es" : "s"}`).join(", ");
 }
 
-function groupActivities(rows: Row[]): Row[] {
+function groupActivities(rows: Row[], busy: boolean): Row[] {
   const result: Row[] = [];
   let items: ActivityEntry[] = [];
-  const flush = () => {
+  const flush = (trailing = false) => {
     if (!items.length) return;
     // A run of only thoughts is no activity group: each is its own `▸ Thought · preview` row (D07).
     if (items.every((item) => item.kind === "reasoning")) { result.push(...items); items = []; return; }
     const key = `group:${items[0].key}`;
     const waiting = items.some((item) => item.kind === "tool" && item.state === "waiting");
-    const running = items.some((item) => item.kind === "reasoning" ? item.running : item.state === "running" || item.state === "waiting");
+    const running = (busy && trailing) || items.some((item) => item.kind === "reasoning" ? item.running : item.state === "waiting" || (busy && item.state === "running"));
     const tools = items.filter((item): item is Extract<Row, { kind: "tool" }> => item.kind === "tool");
     const detail = timelineDetail();
     const defaultOpen = waiting || detail === "high" || (running && detail !== "low");
@@ -651,8 +725,8 @@ function groupActivities(rows: Row[]): Row[] {
     const diffs = tools.filter((tool) => tool.diff !== undefined);
     result.push({
       key, kind: "activity", summary: running ? "Working" : activitySummary(items), items: items.slice(hidden),
-      open: expanded, defaultOpen, hidden,
-      failed: tools.filter((tool) => tool.state === "error").length,
+      open: expanded, defaultOpen, running, hidden,
+      denied: tools.filter((tool) => tool.state === "denied").length,
       diff: diffs.length ? diffs.reduce<Diff>((sum, tool) => ({ add: sum.add + (tool.diff?.add ?? 0), del: sum.del + (tool.diff?.del ?? 0) }), { add: 0, del: 0 }) : undefined,
     });
     items = [];
@@ -661,28 +735,9 @@ function groupActivities(rows: Row[]): Row[] {
     if (row.kind === "tool" || row.kind === "reasoning") items.push(row);
     else { flush(); result.push(row); }
   }
-  flush();
+  flush(true);
   return result;
 }
-
-/** TextView part classes: a calm hierarchy on the 14/22 base (headings only a step above, semibold, tight to what they introduce). */
-const PROSE = {
-  root: "text-[14px] leading-[22px] text-foreground",
-  heading1: "text-[17px] leading-6 font-semibold",
-  heading2: "text-[15px] leading-6 font-semibold",
-  heading3: "text-[14px] leading-[22px] font-semibold",
-  heading4: "text-[14px] leading-[22px] font-semibold",
-  heading5: "text-[14px] leading-[22px] font-semibold text-foreground-secondary",
-  heading6: "text-[14px] leading-[22px] font-semibold text-foreground-secondary",
-  listMarker: "text-[14px] leading-[22px] text-foreground-secondary",
-  table: "border-0",
-  tableScroll: "border-0",
-  tableRow: "border-0",
-  tableCell: "border-0 text-[13px] leading-5",
-  tableHeaderCell: "text-muted-foreground font-medium",
-  tableHead: "bg-card rounded-(--radius)",
-  code: "font-(family-name:--font-code) text-[12.5px] rounded-[6px] bg-card text-foreground",
-};
 
 const RAIL: Record<string, string> = { info: "bg-info", accent: "bg-primary", warning: "bg-warning" };
 
@@ -711,11 +766,11 @@ function RowView(p: { r: () => Row }) {
           {() => {
             const f = r() as Extract<Row, { kind: "footer" }>;
             return (
-              <View class={`w-full items-start pt-1 pr-4 ${TEXT_INDENT}`} testID="turn-footer">
-                <View class="flex-row flex-wrap justify-start items-center">
+              <View class={`w-full items-end pt-1 pr-4 ${TEXT_INDENT}`} testID="turn-footer">
+                <View class="flex-row flex-wrap justify-end items-center">
                   <Each of={f.segments} key={(s, i) => `${i}`}>
                     {(s) => (
-                      <Text class={META} tooltip={s().tip ? <Text class="text-xs leading-4 text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{s().tip!}</Text> : undefined}>
+                      <Text class={META}>
                         {`${s() === f.segments[0] ? "" : " · "}${s().text}`}
                       </Text>
                     )}
@@ -729,11 +784,8 @@ function RowView(p: { r: () => Row }) {
         <If when={r().kind === "handoff"}>
           <View class="py-2"><HandoffCard r={r as any} /></View>
         </If>
-        <If when={r().kind === "notice" && (r() as any).text.startsWith("→ Background Shell Done:")}>
-          {() => <BackgroundShellDone r={r} />}
-        </If>
-        <If when={r().kind === "notice" && !(r() as any).text.startsWith("→ Background Shell Done:")}>
-          <NoteLine tone={(r() as any).tone} label={(r() as any).label} text={(r() as any).text} testID="msg-notice" />
+        <If when={r().kind === "notice"}>
+          <NoticeRow text={() => (r() as any).text} />
         </If>
         <If when={r().kind === "assistant"}>
           <View class={`py-2 pr-4 ${TEXT_INDENT}`} testID="msg-assistant">
@@ -756,27 +808,21 @@ function RowView(p: { r: () => Row }) {
         <If when={r().kind === "child"}>
           {() => {
             const c = r() as Extract<Row, { kind: "child" }>;
-            const kind = c.tone === "accent" ? "waiting" : c.status === "running" || c.status === "starting…" || c.status === "started" ? "running" : c.status === "failed" ? "error" : "done";
             return (
-              <View class="py-2"><View class="relative flex-row rounded-(--radius-card) bg-card">
-                <StatusRail color={RAIL[c.tone] ?? "bg-info"} />
-                <View class={`flex-1 min-w-0 gap-1 py-2 ${CARD_INSET}`}>
-                  <Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId}
-                    class={`flex-row items-center gap-2 rounded-(--radius) px-1 -ml-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID="child-card">
-                    <Status kind={kind} />
-                    <Text class="text-xs leading-4 text-muted-foreground">child</Text>
-                    <If when={c.background}><Text class="text-xs leading-4 text-muted-foreground">Background</Text></If>
-                    <Text class={`text-[13px] leading-5 ${agentColor(c.agent)}`}>{c.agent}</Text>
-                    <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.title ? `“${c.title}”` : ""}</Text>
-                    <Text testID="child-status" class={META}>{c.status}</Text>
-                  </Button>
-                  <If when={!!c.meta}><Text testID="child-meta" class={`${META} pl-6`}>{c.meta}</Text></If>
-                  <Button onPress={() => toggle(c.key, false)} accessibilityLabel={open(c.key, false) ? "Collapse child result" : c.ack ? "Expand background start acknowledgement" : "Expand child result"} testID="child-result-toggle" class={`items-start pl-6 ${FOCUS}`}>
-                    <Text style={open(c.key, false) ? { userSelect: "text" } : { numberOfLines: 2 }} class={META}>{c.body}</Text>
-                    <Text class={META}>{open(c.key, false) ? "Show less" : c.ack ? "Show start" : "Show result"}</Text>
-                  </Button>
+              <Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId} testID="child-card" accessibilityLabel={`${c.agent} ${c.title}`}
+                class={`items-start rounded-(--radius) -ml-1 pl-1 pr-4 py-0.5 ml-3 hover:bg-accent ${FOCUS}`}>
+                <View class="flex-row items-center gap-2 max-w-full">
+                  <View class="w-4 shrink-0 items-center">
+                    <If when={c.state === "running"}><Status kind="running" /></If>
+                    <If when={c.state === "done"}><Text class={`text-[13px] leading-5 ${agentColor(c.agent)}`}>⣿</Text></If>
+                  </View>
+                  <Text class={`shrink-0 text-[13px] leading-5 font-medium ${agentColor(c.agent)}`}>{capitalize(c.agent)}</Text>
+                  <Text style={{ numberOfLines: 1 }} class="shrink min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.title}</Text>
+                  <If when={c.background}><Text class="shrink-0 rounded-(--radius) bg-sidebar px-1.5 text-xs leading-4 text-foreground-secondary">Background</Text></If>
                 </View>
-              </View></View>
+                <If when={!!c.meta}><Text testID="child-meta" class={`${META} pl-6`}>{c.meta}</Text></If>
+                <If when={!!c.outcome}><Text testID="child-outcome" class={`${META} pl-6`}>{c.outcome}</Text></If>
+              </Button>
             );
           }}
         </If>
@@ -818,17 +864,17 @@ function NoteLine(p: { tone: Tone; label: string; text: string; detail?: string;
   );
 }
 
-/** The done notice for a background shell: the command on one line, expandable, in the code face. */
-function BackgroundShellDone(p: { r: () => Row }) {
-  const key = () => `shell:${(p.r() as any).key}`;
-  const command = () => String((p.r() as any).text).replace(/^→ Background Shell Done:\s*/, "");
-  const expanded = () => open(key(), false);
+/** `▸ context · Notification: sub agent finished · show details`: one muted row whose full text opens in a dialog. */
+function NoticeRow(p: { text: () => string }) {
+  const shell = () => p.text().startsWith("→ Background Shell Done:");
+  const head = () => firstLine(p.text()).replace(/^\[/, "").replace(/\]$/, "");
+  const label = () => shell() ? `${firstLine(p.text())} · show full output` : `context · ${head()} · show details`;
   return (
-    <View class={`py-1 pr-4 ${TEXT_INDENT}`} testID="background-shell-done">
-      <Button onPress={() => toggle(key(), false)} accessibilityLabel={`Background shell finished: ${command()}, ${expanded() ? "collapse" : "expand"}`} testID="background-shell-toggle"
-        class={`self-stretch flex-row items-start gap-2 rounded-(--radius) -ml-1 pl-1 hover:bg-accent ${FOCUS}`}>
-        <Text class={`shrink-0 ${T.sec}`}>Background shell finished</Text>
-        <Text style={expanded() ? { userSelect: "text" } : { userSelect: "text", numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.mono}`}>{command()}</Text>
+    <View class={`py-0.5 ${TEXT_INDENT}`}>
+      <Button onPress={() => contextDetail.set({ title: shell() ? "Background shell" : "Context", detail: p.text() })} testID={shell() ? "background-shell-done" : "msg-notice"} accessibilityLabel={label()}
+        class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
+        <View class={ACTIVITY_CHEVRON}><Icon name="chevron-right" size={14} class="tint-muted-foreground" /></View>
+        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-muted-foreground">{label()}</Text>
       </Button>
     </View>
   );
@@ -838,7 +884,7 @@ function BackgroundShellDone(p: { r: () => Row }) {
 function CodeFence(p: { block: TextViewCodeBlock }) {
   const code = () => p.block.code;
   return (
-    <View class="w-full my-1 rounded-(--radius-card) bg-card overflow-hidden" testID="code-fence">
+    <View class="w-full my-1 bg-card overflow-hidden" testID="code-fence">
       <View class="flex-row items-center h-8 pl-4 pr-2 gap-2">
         <Text class={`flex-1 min-w-0 ${META} font-(family-name:--font-code)`}>{p.block.language ?? ""}</Text>
         <Button onPress={() => copyText(code(), "Copied code")} accessibilityLabel="Copy code" testID="code-copy"
@@ -910,10 +956,21 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
                 <Text style={{ numberOfLines: 1 }} class={`${T.meta} px-0.5`}>{i().name}</Text>
                 <Button onPress={() => imagePreview.set({ name: i().name, src: i().data_url })}
                   accessibilityLabel={`Open ${i().name}`} testID={`user-image-${r().n}-${n()}`}
-                  class={`w-24 h-24 items-center justify-center rounded-(--radius) overflow-hidden ${FOCUS}`}>
+                  class={`w-24 h-24 items-center justify-center border border-border-strong overflow-hidden ${FOCUS}`}>
                   <Image class="w-24 h-24" src={i().data_url} style={{ width: 96, height: 96, objectFit: "cover" }} accessibilityLabel={i().name} />
                 </Button>
               </View>}
+            </Each>
+          </View>
+        </If>
+        <If when={!!r().pastes?.length}>
+          <View class="flex-row flex-wrap gap-1.5 pb-2" testID="user-pastes">
+            <Each of={r().pastes ?? []} key={(p) => p.marker}>
+              {(p, n) => <Button onPress={() => contextDetail.set({ title: "Pasted text", detail: p().text })}
+                accessibilityLabel={`Open pasted text, ${p().marker}`} testID={`user-paste-${r().n}-${n()}`}
+                class={`rounded-(--radius) bg-raised px-2 min-h-7 hover:bg-accent ${FOCUS}`}>
+                <Text class="font-mono text-[12px] leading-5 text-foreground">{p().marker}</Text>
+              </Button>}
             </Each>
           </View>
         </If>
@@ -949,7 +1006,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
       <Button onPress={fold} accessibilityLabel={`${meta()} folded, show`} testID={`msg-user-folded-${r().n}`}
         class={`w-full flex-row items-center gap-2 rounded-(--radius) bg-band min-h-9 hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
         <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
-        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[14px] leading-[22px] text-foreground">{r().text}</Text>
+        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[14px] leading-[22px] text-foreground">{r().text || (r().pastes ?? []).map((p) => p.marker).join(" ")}</Text>
         <If when={r().tools > 0 || !!r().duration}>
           {() => <Text class={META}>{[r().tools ? `${r().tools} tool${r().tools === 1 ? "" : "s"}` : "", r().duration].filter(Boolean).join(" · ")}</Text>}
         </If>
@@ -1012,13 +1069,13 @@ function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void })
 }
 
 function ToolTone(tone: string): string {
-  return tone === "add" ? "text-success" : tone === "del" ? "text-error" : tone === "info" ? "text-info" : tone === "error" ? "text-error" : tone === "accent" ? "text-primary" : "text-foreground-secondary";
+  return tone === "add" ? "text-success" : tone === "del" ? "text-error" : tone === "info" ? "text-info" : tone === "error" ? "text-error" : tone === "accent" ? "text-primary" : tone === "command" ? "text-foreground" : tone === "muted" ? "text-muted-foreground" : "text-foreground-secondary";
 }
 
 /** Member label and the verb icon (the status glyph replaces it while running, failed or waiting). */
 const VERB: Record<string, string> = {
   bash: "Shell", read: "Read", edit: "Edit", patch: "Edit", write: "Write", code: "Code", ask: "Ask",
-  web_search: "Web search", web_fetch: "Fetch", grep: "Search", glob: "Find",
+  web_search: "Search", web_fetch: "Fetch",
 };
 function verbLabel(name: string): string { return VERB[name] ?? name; }
 function verbIcon(name: string): IconName {
@@ -1034,21 +1091,34 @@ function verbIcon(name: string): IconName {
 
 function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
   const r = p.r;
+  const reduced = () => !!config()?.values?.ui?.reduced_motion;
+  // A group that was live and now is not has just finished: its chevron flashes the accent.
+  const flash = signal(false);
+  let wasRunning = r().running;
+  effect(() => {
+    const running = r().running;
+    if (wasRunning && !running && !reduced()) {
+      flash.set(true);
+      setTimeout(() => flash.set(false), FLASH_MS);
+    }
+    wasRunning = running;
+  });
   return (
-    <View class="py-0.5">
+    <View class={`py-0.5 ${TEXT_INDENT}`}>
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
-        <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>
-        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{r().summary}</Text>
-        <If when={!!r().diff}>
-          {() => <Text class={`${META} ml-2`}><Text class="text-success">{`+${r().diff!.add}`}</Text>{" "}<Text class="text-error">{`−${r().diff!.del}`}</Text></Text>}
+        <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class={flash() ? "tint-primary" : "tint-muted-foreground"} /></View>
+        <If when={r().running} else={<Text style={{ numberOfLines: 1 }} class="shrink min-w-0 text-[13px] leading-5 text-foreground-secondary">{r().summary}</Text>}>
+          <Shimmer text={r().summary} reduced={reduced()} testID="group-working" />
         </If>
-        <If when={r().failed > 0}><Text class={`${META} ml-2`}>{`✕ ${r().failed} failed`}</Text></If>
+        <If when={!!r().diff}>
+          {() => <Text class={`${META} ml-2 shrink-0`}><Text class="text-success">{`+${r().diff!.add}`}</Text>{" "}<Text class="text-error">{`−${r().diff!.del}`}</Text></Text>}
+        </If>
+        <If when={r().denied > 0}><Text class={`${META} shrink-0`}>{` · ${r().denied} denied`}</Text></If>
       </Button>
       <If when={r().open}>
-        <View class="relative pl-4">
-          <View class="absolute left-[7px] top-0 bottom-0 w-px bg-border-strong" />
-          <If when={r().hidden > 0}><Text class={`${META}`}>{`… ${r().hidden} earlier activities hidden`}</Text></If>
+        <View>
+          <If when={r().hidden > 0}><Button onPress={() => timelineOpen.update((o) => ({ ...o, [r().key]: true }))} accessibilityLabel={`Show ${r().hidden} earlier activities`} class={`self-start pl-4 ${FOCUS}`}><Text class={META}>{`… ${r().hidden} earlier`}</Text></Button></If>
           <Each of={r().items} key={(item) => item.key}>
             {(item) => <ActivityItem item={item} last={() => r().items.at(-1)?.key === item().key} />}
           </Each>
@@ -1058,11 +1128,14 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
   );
 }
 
-/** A member of an expanded group: one soft vertical line (the spine) to the left of the row. */
+/** A member of an expanded group, on the group's tree: `├` for each member and `└` for the last, unless its box stays open. */
 function ActivityItem(p: { item: () => ActivityEntry; last: () => boolean }) {
   const item = p.item;
+  const ends = () => p.last() && !item().open;
   return (
-    <View>
+    <View class="relative pl-4" testID={p.last() ? "activity-tree-end" : "activity-tree-mid"}>
+      <View class={`absolute left-[7px] top-0 w-px bg-border-strong ${ends() ? "h-[14px]" : "bottom-0"}`} />
+      <View class="absolute left-[7px] top-[14px] w-[7px] h-px bg-border-strong" />
       <If when={item().kind === "tool"}>
         <ToolRow r={item as () => Extract<Row, { kind: "tool" }>} />
       </If>
@@ -1074,55 +1147,44 @@ function ActivityItem(p: { item: () => ActivityEntry; last: () => boolean }) {
 }
 
 /**
- * Thought rows (D07): `▸ Thought · preview`; running shows the last 5 lines behind a rule. Nested in an
- * activity group it shares the tool row's grid (`◇ Thought · preview · duration`).
+ * Thought rows (D07): `▸ Thought · preview`; open shows the text behind a rail. A thought still arriving is open by
+ * default and keeps its last 10 lines. Nested in an activity group it reads `◇ Thought · preview`.
  */
 function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?: boolean }) {
   const x = p.x;
-  const lines = () => x().text.split("\n").filter((l) => l.trim().length > 0);
-  const hidden = () => Math.max(0, lines().length - 5);
-  const a11y = () => x().duration && !x().running ? `${roles.reasoning.label} for ${x().duration}` : roles.reasoning.label;
-  const rowClass = `self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`;
-  const label = (cls: string) => <Text class={`${cls} text-[13px] leading-5 font-medium text-muted-foreground`}>{roles.reasoning.label}</Text>;
-  const preview = (cls: string) => (
-    <>
-      <If when={!!x().encrypted}>
-        {() => <Text class={`${cls} flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground`}>encrypted, replayed to the provider</Text>}
-      </If>
-      <If when={!x().encrypted}>
-        {() => <Text style={{ numberOfLines: 1 }} class={`${cls} flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground`}>{firstLine(x().text)}</Text>}
-      </If>
-    </>
-  );
+  // A thought still arriving keeps its last 10 wrapped lines; the rest is announced.
+  const rows = signal(0);
+  const hidden = () => x().running ? Math.max(0, rows() - 10) : 0;
+  const key = () => x().running ? "reason:streaming" : `reason:${x().key}`;
+  const preview = () => x().encrypted ? "encrypted, replayed to the provider" : firstLine(x().text);
   return (
-    <View class="py-0.5">
-      <If when={x().running} else={
-        <Button onPress={() => toggle(`reason:${x().key}`, false)} accessibilityLabel={`${a11y()}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
-          class={`${rowClass} ${p.nested ? "gap-2" : ""}`}>
-          <If when={!!p.nested} else={<View class={ACTIVITY_CHEVRON}><Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>}>
-            <Icon name="diamond" size={16} class="tint-foreground-secondary" />
+    <View class={`py-0.5 ${p.nested ? "" : TEXT_INDENT}`}>
+      <Button onPress={() => { if (!x().encrypted) toggle(key(), !!x().running); }} disabled={!!x().encrypted} accessibilityLabel={`${roles.reasoning.label}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
+        class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS} ${p.nested ? "gap-2" : ""}`}>
+        <If when={!!p.nested} else={<View class={ACTIVITY_CHEVRON}><Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>}>
+          <Icon name="diamond" size={MEMBER_ICON} class="tint-muted-foreground" />
+        </If>
+        <View class="flex-row flex-1 min-w-0 items-center gap-1.5">
+          <Text class="text-[13px] leading-5 font-medium text-muted-foreground">{roles.reasoning.label}</Text>
+          <If when={!x().open && !!preview()}>
+            {() => <>
+              <Text class="text-[13px] leading-5 text-muted-foreground">·</Text>
+              <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground">{preview()}</Text>
+            </>}
           </If>
-          {label(p.nested ? "min-w-[52px]" : "")}
-          {preview(p.nested ? "" : "ml-2")}
-          <If when={!!x().duration}><Text class={`${META} ${p.nested ? "" : "ml-2"}`}>{x().duration!}</Text></If>
-        </Button>
-      }>
-        <View class={`flex-row items-center -ml-1 pl-1 pr-4 min-h-6 ${p.nested ? "gap-2" : ""}`} testID="reasoning">
-          <If when={!!p.nested} else={<View class={ACTIVITY_CHEVRON} />}>
-            <Icon name="diamond" size={16} class="tint-foreground-secondary" />
-          </If>
-          <Text class="text-[13px] leading-5 font-medium text-foreground-secondary">{"Thinking…"}</Text>
         </View>
-      </If>
-      <If when={x().running || (x().open && !x().encrypted)}>
+      </Button>
+      <If when={x().open && !x().encrypted}>
         <View class="relative pl-4 pr-4 py-1">
           <View class="absolute left-[7px] top-0 bottom-0 w-px bg-border-strong" />
-          <If when={x().running && hidden() > 0}>
+          <If when={hidden() > 0}>
             {() => <Text class={META}>{`… ${hidden()} earlier lines`}</Text>}
           </If>
-          <Text style={{ userSelect: "text" }} class="text-[13px] leading-5 italic text-foreground-secondary">
-            {x().running ? lines().slice(-5).join("\n") : x().text}
-          </Text>
+          <View class={x().running ? "max-h-[200px] overflow-hidden justify-end" : ""}>
+            <Text style={{ userSelect: "text" }} onLayout={(b: any) => rows.set(Math.round((b.bounds?.size?.height ?? b.size?.height ?? 0) / 20))} class="shrink-0 text-[13px] leading-5 italic text-muted-foreground">
+              {x().text}
+            </Text>
+          </View>
         </View>
       </If>
     </View>
@@ -1140,70 +1202,76 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
   const markFocused = () => focusedTool.set({ key: r().key, clipped: r().clipped, toggleRaw });
   const clearFocused = () => { if (focusedTool()?.key === r().key) focusedTool.set(null); };
   const open = () => r().open;
-  const live = () => r().state === "running" || r().state === "waiting" || r().state === "error";
-  const stateKind = () => (r().state === "running" ? "running" : r().state === "waiting" ? "waiting" : r().state === "error" ? "error" : "done");
-  const body = () => r().detail.filter((x) => !x.text.includes(HIDDEN_MARK));
-  const isDiff = () => !r().raw && r().state !== "error" && (r().name === "edit" || r().name === "write" || r().name === "patch");
-  const marker = () => r().detail.find((x) => x.text.includes(HIDDEN_MARK));
-  const hidden = () => marker()?.text.match(/(\d+) lines hidden/)?.[1] ?? "";
+  const live = () => r().state !== "done";
+  const stateKind = () => r().state === "done" ? "done" : r().state;
+  const isMark = (x: ToolDetailLine) => x.tone === "show-all" || x.tone === "show-less";
+  const isRaw = () => !!r().raw;
+  const isDiff = () => !isRaw() && r().state !== "error" && (r().name === "edit" || r().name === "write" || r().name === "patch");
+  const body = () => isDiff() ? r().detail.filter((x) => !isMark(x)) : r().detail;
+  const mark = () => r().detail.find(isMark);
+  const showAll = () => { markFocused(); void run("tool.show_all_output"); };
+  const MarkRow = (q: { line: () => ToolDetailLine }) => (
+    <Button onPress={showAll} class={`self-start rounded-(--radius) ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}
+      testID={q.line().tone === "show-all" ? `tool-show-all-${r().id}` : `tool-show-less-${r().id}`}>
+      <Text class={`font-(family-name:--font-code) text-[12.5px] leading-5 ${q.line().text.includes(HIDDEN_MARK) ? "text-primary" : "text-muted-foreground"}`}>{q.line().text}</Text>
+    </Button>
+  );
   return (
     <View class="py-0.5">
-      <View role="button" onFocus={markFocused} onBlur={clearFocused} onPress={() => { markFocused(); toggle(r().key, false); }} accessibilityLabel={`${r().name} ${r().state}`} accessibilityState={{ selected: open() }}
+      <View role="button" onFocus={markFocused} onBlur={clearFocused} onPress={() => {
+        markFocused();
+        // Enter or a press on an open, clipped row brings the rest of its output back.
+        if (open() && r().clipped && !r().showAll) showAll();
+        else toggle(r().key, timelineDetail() === "high");
+      }} accessibilityLabel={`${r().name} ${r().state}`} accessibilityState={{ selected: open() }}
         class={`flex-row items-center gap-2 rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
-        <If when={live()} else={<Icon name={verbIcon(r().name)} size={16} class="tint-foreground-secondary" />}>
-          {() => <View class="w-4 shrink-0 items-center"><Status kind={stateKind()} /></View>}
+        <If when={live()} else={<Icon name={verbIcon(r().name)} size={MEMBER_ICON} class="tint-muted-foreground" />}>
+          {() => <View class="w-[13px] shrink-0 items-center">
+            <If when={r().state === "error"} else={<Status kind={stateKind()} />}>
+              {/* A failed call is part of the flow: marked, never red. */}
+              <Text class="text-center text-[12px] leading-5 text-muted-foreground" accessibilityLabel="failed">{statusGlyphs.error.unicode}</Text>
+            </If>
+          </View>}
         </If>
-        <Text class="min-w-[52px] text-[13px] leading-5 font-medium text-foreground">{verbLabel(r().name)}</Text>
-        <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`flex-1 min-w-0 ${T.mono}`}>{r().arg}</Text>
-        <If when={r().state !== "waiting" && !!r().summary}>
-          <Text class={META}><Text class={r().summary.startsWith("+") ? "text-success" : r().summary.startsWith("−") ? "text-error" : "text-muted-foreground"}>{r().summary}</Text></Text>
+        <Text class="shrink-0 text-[13px] leading-5 font-medium text-foreground">{verbLabel(r().name)}</Text>
+        <If when={!!r().arg}><Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`shrink min-w-0 ${T.mono}`}>{r().arg}</Text></If>
+        <If when={!!r().errorLine}><Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${T.mono}`}>{r().errorLine!}</Text></If>
+        <If when={!!r().summary}>
+          <Text class={`${META} shrink-0`}><Text class={r().summary.startsWith("+") ? "text-success" : "text-muted-foreground"}>{r().summary.split(" −")[0]}</Text><If when={r().summary.includes(" −")}><Text class="text-error">{` −${r().summary.split(" −")[1]}`}</Text></If></Text>
         </If>
-        <If when={r().state !== "waiting" && !!r().duration}><Text class={META}>{r().duration!}</Text></If>
-        <If when={r().state === "waiting"}><Text class="text-[13px] text-primary">waiting</Text></If>
+        <View class="flex-1" />
+        <If when={open()}>
+          <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
+            <Text class={`text-xs leading-4 ${isRaw() ? "text-primary font-medium" : "text-muted-foreground"}`}>raw</Text>
+          </Button>
+        </If>
+        <If when={r().exit !== undefined}><Text class="text-xs leading-4 text-muted-foreground shrink-0">{`exit ${r().exit}`}</Text></If>
+        <If when={r().exit !== undefined && (r().state !== "done" || !!r().duration)}><Text class={META}>·</Text></If>
+        <If when={r().state === "waiting"}><Text class="text-xs leading-4 text-primary shrink-0">waiting</Text></If>
+        <If when={r().state === "denied"}><Text class="text-xs leading-4 text-error shrink-0">denied</Text></If>
+        <If when={r().state === "error"}><Text class="text-xs leading-4 text-muted-foreground shrink-0">failed</Text></If>
+        <If when={(r().state === "done" || r().state === "running") && !!r().duration}><Text class={`${META} shrink-0`}>{r().duration!}</Text></If>
       </View>
       <If when={open()}>
-        <View class="mt-1 mb-1 mr-4 rounded-(--radius-card) bg-card overflow-hidden">
-          <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-start gap-2 min-h-8 px-4 pt-1">
-            <Text style={{ userSelect: "text" }} class={`flex-1 min-w-0 ${T.mono} pt-1`}>{r().raw ? "arguments and output" : r().arg}</Text>
-            <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 -mr-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
-              <Text class={META}>{r().raw ? "[raw]" : "raw · r"}</Text>
-            </Button>
-          </View>
-          <Scroll class="max-h-[320px]">
-            <View class={isDiff() ? "pt-1 pb-3" : "px-4 pt-1 pb-4"}>
-              <If when={isDiff()} else={
-                <Each of={body()} key={(x, i) => `${i}`}>
-                  {(x) => <ToolDetail line={x} />}
-                </Each>
-              }>
-                {() => <DiffView lines={body} />}
-              </If>
-            </View>
-          </Scroll>
-          <If when={r().media.length > 0}>
-            <View class="flex-row flex-wrap gap-4 px-4 pb-4" testID={`tool-media-${r().id}`}>
-              <Each of={r().media} key={(x) => x.artifact}>
-                {(x) => <View class="gap-1"><Image src={apiUrl(`/api/artifact/${x().artifact}`)} style={{ width: 320, height: 240, objectFit: "contain" }} accessibilityLabel={x().name || "image"} /><Text class={META}>{x().name || x().mime}</Text></View>}
-              </Each>
-            </View>
-          </If>
-          <If when={!!marker()}>
+        <View class="pl-4 pr-4 pb-1" onFocus={markFocused} onBlur={clearFocused}>
+          <If when={isDiff()} else={
+            <Each of={body()} key={(x, i) => `${i}`}>
+              {(x) => <If when={isMark(x())} else={<ToolDetail line={x} />}><MarkRow line={x} /></If>}
+            </Each>
+          }>
             {() => (
-              <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-8 px-4">
-                <Text class={META}>{`↑ ${hidden()} earlier lines`}</Text>
-                <View class="flex-1" />
-                <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 -mr-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-show-all-${r().id}`}>
-                  <Text class="text-[13px] leading-5 font-medium text-primary underline">Show all</Text>
-                </Button>
-              </View>
+              <>
+                <If when={mark()?.tone === "show-less"}>{() => <MarkRow line={() => mark()!} />}</If>
+                <DiffView lines={body} />
+                <If when={mark()?.tone === "show-all"}>{() => <MarkRow line={() => mark()!} />}</If>
+              </>
             )}
           </If>
-          <If when={r().clipped && r().showAll}>
-            <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-8 px-4">
-              <View class="flex-1" />
-              <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 -mr-1 min-h-6 hover:bg-accent ${FOCUS}`}>
-                <Text testID={`tool-show-less-${r().id}`} class={META}>show less o</Text>
-              </Button>
+          <If when={r().media.length > 0}>
+            <View class="flex-row flex-wrap gap-4 pt-2" testID={`tool-media-${r().id}`}>
+              <Each of={r().media} key={(x) => x.artifact}>
+                {(x) => <View class="gap-1"><Image src={apiUrl(`/api/artifact/${x().artifact}`)} style={{ width: 320, height: 240, objectFit: "contain" }} accessibilityLabel={x().name || "image"} /><Text class={META}>{x().name}</Text></View>}
+              </Each>
             </View>
           </If>
         </View>
@@ -1235,15 +1303,26 @@ export function Timeline() {
     streamRev();
     const sel = model.selected;
     if (!sel) return [];
-    return groupActivities(withStreaming(stable(), model.streaming.get(sel.sessionId)));
+    return groupActivities(withStreaming(stable(), model.streaming.get(sel.sessionId)), model.running.has(sel.sessionId));
   });
   const below = computed(() => newBelow(rows()));
   jump.fn = () => { try { ref?.scrollToEnd({ animated: true }); } catch {} };
+  // A session opens at its latest message, as in the TUI; `maintainVisibleContentPosition` then follows new content while at the end.
+  let openedSession: string | undefined;
+  effect(() => {
+    const sel = model.selected;
+    const id = sel?.loaded && rows().length ? sel.sessionId : undefined;
+    if (!id || id === openedSession) return;
+    openedSession = id;
+    scrolledUp.set(false);
+    setTimeout(() => { try { ref?.scrollToEnd({ animated: false }); } catch {} }, 0);
+  });
   return (
     <View class="flex-1 min-h-0" testID="timeline">
       <If when={rows().length > 0} else={<EmptyTimeline />}>
         <List
           ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingVertical: 12 }}
+          maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 160 }}
           onScroll={(e) => {
             scrollY.set(e.offset.y);
             viewH.set(e.size.height);

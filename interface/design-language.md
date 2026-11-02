@@ -82,12 +82,11 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   lifetime hairline), three at a time with `+N more`; clicking one opens its full text in
   the modal. The banner is one row at the top of the page and pushes the timeline down;
   the jump-to-latest pill is raised, right-aligned on the row above the composer card.
-- The file and diff panel is one right-anchored surface. From 140 columns (TUI)
-  or 1100 px (NSH) it sits beside the timeline and takes 55% of the space right
-  of the left sidebar; the right sidebar yields and the timeline keeps 45%. Below
-  that it covers the whole window, the composer included, with its own
-  `‹ Back  path  ●` header. The panel keeps its editor, undo history and scroll
-  across the breakpoint. When it hides a session that needs approval or an
+- The file and diff view is one centred modal over the dimmed page, at every
+  width; the page keeps its layout underneath and a click outside closes it. Long
+  lines wrap. It has its own
+  `‹ Back  path  ●` header. The modal keeps its editor, undo history and scroll
+  across a resize. When it hides a session that needs approval or an
   answer, its header carries a `⚠ N waiting` badge. Wide mode appears without
   motion; narrow mode slides in (NSH) or steps in over two 125 ms frames (TUI).
 - The location strip under the composer shows the path and branch in muted text.
@@ -104,6 +103,9 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   the left only at 100-119, and below 100 drawers of 34 / 36 cells over the scrim with a header
   of toggles, status and a left-truncated breadcrumb. The empty and connecting screens carry the
   `_/` N splash logo in the accent colour (bold in mono), one block centred above the title.
+  The launch splash uses the same logo in `text.primary` (white in the dark theme) above a
+  30-segment milestone bar, its percentage and the next step; the bar follows the five startup
+  milestones, never the clock.
 - Narrow layouts keep the centre readable and use drawers for sidebars. Large
   text, CJK and combined graphemes must fit without splitting; keyboard and
   mouse hit targets follow the painted geometry. Empty, loading, error and

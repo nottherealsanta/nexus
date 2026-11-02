@@ -972,7 +972,8 @@ class Runtime:
             if permission is None:
                 permission = settings["permission"]
             if effort is None:
-                effort = settings["effort"] or None
+                remembered = self.store.preference("effort.last")
+                effort = remembered if remembered is not None else settings["effort"]
             if disabled_tools is None:
                 try:
                     disabled_tools = self.check_tool_names(defaults["tools"]["disabled"], self.switchable(project.path))
@@ -1599,7 +1600,7 @@ class Runtime:
 
         Nothing is interrupted: a running turn (or a pending question/approval)
         anywhere in the tree refuses the operation. Data, directories, worktrees,
-        snapshots and background jobs are untouched; archive state is one column.
+        snapshots and background jobs are untouched; idle owned kernels are released.
         """
         session = self.session(session_id)
         if session.parent_id is not None:
@@ -1616,6 +1617,8 @@ class Runtime:
                 f"cannot {'archive' if archived else 'unarchive'} session tree {session_id}: session {busy} "
                 "is running a turn or waiting for the user; interrupt it first"
             )
+        if archived and any(k.lock.locked() for k in self.kernels.owned_by_tree(session_id, set(ids))):
+            raise Conflict("cannot archive session tree: an owned kernel is busy; wait for its cell to finish")
         pending = [item for sid in ids for item in self.inputs.list(sid)] if archived else []
         if pending and not drop_inputs:
             raise Conflict("session tree has pending inputs; remove them or set drop_inputs")
@@ -1629,15 +1632,20 @@ class Runtime:
                 {"root": session_id, "sessions": ids, "archived": archived},
                 session_id=session_id,
             )
+        if archived:
+            for kid in self.kernels.release_tree(session_id, set(ids)):
+                self.bus.publish("kernel.deleted", {"id": kid, "reason": "session tree archived; state discarded"},
+                                 session_id=session_id)
         return self.session(session_id)
 
     def archive_stale_sessions(self, *, older_than: float, now: float | None = None) -> list[str]:
         """Archive whole root trees idle strictly longer than `older_than` seconds.
 
         The transition is the same one the API uses, so each archived tree gets
-        one `session.archived` event and nothing is interrupted, stopped or
-        deleted. A tree is skipped while any session in it is running, waiting
-        for an approval or question, holding pending input, or running a
+        one `session.archived` event and releases idle owned kernels without
+        interrupting work or deleting stored history. A tree is skipped while any
+        session in it is running, waiting for an approval or question, holding
+        pending input, or running a
         background job: those are activity, not idleness. `older_than` <= 0
         disables the sweep.
         """
@@ -2476,7 +2484,7 @@ class Runtime:
             self.bus.publish("session.status", {"status": "busy"}, session_id=session.parent_id)
         return turn
 
-    def prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None, mode: str = "send", typed: bool = False) -> dict[str, Any]:
+    def prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None, pastes: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None, mode: str = "send", typed: bool = False) -> dict[str, Any]:
         session = self.session(session_id)
         if mode not in ("send", "steer", "queue"):
             raise ValueError("mode must be send, steer or queue")
@@ -2488,13 +2496,15 @@ class Runtime:
         elif session.archived:
             raise Conflict("cannot add input to an archived session")
         from .images import image_parts
+        from .pastes import paste_parts
 
         parts = image_parts(images)
+        text_parts = paste_parts(text, pastes)
         if not text.strip() and not parts:
             raise ValueError("text or images must not be empty")
         if busy or mode != "send":
             labelled = tuple(part for index, image in enumerate(parts) for part in (Text(f"[Image {chr(ord('A') + index)}]"), image))
-            message = Message("user", ((Text(text),) if text else ()) + labelled)
+            message = Message("user", ((text_parts if text else ()) + labelled))
             item = self.inputs.add(session_id, mode, message_to_json(message)["parts"], mutation)
             self.bus.publish("input.added", item, session_id=session_id)
             if not busy:
@@ -2510,9 +2520,10 @@ class Runtime:
         labelled_parts = tuple(part for index, image in enumerate(parts) for part in (
             Text(f"[Image {chr(ord('A') + index)}]"), image,
         ))
-        turn = self._begin_turn(session, user_text=Message("user", (Text(text), *labelled_parts)) if parts else text, origin="prompt", mutation=mutation)
+        structured = bool(parts) or any(part.collapsed for part in text_parts)
+        turn = self._begin_turn(session, user_text=Message("user", (*text_parts, *labelled_parts)) if structured else text, origin="prompt", mutation=mutation)
         if typed:
-            self.store.record_prompt(session_id, Message("user", (Text(text), *labelled_parts)))
+            self.store.record_prompt(session_id, Message("user", (*text_parts, *labelled_parts)))
         return {"status": "busy", "turn_id": turn["id"], "origin": "prompt"}
 
     def _start_input(self, session_id: str, item: dict[str, Any]) -> dict[str, Any]:

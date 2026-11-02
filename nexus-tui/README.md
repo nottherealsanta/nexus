@@ -20,36 +20,31 @@ model change), provider, effort, and on the right the `╱` meter with
 `82.0K · 41%`, explained on hover.
 The first row is a band on the chrome surface (`surface.sidebar`, shared
 with both sidebars; no rules between them, a `│` edge only in ANSI-16 and
-mono). It holds the left toggle, the Sessions / Files / Projects icons over the
-left sidebar (a column on the rail, the drawer's first row when narrow;
-hovering shows the label), the session tabs, the run status at the centre's
-right edge, the notification count and the right toggle. Sidebars are 34 / 36
-cells from 160 columns and 28 / 30 below. `paint::scrim` dims a buffer under a
-modal (see the modal recipe below). The left sidebar (D03) opens with a `⌕ Search sessions` row (`ctrl+k`, it opens the
-switcher) and a scope icon (`▣` for the current project, `◎` for all projects;
-click to toggle without a notification). It shows an UPPERCASE project header, `⌥ branch  ~/…/dir`
+mono). It holds the left toggle over the project rail, the Sessions / Files icons over the
+left sidebar (the drawer's first row when narrow; hovering shows the label), the
+session tabs, the waiting status at the centre's right edge, the notification
+count and the right toggle. Sidebars are 34 / 36 cells from 160 columns and 28 / 30
+below. `paint::scrim` dims a buffer under a modal (see the modal recipe below). The
+project rail is always there, from 70 columns, whether the sidebar is open or not.
+Projects keep creation order with uppercase initials; collisions use the next
+available consonant, then a numeric suffix. Running or recently active projects
+(within one hour) are lighter gray. Each tile has a counter in each corner:
+attention (purple) and unread (blue) on top, running (green) and idle (white) below,
+counting root sessions, with archived sessions left out and subagents counted under
+their root. Counts above nine display `*`, and a project with no counts shows a
+three-cell muted rule. Hovering shows the full project name and `N needs attention`, `N unread`, `N running` and `N idle` right beside the rail, over the sidebar when it is open. A `+`
+ends the list and adds a project; Settings sits at the rail's foot while the sidebar
+is closed. A right-click opens the project's actions. Activating a project restores
+its open tabs and last selected session or new-session view in this client; pressing
+the project already open opens the session switcher scoped to it. On first
+selection it falls back to its newest unarchived root session or an empty new-session
+view. New-session composer text and images are kept separately per project, for the
+client process. The left sidebar (D03) lists the current project only (`ctrl+k` opens
+the switcher): `⌥ branch  ~/…/dir`
 sub-groups for linked worktrees, and two-line rows (mark slot, title, time;
-`⌥ branch`, `2 ↳`) ending with `+ New session`; `Settings` is pinned at the bottom. Drag its inner edge to resize it (20–60 columns);
-dragging below 14 columns collapses it to a project rail, with search on top and
-`+` below. Search and new-session buttons are three rows tall, with vertically
-centered icons. Projects stay in creation order and use uppercase initials; collisions
-use the next available consonant, then a numeric suffix. Running or recently
-active projects (within one hour) are lighter gray; inactive projects are darker.
-The rail aligns the sidebar toggle and every label's first character on its center
-column. Selection and hover fill the tile's full width, with padding above the
-label and below its counter row; the selected project has a thin white left border and white
-initials. The final edge column fades into the timeline in truecolor terminals. Tiles
-have a blank row between them. The counter row shows nonzero root-session counts
-in order: needs attention (purple), finished/unread (blue), running (green), idle
-(white). Archived sessions are excluded; subagents contribute to their root's
-state rather than counting twice. Counts above nine display `*`; a project with
-no counts shows a three-cell muted rule under its initials instead. Hovering or
-keyboard focus shows the full project name and exact counts with labels.
-Activating a project restores its open tabs and last selected session or new-session
-view in this client. On first selection it falls back to its newest unarchived root
-session or an empty new-session view. New-session composer text and images are kept
-separately per project. Tab and draft state lasts for the client process.
-Settings → Sidebar switches full / rail / hidden. The project
+`⌥ branch`, `2 ↳`) ending with `+ New session`; `Settings` is pinned at the bottom.
+Drag its inner edge to resize it (20–60 columns); dragging below 14 columns closes it.
+Settings → Sidebar switches full / rail. The project
 strip under the card shows the project name (bold), its path (muted),
 `⌥ branch` and `checkout` (muted) or `worktree` (bold violet); `ctrl+p commands`
 sits muted at the right while idle. The card has no rail and no status band.
@@ -94,14 +89,11 @@ working directory, environment and header names, tool filters and timeouts, and 
 to take. The TUI never starts a project server. Its prompt preview is built
 from the first line of the agent's prompt body, the project's `AGENTS.md` when the TUI can read
 it, and the selected agent's tool list or the default tools. Counts read `~N` with "estimated"
-on hover. Finished-turn footers show model, tool count, input and output tokens,
-elapsed time and recorded finish time, in that order. Hover for reasoning tokens,
-cached input percentage and available effort; click the footer or select it in
-the timeline and press Enter for the same details without hover. Missing usage is
+on hover. Finished-turn footers show model, tool count, input, output and reasoning
+tokens, cached input percentage, elapsed time and recorded finish time. Click the
+footer or select it in the timeline and press Enter for further details including effort. Missing usage is
 marked unknown, and finish time is omitted when it was not recorded; elapsed
-time based on the last available message is prefixed `~`. Terminal
-mouse-motion reporting is needed for hover; the keyboard and click alternatives
-work without it.
+time based on the last available message is prefixed `~`.
 
 `/learn <source>` asks whether to install into this project or every project, previews the
 source, then either installs an unambiguous set of new skills or opens a checklist. The checklist
@@ -218,13 +210,15 @@ and a click or `files.root_toggle` switches between the project and the open ses
 worktree. Folders expand one level at a time, each level has a `│` guide in `border.default`,
 folders are bold, ignored entries are muted and can be hidden, and Git status letters are
 right-aligned and coloured (`M` warning, `A` and `?` success, `D` error). Enter opens a
-read-only file view in the right-hand panel: the header row has `‹ Back`, the `~` path (the
-basename bold) and `lines 1-38 of 38` muted at the right, a blank row follows, then
-right-aligned line numbers and a `│` gutter; Esc or Back returns to the timeline. From 140
-columns the panel sits beside the timeline, takes 55% of the space right of the left sidebar
-and the right sidebar yields; below that it covers the whole window, the composer included.
-When it hides a session that needs approval or an answer, its header shows `⚠ N waiting`.
-Resizing across the breakpoint keeps the open file, search and scroll. The selected file can be copied as an absolute
+read-only file view: the header row has `‹ Back`, the `~` path (the
+basename bold), `e edit`, the Markdown `p source`/`p preview` control and `lines 1-38 of 38`
+muted at the right, a blank row follows, then
+right-aligned line numbers and a `│` gutter; Esc or Back returns to the timeline. It opens
+in a centred modal over the dimmed page (the page keeps its layout); a click outside closes it, and long lines wrap.
+Markdown files (`.md`, `.markdown`) open as rendered prose; the header's `p source` control
+shows the numbered source, and `p` switches back to the preview. Find returns to the source first.
+When a session needs approval or an answer, its header shows `⚠ N waiting`.
+Resizing keeps the open file, search and scroll. The selected file can be copied as an absolute
 path, inserted as `@path`, or opened in `$VISUAL`/`$EDITOR` with the terminal suspended. In the
 file view `/` opens the search on the bottom row (always reserved, so the text does not move):
 `/ query  3 of 12   n next · N prev · esc end`. Matches are on the selection band and the
@@ -242,15 +236,16 @@ asking first when dirty; Esc leaves a clean editor and asks before dropping chan
 diff is refused while the text is unsaved. `vendor/ratatui-code-editor` is checked in for the
 step that replaces this buffer; see [development.md](../docs/development.md#vendored-crates).
 
-**K5-K11 client parts.** The session switcher (`ctrl+k`) marks each session with the same status
-glyph as its tab (running spinner, attention/error dot or idle dot) beside the age, and also
+**K5-K11 client parts.** The session switcher (`ctrl+k`) leads each session with the same status
+glyph as its tab (running spinner, attention/error dot or idle dot), then the title and age, and also
 lists sessions whose user messages match (Core's `/api/search`) after the title matches, with
 the snippet in the hint column. A
 session opens with its newest 200 messages; Enter on `older messages are not loaded` (or the
 palette's Load older turns) reads the page before the oldest. A running session loads every older page on its own, and pages already read stay cached across snapshot resyncs. The approval card offers `y` allow
 once, `a` allow for the session, `n` deny, `d` deny with the composer's text as the note.
 Choosing a model or agent for an existing session first asks `…/switch-cost` and confirms when
-the cache would be lost. `/usage` shows plan limits (`GET /api/usage`). A tool result's images
+the cache would be lost. `/usage` shows provider usage (`GET /api/usage`): every connected provider, with plan
+windows where it reports them. A tool result's images
 are named under its output (`▣ image name · mime · artifact id`); a terminal cannot show them.
 
 Responsive layout (D17, `layout::Breakpoint`): from 160 columns both sidebars are docked at 34
@@ -260,10 +255,18 @@ of 34 and 36 cells over the page, which `paint::scrim` dims (a click on the scri
 drawer). Under 100 the header keeps the two toggles, the run status and the bell, and the tab
 strip gives way to a breadcrumb of the viewed session cut from the left (`… › child`).
 
-States (D18): the connecting screen and the empty workspace show the splash logo
-(`paint::LOGO`, five rows of `_/` strokes, accent, bold in mono, centred as one block) over the
-title. An empty workspace reads `No projects yet` with `alt+3 add a project · ctrl+p commands`
-(the manifest has no key for adding a project yet, so the hint names the Projects tab). A lost
+States (D18): launch shows the splash (`nexus-tui/src/splash.rs`): the `_/` logo in
+`text.primary` (white in the dark theme), a 30-segment milestone bar, its percentage and the
+next step. The milestones are `daemon`, `workspace`, `providers`, `session` and `ready`; the
+bar follows them, while the ambient dots and intro particles run on the clock; the logo is
+painted from the first frame, before the terminal capability probes.
+When the stream is live the logo flashes and a `▓▒░` curtain wipes into the first frame; with
+animations off the logo and bar are static and the frame follows with a cut. A failed start
+dismisses the splash so the error is readable. After launch, the connecting screen and the
+empty workspace show the same logo (`paint::LOGO`, five rows of `_/` strokes, accent, bold in
+mono, centred as one block) over the title. An empty workspace reads `No projects yet` with
+`alt+3 add a project · ctrl+p commands`
+(the manifest has no key for adding a project yet, so the hint names the rail's `+`). A lost
 stream or an unreachable Core shows `✕ offline` in the header, the banner `Disconnected from
 Core · retrying in 4s` with retry, and the composer placeholder `Reconnecting to Core… your
 draft is kept`; with nothing loaded the page says `Not connected to Core`. The banner's `r`
@@ -322,7 +325,7 @@ earlier lines hidden. Once finished, opening it shows the full text. The header 
 The right sidebar's Session
 info totals turns, calls, tools by name, tokens, a context bar against the
 model's window and the catalog cost. Right-click (or `m`) on a sidebar row opens
-its action menu; the Projects tab ends with `+ Add project` (an inline path
+its action menu; the Projects view (`alt+3`) ends with `+ Add project` (an inline path
 field) and removal asks first. Settings shows provider connections and
 per-subagent model lists on their pages, and says why rows that need a Core
 setting cannot change.
@@ -409,7 +412,7 @@ on other ports than 4799/4798.
 Preferences: the TUI keeps its own client preferences in `$NEXUS10_HOME/tui.json`
 (mode 0600, written atomically through a temporary file and a rename). This is
 not Nexus state: Core never reads it and the TUI still reads no other Nexus file.
-It holds `ui.left_width`, `ui.left_rail`, `ui.left_open`, `ui.right_open` and
+It holds `ui.left_width`, `ui.left_open`, `ui.right_open` and
 `theme.mode`, `theme.monochrome`, `theme.animations` (`false` is reduced
 motion). They are loaded at startup and saved when one changes (the sidebar
 edge drag is saved when the button is released). A missing or corrupt file is
@@ -486,7 +489,7 @@ Lower layers know nothing of higher ones.
 | `completion` | Ranking (`rank_menu`, typo distance), acceptance text and the per-token reply cache for the composer's completion popup, copied from old Nexus. |
 | `dictation` | Local `cpal` capture on its own thread, mono conversion, streaming resampling, PCM16 WAV encoding, cue tones, waveform levels and preview pacing. No device handle crosses threads. |
 | `text`, `keys`, `composer`, `editor` | Display-width helpers, key names, and the multi-line composer. The grapheme editor and visual layout are adapted from old Nexus; composer movement and deletion respect grapheme boundaries. The composer uses the editor
-for selection, undo/redo and collapsed large pastes; sent text expands every paste. |
+for selection, undo/redo and collapsed large pastes; a send keeps the marker and sends the full text separately, and the message renders the marker as a clickable chip. |
 | `ui`, `layout` | View-state types (focus, overlays, dialogs, alerts, mouse targets). `Regions::compute` is the one geometry function; the renderer registers every clickable rect in a `HitMap` as it draws it and the map is rebuilt each frame. |
 | `app` | Focus model, `when`-term evaluation, command availability, the palette, the Esc chain, keyboard/mouse/paste handling. Produces `Effect`s (API call, microphone capture, supervisor command, clipboard, quit, suspend). |
 | `actions` | Core actions (prompt, session changes, voice status/download/transcription, and others), each with its own `RequestId` where applicable; failed sends restore their draft. |
@@ -540,7 +543,7 @@ shapes from the docs.
 
 Anchors (INTERFACE_PLAN.md): left sidebar toggle at the header's leading edge,
 title and breadcrumbs centred, notification count and right toggle trailing;
-the toggles stay when a sidebar is closed. Left tabs Sessions, Files, Projects
+the toggles stay when a sidebar is closed. Left tabs Sessions, Files
 with Settings fixed at the bottom; right sidebar SESSION, CONTEXT and GIT
 (the Git section shows its manifest reason when unavailable). Below 100 columns the sidebars become drawers
 opened from the same toggles. The waiting card sits directly above the composer
@@ -652,11 +655,18 @@ TUI can be driven by hand in a browser.
   a marker removes its attachment. Up to eight images, 8 MiB combined; image-only
   sends work and a failed send restores the images. In the timeline the
   `[Image A]` marker stays ordinary message text (no accent colour) and the
-  attachment sits above the message as the same small square thumbnail with its
-  muted name above it; the sticky user header never shows it. Clicking a
+  generated attachment labels are not repeated after the text. Attachments sit side by side above the message in bordered square thumbnails with their
+  muted names above them; the sticky user header never shows them. Clicking a
   thumbnail opens a full-size preview (`ratatui-image`: kitty, iTerm2 or sixel
-  where the terminal supports it, half-blocks otherwise). Normal text paste is
-  unchanged.
+  where the terminal supports it, half-blocks otherwise).
+- A large text paste (at least 200 characters or three lines) collapses into one
+  `[Pasted ~N tokens]` marker at the cursor, as in the old editor; pasting the
+  same text again expands the marker in place. Sending sends the marker and the
+  full text separately: Core stores the text as a collapsed part, so the model
+  reads it while the user message shows only the marker. In the message the
+  marker is a clickable chip above the text, with no preview; clicking it opens
+  the full text in a modal. A failed send restores the marker. Smaller pastes
+  stay inline.
 - The top header omits the busy spinner, working label and elapsed time.
 - The model picker shows model names on the left and providers on the right;
   `m` toggles details below the picker (they follow the selection) and is
@@ -674,10 +684,12 @@ TUI can be driven by hand in a browser.
   row of top padding above the input and a half-height bottom edge. Its status
   shows the latest reported input tokens, the percentage of any known
   pricing-tier boundary and of the context window; hovering explains them. The
-  location strip keeps the current path and branch, and a rule below it shows
-  context occupancy when idle (against the first pricing tier until reached,
-  then the window); during a turn an agent-coloured segment moves along it
-  (stationary with reduced motion, a heavier glyph in monochrome).
+  location strip keeps the current path and branch, a centred highlighted count
+  of live kernels and running background shells (click it for their details),
+  and a rule below it shows context occupancy when idle (against the first
+  pricing tier until reached, then the window); during a turn an
+  agent-coloured segment moves along it (stationary with reduced motion, a
+  heavier glyph in monochrome).
 - User message bands and their sticky headers sit inside the timeline's
   gutters; image labels align with the message text; agent output is indented to
   the user text and wrapped Markdown stays within the timeline. While a turn is

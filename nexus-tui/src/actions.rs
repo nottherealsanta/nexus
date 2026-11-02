@@ -33,7 +33,10 @@ pub enum ApiCall {
         session: String,
         text: String,
         images: Vec<crate::images::Image>,
+        pastes: Vec<(String, String)>,
         mode: String,
+        /// The composer as it was before the send, to put back whole if it fails.
+        draft: Option<Box<crate::composer::Composer>>,
     },
     /// Composer `!` mode: run a command in the workspace; Core adds it and its output to context.
     Shell {
@@ -52,8 +55,11 @@ pub enum ApiCall {
         project: String,
         text: String,
         images: Vec<crate::images::Image>,
+        pastes: Vec<(String, String)>,
         /// Agent, model and effort chosen before the session existed.
         fields: serde_json::Value,
+        /// The composer as it was before the send, to put back whole if it fails.
+        draft: Option<Box<crate::composer::Composer>>,
     },
     Continue {
         session: String,
@@ -69,6 +75,12 @@ pub enum ApiCall {
     Btw {
         session: String,
         question: String,
+    },
+    /// The full text of a skill or an MCP server for the context modal.
+    ContextEntry {
+        kind: &'static str,
+        name: String,
+        project: Option<String>,
     },
     SpeakStop,
     VoiceStatus {
@@ -192,7 +204,7 @@ pub enum ApiCall {
         content: String,
         revision: String,
     },
-    /// Plan limits of the providers that report them (`GET /api/usage`).
+    /// Usage of every connected provider, with plan windows where reported (`GET /api/usage`).
     Usage,
     /// Would switching to `model` or `agent` lose the prompt cache? (`GET …/switch-cost`)
     SwitchCost {
@@ -253,7 +265,7 @@ impl ApiCall {
             ApiCall::Continue { .. } => "Continuing",
             ApiCall::Speak { .. } => "Finished speaking",
             ApiCall::Handoff { .. } => "Handed off to a new session",
-            ApiCall::Btw { .. } => "",
+            ApiCall::Btw { .. } | ApiCall::ContextEntry { .. } => "",
             ApiCall::SpeakStop => "Stopped speaking",
             ApiCall::VoiceStatus { .. }
             | ApiCall::VoicePrepare { .. }
@@ -306,6 +318,14 @@ impl ApiCall {
             ApiCall::Prompt { session, text, .. } => Some((Some(session), text)),
             ApiCall::NewAndPrompt { text, .. } => Some((None, text)),
             ApiCall::Shell { session, command } => Some((Some(session), command)),
+            _ => None,
+        }
+    }
+
+    /// The composer to put back after a failed send, marker chips included.
+    pub fn saved_draft(&self) -> Option<&crate::composer::Composer> {
+        match self {
+            ApiCall::Prompt { draft, .. } | ApiCall::NewAndPrompt { draft, .. } => draft.as_deref(),
             _ => None,
         }
     }
@@ -522,10 +542,12 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             session,
             text,
             images,
+            pastes,
             mode,
+            ..
         } => {
             conflict(
-                api.prompt_images(session, text, images, mode, &key)
+                api.prompt_images(session, text, images, pastes, mode, &key)
                     .await
                     .map_err(e)?,
             )?;
@@ -582,7 +604,9 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             project,
             text,
             images,
+            pastes,
             fields,
+            ..
         } => {
             let s = conflict(
                 api.create_session(project, fields.clone(), &key)
@@ -594,7 +618,7 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             done.session = Some(s.clone());
             let key2 = RequestId::new();
             conflict(
-                api.prompt_images(&s.id, text, images, "send", &key2)
+                api.prompt_images(&s.id, text, images, pastes, "send", &key2)
                     .await
                     .map_err(e)?,
             )?;
@@ -636,6 +660,44 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                 .map_err(e)?
                 .body;
             done.answer = body["answer"].as_str().map(str::to_owned);
+        }
+        ApiCall::ContextEntry {
+            kind,
+            name,
+            project,
+        } => {
+            let path = match (*kind, project) {
+                ("skill", _) => format!("/api/skill/{name}"),
+                _ => format!("/api/mcp/{name}"),
+            };
+            let query = match (*kind, project) {
+                ("skill", Some(project)) => vec![("project", project.clone())],
+                _ => Vec::new(),
+            };
+            let mut reply = api
+                .http
+                .call(reqwest::Method::GET, &path, &query, None, None, None)
+                .await;
+            // A project's own server is not in the global list.
+            if let (true, Some(project), true) = (*kind == "mcp", project, reply.is_err()) {
+                reply = api
+                    .http
+                    .call(
+                        reqwest::Method::GET,
+                        &format!("/api/project/{project}/mcp/{name}"),
+                        &[],
+                        None,
+                        None,
+                        None,
+                    )
+                    .await;
+            }
+            let body = reply.map_err(e)?.body;
+            done.answer = Some(if *kind == "skill" {
+                body["body"].as_str().unwrap_or("").to_owned()
+            } else {
+                serde_json::to_string_pretty(&body).unwrap_or_default()
+            });
         }
         ApiCall::SpeakStop => {
             if !crate::speech::stop_local() {
@@ -965,8 +1027,10 @@ mod tests {
         let c = ApiCall::Prompt {
             mode: "send".into(),
             images: Vec::new(),
+            pastes: Vec::new(),
             session: "ses_1".into(),
             text: "hello".into(),
+            draft: None,
         };
         assert_eq!(c.draft(), Some((Some("ses_1"), "hello")));
         assert_eq!(

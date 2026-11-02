@@ -133,13 +133,16 @@ finishes, so text and tool calls interleave with deltas. Chat emits every
 followed by `Usage` and `Done`. A sample sequence per dialect is in
 [llm-providers.md](llm-providers.md#streaming).
 
-Failures raise `ProviderError(message, status=None, body=None)` from the
-iterator; they are not events.
+Failures raise `ProviderError` from the iterator; they are not events.
+Fields: `status` (default none), `body` (default none), `phase`
+(`transport`, `response` or `stream`; default `stream`) and `retry_after`
+(seconds, when the provider sent a valid one). Retries are allowed only
+before response stream events.
 
 ## Loop events
 
 `Agent.turn(text)` yields every provider event unchanged plus these
-(`nexus/loop.py`). `LoopEvent = Event | StepStart | ToolStart | ToolEnd | MessageAdded | TurnEnd`.
+(`nexus/loop.py`). `LoopEvent` is `Event` plus `StepStart`, `ToolStart`, `ToolEnd`, `MessageAdded`, `TurnEnd`, `RetryScheduled`, `RetryStarted`, `RetryExhausted`, `ModelFallback` and `HookFired`.
 
 | Event | Fields | Emitted when |
 | --- | --- | --- |
@@ -147,11 +150,12 @@ iterator; they are not events.
 | `StepStart` | `step` (from 1) | Before each provider request |
 | `ToolStart` | `call`, `args` | Just before a tool call is checked, approved and run. `args` is `None` when the arguments are not a JSON object |
 | `ToolEnd` | `call`, `result` | After the call finished, was declined, or failed; `result.is_error` tells which |
-| `TurnEnd` | `stop`, `steps` | Last event of a turn. `stop` is the final `Done.stop`, or `"max_steps"` |
+| `TurnEnd` | `stop`, `steps` | Last event of a turn. `stop` is the final `Done.stop`, `"max_steps"`, or `"blocked"` (steps `0`) when a `UserPromptSubmit` hook blocks the prompt |
 | `RetryScheduled` | `attempt`, `next_attempt`, `attempt_id`, `delay`, `reason`, `status`, `retry_after`, `max_attempts` | A retryable pre-stream failure; the next attempt starts after `delay` seconds |
 | `RetryStarted` | `attempt`, `attempt_id` | The next provider attempt is starting |
 | `RetryExhausted` | `attempts`, `attempt_id`, `reason`, `status`, `retry_after`, `max_attempts` | No further attempt fits the policy or remaining budget; the error ends the turn unless a fallback is available |
 | `ModelFallback` | `previous`, `model`, `reason` | A child switches to its next frozen fallback after a failure before any response stream event; a context notice follows |
+| `HookFired` | `hook`, `event`, `decision`, `message`, `error`, `seconds`, `tool`, `call_id` | A command hook ran. Encoded as `hook_fired`. Only what it adds to context becomes a message ([hooks.md](hooks.md)) |
 
 One turn with one tool call:
 
@@ -201,6 +205,8 @@ Storage and the HTTP API use this encoding.
   parts, and otherwise the class name in snake case (`WireRequest` becomes
   `wire_request`, `ToolCallStarted` becomes `tool_call_started`, `StepStart`
   becomes `step_start`, `Message` becomes `message`).
+* A `text` part that came from a collapsed paste also has `"collapsed": true`;
+  its `text` is still the full pasted content, and providers send it unchanged.
 
 ```json
 {"type": "tool_call", "id": "call_1", "name": "read", "arguments": "{\"path\":\"a.txt\"}", "origin": "codex", "raw": {"type": "function_call", "call_id": "call_1"}}

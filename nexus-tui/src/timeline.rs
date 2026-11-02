@@ -48,6 +48,15 @@ pub struct TLine {
     pub context_section: Option<String>,
     /// Switch index and marker/name cell offsets within this line.
     pub context_items: Vec<(usize, usize, usize, usize)>,
+    /// The whole line is a collapsed paste's marker: clicking it opens the text.
+    pub paste: Option<Rc<PasteText>>,
+}
+
+/// A collapsed text paste in a user message: the marker shown and the full text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasteText {
+    pub marker: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +194,14 @@ struct WrapKey {
     width: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct DocumentKey {
+    text: u64,
+    text_len: usize,
+    width: usize,
+    palette: u64,
+}
+
 #[derive(Clone)]
 struct CachedFence {
     /// Relative to the first line of the cached body.
@@ -242,12 +259,14 @@ enum CacheKey {
     Markdown(MarkdownKey),
     Wrap(WrapKey),
     Detail(DetailKey),
+    Document(DocumentKey),
 }
 
 enum CacheEntry {
     Markdown(CachedMarkdown),
     Wrap(Vec<String>),
     Detail(ToolDetail),
+    Document(std::rc::Rc<Vec<ratatui::text::Line<'static>>>),
 }
 
 impl CacheEntry {
@@ -266,6 +285,20 @@ impl CacheEntry {
                         .map(|row| {
                             std::mem::size_of_val(row.as_slice())
                                 + row.iter().map(|span| span.content.len()).sum::<usize>()
+                        })
+                        .sum::<usize>()
+            }
+            Self::Document(lines) => {
+                std::mem::size_of_val(lines.as_slice())
+                    + lines
+                        .iter()
+                        .map(|line| {
+                            std::mem::size_of_val(line.spans.as_slice())
+                                + line
+                                    .spans
+                                    .iter()
+                                    .map(|span| span.content.len())
+                                    .sum::<usize>()
                         })
                         .sum::<usize>()
             }
@@ -378,6 +411,60 @@ impl LayoutCache {
 
     fn put_detail(&mut self, key: DetailKey, detail: ToolDetail) {
         self.insert(CacheKey::Detail(key), CacheEntry::Detail(detail));
+    }
+
+    /// A whole Markdown document (the file view's preview), rendered to the
+    /// same rows the timeline uses. One entry per open file and width.
+    pub fn document(
+        &mut self,
+        text: &str,
+        width: usize,
+        palette: &crate::markdown::Palette,
+    ) -> std::rc::Rc<Vec<ratatui::text::Line<'static>>> {
+        let width = width.max(1);
+        let key = DocumentKey {
+            text: hash_str(text),
+            text_len: text.len(),
+            width,
+            palette: palette.fingerprint(),
+        };
+        if let Some(CacheEntry::Document(lines)) = self.entries.get(&CacheKey::Document(key)) {
+            self.hits += 1;
+            return lines.clone();
+        }
+        self.misses += 1;
+        let mut lines = Vec::new();
+        for row in crate::markdown::lines(text, palette, width) {
+            if row.blank {
+                lines.push(ratatui::text::Line::default());
+                continue;
+            }
+            let prefix_width: usize = row
+                .prefix
+                .iter()
+                .map(|span| crate::text::width(&span.content))
+                .sum();
+            let body_width = width.saturating_sub(prefix_width).max(1);
+            for (index, part) in crate::markdown::wrap_spans(&row.spans, body_width)
+                .into_iter()
+                .enumerate()
+            {
+                let mut spans = if index == 0 {
+                    row.prefix.clone()
+                } else {
+                    vec![ratatui::text::Span::raw(" ".repeat(prefix_width))]
+                };
+                spans.extend(part);
+                let mut line = ratatui::text::Line::from(spans);
+                if let Some(background) = row.bg {
+                    line = line.style(ratatui::style::Style::default().bg(background));
+                }
+                lines.push(line);
+            }
+        }
+        let lines = std::rc::Rc::new(lines);
+        self.insert(CacheKey::Document(key), CacheEntry::Document(lines.clone()));
+        lines
     }
 
     fn insert(&mut self, key: CacheKey, entry: CacheEntry) {
@@ -681,7 +768,7 @@ pub(crate) fn fmt_duration(secs: f64) -> String {
         let t = s.round() as u64;
         format!("{}m {:02}s", t / 60, t % 60)
     } else {
-        let t = s as u64;
+        let t = s.round() as u64;
         format!("{}h {:02}m", t / 3600, (t % 3600) / 60)
     }
 }
@@ -892,6 +979,7 @@ impl Builder<'_> {
             focus: false,
             context_section: None,
             context_items: Vec::new(),
+            paste: None,
         }));
     }
     fn blank(&mut self) {
@@ -1236,7 +1324,7 @@ impl Builder<'_> {
                             busy,
                             false,
                         );
-                        let text = parts_text(m);
+                        let (text, pastes) = user_text(m);
                         if m.delivery.as_deref() == Some("handoff") {
                             self.handoff_block(m, &text);
                             continue;
@@ -1253,7 +1341,7 @@ impl Builder<'_> {
                         }
                         if m.delivery.as_deref() == Some("steer") && turn_open {
                             if !folded {
-                                self.turn_block(turn_no, m, &text, &turns, false);
+                                self.turn_block(turn_no, m, &text, &pastes, &turns, false);
                             }
                             continue;
                         }
@@ -1282,7 +1370,7 @@ impl Builder<'_> {
                             });
                         folded = !turn_waiting
                             && !self.is_open(&format!("turn:{}:{turn_no}", view.session_id), true);
-                        self.turn_block(turn_no, m, &text, &turns, folded);
+                        self.turn_block(turn_no, m, &text, &pastes, &turns, folded);
                         continue;
                     }
                     if !turn_open || folded {
@@ -1761,6 +1849,7 @@ impl Builder<'_> {
         n: usize,
         message: &crate::api::Message,
         text: &str,
+        pastes: &[Rc<PasteText>],
         turns: &[TurnMeta],
         folded: bool,
     ) {
@@ -1779,7 +1868,15 @@ impl Builder<'_> {
         let big = text.len() > 4096 || text.lines().count() > 40;
         let full = self.is_open(&message_key, !big);
         let body = if folded {
-            first_line(text)
+            if text.trim().is_empty() && !pastes.is_empty() {
+                pastes
+                    .iter()
+                    .map(|paste| paste.marker.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else {
+                first_line(text)
+            }
         } else if big && !full {
             text.lines().take(6).collect::<Vec<_>>().join("\n")
         } else {
@@ -1821,56 +1918,109 @@ impl Builder<'_> {
                 focus: false,
                 context_section: None,
                 context_items: Vec::new(),
+                paste: None,
             };
             b.out.push(Rc::new(pad()));
             let available = b.bw.saturating_sub(3);
-            // Image attachments sit above the message text: each name is a
-            // muted label directly over its square preview.
             if !folded {
-                for (index, image) in message
+                let images: Vec<_> = message
                     .parts
                     .iter()
                     .enumerate()
                     .filter(|(_, part)| part["type"] == "image")
-                {
-                    let name = image["name"].as_str().unwrap_or("image");
-                    let data_url = image["data_url"].as_str().unwrap_or_default();
-                    let Some((width, rows)) = crate::images::preview_size(data_url, available)
-                    else {
-                        continue;
+                    .filter_map(|(index, image)| {
+                        let data_url = image["data_url"].as_str().unwrap_or_default();
+                        crate::images::preview_size(data_url, available.saturating_sub(2))?;
+                        Some((index, image))
+                    })
+                    .collect();
+                let (width, rows) = crate::images::square_size(
+                    available.saturating_sub(2),
+                    crate::images::COMPOSER_THUMB_ROWS,
+                );
+                let cell = width + 2;
+                let per_row = ((available + 1) / (cell + 1)).max(1);
+                for group in images.chunks(per_row) {
+                    let line = |spans| TLine {
+                        spans,
+                        bg: Some(bg),
+                        rail: Some(rail),
+                        focus: false,
+                        context_section: None,
+                        context_items: Vec::new(),
+                        paste: None,
                     };
+                    let prefix = || {
+                        vec![
+                            Span::styled(" ", bg),
+                            Span::styled(" ", gutter),
+                            Span::styled(" ", bg),
+                        ]
+                    };
+                    let mut labels = prefix();
+                    for (_, image) in group {
+                        let name = image["name"].as_str().unwrap_or("image");
+                        let label = truncate(name, cell, b.ell());
+                        labels.push(Span::styled(
+                            format!("{label:<cell$} "),
+                            b.st(MUTED, raised),
+                        ));
+                    }
+                    b.out.push(Rc::new(line(labels)));
+                    let border = b.st(MUTED, raised);
+                    let mut top = prefix();
+                    for _ in group {
+                        top.push(Span::styled(format!("┌{}┐ ", "─".repeat(width)), border));
+                    }
+                    b.out.push(Rc::new(line(top)));
+                    let start = b.out.len();
+                    for _ in 0..rows {
+                        let mut spans = prefix();
+                        for _ in group {
+                            spans.push(Span::styled(format!("│{}│ ", " ".repeat(width)), border));
+                        }
+                        b.out.push(Rc::new(TLine {
+                            spans,
+                            bg: Some(bg),
+                            rail: Some(rail),
+                            focus: false,
+                            context_section: None,
+                            context_items: Vec::new(),
+                            paste: None,
+                        }));
+                    }
+                    let mut bottom = prefix();
+                    for _ in group {
+                        bottom.push(Span::styled(format!("└{}┘ ", "─".repeat(width)), border));
+                    }
+                    b.out.push(Rc::new(line(bottom)));
+                    for (column, (index, image)) in group.iter().enumerate() {
+                        b.previews.push(crate::images::Preview {
+                            start,
+                            column: column * (cell + 1) + 1,
+                            width,
+                            rows,
+                            key: format!("{}:{index}", message.id),
+                            name: image["name"].as_str().unwrap_or("image").to_owned(),
+                            data_url: image["data_url"].as_str().unwrap_or_default().to_owned(),
+                        });
+                    }
+                }
+                for paste in pastes {
                     b.out.push(Rc::new(TLine {
                         spans: vec![
                             Span::styled(" ", bg),
                             Span::styled(" ", gutter),
                             Span::styled(" ", bg),
-                            Span::styled(name.to_owned(), b.st(MUTED, raised)),
+                            Span::styled(format!(" {} ", paste.marker), b.st(PRIMARY, raised)),
                         ],
                         bg: Some(bg),
                         rail: Some(rail),
                         focus: false,
                         context_section: None,
                         context_items: Vec::new(),
+                        paste: Some(Rc::clone(paste)),
                     }));
-                    let start = b.out.len();
-                    for _ in 0..rows {
-                        b.out.push(Rc::new(TLine {
-                            spans: Vec::new(),
-                            bg: Some(bg),
-                            rail: Some(rail),
-                            focus: false,
-                            context_section: None,
-                            context_items: Vec::new(),
-                        }));
-                    }
-                    b.previews.push(crate::images::Preview {
-                        start,
-                        width,
-                        rows,
-                        key: format!("{}:{index}", message.id),
-                        name: name.to_owned(),
-                        data_url: data_url.to_owned(),
-                    });
                 }
             }
             let meta_width = width(&metadata);
@@ -1903,6 +2053,7 @@ impl Builder<'_> {
                     focus: false,
                     context_section: None,
                     context_items: Vec::new(),
+                    paste: None,
                 }));
             }
             if big && !folded {
@@ -1922,6 +2073,7 @@ impl Builder<'_> {
                     focus: false,
                     context_section: None,
                     context_items: Vec::new(),
+                    paste: None,
                 }));
             }
             b.out.push(Rc::new(pad()));
@@ -2089,17 +2241,17 @@ impl Builder<'_> {
             };
             bits.push(count(meta.input, "i"));
             bits.push(count(meta.output, "o"));
+            bits.push(count(meta.reasoning, "r"));
+            if meta.input > 0 {
+                bits.push(vec![Span::styled(
+                    format!("{:.0}%c", 100.0 * meta.cached as f64 / meta.input as f64),
+                    value,
+                )]);
+            }
         }
-        if meta.unknown_usage {
-            // Unknown is said, never shown as zero.
-            bits.push(vec![Span::styled(
-                if meta.has_usage() {
-                    "some usage unknown".to_owned()
-                } else {
-                    "usage unknown".to_owned()
-                },
-                value,
-            )]);
+        if meta.unknown_usage && !meta.has_usage() {
+            // No usage at all is said, never shown as zero.
+            bits.push(vec![Span::styled("usage unknown".to_owned(), value)]);
         }
         let duration = fmt_duration(meta.duration());
         bits.push(vec![Span::styled(
@@ -2292,6 +2444,7 @@ impl Builder<'_> {
                         focus: false,
                         context_section: None,
                         context_items: Vec::new(),
+                        paste: None,
                     }));
                 };
                 let width_in = bw.saturating_sub(3);
@@ -2918,10 +3071,8 @@ impl Builder<'_> {
             } else if denied {
                 (denied_word.clone(), b.st("status.error", CANVAS))
             } else if failed {
-                (
-                    b.t.status("error").0.to_owned(),
-                    b.st("status.error", CANVAS),
-                )
+                // A failed call is part of the flow: marked, never red.
+                (b.t.status("error").0.to_owned(), b.meta())
             } else if running {
                 if !b.t.opts.reduced_motion {
                     b.animated.set(true);
@@ -2987,6 +3138,8 @@ impl Builder<'_> {
                 tail.push(Span::styled("waiting", b.st("interactive.accent", CANVAS)));
             } else if denied {
                 tail.push(Span::styled("denied", b.st("status.error", CANVAS)));
+            } else if failed {
+                tail.push(Span::styled("failed", b.meta()));
             } else if let Some(duration) = duration {
                 tail.push(Span::styled(fmt_duration(duration), b.meta()));
             }
@@ -2994,10 +3147,7 @@ impl Builder<'_> {
                 if !tail.is_empty() {
                     tail.insert(0, Span::styled(b.sep(), b.meta()));
                 }
-                tail.insert(
-                    0,
-                    Span::styled(format!("exit {code}"), b.st("status.error", CANVAS)),
-                );
+                tail.insert(0, Span::styled(format!("exit {code}"), b.meta()));
             }
             if !right.is_empty() && !tail.is_empty() {
                 right.push(Span::raw("  "));
@@ -3071,14 +3221,7 @@ impl Builder<'_> {
             }
             if let Some(d) = done {
                 for line in d.output.lines() {
-                    out.push((
-                        line.to_owned(),
-                        if d.is_error {
-                            self.st("status.error", CANVAS)
-                        } else {
-                            self.secondary()
-                        },
-                    ));
+                    out.push((line.to_owned(), self.secondary()));
                 }
             }
             let detail = ToolDetail {
@@ -3138,20 +3281,13 @@ impl Builder<'_> {
                 }
                 if let Some(d) = done {
                     for line in d.output.lines() {
-                        out.push((
-                            line.to_string(),
-                            if d.is_error {
-                                self.st("status.error", CANVAS)
-                            } else {
-                                self.secondary()
-                            },
-                        ));
+                        out.push((line.to_string(), self.secondary()));
                     }
                     for label in &d.media {
                         out.push((format!("▣ {label}"), self.meta()));
                     }
                 } else if let Some(err) = trace.and_then(|t| t.error.clone()) {
-                    out.push((err, self.st("status.error", CANVAS)));
+                    out.push((err, self.secondary()));
                 } else {
                     out.push(("no output".into(), self.meta()));
                 }
@@ -3342,6 +3478,7 @@ impl Builder<'_> {
             focus: false,
             context_section: None,
             context_items: Vec::new(),
+            paste: None,
         };
         self.block(
             key.clone(),
@@ -3367,6 +3504,7 @@ impl Builder<'_> {
                     focus: false,
                     context_section: None,
                     context_items: Vec::new(),
+                    paste: None,
                 }));
                 if !meta.is_empty() {
                     b.out.push(Rc::new(plain(meta.clone(), secondary)));
@@ -3777,10 +3915,61 @@ impl Builder<'_> {
 fn parts_text(m: &crate::api::Message) -> String {
     m.parts
         .iter()
-        .filter(|p| p["type"] == "text")
-        .map(|p| p["text"].as_str().unwrap_or(""))
+        .enumerate()
+        .filter(|(i, p)| {
+            let text = p["text"].as_str().unwrap_or("");
+            let label = text.len() == 9
+                && text.starts_with("[Image ")
+                && text.as_bytes()[7].is_ascii_uppercase()
+                && text.ends_with(']');
+            p["type"] == "text"
+                && !(m.role == "user"
+                    && label
+                    && m.parts
+                        .get(i + 1)
+                        .is_some_and(|next| next["type"] == "image"))
+        })
+        .map(|(_, p)| p["text"].as_str().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The markers a client shows for a collapsed paste: characters / 4, at least one.
+pub(crate) fn paste_marker(text: &str) -> String {
+    format!("[Pasted ~{} tokens]", (text.chars().count() / 4).max(1))
+}
+
+/// A user message's visible text and its collapsed pastes, in part order.
+fn user_text(m: &crate::api::Message) -> (String, Vec<Rc<PasteText>>) {
+    let mut text = Vec::new();
+    let mut pastes = Vec::new();
+    for (i, p) in m.parts.iter().enumerate() {
+        if p["type"] != "text" {
+            continue;
+        }
+        let part = p["text"].as_str().unwrap_or("");
+        let label = part.len() == 9
+            && part.starts_with("[Image ")
+            && part.as_bytes()[7].is_ascii_uppercase()
+            && part.ends_with(']');
+        if m.role == "user"
+            && label
+            && m.parts
+                .get(i + 1)
+                .is_some_and(|next| next["type"] == "image")
+        {
+            continue;
+        }
+        if p["collapsed"] == true {
+            pastes.push(Rc::new(PasteText {
+                marker: paste_marker(part),
+                text: part.to_owned(),
+            }));
+        } else {
+            text.push(part);
+        }
+    }
+    (text.join(""), pastes)
 }
 
 fn first_line(s: &str) -> String {
@@ -3975,8 +4164,9 @@ fn tool_summary(
             .map(str::to_owned)
             .unwrap_or_default(),
         _ => {
-            let v = a["path"]
+            let v = a["pattern"]
                 .as_str()
+                .or_else(|| a["path"].as_str())
                 .or_else(|| a["query"].as_str())
                 .or_else(|| a["url"].as_str())
                 .or_else(|| a["name"].as_str());

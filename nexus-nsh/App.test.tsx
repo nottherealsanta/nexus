@@ -4,7 +4,7 @@ import { manifest } from "./src/gen/manifest";
 import { agentSlot } from "./src/agent-color";
 import { Model, VIEW_CACHE, scratchOf, upsertTurn } from "./src/core/reduce";
 import { groupRequests, latestUsage, ledgerTotals, sumUsage } from "./src/core/turns";
-import { buildRows, capToolDetail, detailOf, errorText, fmtDuration, patchArg } from "./src/ui/timeline";
+import { buildRows, capToolDetail, capToolOutput, detailOf, errorText, fmtDuration, patchArg } from "./src/ui/timeline";
 import { model } from "./src/store";
 import { diffItems, splitRows } from "./src/ui/diff";
 import { defaultSkillSelection, draftInventoryRows, emptyGlobalToastState, globalEventToast, selectedSkillCounts, sessionInventoryRows, setDisabledTool, shouldInstallRequestedDirectly, toggleDisabledTool } from "./src/skills-mcp";
@@ -78,14 +78,15 @@ describe("skills and MCP", () => {
 
   test("running-session inventory marks locked entries as new-session-only and shows MCP failures", () => {
     const rows = sessionInventoryRows(
-      [{ name: "ready", state: "on" }, { name: "late", state: "off", locked: true }],
-      [{ server: "broken", state: "unavailable", error: "connection refused", tools: null, locked: true }],
+      [{ name: "ready", state: "on", scope: "project" }, { name: "late", state: "off", locked: true }],
+      [{ server: "broken", state: "unavailable", error: "connection refused", tools: null, locked: true, scope: "global" }],
     );
     expect(rows.map((row) => [row.name, row.on, row.hint, row.error])).toEqual([
       ["ready", true, undefined, undefined],
       ["late", false, "new session", undefined],
       ["broken", false, "new session", "connection refused"],
     ]);
+    expect(rows.map((row) => row.scope)).toEqual(["project", undefined, "global"]);
   });
 
   test("global event toasts deduplicate changes and suppress this client's successful learn", () => {
@@ -111,7 +112,7 @@ describe("starting-context skills and MCP switches", () => {
         { name: "late", description: "Added later", scope: "global", state: "off", locked: true },
       ],
       mcp: [
-        { server: "docs", tools: 5, state: "on", locked: false, error: null },
+        { server: "docs", tools: 5, state: "on", locked: false, error: null, scope: "global" },
         { server: "broken", tools: null, state: "unavailable", locked: true, error: "connection refused" },
       ],
       disabled_tools: [],
@@ -131,6 +132,7 @@ describe("starting-context skills and MCP switches", () => {
     await app.press("text:Refactor loader");
     await app.waitFor("id:ctx-skill-row-design");
     expect(app.texts().join("\n").includes("5 tools")).toBe(true);
+    expect(app.texts().includes("P") || app.texts().includes("A")).toBe(false);
     expect(app.texts().join("\n").includes("connection refused")).toBe(true);
     await app.press("id:ctx-skill-row-late");
     await app.waitFor("text:Available in a new session.");
@@ -164,15 +166,15 @@ describe("agent colours", () => {
 describe("shell", () => {
   test("header anchors, sidebar tabs in the header, fixed Settings entry", async () => {
     const app = await open("./App.tsx", { network: core(), width: 1024, height: 768, platform: "web" });
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     expect(app.shows("id:header")).toBe(true);
     expect(app.shows("id:toggle-left")).toBe(true);
     expect(app.shows("id:toggle-right")).toBe(true);
     expect(app.shows("id:open-settings")).toBe(true);
-    // tabs: Sessions, Files, Projects, in manifest order; docked, they sit in the header's left slot
+    // tabs: Sessions and Files, in manifest order; docked, they sit in the header's left slot
     const labels = (manifest.navigation.left_sidebar.tab as readonly { id: string }[]).map((t) => t.id);
-    expect(labels).toEqual(["sessions", "files", "projects"]);
-    expect(app.shows("id:tab-sessions") && app.shows("id:tab-files") && app.shows("id:tab-projects")).toBe(true);
+    expect(labels).toEqual(["sessions", "files"]);
+    expect(app.shows("id:tab-sessions") && app.shows("id:tab-files") && !app.shows("id:tab-projects")).toBe(true);
     // the icons follow the left sidebar: closing it hides them, reopening shows them again
     await app.press("id:toggle-left");
     expect(app.shows("id:tab-files")).toBe(false);
@@ -187,9 +189,9 @@ describe("shell", () => {
       network: { ...core(), "GET */api/snapshot*": { body: { ...snapshot, projects: [...snapshot.projects, empty], sessions: [...snapshot.sessions, busy] } } },
       width: 1024, height: 768, platform: "web",
     });
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     await app.press("id:toggle-left");
-    await app.waitFor("id:rail-counts-prj_1-below");
+    await app.waitFor("id:rail-count-prj_1-running");
     expect(app.shows("id:rail-count-prj_1-running")).toBe(true);
     expect(app.shows("id:rail-count-prj_1-idle")).toBe(true);
     await app.waitFor("id:rail-placeholder-prj_2");
@@ -247,7 +249,7 @@ describe("shell", () => {
       },
       width: 1024, height: 768, platform: "web",
     });
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     await app.waitFor("id:composer-agent");
     const slash = async (value: string) => {
       await app.type("id:composer-input", value);
@@ -288,14 +290,14 @@ describe("shell", () => {
 
   test("palette opens with the key, lists disabled commands with reasons, Esc walks the chain", async () => {
     const app = await open("./App.tsx", { network: core(), width: 1024, height: 768, platform: "web" });
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     await app.keyboard.press(`${mod}+p`);
     await app.waitFor("id:palette");
     expect(app.shows("id:palette")).toBe(true);
     // blocked_core command: present, disabled, with its reason once its row is the selected one (D13)
     await app.type("id:palette-input", "Attach file");
-    await app.waitFor("text:Attach file or image");
-    expect(app.texts().some((t) => t.includes("Needs a Core increment"))).toBe(true);
+    await app.waitFor("text:/Attach file or image/");
+    expect(app.texts().some((t) => t.startsWith("Attach file or image · "))).toBe(true);
     await app.keyboard.press("escape");           // rule 1: overlay closes
     expect(app.shows("id:palette")).toBe(false);
     await app.keyboard.press(`${mod}+,`);         // settings opens
@@ -306,7 +308,7 @@ describe("shell", () => {
 
   test("model and agent pickers are fed by Core, not hard-coded lists", async () => {
     const app = await open("./App.tsx", { network: core(), width: 1024, height: 768, platform: "web" });
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     await app.keyboard.press(`${mod}+shift+m`);
     await app.waitFor("id:picker");
     expect(app.texts().some((t) => t.includes("Nothing to choose from"))).toBe(true);
@@ -331,7 +333,7 @@ describe("shell", () => {
 describe("connection states", () => {
   test("live: no connection banner, composer enabled", async () => {
     const app = await open("./App.tsx", { network: core(), width: 1024, height: 768, platform: "web" });
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     // Core reports api_version now: no compatibility banner.
     expect(app.shows("text:Core does not report an API version yet")).toBe(false);
     expect(app.shows("text:Disconnected from Core")).toBe(false);
@@ -545,12 +547,12 @@ describe("context, composer and footer parity", () => {
     expect(shown.includes("Child agents")).toBe(false);
     // The starting context stays open once a session has messages, so its sections are always reachable.
     await app.press("id:ctx-system-open");
-    await app.waitFor("id:context-detail-text");
+    await app.waitFor("id:context-detail-markdown");
     expect(app.shows("id:context-detail")).toBe(true);
     expect(app.texts().join("\n").includes("You are coding in Nexus.")).toBe(true);
     await app.keyboard.press("escape");
     await app.press("id:ctx-instructions-open");
-    await app.waitFor("id:context-detail-text");
+    await app.waitFor("id:context-detail-markdown");
     expect(app.shows("id:context-detail")).toBe(true);
     expect(app.texts().join("\n").includes("Frozen instructions")).toBe(true);
 
@@ -559,7 +561,7 @@ describe("context, composer and footer parity", () => {
   test("turn footer orders model, tools, tokens, duration and finish time", async () => {
     const app = await open("./App.tsx", {
       network: selectedSessionNetwork({
-        "GET */api/session/ses_1/turn*": turnPage([turnSummary("trn_1", 0, [["codex/gpt-5", usage(100000, 10000, 50000)]])]),
+        "GET */api/session/ses_1/turn*": turnPage([turnSummary("trn_1", 0, [["codex/gpt-5", usage(100000, 10000, 50000, 500)]])]),
         "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-5", context: 400000, input_cost: 1, output_cost: 10, cache_read_cost: 0.2 }] } },
       }),
       width: 1024, height: 768, platform: "web",
@@ -568,7 +570,7 @@ describe("context, composer and footer parity", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:turn-footer");
     const footer = app.texts().join("\n");
-    const parts = ["GPT-5", "0 tools", "100K in", "10.0K out", "1.0s", new Date(2000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })];
+    const parts = ["GPT-5", "0 tools", "100Ki", "10.0Ko", "500r", "50%c", "1.0s", new Date(2000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })];
     let previous = -1;
     for (const part of parts) {
       const index = footer.indexOf(part, previous + 1);
@@ -599,6 +601,12 @@ describe("context, composer and footer parity", () => {
       const group = rows.find((r) => r.kind === "activity");
       expect(group?.kind === "activity" && group.summary === "Working").toBe(true);
       expect(group?.kind === "activity" && group.items.some((r) => r.kind === "reasoning" && r.text === "Still thinking")).toBe(true);
+      model.streaming.delete("ses_1");
+      const trailing = buildRows().find((r) => r.kind === "activity");
+      expect(trailing?.kind === "activity" && trailing.open && trailing.summary === "Working").toBe(true);
+      model.running.delete("ses_1");
+      const finished = buildRows().find((r) => r.kind === "activity");
+      expect(finished?.kind === "activity" && !finished.open && finished.summary === "1 command").toBe(true);
     } finally {
       model.selected = null;
       model.sessions.delete("ses_1");
@@ -754,6 +762,7 @@ describe("markdown fences and diffs (I4)", () => {
     await app.waitFor("id:code-fence");
     const fence = app.texts().join("\n");
     expect(fence.includes("python") && fence.includes("print(1)") && fence.includes("Copy")).toBe(true);
+    await app.press("text:1 edit");
     await app.waitFor("id:tool-row-call_edit");
     await app.press("id:tool-row-call_edit");
     await app.waitFor("id:diff");
@@ -769,41 +778,35 @@ describe("timeline rhythm", () => {
 });
 
 describe("tool output detail cap", () => {
-  test("caps plain, raw, and diff detail at the same head and tail", () => {
+  test("a diff or the raw view keeps a head and a tail; command output keeps its command rows and last rows", () => {
     const output = Array.from({ length: 500 }, (_, i) => `plain line ${i + 1}`).join("\n");
     const patch = Array.from({ length: 500 }, (_, i) => `+diff line ${i + 1}`).join("\n");
     const args = JSON.stringify({ command: "printf output" });
-    const details = [
-      detailOf("bash", args, output, false),
-      detailOf("bash", args, output, true),
-      detailOf("edit", JSON.stringify({ patch }), undefined, false),
-    ];
-    for (const lines of details) {
+    for (const lines of [detailOf("bash", args, output, true), detailOf("edit", JSON.stringify({ patch }), undefined, false)]) {
       const capped = capToolDetail(lines, false);
       expect(capped).toHaveLength(201);
       expect(capped[100].text).toContain(`${lines.length - 200} lines hidden · show all (o)`);
       expect(capToolDetail(lines, true)).toEqual(lines);
     }
-    expect(capToolDetail(details[1], false)[100].text).toContain("301 lines hidden");
-    const high = capToolDetail(details[0].slice(0, 120), false, 30, 20);
-    expect(high).toHaveLength(51);
-    expect(high[30].text).toContain("70 lines hidden");
-    expect(high[29].text).toBe("plain line 30");
-    expect(high[31].text).toBe("plain line 101");
+    const command = detailOf("bash", args, output, false);
+    expect(command[0]).toEqual({ text: "$ printf output", tone: "command" });
+    const capped = capToolOutput(command, false, 1);
+    expect(capped.map((l) => l.text)).toEqual([
+      "$ printf output", "↑ 492 earlier lines · enter show all",
+      ...Array.from({ length: 8 }, (_, i) => `plain line ${493 + i}`),
+    ]);
+    expect(capToolOutput(command, true, 1)[1].text).toBe("↑ showing all 500 lines · o show less");
+    const short = detailOf("bash", args, "one\ntwo", false);
+    expect(capToolOutput(short, false, 1)).toEqual(short);
+    expect(detailOf("bash", args, undefined, false, false, undefined, false).at(-1)).toEqual({ text: "no output", tone: "muted" });
   });
 
-  test("keeps the first and last 100 lines for plain, raw, and diff detail, with a reversible toggle", async () => {
+  test("command output folds to its last rows, a press or o restores it, and a diff keeps its head and tail", async () => {
     const plain = Array.from({ length: 500 }, (_, i) => `plain line ${i + 1}`).join("\n");
     const patch = Array.from({ length: 500 }, (_, i) => `+diff line ${i + 1}`).join("\n");
     const messages = [
       { ...userMessage, parts: [{ type: "text", text: "Run the tools" }] },
-      {
-        id: "m_tools", session_id: "ses_1", seq: 2, role: "assistant", created: 2,
-        parts: [
-          { type: "tool_call", id: "call_bash", name: "bash", arguments: JSON.stringify({ command: "printf output" }) },
-          { type: "tool_call", id: "call_edit", name: "edit", arguments: JSON.stringify({ patch }) },
-        ],
-      },
+      { id: "m_tools", session_id: "ses_1", seq: 2, role: "assistant", created: 2, parts: [{ type: "tool_call", id: "call_bash", name: "bash", arguments: JSON.stringify({ command: "printf output" }) }] },
       { id: "m_result", session_id: "ses_1", seq: 3, role: "tool", created: 3, parts: [{ type: "tool_result", call_id: "call_bash", output: plain, is_error: false }] },
     ];
     const app = await open("./App.tsx", {
@@ -812,23 +815,24 @@ describe("tool output detail cap", () => {
     });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
+    await app.waitFor("text:1 command");
+    await app.press("text:1 command");
     await app.waitFor("id:tool-row-call_bash");
     await app.press("id:tool-row-call_bash");
-    await app.waitFor("text:plain line 1");
+    await app.waitFor("text:plain line 500");
     let text = app.texts().join("\n");
-    expect(text.includes("plain line 1") && text.includes("plain line 100")).toBe(true);
-    expect(text.includes("plain line 401") && text.includes("plain line 500")).toBe(true);
-    expect(text.includes("↑ 300 earlier lines") && text.includes("Show all")).toBe(true);
-    expect(text.includes("plain line 250")).toBe(false);
+    expect(text.includes("$ printf output") && text.includes("plain line 493")).toBe(true);
+    expect(text.includes("↑ 492 earlier lines · enter show all")).toBe(true);
+    expect(text.includes("plain line 492")).toBe(false);
 
-    await app.keyboard.press("o");
+    await app.press("id:tool-show-all-call_bash");
+    await app.wait(300);
     expect(app.texts().join("\n").includes("plain line 250")).toBe(true);
-    expect(app.texts().includes("show less o")).toBe(true);
+    expect(app.texts().join("\n").includes("↑ showing all 500 lines · o show less")).toBe(true);
     await app.keyboard.press("o");
     expect(app.texts().join("\n").includes("plain line 250")).toBe(false);
-    await app.keyboard.press("r");
-    text = app.texts().join("\n");
-    expect(text.includes("[raw]")).toBe(true);
+    await app.press("id:tool-raw-call_bash");
+    await app.waitFor('text:{"command":"printf output"}');
 
     const diffMessages = [
       { ...userMessage, parts: [{ type: "text", text: "Run the edit" }] },
@@ -841,12 +845,15 @@ describe("tool output detail cap", () => {
     });
     await diffApp.waitFor("text:Refactor loader");
     await diffApp.press("id:session-ses_1");
+    await diffApp.waitFor("text:1 edit");
+    await diffApp.press("text:1 edit");
     await diffApp.waitFor("id:tool-row-call_edit");
     await diffApp.press("id:tool-row-call_edit");
+    await diffApp.waitFor("text:/diff line 100/");
     text = diffApp.texts().join("\n");
     expect(text.includes("diff line 1") && text.includes("diff line 100")).toBe(true);
     expect(text.includes("diff line 401") && text.includes("diff line 500")).toBe(true);
-    expect(text.includes("↑ 300 earlier lines") && text.includes("Show all")).toBe(true);
+    expect(text.includes("300 lines hidden · show all (o)")).toBe(true);
   });
 
   test("detail cycles groups, tools and high-detail clipping, then resets hand-open state", async () => {
@@ -863,22 +870,23 @@ describe("tool output detail cap", () => {
       { id: "m_result", session_id: "ses_1", seq: 3, role: "tool", created: 3, parts: [{ type: "tool_result", call_id: "call_bash", output: highOutput, is_error: false }, { type: "tool_result", call_id: "call_echo", output: "second output", is_error: false }] },
     ];
     const app = await open("./App.tsx", {
-      network: selectedSessionNetwork({ "GET */api/session/ses_1/message*": { body: messages } }),
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message*": { body: messages }, "PATCH */api/config": { body: {} } }),
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
-    await app.waitFor("id:tool-row-call_bash");
-    expect(app.texts().join("\n").includes("2 commands")).toBe(true);
+    await app.waitFor("text:2 commands");
+    expect(app.shows("id:tool-row-call_bash")).toBe(false);
     await app.keyboard.press("alt+d");
     await app.waitFor("text:Detail: high");
-    await app.waitFor("text:high line 1");
+    await app.waitFor("text:high line 120");
     let text = app.texts().join("\n");
-    expect(text.includes("high line 30") && text.includes("high line 101") && text.includes("high line 120")).toBe(true);
-    expect(text.includes("↑ 70 earlier lines") && text.includes("Show all")).toBe(true);
-    expect(text.includes("high line 31") || text.includes("high line 100")).toBe(false);
+    expect(text.includes("high line 113") && text.includes("high line 120")).toBe(true);
+    expect(text.includes("↑ 112 earlier lines · enter show all")).toBe(true);
+    expect(text.includes("high line 112")).toBe(false);
     await app.press("id:tool-show-all-call_bash");
-    await app.waitFor("text:high line 100");
+    await app.wait(300);
+    expect(app.texts().join("\n").includes("high line 100")).toBe(true);
     await app.keyboard.press("alt+d");
     await app.waitFor("text:Detail: low");
     expect(app.shows("id:tool-row-call_bash")).toBe(false);
@@ -971,7 +979,7 @@ describe("turn summaries", () => {
     await app.waitFor("text:1 request reported no usage (unknown, not zero)");
     const shown = app.texts().join("\n");
     expect(shown.includes("Turns above have no details")).toBe(true);
-    expect(shown.includes("tokens unknown")).toBe(true);
+    expect(shown.includes("usage unknown")).toBe(true);
     expect(shown.includes("0 i")).toBe(false);
     expect(shown.includes("1 request reported no usage (unknown, not zero)")).toBe(true);
     expect(shown.includes("/continue")).toBe(false); // a turn without a summary is not called interrupted
@@ -1042,8 +1050,8 @@ describe("sidebar row menus", () => {
       },
       width: 1024, height: 768, platform: "web",
     });
-    await app.waitFor("text:demo");
-    await app.press("id:tab-projects");
+    await app.waitFor("id:rail-project-prj_1");
+    await app.keyboard.press("mod+3");
     await app.waitFor("id:project-prj_1");
     expect(app.shows("id:add-project")).toBe(true);
     await app.rightClick("id:project-prj_1");
@@ -1073,7 +1081,7 @@ describe("Core-backed settings values", () => {
       },
       width: 1024, height: 768, platform: "web",
     });
-    await app.waitFor("text:demo");
+    await app.waitFor("id:rail-project-prj_1");
     await app.press("id:open-settings");
     expect(app.shows("id:section-models")).toBe(false);
     await app.press("id:section-providers");
@@ -1149,6 +1157,68 @@ describe("image paste and background shell context", () => {
     await app.waitFor("id:background-shell-done");
     expect(app.shows("id:msg-user")).toBe(false);
     await app.screenshot("/private/tmp/nexus-background-shell.png");
+  });
+});
+
+describe("large text paste", () => {
+  const big = Array.from({ length: 8 }, (_, i) => `row ${i + 1}: ${"x".repeat(20)}`).join("\n");
+  const marker = `[Pasted ~${Math.max(1, Math.floor([...big].length / 4))} tokens]`;
+
+  test("collapses in the composer and sends a marker plus the full text", async () => {
+    const app = await open("./ComposerFixture.tsx", {
+      network: selectedSessionNetwork({ "POST */api/session/ses_1/prompt": { status: 202, body: { status: "busy" } } }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("text:Refactor loader");
+    await app.waitFor("id:msg-user");
+    await app.paste("id:composer-input", { text: big });
+    await app.waitUntil(() => app.value("id:composer-input") === marker);
+    expect(app.value("id:composer-input")).toBe(marker);
+    expect(app.texts().join("\n").includes("Pasted text")).toBe(false);
+    await app.submit("id:composer-input");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/prompt")));
+    const req = app.requests().find((r) => r.method === "POST" && r.url.endsWith("/prompt"))!;
+    const body = JSON.parse(req.body!);
+    expect(body.text).toBe(marker);
+    expect(body.pastes).toEqual([{ marker, text: big }]);
+  });
+
+  test("a short paste stays inline", async () => {
+    const app = await open("./ComposerFixture.tsx", {
+      network: selectedSessionNetwork(),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("text:Refactor loader");
+    await app.waitFor("id:msg-user");
+    await app.paste("id:composer-input", { text: "one\ntwo" });
+    await app.waitUntil(() => app.value("id:composer-input") === "one\ntwo");
+    expect(app.texts().join("\n").includes("Pasted text")).toBe(false);
+  });
+
+  test("the user message shows a clickable marker, never the pasted text", async () => {
+    const collapsed = {
+      id: "m_paste", session_id: "ses_1", seq: 1, created: 1, role: "user",
+      parts: [
+        { type: "text", text: "Summarise this log:", origin: null, raw: null },
+        { type: "text", text: big, origin: null, raw: null, collapsed: true },
+      ],
+    };
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message*": { body: [collapsed] } }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("text:Refactor loader");
+    await app.waitFor("id:msg-user");
+    expect(app.shows("id:user-pastes")).toBe(true);
+    const shown = app.texts().join("\n");
+    expect(shown).toContain(marker);
+    expect(shown.includes("row 1:")).toBe(false);
+    await app.press("id:user-paste-1-0");
+    await app.waitFor("id:context-detail");
+    expect(app.texts().join("\n")).toContain("row 8:");
   });
 });
 

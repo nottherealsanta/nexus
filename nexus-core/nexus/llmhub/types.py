@@ -23,6 +23,9 @@ class Text:
     text: str
     origin: str | None = None
     raw: dict[str, Any] | None = None
+    # The user pasted this text and the clients show a marker instead of it.
+    # Providers still receive `text`; the flag is for clients and storage only.
+    collapsed: bool = False
 
 
 @dataclass(frozen=True, slots=True)

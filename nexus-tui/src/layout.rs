@@ -13,22 +13,23 @@ use crate::ui::{Side, Target};
 
 /// Below this many columns the sidebars become drawers (INTERFACE_PLAN.md Scale).
 pub const NARROW_BELOW: u16 = 100;
-/// From this width the right sidebar is open by default; between
-/// `NARROW_BELOW` and here it is closed until the user opens it (D17).
+/// The medium breakpoint of D17. The right sidebar starts closed at every width.
 pub const RIGHT_OPEN_FROM: u16 = 120;
-/// From this width an open file or diff panel sits beside the timeline; below
-/// it the panel covers the whole window.
-pub const PANEL_WIDE_FROM: u16 = 140;
-/// The panel's share of the space right of the left sidebar in the wide layout.
-pub const PANEL_SHARE: u16 = 55;
+/// The file and diff modal: at most this many columns of content, a cell of
+/// frame and these margins around it when the window has room.
+pub const PANEL_MAX_WIDTH: u16 = 120;
+pub const PANEL_MARGIN_X: u16 = 4;
+pub const PANEL_MARGIN_Y: u16 = 2;
 /// From this width the sidebars are 34 / 36 cells and the reading column is
 /// centred (D17); below it they are 28 / 30.
 pub const WIDE_FROM: u16 = 160;
 pub const MIN_CENTRE: u16 = 40;
-/// The collapsed left sidebar: initials per project.
+/// The project rail, always left of the sidebar: initials per project.
 pub const RAIL_WIDTH: u16 = 6;
-/// The full left sidebar's drag bounds; a drag below `RAIL_SNAP` collapses it
-/// to the rail.
+/// Below this many columns there is no room for the rail beside the page.
+pub const RAIL_FROM: u16 = 70;
+/// The left sidebar's drag bounds; a drag below `RAIL_SNAP` closes it, leaving
+/// the rail.
 pub const LEFT_MIN: u16 = 20;
 pub const LEFT_MAX: u16 = 60;
 pub const RAIL_SNAP: u16 = 14;
@@ -38,25 +39,22 @@ pub struct Flags {
     pub left_open: bool,
     pub right_open: bool,
     pub drawer: Option<Side>,
-    pub left_rail: bool,
     /// Stored full width of the left sidebar; 0 means the default.
     pub left_width: u16,
-    /// A file or diff panel is open. It yields the right sidebar and, below
-    /// `PANEL_WIDE_FROM`, covers the whole window (composer included).
+    /// A file or diff is open, in a modal over the whole window.
     pub panel_open: bool,
 }
 
 /// Width of the docked left sidebar, bounded so the centre keeps `MIN_CENTRE`.
 pub fn left_width(total: u16, flags: Flags) -> u16 {
-    if flags.left_rail {
-        return RAIL_WIDTH;
-    }
-    let right = if flags.right_open && !flags.panel_open {
+    let right = if flags.right_open {
         right_width(total)
     } else {
         0
     };
-    let room = total.saturating_sub(MIN_CENTRE + right).max(LEFT_MIN);
+    let room = total
+        .saturating_sub(MIN_CENTRE + right + RAIL_WIDTH)
+        .max(LEFT_MIN);
     let want = if flags.left_width == 0 {
         sidebar_width(total)
     } else {
@@ -80,11 +78,12 @@ pub struct Regions {
     pub area: Rect,
     pub narrow: bool,
     pub header: Rect,
+    /// The project rail: there whether or not the sidebar is open.
+    pub rail: Option<Rect>,
     /// Docked sidebars (wide layouts only).
     pub left: Option<Rect>,
     pub right: Option<Rect>,
-    /// The file/diff panel: docked right in the wide layout, the whole window
-    /// otherwise.
+    /// The file or diff modal's content, centred over everything.
     pub panel: Option<Rect>,
     /// A drawer drawn over the centre (narrow layouts), with its side.
     pub drawer: Option<(Side, Rect)>,
@@ -109,7 +108,7 @@ pub enum Breakpoint {
     Wide,
     /// 120-159: both sidebars docked (28 / 30).
     Medium,
-    /// 100-119: the left sidebar docked, the right closed by default.
+    /// 100-119: the left sidebar docked.
     Compact,
     /// Under 100: both sidebars are drawers over the page with the scrim; the
     /// header keeps the toggles and a left-truncated crumb.
@@ -128,11 +127,6 @@ impl Breakpoint {
 
     pub fn drawers(self) -> bool {
         self == Self::Drawers
-    }
-
-    /// Whether the right sidebar starts open.
-    pub fn right_open_by_default(self) -> bool {
-        matches!(self, Self::Wide | Self::Medium)
     }
 }
 
@@ -165,6 +159,29 @@ pub fn right_width(total: u16) -> u16 {
     }
 }
 
+/// Where the file and diff modal's content sits: centred, keeping its margins
+/// and a cell of frame while the window has room, else the whole window.
+pub fn panel_rect(area: Rect) -> Rect {
+    let frame = 2 * (PANEL_MARGIN_X + 1);
+    let width = if area.width > frame + MIN_CENTRE {
+        (area.width - frame).min(PANEL_MAX_WIDTH)
+    } else {
+        area.width
+    };
+    let frame_y = 2 * (PANEL_MARGIN_Y + 1);
+    let height = if area.height > frame_y + 8 {
+        area.height - frame_y
+    } else {
+        area.height
+    };
+    r(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    )
+}
+
 fn r(x: u16, y: u16, w: u16, h: u16) -> Rect {
     Rect::new(x, y, w, h)
 }
@@ -184,6 +201,12 @@ impl Regions {
         let body_h = area.height.saturating_sub(header.height);
 
         let (mut x, mut w) = (area.x, area.width);
+        let rail = (area.width >= RAIL_FROM).then(|| r(x, body_y, RAIL_WIDTH, body_h));
+        if rail.is_some() {
+            x += RAIL_WIDTH;
+            w -= RAIL_WIDTH;
+        }
+        let page_x = x;
         let mut left = None;
         let mut right = None;
         if !narrow {
@@ -193,33 +216,19 @@ impl Regions {
                 x += lw;
                 w -= lw;
             }
-            if flags.right_open && !flags.panel_open {
+            if flags.right_open {
                 let rw = right_width(area.width);
                 w -= rw;
                 right = Some(r(x + w, body_y, rw, body_h));
             }
         }
-        let mut centre = r(x, body_y, w, body_h);
-        let panel = if flags.panel_open {
-            if !narrow && area.width >= PANEL_WIDE_FROM {
-                let pw = (w * PANEL_SHARE / 100)
-                    .min(w.saturating_sub(MIN_CENTRE))
-                    .max(1);
-                let panel = r(x + w - pw, body_y, pw, body_h);
-                centre.width = w - pw;
-                Some(panel)
-            } else {
-                // Slides over everything: header, timeline and composer.
-                Some(area)
-            }
-        } else {
-            None
-        };
+        let centre = r(x, body_y, w, body_h);
+        let panel = flags.panel_open.then(|| panel_rect(area));
 
         let drawer = flags.drawer.filter(|_| narrow).map(|side| {
-            let dw = drawer_width(side, area.width);
+            let dw = drawer_width(side, area.width - (page_x - area.x));
             let rect = match side {
-                Side::Left => r(area.x, body_y, dw, body_h),
+                Side::Left => r(page_x, body_y, dw, body_h),
                 Side::Right => r(area.x + area.width - dw, body_y, dw, body_h),
             };
             (side, rect)
@@ -250,11 +259,7 @@ impl Regions {
         );
 
         // Header: [ toggle ] [ title ............ ] [ bell ] [ toggle ]
-        let toggle_width = if flags.left_rail && left.is_some() {
-            RAIL_WIDTH
-        } else {
-            3
-        };
+        let toggle_width = if rail.is_some() { RAIL_WIDTH } else { 3 };
         let toggle_left = r(
             header.x,
             header.y,
@@ -284,6 +289,7 @@ impl Regions {
             area,
             narrow,
             header,
+            rail,
             left,
             right,
             panel,
@@ -378,7 +384,7 @@ mod tests {
         assert!(!g.narrow);
         assert_eq!(g.left.unwrap().width, 28);
         assert_eq!(g.right.unwrap().width, 30);
-        assert_eq!(g.centre.width, 120 - 58);
+        assert_eq!(g.centre.width, 120 - 58 - RAIL_WIDTH);
         assert_eq!(g.header.height + g.centre.height, 36);
         assert_eq!(
             g.composer.y + g.composer.height,
@@ -387,32 +393,29 @@ mod tests {
     }
 
     #[test]
-    fn an_open_panel_yields_the_right_sidebar_and_takes_55_percent() {
+    fn an_open_panel_is_a_centred_modal_over_an_unchanged_page() {
         let mut f = flags(true, true);
+        let closed = Regions::compute(Rect::new(0, 0, 160, 40), f, heights);
         f.panel_open = true;
         let g = Regions::compute(Rect::new(0, 0, 160, 40), f, heights);
-        assert!(g.right.is_none());
-        let left = g.left.unwrap();
+        assert_eq!(
+            g.centre, closed.centre,
+            "the page keeps its layout underneath"
+        );
+        assert_eq!(g.right, closed.right);
         let panel = g.panel.unwrap();
-        let right_of_left = 160 - left.width;
-        assert_eq!(panel.width, right_of_left * PANEL_SHARE / 100);
-        assert_eq!(panel.width + g.centre.width, right_of_left);
-        assert_eq!(panel.x, g.centre.right());
-        // The panel spans the whole body, not just the timeline.
-        assert_eq!(panel.y, g.header.bottom());
-        assert_eq!(panel.height, 40 - g.header.height);
+        assert_eq!(panel.width, PANEL_MAX_WIDTH);
+        assert_eq!(panel.x, (160 - PANEL_MAX_WIDTH) / 2);
+        assert_eq!(panel.y, PANEL_MARGIN_Y + 1);
+        assert_eq!(panel.height, 40 - 2 * (PANEL_MARGIN_Y + 1));
     }
 
     #[test]
-    fn below_140_columns_the_panel_covers_the_window() {
+    fn a_small_window_gives_the_panel_all_of_it() {
         let mut f = flags(true, true);
         f.panel_open = true;
-        for width in [139, 120, 99] {
-            let g = Regions::compute(Rect::new(0, 0, width, 40), f, heights);
-            let panel = g.panel.unwrap();
-            assert_eq!(panel, g.area, "{width}");
-            assert!(g.right.is_none(), "{width}");
-        }
+        let g = Regions::compute(Rect::new(0, 0, 40, 10), f, heights);
+        assert_eq!(g.panel.unwrap(), g.area);
     }
 
     #[test]
@@ -439,9 +442,11 @@ mod tests {
         f.left_width = 200;
         let g = Regions::compute(Rect::new(0, 0, 120, 40), f, heights);
         assert!(g.centre.width >= MIN_CENTRE);
-        f.left_rail = true;
+        f.left_open = false;
         let g = Regions::compute(Rect::new(0, 0, 120, 40), f, heights);
-        assert_eq!(g.left.unwrap().width, RAIL_WIDTH);
+        assert!(g.left.is_none());
+        assert_eq!(g.rail.unwrap().width, RAIL_WIDTH);
+        assert_eq!(g.centre.x, RAIL_WIDTH);
     }
 
     #[test]
@@ -460,7 +465,7 @@ mod tests {
         for (width, class, drawers, right, left_w, right_w) in table {
             assert_eq!(Breakpoint::of(width), class, "{width}");
             assert_eq!(class.drawers(), drawers, "{width}");
-            assert_eq!(class.right_open_by_default(), right, "{width}");
+            let _ = right;
             assert_eq!(Regions::is_narrow(width), drawers, "{width}");
             assert_eq!(sidebar_width(width), left_w, "{width}");
             assert_eq!(right_width(width), right_w, "{width}");
@@ -494,7 +499,7 @@ mod tests {
             assert_eq!((s, rect.width), (side, w));
             assert_eq!(rect.height, 23, "from under the header to the bottom");
             match side {
-                Side::Left => assert_eq!(rect.x, 0),
+                Side::Left => assert_eq!(rect.x, RAIL_WIDTH),
                 Side::Right => assert_eq!(rect.right(), 80),
             }
         }
@@ -519,9 +524,9 @@ mod tests {
         f.drawer = Some(Side::Left);
         let g = Regions::compute(Rect::new(0, 0, 80, 24), f, heights);
         assert!(g.narrow && g.left.is_none() && g.right.is_none());
-        assert_eq!(g.centre.width, 80);
+        assert_eq!(g.centre.width, 80 - RAIL_WIDTH);
         let (side, rect) = g.drawer.unwrap();
-        assert_eq!((side, rect.x), (Side::Left, 0));
+        assert_eq!((side, rect.x), (Side::Left, RAIL_WIDTH));
         // anchors stay put
         assert_eq!(g.toggle_left.x, 0);
         assert_eq!(g.toggle_right.x + g.toggle_right.width, 80);

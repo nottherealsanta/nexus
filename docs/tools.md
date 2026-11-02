@@ -168,7 +168,7 @@ restricted command execution (PLAN.md, known gaps). External processes can also
 change a file between the in-process check and the write; the hash detects a
 change up to that point, but the lock does not control other processes.
 
-**Session snapshot.** Each session stores the descriptions, JSON schemas and
+**Session snapshot.** Each session stores the names, descriptions and JSON schemas
 of the tools it was created with ([agents.md](agents.md#session-snapshots)).
 Execution is rebound by name through the registry on each turn. A tool disabled
 at creation is absent from the stored definitions, the provider request and the
@@ -705,11 +705,22 @@ the nested call id.
 
 ## code
 
+Prefer code for multi-step inspection, independent tool batches and processing
+large results down to relevant evidence. Single simple operations and reads
+needed for edit coverage should stay direct: printing a nested read does not
+establish coverage. Scouts grant code with only their read-only nested tools.
+See [agents.md](agents.md#choosing-code-mode) for rollout and evaluation.
+
 `code {code, kernel_id?, timeout_s?}` runs Python in a persistent Monty 1.1.0
 sandbox. Omit `kernel_id` to use the session tree's main kernel (created on
 first use); pass a live `krn_…` to share another kernel. Variables persist
 between cells, including across sessions. Kernels survive session deletion,
-but not daemon shutdown. At most eight kernels are live, with one cell at a
+but archiving their owning session tree releases them, as does daemon shutdown.
+Variables are memory-only: cell history and outputs are durable, but no kernel
+checkpoint is saved. Workers are recycled after one kernel checkout, so closing
+a kernel also retires its process instead of keeping it warm. Unarchiving creates a fresh kernel on the next code call.
+An owned kernel busy in another tree makes archive refuse until it is idle;
+merely borrowing another tree's kernel does not transfer ownership. At most eight kernels are live, with one cell at a
 time per kernel. Waiting for a busy kernel counts toward the timeout.
 
 ```python
@@ -755,7 +766,9 @@ loses every kernel; startup recovery says so for a recovered turn that used
 claiming a successful call or recreating variables.
 
 `GET /api/kernel`, `GET /api/kernel/{id}` and `DELETE /api/kernel/{id}` inspect
-and delete kernels; deleting a busy kernel returns 409. Metadata retains the
+and delete kernels; deleting a busy kernel returns 409. `GET /api/kernel?summary=1`
+keeps the metadata and variable previews but omits retained cell bodies, for
+compact client lists. Metadata retains the
 last 100 cells and announces omitted cells. Variable inspection tracks assigned
 names (up to 200) and returns type and repr previews (200 characters); Monty
 has no `globals()`/`dir()`. This is an approximate listing, not a full Python
