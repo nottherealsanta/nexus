@@ -1935,9 +1935,10 @@ impl Builder<'_> {
             // the whole turn like the rest of the band.
             let selected = self.selected();
             if selected {
+                let focus = self.st("interactive.focus", raised);
                 let line = Rc::make_mut(&mut self.out[row]);
                 line.focus = true;
-                line.rail = Some(self.st("interactive.focus", raised));
+                line.rail = Some(focus);
                 for span in &mut line.spans {
                     span.style = span.style.add_modifier(Modifier::BOLD);
                 }
