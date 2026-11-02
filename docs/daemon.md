@@ -790,5 +790,6 @@ the delivered state and message are committed together. Queue acceptance with
 an idempotency key is journaled with the input, so a lost response can be retried
 without duplicating work. Interruption holds automatic dispatch. Startup holds
 all pending work, converts undelivered steers into queued inputs, and never
-starts a queued turn by itself. Pending inputs block session archive/deletion
+starts a queued turn by itself. A hold ends when the last pending input is
+removed. Pending inputs block session archive/deletion
 unless explicitly dropped. See [Pending inputs](api.md#pending-inputs-steer-and-queue).

@@ -212,6 +212,36 @@ async def test_interrupt_holds_queue_until_explicit_send_next(setup_inputs):
     assert [m["parts"][0]["text"] for m in queued_messages] == ["run after interrupt"]
 
 
+async def test_removing_the_last_pending_input_releases_the_hold(setup_inputs):
+    runtime, client, provider, workspace = setup_inputs
+    session_id = await _session(client, workspace)
+    provider.pause_before_done = True
+    started = await client.post(f"/api/session/{session_id}/prompt", json={"text": "hold here"})
+    assert started.status_code == 202
+    await asyncio.wait_for(provider.entered.wait(), 3)
+    queued = await client.post(f"/api/session/{session_id}/prompt", json={"text": "take me back", "mode": "queue"})
+    assert queued.status_code == 202
+    assert (await client.post(f"/api/session/{session_id}/interrupt")).status_code == 204
+    await _wait_until(lambda: session_id not in runtime.turns, "interrupted turn did not stop")
+    pending = await _inputs(client, session_id)
+    assert pending["held"] is True
+
+    removed = await client.delete(f"/api/session/{session_id}/input/{pending['inputs'][0]['id']}")
+    assert removed.status_code == 200
+    assert [part["text"] for part in removed.json()["parts"]] == ["take me back"]
+    assert await _inputs(client, session_id) == {"inputs": [], "held": False}
+    held_events = [e["data"] for e in await _events(client, session_id) if e["type"] == "input.held"]
+    assert held_events[-1]["held"] is False
+
+    # Nothing is left to hold, so a message queued now starts when its turn ends.
+    runtime.prompt(session_id, "second")
+    runtime.prompt(session_id, "run after the hold", mode="queue")
+    await _wait_until(
+        lambda: session_id not in runtime.turns and len(provider.requests) >= 3,
+        "the cleared hold stranded the queue")
+    assert _user_texts(provider.requests[-1])[-1] == "run after the hold"
+
+
 async def test_recovery_keeps_pending_input_and_converts_steer_to_held_queue(setup_inputs):
     runtime, client, _provider, workspace = setup_inputs
     session_id = await _session(client, workspace)

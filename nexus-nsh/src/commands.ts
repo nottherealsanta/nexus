@@ -8,7 +8,7 @@ import { manifest } from "./gen/manifest";
 import {
   editFile, fileDirty, fileFindOpen, openFile, reloadFile, saveFile,
   pendingInputs, contextDetail, imagePreview, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
-  agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
+  agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsSection, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
@@ -411,7 +411,40 @@ export async function archive(id?: string, undo = false) {
   try { await request("POST", `/api/session/${root.id}/${undo ? "unarchive" : "archive"}`, { key: newKey() }); toast("success", undo ? "Session unarchived" : "Session archived"); }
   catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
 }
-export async function interrupt() { const s = viewed(); if (!s) return; try { await request("POST", `/api/session/${s.id}/interrupt`, { key: newKey() }); } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); } }
+/** Take pending input out of a session's queue, oldest first; returns its parts. */
+async function takePendingInputs(id: string): Promise<any[]> {
+  const { inputs } = await request<{ inputs: { id: string }[] }>("GET", `/api/session/${id}/input`);
+  const parts: any[] = [];
+  for (const item of inputs ?? []) {
+    const removed = await request<{ parts?: any[] }>("DELETE", `/api/session/${id}/input/${item.id}`);
+    parts.push(...(removed.parts ?? []));
+  }
+  return parts;
+}
+
+/** Put removed pending input back in a draft: its text above the draft on a new
+ *  line, its images attached. Parts from several inputs arrive in queue order. */
+export function restorePendingParts(key: string, parts: any[]) {
+  const text = parts.filter((p) => p.type === "text" && !/^\[Image [A-Z]\]$/.test(p.text ?? "")).map((p) => p.text).join("\n");
+  const images = parts.filter((p) => p.type === "image").map((p) => ({ id: `restored-${++restoredImages}`, name: p.name ?? "image.png", data_url: p.data_url }));
+  if (text) draft.update((d) => ({ ...d, [key]: [text, d[key] ?? ""].filter(Boolean).join("\n") }));
+  if (images.length) imageDrafts.update((d) => ({ ...d, [key]: [...images, ...(d[key] ?? [])] }));
+}
+let restoredImages = 0;
+export async function interrupt() {
+  const s = viewed(); if (!s) return;
+  const key = draftKey();
+  try { await request("POST", `/api/session/${s.id}/interrupt`, { key: newKey() }); }
+  catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); return; }
+  // Core holds a queue an interrupt leaves behind; take it back instead, so
+  // nothing is stranded and the user can send it again. A failed reclaim leaves
+  // the queue visible in the client, as before.
+  try {
+    const parts = await takePendingInputs(s.id);
+    if (parts.length) { restorePendingParts(key, parts); focusComposer.fn?.(); }
+    await loadInputs(s.id);
+  } catch { /* the next refresh shows whatever is still queued */ }
+}
 export async function continueSession() {
   const s = viewed(); if (!s) return;
   try { await request("POST", `/api/session/${s.id}/continue`, { body: {}, key: newKey() }); }

@@ -104,6 +104,11 @@ class Inputs:
         self._check_unclaimed(iid)
         with self.store.db:
             self.store.db.execute("update pending_input set state = 'removed' where id = ?", (iid,))
+            # A hold only says "do not start queued work"; with nothing left to start
+            # it would strand the next message queued after an interrupt.
+            if not self.store.db.execute(
+                    "select 1 from pending_input where session_id = ? and state = 'pending'", (sid,)).fetchone():
+                self.store.db.execute("delete from input_hold where session_id = ?", (sid,))
         return item
 
     def move(self, sid: str, iid: str, before: str) -> dict[str, Any]:

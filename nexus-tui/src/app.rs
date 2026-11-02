@@ -2629,6 +2629,41 @@ impl App {
         }
     }
 
+    /// Put removed pending input back in a session's composer: its text and
+    /// images, with an existing draft below it on a new line. Parts from several
+    /// inputs arrive in queue order, so steers and queued messages come back the
+    /// way they were written.
+    fn restore_input_parts(&mut self, session: &str, parts: &[serde_json::Value]) -> bool {
+        let mut text = Vec::new();
+        let mut images = Vec::new();
+        for part in parts {
+            if part["type"] == "text" {
+                if let Some(t) = part["text"].as_str() {
+                    if !t.starts_with("[Image ") {
+                        text.push(t.to_owned());
+                    }
+                }
+            } else if part["type"] == "image" {
+                if let Ok(image) = serde_json::from_value::<crate::images::Image>(part.clone()) {
+                    images.push(image);
+                }
+            }
+        }
+        text.extend(images.iter().map(|image| format!("[{}]", image.name)));
+        if !text.is_empty() {
+            self.restore_draft(Some(session), &text.join("\n"));
+        }
+        if !images.is_empty() {
+            self.ui
+                .drafts
+                .entry(session.to_owned())
+                .or_default()
+                .images
+                .extend(images);
+        }
+        !text.is_empty()
+    }
+
     // ---- focus & overlays --------------------------------------------------------
 
     fn restore_point(&self) -> Restore {
@@ -6171,31 +6206,19 @@ impl App {
                 } = &done.call
                 {
                     if action == "remove" {
-                        let mut text = Vec::new();
-                        let mut images = Vec::new();
-                        for part in r.input_parts.as_ref().unwrap_or(parts) {
-                            if part["type"] == "text" {
-                                if let Some(t) = part["text"].as_str() {
-                                    if !t.starts_with("[Image ") {
-                                        text.push(t.to_owned());
-                                    }
-                                }
-                            } else if part["type"] == "image" {
-                                if let Ok(image) =
-                                    serde_json::from_value::<crate::images::Image>(part.clone())
-                                {
-                                    images.push(image);
-                                }
-                            }
+                        self.restore_input_parts(session, r.input_parts.as_ref().unwrap_or(parts));
+                    }
+                }
+                if let ApiCall::Interrupt { session } = &done.call {
+                    // The interrupt holds the queue; bring it back to the composer
+                    // instead, so nothing is stranded and nothing is lost.
+                    if let Some(parts) = &r.input_parts {
+                        if self.restore_input_parts(session, parts)
+                            && self.viewed_id() == Some(session.as_str())
+                        {
+                            self.ui.pending_selected = None;
+                            self.ui.focus = Focus::Composer;
                         }
-                        text.extend(images.iter().map(|image| format!("[{}]", image.name)));
-                        self.restore_draft(Some(session), &text.join("\n"));
-                        self.ui
-                            .drafts
-                            .entry(session.clone())
-                            .or_default()
-                            .images
-                            .extend(images);
                     }
                 }
                 if let Some(c) = r.conflict {

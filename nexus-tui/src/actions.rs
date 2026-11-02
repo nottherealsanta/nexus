@@ -726,7 +726,12 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             done.transcript = reply.body["text"].as_str().map(str::to_owned);
         }
         ApiCall::Interrupt { session } => {
-            conflict(api.interrupt(session, &key).await.map_err(e)?)?;
+            let parts = conflict(api.interrupt_and_reclaim(session, &key).await.map_err(e)?)?;
+            if let Some(parts) = parts {
+                if !parts.is_empty() {
+                    done.input_parts = Some(parts);
+                }
+            }
         }
         ApiCall::Archive { session, archived } => {
             conflict(

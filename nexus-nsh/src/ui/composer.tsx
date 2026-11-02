@@ -1,7 +1,7 @@
 import { Image, Scroll, Text, View, effect, platform, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
-import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
+import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, restorePendingParts, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
@@ -550,10 +550,8 @@ function PendingStack() {
         const k = draftKey();
         if ((draft()[k] ?? "").trim() || (imageDrafts()[k] ?? []).length) { toast("warning", "Clear the draft before restoring a pending input"); return; }
         const result = await request<any>("DELETE", `/api/session/${s.id}/input/${id}`);
-        const parts = result.parts ?? result.input?.parts ?? [];
-        const text = parts.filter((p: any) => p.type === "text" && !/^\[Image [A-Z]\]$/.test(p.text ?? "")).map((p: any) => p.text).join("\n");
-        const images = parts.filter((p: any) => p.type === "image").map((p: any, i: number) => ({ id: `restored-${id}-${i}`, name: p.name ?? "image.png", data_url: p.data_url }));
-        draft.update((d) => ({ ...d, [k]: [text, d[k] ?? ""].filter(Boolean).join("\n") })); imageDrafts.update((d) => ({ ...d, [k]: [...images, ...(d[k] ?? [])] })); focusComposer.fn?.();
+        restorePendingParts(k, result.parts ?? result.input?.parts ?? []);
+        focusComposer.fn?.();
       } else if (action === "steer") await request("PATCH", `/api/session/${s.id}/input/${id}`, { body: { mode: "steer" } });
       else {
         const inputs = stack()?.inputs ?? []; const at = inputs.findIndex((i) => i.id === id);

@@ -225,6 +225,7 @@ The pages are in both clients ([config.md](docs/config.md#settings-layout)). Rem
 
 ### Steer, queue and prompt history
 
+- An interrupt takes the queue back instead of leaving it held: pending steers and queued messages return to the composer oldest first, joined by newlines above the draft, and removing the last one clears the hold. Covered by the TUI behaviour test and NSH `interrupt.test.tsx`; a real-daemon check should still confirm the parts and their order end to end.
 - Add NSH browser coverage for Enter/Tab and the pending-input stack after fixing the mock stream (see Browser tests). The composer already steers and queues, and the timeline shows the TUI's `steer` / `queued` tags.
 - Add Ctrl+R history search in both clients; verify cross-client per-project recall after restarting both clients, including multiline drafts and images.
 

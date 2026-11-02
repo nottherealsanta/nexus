@@ -2114,6 +2114,48 @@ fn pending_input_is_selected_and_removed_for_restoration() {
 }
 
 #[test]
+fn interrupt_returns_the_queue_and_steers_to_the_composer_on_new_lines() {
+    use nexus_tui::actions::ApiCall;
+    let mut a = app();
+    busy(&mut a);
+    a.state.inputs.insert(
+        SESSION.into(),
+        serde_json::json!({"held": true, "inputs": [
+            {"id": "in_1", "mode": "queue", "parts": [{"type": "text", "text": "follow up"}]},
+            {"id": "in_2", "mode": "steer", "parts": [{"type": "text", "text": "second thought"}]}
+        ]}),
+    );
+    typing(&mut a, "my draft");
+    a.ui.focus = Focus::Timeline;
+    a.effects.clear();
+    press(&mut a, &["esc"]);
+    let call = a
+        .effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::Api(c @ ApiCall::Interrupt { .. }) => Some(c.clone()),
+            _ => None,
+        })
+        .expect("Esc interrupts the running turn");
+    a.apply_done(ActionDone {
+        call,
+        result: Ok(Done {
+            input_parts: Some(vec![
+                serde_json::json!({"type": "text", "text": "follow up"}),
+                serde_json::json!({"type": "text", "text": "second thought"}),
+            ]),
+            ..Done::default()
+        }),
+    });
+    assert_eq!(
+        a.composer_ref().text(),
+        "follow up\nsecond thought\nmy draft"
+    );
+    assert_eq!(a.ui.focus, Focus::Composer);
+    assert_eq!(a.ui.pending_selected, None);
+}
+
+#[test]
 fn core_history_recalls_multiline_entries_whole_and_keeps_the_draft() {
     let mut a = app();
     a.composer()

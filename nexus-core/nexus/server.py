@@ -1137,8 +1137,11 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         sid, iid = p(request, "id"), p(request, "iid")
         runtime.session(sid)
         if request.method == "DELETE":
+            held = runtime.inputs.held(sid)
             item = runtime.inputs.remove(sid, iid)
             runtime.bus.publish("input.removed", item, session_id=sid)
+            if held and not runtime.inputs.held(sid):
+                runtime.bus.publish("input.held", {"session_id": sid, "held": False}, session_id=sid)
             return JSONResponse(item)
         body = await _body(request)
         item = runtime.inputs.get(sid, iid)

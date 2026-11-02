@@ -1121,6 +1121,11 @@ Pending inputs and held sessions are included in `/api/snapshot`.
 
 Interruption holds the queue. Restart preserves pending inputs, converts
 undelivered steers into queued inputs, and holds them until explicit release.
+A hold only says "do not start queued work by itself": removing the last pending
+input clears it, so the next queued message after an interrupt is not stranded.
+Both clients react to an interrupt by taking the queue back: they delete every
+pending steer and queued message, oldest first, and put the parts in the
+composer joined by newlines above the draft, so nothing stays held out of sight.
 Archive and deletion refuse pending inputs unless `drop_inputs: true` is given.
 `input.added`, `input.updated`, `input.removed`, `input.delivered` and
 `input.held` events update client activity. Delivery includes the stored

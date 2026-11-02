@@ -1164,7 +1164,7 @@ key_context = "escape_chain"
 when = ["session.busy"]
 unavailable_reason = "Nothing is running."
 placement = ["palette", "composer"]
-note = "Esc interrupts the turn; queued inputs are held."
+note = "Esc interrupts the turn; its pending steers and queued messages come back to the composer, joined by a newline."
 
 [[command]]
 id = "session.continue"

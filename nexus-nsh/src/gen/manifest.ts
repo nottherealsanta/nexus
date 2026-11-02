@@ -1616,7 +1616,7 @@ export const manifest = {
     "palette",
     "composer"
    ],
-   "note": "Esc interrupts the turn; queued inputs are held."
+   "note": "Esc interrupts the turn; its pending steers and queued messages come back to the composer, joined by a newline."
   },
   {
    "id": "session.continue",

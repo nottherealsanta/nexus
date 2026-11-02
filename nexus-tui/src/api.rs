@@ -1026,6 +1026,57 @@ impl CoreApi {
             .map(|_| ()))
     }
 
+    /// The session's pending inputs (steers and queued messages), oldest first.
+    pub async fn pending_inputs(&self, id: &str) -> Result<Vec<Value>, Error> {
+        let body = self
+            .http
+            .get(&format!("/api/session/{id}/input"), &[])
+            .await?;
+        Ok(body["inputs"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Remove one pending input from the queue, returning its parts so the
+    /// composer can take the text and images back.
+    pub async fn remove_input(&self, id: &str, iid: &str) -> Result<Vec<Value>, Error> {
+        let body = self
+            .http
+            .call(
+                Method::DELETE,
+                &format!("/api/session/{id}/input/{iid}"),
+                &[],
+                None,
+                None,
+                None,
+            )
+            .await?
+            .body;
+        Ok(body["parts"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Interrupt the running turn and take the queue back: Core holds a queue an
+    /// interrupt leaves behind, so the client removes every pending steer and
+    /// queued message (oldest first) and returns their parts for the composer.
+    pub async fn interrupt_and_reclaim(
+        &self,
+        id: &str,
+        key: &RequestId,
+    ) -> Result<Outcome<Vec<Value>>, Error> {
+        let outcome = self.interrupt(id, key).await?;
+        if let Outcome::Conflict { .. } = &outcome {
+            return Ok(outcome.map(|()| Vec::new()));
+        }
+        let mut parts = Vec::new();
+        for item in self.pending_inputs(id).await.unwrap_or_default() {
+            if let Some(iid) = item["id"].as_str() {
+                // Best effort: an input that cannot be taken back stays queued.
+                if let Ok(mut more) = self.remove_input(id, iid).await {
+                    parts.append(&mut more);
+                }
+            }
+        }
+        Ok(outcome.map(|()| parts))
+    }
+
     pub async fn reply_permission(
         &self,
         session: &str,
