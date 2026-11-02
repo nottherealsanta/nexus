@@ -1,11 +1,11 @@
-import { Image, Scroll, Text, View, effect, platform, safeArea, signal, untracked, windowSize } from "nsh";
+import { Image, Scroll, Text, View, effect, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
 import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, restorePendingParts, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
-  agentCatalog, contextBudget, draftContext, draftContextKey, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, modelCatalog, tick,
+  agentCatalog, contextBudget, draftContext, draftContextKey, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
   projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast, imagePreview,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
@@ -260,14 +260,12 @@ export function Composer() {
     <View class="w-full" testID="composer-area">
     <TimelineColumn class="items-center pt-3">
       <View class="w-full">
-        <If when={working()}><WorkingRow /></If>
-        <PendingStack />
         <If when={open()}>
           {() => {
             const c = () => completion()!;
             const rows = () => c().rows.slice(0, MENU_LIMIT);
             return (
-              <View class="w-full bg-popover pt-1.5 pb-1 overflow-hidden" testID="completion" accessibilityLabel="Completion">
+              <View class="w-full bg-popover px-1 pt-1.5 pb-1 overflow-hidden" testID="completion" accessibilityLabel="Completion">
                 <Each of={rows()} key={(r) => r.key}>
                   {(r, i) => {
                     const sel = () => i() === Math.min(selected(), rows().length - 1);
@@ -302,17 +300,25 @@ export function Composer() {
           accessibilityLabel="Composer" testID="composer-panel"
           onLayout={(b: any) => dockWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}
         >
+          <If when={working()}><WorkingRow /></If>
+          <PendingStack />
           <If when={images().length > 0}>
             <View class="flex-row flex-wrap gap-2 pb-3" testID="image-previews">
               <Each of={images()} key={(image) => image.id}>
-                {(image) => <View class="gap-1 w-24 shrink-0">
-                  <Text style={{ numberOfLines: 1 }} class={`${T.meta} px-0.5`}>{image().name}</Text>
-                  <Button onPress={() => imagePreview.set({ name: image().name, src: image().data_url })}
-                    accessibilityLabel={`Open ${image().name}`} testID={`composer-image-${image().id}`}
-                    class={`w-24 h-24 items-center justify-center rounded-(--radius) overflow-hidden ${FOCUS}`}>
-                    <Image class="w-24 h-24" src={image().data_url} style={{ width: 96, height: 96, objectFit: "cover" }} accessibilityLabel={image().name} />
-                  </Button>
-                  <Btn label="Remove image" testID={`remove-image-${image().id}`} onPress={() => imageDrafts.update((d) => ({ ...d, [key()]: images().filter((i) => i !== image()) }))} />
+                {(image) => <View class="gap-1 w-20 shrink-0">
+                  <View class="relative w-20 h-20">
+                    <Button onPress={() => imagePreview.set({ name: image().name, src: image().data_url })}
+                      accessibilityLabel={`Open ${image().name}`} testID={`composer-image-${image().id}`}
+                      class={`w-20 h-20 items-center justify-center rounded-(--radius) overflow-hidden ${FOCUS}`}>
+                      <Image class="w-20 h-20" src={image().data_url} style={{ width: 80, height: 80, objectFit: "cover" }} accessibilityLabel={image().name} />
+                    </Button>
+                    <Button onPress={() => imageDrafts.update((d) => ({ ...d, [key()]: images().filter((i) => i !== image()) }))}
+                      accessibilityLabel="Remove image" testID={`remove-image-${image().id}`}
+                      class={`absolute top-1 right-1 items-center justify-center rounded-full bg-popover hover:bg-accent ${isNarrow() ? "size-8" : "size-6"} ${FOCUS}`}>
+                      <Icon name="x" size={12} />
+                    </Button>
+                  </View>
+                  <Text style={{ numberOfLines: 1 }} class={T.meta}>{image().name}</Text>
                 </View>}
               </Each>
             </View>
@@ -350,7 +356,7 @@ export function Composer() {
                 <Selector command="model.effort" label={effort()} testID="composer-effort" fixed />
               </If>
               <If when={!busy() && interrupted()}>
-                <Btn label="Continue" icon="play" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
+                <Btn label="Continue" icon="play" kind="ghost" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
               </If>
             </View>
             <View class="shrink-0 flex-row items-center gap-3">
@@ -482,9 +488,11 @@ const AGENT_TONE: Record<string, string> = {
   sky: "bg-agent-sky text-agent-sky", gold: "bg-agent-gold text-agent-gold",
 };
 /**
- * The TUI's activity line (`draw_activity_line`) along the dock's foot, a line with a slight glow in
- * the agent's colour. At rest it fills to the context used; while busy a soft pulse a fifth of the
- * width glides back and forth on a cosine, three seconds a sweep.
+ * The TUI's activity line (`draw_activity_line`) along the dock's foot, in the agent's colour with a slight
+ * glow, here on the text edges rather than across the whole centre. While busy a soft pulse a fifth of the
+ * width glides back and forth on a cosine, three seconds a sweep. At rest the `418K · 42%` text already
+ * says how full the context is, so the line stays out of sight until the context is nearly full (80%, then
+ * 95%) and then fills to it in the warning or error colour.
  */
 function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
   const phase = signal(0.5);
@@ -496,16 +504,21 @@ function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
     return () => clearInterval(id);
   });
   const left = () => 40 * (1 - Math.cos(phase() * Math.PI * 2));
-  // macOS draws the window's bottom corners over the bar: inset it, and let the lit fill overhang
-  // the 1 px track by half a pixel each side so a low percentage is still visible.
-  const inset = () => (platform.os === "macos" ? { paddingHorizontal: 10 } : {});
-  return <View class="relative w-full" style={inset()}>
-    <View class="relative w-full h-px bg-border-strong" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`}>
-      <If when={p.busy} else={<View class={`absolute -top-px h-0.5 left-0 ${AGENT_TONE[p.slot] ?? "bg-primary text-primary"}`} testID="activity-fill" style={{ width: `${Math.min(100, p.fraction * 100)}%`, boxShadow: [{ x: 0, y: 0, blur: 4 }] }} />}>
-        <View class={`absolute -top-px h-0.5 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
-      </If>
+  const full = () => !p.busy && p.fraction >= 0.8;
+  const tone = () => (p.fraction >= 0.95 ? "bg-error" : "bg-warning");
+  // The 1 px track is always laid out, so the dock does not move when the line appears.
+  return <TimelineColumn>
+    <View class={`w-full ${TEXT_INSET}`}>
+      <View class={`relative w-full h-px ${p.busy || full() ? "bg-border-strong" : ""}`} testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`}>
+        <If when={p.busy}>
+          <View class={`absolute -top-px h-0.5 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
+        </If>
+        <If when={full()}>
+          <View class={`absolute -top-px h-0.5 left-0 ${tone()}`} testID="activity-fill" style={{ width: `${Math.min(100, p.fraction * 100)}%`, boxShadow: [{ x: 0, y: 0, blur: 4 }] }} />
+        </If>
+      </View>
     </View>
-  </View>;
+  </TimelineColumn>;
 }
 
 function WorkingRow() {
@@ -529,7 +542,7 @@ function WorkingRow() {
     return () => clearInterval(id);
   });
   return (
-    <View class="flex-row items-center gap-2 h-7 mb-1 px-1" testID="working-row">
+    <View class="flex-row items-center gap-2 h-7 mb-2" testID="working-row">
       <Status kind="running" />
       <Shimmer text="Working" reduced={!!config()?.values?.ui?.reduced_motion} />
       <Text class={T.sec}>{`· ${fmtDuration(elapsed())}`}</Text>
@@ -543,10 +556,23 @@ function WorkingRow() {
 function PendingStack() {
   const session = () => viewed();
   const stack = () => pendingInputs()[session()?.id ?? ""];
-  const perform = async (id: string, action: "remove" | "steer" | "up" | "down") => {
+  const perform = async (id: string, action: "edit" | "remove" | "steer" | "up" | "down") => {
     const s = session(); if (!s) return;
     try {
       if (action === "remove") {
+        const item = (stack()?.inputs ?? []).find((i: any) => i.id === id);
+        const text = item?.parts?.find((p: any) => p.type === "text")?.text?.split("\n")[0] ?? "[image]";
+        const kind = item?.mode === "steer" ? "steer" : "queued message";
+        const sid = s.id;
+        confirmDialog.set({
+          title: "Remove pending input",
+          body: `Remove the ${kind} "${text}"?\n\nThis cannot be undone.`,
+          confirm: "Remove", destructive: true,
+          run: async () => { await request("DELETE", `/api/session/${sid}/input/${id}`); await loadInputs(sid); },
+        });
+        return;
+      }
+      if (action === "edit") {
         const k = draftKey();
         if ((draft()[k] ?? "").trim() || (imageDrafts()[k] ?? []).length) { toast("warning", "Clear the draft before restoring a pending input"); return; }
         const result = await request<any>("DELETE", `/api/session/${s.id}/input/${id}`);
@@ -563,15 +589,35 @@ function PendingStack() {
       await loadInputs(s.id);
     } catch (e) { toast("error", e instanceof Error ? e.message : String(e)); }
   };
-  return <If when={(stack()?.inputs.length ?? 0) > 0}><View class="mb-2 gap-1" testID="pending-inputs">
-    <Text class={T.meta}>{stack()?.held ? "Queue held · enter steer · tab queue" : "Pending · enter steer · tab queue"}</Text>
-    <Each of={stack()?.inputs ?? []} key={(i) => i.id}>{(i) => <View class="flex-row items-center gap-1" testID={`pending-${i().id}`}>
-      <Text class={`flex-1 ${T.sec}`}>{`${i().mode === "steer" ? "steer" : "queued"} · ${i().parts.find((p: any) => p.type === "text")?.text?.split("\n")[0] ?? "[image]"}`}</Text>
-      <Btn label="Edit" onPress={() => void perform(i().id, "remove")} /><Btn label="Remove" onPress={() => void perform(i().id, "remove")} />
-      <If when={i().mode === "queue"}><Btn label="Steer" onPress={() => void perform(i().id, "steer")} /></If>
-      <Btn label="↑" onPress={() => void perform(i().id, "up")} /><Btn label="↓" onPress={() => void perform(i().id, "down")} />
+  // Quiet ghost actions: icons that appear on hover (and on focus) on a pointer, always shown below the
+  // text on touch and on a narrow window.
+  const always = () => touch || isNarrow();
+  const reveal = () => always() ? "" : "opacity-0 group-hover/pend:opacity-100 focus-visible:opacity-100";
+  // Where there is no hover a tap on the row opens its actions, one row at a time.
+  const opened = signal<string | null>(null);
+  const PendingActions = (q: { i: () => { id: string; mode: string } }) => <>
+    <IconButton icon="pencil" label="Edit" class={reveal()} testID={`pending-edit-${q.i().id}`} onPress={() => void perform(q.i().id, "edit")} />
+    <IconButton icon="x" label="Remove" class={reveal()} testID={`pending-remove-${q.i().id}`} onPress={() => void perform(q.i().id, "remove")} />
+    <If when={q.i().mode === "queue"}><Btn label="Steer" kind="ghost" class={reveal()} testID={`pending-steer-${q.i().id}`} onPress={() => void perform(q.i().id, "steer")} /></If>
+    <IconButton icon="arrow-up" label="Move up" class={reveal()} testID={`pending-up-${q.i().id}`} onPress={() => void perform(q.i().id, "up")} />
+    <IconButton icon="chevron-down" label="Move down" class={reveal()} testID={`pending-down-${q.i().id}`} onPress={() => void perform(q.i().id, "down")} />
+  </>;
+  return <If when={(stack()?.inputs.length ?? 0) > 0}><View class="mb-3" testID="pending-inputs">
+    <View class="flex-row items-center min-h-6">
+      <Text class={`flex-1 min-w-0 ${T.meta}`} style={{ numberOfLines: 1 }}>{stack()?.held ? "Queue held · enter steer · tab queue" : "Pending · enter steer · tab queue"}</Text>
+      <If when={stack()?.held}><View class="-mr-3"><Btn label="Send next" kind="ghost" testID="pending-send-next" onPress={() => { const s = session(); if (s) void request("POST", `/api/session/${s.id}/input/next`, { body: {} }).then(() => loadInputs(s.id)).catch((e) => toast("error", String(e))); }} /></View></If>
+    </View>
+    <Each of={stack()?.inputs ?? []} key={(i) => i.id}>{(i) => <View class="group/pend relative" testID={`pending-${i().id}`}>
+      <Button disabled={!always()} onPress={() => opened.set(opened() === i().id ? null : i().id)} selected={opened() === i().id}
+        accessibilityLabel={`${i().mode === "steer" ? "Steer" : "Queued"}: ${i().parts.find((p: any) => p.type === "text")?.text?.split("\n")[0] ?? "[image]"}`}
+        class={`flex-row items-center gap-3 min-h-8 rounded-(--radius) ${FOCUS}`}>
+        <Text class={`w-12 shrink-0 ${T.meta}`}>{i().mode === "steer" ? "steer" : "queued"}</Text>
+        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec}`}>{i().parts.find((p: any) => p.type === "text")?.text?.split("\n")[0] ?? "[image]"}</Text>
+      </Button>
+      <If when={always()} else={<View class="absolute right-0 top-0 bottom-0 flex-row items-center gap-0.5 pl-2 group-hover/pend:bg-sidebar"><PendingActions i={i} /></View>}>
+        <If when={opened() === i().id}><View class="flex-row items-center justify-end gap-0.5"><PendingActions i={i} /></View></If>
+      </If>
     </View>}</Each>
-    <If when={stack()?.held}><Btn label="Send next" onPress={() => { const s = session(); if (s) void request("POST", `/api/session/${s.id}/input/next`, { body: {} }).then(() => loadInputs(s.id)).catch((e) => toast("error", String(e))); }} /></If>
   </View></If>;
 }
 
@@ -698,7 +744,7 @@ function OtherWaits() {
       <View class={`w-full flex-row items-center gap-2 h-8 border-b border-border ${TEXT_INSET}`} testID="other-waits">
         <Status kind="waiting" word={false} />
         <Text class={`flex-1 min-w-0 ${T.sec}`} style={{ numberOfLines: 1 }}>{`${others().length} other session${others().length === 1 ? " is" : "s are"} waiting`}</Text>
-        <Btn label="Go to" kind="ghost" onPress={() => run("waiting.go_to")} testID="waiting-go-to" />
+        <View class="-mr-3"><Btn label="Go to" kind="ghost" onPress={() => run("waiting.go_to")} testID="waiting-go-to" /></View>
       </View>
     </If>
   );
@@ -766,7 +812,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     <View class="relative w-full mb-2 rounded-(--radius-card) bg-raised" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
       <StatusRail color={multi() ? "bg-multi" : "bg-primary"} testID="waiting-rail" />
       <Scroll style={{ maxHeight: Math.round(windowSize().height * 0.6) }}>
-        <View class="pl-4 pr-3 py-3 gap-2.5">
+        <View class="pl-4 pr-4 py-3 gap-2.5">
           <View>
           <View class="flex-row items-center gap-2 min-h-6">
             <Text class={`text-[15px] leading-5 ${multi() ? "text-multi" : "text-primary"}`}>◆</Text>

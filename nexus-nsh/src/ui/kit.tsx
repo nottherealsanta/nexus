@@ -1,4 +1,5 @@
 // Small building blocks on NSH base components, styled only with theme tokens.
+import type { JSX } from "nsh";
 import { Image, Text, View } from "nsh";
 import { Button } from "nsh/base";
 import { icons, IconName } from "../icons";
@@ -93,6 +94,17 @@ export function Seg(p: { options: string[]; value: string; onPick?: (v: string) 
   );
 }
 const identity = (v: string) => v;
+
+/** The one empty state: a medium title, an optional secondary line and an optional action, left-aligned. */
+export function Empty(p: { title: string; body?: string; action?: JSX.Element; testID?: string }) {
+  return (
+    <View class="items-start gap-2 p-4" testID={p.testID}>
+      <Text class="text-[13px] leading-5 font-medium text-foreground">{p.title}</Text>
+      <If when={p.body}><Text class={T.sec}>{p.body}</Text></If>
+      {p.action}
+    </View>
+  );
+}
 
 export function Rule() { return <View class="h-px bg-border" />; }
 

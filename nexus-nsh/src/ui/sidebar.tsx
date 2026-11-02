@@ -1,10 +1,10 @@
 import type { JSX } from "nsh";
 import { List, PanResponder, Scroll, Text, View, effect, safeArea, signal } from "nsh";
 import { Button, ContextMenu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/base";
-import { Btn, Icon, IconButton, Status, AttentionMark, T, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
+import { Btn, Empty, Icon, IconButton, Status, AttentionMark, T, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
 import { manifest } from "../gen/manifest";
 import { availability, byId, commands, keyLabel, newSession, run, toggleLeft } from "../commands";
-import { archivedFilter, centre, connection, currentProject, focusedSidebarRow, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, projectWorktrees, worktreeForDirectory, phone, phonePage } from "../store";
+import { archivedFilter, centre, connection, currentProject, focusedSidebarRow, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, phone, phonePage } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
 import { fileListing, loadFiles, openFile, showFile } from "../store";
@@ -144,16 +144,9 @@ export function SessionRail() {
         </Each>
         </View>
       </Scroll>
-    </View>
-  );
-}
-
-function Empty(p: { title: string; body?: string; action?: JSX.Element }) {
-  return (
-    <View class="items-start gap-2 p-4">
-      <Text class="text-[13px] leading-5 font-medium text-foreground">{p.title}</Text>
-      <If when={p.body}><Text class={T.sec}>{p.body}</Text></If>
-      {p.action}
+      <View class="border-t border-border w-full items-center pt-2" style={{ paddingBottom: safeArea().bottom + 8 }}>
+        <IconButton icon="settings" label="Settings" testID="rail-settings" selected={centre() === "settings"} class={centre() === "settings" ? "bg-selection" : ""} onPress={() => run("app.settings")} reason={hint("app.settings") ?? undefined} />
+      </View>
     </View>
   );
 }
@@ -215,7 +208,32 @@ export function attention(id: string): "waiting" | "error" | null {
   return null;
 }
 
+/**
+ * Branch labels come from Core's worktree listings, which the store reads once per project. A
+ * checkout moves on without any event, so the sidebar asks again (as the TUI does on every
+ * snapshot): when Core comes back, when a turn starts or ends, and every 30 s while it is open.
+ */
+let worktreeTimer: ReturnType<typeof setInterval> | undefined;
+let worktreeKey = "";
+function refreshWorktrees() {
+  if (connection().kind !== "live") return;
+  for (const id of Object.keys(projectWorktrees())) loadProjectWorktrees(id, true);
+  const open = viewed()?.id;
+  if (open) loadSessionWorktrees(open, true);
+}
+function useWorktreeRefresh() {
+  effect(() => {
+    const key = `${connection().kind}|${(m(), model.running.size)}|${viewed()?.id ?? ""}`;
+    if (key === worktreeKey) return;
+    const first = worktreeKey === "";
+    worktreeKey = key;
+    if (!first) refreshWorktrees();
+  });
+  if (!worktreeTimer) worktreeTimer = setInterval(refreshWorktrees, 30000);
+}
+
 export function SessionsTab() {
+  useWorktreeRefresh();
   return (
     <View class="flex-1 min-h-0">
       <View class={phone ? "gap-3 px-4 pt-4 pb-3" : "gap-2 p-2"}>
@@ -321,7 +339,7 @@ function SessionRow(p: { s: () => Session }) {
           <Button onPress={() => { focusedSidebarRow.set(ref()); sidebarRowMenu.set(ref()); if (!phone) void selectSession(s().id); }}
             accessibilityLabel={`Actions for ${s().title || "Untitled"}`} testID={`row-menu-${s().id}`}
             class={`absolute right-1.5 ${phone ? "top-3 size-11" : touch ? "top-1.5 size-11 bg-sidebar" : "top-1.5 size-6 opacity-0 group-hover/row:opacity-100 focus:opacity-100"} items-center justify-center rounded-(--radius) hover:bg-hover ${FOCUS}`}>
-            <Text class="text-[15px] leading-5 text-foreground-secondary">⋯</Text>
+            <Icon name="more" size={16} class="tint-foreground-secondary" />
           </Button>
         </View>
       }
@@ -366,9 +384,12 @@ function FilesTab() {
     return path;
   };
   const isOpen = (path: string) => { m(); return openFile()?.path === path; };
-  return <Scroll class="flex-1" contentStyle={{ padding: 8 }}>
-    <If when={fileListing()} else={<Text class={T.sec}>Loading files…</Text>}>
-      {() => <View>
+  return <Scroll class="flex-1">
+    <If when={fileListing()} else={<Text class={`${T.sec} p-4`}>Loading files…</Text>}>
+      {() => <View class="p-2">
+        <View class="flex-row items-center gap-2 px-2 pb-2" testID="files-header">
+          <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 font-medium text-foreground">{currentProject() ? projectName(currentProject()!) : "Files"}</Text>
+        </View>
         <If when={fileListing()!.path}>
           <Button onPress={() => void loadFiles(currentPath().split("/").slice(0, -1).join("/"))} accessibilityLabel="Parent directory" testID="file-parent"
             class={`flex-row items-center gap-1.5 h-7 rounded-(--radius) px-2 hover:bg-accent ${FOCUS}`}>
@@ -376,7 +397,8 @@ function FilesTab() {
             <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.meta}`}>{currentPath()}</Text>
           </Button>
         </If>
-        <If when={fileListing()!.error}><Text class={T.sec}>{fileListing()!.error}</Text></If>
+        <If when={fileListing()!.error}><Text class={`${T.sec} px-2`}>{fileListing()!.error}</Text></If>
+        <If when={!fileListing()!.error && fileListing()!.entries.length === 0}><Text class={`${T.sec} px-2 pt-1`} testID="files-empty">This folder is empty.</Text></If>
         <Each of={fileListing()!.entries} key={(entry) => entry.name}>{(entry) =>
           <Button onPress={() => { const path = [fileListing()!.path, entry().name].filter(Boolean).join("/"); if (entry().kind === "directory") void loadFiles(path); else if (entry().kind === "file") void showFile(path); }}
             accessibilityLabel={entry().name} testID={`file-entry-${entry().name}`}
@@ -455,7 +477,7 @@ function ProjectRow(p: { project: () => Project; count: (id: string) => number }
             <Text style={{ numberOfLines: 1 }} class={`flex-1 text-[13px] leading-5 ${selected() ? "text-foreground font-medium" : "text-foreground"}`}>{project().name}</Text>
             <Text class={T.meta}>{`${p.count(project().id)} session${p.count(project().id) === 1 ? "" : "s"} · ${relTime(project().updated)}`}</Text>
           </View>
-          <Text style={{ numberOfLines: 1 }} class={T.mono}>{midTruncate(short(), 32)}</Text>
+          <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`${T.mono} w-full min-w-0`}>{short()}</Text>
         </View>
       }
     >

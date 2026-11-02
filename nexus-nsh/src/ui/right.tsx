@@ -14,7 +14,7 @@ const sections = manifest.navigation.right_sidebar.section as unknown as { id: s
 
 function Field(p: { k: string; v?: string | null; mono?: boolean; children?: JSX.Element }) {
   return (
-    <View class="flex-row items-baseline gap-3 min-h-6 py-0.5">
+    <View class="flex-row items-start gap-3 min-h-6 py-0.5">
       <Text class={`w-20 shrink-0 ${T.sec}`}>{p.k}</Text>
       <View class="flex-1 min-w-0">
         {p.children ?? <Text style={{ userSelect: "text" }} class={`${p.mono ? T.mono : T.sec} text-foreground`}>{p.v || "—"}</Text>}
@@ -268,15 +268,11 @@ export function RightRail() {
     <View class="w-12 shrink-0 bg-sidebar border-l border-border items-center pt-2 gap-1" testID="right-rail">
       <IconButton icon="info" label="Session" selected={open() && rightSection() === "session"} testID="rail-session" onPress={() => show("session")}
         class={open() && rightSection() === "session" ? "bg-selection" : ""} />
-      <View class="relative">
-        <IconButton icon="branch" label="Git" selected={open() && rightSection() === "git"} testID="rail-git" onPress={() => show("git")}
-          class={open() && rightSection() === "git" ? "bg-selection" : ""} />
-        <If when={changes() > 0}>
-          <View class="absolute -right-0.5 -top-0.5 min-w-3.5 h-3.5 items-center justify-center rounded-full bg-border-strong px-1" testID="rail-git-count">
-            <Text class="text-[10px] leading-3 font-semibold text-foreground">{String(changes())}</Text>
-          </View>
-        </If>
-      </View>
+      <IconButton icon="branch" label="Git" selected={open() && rightSection() === "git"} testID="rail-git" onPress={() => show("git")}
+        class={open() && rightSection() === "git" ? "bg-selection" : ""} />
+      <If when={changes() > 0}>
+        <Text class={T.meta} testID="rail-git-count">{changes() > 99 ? "99+" : String(changes())}</Text>
+      </If>
     </View>
   );
 }

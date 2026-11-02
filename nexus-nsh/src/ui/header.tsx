@@ -8,6 +8,7 @@ import { attention as attentionGlyph, statusGlyphs, structure } from "../gen/the
 import { centre, connection, coreUrl, drawer, isNarrow, leftOpen, m, model, native, touch, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
 import { agentColor } from "../agent-color";
 import { coreEditing } from "./connect";
+import { currentAlerts } from "./alerts";
 
 function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
 
@@ -70,7 +71,7 @@ function WorkspaceTabs() {
           </Button>
         </If>
         <Button onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab-add" class={`shrink-0 items-center justify-center rounded-(--radius) ${isNarrow() ? "size-10" : "size-7"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
-          <Text class="text-[17px] leading-5">+</Text>
+          <Icon name="plus" size={14} class="tint-muted-foreground" />
         </Button>
         </View>
       </Scroll>
@@ -171,6 +172,9 @@ export function SubagentStrip() {
 export function Header() {
   const conn = () => connection();
   const leftDocked = () => !isNarrow() && leftOpen();
+  // The banner under the header already says it when Core is gone; the header keeps its own mark only
+  // for a connection state with no banner (an incompatible Core, a start that another banner outranks).
+  const showStatus = () => conn().kind !== "live" && conn().kind !== "connecting" && currentAlerts()[0]?.key !== "conn";
   const rightDocked = () => !isNarrow() && rightIsOpen(width());
   // A hidden macOS title bar keeps its traffic lights in the band: the first control starts after them.
   const lights = () => platform.os === "macos" ? titleBar().left : 0;
@@ -186,8 +190,11 @@ export function Header() {
         <View class="flex-1 min-w-0 flex-row items-center gap-2">
           <WorkspaceTabs />
           <View class="flex-row items-center gap-2 shrink-0">
-            <If when={conn().kind !== "live" && conn().kind !== "connecting"}>
-              <View class="flex-row items-center gap-1 pr-1"><Status kind="error" word={false} /><Text class="text-xs leading-4 text-error">{conn().kind === "reconnecting" ? "reconnecting" : conn().kind === "starting" ? "starting" : "offline"}</Text></View>
+            <If when={showStatus()}>
+              <View class="flex-row items-center gap-1 pr-1" testID="header-status">
+                <Status kind={conn().kind === "starting" ? "running" : "error"} word={false} />
+                <Text class={`text-xs leading-4 ${conn().kind === "starting" ? "text-muted-foreground" : "text-error"}`}>{conn().kind === "starting" ? "starting" : conn().kind === "incompatible" ? "incompatible" : conn().kind === "auth_failed" ? "sign-in failed" : conn().kind === "reconnecting" ? "reconnecting" : "offline"}</Text>
+              </View>
             </If>
           </View>
         </View>

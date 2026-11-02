@@ -1,7 +1,7 @@
 import type { JSX } from "nsh";
 import { Scroll, Text, View, effect, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, T, FOCUS, Seg } from "./kit";
+import { Btn, Icon, T, FOCUS, Seg } from "./kit";
 import { Heading, Modal, ModalFooter, ModalTitle } from "./modal";
 import { manifest } from "../gen/manifest";
 import { byId, commands, copyText, escape, keyLabel, loadProviders, run } from "../commands";
@@ -222,7 +222,7 @@ function ProviderRow(p: { p: any }) {
   return <View class="gap-2 rounded-(--radius) px-3 py-2 hover:bg-accent" testID={`provider-${p.p.id}`}>
     <View class="flex-row items-center gap-3">
       <View class="flex-1">
-        <Text class="text-[14px] leading-[22px] text-foreground">{p.p.label ?? p.p.id}</Text>
+        <Text class="text-[13px] leading-5 text-foreground">{p.p.label ?? p.p.id}</Text>
         <Text class={T.meta}>{providerStatus(p.p)}</Text>
       </View>
       <If when={p.p.connected}><Btn label="Disconnect" disabled={!live()} onPress={() => void disconnect(p.p)} testID={`provider-action-${p.p.id}`} /></If>
@@ -344,16 +344,16 @@ function AgentsPage(p: { sec: Section }) {
     <View>
       <Each of={p.sec.row ?? []} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={p.sec} />}</Each>
     </View>
-    <Heading text="Subagents" />
+    <View class="px-3"><Heading text="Subagents" /></View>
     <If when={!data().agents}><Text class={`px-3 ${T.meta}`}>Loading agents…</Text></If>
     <Each of={data().agents?.problems ?? []} key={(problem: any) => JSON.stringify(problem)}>{(problem) => <Text class="px-3 text-xs leading-4 text-error">{typeof problem() === "string" ? problem() : `${problem().path}: ${problem().error}`}</Text>}</Each>
     <View>
       <Each of={agents()} key={(a: any) => a.name}>{(a) => (
         <Button onPress={() => settingsPage.set(`agents/${a().name}`)} testID={`agent-row-${a().name}`} accessibilityLabel={`${a().name}: ${agentSummary(a()).text}`}
           class={`flex-row items-center gap-6 rounded-(--radius) px-3 py-2 hover:bg-accent ${FOCUS}`}>
-          <View class="flex-1"><Text class="text-[14px] leading-[22px] text-foreground">{a().name}</Text><Text class={T.meta} style={{ numberOfLines: 1 }}>{a().description}</Text></View>
+          <View class="flex-1"><Text class="text-[13px] leading-5 text-foreground">{a().name}</Text><Text class={T.meta} style={{ numberOfLines: 1 }}>{a().description}</Text></View>
           <Text class={`text-[13px] leading-5 ${agentSummary(a()).warn ? "text-warning" : "text-foreground-secondary"}`}>{agentSummary(a()).text}</Text>
-          <Text class={T.meta}>›</Text>
+          <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
         </Button>
       )}</Each>
     </View>
@@ -393,7 +393,12 @@ function control(r: Row): JSX.Element {
   if (r.id === "tools.default_permission") return <Seg label={r.label} options={["allow", "ask"]} value={config()?.values?.defaults?.permission ?? "allow"} onPick={(v) => void patchConfig("defaults.permission", v)} />;
   if (r.id === "tools.defaults") {
     const disabled: string[] = config()?.values?.tools?.disabled ?? [];
-    return <View class="gap-1">{["read", "grep", "glob", "ls", "bash", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code"].map((name) => <Button testID={`default-tool-${name}`} onPress={() => void patchConfig("tools.disabled", disabled.includes(name) ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={`${disabled.includes(name) ? "off" : "on"} · ${name}`} /></Button>)}</View>;
+    return <View class="w-full flex-row flex-wrap justify-end gap-1">{["read", "grep", "glob", "ls", "bash", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code"].map((name) => {
+      const off = disabled.includes(name);
+      return <Button role="switch" selected={!off} testID={`default-tool-${name}`} accessibilityLabel={`${name} ${off ? "off" : "on"}`} onPress={() => void patchConfig("tools.disabled", off ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-(--radius) px-2 min-h-7 justify-center hover:bg-accent ${FOCUS}`}>
+        <Text class={`font-mono text-[12.5px] leading-5 ${off ? "text-muted-foreground line-through opacity-60" : "text-foreground-secondary"}`}>{name}</Text>
+      </Button>;
+    })}</View>;
   }
   const paths: Record<string, string> = { "agents.default_effort": "effort", "agents.default_root": "agent" };
   if (paths[r.id]) {
@@ -423,10 +428,10 @@ function SettingRow(p: { r: Row; sec: Section }) {
   const tag = r.clients === "nsh" ? "NSH only" : r.clients === "tui" && r.id !== "appearance.timeline_detail" ? "TUI only" : "";
   const tooltip = <Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{notEditable}</Text>;
   return (
-    <View class={`${isNarrow() ? "gap-2" : "flex-row gap-3 items-start"} px-3 py-2 rounded-(--radius) hover:bg-accent`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
+    <View class={`${isNarrow() ? "gap-2" : "flex-row gap-3 items-center"} px-3 py-2 rounded-(--radius) hover:bg-accent`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
       <View class={isNarrow() ? "" : "w-[44%] pr-2"}>
         <View class="flex-row items-center gap-2">
-          <Text class={`text-[14px] leading-[22px] ${disabled ? "text-muted-foreground" : "text-foreground"}`}>{r.label}</Text>
+          <Text class={`text-[13px] leading-5 ${disabled ? "text-muted-foreground" : "text-foreground"}`}>{r.label}</Text>
           <If when={tag}><Text class="text-xs leading-4 text-muted-foreground rounded-(--radius) px-1.5">{tag}</Text></If>
         </View>
         {/* A row with no control yet keeps that note in its tooltip, not in every row's second line. */}
@@ -471,7 +476,8 @@ function SettingsPage(p: { sec: Section }) {
     <View class="flex-row items-center gap-2">
       <Button onPress={() => settingsPage.set(agent() ? "agents" : null)} testID="settings-page-back" accessibilityLabel={agent() ? "Back to Agents" : "Back to Settings"}
         class={`flex-row items-center gap-1 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}>
-        <Text class="text-[13px] leading-5 text-foreground-secondary">{agent() ? "‹ Agents" : "‹ Settings"}</Text>
+        <Icon name="arrow-left" size={14} class="tint-muted-foreground" />
+        <Text class="text-[13px] leading-5 text-foreground-secondary">{agent() ? "Agents" : "Settings"}</Text>
       </Button>
       <Text class="text-[13px] leading-5 text-muted-foreground">/</Text>
       <Text class="text-[13px] leading-5 font-medium text-foreground">{agent() ?? p.sec.label}</Text>
@@ -515,7 +521,7 @@ export function SettingsView(p: { inline?: boolean }) {
           </View></If>
           <If when={!page()}><Scroll class="flex-1 min-h-0">
             <View class="pb-4 w-full">
-            <If when={cur().id !== "appearance"}><Heading text={cur().label} first /></If>
+            <If when={cur().id !== "appearance"}><View class="px-3"><Heading text={cur().label} first /></View></If>
             <Each of={config()?.errors ?? []} key={(e: string) => e}>{(e) => <Text class={T.meta}>{e()}</Text>}</Each>
             <If when={cur().unavailable_reason}><View class="flex-row gap-2 items-start pt-1 pb-1"><Text class="text-[13px] text-muted-foreground">⊖</Text><Text class={`flex-1 ${T.sec}`}>{cur().unavailable_reason!}</Text></View></If>
             <If when={cur().page}><PageEntry sec={cur()} /></If>
