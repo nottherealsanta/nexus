@@ -1,460 +1,376 @@
-# Plan: the Void design for NSH
+# Plan: the Void design for NSH, second pass
 
-Status: design final 2026-11-01. Implemented in NSH on 2026-11-01; the TUI is unchanged
-(see [PLAN.md](PLAN.md) and the porting ledger).
+Status: the first pass landed on 2026-11-01 and the second pass landed on 2026-11-01. This page replaces the first pass's plan and records the design NSH now has; the steps below are the record of what was applied.
 
-This changes NSH only: web, desktop and iOS. **The TUI stays exactly as it is**, so do not edit
-`nexus-tui/` or anything it reads. `AGENTS.md` asks the two clients to match, so record this as a
-deliberate difference in `docs/porting-ledger.md` (step 14).
+Scope: NSH only, on web, desktop and iOS. **The TUI stays as it is**, so don't edit `nexus-tui/` or `interface/theme.toml`. Palette values live in `nexus-nsh/theme-void.toml`.
 
-## Start here
+## The problem
 
-1. **Keep the mock-up safe.** `nexus-design-mockup/stage/`, `interface/brand/` and this plan are untracked
-   in the main checkout, so commit them first.
-2. **Pick where to work.** Other work is uncommitted in this checkout (`EDITOR_GIT_PLAN.md`: `App.tsx`,
-   `commands.ts`, `store.ts`, `centre.tsx`, `editor.tsx`, the manifest and `nexus-tui/`). Work on a branch,
-   and don't include its files in your commits by accident.
-3. **Reuse the partial build.** Most UI changes already exist in a worktree, so you can apply them
-   instead of retyping them. See [The partial build](#the-partial-build).
-4. **Run the baseline.** Note `nsh test` and `cargo test` results before you change anything. See
-   [Testing](#testing).
-5. **Work through the [steps](#work-order)**, with the mock-up open beside you.
+The first pass got the palette and the big structure right: black canvas, chrome band, docked composer, icon rail. It looks unfinished for four other reasons, all visible in screenshots of NSH web at 390, 1024 and 1440 wide, dark and light.
 
-## Where the design lives
+1. **Things are broken at the edges.** Traffic lights sit on top of `Back`. Model, provider and effort overprint each other. The `New session` label sits 4 px high in its tab. A `2 other sessions` card covers the prose.
+2. **There is no shared grid.** Text in the reading column starts at four different x positions and ends at four others. The sidebar has three left edges. Header toggles sit 3 px off the rails below them.
+3. **TUI notation survived into a graphical UI.** `[18]`, `( )`, `[x]`, `▸`, `✓ Project`, an idle `·` on every tab, and a grey dot beside every tool.
+4. **Boxes are drawn three different ways.** Some have broken hairlines with a floating rail, some a rail bent around the corner, and the band is square. Search and segmented controls use the card radius, so they read as pills beside 10 px controls.
 
-Treat the mock-up as the visual spec, and this page as the instructions. If the two
-disagree, this page wins.
+The second pass fixes these with the rules below, then applies them surface by surface.
 
-| Thing | Where |
+## Rules
+
+Every step follows from these. If a case isn't covered in a step, apply the rule.
+
+| Rule | Meaning |
 | --- | --- |
-| Rendered mock-up, built | `nexus-design-mockup/stage/dist/index.html` (open it from disk) |
-| Same page, hosted and private to you | <https://claude.ai/artifact/6LSmk9G6dGZW7Xp6EzrzE8> |
-| NSH parts, drawn from tokens | `nexus-design-mockup/stage/src/parts.tsx` |
-| Tokens and component CSS | `nexus-design-mockup/stage/src/nexus.css` |
-| The list of surfaces and the animated turn | `nexus-design-mockup/stage/src/main.tsx` (`SURFACES`, `heroScript`) |
-| The final decisions | `nexus-design-mockup/stage/src/styles.ts` (`DEFAULTS`, `SELECTED`) |
-| Logo icons and their generator | `interface/brand/`, `interface/brand/make_icons.py` |
-| A partial NSH build to copy from | Worktree `.claude/worktrees/void`, branch `design/void`, see [below](#the-partial-build) |
+| **One text edge** | In the reading column, boxes start at the column edge, and all text starts 16 px in: prose, band, card contents, activity labels, turn footer, composer input, controls, location strip |
+| **One right edge** | All right-aligned meta ends 16 px inside the column's right side, including durations, band stamp, footer and send button |
+| **One sidebar edge** | Everything in the left sidebar starts at 16 px: search text, project name, chips, session titles, group headings, Settings icon |
+| **Chrome lines up** | A header toggle's centre matches the centre of the rail below it, on both sides |
+| **Filled boxes have no border** | Every box is filled, so no box gets a hairline. Straight dividers stay |
+| **Status rail** | A card that carries status gets one inset rail: 3 px wide, fully rounded, 6 px from the left, 12 px from top and bottom. Only the square user band keeps its flush rail |
+| **Radius** | 16 px for cards and dialogs. 10 px for every control, input, row and chip. Full rounding only for dots and rails |
+| **Selection is a pill** | Selected means `bg-selection`, the same everywhere. No checkmarks, carets, or bold-only states |
+| **No terminal notation** | Draw controls and numbers as UI. Glyphs are fine where they mean status: `◆`, `✕`, `◐` |
+| **Type** | Prose 14/22. Interface 13/20. Meta 12/16. Code beside Geist is 12.5/20, because Monaspace Argon at 13 looks a size larger than Geist at 13 |
+| **Space scale** | 4, 8, 12, 16, 24. Two adjacent boxes are always at least 8 px apart |
 
-To rebuild the page: `cd nexus-design-mockup/stage && npm install && npm run build`.
+### The column
 
-Page anchors, for the hosted or local page: `#selected` (the animated turn), `#notes`, `#window`,
-`#light`, `#surfaces`. Each surface is `#surface-<id>`: `palette`, `settings`, `new`, `panel`, `files`, `git`,
-`turn`, `sessions`, `diff`, `kids`, `approval`, `question`, `completion`, `model`, `alerts`,
-`connect`, `phone`.
+```text
+column edge   text edge                                     right edge   column end
+|             |                                                      |   |
+|<--- 16 ---->|                                                      |<16>|
 
-**Where the mock-up differs from the app on purpose.** Take these from the app, and not the mock-up:
+box           Run the full scenario review                  #1 · 11:17
+              > 5 thoughts, 1 command                       ✕ 2 failed  0.2s
+              ^ chevron hangs in the inset, label lands on the text edge
+              The notes file is missing, so I stopped.
+              m · 1 tool · 480 in · 18 out · 11:17          (left, at the text edge)
 
-- Sample sessions, projects and numbers are made up.
-- Session rows: the mock-up's second line shows agent and branch. The app's shows its place (branch or
-  project), which stays. Neither carries agent color.
-- The rail: the mock-up has three icons. The app has two sections, so it gets two (step 7).
-- Settings, starting context and the session panel: keep the app's rows and content, and restyle them.
-- The glow, shimmer and pulse are canvas and CSS in the mock-up. Step 5 and step 4 say how to build them.
-
-## Decisions
-
-| Topic | Decision |
-| --- | --- |
-| Scope | NSH only. The TUI is unchanged, including its palette |
-| Style | Void: true black, white ink, color only where it means something |
-| Ground | Nothing behind or around the window. No glyphs, except on Connect |
-| Window | Chrome band: header and sidebars share one surface around the page |
-| User message | Full-width band, square, with a straight rail |
-| Working | Shimmer on the word Working |
-| Tool activity | Spine: one straight line beside the rows |
-| Composer | Docked bar, edge to edge, its content in the reading column. Path, branch, worktree and context on their own line under the controls, as in the TUI |
-| Context meter | The TUI's activity bar behavior along the dock's foot, as a line, slightly glowing, in the agent's color |
-| Session row | Two lines |
-| Waiting card | Key chips, in a floating card above the dock |
-| Left toggle | The first control at the top left, and it doesn't move when the sidebar closes |
-| macOS traffic lights | In the band, with a hidden title bar. The toggle sits right after them, and flush left in full screen |
-| Right sidebar | Icon rail. The panel opens on demand and pushes the page |
-| Selection | Soft pill, with no focus bar |
-| Box rule | A border stops before a corner curves. A filled box needs no border |
-| New session | Starting context on the timeline, at the top, composer docked below |
-| Agent color | The composer's agent name and the bar. **No agent color in the session sidebar or the turn footer** |
-| Fonts | Geist for interface text and prose. Monaspace Argon for code, paths and tool arguments |
-| Themes | Dark and light both stay |
-| Logo | Slash N, not bold, for icons only. NSH never draws it |
-| Connect | Plain heading, with a field made only of `_/` |
-
-## Tokens
-
-**Do not edit `interface/theme.toml`.** The TUI embeds that file at build time
-(`nexus-tui/src/theme.rs`), so a change there would change the TUI.
-
-Put these values in a new overlay, `nexus-nsh/theme-void.toml`, using the same `[dark.surface]`
-style of groups. `nexus-nsh/scripts/gen.py` loads `interface/theme.toml`, then merges the overlay
-over it before generating. Glyphs, roles, agent colors and pins keep coming from the shared file.
-
-`interface/check_theme.py` only sees the shared file today. Give it an optional `--overlay <path>`
-that merges before checking, and add that check where the theme check runs: `scripts/nexus:264` and
-`.github/workflows/ci.yml:58`.
-
-| Token | Dark | Light |
-| --- | --- | --- |
-| `surface.canvas` | `#000000` | `#fbfbfa` |
-| `surface.panel` | `#0e0e10` | `#efefed` |
-| `surface.raised` | `#161618` | `#ffffff` |
-| `surface.sidebar` | `#0a0a0b` | `#f1f1ef` |
-| `text.primary` | `#f4f4f5` | `#0b0b0c` |
-| `text.secondary` | `#a7a7ae` | `#4b4b50` |
-| `text.muted` | `#85858d` | `#5f5f65` |
-| `text.faint` | `#6e6e76` | `#83838a` |
-| `border.default` | `#1c1c1f` | `#e2e2df` |
-| `border.strong` | `#2e2e33` | `#cfcfcb` |
-| `border.focus` | `#f4f4f5` | `#0b0b0c` |
-| `interactive.accent` | `#f4f4f5` | `#0b0b0c` |
-| `interactive.multi` | `#a78bfa` | `#6743ae` |
-| `interactive.on_accent` | `#000000` | `#ffffff` |
-| `interactive.focus` | `#f4f4f5` | `#0b0b0c` |
-| `interactive.selection` | `#1a1a1d` | `#e7e7e4` |
-| `interactive.hover` | `#111113` | `#ececea` |
-| `status.success` | `#5ad58a` | `#146f36` |
-| `status.warning` | `#e8c36a` | `#8a5d00` |
-| `status.error` | `#f2707f` | `#c42b3d` |
-| `status.info` | `#6aa8ff` | `#1f62c9` |
-| `diff.add` | `#5ad58a` | `#146f36` |
-| `diff.del` | `#f2707f` | `#c42b3d` |
-| `diff.add_bg` | `#0c2015` | `#eef9f1` |
-| `diff.del_bg` | `#2a0f14` | `#fbe3e6` |
-
-These values passed `check_theme.py` (512 contrast checks) when applied to the full theme. The light
-`status.success`, `diff.add` and `diff.add_bg` were adjusted to pass, so the mock-up's light values
-for those three differ slightly. Use the table.
-
-**Accent now equals primary text.** See [Open question](#open-question).
+dock          Type a message…
+              Build   DeepSeek V4.1 Flash   default              mic  send
+              ~/repos/nexus  ⌥ main                          5.4K · 0.5%
+```
 
 ## Work order
 
-Do steps 1 and 2 first, since everything else reads them. The rest are independent, and this order shows
-results soonest.
+Do step 1 first, so the app stops looking broken, then step 2, since the later steps sit on its grid. The rest are independent.
 
-| Step | What | Partial build | Size |
-| --- | --- | --- | --- |
-| 1 | Palette overlay | Redo | Small |
-| 2 | Fonts and radius | Copy | Medium: the `font-mono` sweep |
-| 3 | Box rule | Copy, then error inputs | Medium |
-| 4 | User band, spine, shimmer | Copy | Small |
-| 5 | Docked composer and activity bar | Copy, then move `LocationStrip` | Medium |
-| 6 | Selection, session sidebar, turn footer | Copy, then delete `SelectBar` | Small |
-| 7 | Icon rail and pushing panel | Copy, then check Git count | Medium |
-| 8 | Project hover card | New | Small |
-| 9 | Left toggle and macOS traffic lights | New | Medium: try it early, it's unproven |
-| 10 | Headings | Copy | Small |
-| 11 | Waiting card | Copy, then fix a test | Small |
-| 12 | New session | Nothing to do | None |
-| 13 | Logo, icons, Connect | Copy, then favicon step | Medium |
-| 14 | Docs and tests | New | Medium |
+| Step | What | Size |
+| --- | --- | --- |
+| 1 | Breakage | Small |
+| 2 | Grid and shared kit | Medium |
+| 3 | Chrome band and rails | Small |
+| 4 | Left sidebar | Medium |
+| 5 | Starting context | Medium |
+| 6 | Timeline | Medium |
+| 7 | Waiting card | Medium |
+| 8 | Dock | Small |
+| 9 | Files and file panel | Medium |
+| 10 | Session panel | Small |
+| 11 | Settings and dialogs | Small |
+| 12 | Light theme | Small |
+| 13 | Docs and tests | Small |
 
-`EDITOR_GIT_PLAN.md` is being built at the same time and touches `nexus-nsh/App.tsx`, `store.ts`,
-`commands.ts`, `centre.tsx` and `interface/manifest.toml`. Rebase before steps 5 and 7, which overlap
-the most. Its right panel and the icon rail in step 7 must share one layout rule.
+The checkout has unrelated staged work in `composer.tsx` and `commands.ts`, among others. Work on a branch and don't sweep it into these commits.
 
-### 1. Palette
+### 1. Breakage
 
-- Add `nexus-nsh/theme-void.toml` and the merge in `scripts/gen.py`, as in [Tokens](#tokens).
-- Extend `interface/check_theme.py` with `--overlay`. Its default behavior must stay the same.
-- `npm run gen` rewrites `nexus-nsh/gen/theme.json` and `src/gen/theme.ts`, which are tracked. Commit them.
-- **Done when:** `check_theme.py --overlay nexus-nsh/theme-void.toml` and `nsh check` pass,
-  `git diff interface/theme.toml` is empty, and a TUI build looks the same as before.
+Each of these has a confirmed cause, except where marked.
 
-### 2. Fonts and radius
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Traffic lights cover `Back` when a file opens in a narrow window | `FilePanel` goes full-window at `top: 0`, with no room for the lights | Below `PANEL_WIDE`, pad the panel header left by `titleBar().left + 8` on macOS, make it `min-h-11`, and mark it `windowDrag` |
+| Most lines of a file look blank once scrolled sideways | Not a paint bug: `softWrap` is off, so long lines scroll the whole editor sideways and short lines leave the view | Set `softWrap` on `Editor` in `editor.tsx`, for reading and editing. Leave `DiffView` as it is |
+| `opencode` and `default` overprint in a narrow column | `Selector`'s `Button` shrinks, but its `Text`s have no `min-w-0`, so they paint outside it | In `Selector`, give the label `min-w-0 shrink` and the sub-label `min-w-0 shrink-[2]`. Give the effort selector `shrink-0`. Hide the provider when the column is under 560 px, using `onLayout` and not the window width |
+| `New session` label sits 4 px high in its tab (measured: text top 8, button 8 to 36) | `new-session-tab` has no `justify-center` | Add `flex-row items-center justify-center` |
+| `2 other sessions are waiting` covers the prose | It's a 66 px floating card in `WaitingCard` | Move it into the dock (step 8) |
+| `Working · 2m 01s · ↓0` runs under `waiting on you` | `WorkingRow` ignores the waiting state | Hide `WorkingRow` while the viewed session has a waiting item |
+| Waiting card touches the band above it | No gap between them | Give the waiting slot `mt-2` |
+| Pinned band sits about 64 px right of the column it belongs to | `StickyBar`'s wrapper still has `items-center`, from before the reading column moved left, so it centres the column | Change it to `items-start` |
 
-- **Mock-up:** `--n-sans`, `--n-mono` and `--n-r*` at the top of `nexus.css`.
-- **`nexus-nsh/scripts/gen.py`:** `RADIUS` becomes `radius: 10px`, `radius-card: 16px`.
-  `FONTS` becomes `font-sans` Geist, and `font-mono` and `font-code` Monaspace Argon.
-- **Files:** add `Geist-{Regular,Medium,SemiBold,Bold}.ttf` and `Geist-LICENSE.txt` to
-  `nexus-nsh/fonts/` (the `geist@1.3.1` npm package has the TTFs, and the worktree has them).
-  In `App.tsx` import those and drop Neon. Delete `MonaspaceNeon-*.otf`.
-- **`font-mono` meant interface text until now,** so this is a real sweep. In
-  `src/ui/timeline.tsx` remove `font-mono` from prose, user messages, verbs, labels and the
-  footer. Keep it only on `r().arg`, `p.line().text` and `p.block.language`. Remove it from the
-  composer's `Input`. Check other `src/ui/*.tsx` by eye.
-- **Docs:** `nexus-nsh/README.md` lines on Monaspace Neon.
+**Done when:** at 700 px wide with a long model name nothing overlaps, and `AGENTS.md` reads top to bottom with no sideways scroll.
 
-### 3. Box rule
+### 2. Grid and shared kit
 
-**Mock-up:** `.n-edge` in `nexus.css`, and `#surface-approval` for a close look.
+**`src/ui/reading-column.tsx`:**
 
-- Add `Edges` to `src/ui/kit.tsx`: four absolute `View`s inset by the box's radius. Set `left` and
-  `leftWidth` for a colored rail.
-- Remove `border border-border` from every rounded box in `src/ui/*.tsx`. A filled box keeps its
-  fill and nothing else. Use `Edges` on tool cards and diagnostics in `timeline.tsx` and on the
-  waiting card.
-- Strip border classes from `Btn`'s `skin` in `kit.tsx`, and turn `selected:border-ring` into
-  `selected:bg-selection`.
-- Straight rules like `border-b`, `border-l` and `border-t` are fine. Keep `FOCUS` outlines, which
-  are a focus state.
-- Inputs with `border-error` still curve, and need another error signal.
+- Delete `ACTIVITY_INDENT` and `ACTIVITY_CONTROL_INSET`. Keep `CARD_INSET` (`px-4`) and `TEXT_INDENT` (`pl-4`), and add `TEXT_INSET = "px-4"` for full rows.
+- Add `ACTIVITY_CHEVRON = "w-4 shrink-0"`, the slot that hangs a chevron inside the inset. The row itself has no left padding, so its label lands on the text edge. Give hover fills `-mx-1 px-1`, so they overhang without moving the text.
 
-### 4. User band, spine, shimmer
+**`src/ui/kit.tsx`:**
 
-**Mock-up:** `UserMsg`, `ToolRow`, `Activity`, `Working` in `parts.tsx`; `#surface-turn`.
+- Delete `Edges`. Its callers are the waiting card in `composer.tsx` and three rows in `timeline.tsx`. Filled boxes keep their fill.
+- Add `StatusRail`, following the rule above, with `color` and `testID` props. Replace `Rail` in `timeline.tsx` with it. The parent is `relative`.
+- Change `T.mono` to `font-mono text-[12.5px] leading-5 text-foreground-secondary`, and use it wherever code sits beside Geist. Sweep `font-mono text-[13px]`, and leave the editor's own font size alone.
+- Add `Seg`, moved out of `settings.tsx`, as the one segmented control. The well is `bg-muted p-0.5 rounded-(--radius)`, each option `rounded-[8px]`, and the selected option `bg-selection text-foreground font-medium`.
+- Replace `rounded-(--radius-card)` with `rounded-(--radius)` on anything that isn't a card, a dialog or a menu. Known cases are `session-search`, `Seg` and the folded band. The folded band goes square, to match the open one.
 
-- **`src/ui/timeline.tsx`:**
-  - In `msg-user`, drop `rounded-(--radius-card)` and make the rail
-    `absolute left-0 top-0 bottom-0 w-0.5` with no rounding. Remove the rounding on the pinned band too.
-  - In `ActivityItem`, replace the branch and tick with one `w-px bg-border-strong` line for every
-    row, last included.
-- **`src/ui/composer.tsx`:** `WorkingRow` uses a `Shimmer`. I didn't find a way to clip a gradient to
-  text in NSH, so animate each letter's opacity with `animationName: "pulse"`, staggered. Static under
-  `ui.reduced_motion`.
+### 3. Chrome band and rails
 
-### 5. Docked composer and activity bar
+**Mock-up reference for the band:** `#window` in the mock-up. These details override it.
 
-**Mock-up:** `Composer`, `ActivityBar` in `parts.tsx`; `.n-comp--dock`, `.n-bar` in `nexus.css`;
-`#notes` shows rest and running.
+- **Tabs (`header.tsx`):**
+  - Put `+` straight after the last tab, inside the scroll content, not at the far right. It shouldn't move when the right panel opens.
+  - Show no glyph for an idle tab, and keep glyphs for running, waiting, failed and unread. Keep the idle state in the accessibility label.
+  - Use the `x` icon in place of the `×` text. Add it to `src/icons` if it's missing.
+- **Section tabs (`SidebarTabs`):** add `bg-selection` to the selected tab, on top of the tint. Today only the tint marks it. Put a `w-px h-4 bg-border mx-1` divider between `toggle-left` and the tabs.
+- **Alignment:** today the left toggle's centre is at 24 and the rail's at 21, and on the right they're at `W-24` and `W-21`.
+  - Set both rails to `w-12` and centre the toggles at 24 from each side.
+  - Update `RAIL = 42` in `editor.tsx` to 48.
+- **Project rail (`SessionRail`):** the counters of neighbouring projects run together, and the pill touches the rail's sides. Use `size-10` cells with `gap-2` in the `w-12` rail.
+- **Right rail:**
+  - Mark only the section the panel is showing. Today `rail-git` is never selected.
+  - Git opens the panel and scrolls to its section. Today both icons only toggle.
+  - Show the change count as a small `bg-border-strong` badge, not bare text on the icon.
+- **`Header` band:** keep the 44 px height. The band and sidebars stay one surface.
 
-Bar behavior comes from the TUI's `draw_activity_line` (`nexus-tui/src/render.rs`). Read it, and
-don't change it. At rest, the first `fraction` of the width is lit. While a turn runs, a soft-edged
-pulse a fifth of the width glides on `travel * (1 - cos(2π * phase)) / 2`. The sweep takes about
-three seconds. Under reduced motion it holds at phase 0.5.
+### 4. Left sidebar
 
-In `src/ui/composer.tsx`:
+**Search:** `h-8 rounded-(--radius) bg-hover`, not the black well. Put a 14 px `search` icon inside it, on the sidebar edge, with the placeholder after it. The sidebar has no other search affordance once text is typed, so the icon stays.
 
-- Split the root in two: a `TimelineColumn` for `WorkingRow`, `PendingStack` and completion, then a
-  full-width `bg-sidebar` dock holding a second `TimelineColumn` and the bar. `safeArea().bottom`
-  goes on the dock.
-- Remove the card classes and the focus border.
-- Keep `LocationStrip` on its own row under the controls, at every width, as in the TUI: path, branch and
-  the linked-worktree icon on the left, context (`82k · 41%`) on the right. `composer.tsx` already has
-  this row, so only remove the `w-20 h-1` meter from it, along with its `meterPct` and `meterColor` props. The row order in the dock is input, controls,
-  strip, then the bar. It keeps `location-*`, `composer-meter` and `composer-usage` test IDs.
-- `ActivityBar`: a 1 px `bg-border-strong` line with an absolute fill (`boxShadow 0 0 4px` for the
-  glow), or a gradient pulse while busy. Get the color with `token("agent-<slot>")` from `agentSlot`.
-- **Done when:** the numbers and the bar agree at 0%, 41% and 100%, with reduced motion, and at phone
-  width.
+**Project row and chips:**
 
-### 6. Selection, session sidebar and turn footer
+- Drop `✓ ` from `Chip`, because it moves the label when toggled. Selected is `bg-selection text-foreground font-medium`, as on the phone.
+- Keep the labels and test IDs. Web says `Global` where the phone says `All projects`, which is a known difference to settle in [Open questions](#open-questions).
 
-**Mock-up:** `.nx[data-select="pill"]`, `.n-row__l2 .n-ag`, `.n-foot .n-ag` in `nexus.css`; `#surface-sessions`,
-`#surface-turn`.
+**Session rows (`SessionRow`):**
 
-- Remove the bars: completion rows in `composer.tsx`, `SelectBar` in `modal.tsx` (delete it and its
-  callers: three in `overlays.tsx`, one in `settings.tsx`), `row-focus-bar` and the project bar in `sidebar.tsx`. Selected rows get
-  `bg-selection rounded-(--radius)`.
-- Headers: active tab and `new-session-tab` go from `bg-background` to `bg-selection`, in `header.tsx`.
-- **No agent color in the session sidebar.** `src/ui/sidebar.tsx` doesn't use `agentColor` today, so
-  there's nothing to remove. Keep it that way. If you add the agent name to the row as the mock-up
-  shows, make it `T.meta` muted. The comment in `i6.test.tsx` that says "the agent in its colour" is out
-  of date.
+- Remove the 22 px status gutter, which pushes every title away from the sidebar edge. Titles start on the sidebar edge.
+- Status moves to the right, in front of the time: `◆ 2m`, `◐ now`.
+- Under a project heading, stop repeating the project name. `place()` returns `projectName` when `scopeAll()` is on, so each group reads `Nexus / Nexus`. Show the branch there, the same as the project scope.
+- When a row has nothing on its second line, it's one line, `h-8`. Otherwise it stays `h-12`.
+- Keep titles `font-medium` in every state, and let the pill carry selection, since bold makes the text reflow against the time.
 
-- **No agent color in the turn footer.** The real footer (`turn-footer` in `src/ui/timeline.tsx`) doesn't
-  use `agentColor` today, so there's nothing to remove here either. Keep its text muted.
+**Group headings:** keep them as they are, but `pt-3 pb-1`, on the same edge.
 
-Agent color stays on the composer's name, and on the other places that use `agentColor` today:
-`overlays.tsx`, the child card in `timeline.tsx`, `header.tsx` and `right.tsx`.
+**Projects tab:**
 
-### 7. Icon rail and pushing panel
+- Shorten paths with `~`, using the helper `LocationStrip` has inline. Move it to `kit.tsx`, and use it in both places.
+- Truncate at the start of the path with `midTruncate` only after shortening.
+- Replace `1 · 2m` with `1 session · 2m`.
+- Put the `Projects` heading on the sidebar edge. Give `Refresh` in `ProjectMcpPanel` a ghost button look with `text-muted-foreground`.
 
-**Mock-up:** `Right` in `parts.tsx`; `#surface-panel`, and any shell for the closed state.
+### 5. Starting context
 
-- **Rail contents:** Session and Git only. Those are the two right-sidebar sections in
-  `manifest.toml`. Don't copy the mock-up's third Context icon unless you add a section. Show the
-  count of changed files on Git.
-- `rightIsOpen` in `src/commands.ts` defaults to `rightOpen() ?? false`.
-- Add `RightRail` to `src/ui/right.tsx`, `w-11 bg-sidebar`. Mount it in `App.tsx` after
-  `RightSidebar`, on non-narrow windows only. Icons run `sidebar.right.toggle`.
-- Narrow keeps its drawer. The phone keeps its details button.
-- The header's `toggle-right` stays, since `manifest.toml` requires that anchor. Don't change the
-  manifest for this: the TUI reads it too.
-- Agree the layout rule with the `EDITOR_GIT_PLAN.md` panel.
+This is the first thing every session shows, and it's the most visible flaw. Make it a compact ledger: names on the left and token counts in a column on the right.
 
-### 8. Project hover card on the collapsed rail
+```text
+System prompt                                                  ~1.6K
+AGENTS.md                                                       ~946
+Tools  18                                                      ~3.5K
+  read       grep       glob        ls         bash       bash_output
+  bash_kill  edit       patch       write      web_search web_fetch
+Skills  2
+  nexus-ios-device  project         stageshow  project
+MCP  1
+  browser-use  16 tools
+────────────────────────────────────────────────────────────────────
+Total                                          ~5.4K · 0.5% of window
+```
 
-**Mock-up:** `#window-rail-hover`. **Reference:** `draw_rail_popup` in `nexus-tui/src/render.rs`. Read it,
-and don't change it.
+In `Section` and `ContextSections` in `newsession.tsx`:
 
-With the left sidebar closed, hovering a project on the rail shows its name and activity, as in the TUI.
-`src/ui/sidebar.tsx` already has a `tooltip` on `rail-project-<id>`, so build on that. I haven't seen it
-running. Match the TUI:
+- **Header row:** title, then a muted count with no brackets (`Tools 18`), then a `flex-1` gap, then tokens right-aligned with `tabular-nums`. A section's `meta` (`not found`, `none`) sits in the token column, muted.
+- **Tools:**
+  - Delete the dot for items that are on. Off stays `line-through`, with `opacity-60`.
+  - Replace `w-1/3` columns, which truncate to `bash_k…`, with `flex-row flex-wrap gap-x-4` and fixed `w-[196px]` cells. 196 px fits `change_session_directory` at 12.5 px, and as many columns fit as the width allows.
+  - Under 420 px of card width, use natural-width items, so nothing truncates on a phone.
+  - Remove the `pl-5` indent in favour of `pl-3`.
+- **Skills and MCP:**
+  - Use the same cell as tools, on one line: `name` then muted `project` or `16 tools`. That removes the double-height rows.
+  - Keep them as `role="switch"` buttons with the hover pill. A click toggles, so show off the same way as tools.
+  - A row with an error or a `new session` lock takes the full width, on two lines.
+  - Keep `ctx-*` test IDs and accessibility labels with `on` and `off`.
+- **Total:** a `h-px bg-border` divider above it. `Total` is capitalised, and the figure is compacted with `contextTokens`, so it matches the location strip. `share()` stays, right-aligned.
+- **Surface:** `bg-card`, `rounded-(--radius-card)`, `px-4 py-3`, and `my-3` in place of `my-5`, so the band follows closer.
 
-- **Content:** the project's name in bold, then two rows, zero counts included: `N attention` and
-  `N unread` on top, `N running` and `N idle` on the bottom, in aligned columns. This mirrors the rail's
-  counters above and below the initials. The wording is shorter than the TUI's, so change `details()` in
-  `sidebar.tsx`, which also feeds the `accessibilityLabel`. The card itself needs a row of two `Text`s
-  in place of its current list.
-- **Color:** the tooltip makes the lines muted today. Use `text-multi`,
-  `text-info`, `text-success` and `text-foreground`, in that order, which `tones` already holds.
-- **Surface:** `bg-raised` with padding and no border. This follows the box rule in step 3.
-- **Position:** beside the rail, level with the hovered project, on top of the page.
-- **Keyboard:** the TUI also shows it when the project has focus in the rail. Do the same, and keep the
-  existing `accessibilityLabel`.
-- **Timing:** check that NSH's tooltip delay feels immediate. If it can't, draw the card from the rail's
-  hover state.
-- **Touch:** no hover, so nothing changes on touch screens.
-- **Tests:** add one for the wording and the two rows. Nothing checks the old text today.
+The figures stay estimates with their tooltips, and nothing is hidden.
 
-### 9. Left toggle and macOS traffic lights
+### 6. Timeline
 
-**Mock-up:** `#window`, with `#window-web`, `#window-web-closed`, `#window-hidden` and
-`#window-hidden-closed`.
+**User band (`UserBand`):**
 
-- **Web:** `src/ui/header.tsx` already puts `toggle-left` first in the band, flush left. Keep it there
-  when the sidebar closes.
-- **macOS (decided: lights in the band, `#window-hidden`):**
-  - Call `Window.setTitleBar({ style: "hidden", height })` from `nsh/desktop`, with the band's height.
-  - Pad the band's left cell by the traffic lights' width from `titleBar()`. It reports zero in full
-    screen, so the toggle moves flush left there.
-  - Keep the toggle in the same spot with the sidebar closed (`#window-hidden-closed`): the rail starts
-    below the band.
-  - Mark the band with `windowDrag`, or the window can't be dragged any more. Its controls must still
-    take clicks.
-  - I read this in NSH's docs and source, and haven't run it. Nexus doesn't use `nsh/desktop` yet, so
-    try it early on the desktop build, and check `titleBar()`'s field names there.
-- **iOS and the phone:** no change.
+- Stamp and text share a first baseline: `flex-row items-start`, and the stamp is `pt-[3px]`, with no extra height. Today hover icons make the row 32 px, so one-line bands are lopsided and differ in height.
+- Take the hover icons out of the flow: `absolute right-3 top-2`, over a small `bg-raised` backing, and hide the stamp while they show.
+- On touch, where they're always visible and squeeze the message to four lines, move them with the stamp to their own row below the text, right-aligned.
 
-### 10. Headings
+**Activity rows:** chevron in `ACTIVITY_CHEVRON`, label on the text edge, as in [The column](#the-column). Failures and duration on the right edge. Hide durations under 0.1 s. The spine stays at the chevron's centre, `left-[7px]`, and its rows start on the text edge.
 
-**Mock-up:** `.n-label`.
+**Cards (`child`, `msg-diag`, handoff):**
 
-Replace `text-[11px] leading-4 font-semibold uppercase tracking-[0.06em]` with
-`text-[12.5px] leading-4 font-medium`, across `src/ui/*.tsx`.
+- Replace `Edges` and `Rail` with `StatusRail`, and remove `overflow-hidden`, which bends the child card's rail round the corner.
+- `diagnostic` is a heading the user doesn't need. Show the message as the first line, in `T.sec`, and move `label` to the accessibility label. Merge consecutive identical diagnostics into one with `×2`. Two `interrupted by the user` cards are one fact.
 
-### 11. Waiting card
+**Turn footer:** left-aligned on the text edge, not right-aligned. Right-aligned, it wraps to a ragged block in a narrow column. Change `items-end` and `justify-end`. Keep the wording, including `+ unknown`, since unknown usage must never read as zero.
 
-**Mock-up:** `Approval`, `Question`; `#surface-approval`, `#surface-question`.
+**Older messages:** make `Load older messages` a ghost button on the text edge and drop `Older messages are not loaded`, because the button says it. Keep the `timeline-older` test ID on the row.
 
-The card is `relative` with `Edges left="bg-primary" leftWidth={2}`, not a full-height `w-[3px]` rail
-in an `overflow-hidden` box. Drop the 3 px `View`, and either keep the `waiting-rail` test ID on the
-Edges rail or update `i8.test.tsx:72`. Key chips stay, with fills in place of borders. A multi-select
-question uses `bg-multi`.
+**Background shell notice:** clip to one line with an expand control. Today it's cut mid-line where the dock starts. Show the command in `T.mono`, without the `→ Background Shell Done:` prefix text in raw form: `Background shell finished` then the command.
 
-### 12. New session
+**Pinned band:** with step 1's fix, it matches the user band's left and right edges. Give it the same flush rail and fill as the band, in place of the `border-b`, so it reads as the same object pinned.
 
-**Mock-up:** `StartContext`, `NewMain`; `#surface-new`.
+### 7. Waiting card
 
-Already on the timeline in `src/ui/newsession.tsx`, so don't rebuild it. Only the composer changes,
-through step 5. It inherits the palette, and its section labels follow step 2.
+It floats above the dock and is the most important thing on screen while it's open. It should look deliberate.
 
-### 13. Logo, icons, Connect
+```text
+┃ ◆ Allow bash?                               1 of 2  ⌘]  next
+┃   waiting on you · 0:02
+┃   ┌ command  ls -la src/ && echo done
+┃   └ timeout  20
+┃
+┃   [pill: Allow once          ⏎ ]
+┃    Allow for session        ⌥⏎
+┃    Deny                     ⌘⌫
+┃    Deny with a note        ⇧⌘⌫
+```
 
-**Mock-up:** `SlashField`, `Connect`; `#surface-connect`, `#notes`.
+- **Surface:** `bg-raised`, one step above other cards, `rounded-(--radius-card)`, no border, with `StatusRail` carrying `testID="waiting-rail"`, so `i8.test.tsx:72` still passes. Keep `bg-multi` for a multi-select question.
+- **Text edge:** `pl-4 pr-3 py-3`. Everything inside starts at the column's text edge.
+- **Choices:**
+  - Remove `▸`. The current choice is `bg-selection`, the soft pill.
+  - Put the label first and the key chip on the right, so labels line up and the shortcut stops being the first thing read.
+  - The chip is natural width, `bg-muted`, `text-xs font-medium`, not `w-16 font-bold`.
+  - Keep `font-semibold` off `Allow once`, as the pill now does that job.
+- **Question options:** replace `( )`, `(•)`, `[ ]` and `[x]` with drawn marks. Radio is a 14 px ring with a filled centre. Checkbox is a 14 px `rounded-[4px]` box with a check icon. Selected rows get `bg-selection`.
+- **Tool table:** `bg-background` stays for code, with `rounded-(--radius)`. Labels are `T.meta`, values are `T.mono`.
+- **Height:** cap at 60% of the centre column, and scroll inside it, so the timeline never disappears on a short window.
+- **Status text:** `waiting on you · 0:02` becomes `Waiting on you · 0:02`, because the rest of the UI is in sentence case.
 
-- **Logo out of the UI:** NSH already draws no logo, so there is nothing to remove. Keep it that way.
-- **Icons:**
-  - Set `"icon": "../interface/brand/nexus-1024.png"` in `nexus-nsh/nsh.json`.
-  - **Not yet verified:** that `nsh package` accepts a path outside the app folder, on web, macOS
-    and iOS.
-  - **Known gap:** `nsh-cli/src/web.rs` makes its favicon by downscaling the one icon, so the
-    pixel-tuned 16 and 32 px files will not be used. Add a post-build step that replaces
-    `icons/32*.png`, or use `favicon.ico`.
-  - The 16 px icon is at its limit: it reads as marks more than as an N. Look at it in a real tab.
-- **Connect (`src/ui/connect.tsx`, native only):**
-  - Add `slashField(cols, rows)`, a pure function returning rows of `_/ ` in soft clusters, clear in
-    the middle. Draw it in an absolute, non-interactive layer behind the `Scroll`, in `font-mono`
-    `text-border-strong`, with test ID `connect-field`.
-  - Heading: `Connect to Core`.
+### 8. Dock
 
-### 14. Docs and tests, last
+- **Edges:** remove `px-1` from `LocationStrip` and the composer's inner padding, and set the dock's content to `TEXT_INSET`. Input, agent name and path then line up with the prose. `Selector` with `alignStart` already has `pl-0`.
+- **Other sessions waiting:** a slim `h-8` row at the top of the dock, in place of the card: `◆  2 other sessions waiting` on the left, and a ghost `Go to` on the right. Keep the `waiting-go-to` test ID. Divider below it.
+- **Mic and send:** the same size and treatment at every width. Today narrow gets a `size-12 bg-raised` mic beside a `size-11` send. Use `size-8` ghost for mic and `size-8` filled for send on desktop, and `size-11` for both on narrow.
+- **Foot:** add `pb-1.5` to the strip, which now sits against the window's bottom edge.
+- **Activity bar:** on macOS, the bar's ends vanish in the window's rounded corner. Inset it 10 px on macOS only. Make the lit fill 2 px with the track still 1 px, or it can't be seen at low percentages.
+- **Strip:** use `T.mono`'s 12.5 px for path and branch, and give context `tabular-nums`. Fix the `midTruncate` limits by measuring the row with `onLayout`: 54 characters overflows in a narrow column, and truncates needlessly in a wide one.
 
-- **`docs/porting-ledger.md`:** add one row, at the user's request: NSH uses Void (palette from the overlay,
-  rounded boxes whose borders stop before the curve, docked composer, soft pill, sentence-case headings,
-  spine, icon rail, Geist, hidden macOS title bar, no logo, no agent color in the turn footer, shorter
-  hover card wording), while the TUI keeps its amber palette and layout.
-- **`interface/design-language.md`:** it describes the TUI, so leave its rules alone. Add one line
-  saying NSH follows this plan's design instead, and `theme-void.toml` overrides `theme.toml` for NSH.
-- **`nexus-nsh/README.md`, `docs/development.md`:** composer meter text (`╱`), fonts, the overlay.
-- **`PLAN.md`:** update when this lands. Delete `nexus-design-mockup/` when its README says to.
+### 9. Files and file panel
+
+**`FilesTab` in `sidebar.tsx`.** Ignored rows use `T.meta` and others `T.sec`, so sizes and row heights jump around, and the selected row is a full-bleed square.
+
+- Every row is `h-7 rounded-(--radius) px-2 flex-row items-center gap-1.5`, with the list inset by 8 px, 13/20 at all times.
+- A 14 px chevron slot, drawn with `chevron-right`, not `▸ `. Files leave the slot empty, so names line up.
+- Ignored files use `text-faint`, at the same size.
+- Git status sits on the right, in a fixed `w-4` column: `M` in `text-warning`, `A` in `text-success`, `D` in `text-error`, `?` muted. Folders with changes get a 6 px dot in place of a letter, because `M` on a folder reads as a file state.
+- The selected file is `bg-selection`.
+- The parent row `← path` becomes a compact breadcrumb in `T.meta`, on the sidebar edge.
+
+**`FilePanel` in `editor.tsx`:**
+
+- **Header:** the same `bg-sidebar` band as the app, `min-h-11`, using an `arrow-left` icon button in place of the text `Back`, then the path in `T.mono`. `Edit` becomes ghost, and only `Save` is filled.
+- **Width:** 55% of the space leaves the timeline too narrow at 1440. Use `min(55%, 760px)`, so the timeline keeps at least 480 px, and make the divider draggable, using the same pattern as `left-sidebar-resize`. Below `PANEL_WIDE` it stays full-window.
+- **Find bar:** icon buttons for previous, next and close, in place of three text buttons. `Aa` stays as a `Seg`-style toggle.
+- **Gutter:** the editor's current line highlight stays. Remove the `shadow-2xl`, since the panel is a column and not a layer.
+
+The composer's narrow-column behaviour is handled by steps 1 and 5.
+
+### 10. Session panel
+
+In `right.tsx`:
+
+- **`Field`:** label and value share a baseline: both 13/20, with `pt-0.5` removed from the label, and label width `w-20`. `Agent` uses the same size as the rest. In your screenshot it's a size larger than its neighbours.
+- **Paths:** one line, with `~` and middle truncation, and the full path in a tooltip. Today `Directory` wraps mid-word: `…/e2e/ws/n` / `exus-demo`.
+- **Id:** the copy button goes to `size-5`, so that row is the same height as the others.
+- **Git:** `Error: workspace is not a Git repository` becomes a muted `Not a Git repository`. Keep other errors verbatim.
+- **Kernel note:** remove `Kernel state is not reported by Core yet.`, which is a note to developers.
+- **Usage:** `2 requests reported no usage (unknown, not zero)` stays.
+- **Sections:** `pt-5` between groups, and a `h-px bg-border` divider above `Git status`.
+
+### 11. Settings and dialogs
+
+**`settings.tsx`:**
+
+- `Seg` comes from `kit.tsx`, so a selected option finally looks selected. Show options capitalised (`System`, `Light`, `Dark`), keeping stored values lowercase.
+- Remove the repeated `Not editable in this NSH increment yet.` Rows with no control yet (`Density`, `Font`, `Font size`) show their value muted, with that sentence in a tooltip.
+- Remove the `Appearance` heading inside the page, because the nav already says it. Keep headings on pages with several groups.
+- Give the settings nav's chevrons a purpose or remove them. They appear on `Providers` and `Agents` only, and all the entries behave the same.
+- Rows use the shared 12 px gap, and controls align to the right edge. Check inputs at `bg-background`: on the `raised` dialog they should stay wells, with `rounded-(--radius)`.
+
+**Dialogs (`modal.tsx`, `overlays.tsx`):**
+
+- Drop the top-right `esc` chip where a footer already says `esc close`. Keep one, in the footer.
+- Scrim: raise `SCRIM` in `modal.tsx` from `bg-black/50` to `bg-black/65`, so the sidebar and timeline stop competing with the dialog. Today session titles stay bright behind the palette. Check it in light, and lower it there if it looks heavy.
+- The palette's list and footer keep their shape.
+
+### 12. Light theme
+
+Light inherits everything above. Two values need attention in `theme-void.toml`:
+
+- The user band is `raised`, `#ffffff`, on a `#fbfbfa` canvas, so it nearly disappears. Add `surface.band`: dark `#161618`, light `#f0f0ee`. Map it in `scripts/gen.py`, and use `bg-band` in `UserBand`, the folded band and the pinned band.
+- Check `bg-hover` on the search field against `#f1f1ef` chrome. If it doesn't read as a field, use `bg-background` in light only, through a new `input` token.
+
+Run `python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml` after both.
+
+### 13. Docs and tests
+
+- **`docs/porting-ledger.md`:** edit the existing Void row. Replace the hairline wording with filled boxes and inset status rails, and add left-aligned turn footer, soft wrap in the editor, and status on the right in session rows.
+- **`interface/design-language.md`:** still points here, so nothing to change unless the file is renamed.
+- **`PLAN.md`:** update the Void entry when this lands.
+- **Tests:**
+  - `App.test.tsx` still presses `id:context-fold`, and `e2e/shots.mjs` does too, but no such control exists. Fix both with the [fold decision](#open-questions).
+  - Update `timeline-layout.test.tsx` and `timeline-visual-parity.test.tsx` for the new insets.
+  - Add tests for `Selector` at a narrow width, `softWrap` on the editor, `WorkingRow` hidden while waiting, and a one-line session row.
+
+## What stays
+
+These were decided and hold up in the screenshots, so don't reopen them.
+
+- True black, white ink, and color only where it means something.
+- The chrome band, with traffic lights in it on macOS and `toggle-left` first.
+- The square full-width user band with a flush rail.
+- Reading column on the left, not centred. Maximum 880 px.
+- Docked composer, with the location strip on its own row and the activity bar at its foot.
+- Shimmer on `Working`, and the spine beside tool rows.
+- Icon rail, with a panel that pushes the page and starts closed.
+- Agent color on the composer's name and the bar, not in the session sidebar or turn footer.
+- Geist and Monaspace Argon. No logo in the UI.
+- The starting context shown on the timeline, at the top, for new and running sessions.
+- The mock-up (`nexus-design-mockup/stage`) as a reference for the look only. Where it differs from this page, this page wins.
+
+The one reversal is the box rule. "A border stops before a corner curves" made filled cards look damaged, so it's gone, and "a filled box needs no border" now covers every box.
 
 ## Testing
 
-Use a scratch `$NEXUS10_HOME`, and never the real home.
+Use a scratch `$NEXUS10_HOME`, never the real home. `e2e/up.sh` fails when ports 4811, 4812, 4820 or 4821 are taken, and they often are, so start the stack on its own ports:
 
 ```sh
 cd nexus-nsh
-npm run gen && nsh check
-nsh test --target web --browser "$(find ~/Library/Caches/ms-playwright/chromium-1248 -type f -name 'Google Chrome for Testing' | head -1)"
+npm run check
+npm run build
+
+S=$(mktemp -d); mkdir -p "$S/home" "$S/ws"; chmod 700 "$S/home"
+(cd ../nexus-core && NEXUS10_HOME="$S/home" NEXUS_PORT=4832 uv run python ../nexus-nsh/e2e/scripted_core.py) &
+sleep 3   # wait for daemon.json
+node e2e/seed.mjs "$S/home" "$S/ws/nexus-demo" "$S/ws/docs-site" > "$S/ids.json"
+NEXUS10_HOME="$S/home" NEXUS_NSH_NO_START=1 node scripts/serve.mjs --port 4830 &
 ```
 
-**The baseline is not clean.** On unmodified `main` at `89fadf93`, 13 of 122 tests fail:
+Sessions open scoped to one project, so press `chip-global` before looking for a session row. `new-session` matches two elements, so use `.first()`.
 
-- `App.test.tsx`: starting context items, the two daemon-restart `history` tests, session info
-  totals, palette, pre-session picker, both tool output detail cap tests
-- `i6.test.tsx`: uppercase project header
-- `i8.test.tsx`: both alerts tests
-- `parity.test.tsx`: child result
-- `toolmedia.test.tsx`: tool images
+**By eye,** dark and light, at 390, 1024 and 1440 wide, and with reduced motion:
 
-That baseline run was cut off with no summary line, after every test had printed a result.
-
-The partial build added these 5, which are likely yours to fix or update as you change the design:
-
-- `App.test.tsx › session info totals › says when Core has not reported usage`
-- `App.test.tsx › turn summaries › unknown usage reads unknown…`
-- `i6.test.tsx › right sidebar › Git shows the branch…`
-- `i6.test.tsx › right sidebar › Session info and Context sections…`
-- `i8.test.tsx › waiting card › an approval shows the title, timer, table…`
-
-The first four probably fail because the right panel now starts closed, so open it first in those
-tests. I didn't confirm that. The fifth looks for `waiting-rail`. `i6`'s uppercase test also has the
-wrong name now.
-
-**By eye**, with the mock-up beside you:
-
-- On a scripted Core: `e2e/scripted_core.py` and `e2e/seed.mjs` via `e2e/up.sh`, then
-  `node e2e/shots.mjs`. `up.sh` fails if ports 4811, 4812, 4820 or 4821 are taken.
-- Dark and light, at 390, 1024 and 1440 wide, and with reduced motion.
-- On the macOS build: the lights line up with the band, the window drags from the band, and the
-  toggle moves in and out of full screen correctly, with the sidebar open and closed.
-- `nexus check` before you finish.
-
-**Confirm the TUI didn't change:** `git diff --stat -- nexus-tui interface/theme.toml` is empty, and
-`cargo test -q` in `nexus-tui` gives the same result as before you started.
-
-## Open question
-
-**Accent equals primary text.** In NSH, links and active states now look like plain text. Decide per
-element: links probably need an underline. There are about 20 `bg-primary` and `text-primary` uses in
-`src/ui/*.tsx`. Filled buttons are fine as white. Check the text ones, like the waiting `◆`, the sidebar's `+`
-and `Show all` in `timeline.tsx`. You can decide this at step 14.
-
-## The partial build
-
-Worktree `.claude/worktrees/void`, branch `design/void`, based on `89fadf93`, all uncommitted.
-Copy from it or delete it. It isn't meant to be merged as is.
-
-```sh
-# From the repo root. All of src/ui applied cleanly to the main checkout on 2026-11-01 (--check only).
-git -C .claude/worktrees/void diff -- nexus-nsh/src/ui nexus-nsh/src/commands.ts | git apply -
-
-# App.tsx conflicts with the editor work, so make its two changes by hand:
-#   swap the Neon font imports for Geist, and mount <RightRail /> after <RightSidebar />.
-git -C .claude/worktrees/void diff -- nexus-nsh/App.tsx
-
-# Copy these too:
-cp .claude/worktrees/void/nexus-nsh/fonts/Geist-* nexus-nsh/fonts/
-git -C .claude/worktrees/void diff -- nexus-nsh/scripts/gen.py nexus-nsh/nsh.json | git apply -
-```
-
-Then build the overlay from step 1, or the app keeps the amber palette, and rerun the check if the editor
-work has moved on. Delete the worktree when you're done:
-`git worktree remove --force .claude/worktrees/void && git branch -D design/void`.
-
-**Do not copy these from it:** its edits to `interface/theme.toml`, which would change the TUI, and
-its notes in `docs/porting-ledger.md`, `interface/design-language.md` and `PLAN.md`, which say the
-TUI takes the palette. Its `nexus-tui/` changes have been reverted. With `theme.toml` reverted too,
-NSH there would lose its colors until the overlay from step 1 exists.
-
-| Step | State in the worktree |
+| Surface | Look for |
 | --- | --- |
-| 1 | Tokens are in `interface/theme.toml`, the wrong place. Overlay not started |
-| 2 | Done. Neon font files deleted there, so delete them here too |
-| 3 | Done except error inputs |
-| 4 | Done |
-| 5 | Done, except that `LocationStrip` is inline on wide windows. Move it back to its own row |
-| 6 | Done, but `SelectBar` is a leftover no-op |
-| 7 | Done. `changes()` in `RightRail` guesses `gitStatus` field names, so check it |
-| 8 | Not started |
-| 9 | Not started |
-| 10 | Done |
-| 11 | Done. `i8.test.tsx` not updated |
-| 12 | Nothing needed |
-| 13 | Connect and `nsh.json` done, neither seen running (Connect is native only). Favicon step not started |
-| 14 | Short notes only, wrong on the TUI, so don't copy them |
+| New session, session | Ledger columns line up, and there's one text edge from the card down to the location strip |
+| 1440 with the file panel open | Timeline still readable, nothing overlaps in the dock |
+| 1024 with a file open | Full-window panel, `AGENTS.md` wraps |
+| Approval, question | Pill on the current choice, chips on the right, no terminal marks |
+| Sidebar: global, project, files, projects, closed rail | One left edge, no repeated names, even row heights |
+| Settings, palette | Selected segments are visible, scrim is dark enough |
+| macOS build | Lights clear of `Back`, band and panel header drag the window, toggles line up with rails |
 
-NSH type check passes there. I looked at the web build on a scripted Core, in dark and light, for
-session, question and panel. I didn't see: a live approval card, the running pulse on screen, phone
-sizes, native builds or Connect.
+Measure alignment rather than judging it. In a Playwright session, compare `boundingBox()` of `toggle-left` against `rail-search` with the left sidebar closed, and of `toggle-right` against `rail-session`. The prose, `composer-agent` and `location-directory` should all share a left edge, within 1 px.
+
+**Confirm the TUI didn't change:** `git diff --stat -- nexus-tui interface/theme.toml` shows nothing from this work, and `cargo test -q` gives the same result as before you started. The checkout has unrelated `nexus-tui/` changes staged, so compare against those.
+
+Note `nsh test` and `nexus check` results before starting. The app tests have known failures, including the `context-fold` ones.
+
+## Open questions
+
+Each has a default, so none of them block the work.
+
+1. **Fold the starting context once a session has messages?** The card takes about 300 px at the top of every session, and step 5 only shrinks it. The fold control is gone, but `foldedMeta` and the `open` field on the row remain, and tests still press `context-fold`. **Default: leave it open**, since "keep the context visible" is a core rule, and delete the leftovers. The alternative is to fold it to `Context · 5 items · ~5.4K tokens` after the first message, still in place and in order, and restore the control.
+2. **`Global` or `All projects`?** Web and desktop say `Global` while the heading above says `All projects`, and the phone says `All projects`. **Settled: `All projects` everywhere**, and the test ID is `chip-all-projects`.
+3. **Accent equals primary text,** so links and active states look like plain text. **Default: underline links in prose,** and leave controls as they are.
