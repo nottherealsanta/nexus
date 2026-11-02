@@ -10,7 +10,7 @@ import {
   contextDetail, agentCatalog, currentProject, info, rememberedModel, draftContext, draftContextKey, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome,
 } from "../store";
 import { request } from "../core/transport";
-import { Modal } from "./modal";
+import { Modal, ModalFooter, ModalTitle } from "./modal";
 import { sessionInventoryRows } from "../skills-mcp";
 import type { InventoryKind, InventoryRow, McpEntry, SkillEntry } from "../skills-mcp";
 import { TimelineColumn } from "./reading-column";
@@ -161,13 +161,13 @@ function Section(p: { s: CtxSection; estimated: boolean; wide: boolean; onOpen: 
   const s = p.s;
   return (
     <View class="py-1 gap-1" testID={`ctx-${s.key}`}>
-      <View class="flex-row items-center gap-2 min-h-5">
+      <View class="flex-row items-baseline gap-2 min-h-5">
         <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`} class={`flex-row items-baseline gap-1.5 rounded-(--radius) px-1 -mx-1 hover:bg-accent ${FOCUS}`}>
           <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{s.title}</Text>
-          <If when={s.count !== undefined}><Text class="text-[13px] leading-5 text-muted-foreground tabular-nums">{s.count}</Text></If>
+          <If when={s.count !== undefined}><Text class={T.meta}>{s.count}</Text></If>
         </Button>
         <If when={s.tokens !== undefined}>
-          <Count text={`${p.estimated ? "~" : ""}${contextTokens(s.tokens ?? 0)}`} estimated={p.estimated} class={`${T.sec} tabular-nums`} />
+          <Count text={`${p.estimated ? "~" : ""}${contextTokens(s.tokens ?? 0)}`} estimated={p.estimated} class="text-xs leading-4 text-foreground-secondary tabular-nums" />
         </If>
         <If when={!!s.meta}><Text style={{ numberOfLines: 1 }} class={T.meta}>{s.meta}</Text></If>
       </View>
@@ -175,7 +175,7 @@ function Section(p: { s: CtxSection; estimated: boolean; wide: boolean; onOpen: 
         <View class="flex-row flex-wrap gap-x-4 pl-3" testID={`ctx-${s.key}-grid`}>
           <Each of={(s.body as { items: { name: string; on: boolean }[] }).items} key={(c) => c.name}>
             {(c) => (
-              <View class={`h-6 flex-row items-center ${p.wide ? CELL : ""}`} testID={`ctx-chip-${c().name}`} accessibilityLabel={`${c().name} ${c().on ? "on" : "off"}`}>
+              <View class={`h-5 flex-row items-center ${p.wide ? CELL : ""}`} testID={`ctx-chip-${c().name}`} accessibilityLabel={`${c().name} ${c().on ? "on" : "off"}`}>
                 <Text class={`font-mono text-[12.5px] leading-5 ${c().on ? "text-foreground-secondary" : "text-muted-foreground line-through opacity-60"}`}>{c().name}</Text>
               </View>
             )}
@@ -215,7 +215,7 @@ function Section(p: { s: CtxSection; estimated: boolean; wide: boolean; onOpen: 
 /** A single detail dialog remains mounted even when the context section is folded. */
 export function ContextDetailModal() {
   const detail = contextDetail;
-  return <If when={detail()}>{() => <Modal width={760} label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}><View class="flex-row items-center min-h-8 gap-3"><Text class="flex-1 text-[15px] leading-5 font-semibold text-popover-foreground">{detail()!.title}</Text><Text class={`${T.meta} rounded-(--radius) bg-muted px-1.5`}>esc</Text></View><Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }}><View class="pt-3"><Text testID="context-detail-text" style={{ userSelect: "text" }} class="font-mono text-[13px] leading-5 text-foreground">{detail()!.detail}</Text></View></Scroll></Modal>}</If>;
+  return <If when={detail()}>{() => <Modal width={760} label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}><View class="gap-3"><ModalTitle title={detail()!.title} esc={false} /><Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }}><Text testID="context-detail-text" style={{ userSelect: "text" }} class="font-mono text-[12.5px] leading-5 text-foreground">{detail()!.detail}</Text></Scroll><ModalFooter hints="esc close" /></View></Modal>}</If>;
 }
 
 /** The sections and the total as text (no bar). */

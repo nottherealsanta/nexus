@@ -54,7 +54,7 @@ export function FilePanel() {
   const loaded = () => editing() || f()?.content !== undefined;
   const matchCount = () => {
     const r = found();
-    if (!query()) return "–";
+    if (!query()) return "";
     if (r.error) return r.error;
     if (r.current == null) return `${r.count} ${r.count === 1 ? "match" : "matches"}`;
     return `${r.current + 1} of ${r.count}`;
@@ -97,7 +97,7 @@ export function FilePanel() {
         <View class="flex-row items-center gap-2 px-3 min-h-9 border-b border-border bg-sidebar" testID="file-find">
           <Input autoFocus value={query()} onChange={({ value }) => query.set(value)} onSubmit={() => editor?.run("findNext")}
             placeholder="Find" accessibilityLabel="Find in file" testID="file-find-input"
-            class="h-7 flex-1 min-w-0 rounded-(--radius) bg-background px-2 font-mono text-xs text-foreground" />
+            class="h-7 flex-1 min-w-0 rounded-(--radius) bg-background px-2 font-mono text-[12.5px] text-foreground" />
           <Text class={`${T.meta} w-20 text-right`} testID="file-find-count">{matchCount()}</Text>
           <View class="flex-row rounded-(--radius) bg-muted p-0.5">
             <Button onPress={() => caseSensitive.set(!caseSensitive())} selected={caseSensitive()} accessibilityLabel="Match case" testID="file-find-case"
@@ -123,10 +123,10 @@ export function FilePanel() {
                 class="flex-1 min-h-0 bg-background" testID="file-diff-view" />
             </If>
           }>
-            <Scroll class="flex-1"><Text style={{ userSelect: "text" }} class="font-mono text-xs text-muted-foreground px-3 py-2">Loading file…</Text></Scroll>
+            <Scroll class="flex-1"><Text class={`${T.sec} px-4 py-3`}>Loading file…</Text></Scroll>
           </If>
         }>
-          <Scroll class="flex-1"><Text style={{ userSelect: "text" }} class="font-mono text-xs text-error px-3 py-2">{f()?.error}</Text></Scroll>
+          <Scroll class="flex-1"><Text style={{ userSelect: "text" }} class="text-[13px] leading-5 text-error px-4 py-3">{f()?.error}</Text></Scroll>
         </If>
       </View>
     </View>

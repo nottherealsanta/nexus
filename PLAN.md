@@ -19,7 +19,7 @@ The sections below are the record of the release steps and the backlog that rema
 
 ## Where things stand (2026-10-30)
 
-- **NSH closer to the TUI (2026-11-02).** After review of the Void design: centred, wider reading column; context counts beside their headers; finished groups stay folded; one footer per turn; draggable file panel. See [docs/porting-ledger.md](docs/porting-ledger.md).
+- **NSH closer to the TUI (2026-11-02).** After review of the Void design: centred, wider reading column; context counts beside their headers; finished groups stay folded; one footer per turn; draggable file panel; plain diagnostic rows; one row-spacing rule; the queue inside the dock; calmer disconnect banner. See [docs/porting-ledger.md](docs/porting-ledger.md).
 - **NSH Void design (2026-11-01).** NSH web, desktop and iOS use the Void design in
   [VOID_DESIGN_PLAN.md](VOID_DESIGN_PLAN.md): `nexus-nsh/theme-void.toml` overrides the shared palette
   for NSH only, and the layout changes are listed in the porting ledger's 2026-11-01 row. The second

@@ -19,7 +19,7 @@ import "../../fonts/MonaspaceArgon-Regular.otf";
 import "../../fonts/MonaspaceArgon-Medium.otf";
 import "../../fonts/MonaspaceArgon-Bold.otf";
 
-type Tone = "info" | "accent" | "warning";
+type Tone = "info" | "accent" | "warning" | "error";
 type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
 type Diff = { add: number; del: number };
 /** Timeline metadata uses the app's monospace face. */
@@ -43,7 +43,7 @@ type Row =
   | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean; running?: boolean; duration?: string }
   | {
       key: string; kind: "activity"; summary: string; items: (Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>)[];
-      open: boolean; defaultOpen: boolean; hidden: number; failed: number; duration?: string; diff?: Diff;
+      open: boolean; defaultOpen: boolean; hidden: number; failed: number; diff?: Diff;
     }
   | {
       key: string; kind: "tool"; id: string; name: string; arg: string; summary: string; tone: Tone;
@@ -205,10 +205,10 @@ function diag(e: CoreEvent): Extract<Row, { kind: "diag" }> | null {
   const k = `ev-${e.id}`;
   const label = roles.diagnostic.label;
   switch (e.type) {
-    case "session.error": return { key: k, kind: "diag", label, text: errorText(d.kind, d.message), detail: d.status ? `HTTP ${d.status}` : undefined, tone: "warning" };
+    case "session.error": return { key: k, kind: "diag", label, text: errorText(d.kind, d.message), detail: d.status ? `HTTP ${d.status}` : undefined, tone: d.kind === "interrupted" ? "warning" : "error" };
     case "retry_scheduled": return { key: k, kind: "diag", label, text: `provider retry ${d.attempt ?? ""}/${d.max_attempts ?? ""} in ${d.delay ?? "?"}s`, detail: d.reason, tone: "warning" };
     case "retry_started": return { key: k, kind: "diag", label, text: `provider retry started (attempt ${d.attempt ?? ""})`, tone: "warning" };
-    case "retry_exhausted": return { key: k, kind: "diag", label, text: "provider retries exhausted", detail: d.reason, tone: "warning" };
+    case "retry_exhausted": return { key: k, kind: "diag", label, text: "provider retries exhausted", detail: d.reason, tone: "error" };
     case "turn.recovered": return { key: k, kind: "diag", label, text: `turn ${d.outcome ?? "interrupted"}: ${d.reason ?? "daemon restarted"}`, tone: "warning" };
     case "session.directory_changed": return { key: k, kind: "diag", label, text: `directory changed: ${d.from ?? ""} → ${d.to ?? ""}`, tone: "info" };
     case "session.notified": return { key: k, kind: "diag", label, text: `child finished: ${d.from ?? "child"}`, tone: "info" };
@@ -232,13 +232,13 @@ function summaryDiags(t: TurnSummary): { t: number; row: Extract<Row, { kind: "d
         const delay = typeof next.delay === "number" ? ` in ${fmtDuration(next.delay)}` : "";
         out.push({ t: at, row: { key: `retry-${r.id}-${a.n}`, kind: "diag", label, text: `provider retry ${next.n}/${attempts.length}${delay}`, detail: a.error ?? undefined, tone: "warning" } });
       } else if (i > 0 && a.status === "failed") {
-        out.push({ t: at, row: { key: `retry-${r.id}-end`, kind: "diag", label, text: "provider retries exhausted", detail: a.error ?? undefined, tone: "warning" } });
+        out.push({ t: at, row: { key: `retry-${r.id}-end`, kind: "diag", label, text: "provider retries exhausted", detail: a.error ?? undefined, tone: "error" } });
       }
     });
   }
   if (t.error) {
     const e = t.error;
-    out.push({ t: t.finished ?? t.started, row: { key: `error-${t.id}`, kind: "diag", label, text: errorText(e.kind, e.message), detail: e.status ? `HTTP ${e.status}` : undefined, tone: "warning" } });
+    out.push({ t: t.finished ?? t.started, row: { key: `error-${t.id}`, kind: "diag", label, text: errorText(e.kind, e.message), detail: e.status ? `HTTP ${e.status}` : undefined, tone: e.kind === "interrupted" ? "warning" : "error" } });
   }
   if (t.recovery === "done") {
     out.push({ t: (t.finished ?? t.started) + 0.00005, row: { key: `recovered-${t.id}`, kind: "diag", label, text: `turn ${t.status}: recovered after a daemon restart`, tone: "warning" } });
@@ -567,7 +567,19 @@ function buildStableRows(): Row[] {
   }
   if (sel.messagesMore) flat.unshift({ key: "older-messages", kind: "older", text: "Older messages are not loaded", action: "load-older" });
   if (sel.turnsGap) flat.unshift({ key: "turns-gap", kind: "older", text: `${sel.turnsGap[0].toUpperCase()}${sel.turnsGap.slice(1)}.` });
-  return mergeDiagnostics(flat);
+  return mergeDiagnostics(footersLast(flat));
+}
+
+/** A turn's diagnostics (its interrupt, error, retries) come before its footer, as in the TUI: the footer closes the turn. */
+function footersLast(flat: Row[]): Row[] {
+  const out = [...flat];
+  for (let i = 0; i < out.length; i++) {
+    if (out[i].kind !== "footer") continue;
+    let j = i + 1;
+    while (j < out.length && out[j].kind === "diag") j++;
+    if (j > i + 1) out.splice(i, j - i, ...out.slice(i + 1, j), out[i]);
+  }
+  return out;
 }
 
 /** Consecutive identical diagnostics are one fact: `×2` on the first card. */
@@ -636,14 +648,11 @@ function groupActivities(rows: Row[]): Row[] {
     const expanded = waiting || open(key, defaultOpen);
     const explicit = timelineOpen()[key] === true;
     const hidden = running && !waiting && detail !== "high" && !explicit ? Math.max(0, items.length - 5) : 0;
-    const timed = tools.filter((tool) => tool.seconds !== undefined);
     const diffs = tools.filter((tool) => tool.diff !== undefined);
-    const totalSeconds = timed.reduce((sum, tool) => sum + (tool.seconds ?? 0), 0);
     result.push({
       key, kind: "activity", summary: running ? "Working" : activitySummary(items), items: items.slice(hidden),
       open: expanded, defaultOpen, hidden,
       failed: tools.filter((tool) => tool.state === "error").length,
-      duration: totalSeconds >= 0.1 ? fmtDuration(totalSeconds) : undefined,
       diff: diffs.length ? diffs.reduce<Diff>((sum, tool) => ({ add: sum.add + (tool.diff?.add ?? 0), del: sum.del + (tool.diff?.del ?? 0) }), { add: 0, del: 0 }) : undefined,
     });
     items = [];
@@ -655,6 +664,25 @@ function groupActivities(rows: Row[]): Row[] {
   flush();
   return result;
 }
+
+/** TextView part classes: a calm hierarchy on the 14/22 base (headings only a step above, semibold, tight to what they introduce). */
+const PROSE = {
+  root: "text-[14px] leading-[22px] text-foreground",
+  heading1: "text-[17px] leading-6 font-semibold",
+  heading2: "text-[15px] leading-6 font-semibold",
+  heading3: "text-[14px] leading-[22px] font-semibold",
+  heading4: "text-[14px] leading-[22px] font-semibold",
+  heading5: "text-[14px] leading-[22px] font-semibold text-foreground-secondary",
+  heading6: "text-[14px] leading-[22px] font-semibold text-foreground-secondary",
+  listMarker: "text-[14px] leading-[22px] text-foreground-secondary",
+  table: "border-0",
+  tableScroll: "border-0",
+  tableRow: "border-0",
+  tableCell: "border-0 text-[13px] leading-5",
+  tableHeaderCell: "text-muted-foreground font-medium",
+  tableHead: "bg-card rounded-(--radius)",
+  code: "font-(family-name:--font-code) text-[12.5px] rounded-[6px] bg-card text-foreground",
+};
 
 const RAIL: Record<string, string> = { info: "bg-info", accent: "bg-primary", warning: "bg-warning" };
 
@@ -677,14 +705,13 @@ function RowView(p: { r: () => Row }) {
           }}
         </If>
         <If when={r().kind === "user"}>
-          <UserBand r={r as () => Extract<Row, { kind: "user" }>} />
+          <View class="pt-4 pb-2"><UserBand r={r as () => Extract<Row, { kind: "user" }>} /></View>
         </If>
         <If when={r().kind === "footer"}>
           {() => {
             const f = r() as Extract<Row, { kind: "footer" }>;
             return (
-              <View class={`w-full items-start gap-0.5 pt-3 pb-1 ${TEXT_INDENT}`} testID="turn-footer">
-                <If when={!!f.error}><Text style={{ userSelect: "text" }} class="text-xs leading-4 text-error">{`✕ ${f.error}`}</Text></If>
+              <View class={`w-full items-start pt-1 pr-4 ${TEXT_INDENT}`} testID="turn-footer">
                 <View class="flex-row flex-wrap justify-start items-center">
                   <Each of={f.segments} key={(s, i) => `${i}`}>
                     {(s) => (
@@ -700,25 +727,20 @@ function RowView(p: { r: () => Row }) {
           }}
         </If>
         <If when={r().kind === "handoff"}>
-          <View class="py-1"><HandoffCard r={r as any} /></View>
+          <View class="py-2"><HandoffCard r={r as any} /></View>
         </If>
         <If when={r().kind === "notice" && (r() as any).text.startsWith("→ Background Shell Done:")}>
           {() => <BackgroundShellDone r={r} />}
         </If>
         <If when={r().kind === "notice" && !(r() as any).text.startsWith("→ Background Shell Done:")}>
-          <View class={`relative flex-row rounded-(--radius-card) bg-card py-2.5 my-1 ${CARD_INSET}`} accessible accessibilityLabel={(r() as any).label}>
-            <StatusRail color={RAIL[(r() as any).tone] ?? "bg-info"} />
-            <View class="flex-1 min-w-0 gap-0.5">
-              <Text style={{ userSelect: "text" }} class={`${T.sec}`}>{(r() as any).text}</Text>
-            </View>
-          </View>
+          <NoteLine tone={(r() as any).tone} label={(r() as any).label} text={(r() as any).text} testID="msg-notice" />
         </If>
         <If when={r().kind === "assistant"}>
-          <View class={`py-1.5 ${TEXT_INDENT}`} testID="msg-assistant">
+          <View class={`py-2 pr-4 ${TEXT_INDENT}`} testID="msg-assistant">
             <TextView
               selectable markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
               renderCodeBlock={(block) => <CodeFence block={block} />}
-              classes={{ root: "text-[14px] leading-[22px] text-foreground", code: "font-(family-name:--font-code) text-[12.5px] rounded-(--radius) bg-card text-foreground" }}
+              classes={PROSE}
             />
           </View>
         </If>
@@ -736,7 +758,7 @@ function RowView(p: { r: () => Row }) {
             const c = r() as Extract<Row, { kind: "child" }>;
             const kind = c.tone === "accent" ? "waiting" : c.status === "running" || c.status === "starting…" || c.status === "started" ? "running" : c.status === "failed" ? "error" : "done";
             return (
-              <View class="relative flex-row rounded-(--radius-card) bg-card my-1">
+              <View class="py-2"><View class="relative flex-row rounded-(--radius-card) bg-card">
                 <StatusRail color={RAIL[c.tone] ?? "bg-info"} />
                 <View class={`flex-1 min-w-0 gap-1 py-2 ${CARD_INSET}`}>
                   <Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId}
@@ -754,7 +776,7 @@ function RowView(p: { r: () => Row }) {
                     <Text class={META}>{open(c.key, false) ? "Show less" : c.ack ? "Show start" : "Show result"}</Text>
                   </Button>
                 </View>
-              </View>
+              </View></View>
             );
           }}
         </If>
@@ -762,24 +784,15 @@ function RowView(p: { r: () => Row }) {
           {() => {
             const d = r() as Extract<Row, { kind: "diag" }>;
             return (
-              <View class={`relative flex-row rounded-(--radius-card) bg-card py-2.5 my-1 ${CARD_INSET}`} testID="msg-diag" accessible accessibilityLabel={d.label}>
-                <StatusRail color={RAIL[d.tone] ?? "bg-warning"} />
-                <View class="flex-1 min-w-0 gap-0.5">
-                  <View class="flex-row items-start gap-2">
-                    <Text style={{ userSelect: "text" }} class={`flex-1 min-w-0 ${T.sec}`}>{d.text}</Text>
-                    <If when={(d.count ?? 1) > 1}><Text class={META}>{`×${d.count}`}</Text></If>
-                  </View>
-                  <If when={!!d.detail}><Text class={META}>{d.detail}</Text></If>
-                </View>
-              </View>
+              <NoteLine tone={d.tone} label={d.label} text={d.text} detail={d.detail} count={d.count} testID="msg-diag" />
             );
           }}
         </If>
         <If when={r().kind === "older"}>
           <If when={(r() as any).action === "load-older"} else={<Text class={`${META} py-2 ${TEXT_INDENT}`} testID="timeline-older">{(r() as any).text}</Text>}>
             <View class={`flex-row items-center py-2 ${TEXT_INDENT}`} testID="timeline-older">
-              <Button onPress={() => run("turn.load_older")} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 ${hit("min-h-6")} justify-center hover:bg-accent ${FOCUS}`}>
-                <Text class="text-xs leading-4 text-foreground">Load older messages</Text>
+              <Button onPress={() => run("turn.load_older")} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 -ml-2 ${hit("min-h-6")} justify-center hover:bg-accent ${FOCUS}`}>
+                <Text class="text-[13px] leading-5 text-foreground-secondary">Load older messages</Text>
               </Button>
             </View>
           </If>
@@ -789,15 +802,31 @@ function RowView(p: { r: () => Row }) {
   );
 }
 
+/** One-line diagnostics and notices, as the TUI draws them: a plain row at the text edge, a coloured glyph, muted text, the detail after a dot. */
+function NoteLine(p: { tone: Tone; label: string; text: string; detail?: string; count?: number; testID: string }) {
+  const glyph = p.tone === "error" ? statusGlyphs.error : p.tone === "warning" ? statusGlyphs.interrupted : null;
+  const color = p.tone === "error" ? "text-error" : p.tone === "warning" ? "text-warning" : "text-info";
+  return (
+    <View class={`flex-row items-start gap-2 py-1 pr-4 ${TEXT_INDENT}`} testID={p.testID} accessible accessibilityLabel={p.label}>
+      <Text class={`w-3.5 text-center ${T.sec} ${color}`}>{glyph?.unicode ?? "i"}</Text>
+      <Text style={{ userSelect: "text" }} class={`flex-1 min-w-0 ${T.sec} ${p.tone === "error" ? "text-error" : ""}`}>
+        {p.text}
+        <If when={(p.count ?? 1) > 1}><Text class={META}>{` ×${p.count}`}</Text></If>
+        <If when={!!p.detail && !p.text.includes(p.detail)}><Text class={META}>{` · ${p.detail}`}</Text></If>
+      </Text>
+    </View>
+  );
+}
+
 /** The done notice for a background shell: the command on one line, expandable, in the code face. */
 function BackgroundShellDone(p: { r: () => Row }) {
   const key = () => `shell:${(p.r() as any).key}`;
   const command = () => String((p.r() as any).text).replace(/^→ Background Shell Done:\s*/, "");
   const expanded = () => open(key(), false);
   return (
-    <View class={`py-2 ${TEXT_INDENT}`} testID="background-shell-done">
+    <View class={`py-1 pr-4 ${TEXT_INDENT}`} testID="background-shell-done">
       <Button onPress={() => toggle(key(), false)} accessibilityLabel={`Background shell finished: ${command()}, ${expanded() ? "collapse" : "expand"}`} testID="background-shell-toggle"
-        class={`self-stretch flex-row items-start gap-2 rounded-(--radius) -ml-1 pl-1 pr-4 py-0.5 hover:bg-accent ${FOCUS}`}>
+        class={`self-stretch flex-row items-start gap-2 rounded-(--radius) -ml-1 pl-1 hover:bg-accent ${FOCUS}`}>
         <Text class={`shrink-0 ${T.sec}`}>Background shell finished</Text>
         <Text style={expanded() ? { userSelect: "text" } : { userSelect: "text", numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.mono}`}>{command()}</Text>
       </Button>
@@ -809,9 +838,9 @@ function BackgroundShellDone(p: { r: () => Row }) {
 function CodeFence(p: { block: TextViewCodeBlock }) {
   const code = () => p.block.code;
   return (
-    <View class="w-full my-3 rounded-[10px] bg-card overflow-hidden" testID="code-fence">
+    <View class="w-full my-1 rounded-(--radius-card) bg-card overflow-hidden" testID="code-fence">
       <View class="flex-row items-center h-8 pl-4 pr-2 gap-2">
-        <Text class="flex-1 min-w-0 text-xs leading-4 text-muted-foreground font-mono">{p.block.language ?? ""}</Text>
+        <Text class={`flex-1 min-w-0 ${META} font-(family-name:--font-code)`}>{p.block.language ?? ""}</Text>
         <Button onPress={() => copyText(code(), "Copied code")} accessibilityLabel="Copy code" testID="code-copy"
           class={`flex-row items-center gap-1.5 rounded-(--radius) px-2 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
           <Icon name="copy" size={12} class="tint-muted-foreground" />
@@ -819,8 +848,8 @@ function CodeFence(p: { block: TextViewCodeBlock }) {
         </Button>
       </View>
       <Scroll horizontal>
-        <View class="gap-0 px-4 pb-3.5">
-          {code().split("\n").map((line) => <Text style={{ userSelect: "text" }} class="font-(family-name:--font-code) text-[13px] leading-5 text-foreground">{line || " "}</Text>)}
+        <View class="gap-0 px-4 pb-4">
+          {code().split("\n").map((line) => <Text style={{ userSelect: "text" }} class="font-(family-name:--font-code) text-[12.5px] leading-5 text-foreground">{line || " "}</Text>)}
         </View>
       </Scroll>
     </View>
@@ -844,10 +873,10 @@ function HandoffCard(p: { r: () => Extract<Row, { kind: "handoff" }> }) {
     <View class={`w-full rounded-(--radius-card) bg-raised py-3 gap-1 ${CARD_INSET}`}>
       <Button onPress={open} accessibilityLabel="Show the whole handoff summary" testID="msg-handoff" class={`w-full flex-col items-stretch gap-1 ${FOCUS}`}>
         <View class="flex-row items-center gap-3">
-          <Text class="flex-1 min-w-0 text-[14px] leading-5 font-semibold text-foreground">{`Continued from ${name()}`}</Text>
+          <Text class="flex-1 min-w-0 text-[14px] leading-[22px] font-semibold text-foreground">{`Continued from ${name()}`}</Text>
           <Text class={META}>{`handoff · ${r().time}`}</Text>
         </View>
-        <Text style={{ numberOfLines: 3 }} testID="handoff-preview" class="text-[14px] leading-5 text-foreground">{lines().join("\n")}</Text>
+        <Text style={{ numberOfLines: 3 }} testID="handoff-preview" class="text-[14px] leading-[22px] text-foreground">{lines().join("\n")}</Text>
       </Button>
       <View class="flex-row gap-3">
         <Button onPress={open} class={`${FOCUS}`}><Text class={META}>Show all</Text></Button>
@@ -903,7 +932,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
           <If when={!touch}>
             {/* Hover icons stay out of the flow: over a small backing, hiding the stamp while they show. */}
             <Text class={`${META} pt-[3px] transition-opacity ${focusedBand() === r().key ? "opacity-0" : "group-hover/band:opacity-0"}`}>{meta()}</Text>
-            <View class={`absolute right-3 top-2 flex-row items-center gap-1 rounded-(--radius) bg-raised transition-opacity ${focusedBand() === r().key ? "opacity-100" : "opacity-0 group-hover/band:opacity-100"}`}>
+            <View class={`absolute right-2 top-[7px] flex-row items-center gap-1 rounded-(--radius) bg-raised transition-opacity ${focusedBand() === r().key ? "opacity-100" : "opacity-0 group-hover/band:opacity-100"}`}>
               <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
               <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
             </View>
@@ -1011,7 +1040,6 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
           {() => <Text class={`${META} ml-2`}><Text class="text-success">{`+${r().diff!.add}`}</Text>{" "}<Text class="text-error">{`−${r().diff!.del}`}</Text></Text>}
         </If>
         <If when={r().failed > 0}><Text class={`${META} ml-2`}>{`✕ ${r().failed} failed`}</Text></If>
-        <If when={!!r().duration}><Text class={`${META} ml-2`}>{r().duration!}</Text></If>
       </Button>
       <If when={r().open}>
         <View class="relative pl-4">
@@ -1083,7 +1111,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
         </View>
       </If>
       <If when={x().running || (x().open && !x().encrypted)}>
-        <View class="relative pl-4 py-1">
+        <View class="relative pl-4 pr-4 py-1">
           <View class="absolute left-[7px] top-0 bottom-0 w-px bg-border-strong" />
           <If when={x().running && hidden() > 0}>
             {() => <Text class={META}>{`… ${hidden()} earlier lines`}</Text>}
@@ -1099,7 +1127,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
 
 /** One line of a member's detail output (the hidden-lines marker is shown as the foot instead). */
 function ToolDetail(p: { line: () => ToolDetailLine }) {
-  return <Text style={{ userSelect: "text" }} class={`font-mono text-xs leading-[18px] ${ToolTone(p.line().tone)}`}>{p.line().text}</Text>;
+  return <Text style={{ userSelect: "text" }} class={`font-(family-name:--font-code) text-[12.5px] leading-5 ${ToolTone(p.line().tone)}`}>{p.line().text}</Text>;
 }
 
 function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
@@ -1130,16 +1158,15 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
         <If when={r().state === "waiting"}><Text class="text-[13px] text-primary">waiting</Text></If>
       </View>
       <If when={open()}>
-        <View class="mt-1 mb-1 rounded-(--radius) bg-card overflow-hidden">
-          <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
-            <Text class="text-xs leading-4 font-semibold text-foreground">{verbLabel(r().name)}</Text>
-            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.mono}`}>{r().arg}</Text>
-            <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
+        <View class="mt-1 mb-1 mr-4 rounded-(--radius-card) bg-card overflow-hidden">
+          <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-start gap-2 min-h-8 px-4 pt-1">
+            <Text style={{ userSelect: "text" }} class={`flex-1 min-w-0 ${T.mono} pt-1`}>{r().raw ? "arguments and output" : r().arg}</Text>
+            <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 -mr-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
               <Text class={META}>{r().raw ? "[raw]" : "raw · r"}</Text>
             </Button>
           </View>
           <Scroll class="max-h-[320px]">
-            <View class="px-3 py-2 gap-0.5">
+            <View class={isDiff() ? "pt-1 pb-3" : "px-4 pt-1 pb-4"}>
               <If when={isDiff()} else={
                 <Each of={body()} key={(x, i) => `${i}`}>
                   {(x) => <ToolDetail line={x} />}
@@ -1150,7 +1177,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
             </View>
           </Scroll>
           <If when={r().media.length > 0}>
-            <View class="flex-row flex-wrap gap-3 px-3 pb-2" testID={`tool-media-${r().id}`}>
+            <View class="flex-row flex-wrap gap-4 px-4 pb-4" testID={`tool-media-${r().id}`}>
               <Each of={r().media} key={(x) => x.artifact}>
                 {(x) => <View class="gap-1"><Image src={apiUrl(`/api/artifact/${x().artifact}`)} style={{ width: 320, height: 240, objectFit: "contain" }} accessibilityLabel={x().name || "image"} /><Text class={META}>{x().name || x().mime}</Text></View>}
               </Each>
@@ -1158,19 +1185,19 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
           </If>
           <If when={!!marker()}>
             {() => (
-              <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
+              <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-8 px-4">
                 <Text class={META}>{`↑ ${hidden()} earlier lines`}</Text>
                 <View class="flex-1" />
-                <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-show-all-${r().id}`}>
+                <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 -mr-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-show-all-${r().id}`}>
                   <Text class="text-[13px] leading-5 font-medium text-primary underline">Show all</Text>
                 </Button>
               </View>
             )}
           </If>
           <If when={r().clipped && r().showAll}>
-            <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
+            <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-8 px-4">
               <View class="flex-1" />
-              <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`}>
+              <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 -mr-1 min-h-6 hover:bg-accent ${FOCUS}`}>
                 <Text testID={`tool-show-less-${r().id}`} class={META}>show less o</Text>
               </Button>
             </View>
@@ -1225,13 +1252,15 @@ export function Timeline() {
       </If>
       <StickyBar rows={rows} scrollTo={(offset) => { try { ref?.scrollToOffset({ offset, animated: true }); } catch {} }} />
       <If when={scrolledUp()}>
-        <View class="absolute bottom-2 left-0 right-0 items-center" style={{ pointerEvents: "box-none" }}>
-          <TimelineColumn class="items-end">
-            <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${below()} new`} testID="jump-latest" class={`flex-row items-center gap-1.5 rounded-full bg-popover px-3 min-h-8 shadow-md hover:bg-accent ${FOCUS}`}>
-              <Text class="text-[13px] leading-5 text-foreground-secondary">↓</Text>
-              <Text class="text-[13px] leading-5 text-popover-foreground">{below() > 0 ? `${below()} new` : "latest"}</Text>
-              <Text class={META}>{`· ${keyLabel(byId.get("session.jump_latest")!) ?? "end"}`}</Text>
-            </Button>
+        <View class="absolute bottom-3 left-0 right-0 items-center" style={{ pointerEvents: "box-none" }}>
+          <TimelineColumn>
+            <View class="w-full items-end pr-4">
+              <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${below()} new`} testID="jump-latest" class={`flex-row items-center gap-2 rounded-full bg-popover px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} shadow-md hover:bg-accent ${FOCUS}`}>
+                <Text class="text-[13px] leading-5 text-foreground-secondary">↓</Text>
+                <Text class="text-[13px] leading-5 text-popover-foreground">{below() > 0 ? `${below()} new` : "latest"}</Text>
+                <Text class={META}>{`· ${keyLabel(byId.get("session.jump_latest")!) ?? "end"}`}</Text>
+              </Button>
+            </View>
           </TimelineColumn>
         </View>
       </If>

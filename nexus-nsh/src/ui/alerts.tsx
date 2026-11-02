@@ -6,6 +6,7 @@ import { run, availability, byId, copyText, escape } from "../commands";
 import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, native, openAlert, splitAlert, tick, TOAST_VISIBLE, toasts } from "../store";
 import type { Toast } from "../store";
 import { statusGlyphs } from "../gen/theme";
+import { TEXT_INSET, TimelineColumn } from "./reading-column";
 
 type Level = "info" | "warning" | "error" | "loading";
 interface Alert { key: string; level: Level; text: string; sub?: string; actions: { label: string; cmd?: string; run?: () => void }[]; dismissible: boolean }
@@ -27,7 +28,7 @@ export function currentAlerts(): Alert[] {
     case "starting": out.push({ key: "conn", level: "loading", text: "Starting Nexus Core…", sub: "Running `nexus daemon start`.", actions: [], dismissible: false }); break;
     case "reconnecting": {
       const s = Math.max(0, Math.ceil((c.retryAt - (tick(), Date.now())) / 1000));
-      out.push({ key: "conn", level: "error", text: `Disconnected from Core · reconnecting${s > 0 ? ` in ${s} s` : "…"}`, sub: `${c.reason}. The view is read-only until Core is back.`, actions: [{ label: "Retry now", cmd: "app.reconnect" }], dismissible: false });
+      out.push({ key: "conn", level: "warning", text: `Disconnected from Core · reconnecting${s > 0 ? ` in ${s} s` : "…"}`, sub: `${c.reason}. The view is read-only until Core is back.`, actions: [{ label: "Retry now", cmd: "app.reconnect" }], dismissible: false });
       break;
     }
     case "offline": out.push({
@@ -55,23 +56,36 @@ export function currentAlerts(): Alert[] {
   return out.sort((a, b) => rank[b.level] - rank[a.level]);
 }
 
-/** The banner (D15): one 36 px strip on the panel surface, pushing the timeline down; never over it. */
+/**
+ * The banner (D15): one strip on the panel surface, pushing the timeline down; never over it. Like a toast,
+ * only the glyph carries the level; the words stay in the text colour, so a transient `reconnecting` does not
+ * read as a failure. Its content sits in the reading column, on the same text and right edges as the dock.
+ */
 export function Banners() {
   const all = () => currentAlerts();
   const top = () => all()[0];
   return (
     <If when={top()}>
       {(a) => (
-        <View class="h-9 shrink-0 flex-row items-center gap-2.5 border-b border-border bg-card px-4" role="alert" testID="banner" accessibilityLabel={`${GLYPH[a().level].word}: ${a().text}${a().sub ? `. ${a().sub}` : ""}`}>
-          <Text class={`w-4 text-center text-[13px] leading-5 font-semibold ${GLYPH[a().level].tone}`}>{GLYPH[a().level].g}</Text>
-          <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 text-[13px] leading-5 font-semibold ${GLYPH[a().level].tone}`}>{a().text}</Text>
-          <If when={!isNarrow() && !!a().sub}><Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec}`}>{a().sub!}</Text></If>
-          <If when={isNarrow() || !a().sub}><View class="flex-1" /></If>
-          <If when={all().length > 1}><Text class={T.meta}>{`+${all().length - 1}`}</Text></If>
-          <Each of={a().actions} key={(x) => x.label}>
-            {(x) => <Btn label={x().label} kind="ghost" onPress={() => (x().cmd ? void run(x().cmd!) : x().run?.())} disabled={x().cmd ? !availability(byId.get(x().cmd!)!).ok : false} />}
-          </Each>
-          <If when={a().dismissible}><IconButton icon="x" label="Hide" onPress={() => dismissedBanners.update((l) => [...l, a().key])} testID="banner-hide" /></If>
+        <View class="shrink-0 border-b border-border bg-card" role="alert" testID="banner" accessibilityLabel={`${GLYPH[a().level].word}: ${a().text}${a().sub ? `. ${a().sub}` : ""}`}>
+          <TimelineColumn>
+            <View class={`${TEXT_INSET} ${isNarrow() ? "py-2 gap-2" : "min-h-10 flex-row items-center gap-2.5 py-1"}`}>
+              <View class={`flex-row items-center gap-2.5 ${isNarrow() ? "min-h-6" : "shrink min-w-0"}`}>
+                <Text class={`w-4 text-center text-[13px] leading-5 font-semibold ${GLYPH[a().level].tone}`}>{GLYPH[a().level].g}</Text>
+                <Text style={{ numberOfLines: isNarrow() ? 2 : 1 }} class="flex-1 shrink min-w-0 text-[13px] leading-5 font-semibold text-foreground">{a().text}</Text>
+                <If when={isNarrow() && a().dismissible}><IconButton icon="x" label="Hide" onPress={() => dismissedBanners.update((l) => [...l, a().key])} testID="banner-hide" /></If>
+              </View>
+              <If when={!isNarrow() && !!a().sub}><Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec}`}>{a().sub!}</Text></If>
+              <If when={!isNarrow() && !a().sub}><View class="flex-1" /></If>
+              <If when={!isNarrow() || a().actions.length > 0 || all().length > 1}><View class={`flex-row items-center gap-2 ${isNarrow() ? "justify-end" : ""}`}>
+                <If when={all().length > 1}><Text class={T.meta}>{`+${all().length - 1}`}</Text></If>
+                <Each of={a().actions} key={(x) => x.label}>
+                  {(x) => <Btn label={x().label} onPress={() => (x().cmd ? void run(x().cmd!) : x().run?.())} disabled={x().cmd ? !availability(byId.get(x().cmd!)!).ok : false} />}
+                </Each>
+                <If when={!isNarrow() && a().dismissible}><IconButton icon="x" label="Hide" onPress={() => dismissedBanners.update((l) => [...l, a().key])} testID="banner-hide" /></If>
+              </View></If>
+            </View>
+          </TimelineColumn>
         </View>
       )}
     </If>
@@ -85,7 +99,7 @@ export function Toasts() {
   const shown = () => toasts().slice(0, TOAST_VISIBLE);
   const more = () => Math.max(0, toasts().length - TOAST_VISIBLE);
   return (
-    <View class={`absolute right-3 items-end gap-2 ${isNarrow() ? "left-3" : "w-[360px]"} ${currentAlerts().length > 0 ? "top-12" : "top-3"}`} style={{ pointerEvents: "box-none" }} testID="toasts" accessibilityLabel="Notifications">
+    <View class={`absolute right-3 items-end gap-2 ${isNarrow() ? "left-3" : "w-[360px]"} ${currentAlerts().length > 0 ? "top-14" : "top-3"}`} style={{ pointerEvents: "box-none" }} testID="toasts" accessibilityLabel="Notifications">
       <Each of={shown()} key={(t) => t.id}>{(t) => <ToastCard t={t} />}</Each>
       <If when={more() > 0}><Text testID="toasts-more" class={`${T.meta} rounded-full bg-popover px-2.5 py-0.5`}>{`+${more()} more`}</Text></If>
     </View>

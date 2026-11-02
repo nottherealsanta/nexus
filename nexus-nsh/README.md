@@ -98,7 +98,7 @@ choice list: allow once, allow for session (`scope: "session"`), deny, and deny 
 oldest first, three at most and then `+N more`, with no lifetime hairline. A toast keeps its
 full text on the record; clicking it, or pressing Enter on it, or clicking an entry of the
 notifications drawer opens it in the modal dialog (`c` copies, Esc closes). The banner is a
-36 px strip, and the jump-to-latest pill (`↓ 3 new · ⌘↓`) sits above the composer, right-aligned
+one-line strip on the reading column (it stacks when narrow), where only the glyph carries the level's colour, and the jump-to-latest pill (`↓ 3 new · ⌘↓`) sits above the composer, right-aligned
 with its card. Settings › Notifications › Notification sounds (on by default) plays a rising
 Web Audio cue when a root session and all its subagents have finished, and a higher cue when any session needs
 input; `NEXUS_COMPLETION_SOUNDS=off` silences both.
@@ -140,10 +140,10 @@ The agent (in its colour), model with its muted provider, and effort are compact
 the input starts on the user band's 16 px text edge and the control row ends with dictation
 and send buttons. The location strip is its own row under the controls at every width: the
 muted home-shortened path and branch on the left, a linked worktree adding `⑂`, and the
-context reading (`82k · 41%`) on the right. The activity bar along the dock's foot fills to
-the context used in the agent's colour with a slight glow; while a turn runs it becomes a
-soft pulse a fifth of the width gliding back and forth. Draft context is marked as an estimate.
-While a session runs, a Working row above the dock shimmers the word and shows the elapsed
+context reading (`82k · 41%`) on the right. The activity line along the dock's foot sits on the text edges. While a turn runs it is a
+soft pulse in the agent's colour, a fifth of the width, gliding back and forth. At rest it stays
+hidden until context reaches 80% (warning) or 95% (error). Draft context is marked as an estimate.
+While a session runs, a Working row at the top of the dock shimmers the word and shows the elapsed
 time and output tokens (`Working · 12s · ↓4.1k`) with Stop. Typing `/` opens a completion
 block above the dock (commands, with their key hints); `@` completes project paths from
 Core's file listing. Tab accepts, Enter runs a slash command, Esc closes. Before a session exists, the agent/model/effort pickers and slash commands

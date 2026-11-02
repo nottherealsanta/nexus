@@ -7,7 +7,7 @@ import { width } from "../store";
 
 export const SPLIT_MIN_WIDTH = 1100;
 const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)/;
-const MONO = "font-(family-name:--font-code) text-[13px] leading-5";
+const MONO = "font-(family-name:--font-code) text-[12.5px] leading-5";
 
 export type DiffItem = { kind: "hunk" | "ctx" | "add" | "del"; o?: number; n?: number; text: string };
 
@@ -77,7 +77,7 @@ export function DiffView(p: { lines: () => ToolDetailLine[]; unified?: boolean }
 function Hunk(p: { text: string }) {
   return (
     <View class="h-6 justify-center px-3">
-      <Text style={{ numberOfLines: 1 }} class="font-mono text-xs leading-4 text-muted-foreground">{`⋯ ${p.text}`}</Text>
+      <Text style={{ numberOfLines: 1 }} class="font-(family-name:--font-code) text-xs leading-4 text-muted-foreground">{`⋯ ${p.text}`}</Text>
     </View>
   );
 }
@@ -119,7 +119,7 @@ function SplitView(p: { lines: () => ToolDetailLine[] }) {
 function SplitCell(p: { num: string; text: string; tint?: string; numClass?: string }) {
   return (
     <View class={`flex-1 min-w-0 flex-row ${p.tint ?? ""}`}>
-      <Text class={`w-12 shrink-0 text-right pr-2 font-mono text-xs leading-5 text-muted-foreground ${p.numClass ?? ""}`}>{p.num}</Text>
+      <Text class={`w-12 shrink-0 text-right pr-2 font-(family-name:--font-code) text-[12.5px] leading-5 text-muted-foreground ${p.numClass ?? ""}`}>{p.num}</Text>
       <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 pl-2 pr-2 ${MONO} text-foreground`}>{p.text}</Text>
     </View>
   );
@@ -149,8 +149,8 @@ function UnifiedView(p: { lines: () => ToolDetailLine[] }) {
           const newNo = it.kind === "del" ? undefined : it.n;
           return (
             <View class={`flex-row min-h-5 ${tint}`}>
-              <Text class="w-12 shrink-0 text-right pr-2 font-mono text-xs leading-5 text-muted-foreground">{num(oldNo)}</Text>
-              <Text class="w-12 shrink-0 text-right pr-2 font-mono text-xs leading-5 text-muted-foreground">{num(newNo)}</Text>
+              <Text class="w-12 shrink-0 text-right pr-2 font-(family-name:--font-code) text-[12.5px] leading-5 text-muted-foreground">{num(oldNo)}</Text>
+              <Text class="w-12 shrink-0 text-right pr-2 font-(family-name:--font-code) text-[12.5px] leading-5 text-muted-foreground">{num(newNo)}</Text>
               <Text class={`w-5 text-center ${MONO} ${signClass}`}>{sign}</Text>
               <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 pr-2 ${MONO} ${textClass}`}>{it.text}</Text>
             </View>
