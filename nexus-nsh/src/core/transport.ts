@@ -67,6 +67,17 @@ function authHeaders(headers: Record<string, string>) {
   } catch {}
   return headers;
 }
+/**
+ * A WebSocket URL on Core for `path`. On the web the host proxy adds the daemon's token; natively the token from
+ * daemon.json goes only to a loopback Core, as for requests.
+ */
+export async function socketUrl(path: string, query: Record<string, string> = {}): Promise<string> {
+  await ensureAuth();
+  const origin = base || (globalThis as unknown as { location?: { origin: string } }).location?.origin || "";
+  const params = new URLSearchParams(query);
+  if (base && daemon && loopbackBase() && authHeaders({}).authorization) params.set("token", daemon.token);
+  return `${origin.replace(/^http/, "ws")}${path}?${params}`;
+}
 /** A Core URL outside `request`/`eventStream` (an image the platform fetches itself). */
 export const apiUrl = (path: string) => base + path;
 

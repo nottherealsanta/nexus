@@ -20,7 +20,13 @@ for deliberate changes from old Nexus.
 - One timeline: the "timeline" (or "context line"), which is what the user sees
   as a session in the UIs, reflects the agent's context. Everything the model
   receives is shown in order, and the UI shows nothing the model does not have.
-  Presenting context well is a core idea of Nexus.
+  Presenting context well is a core idea of Nexus. **Exception: the Manager**
+  ([docs/manager.md](docs/manager.md)). Its own context (hidden episodes, the state
+  snapshot and deltas it is given each turn) has no timeline; the user sees its
+  stage (orb, caption, one card) and the full log only in the inspector. The rule
+  still holds for every session the Manager touches: whatever it sends or answers
+  shows there, labelled `via Manager`, and what a card shows is what the Manager
+  asked to show. Do not add a Manager timeline or chat view.
 - Task tools (`nexus-core/nexus/tools/`) act on the workspace. Changes to Nexus state
   (session, workspace, worktree, model) belong to the control plane, never a task
   tool; the model reaches control only through exposed control tools.
@@ -64,3 +70,4 @@ change as the code.
 | Session inspector web page | [docs/inspector.md](docs/inspector.md) |
 | HTTP API and event stream | [docs/api.md](docs/api.md) |
 | Daemon, projects, sessions, turns, approvals | [docs/daemon.md](docs/daemon.md) |
+| The Manager (voice agent above all sessions): hidden sessions, tools, authority, cards, navigation | [docs/manager.md](docs/manager.md) |

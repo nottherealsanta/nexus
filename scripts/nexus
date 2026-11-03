@@ -17,8 +17,8 @@
 #   nexus ps                  Core daemon status only
 #   nexus logs                follow the Core daemon log
 #   nexus check               tests, lints and shared-file checks
-#   nexus test                Core and TUI tests
-#   nexus fmt                 format the TUI and regenerate shared files
+#   nexus test                Core, TUI and shared Mermaid tests
+#   nexus fmt                 format the TUI and Mermaid crates and regenerate shared files
 #   nexus doctor              versions and paths, then Core's checks (daemon code, sign-ins, ...)
 #   nexus update              check for a newer release (never installs)
 #   nexus core <args>         run the Core CLI (login, chat, session, ...)
@@ -41,6 +41,8 @@ ROOT="$(cd "$(dirname "$source_file")/.." && pwd)"
 CORE="$ROOT/nexus-core"
 TUI="$ROOT/nexus-tui"
 NSH="$ROOT/nexus-nsh"
+MERMAID="$ROOT/nexus-mermaid"
+ANNOTATE="$ROOT/nexus-annotate"
 HOME_DIR="${NEXUS10_HOME:-$HOME/.nexus}"
 
 die() { printf 'nexus: %s\n' "$*" >&2; exit 1; }
@@ -260,6 +262,10 @@ check_all() {
   (cd "$CORE" && uv run ${CORE_EXTRA[@]+"${CORE_EXTRA[@]}"} pytest -q && uv run ${CORE_EXTRA[@]+"${CORE_EXTRA[@]}"} ruff check nexus tests)
   printf '› TUI tests and lints\n'
   (cd "$TUI" && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check)
+  printf '› Shared Mermaid tests and lints\n'
+  (cd "$MERMAID" && cargo test --all-features && cargo clippy --all-features --all-targets -- -D warnings && cargo fmt --check)
+  printf '› Shared annotation tests and lints\n'
+  (cd "$ANNOTATE" && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check)
   printf '› Shared interface checks\n'
   (cd "$ROOT" && python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml && python3 interface/check_manifest.py)
   printf '› NSH checks\n'
@@ -273,12 +279,18 @@ test_all() {
   (cd "$CORE" && uv run ${CORE_EXTRA[@]+"${CORE_EXTRA[@]}"} pytest -q)
   printf '› TUI tests\n'
   (cd "$TUI" && cargo test)
+  printf '› Shared Mermaid tests\n'
+  (cd "$MERMAID" && cargo test --all-features)
+  printf '› Shared annotation tests\n'
+  (cd "$ANNOTATE" && cargo test)
 }
 
 fmt_all() {
   ensure_cargo
   ensure_npm
   (cd "$TUI" && cargo fmt)
+  (cd "$MERMAID" && cargo fmt)
+  (cd "$ANNOTATE" && cargo fmt)
   (cd "$NSH" && npm run gen)
 }
 

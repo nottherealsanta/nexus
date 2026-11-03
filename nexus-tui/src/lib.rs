@@ -9,6 +9,7 @@
 //! `render` (drawing) and `term` (terminal hygiene).
 
 pub mod actions;
+pub mod annotate;
 pub mod api;
 pub mod app;
 pub mod code_editor;
@@ -22,10 +23,13 @@ pub mod frames;
 pub mod images;
 pub mod keys;
 pub mod layout;
+pub mod live;
+pub mod manager;
 pub mod manifest;
 pub mod markdown;
 pub mod mermaid;
-pub mod mermaid_text;
+pub mod orb;
+pub use nexus_mermaid::text as mermaid_text;
 pub mod paint;
 pub mod prefs;
 pub mod program_status;
@@ -34,6 +38,7 @@ pub mod render;
 pub mod selection;
 pub mod speech;
 pub mod splash;
+pub mod stage;
 pub mod state;
 pub mod stats;
 pub mod sticky;

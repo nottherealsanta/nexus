@@ -25,16 +25,29 @@ not break filtering, and a descendant created during catch-up is included.
 Numeric gaps are normal on a filtered stream and never mean loss; only
 `bus.overflow` (an explicit continuity outcome) does.
 
+**Hidden sessions.** Events of a Manager episode (`Session.kind == "manager"`) stay in the log but are
+dropped from every stream except one filtered to that episode's own id.
+
 **Invalid cursors.** Malformed text, another generation, a cursor ahead of the
 head, and (later, with retention) history below the log floor raise
 `CursorError` with an actionable resync payload before any stream is opened.
 This increment does not expire history: the floor stays 0.
+
+**Stream identity.** Every opened `Stream` gets a fresh, unguessable
+`stream_id`. It is the identity of that one event-stream subscriber, not of a
+client process: reconnecting opens a new stream and a new id. The HTTP layer
+reports it in `server.connected` and uses it to keep ephemeral per-client state
+separate, then drops that state when the stream closes. `add_close_listener`
+registers cleanup that runs exactly once, whether the client disconnects, the
+generator is closed, or the response is cancelled before its body starts.
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
-from collections.abc import AsyncIterator
+import secrets
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from .bus import Bus, Subscription
@@ -43,6 +56,7 @@ from .store import Store
 REPLAY_PAGE = 500
 CURSOR_MAX = 128
 _CURSOR = re.compile(r"\A([A-Za-z0-9_]+):(0|[1-9][0-9]*)\Z")
+log = logging.getLogger(__name__)
 
 
 def format_cursor(generation: str, event_id: int) -> str:
@@ -168,6 +182,8 @@ class Stream:
                  filter: SessionFilter | None) -> None:
         self.store = store
         self.subscription = subscription
+        # This subscriber's identity for ephemeral state; a reconnect is a new stream.
+        self.stream_id = f"stream_{secrets.token_urlsafe(18)}"
         self.generation = subscription.generation
         self.head = subscription.head
         # No cursor means "start now": the boundary is the head read when the subscription opened.
@@ -177,6 +193,7 @@ class Stream:
         self.replayed = 0
         self.replay_pages = 0
         self._closed = False
+        self._close_listeners: list[Callable[[Stream], None]] = []
         self._pin = store.pin_events(after + 1, subscription.head) if after < subscription.head else None
 
     @classmethod
@@ -193,6 +210,20 @@ class Stream:
             if self._pin is not None:
                 self.store.unpin_events(self._pin)
                 self._pin = None
+            listeners, self._close_listeners = self._close_listeners, []
+            for listener in listeners:
+                try:
+                    listener(self)
+                except Exception:
+                    # One broken cleanup must not strand the others.
+                    log.exception("event stream close listener failed")
+
+    def add_close_listener(self, listener: Callable[[Stream], None]) -> None:
+        """Run `listener` once on close; immediately when the stream is already closed."""
+        if self._closed:
+            listener(self)
+        else:
+            self._close_listeners.append(listener)
 
     async def events(self) -> AsyncIterator[dict[str, Any]]:
         try:
@@ -229,6 +260,11 @@ class Stream:
             self.close()
 
     def _keep(self, event: dict[str, Any]) -> bool:
+        session_id = event.get("session_id")
+        if self.store.is_hidden(session_id) and (self.filter is None or self.filter.root_id != session_id):
+            # A Manager episode is hidden: its events are in the durable log for the inspector, which asks for the
+            # episode by id, but no other stream (a client's rail included) ever carries them.
+            return False
         if self.filter is None:
             return True
         self.filter.observe(event)

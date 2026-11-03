@@ -33,7 +33,7 @@ are in docs/api.md.
 | POST | /api/project | `{path, name?}` → the project at that path (created if new) |
 | GET/PATCH/DELETE | /api/project/{id} | one project; PATCH `{name}` |
 | GET | /api/project/{id}/worktrees | the project checkout's worktrees, before any session exists |
-| GET | /api/project/{id}/mcp | this project's `.mcp.json`: file, revision, error, warnings and server rows |
+| GET | /api/project/{id}/mcp | this project's MCP files (.mcp.json, .agents/mcp.json): files, duplicates, revision, error, warnings and server rows |
 | GET | /api/project/{id}/mcp/{name} | one project server, plus `tool_names` and `log`; never connects |
 | POST | /api/project/{id}/mcp/{name}/restart | close and reconnect a project server |
 | GET | /api/session | `?project=`, `?directory=` or `?parent=`; `?archived=` exclude/only/include |
@@ -66,6 +66,19 @@ are in docs/api.md.
 | GET | /api/session/{id}/question | pending questions for that session |
 | POST | /api/session/{id}/question/{qid} | `{answers: [...]}` → 204; 400 invalid, 404 unknown, 409 already resolved |
 | GET | /inspector | the session inspector page (static; it reads the API with the token from its URL fragment) |
+| POST | /api/client/view | ephemeral view per open event stream: `{stream_id, client_id, project, session, panel}`; there is no read route |
+| GET | /api/manager | the Manager: `{enabled, mode, model, call}`; restores a call after a reconnect |
+| GET | /api/manager/episode | the Manager's own past conversations, newest first, so the inspector can open one by id |
+| GET | /api/manager/audit | what the Manager did on the user's words: `?limit=&tool=` |
+| POST | /api/manager/start | `{stream_id, client_id}` → start or move the Manager call (409 `manager_disabled`) |
+| POST | /api/manager/consent | `{accept, version}` → the provider privacy notice acknowledged or revoked (`GET /api/manager` carries it) |
+| POST | /api/voice/speak | `{session_id}` as before, or `{stream_id, text}`: one Manager sentence as a streamed WAV (holder only, redacted, 1200 characters at most) |
+| POST | /api/manager/stop | `{stream_id}` → end the call; never stops a session |
+| POST | /api/manager/say | `{stream_id, text, source}` → 202 `{turn_id}`; the answer arrives as `manager.*` events |
+| POST | /api/manager/cancel | `{stream_id}` → barge-in: mute speech, cancel the turn if nothing had side effects |
+| POST | /api/manager/activity | `{stream_id, listening, speaking}` → 204 |
+| POST | /api/manager/card/dismiss | `{stream_id, card_id}` → 204 |
+| POST | /api/manager/navigate/result | `{stream_id, request_id, ok, reason?}` → 204 |
 | GET | /api/event | server-sent events; `?session=` filters to that session and its descendants; `?cursor=` or `Last-Event-ID` replays from a durable cursor |
 """
 from __future__ import annotations
@@ -74,8 +87,10 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
@@ -89,7 +104,8 @@ from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
+from starlette.websockets import WebSocket
 
 from . import agents as agents_module
 from . import export
@@ -107,6 +123,9 @@ from .llmhub.auth import SIGN_INS, ApiKeyAuth, AuthError, CredentialError
 from .llmhub.hub import connected
 from .llmhub.providers import PROVIDERS
 from .llmhub.types import ProviderError
+from .manager.consent import NOTICE_VERSION
+from .manager.redact import redact
+from .manager.service import LIVE_CONSENT_REF, Forbidden
 from .mcp import manager as mcp_manager
 from .oneshot import OneshotError
 from .paths import home
@@ -120,6 +139,7 @@ from .voice.model import VoiceError
 from .voice.speech import SpeechError, SpeechService, final_answer
 
 VERSION = "0.10.0.dev0"
+MAX_SPEAK_CHARS = 1200  # one Manager sentence is at most 400; this leaves room for a coalesced line
 # The HTTP API contract clients check before sending anything else. A change
 # that a client written for an older major cannot survive is a new major; new
 # fields and endpoints are a minor bump.
@@ -297,11 +317,99 @@ def sse(event: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+_VIEW_TEXT = re.compile(r"\A[\x21-\x7e]{1,128}\Z")
+
+
+def _view_text(value: Any, name: str, *, required: bool = False) -> str | None:
+    """A short opaque view id, or `None` for an empty optional field."""
+    if value is None or value == "":
+        if required:
+            raise ValueError(f"{name} is required")
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string or null")
+    if not _VIEW_TEXT.match(value):
+        raise ValueError(f"{name} must be 1-128 printable ASCII characters without spaces")
+    return value
+
+
+class ClientViews:
+    """Ephemeral views reported by clients, one per open event stream.
+
+    The key is the stream id issued in `server.connected`, never `client_id`:
+    two windows can share a client id, and a reconnect is a new subscriber.
+    Closing the stream drops only its view. Nothing here is durable, published
+    as an event, or exposed through a read route. An in-process Manager may
+    inspect `views()` but must decide which client holds the call itself.
+    """
+
+    def __init__(self) -> None:
+        self._streams: set[str] = set()
+        self._views: dict[str, dict[str, Any]] = {}
+        self._detach_listeners: list[Callable[[str], None]] = []
+        self._sequence = 0
+
+    def attach(self, stream: Stream) -> None:
+        self._streams.add(stream.stream_id)
+        stream.add_close_listener(self._detach)
+
+    def _detach(self, stream: Stream) -> None:
+        self._streams.discard(stream.stream_id)
+        self._views.pop(stream.stream_id, None)
+        for listener in list(self._detach_listeners):
+            try:
+                listener(stream.stream_id)
+            except Exception:
+                logging.getLogger(__name__).exception("client view close listener failed")
+
+    def on_detach(self, listener: Callable[[str], None]) -> None:
+        """Call ``listener(stream_id)`` when any stream closes (the Manager ends a call this way)."""
+        self._detach_listeners.append(listener)
+
+    def has_stream(self, stream_id: str) -> bool:
+        return stream_id in self._streams
+
+    def view_for(self, stream_id: str) -> dict[str, Any] | None:
+        """One stream's view, for the in-process Manager. The HTTP API has no read route for it."""
+        view = self._views.get(stream_id)
+        return self._public(view) if view is not None else None
+
+    def report(self, stream_id: str, client_id: str, *, project: str | None,
+               session: str | None, panel: str | None) -> dict[str, Any]:
+        if stream_id not in self._streams:
+            raise Conflict(
+                "the event stream for this view is not connected; "
+                "reconnect and report its new stream_id",
+                code="stream_closed")
+        previous = self._views.get(stream_id)
+        if previous is not None and previous["client_id"] != client_id:
+            raise Conflict(
+                "this event stream is already bound to another client; "
+                "open a new event stream and report from it",
+                code="client_mismatch")
+        self._sequence += 1
+        view = {"stream_id": stream_id, "client_id": client_id, "project": project,
+                "session": session, "panel": panel, "updated": time.time(),
+                "_sequence": self._sequence}
+        self._views[stream_id] = view
+        return self._public(view)
+
+    @staticmethod
+    def _public(view: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in view.items() if not key.startswith("_")}
+
+    def views(self) -> list[dict[str, Any]]:
+        return [self._public(view) for view in sorted(
+            self._views.values(), key=lambda view: view["_sequence"])]
+
+
 def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceManager | None = None) -> Starlette:
     config = ConfigFile()
     code_fingerprint = source_fingerprint()  # what `nexus doctor` compares with the checkout
     config_lock = asyncio.Lock()
     config_revision = config.read()["revision"]
+    client_views = ClientViews()
+    runtime.manager.attach_views(client_views)
 
     async def config_api(request: Request) -> Response:
         nonlocal config_revision
@@ -396,8 +504,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         if provider in login_tasks and not login_tasks[provider].done():
             raise Busy(f"{provider} sign-in already running")
         method = body.get("method", "device" if "device" in auth.methods else auth.methods[0])
-        if method not in auth.methods or method == "browser":
-            raise ValueError("API sign-in supports device, api_key or local methods")
+        if method not in auth.methods:
+            raise ValueError(f"{provider} sign-in methods are {', '.join(auth.methods)}")
         if method == "api_key":
             key = body.get("api_key")
             if not isinstance(key, str):
@@ -415,17 +523,36 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
 
         def notify(message: str) -> None:
             state["message"] = message
-            # Device flows say "Open <url> and enter code <code>"; clients show both on the provider's row.
+            # Device flows say "Open <url> and enter code <code>"; browser flows
+            # say "Open <url> to sign in to ChatGPT.". Clients show both parts.
             found = re.search(r"Open (https?://\S+) and enter code (\S+)", message)
             if found:
                 state["verification_uri"], state["user_code"] = found.group(1), found.group(2)
+            else:
+                found = re.search(r"(https?://\S+)", message)
+                if found:
+                    state["verification_uri"] = found.group(1).rstrip(".,;")
             runtime.bus.publish("provider.login", dict(state))
+
+        def handoff(url: str) -> bool:
+            # The daemon never launches a browser: the client opens the URL.
+            notify(f"Open {url} to sign in to ChatGPT.")
+            return True
 
         async def run() -> None:
             try:
-                await auth.login(method, notify=notify)
+                if method == "browser":
+                    await auth.login(method, notify=notify, browser_open=handoff)
+                else:
+                    await auth.login(method, notify=notify)
             except asyncio.CancelledError:
                 raise
+            except AuthError as exc:
+                state.update(status="failed", message=str(exc), verification_uri=None, user_code=None)
+            except OSError:
+                state.update(status="failed", verification_uri=None, user_code=None,
+                             message=("Port 1455 is in use; try the device code." if method == "browser"
+                                      else "Sign-in failed; retry or use the local login command."))
             except Exception:  # noqa: BLE001 - never leak provider failures or credentials
                 state.update(status="failed", message="Sign-in failed; retry or use the local login command.",
                              verification_uri=None, user_code=None)
@@ -440,6 +567,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         async def inner(request: Request) -> Response:
             try:
                 return await handler(request)
+            except Forbidden as exc:
+                return JSONResponse({"error": str(exc), "code": "not_holder"}, status_code=403)
             except (NotFound, InputNotFound) as exc:
                 return _error(404, str(exc))
             except (Busy, InputBusy) as exc:
@@ -545,12 +674,14 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         })
 
     def sign_in(provider: str) -> dict[str, Any]:
-        """How a client connects this provider: its methods (no `browser`: that needs a local terminal) and, for a
-        pasted key, where to get one, its variable and whether the key in use is stored or from the environment."""
+        """How a client connects this provider: its methods and, for a pasted key,
+        where to get one, its variable and whether the key in use is stored or
+        from the environment. `browser` is a local loopback flow: the daemon
+        starts the callback server and hands the URL to the client to open."""
         kind = SIGN_INS.get(provider)
         if kind is None:
             return {"methods": []}
-        out: dict[str, Any] = {"methods": [m for m in kind.methods if m != "browser"]}
+        out: dict[str, Any] = {"methods": list(kind.methods)}
         if issubclass(kind, ApiKeyAuth):
             out |= {"key_hint": kind.hint, "key_env": kind.env, "key_source": kind().key_source()}
         return out
@@ -729,10 +860,29 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
 
     async def voice_speak(request: Request) -> Response:
         body = await _body(request)
-        sid = str(body.get("session_id", ""))
-        runtime.session(sid)
+        manager_text = "session_id" not in body and "text" in body
+        if manager_text:
+            # The Manager's sentences: holder only, redacted, bounded. Waits briefly for the previous sentence
+            # to finish instead of answering 409, so a client may ask for the next one while one still plays.
+            runtime.manager.require_holder(_view_text(body.get("stream_id"), "stream_id") or "")
+            text = body.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("text must be a non-empty string")
+            text = redact(text).strip()
+            if len(text) > MAX_SPEAK_CHARS:
+                return JSONResponse({"error": f"text is {len(text)} characters; the limit is {MAX_SPEAK_CHARS}",
+                                     "code": "speech_text_too_long"}, status_code=422)
+            for _ in range(200):
+                if not speech.busy:
+                    break
+                runtime.manager.require_holder(body["stream_id"])
+                await asyncio.sleep(0.05)
+        else:
+            sid = str(body.get("session_id", ""))
+            runtime.session(sid)
         try:
-            text = final_answer(runtime.store, sid)
+            if not manager_text:
+                text = final_answer(runtime.store, sid)
             repo = config.read()["values"]["speech"]["tts_model"]
             stream = await speech.speak(text, repo)
         except SpeechError as exc:
@@ -1316,6 +1466,126 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             return Response(status_code=204)
         return JSONResponse(runtime.kernels.get(kid).json())
 
+    async def client_view(request: Request) -> Response:
+        body = await _body(request)
+        stream_id = _view_text(body.get("stream_id"), "stream_id", required=True)
+        client_id = _view_text(body.get("client_id"), "client_id", required=True)
+        project_id = _view_text(body.get("project"), "project")
+        session_id = _view_text(body.get("session"), "session")
+        panel = _view_text(body.get("panel"), "panel")
+        if project_id is not None:
+            project = runtime.project(project_id)
+        else:
+            project = None
+        if session_id is not None:
+            session = runtime.session(session_id)
+            if project is not None and session.project_id != project.id:
+                raise ValueError("session does not belong to project")
+            project_id = session.project_id
+        view = client_views.report(
+            stream_id, client_id, project=project_id, session=session_id, panel=panel)
+        # Do not echo the capability that authorized this report.
+        view.pop("stream_id", None)
+        return JSONResponse(view, headers={"cache-control": "no-store"})
+
+    async def manager_status(request: Request) -> Response:
+        return JSONResponse(runtime.manager.status(), headers={"cache-control": "no-store"})
+
+    async def manager_episodes(request: Request) -> Response:
+        return JSONResponse([{"id": s.id, "created": s.created, "updated": s.updated, "continued_from": s.continued_from,
+                              "model": s.model} for s in runtime.manager.episodes()])
+
+    async def manager_audit(request: Request) -> Response:
+        try:
+            limit = max(1, min(500, int(request.query_params.get("limit", "100"))))
+        except ValueError:
+            raise ValueError("limit must be an integer") from None
+        return JSONResponse(runtime.store.audit(limit=limit, tool=request.query_params.get("tool") or None))
+
+    async def manager_start(request: Request) -> Response:
+        body = await _body(request)
+        stream_id = _view_text(body.get("stream_id"), "stream_id", required=True)
+        client_id = _view_text(body.get("client_id"), "client_id", required=True)
+        return JSONResponse(await runtime.manager.start(stream_id or "", client_id or ""),
+                            headers={"cache-control": "no-store"})
+
+    async def manager_stop(request: Request) -> Response:
+        body = await _body(request)
+        await runtime.manager.stop(_view_text(body.get("stream_id"), "stream_id", required=True) or "")
+        return Response(status_code=204)
+
+    async def manager_say(request: Request) -> Response:
+        body = await _body(request)
+        result = runtime.manager.say(_view_text(body.get("stream_id"), "stream_id", required=True) or "",
+                                     body.get("text"), body.get("source"))
+        return JSONResponse(result, status_code=202)
+
+    async def manager_cancel(request: Request) -> Response:
+        body = await _body(request)
+        result = await runtime.manager.cancel(_view_text(body.get("stream_id"), "stream_id", required=True) or "")
+        result["speech_stopped"] = speech.stop()  # barge-in: the sentence being synthesised stops too
+        return JSONResponse(result)
+
+    async def manager_consent(request: Request) -> Response:
+        body = await _body(request)
+        accept = body.get("accept")
+        if not isinstance(accept, bool):
+            raise TypeError("accept must be a boolean")
+        shown = body.get("version")
+        if accept and shown != NOTICE_VERSION:
+            raise ValueError(f"version must be the notice version being acknowledged ({NOTICE_VERSION})")
+        provider = body.get("provider")
+        if provider is not None and provider != "codex":
+            raise ValueError("provider must be omitted (the Manager's model) or \"codex\" (GPT-Live)")
+        ref = LIVE_CONSENT_REF if provider == "codex" else runtime.manager.settings()["model"]
+        return JSONResponse(runtime.manager.consent.set(ref, accept))
+
+    async def manager_live_start(request: Request) -> Response:
+        body = await _body(request)
+        return JSONResponse(await runtime.manager.live_start(
+            _view_text(body.get("stream_id"), "stream_id", required=True) or ""),
+            headers={"cache-control": "no-store"})
+
+    async def manager_live_audio(websocket: WebSocket) -> None:
+        """Raw call audio: binary frames of PCM16 mono 24 kHz both ways. Holder only; the token and the stream id
+        are query parameters because a browser cannot set headers on a WebSocket."""
+        if token and not hmac.compare_digest(websocket.query_params.get("token", ""), token):
+            await websocket.close(code=4401)
+            return
+        try:
+            voice = runtime.manager.live_voice(websocket.query_params.get("stream_id", ""))
+        except Forbidden:
+            await websocket.close(code=4403)
+            return
+        await websocket.accept()
+        await voice.attach_client(websocket)
+
+    async def manager_activity(request: Request) -> Response:
+        body = await _body(request)
+        listening, speaking = body.get("listening"), body.get("speaking")
+        if not isinstance(listening, bool) or not isinstance(speaking, bool):
+            raise TypeError("listening and speaking must be booleans")
+        runtime.manager.activity(_view_text(body.get("stream_id"), "stream_id", required=True) or "",
+                                 listening, speaking)
+        return Response(status_code=204)
+
+    async def manager_card_dismiss(request: Request) -> Response:
+        body = await _body(request)
+        card_id = _view_text(body.get("card_id"), "card_id", required=True) or ""
+        runtime.manager.dismiss_card(_view_text(body.get("stream_id"), "stream_id", required=True) or "", card_id)
+        return Response(status_code=204)  # a stale card id (an older card) changes nothing
+
+    async def manager_navigate_result(request: Request) -> Response:
+        body = await _body(request)
+        ok, reason = body.get("ok"), body.get("reason")
+        if not isinstance(ok, bool) or not (reason is None or isinstance(reason, str)):
+            raise TypeError("ok must be a boolean and reason a string")
+        request_id = _view_text(body.get("request_id"), "request_id", required=True) or ""
+        runtime.manager.navigate_result(
+            _view_text(body.get("stream_id"), "stream_id", required=True) or "", request_id, ok,
+            reason[:300] if reason else None)
+        return Response(status_code=204)  # an unknown or late request id is ignored
+
     async def events(request: Request) -> Response:
         only = request.query_params.get("session") or None
         if only is not None:
@@ -1328,10 +1598,12 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         after = parse_cursor(supplied, generation=generation, head=store.log_head(), floor=store.log_floor()) \
             if supplied is not None else None
         stream = Stream.open(store, runtime.bus, after=after, session_id=only)
+        client_views.attach(stream)  # dropped by the stream's close listener on disconnect
         connected = {
             "version": VERSION, "generation": stream.generation, "head": stream.head,
             "head_cursor": format_cursor(stream.generation, stream.head),
             "resumed_from": after, "session": only, "floor": store.log_floor(),
+            "stream_id": stream.stream_id,
         }
 
         async def body() -> AsyncIterator[str]:
@@ -1433,6 +1705,20 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/session/{id}/permission/{pid}", route(permission_reply), methods=["POST"]),
         Route("/api/session/{id}/question", route(questions)),
         Route("/api/session/{id}/question/{qid}", route(question_reply), methods=["POST"]),
+        Route("/api/client/view", route(client_view), methods=["POST"]),
+        Route("/api/manager", route(manager_status)),
+        Route("/api/manager/episode", route(manager_episodes)),
+        Route("/api/manager/audit", route(manager_audit)),
+        Route("/api/manager/consent", route(manager_consent), methods=["POST"]),
+        Route("/api/manager/start", route(manager_start), methods=["POST"]),
+        Route("/api/manager/stop", route(manager_stop), methods=["POST"]),
+        Route("/api/manager/live/start", route(manager_live_start), methods=["POST"]),
+        WebSocketRoute("/api/manager/live/audio", manager_live_audio),
+        Route("/api/manager/say", route(manager_say), methods=["POST"]),
+        Route("/api/manager/cancel", route(manager_cancel), methods=["POST"]),
+        Route("/api/manager/activity", route(manager_activity), methods=["POST"]),
+        Route("/api/manager/card/dismiss", route(manager_card_dismiss), methods=["POST"]),
+        Route("/api/manager/navigate/result", route(manager_navigate_result), methods=["POST"]),
         Route("/api/event", route(events)),
     ]
 
@@ -1453,7 +1739,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             await voice.close()
             await runtime.shutdown()
 
-    return Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(GZipMiddleware)])
+    app = Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(GZipMiddleware)])
+    # Raw per-stream registry for the future Manager; it does not choose a call holder.
+    app.state.client_views = client_views
+    return app
 
 
 def make_runtime(store: Store | None = None) -> Runtime:

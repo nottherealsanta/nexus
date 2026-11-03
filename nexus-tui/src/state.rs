@@ -281,7 +281,7 @@ impl AppState {
             },
             // The TUI owns this view-only inventory cache; it is applied in
             // `App::apply_sync`, alongside the rest of the UI state.
-            SyncMsg::SkillMcp { .. } => {}
+            SyncMsg::SkillMcp { .. } | SyncMsg::Manager { .. } => {}
             SyncMsg::Files {
                 project,
                 session,

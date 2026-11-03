@@ -22,6 +22,7 @@ doc and the code disagree, the code wins: fix the doc.
 | [development.md](development.md) | uv, tests, ruff, repo layout, docs rules |
 | [agents.md](agents.md) | Agent files: frontmatter, where they load from, session snapshots and `AGENTS.md` |
 | [inspector.md](inspector.md) | The session inspector web page: four levels of detail down to raw events |
+| [manager.md](manager.md) | The Manager: a voice agent above all sessions; hidden episodes, tools, authority guards, retrieval, cards, navigation, the scripted model |
 | [api.md](api.md) | The HTTP API every surface speaks, and its event stream |
 | [daemon.md](daemon.md) | The daemon, projects, sessions, turns, approvals, questions, crash recovery, session archiving, the CLI as a client |
 
@@ -44,7 +45,7 @@ doc and the code disagree, the code wins: fix the doc.
 | MCP servers, `mcp_tool_search`/`mcp_call`, untrusted-data fencing | [mcp.md](mcp.md) |
 | Voice models, dictation, speech downloads or TTS playback | [voice.md](voice.md), [api.md](api.md) |
 | The patch format | [tools.md](tools.md) |
-| Read-before-edit observations, stale or partial reads, edit/overwrite coverage | [tools.md](tools.md#read-observations-and-freshness) |
+| File mutation lock, how `edit`, `patch` and `write` act on a file (no read-before-edit guard) | [tools.md](tools.md#file-mutations) |
 | On-demand workspace tools, moving a session's directory, Git worktrees | [tools.md](tools.md#workspace-control-tools-on-demand), [api.md](api.md#workspace-controls) |
 | Steps, max steps, approval callback, tool errors | [loop.md](loop.md) |
 | Running tests, lint, uv, repo layout | [development.md](development.md) |
@@ -57,4 +58,5 @@ doc and the code disagree, the code wins: fix the doc.
 | Reconnecting a client, durable event ids, cursors, replay and overflow | [api.md](api.md#event-stream), [daemon.md](daemon.md#durable-event-log) |
 | A daemon restart, interrupted turns, partial output, lost kernels or jobs after a crash | [daemon.md](daemon.md#crash-recovery), [api.md](api.md#crash-recovery) |
 | An endpoint, the event stream, a new client | [api.md](api.md) |
+| The Manager (hidden sessions, its tools and guards, finding sessions, cards, moving the user's screen) | [manager.md](manager.md), [api.md](api.md#the-manager) |
 | Starting or finding the daemon, projects, sessions, storage, interrupts | [daemon.md](daemon.md) |

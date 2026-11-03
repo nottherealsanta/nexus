@@ -8,7 +8,7 @@ import { ApiError, request } from "../core/transport";
 import { attention as attentionGlyph, statusGlyphs } from "../gen/theme";
 import { escape } from "../commands";
 import { currentProject, m, model, scopeAll, selectSession, switcherOpen, tick } from "../store";
-import { FOCUS, T, TONE, relTime } from "./kit";
+import { FOCUS, Spinner, T, TONE, relTime } from "./kit";
 import { Modal, ModalFooter, ModalTitle } from "./modal";
 import { attention } from "./sidebar";
 
@@ -26,18 +26,18 @@ function switchState(id: string) {
   m();
   const session = model.sessions.get(id);
   if (model.running.has(id) || session?.status === "busy") {
-    return { glyph: statusGlyphs.running.unicode, tone: TONE[statusGlyphs.running.token], label: "running" };
+    return { glyph: statusGlyphs.running.unicode, tone: TONE[statusGlyphs.running.token], label: "running", spin: true };
   }
   if (model.failedSessions.has(id) || session?.status === "failed") {
-    return { glyph: "\u25cf", tone: "text-error", label: "failed" };
+    return { glyph: "\u25cf", tone: "text-error", label: "failed", spin: false };
   }
   if (attention(id) === "waiting") {
-    return { glyph: attentionGlyph.waiting.unicode, tone: TONE[attentionGlyph.waiting.token], label: "waiting" };
+    return { glyph: attentionGlyph.waiting.unicode, tone: TONE[attentionGlyph.waiting.token], label: "waiting", spin: false };
   }
   if (model.unreadSessions.has(id)) {
-    return { glyph: attentionGlyph.unread.unicode, tone: TONE[attentionGlyph.unread.token], label: "unread" };
+    return { glyph: attentionGlyph.unread.unicode, tone: TONE[attentionGlyph.unread.token], label: "unread", spin: false };
   }
-  return { glyph: "\u00b7", tone: "text-muted-foreground", label: "idle" };
+  return { glyph: "\u00b7", tone: "text-muted-foreground", label: "idle", spin: false };
 }
 
 type Hit = { session_id: string; snippet: string };
@@ -148,8 +148,10 @@ function SessionSwitcherBody() {
                       accessibilityLabel={`${row().title}, ${state().label}`} testID={`switch-session-${row().id}`}
                       class={`group/row relative rounded-(--radius) px-3 py-0.5 min-h-8 justify-center hover:bg-accent ${idx() === clamp(i()) ? "bg-selection" : ""} ${FOCUS}`}>
                       <View class="flex-row items-center gap-2">
-                        <Text testID={`switch-glyph-${row().id}`} accessibilityLabel={state().label}
-                          class={`w-3.5 shrink-0 text-center text-[13px] leading-5 ${state().tone}`}>{state().glyph}</Text>
+                        <If when={state().spin} else={<Text testID={`switch-glyph-${row().id}`} accessibilityLabel={state().label}
+                          class={`w-3.5 shrink-0 text-center text-[13px] leading-5 ${state().tone}`}>{state().glyph}</Text>}>
+                          <Spinner testID={`switch-glyph-${row().id}`} class={`w-3.5 shrink-0 text-center text-[13px] leading-5 ${state().tone}`} label={state().label} />
+                        </If>
                         <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[13px] leading-5 ${row().message ? "text-muted-foreground" : "text-popover-foreground"}`}>{row().title}</Text>
                         <If when={!!row().hint}>
                           <Text style={{ numberOfLines: 1 }} class={`${T.meta} shrink-0 max-w-[190px]`}>{row().hint}</Text>

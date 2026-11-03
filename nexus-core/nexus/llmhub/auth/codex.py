@@ -18,6 +18,7 @@ import secrets
 import time
 import webbrowser
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -121,10 +122,15 @@ class CodexAuth:
             self.store.write(ENTRY, {"refresh_token": token["refresh_token"], "account_id": account, "residency": residency})
         self._access = None
 
-    async def login(self, method: str = "browser", notify: Callable[[str], None] = print) -> None:
-        await (self.device_login(notify) if method == "device" else self.browser_login(notify))
+    async def login(self, method: str = "browser", notify: Callable[[str], None] = print,
+                    browser_open: Callable[[str], bool] | None = None) -> None:
+        await (self.device_login(notify) if method == "device" else self.browser_login(notify, browser_open))
 
-    async def browser_login(self, notify: Callable[[str], None] = print) -> None:
+    async def browser_login(self, notify: Callable[[str], None] = print,
+                            browser_open: Callable[[str], bool] | None = None) -> None:
+        """PKCE in the browser. `browser_open` opens the sign-in page; a caller
+        that cannot open a browser itself (the daemon) hands the URL to the
+        client through `notify` and returns True."""
         verifier = secrets.token_urlsafe(48)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         state = secrets.token_urlsafe(32)
@@ -136,14 +142,19 @@ class CodexAuth:
                 parsed = urlsplit(parts[1] if len(parts) >= 2 and parts[0] == "GET" else "")
                 query = parse_qs(parsed.query)
                 code = query.get("code", [""])[0]
-                ok = parsed.path == "/auth/callback" and bool(code) and hmac.compare_digest(query.get("state", [""])[0], state)
+                error = query.get("error", [""])[0]
+                ok = parsed.path == "/auth/callback" and bool(code) and not error and hmac.compare_digest(query.get("state", [""])[0], state)
                 if parsed.path == "/auth/callback" and not result.done():
-                    result.set_result(code) if ok else result.set_exception(AuthError("codex: login was denied or invalid"))
-                page = f"<html><body><p>{html.escape('Login complete. Return to Nexus.' if ok else 'Login failed.')}</p></body></html>".encode()
-                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: " + str(len(page)).encode() + b"\r\n\r\n" + page)
+                    result.set_result(code) if ok else result.set_exception(
+                        AuthError(f"codex: login was denied ({error})" if error else "codex: login was denied or invalid"))
+                message = "Login complete. Return to Nexus." if ok else "Login failed. Return to Nexus."
+                page = f"<html><body><p>{html.escape(message)}</p></body></html>".encode()
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: " + str(len(page)).encode() + b"\r\n\r\n" + page)
                 await writer.drain()
             finally:
                 writer.close()
+                with suppress(ConnectionError):
+                    await writer.wait_closed()
 
         server = await asyncio.start_server(callback, host="127.0.0.1", port=1455)
         try:
@@ -153,10 +164,8 @@ class CodexAuth:
                 "id_token_add_organizations": "true", "codex_cli_simplified_flow": "true", "originator": "nexus",
             })
             url = f"{ISSUER}/oauth/authorize?{params}"
-            if not webbrowser.open(url):
-                notify(f"Open this URL in a browser:\n{url}")
-            else:
-                notify("Opened the browser for ChatGPT login…")
+            if not (browser_open or webbrowser.open)(url):
+                notify(f"Open {url} to sign in to ChatGPT.")
             code = await asyncio.wait_for(result, timeout=300)
         except TimeoutError as exc:
             raise AuthError("codex: browser login timed out") from exc
@@ -176,7 +185,9 @@ class CodexAuth:
             interval = max(1.0, float(data.get("interval") or 5))
             deadline = time.time() + 900
             while time.time() < deadline:
-                await asyncio.sleep(interval)
+                # Ask slightly less often than the server allows, so polling
+                # never trips `slow_down` when requests bunch up.
+                await asyncio.sleep(interval + 3)
                 poll = await client.post(f"{ISSUER}/api/accounts/deviceauth/token", json={"device_auth_id": device_id, "user_code": code})
                 if poll.status_code in (403, 404):
                     continue

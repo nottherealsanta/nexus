@@ -624,6 +624,32 @@ async def test_project_servers_start_automatically_in_new_sessions(env):
     assert "HI" in results[0]
     await rt.shutdown()
 
+
+async def test_both_project_files_are_reported_and_the_standard_file_wins_a_duplicate(env):
+    rt, client, _provider, workspace, _home = env
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    (workspace / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"shared": entry(), "standard": entry()}}), encoding="utf-8")
+    (workspace / ".agents").mkdir()
+    (workspace / ".agents" / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"shared": entry(args=[FIXTURE, "--agents"]), "agents": entry()}}),
+        encoding="utf-8")
+
+    summary = (await client.get(f"/api/project/{project['id']}/mcp")).json()
+    assert {state["name"] for state in summary["files"]} == {".mcp.json", ".agents/mcp.json"}
+    assert all(state["exists"] for state in summary["files"])
+    assert summary["duplicates"] == [
+        {"server": "shared", "used": ".mcp.json", "ignored": ".agents/mcp.json"}]
+    assert any("server 'shared' is defined in both" in warning for warning in summary["warnings"])
+    rows = {row["server"]: row for row in summary["servers"]}
+    assert set(rows) == {"shared", "standard", "agents"}
+    assert rows["shared"]["file"] == str(workspace / ".mcp.json")
+    assert rows["shared"]["duplicate"] == summary["duplicates"][0]
+    assert any("defined in both" in warning for warning in rows["shared"]["warnings"])
+    assert rows["agents"]["file"] == str(workspace / ".agents" / "mcp.json")
+    await rt.shutdown()
+
+
 async def test_global_config_change_is_reloaded_by_the_next_session(env):
     rt, client, _provider, workspace, home = env
     write_config(home)

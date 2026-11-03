@@ -25,7 +25,10 @@ pub const PANEL_MARGIN_Y: u16 = 2;
 pub const WIDE_FROM: u16 = 160;
 pub const MIN_CENTRE: u16 = 40;
 /// The project rail, always left of the sidebar: initials per project.
-pub const RAIL_WIDTH: u16 = 6;
+/// Cells of the header's Manager button (a space each side of the word).
+pub const MANAGER_BUTTON: u16 = 10;
+
+pub const RAIL_WIDTH: u16 = 5;
 /// Below this many columns there is no room for the rail beside the page.
 pub const RAIL_FROM: u16 = 70;
 /// The left sidebar's drag bounds; a drag below `RAIL_SNAP` closes it, leaving
@@ -97,6 +100,8 @@ pub struct Regions {
     pub toggle_left: Rect,
     pub toggle_right: Rect,
     pub bell: Rect,
+    /// The header's Manager button, left of the right toggle (and the bell).
+    pub manager: Rect,
     pub title: Rect,
 }
 
@@ -272,10 +277,20 @@ impl Regions {
             4.min(header.width),
             header.height,
         );
-        let bell = r(
-            toggle_right.x.saturating_sub(6),
+        // [ title ] [ bell ] [ Manager ] [ toggle ]: the Manager button sits against the toggle, and the bell
+        // (only with unread notices) moves left of it. Too narrow to fit beside a title: no button.
+        let wide = header.width >= 60;
+        let manager = r(
+            toggle_right.x.saturating_sub(MANAGER_BUTTON),
             header.y,
-            6.min(toggle_right.x.saturating_sub(header.x)),
+            if wide { MANAGER_BUTTON } else { 0 },
+            header.height,
+        );
+        let bell_right = if wide { manager.x } else { toggle_right.x };
+        let bell = r(
+            bell_right.saturating_sub(6),
+            header.y,
+            6.min(bell_right.saturating_sub(header.x)),
             header.height,
         );
         let title = r(
@@ -303,6 +318,7 @@ impl Regions {
             toggle_left,
             toggle_right,
             bell,
+            manager,
             title,
         }
     }

@@ -140,6 +140,7 @@ fn stream() -> Vec<SyncMsg> {
             role: "user".into(),
             parts: vec![json!({"type": "text", "text": "older context"})],
             delivery: None,
+            origin: None,
         }],
         messages_more: false,
         ..Default::default()
@@ -1027,6 +1028,7 @@ fn history_merge_and_replacement_show_new_text() {
             role: "assistant".into(),
             parts: vec![json!({"type": "text", "text": "merged after history"})],
             delivery: None,
+            origin: None,
         }],
         ..Default::default()
     };

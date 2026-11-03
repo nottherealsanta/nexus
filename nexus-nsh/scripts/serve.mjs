@@ -129,9 +129,27 @@ const server = http.createServer((req, res) => {
     if (!res.headersSent) json(res, 500, { error: "host error" }); else res.destroy();
   }
 });
+// WebSockets: the Manager's call audio only (the rest of the API is plain HTTP). The browser cannot hold the daemon's
+// token, so the host adds it, as it does for `proxyApi`. With a dev `--upstream`, any path goes to that upstream instead.
+const AUDIO_SOCKET = "/api/manager/live/audio";
 server.on("upgrade", (req, socket, head) => {
-  if (!upstream || !allowedHosts.has(req.headers.host ?? "") || !allowedHosts.has(originHost(req.headers.origin ?? "")) || !req.url?.startsWith("/") || req.url.startsWith("//")) return socket.destroy();
-  const out = http.request({ host: upstream.hostname, port: upstream.port, path: req.url, headers: { ...req.headers, host: upstream.host, origin: upstream.origin } });
+  if (!allowedHosts.has(req.headers.host ?? "") || !allowedHosts.has(originHost(req.headers.origin ?? "")) || !req.url?.startsWith("/") || req.url.startsWith("//")) return socket.destroy();
+  let target;
+  const headers = { ...req.headers };
+  for (const k of ["authorization", "cookie", "referer"]) delete headers[k];
+  if (upstream) {
+    target = { host: upstream.hostname, port: upstream.port, path: req.url };
+    Object.assign(headers, { host: upstream.host, origin: upstream.origin });
+  } else {
+    const d = daemonInfo();
+    const { pathname, searchParams } = new URL(req.url, "http://x");
+    if (!d || pathname !== AUDIO_SOCKET) return socket.destroy();
+    const origin = new URL(d.url);
+    if (d.token) searchParams.set("token", d.token);
+    target = { host: origin.hostname, port: origin.port, path: `${pathname}?${searchParams}` };
+    Object.assign(headers, { host: origin.host, origin: origin.origin });
+  }
+  const out = http.request({ ...target, headers });
   out.on("upgrade", (res, peer, extra) => {
     socket.write(`HTTP/1.1 ${res.statusCode} ${res.statusMessage}\r\n${res.rawHeaders.reduce((s, h, i) => s + (i % 2 ? `${h}\r\n` : `${h}: `), "")}\r\n`);
     if (head.length) peer.write(head);

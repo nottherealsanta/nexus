@@ -8,15 +8,13 @@ bounded, and any clipping is stated in the output itself.
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import Any, Self
 
 from ..llmhub.types import Media, ToolSpec
-
-if TYPE_CHECKING:
-    from ..observations import FileGuard
 
 MAX_OUTPUT_CHARS = 30_000
 
@@ -41,7 +39,7 @@ class ToolOutput(str):
 class ToolContext:
     workspace: Path
     call_id: str | None = None  # the model's tool call id, for tools that record it
-    files: FileGuard | None = None  # the session's read observations; None outside a session
+    file_lock: asyncio.Lock | None = None  # serializes file mutations; None outside a session
     model_visible: bool = True  # False for calls retained inside a code kernel
     cwd_changed: bool = False  # the session moved; report absolute paths and bash's cwd
     save_media: Callable[[bytes, str, str], str] | None = None  # (bytes, mime, name) -> artifact id; None outside a session
@@ -74,10 +72,3 @@ def clip(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
     tail = text[-limit // 2 :]
     return f"{head}\n[… clipped {len(text) - limit} of {len(text)} characters …]\n{tail}"
 
-
-def line_span(text: str, start: int, end: int) -> tuple[int, int]:
-    """The 1-based lines an original `text[start:end]` touches, matching read's line numbers."""
-    prefix = text[:start]
-    first = len(prefix.splitlines()) + (1 if start == 0 or prefix.endswith(("\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")) else 0)
-    last = len(text[:end].splitlines())
-    return max(1, first), max(1, last)

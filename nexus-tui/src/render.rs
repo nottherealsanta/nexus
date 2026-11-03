@@ -105,10 +105,26 @@ fn short_home(path: &str) -> String {
 
 /// Draw one frame and rebuild the hit map from it.
 pub fn render(frame: &mut Frame, app: &mut App) {
+    render_frame(frame, app);
+    // Every way out of the modal ends here: its pictures and pixel mouse go too.
+    let annotating = matches!(
+        app.ui.overlay,
+        Some(Overlay {
+            kind: OverlayKind::Annotate(_),
+            ..
+        })
+    );
+    if !annotating {
+        app.annotate_live.borrow_mut().teardown();
+    }
+}
+
+fn render_frame(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     app.size = (area.width, area.height);
     let now = std::time::Instant::now();
     observe_splash(app, now);
+    app.manager_frame(now);
     if matches!(
         app.ui.splash.phase(app.ui.splash.frame(now), area.width),
         crate::splash::Phase::Loading | crate::splash::Phase::Flash
@@ -159,7 +175,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             draw_left(
                 &cx,
                 buf,
-                Rect::new(l.x, l.y, l.width.saturating_sub(1), l.height),
+                Rect::new(
+                    l.x + u16::from(regions.rail.is_some()),
+                    l.y,
+                    l.width
+                        .saturating_sub(1 + u16::from(regions.rail.is_some())),
+                    l.height,
+                ),
                 &mut hits,
             );
             let ex = l.right().saturating_sub(1);
@@ -182,7 +204,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         }
         if let Some(rail) = regions.rail {
             draw_rail(&cx, buf, rail, &mut hits);
-            draw_sidebar_edge(&cx, buf, rail.right().saturating_sub(1), rail);
+            if let Some(left) = regions.left {
+                for y in left.y..left.bottom() {
+                    put(
+                        buf,
+                        left.x,
+                        y,
+                        cx.t.structure("rail"),
+                        cx.st("border.default", SIDEBAR),
+                        1,
+                    );
+                }
+            }
         }
         if let Some(r) = regions.right {
             draw_right(
@@ -226,9 +259,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 rail.height,
             );
             draw_rail_popup(&cx, buf, rail, limit);
-        }
-        if let Some(l) = regions.left {
-            draw_tab_tooltip(&cx, buf, l, area);
         }
         if a.ui.view == View::Settings {
             draw_settings(&cx, buf, area, &mut hits);
@@ -303,6 +333,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         } else if let Some((title, body)) = a.blocking() {
             draw_dialog(&cx, buf, area, &title, &body, None, &mut hits);
         }
+        // The Manager's orb, caption and card are painted over everything else.
+        crate::stage::draw(a, buf, area, regions.composer, &mut hits);
     }
     // The splash wipes into the first live frame: cells right of the curtain
     // still show the splash.
@@ -550,6 +582,12 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
     if app.ui.dialog.is_some() || app.blocking().is_some() {
         return None;
     }
+    // The Manager's typed field takes the caret while it is open.
+    if app.ui.manager.field.is_some() {
+        if let Some((x, y)) = app.ui.manager.cursor.get() {
+            return Some(Position::new(x, y));
+        }
+    }
     if let (Some(edit), true, None, View::Session) = (
         &app.ui.file_edit,
         app.ui.file_open,
@@ -604,9 +642,10 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
     if app.ui.focus != Focus::Composer || !app.writable() {
         return None;
     }
-    let inner = composer_inner(
+    let inner = composer_inner_with(
         composer_without_pending(g.composer, app.pending_inputs().len()),
         app.composer_ref().images.len(),
+        app.composer_ref().pastes().len(),
     );
     let (rows, (cr, cc)) = app.composer_view().layout(inner.width as usize);
     let input_height = inner.height as usize;
@@ -662,7 +701,13 @@ pub(crate) fn visible_first(total: usize, cursor_row: usize, h: usize) -> usize 
 /// The text area: inside the card (inset two cells from the column), three
 /// cells in and two rows down, below the top padding row.
 pub(crate) fn composer_inner(r: Rect, images: usize) -> Rect {
-    let r = composer_card(composer_content(r), images);
+    composer_inner_with(r, images, 0)
+}
+
+/// As `composer_inner`, also clearing the collapsed-paste cards above the
+/// thumbnails; the mouse path must pass the draft's paste count to line up.
+pub(crate) fn composer_inner_with(r: Rect, images: usize, pastes: usize) -> Rect {
+    let r = composer_card(composer_content(r), images, pastes);
     Rect::new(
         r.x + 5,
         r.y + 2,
@@ -713,7 +758,7 @@ fn composer_content(r: Rect) -> Rect {
 
 /// Rows the composer's attachment strip needs above the card: each thumbnail
 /// is a square with its muted name on the row above, and each collapsed paste
-/// is a title row and a snippet row with one row of air below.
+/// is a title row (`Pasted text · N lines · Show`) over a clipped first line.
 fn composer_image_rows(width: u16, images: usize) -> u16 {
     if images == 0 {
         return 0;
@@ -728,8 +773,16 @@ fn composer_image_rows(width: u16, images: usize) -> u16 {
     (lines * (1 + crate::images::COMPOSER_THUMB_ROWS)) as u16
 }
 
-fn composer_card(r: Rect, images: usize) -> Rect {
-    let offset = composer_image_rows(r.width, images).min(r.height.saturating_sub(7));
+fn composer_paste_rows(pastes: usize) -> u16 {
+    (pastes as u16) * 2
+}
+
+fn composer_strip_rows(width: u16, images: usize, pastes: usize) -> u16 {
+    composer_paste_rows(pastes) + composer_image_rows(width, images)
+}
+
+fn composer_card(r: Rect, images: usize, pastes: usize) -> Rect {
+    let offset = composer_strip_rows(r.width, images, pastes).min(r.height.saturating_sub(7));
     Rect::new(r.x, r.y + offset, r.width, r.height - offset)
 }
 
@@ -745,7 +798,11 @@ fn heights(app: &App, w: u16) -> Heights {
             } else {
                 app.pending_inputs().len().min(4) as u16 + 2
             }
-            + composer_image_rows(w, app.composer_ref().images.len()),
+            + composer_strip_rows(
+                w,
+                app.composer_ref().images.len(),
+                app.composer_ref().pastes().len(),
+            ),
     );
     Heights {
         banner,
@@ -821,7 +878,7 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
                     );
                 }
                 let x = if g.rail.is_some() {
-                    rect.x + rect.width.saturating_sub(2) / 2
+                    rect.x + rect.width.saturating_sub(gw) / 2
                 } else {
                     rect.x + 1
                 };
@@ -866,6 +923,20 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         .filter(|l| l.width.saturating_sub(1) > crate::layout::RAIL_WIDTH)
     {
         draw_tab_icons(cx, buf, l, hits);
+    }
+
+    // The Manager button, left of the right toggle: the Manager's own session in the inspector.
+    if g.manager.width > 0 {
+        let label = " Manager ";
+        let live = cx.app.ui.manager.call.is_some();
+        let style = if live {
+            cx.st("status.info", SIDEBAR)
+        } else {
+            cx.st(SECONDARY, SIDEBAR)
+        };
+        let x = g.manager.x + g.manager.width.saturating_sub(width(label) as u16);
+        put(buf, x, g.manager.y, label, style, g.manager.width);
+        hits.add(g.manager, Target::ManagerSession);
     }
 
     // bell: only with unread notices
@@ -1039,8 +1110,11 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
     // The room: leave the `+` and the status.
     let avail = (tr.width as usize).saturating_sub(status_w + 4);
     let cell = |t: &Tab, max: usize| 5 + title_w(t, max) + usize::from(t.id.is_some()) * 2;
+    // One width for every tab — roots, children and New session — so the strip
+    // keeps the same rhythm whatever the titles say.
+    let tab_width = |tabs: &[Tab], max: usize| tabs.iter().map(|t| cell(t, max)).max().unwrap_or(0);
     let mut max_title = 28usize;
-    let total = |tabs: &[Tab], max: usize| tabs.iter().map(|t| cell(t, max) + 1).sum::<usize>();
+    let total = |tabs: &[Tab], max: usize| tabs.len() * (tab_width(tabs, max) + 1);
     while max_title > 8 && total(&tabs, max_title) > avail {
         max_title -= 2;
     }
@@ -1059,8 +1133,8 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
     if dropped_left {
         x = put(buf, x, tr.y, cx.ell(), cx.st(MUTED, SIDEBAR), 1) + 1;
     }
+    let w = tab_width(&tabs, max_title) as u16;
     for t in &tabs {
-        let w = cell(t, max_title) as u16;
         if x + w > tr.right() {
             break;
         }
@@ -1073,7 +1147,10 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
             let (g, gs) = session_glyph(cx, id, bg);
             cx_x = put(buf, cx_x, tr.y, &g, gs, 1) + 1;
         }
-        let parts = shown(t, max_title);
+        let title_max = max_title
+            .min(w.saturating_sub(5 + u16::from(t.id.is_some()) * 2) as usize)
+            .max(6);
+        let parts = shown(t, title_max);
         let last = parts.len() - 1;
         if let (Some(i), Some(_)) = (t.index, &t.id) {
             hits.add(rect, Target::SessionTab(i));
@@ -1204,40 +1281,126 @@ fn header_status(cx: &Cx) -> Option<(String, Style)> {
 // banner and toasts
 // ============================================================================
 
-/// The subagent line under the tabs, shown only while a subagent is viewed:
-/// `{Agent} {title}` with the agent's colour. A root session has no such line.
-fn draw_subagents(cx: &Cx, buf: &mut Buffer, r: Rect, _hits: &mut HitMap) {
+/// The subagent strip under the tabs (shown only while a child is viewed): the
+/// path above it as equal parent tabs, a rail, then the root's other sessions
+/// as equal tabs with their state glyph and agent. The viewed child is the one
+/// selected tab, so its title appears there and not again beside the strip.
+fn draw_subagents(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     if r.height == 0 {
         return;
     }
     let a = cx.app;
-    let Some(s) = a.viewed_id().and_then(|id| a.state.model.sessions.get(id)) else {
+    let Some(viewed) = a.viewed_id() else {
         return;
     };
+    let chain = a.ancestors_of(viewed);
+    if chain.len() < 2 {
+        return;
+    }
+    let root = chain[0];
+    let mut ancestors: Vec<&crate::api::Session> = chain[..chain.len() - 1].to_vec();
+    let mut children: Vec<&crate::api::Session> = a.subagents_of(&root.id);
+    let above: Vec<&str> = ancestors.iter().map(|s| s.id.as_str()).collect();
+    children.retain(|s| !above.contains(&s.id.as_str()));
+    if children.is_empty() {
+        children.push(chain[chain.len() - 1]);
+    }
+    let title_w = |s: &&crate::api::Session| width(&s.title).min(28);
+    let natural = |s: &&crate::api::Session, child: bool| {
+        if child {
+            4 + width(&crate::text::capitalize(&s.agent)) + title_w(s)
+        } else {
+            title_w(s)
+        }
+    };
+    let widest = ancestors
+        .iter()
+        .map(|s| natural(s, false))
+        .chain(children.iter().map(|s| natural(s, true)))
+        .max()
+        .unwrap_or(10);
+    let mut cell = (widest + 2).clamp(10, 30) as u16;
+    let total = |cell: u16, count: usize| count as u16 * (cell + 1) + 2;
+    let room = r.width.saturating_sub(3);
+    let mut dropped_left = false;
+    while total(cell, ancestors.len() + children.len()) + if dropped_left { 2 } else { 0 } > room {
+        if ancestors.len() > 1 {
+            ancestors.remove(0);
+            dropped_left = true;
+        } else if children.len() > 1 {
+            // Drop the tab farthest from the viewed child so it keeps its selected tab.
+            let at = children
+                .iter()
+                .position(|s| s.id.as_str() == viewed)
+                .unwrap_or(0);
+            if at + 1 < children.len() {
+                children.remove(children.len() - 1);
+            } else {
+                children.remove(0);
+            }
+        } else if cell > 8 {
+            cell -= 1;
+        } else {
+            break;
+        }
+    }
     let row = Rect::new(r.x, r.y, r.width, 1);
     clear(buf, row, cx.st(MUTED, CANVAS));
-    let agent = crate::text::capitalize(&s.agent);
-    let x = put(
-        buf,
-        r.x + 1,
-        r.y,
-        &agent,
-        cx.st(PRIMARY, CANVAS).patch(cx.t.agent_style(&s.agent)),
-        row.width.saturating_sub(1),
-    );
-    let title = truncate(
-        &s.title,
-        (row.right().saturating_sub(x + 1)) as usize,
-        cx.ell(),
-    );
-    put(
-        buf,
-        x + 1,
-        r.y,
-        &title,
-        cx.st(SECONDARY, CANVAS),
-        row.right().saturating_sub(x + 1),
-    );
+    let mut x = r.x + 1;
+    if dropped_left {
+        x = put(buf, x, r.y, cx.ell(), cx.st(MUTED, CANVAS), 1) + 1;
+    }
+    for s in &ancestors {
+        if x + cell > row.right() {
+            return;
+        }
+        let rect = Rect::new(x, r.y, cell, 1);
+        let hot = cx.hovered(rect);
+        let bg = if hot { RAISED } else { CANVAS };
+        clear(buf, rect, cx.st(SECONDARY, bg));
+        put(
+            buf,
+            x + 1,
+            r.y,
+            &truncate(&s.title, cell.saturating_sub(2) as usize, cx.ell()),
+            cx.st(if hot { PRIMARY } else { SECONDARY }, bg),
+            cell.saturating_sub(1),
+        );
+        hits.add(rect, Target::Subagent(s.id.clone()));
+        x += cell + 1;
+    }
+    x = put(buf, x, r.y, cx.t.structure("rail"), cx.st(MUTED, CANVAS), 1) + 1;
+    for s in &children {
+        if x + cell > row.right() {
+            break;
+        }
+        let open = s.id.as_str() == viewed;
+        let rect = Rect::new(x, r.y, cell, 1);
+        let bg = if open { RAISED } else { CANVAS };
+        let base = cx.st(if open { PRIMARY } else { SECONDARY }, bg);
+        clear(buf, rect, base);
+        let (glyph, style) = session_glyph(cx, &s.id, bg);
+        let mut tx = put(buf, x + 1, r.y, &glyph, style, 1) + 1;
+        let agent = crate::text::capitalize(&s.agent);
+        tx = put(
+            buf,
+            tx,
+            r.y,
+            &agent,
+            cx.st(PRIMARY, bg).patch(cx.t.agent_style(&s.agent)),
+            rect.right().saturating_sub(tx),
+        ) + 1;
+        put(
+            buf,
+            tx,
+            r.y,
+            &truncate(&s.title, rect.right().saturating_sub(tx) as usize, cx.ell()),
+            base,
+            rect.right().saturating_sub(tx),
+        );
+        hits.add(rect, Target::Subagent(s.id.clone()));
+        x += cell + 1;
+    }
 }
 
 fn draw_banner(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
@@ -1553,8 +1716,7 @@ fn draw_left(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     }
 }
 
-/// The sidebar tab icons, in manifest order: a row at the top of the full
-/// sidebar, or a column at the top of the rail. Labels show on hover.
+/// The sidebar tabs, in manifest order.
 fn tab_icons(cx: &Cx, r: Rect) -> Vec<(Tab, Rect, String, &'static str)> {
     let rail = r.width <= crate::layout::RAIL_WIDTH;
     let mut out = Vec::new();
@@ -1582,11 +1744,15 @@ fn tab_icons(cx: &Cx, r: Rect) -> Vec<(Tab, Rect, String, &'static str)> {
         let rect = if rail {
             Rect::new(r.x, r.y + 1 + i, r.width, 1)
         } else {
-            // in the header band, over the docked sidebar
-            Rect::new(r.x + 3 + i * 3, r.y.saturating_sub(1), 3, 1)
+            Rect::new(
+                r.x + 4 + i * 11,
+                r.y.saturating_sub(1),
+                if i == 0 { 10 } else { 7 },
+                1,
+            )
         };
         let rect = if !rail && cx.app.narrow() {
-            Rect::new(r.x + 1 + i * 4, r.y, 3, 1)
+            Rect::new(r.x + 3 + i * 11, r.y, if i == 0 { 10 } else { 7 }, 1)
         } else {
             rect
         };
@@ -1599,7 +1765,7 @@ fn tab_icons(cx: &Cx, r: Rect) -> Vec<(Tab, Rect, String, &'static str)> {
 
 fn draw_tab_icons(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let a = cx.app;
-    for (tab, rect, _, glyph) in tab_icons(cx, r) {
+    for (tab, rect, _, _) in tab_icons(cx, r) {
         let active = a.ui.tab == tab;
         let mut style = if active {
             cx.st(PRIMARY, SIDEBAR)
@@ -1612,40 +1778,17 @@ fn draw_tab_icons(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         if active || cx.hovered(rect) {
             clear(buf, rect, style);
         }
-        let g = cx.t.sidebar_glyph(glyph);
-        let gx = rect.x + rect.width.saturating_sub(width(g) as u16) / 2;
-        put(buf, gx, rect.y, g, style, rect.width);
+        let label = match tab {
+            Tab::Sessions => "[Sessions]",
+            Tab::Projects => "[Projects]",
+            Tab::Files => "[Files]",
+        };
+        put(buf, rect.x, rect.y, label, style, rect.width);
         if active && cx.t.mono() {
             buf.set_style(rect, Style::default().add_modifier(Modifier::UNDERLINED));
         }
         hits.add(rect, Target::Tab(tab));
     }
-}
-
-/// The hovered tab icon's word label, drawn on top of everything.
-fn draw_tab_tooltip(cx: &Cx, buf: &mut Buffer, r: Rect, limit: Rect) {
-    let Some((_, rect, label, _)) = tab_icons(cx, r)
-        .into_iter()
-        .find(|(_, rect, _, _)| cx.hovered(*rect))
-    else {
-        return;
-    };
-    let w = width(&label) as u16 + 2;
-    let (x, y) = if r.width <= crate::layout::RAIL_WIDTH {
-        (rect.right(), rect.y)
-    } else {
-        (rect.x, rect.y + 1)
-    };
-    let tip = Rect::new(x, y, w, 1).intersection(limit);
-    clear(buf, tip, cx.st(PRIMARY, RAISED));
-    put(
-        buf,
-        tip.x + 1,
-        tip.y,
-        &label,
-        cx.st(PRIMARY, RAISED),
-        tip.width.saturating_sub(1),
-    );
 }
 
 /// One rail entry: a project, the add-project control, or Settings while the
@@ -1664,7 +1807,7 @@ fn rail_layout(cx: &Cx, r: Rect) -> Vec<(RailItem, Rect)> {
     let a = cx.app;
     let entries = a.rail_project_ids();
     let settings = !a.ui.left_open;
-    let room = r.height.saturating_sub(3 + u16::from(settings));
+    let room = r.height.saturating_sub(4 + if settings { 4 } else { 0 });
     let shown = (room / RAIL_ITEM) as usize;
     // The current project stays in view when the rail overflows.
     let current = a
@@ -1673,7 +1816,7 @@ fn rail_layout(cx: &Cx, r: Rect) -> Vec<(RailItem, Rect)> {
         .unwrap_or(0);
     let top = (current + 1).saturating_sub(shown);
     let mut out = Vec::new();
-    let mut y = r.y;
+    let mut y = r.y.saturating_add(1);
     for i in (top..entries.len()).take(shown) {
         out.push((RailItem::Project(i), Rect::new(r.x, y, r.width, RAIL_ITEM)));
         y += RAIL_ITEM;
@@ -1681,10 +1824,10 @@ fn rail_layout(cx: &Cx, r: Rect) -> Vec<(RailItem, Rect)> {
     if y + 3 <= r.bottom() {
         out.push((RailItem::Add, Rect::new(r.x, y, r.width, 3)));
     }
-    if settings && r.height > 0 {
+    if settings && r.height >= 4 {
         out.push((
             RailItem::Settings,
-            Rect::new(r.x, r.bottom() - 1, r.width, 1),
+            Rect::new(r.x, r.bottom() - 4, r.width, 3),
         ));
     }
     out
@@ -1775,7 +1918,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             .iter()
             .map(|id| a.state.model.projects[id].name.clone()),
     );
-    let inner = r.width.saturating_sub(1);
+    let inner = r.width;
     let centre = r.x + inner.saturating_sub(1) / 2;
     for (item, band) in rail_layout(cx, r) {
         let hovered = cx.hovered(band);
@@ -1788,7 +1931,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             RailItem::Settings => {
                 let style = cx.st(if hovered { PRIMARY } else { MUTED }, SIDEBAR);
                 let glyph = if cx.t.opts.ascii { "*" } else { "⚙" };
-                put(buf, centre, band.y, glyph, style, 1);
+                put(buf, centre, band.y + 1, glyph, style, 1);
                 hits.add(band, Target::SettingsEntry);
             }
             RailItem::Project(i) => {
@@ -1809,12 +1952,16 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     clear(buf, tile, cx.st(PRIMARY, RAISED));
                 }
                 let mut style = cx.st(token, bg);
+                if token == MUTED {
+                    style = style.add_modifier(Modifier::DIM);
+                }
                 if selected {
                     style = cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD);
                 }
                 let label = &labels[i];
-                let label_x = tile.x + tile.width.saturating_sub(width(label) as u16) / 2;
-                put(buf, label_x, band.y + 1, label, style, width(label) as u16);
+                let label_width = width(label) as u16;
+                let label_x = tile.x + tile.width.saturating_sub(label_width) / 2;
+                put(buf, label_x, band.y + 1, label, style, label_width);
                 if selected {
                     for y in tile.y..tile.bottom() {
                         put(
@@ -1836,7 +1983,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                         tile.x + (tile.width - len) / 2,
                         band.y + 2,
                         &glyph.repeat(len as usize),
-                        cx.st(MUTED, bg),
+                        cx.st("border.default", bg).add_modifier(Modifier::DIM),
                         len,
                     );
                 } else {
@@ -1844,7 +1991,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     // running and idle below.
                     let tokens = [MULTI, "status.info", "status.success", PRIMARY];
                     let left = tile.x + 1;
-                    let right = tile.right().saturating_sub(1);
+                    let right = tile.right().saturating_sub(2);
                     let corners = [
                         (left, band.y),
                         (right, band.y),
@@ -1887,7 +2034,7 @@ fn draw_rail_popup(cx: &Cx, buf: &mut Buffer, r: Rect, limit: Rect) {
     let title = p.name.clone();
     let counts = rail_counts(a, &p.id);
     let details = [
-        format!("{} needs attention", counts[0]),
+        format!("{} attention", counts[0]),
         format!("{} unread", counts[1]),
         format!("{} running", counts[2]),
         format!("{} idle", counts[3]),
@@ -2767,14 +2914,14 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         return;
     }
     // The search row opens the switcher; a blank row follows it.
-    let search = Rect::new(r.x, r.y, r.width.saturating_sub(4), 1);
+    let search = Rect::new(r.x, r.y, r.width, 1);
     let mut style = cx.st(MUTED, SIDEBAR);
     if cx.hovered(search) {
         style = style.patch(cx.st(PRIMARY, SIDEBAR));
         clear(buf, search, style);
     }
     let glyph = if cx.t.opts.ascii { "/" } else { "⌕" };
-    put(buf, r.x + 2, r.y, glyph, style, 1);
+    put(buf, r.x, r.y, glyph, style, 1);
     let key = a
         .manifest
         .command("session.switch")
@@ -2783,7 +2930,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     let kw = width(key) as u16;
     let kx = search.right().saturating_sub(kw + 1);
     // `Search sessions`, or `Search` when the key hint leaves no room for it.
-    let room = kx.saturating_sub(r.x + 6) as usize;
+    let room = kx.saturating_sub(r.x + 3) as usize;
     let label = if room >= 15 {
         "Search sessions"
     } else {
@@ -2791,7 +2938,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     };
     put(
         buf,
-        r.x + 5,
+        r.x + 2,
         r.y,
         &truncate(label, room, cx.ell()),
         style,
@@ -2864,11 +3011,19 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                 };
                 put(
                     buf,
-                    rr.x + 4,
+                    rr.x + 1,
                     y,
-                    "+ New session",
+                    "+",
                     style,
-                    rr.width.saturating_sub(4),
+                    1,
+                );
+                put(
+                    buf,
+                    rr.x + 3,
+                    y,
+                    "New session",
+                    style,
+                    rr.width.saturating_sub(3),
                 );
                 hits.add(rr, Target::NewSession);
             }
@@ -2937,7 +3092,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                 let mut close_hit: Option<(Rect, String)> = None;
                 if first {
                     if let Some((glyph, token)) = session_mark(cx, &s.id) {
-                        put(buf, rr.x + 2, y, &glyph, cx.st(token, SIDEBAR).patch(bg), 1);
+                        put(buf, rr.x + 1, y, &glyph, cx.st(token, SIDEBAR).patch(bg), 1);
                     }
                     let token = if s.archived {
                         MUTED
@@ -2955,11 +3110,11 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                     // Hovering the two rows of a session offers `×` where the time is.
                     let close = (!s.archived && cx.hovered(Rect::new(rr.x, y, rr.width, 2)))
                         .then(|| Rect::new(inner_right.saturating_sub(2), y, 3, 1));
-                    let inner = rr.width.saturating_sub(5);
+                    let inner = rr.width.saturating_sub(4);
                     // The time yields when the title would be squeezed too far.
                     let show_age = inner >= aw + 1 + 6;
                     let room = if show_age { inner - aw - 1 } else { inner };
-                    draw_session_title(cx, buf, (rr.x + 4, y), room, s, style, bg);
+                    draw_session_title(cx, buf, (rr.x + 3, y), room, s, style, bg);
                     if let Some(x) = close {
                         let hot = cx.hovered(x);
                         clear(
@@ -2981,12 +3136,12 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                     }
                 } else {
                     let (left, meta) = session_detail(cx, s, a.descendants(&s.id));
-                    let inner = rr.width.saturating_sub(5) as usize;
+                    let inner = rr.width.saturating_sub(4) as usize;
                     let mw = width(&meta);
                     let show_meta = mw > 0 && inner >= mw + 1 + 6;
                     let room = if show_meta { inner - mw - 1 } else { inner };
-                    let mut x = rr.x + 4;
-                    let end = rr.x + 4 + room as u16;
+                    let mut x = rr.x + 3;
+                    let end = rr.x + 3 + room as u16;
                     let mut budget = room;
                     for (text, st) in left {
                         let t = truncate(&text, budget, cx.ell());
@@ -5656,6 +5811,90 @@ fn draw_working(cx: &Cx, buf: &mut Buffer, start: u16, y: u16, end: u16) {
     );
 }
 
+/// The composer's collapsed pastes: one raised row each, with the text's size
+/// and an explicit `Show` that opens the full paste.
+fn draw_composer_pastes(
+    cx: &Cx,
+    buf: &mut Buffer,
+    strip: Rect,
+    pastes: &[(&str, &str)],
+    hits: &mut HitMap,
+) {
+    if pastes.is_empty() || strip.width < 16 {
+        return;
+    }
+    for (i, (marker, text)) in pastes.iter().enumerate() {
+        let y = strip.y + i as u16 * 2;
+        if y >= strip.bottom() {
+            break;
+        }
+        let width = strip.width.saturating_sub(6);
+        if width < 16 {
+            break;
+        }
+        let height = if y + 1 < strip.bottom() { 2 } else { 1 };
+        let rect = Rect::new(strip.x + 3, y, width, height);
+        let hot = cx.hovered(rect);
+        clear(buf, Rect::new(rect.x, y, width, 1), cx.st(PRIMARY, RAISED));
+        let show_x = rect.right().saturating_sub(5);
+        let x = put(
+            buf,
+            rect.x + 1,
+            y,
+            "Pasted text",
+            cx.st(PRIMARY, RAISED),
+            show_x.saturating_sub(rect.x + 1),
+        );
+        let lines = text.lines().count().max(1);
+        let tokens = (text.chars().count() / 4).max(1);
+        let detail = format!(" {} {lines} lines {} ~{tokens} tokens", cx.sep(), cx.sep());
+        put(
+            buf,
+            x,
+            y,
+            &detail,
+            cx.st(MUTED, RAISED),
+            show_x.saturating_sub(x),
+        );
+        put(
+            buf,
+            show_x,
+            y,
+            "Show",
+            if hot {
+                cx.st(ACCENT, RAISED).add_modifier(Modifier::BOLD)
+            } else {
+                cx.st(ACCENT, RAISED)
+            },
+            4,
+        );
+        if height > 1 {
+            let preview = text
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .map(|line| line.trim_start())
+                .unwrap_or("");
+            let row = Rect::new(rect.x, y + 1, width, 1);
+            clear(buf, row, cx.st(MUTED, RAISED));
+            put(
+                buf,
+                row.x + 1,
+                row.y,
+                &truncate(preview, width.saturating_sub(2) as usize, cx.ell()),
+                cx.st(MUTED, RAISED),
+                width.saturating_sub(1),
+            );
+        }
+        hits.add(
+            rect,
+            Target::TimelinePaste(std::rc::Rc::new(crate::timeline::PasteText {
+                marker: (*marker).to_owned(),
+                text: (*text).to_owned(),
+            })),
+        );
+    }
+}
+
 /// The composer's attachment strip: a muted name row over a square thumbnail
 /// for every image, wrapping when the width runs out.
 fn draw_composer_images(
@@ -5698,13 +5937,7 @@ fn draw_composer_images(
                     .resize(ratatui_image::Resize::Fit(None));
             ratatui::widgets::StatefulWidget::render(picture, rect, buf, state);
         }
-        hits.add(
-            rect,
-            Target::ImagePreview {
-                name: image.name.clone(),
-                data_url: image.data_url.clone(),
-            },
-        );
+        hits.add(rect, Target::ComposerImage(i));
     }
 }
 
@@ -5734,7 +5967,12 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         clear(buf, card, cx.st(MUTED, PANEL));
         // The message text starts where the composer's input starts; the
         // `Q`/`S` marker sits two cells left of it, one cell of air between.
-        let input_x = composer_inner(composer, cx.app.composer_ref().images.len()).x;
+        let input_x = composer_inner_with(
+            composer,
+            cx.app.composer_ref().images.len(),
+            cx.app.composer_ref().pastes().len(),
+        )
+        .x;
         let mark_x = input_x.saturating_sub(2);
         let end = card.right().saturating_sub(2);
         for (line, (idx, item)) in inputs
@@ -5804,7 +6042,8 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let base = cx.st(PRIMARY, PANEL);
     let comp_view = a.composer_view();
     let comp = &*comp_view;
-    let card = composer_card(r, comp.images.len());
+    let pastes = comp.pastes();
+    let card = composer_card(r, comp.images.len(), pastes.len());
     // Rows: the pill/attachment row, the top padding, the input, a blank row,
     // the control row, the bottom edge and the project strip.
     let panel = Rect::new(
@@ -5816,7 +6055,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     clear(buf, panel, base);
     hits.add(panel, Target::Composer);
     card_edge(cx, buf, panel, panel.bottom() - 1, "\u{2580}");
-    let inner = composer_inner(full_r, comp.images.len());
+    let inner = composer_inner_with(full_r, comp.images.len(), pastes.len());
     let input_height = inner.height as usize;
     let cy = r.bottom() - 3;
     // The focus bar at the card's left edge, only where colour cannot carry
@@ -5839,11 +6078,20 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         }
     }
 
-    // The square attachment thumbnails, each with its name above it.
+    // Collapsed pastes first, then the square attachment thumbnails with their names above.
+    let paste_rows = composer_paste_rows(pastes.len()).min(card.y.saturating_sub(r.y));
+    draw_composer_pastes(
+        cx,
+        buf,
+        Rect::new(r.x, r.y, r.width, paste_rows),
+        &pastes,
+        hits,
+    );
+    let images_y = r.y + paste_rows;
     draw_composer_images(
         cx,
         buf,
-        Rect::new(r.x, r.y, r.width, card.y.saturating_sub(r.y)),
+        Rect::new(r.x, images_y, r.width, card.y.saturating_sub(images_y)),
         &comp.images,
         hits,
     );
@@ -6595,6 +6843,10 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
                 format!("{off} off")
             })
         }
+        "manager.enabled" | "manager.mode" | "manager.model" | "manager.proactive" => {
+            a.manager_setting_value(&row.id)
+        }
+        "manager.privacy" => Some("enter".into()),
         "dictation.push_to_talk" => Some("enter".into()),
         "about.inspector" => Some("enter".into()),
         "appearance.theme" => Some(match a.theme.opts.mode {
@@ -7142,6 +7394,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
         if page.starts_with("agents/") {
             vec![
                 ("enter", "select"),
+                (arrows, "effort"),
                 ("d", "remove"),
                 ("K/J", "reorder"),
                 ("esc", "back"),
@@ -7536,6 +7789,7 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
         OverlayKind::ImagePreview { name, data_url } => {
             draw_image_preview(cx, buf, area, name, data_url, hits)
         }
+        OverlayKind::Annotate(annotation) => draw_annotate(cx, buf, area, annotation, hits),
         OverlayKind::AlertDetail { id, top, .. } => {
             draw_alert_detail(cx, buf, area, *id, *top, hits)
         }
@@ -8224,6 +8478,189 @@ fn draw_image_preview(
         ratatui::widgets::StatefulWidget::render(image, m.body, buf, state);
     }
     hint_row(cx, buf, &m, &[("esc", "close")]);
+}
+
+/// The drawing modal: the picture, the pen colours and actions, then the keys.
+fn draw_annotate(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    annotation: &crate::annotate::Annotation,
+    hits: &mut HitMap,
+) {
+    use crate::annotate::{fit, PixelRect};
+    let wide = (area.width as u32 * 85 / 100).clamp(24, area.width.saturating_sub(4).max(24) as u32)
+        as u16;
+    let high = (area.height as u32 * 80 / 100)
+        .clamp(12, area.height.saturating_sub(4).max(12) as u32) as u16;
+    let b = modal_box(area, wide, high);
+    let m = modal(
+        cx,
+        buf,
+        area,
+        b,
+        &format!("Mark up {}", annotation.name),
+        hits,
+    );
+    if m.body.width == 0 || m.body.height < 3 {
+        return;
+    }
+    let tools_y = m.body.bottom() - 1;
+    let picture = Rect::new(m.body.x, m.body.y, m.body.width, m.body.height - 2);
+    let live = cx.app.annotate_live.borrow().supported();
+    if live {
+        let mut state = cx.app.annotate_live.borrow_mut();
+        // Zooming the terminal changes the cell size; the kernel knows it.
+        if let Ok(size) = crossterm::terminal::window_size() {
+            if size.columns > 0 && size.rows > 0 && size.width > 0 && size.height > 0 {
+                state.set_font((size.width / size.columns, size.height / size.rows));
+            }
+        }
+        let (cell_w, cell_h) = state.font();
+        let (cell_w, cell_h) = (u32::from(cell_w), u32::from(cell_h));
+        let room = PixelRect {
+            x: u32::from(picture.x) * cell_w,
+            y: u32::from(picture.y) * cell_h,
+            width: u32::from(picture.width) * cell_w,
+            height: u32::from(picture.height) * cell_h,
+        };
+        if let Some(natural) = annotation.natural {
+            let rect = fit(natural, room);
+            annotation.canvas.set(rect);
+            state.sync(annotation, rect);
+        }
+    } else {
+        let url = annotation
+            .flattened
+            .as_deref()
+            .unwrap_or(&annotation.data_url);
+        let (cell_w, cell_h) = cx.app.annotate_live.borrow().font();
+        let (cell_w, cell_h) = (u32::from(cell_w), u32::from(cell_h));
+        let mut viewer = cx.app.image_viewer.borrow_mut();
+        if let Some(state) = viewer.protocol("annotate", url) {
+            let resize = ratatui_image::Resize::Fit(None);
+            let shown = state.size_for(resize.clone(), picture);
+            annotation.canvas.set(PixelRect {
+                x: u32::from(picture.x) * cell_w,
+                y: u32::from(picture.y) * cell_h,
+                width: u32::from(shown.width) * cell_w,
+                height: u32::from(shown.height) * cell_h,
+            });
+            let image =
+                ratatui_image::StatefulImage::<ratatui_image::protocol::StatefulProtocol>::new()
+                    .resize(resize);
+            ratatui::widgets::StatefulWidget::render(image, picture, buf, state);
+            if annotation.drawing {
+                draw_annotate_cells(annotation, picture, shown, buf);
+            }
+        }
+    }
+    draw_annotate_tools(cx, buf, &m, tools_y, annotation, hits);
+    hint_row(
+        cx,
+        buf,
+        &m,
+        &[
+            ("1-4", "colour"),
+            ("u", "undo"),
+            ("x", "clear"),
+            ("enter", "done"),
+            ("esc", "cancel"),
+        ],
+    );
+}
+
+/// The stroke in progress where the terminal cannot draw it live.
+fn draw_annotate_cells(
+    annotation: &crate::annotate::Annotation,
+    picture: Rect,
+    shown: Rect,
+    buf: &mut Buffer,
+) {
+    let Some(stroke) = annotation.strokes.last() else {
+        return;
+    };
+    let ink = Color::Rgb(stroke.color[0], stroke.color[1], stroke.color[2]);
+    let cell = |point: &[f32; 2]| {
+        (
+            f32::from(picture.x) + point[0] * f32::from(shown.width.saturating_sub(1)),
+            f32::from(picture.y) + point[1] * f32::from(shown.height.saturating_sub(1)),
+        )
+    };
+    let mut mark = |x: f32, y: f32| {
+        if let Some(cell) = buf.cell_mut((x.round() as u16, y.round() as u16)) {
+            cell.set_skip(false);
+            cell.set_symbol(" ");
+            cell.set_bg(ink);
+        }
+    };
+    let mut previous: Option<(f32, f32)> = None;
+    for point in &stroke.points {
+        let (x, y) = cell(point);
+        if let Some((from_x, from_y)) = previous {
+            // Sample so a fast drag still leaves a connected line of cells.
+            let steps = (x - from_x).abs().max((y - from_y).abs()).ceil().max(1.0);
+            for step in 1..=steps as u32 {
+                let t = step as f32 / steps;
+                mark(from_x + (x - from_x) * t, from_y + (y - from_y) * t);
+            }
+        } else {
+            mark(x, y);
+        }
+        previous = Some((x, y));
+    }
+}
+
+/// The row under the picture: pen colours on the left, actions on the right.
+fn draw_annotate_tools(
+    cx: &Cx,
+    buf: &mut Buffer,
+    m: &Modal,
+    y: u16,
+    annotation: &crate::annotate::Annotation,
+    hits: &mut HitMap,
+) {
+    let inks = crate::theme::annotation_inks();
+    let mut x = m.x;
+    for (i, ink) in inks.iter().enumerate() {
+        let selected = annotation.ink == i;
+        let bracket = cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD);
+        put(buf, x, y, if selected { "[" } else { " " }, bracket, 1);
+        put(
+            buf,
+            x + 1,
+            y,
+            "  ",
+            Style::default().bg(Color::Rgb(ink[0], ink[1], ink[2])),
+            2,
+        );
+        put(buf, x + 3, y, if selected { "]" } else { " " }, bracket, 1);
+        hits.add(Rect::new(x, y, 4, 1), Target::AnnotateInk(i));
+        x += 5;
+    }
+    let has_strokes = !annotation.strokes.is_empty();
+    let actions = [
+        ("Undo", Target::AnnotateUndo, has_strokes),
+        ("Clear", Target::AnnotateClear, has_strokes),
+        ("Done", Target::AnnotateDone, true),
+    ];
+    let width: u16 = actions
+        .iter()
+        .map(|(label, _, _)| label.len() as u16 + 2)
+        .sum();
+    let mut action_x = (m.x + m.w).saturating_sub(width).max(x);
+    for (label, target, enabled) in actions {
+        let style = if enabled {
+            cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD)
+        } else {
+            cx.st(MUTED, RAISED)
+        };
+        let end = put(buf, action_x, y, label, style, label.len() as u16);
+        if enabled {
+            hits.add(Rect::new(action_x, y, label.len() as u16, 1), target);
+        }
+        action_x = end + 2;
+    }
 }
 
 pub(crate) fn context_detail_max(area: Rect, text: &str) -> usize {

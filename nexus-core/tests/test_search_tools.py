@@ -1,7 +1,6 @@
-"""grep, glob, ls: confinement, .gitignore, clipping notices, read observations."""
+"""grep, glob, ls: confinement, .gitignore, clipping notices."""
 from __future__ import annotations
 
-import contextlib
 import shutil
 import subprocess
 
@@ -153,22 +152,3 @@ async def test_ls_announces_clipping(ctx):
     for i in range(1005):
         (ctx.workspace / "src" / "deep" / f"{i}.t").write_text("")
     assert "showing 1000 of 1006 entries" in await ls({"path": "src/deep"}, ctx)
-
-
-class Guard:
-    """Records what a file tool asks of the session's read observations."""
-
-    def __init__(self, error=None):
-        self.error, self.required, self.forgotten = error, [], []
-
-    @contextlib.asynccontextmanager
-    async def mutation(self):
-        yield
-
-    def require(self, display, path, *, complete=False, affected=()):
-        if self.error:
-            raise ToolError(self.error)
-        self.required.append((display, complete))
-
-    def forget(self, paths):
-        self.forgotten.extend(paths)

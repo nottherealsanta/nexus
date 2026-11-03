@@ -27,6 +27,16 @@ eligible ref, or no list, the agent file's `model` applies, else the parent's. `
 uses the same format for an ordered list of fallback refs. A new child's fallback
 list is frozen at creation (as `model_fallbacks`, with disconnected refs under
 `skipped`) and is ignored when an explicit model is supplied.
+
+`[agents.efforts]` sets the reasoning effort per agent and per model: `[agents.efforts.scout]` with
+`"codex/example" = "low"`. A value is a lowercase word of up to 20 characters (`low`, `medium`, `high`, `xhigh` …) and a
+ref needs a `provider/` part; a malformed table is refused. A new child with a pool (or fallbacks) freezes the entries
+for the refs it can run as `model_efforts` in its snapshot, so a later edit does not move a running child. The effort a
+session runs a model with is, in order: the session's own, this entry (`effort_source: "config"`), the agent file's
+`effort`, the provider's default. A fallback model switches to its own entry (else the agent's or provider's default)
+rather than inheriting the failed model's effort. Settings › Agents › name shows each model's effort next to its
+odds; ←/→ steps it through `default` and the levels the catalog lists for that model, a model with none listed has no
+control, and it writes this key.
 After retries, a failed request can switch to the next fallback only before any
 response stream event; partial responses are never replayed automatically. The
 switch and a notice in the model's context are visible, and the new model remains
@@ -48,10 +58,12 @@ in the right pane (`page = true`) rather than opening a separate screen.
 
 - **Providers** lists every provider from `GET /api/provider` with its state
   (connected, `using $KEY` when the key comes from the environment, the model
-  count, unverified). Each provider row opens a detail modal with the
-  connection actions its `methods` allow: Connect starts a device flow whose
-  link and code are separate actions (Enter or a click opens the link; Enter or
-  Copy copies the code), Add API key opens a masked field, Disconnect warns
+  count, unverified). Each provider row opens a detail modal with one action
+  per method in `methods`: `Sign in with browser` (Codex: the daemon listens on
+  `127.0.0.1:1455` and the client opens the URL), `Sign in with a device code`
+  (the link and code are separate actions: Enter or a click opens the link;
+  Enter or Copy copies the code), `Sign in with Claude Code` and
+  `Use the local server`. Add API key opens a masked field, Disconnect warns
   when agent model lists name the provider. The row says `sign-in pending ·
   open`; the modal waits for authorization without blocking Settings. Refresh
   models re-reads the catalog.
@@ -124,6 +136,24 @@ or deleted, and archived trees are shown by the clients' archived filter
 `full_definitions` (boolean, default false) and `max_listed_tools` (integer 1 to 1000, default
 25) choose how a **new** session lists MCP tools in its context; running sessions keep theirs
 ([mcp.md](mcp.md#what-the-model-sees)). Servers are `[mcp.servers.<name>]` tables.
+
+## `[manager]` settings
+
+The Manager ([manager.md](manager.md)) is off until its soak passes.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | allow the Manager call; `POST /api/manager/start` is `409 manager_disabled` while off |
+| `mode` | `"pipeline"` | the voice front end: `pipeline` (typed text, or speech to text and back) or `live` (GPT-Live over the ChatGPT sign-in; experimental, Core only so far, see [manager.md](manager.md)) |
+| `model` | `"copilot/gpt-6-luna"` | the one model the Manager runs on, a `provider/model` ref. An exception to "no default model" ([models.md](models.md)): if it is unavailable the Manager fails visibly (`manager.state.error`) and never falls back |
+| `idle_episode_minutes` | `30` | a new episode (and recap) after this many idle minutes, 1 to 1440 |
+| `max_episode_tokens` | `24000` | a new episode once the current one passes this many tokens, 2000 to 200000 |
+| `proactive` | `"attention"` | `off`: never unprompted. `attention`: approvals, questions, failures and blocked sessions. `all`: also a coalesced "3 sessions finished" on a lull ([manager.md](manager.md#attention-unprompted-lines)) |
+| `proactive_interval_seconds` | `20` | at most one unprompted line per this many seconds, 1 to 600 |
+| `approvals` | `"spoken"` | `spoken`: a spoken yes is enough, within the guards of MANAGER_PLAN.md section 9 |
+| `talk` | `"tap"` | tap to talk; hands-free comes later |
+
+There is no `stage` setting. The Manager's prompt and tool catalog are code and cannot be extended from a file.
 
 ## `[voice]` and `[speech]`
 

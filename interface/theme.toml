@@ -13,6 +13,11 @@ themes = ["dark", "light"]
 text_min = 4.5          # text.primary / secondary / muted, role text, status text
 nontext_min = 3.0       # border.focus, focus, accent, status marks, diff marks
 
+# Pen colours for drawing on an image. They end up in the image, so they do not
+# change with the theme, and they stay legible over most pictures.
+[annotation]
+ink = ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff"]
+
 # ---------------------------------------------------------------- dark
 [dark.surface]
 canvas = "#0B0B0B"      # the page: timeline and centre column
@@ -62,6 +67,13 @@ del    = "#f27d8f"
 add_bg = "#1c2a1a"
 del_bg = "#2e1b20"
 
+# The Manager's orb (MANAGER_PLAN.md 10.2): one mark per state, drawn on the canvas.
+[dark.manager]
+listening = "#69b7d5"   # = agent.sky
+thinking  = "#a78bfa"   # = agent.violet
+speaking  = "#e8a46e"   # = interactive.accent
+idle      = "#6f757c"   # = text.faint
+
 # ---------------------------------------------------------------- light
 [light.surface]
 canvas = "#f7f7f5"
@@ -110,6 +122,12 @@ add    = "#2f7a1f"
 del    = "#c0283f"
 add_bg = "#e1f0dc"
 del_bg = "#f8e1e4"
+
+[light.manager]
+listening = "#23687f"   # = agent.sky
+thinking  = "#6743ae"   # = agent.violet
+speaking  = "#a84e16"   # = interactive.accent
+idle      = "#7f868d"   # = text.faint
 
 # Agent names are casefolded, then FNV-1a 32-bit selects a slot. Built-ins
 # are pinned; custom names select from the unpinned slots (rose, sky, gold).
@@ -212,6 +230,10 @@ style = ""
 "diff.del" = 210
 "diff.add_bg" = 22
 "diff.del_bg" = 52
+"manager.listening" = 74
+"manager.thinking" = 141
+"manager.speaking" = 179
+"manager.idle" = 243
 
 "agent.amber" = 173
 "agent.blue" = 75
@@ -248,6 +270,10 @@ style = ""
 "diff.del" = 125
 "diff.add_bg" = 194
 "diff.del_bg" = 224
+"manager.listening" = 24
+"manager.thinking" = 60
+"manager.speaking" = 94
+"manager.idle" = 244
 
 "agent.amber" = 94
 "agent.blue" = 25
@@ -284,6 +310,10 @@ style = ""
 "diff.del" = "red"
 "diff.add_bg" = "default"
 "diff.del_bg" = "default"
+"manager.listening" = "cyan"
+"manager.thinking" = "magenta"
+"manager.speaking" = "yellow"
+"manager.idle" = "bright_black"
 
 "agent.amber" = "yellow"
 "agent.blue" = "blue"
@@ -320,6 +350,10 @@ style = ""
 "diff.del" = "red"
 "diff.add_bg" = "default"
 "diff.del_bg" = "default"
+"manager.listening" = "cyan"
+"manager.thinking" = "magenta"
+"manager.speaking" = "red"
+"manager.idle" = "bright_black"
 
 "agent.amber" = "yellow"
 "agent.blue" = "blue"
@@ -360,6 +394,10 @@ style = ""
 "diff.add_bg" = []
 "diff.del_bg" = []
 "interactive.on_accent" = ["reverse"]  # accent fills render as reverse video
+"manager.listening" = ["bold"]         # the orb's state is also a word in the caption
+"manager.thinking" = ["bold"]
+"manager.speaking" = ["bold"]
+"manager.idle" = ["dim"]
 
 "agent.amber" = ["bold"]
 "agent.blue" = ["bold"]

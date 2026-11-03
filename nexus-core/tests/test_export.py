@@ -102,7 +102,7 @@ def _database_rows(store):
     """Every logical row that an export must not change."""
     return {
         table: [tuple(row) for row in store.db.execute(f"select * from {table} order by rowid")]
-        for table in ("project", "session", "session_snapshot", "message", "event", "file_observation")
+        for table in ("project", "session", "session_snapshot", "message", "event")
     }
 
 

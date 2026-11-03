@@ -2,7 +2,7 @@
 name = "nexus-tui"
 version = "0.10.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.97"
 description = "Nexus 0.10 terminal client (Ratatui). Speaks only the Core HTTP API."
 license = "UNLICENSED"
 publish = false
@@ -12,6 +12,8 @@ name = "nexus-tui"
 path = "src/main.rs"
 
 [dependencies]
+nexus-annotate = { path = "../nexus-annotate" }
+nexus-mermaid = { path = "../nexus-mermaid", default-features = false, features = ["raster"] }
 ratatui = "=0.29.0"
 crossterm = "=0.28.1"
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util", "process", "signal"] }
@@ -47,3 +49,4 @@ ratatui-code-editor = { path = "vendor/ratatui-code-editor", default-features = 
     "lang-typescript",
     "lang-yaml",
 ] }
+tokio-tungstenite = { version = "=0.28.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }

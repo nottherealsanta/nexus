@@ -110,7 +110,6 @@ from .loop import (
 )
 from .mcp.project import ProjectMcp
 from .mcp.search import Result as McpSearchResult
-from .observations import FileGuard, FileObservation
 from .questions import PendingQuestion, QuestionError
 from .recovery import Recovery, open_approvals
 from .retention import Retention
@@ -162,7 +161,8 @@ def project_json(p: Project) -> dict[str, Any]:
 
 
 def message_json(m: StoredMessage) -> dict[str, Any]:
-    return {"id": m.id, "session_id": m.session_id, "seq": m.seq, "created": m.created, **message_to_json(m.message), **({"delivery": m.delivery} if m.delivery else {})}
+    return {"id": m.id, "session_id": m.session_id, "seq": m.seq, "created": m.created, **message_to_json(m.message), **({"delivery": m.delivery} if m.delivery else {}),
+            **({"origin": m.origin} if m.origin else {})}
 
 
 class ReasoningClock:
@@ -229,7 +229,6 @@ class Runtime:
         self.escalations: dict[str, list[str]] = {}  # child id -> blocks it reported, until its parent's report carries them
         self.errors: dict[str, str] = {}  # session id -> how its last turn failed
         self._parents: dict[str, str | None] = {}  # session id -> parent id (never changes)
-        self.pending_reads: dict[str, list[FileObservation]] = {}
         self.removing_worktrees: set[Path] = set()
         self.closing_sessions: set[str] = set()
         self.handoffs: set[str] = set()  # sessions whose handoff summary is being written
@@ -248,6 +247,8 @@ class Runtime:
         store.on_pressure = self.retention.note_pressure
         bus.attach(store)  # every published event is durable before any subscriber sees it
         self.recovered: list[dict[str, Any]] = []
+        from .manager.service import ManagerService
+        self.manager = ManagerService(self)  # the hidden Manager above all sessions; idle until a call starts
 
     def recover(self) -> list[dict[str, Any]]:
         """Reconcile turns a crash left unfinished. Runs before the daemon serves requests."""
@@ -357,7 +358,7 @@ class Runtime:
         return project
 
     def project_mcp(self, project: Project) -> ProjectMcp:
-        """This project's own `.mcp.json` scope; its servers never appear in another project."""
+        """This project's own MCP files; its servers never appear in another project."""
         manager = self.project_mcps.get(project.id)
         if manager is None or manager.project_path != str(Path(project.path).resolve()):
             manager = ProjectMcp(project.id, project.path, lambda kind, data: self.bus.publish(kind, data),
@@ -376,12 +377,14 @@ class Runtime:
         return self.project_mcp(project) if project is not None else None
 
     def project_mcp_summary(self, project: Project) -> dict[str, Any]:
-        """This project's `.mcp.json` state: no secret values, and it never starts a server."""
+        """This project's MCP files' state: no secret values, and it never starts a server."""
         manager = self.project_mcp(project)
         definition = manager.refresh()
         return {"project_id": project.id, "file": definition.file, "exists": definition.exists,
                 "revision": definition.revision, "error": definition.error,
-                "warnings": list(definition.warnings), "servers": manager.status()}
+                "warnings": list(definition.warnings), "servers": manager.status(),
+                "files": [state.summary() for state in definition.files],
+                "duplicates": [item.summary() for item in definition.duplicates]}
 
     def project_mcp_row(self, project: Project, name: str) -> dict[str, Any] | None:
         return self.project_mcp(project).row(name)
@@ -435,6 +438,8 @@ class Runtime:
 
     def session_json(self, s: Session) -> dict[str, Any]:
         """`model`/`effort` are what the next turn uses; `*_source` says where they came from."""
+        if s.kind == "manager":
+            return self.manager.session_json(s)
         snapshot_info: dict[str, Any] | None = None
         state: dict[str, Any] = {}
         skills: list[dict[str, Any]] = []
@@ -444,8 +449,7 @@ class Runtime:
             snapshot = self.snapshot_for(s)
             agent = snapshot["agent"]
             model, model_source = self.resolve_model(s, agent)
-            effort = s.effort or agent["effort"]
-            effort_source = "session" if s.effort else ("agent" if agent["effort"] else "provider")
+            effort, effort_source = self.resolve_effort(s, snapshot, model)
             tools = self.effective_tool_names(snapshot, s)
             snapshot_info = snapshots.summary(snapshot)
             starting = snapshot.get("directory", s.directory)
@@ -500,12 +504,16 @@ class Runtime:
                    for n, r in book.get("off", {}).items()]
         mcp = snapshot.get("mcp") or {}
         scopes = mcp.get("scopes") or {}
+        notes = mcp.get("warnings") or {}
         servers = [{"server": n, "tools": (mcp.get("tools") or {}).get(n), "locked": False, "error": None,
-                    "scope": scopes.get(n), "state": "off" if mcp_files.DISABLED_PREFIX + n in disabled else "on"}
+                    "scope": scopes.get(n), "warnings": notes.get(n, []),
+                    "state": "off" if mcp_files.DISABLED_PREFIX + n in disabled else "on"}
                    for n in mcp.get("servers", [])]
-        servers += [{"server": n, "tools": None, "locked": True, "error": e, "state": "unavailable"}
+        servers += [{"server": n, "tools": None, "locked": True, "error": e, "warnings": notes.get(n, []),
+                     "state": "unavailable"}
                     for n, e in (mcp.get("unavailable") or {}).items()]
-        servers += [{"server": n, "tools": None, "locked": started, "error": None, "state": "off"}
+        servers += [{"server": n, "tools": None, "locked": started, "error": None, "warnings": notes.get(n, []),
+                     "state": "off"}
                     for n in mcp.get("off", [])]
         return skills, servers
 
@@ -528,6 +536,18 @@ class Runtime:
             if ref:
                 return ref, "parent"
         return "", "none"
+
+    @staticmethod
+    def resolve_effort(session: Session, snapshot: dict[str, Any], ref: str) -> tuple[str | None, str]:
+        """The reasoning effort a session runs `ref` with, and where it came from: the session's own, the
+        `agents.efforts` entry frozen for that model at creation (`config`), the agent file's, else the provider's."""
+        if session.effort:
+            return session.effort, "session"
+        configured = (snapshot.get("model_efforts") or {}).get(ref)
+        if configured:
+            return configured, "config"
+        agent_effort = snapshot["agent"]["effort"]
+        return (agent_effort, "agent") if agent_effort else (None, "provider")
 
     # -- remembered models -----------------------------------------------------
 
@@ -558,6 +578,7 @@ class Runtime:
         the agent file's `model` (`agent`) or the parent session's model (`parent`)."""
         settings = (values or ConfigFile().read()["values"])["agents"]
         return {"pool": settings["models"].get(spec.name, []), "fallbacks": settings["fallbacks"].get(spec.name, []),
+                "efforts": settings.get("efforts", {}).get(spec.name, {}),
                 "effective": {"model": spec.model, "source": "agent"} if spec.model else {"model": "", "source": "parent"}}
 
     def remember_model(self, project_id: str, agent: str, ref: str) -> None:
@@ -812,8 +833,10 @@ class Runtime:
         # A project entry wins the name even when a disabled global entry (the offered
         # browser-use default) has the same name; only an enabled global reserves it.
         scopes |= {n: "project" for n in definition.servers}
+        # File warnings and cross-file duplicate notices travel with the server they concern.
+        notes = {n: definition.warnings_for(n) for n in definition.all_names()}
         return {"servers": up, "unavailable": down, "off": off, "scopes": scopes,
-                "full_definitions": full, "max_listed_tools": limit, "listing": listing,
+                "warnings": notes, "full_definitions": full, "max_listed_tools": limit, "listing": listing,
                 "tools": {n: len(connections[n].tools) for n in up}}
 
     def _build_snapshot(self, *, project: Project, directory: str, spec: agent_files.AgentDef,
@@ -1048,6 +1071,11 @@ class Runtime:
                 usable = [ref for ref in fallbacks if ref != primary and split_ref(ref)[0] in live]
                 snapshot["model_fallbacks"] = {"primary": primary, "models": usable,
                                                "skipped": [ref for ref in fallbacks if ref != primary and ref not in usable]}
+            efforts = settings.get("efforts", {}).get(agent, {})
+            used = {ref for ref in (model, *(snapshot.get("model_fallbacks") or {}).get("models", [])) if ref}
+            frozen = {ref: effort for ref, effort in efforts.items() if ref in used}
+            if frozen:
+                snapshot["model_efforts"] = frozen
         session = self.store.create_session(project, title=title or "New session", agent=agent, model=model or "",
                                             permission=permission or "allow", effort=effort or None, parent=parent,
                                             parent_call_id=parent_call_id, launched_by=launched_by,
@@ -1913,7 +1941,8 @@ class Runtime:
         try:
             percent = ConfigFile().read()["values"]["context"]["handoff_percent"]
             session = self.store.session(session_id)
-            if not percent or session is None or session.parent_id is not None or session.archived:
+            if not percent or session is None or session.parent_id is not None or session.archived \
+                    or session.kind != "user":
                 return
             model = self.session_json(session)["model"]
             used, window = self.measured_input(session_id, model), await self.window_for(model)
@@ -1978,11 +2007,13 @@ class Runtime:
         """Rebind explicit changes at dispatch boundaries, never within a running call."""
         self._apply_pending_directory(session_id)  # a queued move lands between calls, not inside one
         updated = self._agent(self.session(session_id), refresh=False)
-        for name in ("provider", "model", "model_ref", "fallback_models", "workspace", "tools", "instructions", "reasoning_effort", "approve",
-                     "files", "cwd_changed", "render"):
+        for name in ("provider", "model", "model_ref", "fallback_models", "workspace", "tools", "instructions", "reasoning_effort", "model_efforts", "approve",
+                     "file_lock", "cwd_changed", "render"):
             setattr(active, name, getattr(updated, name))
 
     def _agent(self, session: Session, *, refresh: bool = True) -> Agent:
+        if session.kind == "manager":
+            return self.manager.build_agent(session, refresh=refresh)
         snapshot = self.snapshot_for(session)
         spec = snapshot["agent"]
         ref = self.resolve_model(session, spec)[0]
@@ -2014,7 +2045,6 @@ class Runtime:
         starting = snapshot.get("directory", session.directory)
         cwd_changed = str(workspace.resolve()) != starting
         root = self._root(session)
-        files = FileGuard(self.store, session.id, self.file_lock, self.pending_reads.setdefault(session.id, []))
 
         async def run_bash(args: dict[str, Any], ctx: ToolContext) -> str:
             background = args.get("background", False)
@@ -2118,13 +2148,14 @@ class Runtime:
             provider, model=model, workspace=workspace,
             tools=tuple(tools),
             instructions=snapshot["system_prompt"],
-            reasoning_effort=session.effort or spec["effort"], max_steps=spec["steps"] or MAX_STEPS,
+            reasoning_effort=self.resolve_effort(session, snapshot, ref)[0], max_steps=spec["steps"] or MAX_STEPS,
+            model_efforts={item: self.resolve_effort(session, snapshot, item)[0] for item, *_ in fallback_models},
             messages=[m.message for m in self.store.messages(session.id)],
             conversation_id=session.id, approve=lambda call, args: self._approve(session.id, call, args),
             inbox=lambda: self.inboxes.pop(session.id, []),
             steering=lambda: [(item["id"], self.inputs.message(item)) for item in self.inputs.list(session.id, "steer")],
             refresh=(lambda active: self._refresh_call(active, session.id)) if refresh else None,
-            files=files,
+            file_lock=self.file_lock,
             cwd_changed=cwd_changed,
             save_media=lambda data, mime, name: self.save_artifact(session.id, data, mime, name=name, source=f"read:{name}"),
             retry_policy=self.retry_policy,
@@ -2457,7 +2488,8 @@ class Runtime:
 
     def _begin_turn(self, session: Session, *, user_text: str | Message | NoUserMessage, origin: str,
                     continuation: dict[str, Any] | None = None,
-                    mutation: dict[str, Any] | None = None, input_id: str | None = None) -> dict[str, Any]:
+                    mutation: dict[str, Any] | None = None, input_id: str | None = None,
+                    via: str | None = None) -> dict[str, Any]:
         """Record one turn durably, announce it, and start its task.
 
         Prompting and manual continuation share this path; the only difference is
@@ -2479,12 +2511,16 @@ class Runtime:
         # Published here, not in the task, so a session is never seen idle between being prompted and running.
         self.bus.publish("session.status", status, session_id=session_id)
         self.turns[session_id] = asyncio.create_task(
-            self._run(session_id, user_text, turn["id"], origin=origin, continuation=continuation, input_id=input_id))
+            self._run(session_id, user_text, turn["id"], origin=origin, continuation=continuation, input_id=input_id,
+                      via=via))
         if session.parent_id and session.parent_id not in self.turns:
             self.bus.publish("session.status", {"status": "busy"}, session_id=session.parent_id)
         return turn
 
-    def prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None, pastes: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None, mode: str = "send", typed: bool = False) -> dict[str, Any]:
+    def prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None, pastes: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None, mode: str = "send", typed: bool = False,
+               via: str | None = None) -> dict[str, Any]:
+        """Start a turn with `text`, or queue/steer it. `via` is who typed it when that was not the user at a client
+        (`"manager"`); it is stored on the message so clients can label it."""
         session = self.session(session_id)
         if mode not in ("send", "steer", "queue"):
             raise ValueError("mode must be send, steer or queue")
@@ -2505,7 +2541,7 @@ class Runtime:
         if busy or mode != "send":
             labelled = tuple(part for index, image in enumerate(parts) for part in (Text(f"[Image {chr(ord('A') + index)}]"), image))
             message = Message("user", ((text_parts if text else ()) + labelled))
-            item = self.inputs.add(session_id, mode, message_to_json(message)["parts"], mutation)
+            item = self.inputs.add(session_id, mode, message_to_json(message)["parts"], mutation, origin=via)
             self.bus.publish("input.added", item, session_id=session_id)
             if not busy:
                 self.inputs.hold(session_id, False)
@@ -2521,7 +2557,8 @@ class Runtime:
             Text(f"[Image {chr(ord('A') + index)}]"), image,
         ))
         structured = bool(parts) or any(part.collapsed for part in text_parts)
-        turn = self._begin_turn(session, user_text=Message("user", (*text_parts, *labelled_parts)) if structured else text, origin="prompt", mutation=mutation)
+        turn = self._begin_turn(session, user_text=Message("user", (*text_parts, *labelled_parts)) if structured else text,
+                                origin="prompt", mutation=mutation, via=via)
         if typed:
             self.store.record_prompt(session_id, Message("user", (*text_parts, *labelled_parts)))
         return {"status": "busy", "turn_id": turn["id"], "origin": "prompt"}
@@ -2584,7 +2621,8 @@ class Runtime:
         return {**response, "turn_id": turn["id"]}
 
     async def _run(self, session_id: str, user_text: str | Message | NoUserMessage, turn_id: str, *,
-                   origin: str = "prompt", continuation: dict[str, Any] | None = None, input_id: str | None = None) -> None:
+                   origin: str = "prompt", continuation: dict[str, Any] | None = None, input_id: str | None = None,
+                   via: str | None = None) -> None:
         started: set[str] = set()
         finished: dict[str, ToolResult] = {}
         active_request: str | None = None
@@ -2623,8 +2661,9 @@ class Runtime:
                                 self.store.db.execute("update pending_input set event_id = ? where id = ?", (published.get("id", -1), iid))
                         input_id = None
                     else:
-                        stored = self.store.append_message(session_id, event.message)
-                    self._commit_file_reads(session_id, event.message)
+                        # The turn's own prompt is the first user message; later ones are notices.
+                        stored = self.store.append_message(session_id, event.message, origin=via)
+                        via = None
                     self._publish_message(session_id, stored)
                 else:
                     if isinstance(event, StepStart):
@@ -2663,9 +2702,7 @@ class Runtime:
                         self.store.mark_tool_started(turn_id, session_id, event.call)
                     elif isinstance(event, ToolEnd):
                         finished[event.call.id] = event.result
-                        self.store.mark_tool_finished(
-                            turn_id, session_id, event.call, event.result,
-                            self._pending_observation_data(session_id, event.call.id))
+                        self.store.mark_tool_finished(turn_id, session_id, event.call, event.result)
                     elif isinstance(event, RetryScheduled):
                         if active_attempt is not None:
                             self.store.finish_attempt(active_attempt, "failed", error=event.reason)
@@ -2749,7 +2786,8 @@ class Runtime:
             # A clean close's bookkeeping (`recovery` back to none) lands below; a crash
             # before it leaves the turn to startup recovery, which publishes again.
             self.publish_turn_summary(session_id, turn_id, recovery="none" if closed else None)
-            self.pending_reads.pop(session_id, None)
+            if completed:
+                self.manager.after_turn(session_id)  # a topic line, only when the Manager is on and the topic moved
             self.turns.pop(session_id, None)
             # A reserved input whose first message did not commit remains pending.
             if input_id:
@@ -2839,19 +2877,6 @@ class Runtime:
         self.errors[session_id] = error["message"]
         self.bus.publish("session.error", error, session_id=session_id)
 
-    def _pending_observation_data(self, session_id: str, call_id: str) -> list[dict[str, Any]]:
-        """Observations from one read call, kept with its result for crash recovery."""
-        return [observation.json() | {"path": observation.path}
-                for observation in self.pending_reads.get(session_id, [])
-                if observation.call_id == call_id]
-
-    def _commit_file_reads(self, session_id: str, message: Message) -> None:
-        if message.role != "tool":
-            return
-        calls = {p.call_id for p in message.parts if isinstance(p, ToolResult) and not p.is_error}
-        guard = FileGuard(self.store, session_id, self.file_lock, self.pending_reads.get(session_id, []))
-        guard.commit_reads(calls)
-
     def _pending_approval_calls(self, session_id: str) -> set[str]:
         """Calls still waiting for a user decision when a turn was cancelled.
 
@@ -2894,7 +2919,6 @@ class Runtime:
                 results.append(ToolResult(call.id, "interrupted by the user before this tool ran", is_error=True))
         message = Message("tool", tuple(results))
         stored = self.store.save_tool_message(session_id, message, turn_id=turn_id)
-        self._commit_file_reads(session_id, message)
         self._publish_message(session_id, stored)
 
     async def interrupt(self, session_id: str, *, reason: str = "the turn was interrupted") -> bool:
@@ -3018,7 +3042,8 @@ class Runtime:
         self.grants.pop(session_id, None)
         self.bus.publish("permission.grants_cleared", {"session_id": session_id}, session_id=session_id)
 
-    def reply(self, session_id: str, approval_id: str, allow: bool, *, scope: str = "once", note: str = "") -> None:
+    def reply(self, session_id: str, approval_id: str, allow: bool, *, scope: str = "once", note: str = "",
+              via: str | None = None, heard: str | None = None) -> None:
         """Answer an approval. `scope="session"` (allow only) also grants the same call for the rest of the session;
         `note` (deny only) goes to the model with the refusal."""
         entry = self.approvals.get(approval_id)
@@ -3035,6 +3060,10 @@ class Runtime:
             raise ValueError("a note goes with a deny")
         event = {"id": approval_id, "session_id": session_id,
                  "outcome": "allowed" if allow else "denied", "allow": allow}
+        if via:
+            event["origin"] = via  # "manager": an act on the user's spoken word
+            if heard:
+                event["heard"] = heard[:500]
         if scope == "session":
             event["scope"] = "session"
             event["grant"] = entry[2]["grant"]
@@ -3078,7 +3107,8 @@ class Runtime:
             if session_id is None or request.session_id == session_id
         ]
 
-    def reply_question(self, session_id: str, question_id: str, answers: Any) -> None:
+    def reply_question(self, session_id: str, question_id: str, answers: Any, *,
+                       via: str | None = None, heard: str | None = None) -> None:
         """Validate and resolve one question request exactly once."""
         request = self.questions.get(question_id)
         if request is None:
@@ -3099,7 +3129,8 @@ class Runtime:
         self._remember_question(question_id, "answered")
         self.bus.publish(
             "question.replied",
-            question_contract.replied_event(request, outcome="answered", answers=validated),
+            {**question_contract.replied_event(request, outcome="answered", answers=validated),
+             **({"origin": via, **({"heard": heard[:500]} if heard else {})} if via else {})},
             session_id=session_id,
         )
         if not request.future.done():
@@ -3131,6 +3162,7 @@ class Runtime:
             self.resolved_questions.pop(next(iter(self.resolved_questions)))
 
     async def shutdown(self) -> None:
+        await self.manager.shutdown()
         for task in list(self.background):
             task.cancel()
         for session_id in list(self.turns):

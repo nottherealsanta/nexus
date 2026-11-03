@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .hooks import HookOutcome, HookRunner
 from .llmhub import Provider
@@ -39,10 +39,14 @@ from .llmhub.types import (
 from .retry import RetryPolicy
 from .tools import DEFAULT_TOOLS, Tool, ToolContext, ToolError
 
-if TYPE_CHECKING:
-    from .observations import FileGuard
-
 MAX_STEPS = 500
+
+STEP_LIMIT_NOTICE = (
+    "[Nexus notice: step limit] The maximum number of steps allowed for this turn has been reached. "
+    "Tools are disabled until the next user message. Respond with text only; do not call any tool. "
+    "Say that the step limit was reached, summarize what has been done so far, list any remaining "
+    "tasks, and recommend what to do next.")
+STEP_LIMIT_REFUSAL = "tools are disabled: the step limit for this turn was reached; reply with text only"
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +175,7 @@ def default_instructions(workspace: Path) -> str:
         f"Today: {datetime.now().astimezone().date().isoformat()}\n"
         "Tools: read (files, directories), bash (commands run in the workspace), "
         "edit (exact replacement), patch (apply_patch), write (whole files), ask (questions to the user). "
-        "Read before you edit. Keep answers short and say what you changed."
+        "Keep answers short and say what you changed."
     )
 
 
@@ -185,6 +189,7 @@ class Agent:
         tools: tuple[Tool, ...] = DEFAULT_TOOLS,
         instructions: str | None = None,
         reasoning_effort: str | None = None,
+        model_efforts: dict[str, str | None] | None = None,
         approve: Approve | None = None,
         max_steps: int = MAX_STEPS,
         messages: list[Message] | None = None,
@@ -192,7 +197,7 @@ class Agent:
         inbox: Inbox | None = None,
         steering: Callable[[], list[tuple[str, Message]]] | None = None,
         refresh: Callable[[Any], None] | None = None,
-        files: FileGuard | None = None,
+        file_lock: asyncio.Lock | None = None,
         cwd_changed: bool = False,
         save_media: Callable[[bytes, str, str], str] | None = None,
         retry_policy: RetryPolicy | None = None,
@@ -218,6 +223,7 @@ class Agent:
         self.tools = {tool.spec.name: tool for tool in tools}
         self.instructions = instructions or default_instructions(workspace)
         self.reasoning_effort = reasoning_effort
+        self.model_efforts = model_efforts or {}  # a fallback model runs with its own effort
         self.approve = approve
         self.max_steps = max_steps
         self.conversation_id = conversation_id or uuid.uuid4().hex
@@ -225,7 +231,7 @@ class Agent:
         self.inbox = inbox
         self.steering = steering
         self.refresh = refresh
-        self.files = files
+        self.file_lock = file_lock
         self.cwd_changed = cwd_changed
         self.save_media = save_media
         self.retry_policy = retry_policy or RetryPolicy()
@@ -285,9 +291,12 @@ class Agent:
                 yield TurnEnd("blocked", 0)
                 return
         for step in range(1, self.max_steps + 1):
+            final = step == self.max_steps and self.max_steps > 1
             if self.refresh is not None:
                 self.refresh(self)
             notices = [*(self.inbox() if self.inbox is not None else []), *self._flush_notes()]
+            if final:
+                notices.append(STEP_LIMIT_NOTICE)
             if notices:
                 yield self._add(Message("user", tuple(Text(n) for n in notices)))
             steering = self.steering() if self.steering else []
@@ -313,6 +322,8 @@ class Agent:
                     ref, provider, model = self.fallback_models.pop(0)
                     previous = self.model_ref
                     self.provider, self.model, self.model_ref = provider, model, ref
+                    if ref in self.model_efforts:
+                        self.reasoning_effort = self.model_efforts[ref]
                     yield ModelFallback(previous, ref, str(error))
                     yield self._add(Message("user", (Text(
                         f"[Nexus notice: model fallback] {previous} failed before a response; "
@@ -327,7 +338,7 @@ class Agent:
                     yield event
                 if self._hook_notes:
                     yield self._add(Message("user", tuple(Text(n) for n in self._flush_notes())))
-                yield TurnEnd(stop, step)
+                yield TurnEnd("max_steps" if final else stop, step)
                 return
             results: list[ToolResult] = []
             for call in calls:
@@ -335,6 +346,11 @@ class Agent:
                     self.refresh(self)
                 args = _parse_args(call.arguments)
                 yield ToolStart(call, args)
+                if final:
+                    result = ToolResult(call.id, STEP_LIMIT_REFUSAL, is_error=True)
+                    results.append(result)
+                    yield ToolEnd(call, result)
+                    continue
                 result = None
                 if args is not None and call.name in self.tools:
                     outcomes, fired = await self._fire("PreToolUse", tool=call.name, args=args, call_id=call.id)
@@ -419,7 +435,7 @@ class Agent:
                 return ToolResult(call.id, str(exc), is_error=True)
         try:
             output = await tool.run(args, ToolContext(
-                self.workspace, call.id, files=self.files, cwd_changed=self.cwd_changed,
+                self.workspace, call.id, file_lock=self.file_lock, cwd_changed=self.cwd_changed,
                 save_media=self.save_media))
             return ToolResult(call.id, str(output), media=getattr(output, "media", ()))
         except ToolError as exc:

@@ -5,9 +5,11 @@ import { Model, normalizeSession } from "./core/reduce";
 import { Banner, ConnectionState, MESSAGE_PAGE, Sync, SyncHost } from "./core/sync";
 import { Compat, Info, Message, Session } from "./core/api";
 import { ApiError, apiBase, localCore, request, setApiBase } from "./core/transport";
+import { ClientView, ViewReporter, sameClientView } from "./core/view";
 import type { ProjectMcpSummary } from "./project-mcp";
 import { emptyGlobalToastState, globalEventToast } from "./skills-mcp";
 import { receiveVoiceProgress } from "./voice-state";
+import { managerHooks } from "./core/manager-hooks";
 import { playNotificationCue } from "./cues";
 import { splashDismiss, splashFinish, splashReach, splashStart } from "./ui/splash";
 
@@ -20,6 +22,8 @@ export type ContextEntry = { key: string; name: string; description: string; ful
 export const contextDetail = signal<{ title: string; detail: string; markdown?: boolean; entries?: ContextEntry[]; focus?: string } | null>(null);
 /** The attachment open in the full-size preview modal (composer or timeline). */
 export const imagePreview = signal<{ name: string; src: string } | null>(null);
+/** The composer image open in the drawing modal: its draft and id. */
+export const annotating = signal<{ key: string; id: string } | null>(null);
 export const rev = signal(0);
 /** Bumped by text/reasoning deltas; the settled timeline does not depend on it. */
 export const streamRev = signal(0);
@@ -191,9 +195,16 @@ export const addProjectOpen = signal(false);
 export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string; disabled_tools?: string[] }>({});
 export const draft = signal<Record<string, string>>({});
 /** Core's starting context (PLAN K4) for the draft in `key`; a newer draft ignores a late older answer. */
-export const draftContext = signal<{ key: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: any[]; mcp: any[]; session?: { effort: string | null } } } | null>(null);
+export const draftContext = signal<{ key: string; planKey: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: any[]; mcp: any[]; session?: { effort: string | null } } } | null>(null);
 let draftSeq = 0;
 export const draftContextKey = (project: string, d = sessionDraft()) => JSON.stringify([project, d.agent ?? null, d.model ?? null, d.effort ?? null, d.disabled_tools ?? null]);
+/** The draft fields that change the context itself. Effort steers the model; it is not context. */
+export const draftContextPlanKey = (project: string, d = sessionDraft()) => JSON.stringify([project, d.agent ?? null, d.model ?? null, d.disabled_tools ?? null]);
+/** Core's plan for the current draft's context. An effort change keeps it while Core re-plans. */
+export function draftPlanContext(project: string) {
+  const answer = draftContext();
+  return answer && answer.planKey === draftContextPlanKey(project) ? answer.data : null;
+}
 /** The draft key last asked for: the same draft is asked once, until `force` or a failure. */
 let draftAsked: string | null = null;
 export async function loadDraftContext(project: string, force = false) {
@@ -203,7 +214,7 @@ export async function loadDraftContext(project: string, force = false) {
   const seq = ++draftSeq;
   try {
     const data = await request<any>("POST", "/api/draft/context", { body: { project, agent: d.agent, model: d.model || undefined, effort: d.effort, disabled_tools: d.disabled_tools } });
-    if (seq === draftSeq) draftContext.set({ key, data });
+    if (seq === draftSeq) draftContext.set({ key, planKey: draftContextPlanKey(project, d), data });
   } catch {
     if (seq === draftSeq) draftAsked = null; // the client-side estimate stays; the next change asks again
   }
@@ -442,7 +453,7 @@ export function loadProjectWorktrees(id: string, refresh = false) {
   });
 }
 
-// --- project `.mcp.json` ----------------------------------------------------------------------
+// --- project MCP files (.mcp.json, .agents/mcp.json) ------------------------------------------
 /** One project's MCP summary; enabled servers start with a new session, never from this read. */
 export type ProjectMcpState = { data: ProjectMcpSummary | null; loading: boolean; error: string | null };
 export const projectMcp = signal<Record<string, ProjectMcpState>>({});
@@ -607,10 +618,44 @@ const host: SyncHost = {
   },
   globalEvent(e) {
     if (e.type === "voice.progress") receiveVoiceProgress(e.data);
+    else if (e.type.startsWith("manager.")) managerHooks.event?.(e);
     else handleGlobalEvent(e);
   },
+  streamConnected(streamId) { viewReporter.connected(streamId); managerHooks.connected?.(streamId); },
+  streamClosed(streamId) { viewReporter.closed(streamId); managerHooks.closed?.(streamId); },
 };
 export const sync = new Sync(host);
+
+/** Core's ephemeral view registry; a rejected client id asks for a fresh stream. */
+export const viewReporter = new ViewReporter({ onMismatch: () => sync.forceSnapshot() });
+
+/**
+ * What this client is showing, as ids plus the shared panel label. A selected
+ * session implies its project, so the reported pair is never transiently mixed.
+ */
+export function currentClientView(): ClientView {
+  m();
+  const session = viewed()?.id ?? null;
+  const project = session
+    ? model.sessions.get(session)?.project_id ?? currentProject()
+    : currentProject();
+  // NSH has no Git diff panel (the Git sidebar is a status list); the editor's
+  // draft-vs-disk diff is still the file panel, never the TUI's `diff` panel.
+  const panel = phone || centre() === "settings" ? null
+    : openFile() !== null ? "file" as const
+    : leftTab() === "files" && (isNarrow() ? drawer() === "left" : leftOpen()) ? "files" as const
+    : null;
+  return { project: project ?? null, session, panel };
+}
+
+let viewSent: ClientView | null = null;
+/** Tell the reporter when the view changed. The stream id and retries stay its business. */
+export function syncView() {
+  const view = currentClientView();
+  if (sameClientView(viewSent, view)) return;
+  viewSent = view;
+  viewReporter.setView(view);
+}
 
 function reconcileSelection() {
   if (model.selectedDeleted) {

@@ -435,42 +435,6 @@ async def test_direct_and_nested_tools_use_the_new_directory(env):
     await env.rt.shutdown()
 
 
-async def test_read_observations_do_not_transfer_between_different_files(env):
-    destination = env.tmp_path / "other"
-    destination.mkdir()
-    (destination / "a.txt").write_text("new file\n")
-    session = await _create(env.client, env.workspace, permission="allow")
-    sid = session["id"]
-    env.provider.replies = [[ToolCall("r1", "read", '{"path": "a.txt"}')], [Text("read")]]
-    await env.client.post(f"/api/session/{sid}/prompt", json={"text": "read"})
-    await _idle(env.rt, sid)
-    await env.client.post(f"/api/session/{sid}/directory", json={"directory": str(destination)})
-
-    # The old a.txt observation must not authorize the destination's a.txt.
-    env.provider.replies = [[ToolCall("e1", "edit", json.dumps({
-        "path": "a.txt", "old_string": "new file", "new_string": "changed"}))], [Text("try")]]
-    await env.client.post(f"/api/session/{sid}/prompt", json={"text": "edit"})
-    await _idle(env.rt, sid)
-    result = _results(await _messages_of(env.client, sid))[-1]
-    assert result["is_error"] and "has not been read in this session" in result["output"]
-    assert (destination / "a.txt").read_text() == "new file\n"
-
-    env.provider.replies = [
-        [ToolCall("r2", "read", '{"path": "a.txt"}')],
-        [Text("read")],
-    ]
-    await env.client.post(f"/api/session/{sid}/prompt", json={"text": "read it"})
-    await _idle(env.rt, sid)
-    env.provider.replies = [
-        [ToolCall("e2", "edit", json.dumps({"path": "a.txt", "old_string": "new file", "new_string": "changed"}))],
-        [Text("done")],
-    ]
-    await env.client.post(f"/api/session/{sid}/prompt", json={"text": "edit it"})
-    await _idle(env.rt, sid)
-    assert (destination / "a.txt").read_text() == "changed\n"
-    await env.rt.shutdown()
-
-
 async def test_new_children_inherit_the_directory_and_existing_children_keep_theirs(env):
     parent = await _create(env.client, env.workspace, agent="orchestrate")
     old_child = (await env.client.post("/api/session", json={"parent": parent["id"], "agent": "build"})).json()

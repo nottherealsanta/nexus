@@ -57,6 +57,9 @@ the latest GitHub release and never installs.
 - **Project.** A directory, unique by its resolved absolute path.
   `POST /api/project {path}` returns the existing project or creates one, named
   after the folder by default.
+- **Hidden Manager sessions.** The Manager ([manager.md](manager.md)) is `kind = "manager"` sessions in a hidden
+  project. Every default list, search, snapshot, idle-archive sweep and event stream excludes them; their events stay
+  in the durable log and open by id.
 - **Session.** Belongs to one project and runs one agent ([agents.md](agents.md)).
   Each session has:
   - `directory`: where tools run. It starts as the project path and can move to
@@ -95,7 +98,7 @@ the latest GitHub release and never installs.
   continuation, export and replay to any provider. The prompt route accepts
   bodies up to 12 MiB; every other route keeps 1 MiB.
 - **Storage.** SQLite at `~/.nexus/nexus.db` (WAL). Tables: `project`,
-  `session`, `session_snapshot`, `message`, `event`, `file_observation`, `turn`,
+  `session`, `session_snapshot`, `message`, `event`, `turn`,
   `turn_request`, `turn_tool`, `turn_attempt`, `session_usage`, `mutation`,
   `preference`, `log`, `event_body` and `storage_metrics`.
   `session_snapshot` is
@@ -106,8 +109,7 @@ the latest GitHub release and never installs.
   `storage_metrics` is the native SQLite counter row (event/payload/wire/body
   bytes) used instead of rescanning the log on every pass; `mutation` is the
   idempotency journal; `turn_attempt` records provider
-  retry attempts; `file_observation` holds each session's read observations (see
-  below); `turn`, `turn_request` and `turn_tool` are the durable execution
+  retry attempts; `turn`, `turn_request` and `turn_tool` are the durable execution
   lifecycle ([Crash recovery](#crash-recovery)) and, with `session_usage`, the
   turn summaries ([Turn summaries](#turn-summaries-and-the-spend-ledger));
   `preference` holds machine-wide name/value settings (`Store.preference`,
@@ -131,7 +133,7 @@ the latest GitHub release and never installs.
   maintenance; a crash only leaves the remaining rows unmeasured.
   A `message` row also records the id of the `message.added` event that announced it.
   Deleting a project or session deletes everything under it, including its child
-  sessions, snapshots, observations, execution records and session events.
+  sessions, snapshots, execution records and session events.
   Archiving changes the `archived` column on every session in the tree and
   releases its idle owned kernels; stored history is preserved.
 
@@ -176,7 +178,7 @@ id into a cursor, `<generation>:<id>`, and serves the reconnect stream.
   minimal `session.deleted` tombstone (`{"id": "ses_…"}`). Deleting a session or
   project publishes one tombstone per deleted session, so a reconnecting client
   cannot miss a deletion that no longer has a session row. Statistics, messages,
-  snapshots and observations still disappear with the session.
+  snapshots still disappear with the session.
 - **Reconnect.** `GET /api/event` accepts `?cursor=` or `Last-Event-ID`, registers
   the live subscription and reads the head atomically, replays the stored log up
   to that head in pages, then continues live while skipping the overlap. Cursor
@@ -298,7 +300,7 @@ log) with the tree ids; repeating the same state publishes nothing.
   saved checkpoint; cell history and outputs remain durable. Unarchive leaves
   kernels absent until the next code call creates fresh state. Borrowing another
   tree's kernel does not transfer ownership.
-- **While archived.** Messages, events, snapshots, file observations,
+- **While archived.** Messages, events, snapshots,
   directories and tree relationships stay readable. A prompt gets 409 with the
   unarchive command, and a new child in the tree gets 409, until the root is
   unarchived. Unarchive does not start a turn.
@@ -622,6 +624,8 @@ nexus session list --archived-only | --include-archived
 nexus session export ID --format markdown --output transcript.md
 nexus session export ID --format json --scope tree --output session.json
 nexus project list | open [PATH]
+nexus manager ["one line"]          # typed chat with the Manager (docs/manager.md)
+nexus manager episodes | audit      # its past conversations (open in the inspector) | what it did
 ```
 
 The CLI subscribes to `/api/event?session=…` before it posts a prompt or
@@ -735,31 +739,12 @@ directory before calling the API; API and model-tool calls resolve a relative
 worktree path against the main checkout and a relative directory against the
 session's current directory.
 
-## File observations
+## File mutations
 
-The runtime gives each session a `FileGuard` (`nexus/observations.py`) backed by
-the `file_observation` table. A direct `read` records the resolved path, content
-hash, line ranges, clipped lines and read call id; a read inside `code` records
-nothing because its output is retained by the kernel, and reads by another
-session belong to that session. Observations persist, so a restart does not
-forget what the model saw and never rebuilds an old observation from current
-file contents.
-
-`edit` and `write` (direct and nested) require a same-revision observation before
-changing an existing file. Local changes need the affected lines, while
-overwrite/delete/move need complete coverage; details and the clipping rules are
-in [tools.md](tools.md#read-observations-and-freshness). A successful change
-drops the observations it invalidated. All Nexus file mutations in one daemon
-share an in-process asyncio lock (`Runtime.file_lock`), and the revision is
-checked again inside it before writing; a multi-file patch validates every file
-before writing any.
-Startup recovery restores an observation only for a completed `read` whose saved
-result it puts back into conversation history (and records its revision when the
-result was saved). A read whose result is unknown grants nothing, so recovery
-never authorizes an edit beyond content the model actually received.
-This orders Nexus writers only: unrestricted `bash` and
-external processes can still write without these checks, and an external writer
-can race the moment between the final check and the write.
+All Nexus file mutations in one daemon share an in-process asyncio lock (`Runtime.file_lock`); a multi-file patch
+validates every file before writing any. There is no read-before-edit guard and no per-session file observations
+([tools.md](tools.md#file-mutations)). The lock orders Nexus writers only: unrestricted `bash` and external
+processes can still write at any time.
 
 ## Questions
 

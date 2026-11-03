@@ -11,12 +11,20 @@ fn mix(a: u8, b: u8) -> u8 {
     (u16::from(a) + u16::from(b)).div_ceil(2) as u8
 }
 
-fn toward(c: Color, canvas: (u8, u8, u8)) -> Option<Color> {
+/// `c` moved `percent` of the way to `canvas`. 50 is the ordinary scrim.
+fn toward_by(c: Color, canvas: (u8, u8, u8), percent: u8) -> Option<Color> {
+    let step = |a: u8, b: u8| {
+        if percent == 50 {
+            return mix(a, b);
+        }
+        let (a, b, p) = (i32::from(a), i32::from(b), i32::from(percent));
+        (a + ((b - a) * p + if b >= a { 50 } else { -50 }) / 100).clamp(0, 255) as u8
+    };
     match c {
         Color::Rgb(r, g, b) => Some(Color::Rgb(
-            mix(r, canvas.0),
-            mix(g, canvas.1),
-            mix(b, canvas.2),
+            step(r, canvas.0),
+            step(g, canvas.1),
+            step(b, canvas.2),
         )),
         _ => None,
     }
@@ -27,6 +35,12 @@ fn toward(c: Color, canvas: (u8, u8, u8)) -> Option<Color> {
 /// named, default), and every cell in ANSI-16, 256 and mono, get
 /// `Modifier::DIM` instead.
 pub fn scrim(theme: &Theme, buf: &mut Buffer, area: Rect) {
+    scrim_by(theme, buf, area, 50);
+}
+
+/// The same scrim, lighter or heavier: `percent` of the way to the canvas. The
+/// Manager's card uses 25, far lighter than a modal's 50.
+pub fn scrim_by(theme: &Theme, buf: &mut Buffer, area: Rect, percent: u8) {
     let area = area.intersection(buf.area);
     let canvas = match (theme.opts.tier, theme.color("surface.canvas")) {
         (Tier::TrueColor, Some(Color::Rgb(r, g, b))) => Some((r, g, b)),
@@ -35,7 +49,12 @@ pub fn scrim(theme: &Theme, buf: &mut Buffer, area: Rect) {
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
             let cell = &mut buf[(x, y)];
-            let blended = canvas.and_then(|k| Some((toward(cell.fg, k)?, toward(cell.bg, k)?)));
+            let blended = canvas.and_then(|k| {
+                Some((
+                    toward_by(cell.fg, k, percent)?,
+                    toward_by(cell.bg, k, percent)?,
+                ))
+            });
             match blended {
                 Some((fg, bg)) => {
                     cell.fg = fg;
@@ -812,7 +831,7 @@ mod ctx_tests {
             body: CtxBody::Inventory(vec![CtxItem {
                 index: 0,
                 key: "mcp:runner".into(),
-                label: "runner · disabled in .mcp.json".into(),
+                label: "runner · disabled in project MCP".into(),
                 on: false,
                 locked: true,
             }]),
@@ -822,7 +841,7 @@ mod ctx_tests {
         let preview_text = text(&context_rows(&[section], 0, &preview));
         assert!(preview_text
             .iter()
-            .any(|line| line.contains("disabled in .mcp.json")));
+            .any(|line| line.contains("disabled in project MCP")));
         assert!(!preview_text.iter().any(|line| line.contains("new session")));
 
         let session_text = text(&context_rows(
@@ -833,7 +852,7 @@ mod ctx_tests {
                 body: CtxBody::Inventory(vec![CtxItem {
                     index: 0,
                     key: "mcp:runner".into(),
-                    label: "runner · disabled in .mcp.json".into(),
+                    label: "runner · disabled in project MCP".into(),
                     on: false,
                     locked: true,
                 }]),

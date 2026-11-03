@@ -101,9 +101,9 @@ pub struct Editor {
     /// Collapsed pastes: (marker text, full content), expanded again on `take`.
     pastes: Vec<(String, String)>,
 }
-/// Pastes at or above this size collapse into a `[Pasted ~N tokens]` marker.
-const COLLAPSE_CHARS: usize = 200;
-const COLLAPSE_LINES: usize = 3;
+/// Pastes at or above this many characters collapse into a `[Pasted ~N tokens]` marker,
+/// whatever their line count.
+const COLLAPSE_CHARS: usize = 500;
 impl Editor {
     fn paste_marker(content: &str) -> String {
         format!("[Pasted ~{} tokens]", (content.chars().count() / 4).max(1))
@@ -112,7 +112,7 @@ impl Editor {
     /// Insert pasted text. Large pastes become one atomic marker, like images;
     /// pasting the same content again right after its marker expands it in place.
     pub fn paste(&mut self, text: &str) {
-        let big = text.chars().count() >= COLLAPSE_CHARS || text.lines().count() >= COLLAPSE_LINES;
+        let big = text.chars().count() >= COLLAPSE_CHARS;
         if !big {
             return self.insert(text);
         }

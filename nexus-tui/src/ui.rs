@@ -222,6 +222,8 @@ pub enum OverlayKind {
         name: String,
         data_url: String,
     },
+    /// Drawing on a composer image.
+    Annotate(Box<crate::annotate::Annotation>),
     /// Usage of every connected provider (`/usage`, ctrl+u); `r` reads it again.
     Usage {
         rows: Vec<crate::usage::Row>,
@@ -351,6 +353,10 @@ pub enum EditTarget {
     },
     /// `[context] title_models`, comma separated; empty clears the list.
     TitleModels {
+        revision: String,
+    },
+    /// `[manager] model`, one `provider/model` ref.
+    ManagerModel {
         revision: String,
     },
 }
@@ -539,6 +545,8 @@ pub enum Target {
     /// An entry of the subagent strip: the session to open.
     Subagent(String),
     Notifications,
+    /// The header's Manager button.
+    ManagerSession,
     Tab(Tab),
     SettingsEntry,
     SideRow(usize),
@@ -579,6 +587,13 @@ pub enum Target {
         name: String,
         data_url: String,
     },
+    /// A composer thumbnail: draw on it.
+    ComposerImage(usize),
+    /// A pen colour in the drawing modal.
+    AnnotateInk(usize),
+    AnnotateUndo,
+    AnnotateClear,
+    AnnotateDone,
     /// A collapsed paste marker in a user message: open its full text.
     TimelinePaste(std::rc::Rc<crate::timeline::PasteText>),
     JumpLatest,
@@ -628,6 +643,14 @@ pub enum Target {
     SettingsPageRow(usize),
     /// A row of a provider's detail modal.
     ProviderDetailRow(usize),
+    /// The Manager's orb: a click talks.
+    ManagerOrb,
+    /// Outside a focused Manager card: a click dismisses it.
+    ManagerScrim,
+    /// An unfocused Manager card: a click focuses it.
+    ManagerCard,
+    /// Row `n` of a focused Manager card: a click opens the session.
+    ManagerRow(usize),
 }
 
 /// One row of the composer's completion popup.

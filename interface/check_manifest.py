@@ -11,7 +11,7 @@ from pathlib import Path
 
 SECTION_ORDER = [
     "appearance", "providers", "agents", "tools", "mcp",
-    "context", "dictation", "keybindings", "notifications", "about",
+    "context", "dictation", "manager", "keybindings", "notifications", "about",
 ]
 TABS = ["sessions", "files"]
 RIGHT = ["session_info", "git_status"]

@@ -213,6 +213,26 @@ impl Http {
         &self.base
     }
 
+    /// A WebSocket address on Core for `path` (the token is a query parameter: a WebSocket has no bearer header here).
+    pub fn socket_url(&self, path: &str, query: &[(&str, &str)]) -> String {
+        let base = self
+            .base
+            .replacen("https://", "wss://", 1)
+            .replacen("http://", "ws://", 1);
+        let mut params: Vec<(String, String)> = query
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        if !self.token.is_empty() {
+            params.push(("token".into(), self.token.clone()));
+        }
+        let query: Vec<String> = params
+            .iter()
+            .map(|(k, v)| format!("{k}={}", encode(v)))
+            .collect();
+        format!("{base}{path}?{}", query.join("&"))
+    }
+
     /// Bearer auth, unless Core serves the network without a token (`NEXUS_HOST`).
     fn authorized(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if self.token.is_empty() {
@@ -611,5 +631,33 @@ mod tests {
         let f = s.next().await.unwrap().unwrap();
         assert_eq!((f.event.as_str(), f.id.as_deref()), ("x", Some("g:1")));
         assert!(matches!(s.next().await, Err(Error::Network(_))));
+    }
+}
+
+fn encode(value: &str) -> String {
+    let mut out = String::new();
+    for b in value.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod socket_url_tests {
+    use super::*;
+
+    #[test]
+    fn a_socket_address_swaps_the_scheme_and_carries_the_token_and_stream() {
+        let http = Http::new("http://127.0.0.1:8790/", "t0k en").unwrap();
+        assert_eq!(
+            http.socket_url("/api/manager/live/audio", &[("stream_id", "s/1")]),
+            "ws://127.0.0.1:8790/api/manager/live/audio?stream_id=s%2F1&token=t0k%20en"
+        );
+        let open = Http::new("https://core.example", "").unwrap();
+        assert_eq!(open.socket_url("/x", &[]), "wss://core.example/x?");
     }
 }

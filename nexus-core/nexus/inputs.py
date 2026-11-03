@@ -38,6 +38,8 @@ class Inputs:
         columns = {row["name"] for row in store.db.execute("pragma table_info(pending_input)")}
         if "event_id" not in columns:
             store.db.execute("alter table pending_input add column event_id integer")
+        if "origin" not in columns:
+            store.db.execute("alter table pending_input add column origin text")
 
     def held(self, sid: str) -> bool:
         return self.store.db.execute("select 1 from input_hold where session_id = ?", (sid,)).fetchone() is not None
@@ -52,7 +54,8 @@ class Inputs:
     def _json(self, row: Any) -> dict[str, Any]:
         return {"id": row["id"], "session_id": row["session_id"], "mode": row["mode"],
                 "parts": json.loads(row["parts"]), "created": row["created"], "position": row["position"],
-                "state": row["state"], "held": self.held(row["session_id"])}
+                "state": row["state"], "held": self.held(row["session_id"]),
+                **({"origin": row["origin"]} if row["origin"] else {})}
 
     def list(self, sid: str | None = None, mode: str | None = None) -> list[dict[str, Any]]:
         sql = "select * from pending_input where state = 'pending'"
@@ -65,12 +68,13 @@ class Inputs:
             params.append(mode)
         return [self._json(row) for row in self.store.db.execute(sql + " order by position, created, id", params)]
 
-    def add(self, sid: str, mode: str, parts: list[dict[str, Any]], mutation: dict[str, Any] | None = None) -> dict[str, Any]:
+    def add(self, sid: str, mode: str, parts: list[dict[str, Any]], mutation: dict[str, Any] | None = None,
+            origin: str | None = None) -> dict[str, Any]:
         iid, now = new_id("inp"), time.time()
         with self.store.db:
             pos = self.store.db.execute("select coalesce(max(position), 0) + 1 from pending_input where session_id = ?", (sid,)).fetchone()[0]
-            self.store.db.execute("insert into pending_input (id,session_id,mode,parts,created,position,state) values (?,?,?,?,?,?,'pending')",
-                                  (iid, sid, mode, json.dumps(parts), now, pos))
+            self.store.db.execute("insert into pending_input (id,session_id,mode,parts,created,position,state,origin) values (?,?,?,?,?,?,'pending',?)",
+                                  (iid, sid, mode, json.dumps(parts), now, pos, origin))
             if mutation is not None:
                 record = {**mutation, "state": "resolved", "status": 202, "resource": sid,
                           "resolved": now, "expires": now + 7 * 24 * 3600,
@@ -137,8 +141,10 @@ class Inputs:
         if message is None:
             message = self.message(items[0])
         delivery = "steer" if items[0]["mode"] == "steer" else "queued"
+        origins = {item.get("origin") for item in items}
+        origin = origins.pop() if len(origins) == 1 else None  # a merged steer is "via" only if every part was
         with self.store.db:
-            stored = self.store._insert_message(sid, message, time.time())
+            stored = self.store._insert_message(sid, message, time.time(), origin)
             text, images = self.store._prompt_text(stored.message)
             if text.strip() or images:
                 self.store.db.execute("insert into prompt_history (session_id, text, image_count, created) values (?, ?, ?, ?)",

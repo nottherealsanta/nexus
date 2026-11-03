@@ -1,6 +1,6 @@
-"""Project `.mcp.json`: automatic enabled servers, isolation, collisions and strict parsing.
+"""Project MCP files: automatic enabled servers, isolation, collisions and strict parsing.
 
-Every test writes its own file under `tmp_path`. No repository or user `.mcp.json` is
+Every test writes its own files under `tmp_path`. No repository or user MCP file is
 read, and the autouse home fixture points every log and path at the test's temporary
 home. Commands are either nonexistent (so they fail before running anything) or the
 transport is monkeypatched.
@@ -28,6 +28,12 @@ def isolated_home(tmp_path, monkeypatch):
 def write_file(path: Path, servers: dict[str, object]) -> None:
     path.mkdir(parents=True, exist_ok=True)
     (path / ".mcp.json").write_text(json.dumps({"mcpServers": servers}), encoding="utf-8")
+
+
+def write_agents_file(path: Path, servers: dict[str, object]) -> None:
+    folder = path / ".agents"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "mcp.json").write_text(json.dumps({"mcpServers": servers}), encoding="utf-8")
 
 
 def project_for(path: Path, project_id: str = "p-1", *,
@@ -163,6 +169,78 @@ def test_reserved_names_follow_global_enable_and_disable_without_a_file_change(t
     assert set(definition.servers) == {"shell"} and definition.invalid == {}
     assert set(project.manager.connections) == {"shell"}
     assert project.row("shell")["state"] == "idle"
+
+
+def test_both_project_files_load_and_the_standard_file_wins_a_duplicate(tmp_path):
+    path = tmp_path / "project"
+    write_file(path, {"shared": {"command": "/nonexistent/standard"},
+                      "standard": {"command": "/nonexistent/standard-only"}})
+    write_agents_file(path, {"shared": {"command": "/nonexistent/agents"},
+                             "agents": {"command": "/nonexistent/agents-only"}})
+    project = project_for(path)
+
+    definition = project.refresh()
+    assert definition.error is None
+    assert set(definition.servers) == {"shared", "standard", "agents"}
+    assert definition.servers["shared"].command == "/nonexistent/standard"
+    assert project.names() == ["agents", "shared", "standard"]
+    assert {state.name for state in definition.files} == {".mcp.json", ".agents/mcp.json"}
+
+    duplicate = definition.duplicate_for("shared")
+    assert duplicate is not None
+    assert duplicate.used == ".mcp.json" and duplicate.ignored == ".agents/mcp.json"
+    assert any(".mcp.json is used" in warning for warning in definition.warnings)
+    row = project.row("shared")
+    assert row is not None and row["file"] == str(path / ".mcp.json")
+    assert row["duplicate"] == {"server": "shared", "used": ".mcp.json", "ignored": ".agents/mcp.json"}
+    assert ".mcp.json is used" in next(w for w in row["warnings"] if "defined in both" in w)
+    assert project.row("agents")["file"] == str(path / ".agents" / "mcp.json")
+    await_close = project.close()
+    asyncio.run(await_close)
+
+
+def test_the_agents_file_works_alone_and_reports_its_path(tmp_path):
+    path = tmp_path / "project"
+    path.mkdir()
+    write_agents_file(path, {"agents": {"command": "/nonexistent/agents"}})
+    project = project_for(path)
+
+    definition = project.refresh()
+    assert definition.exists and definition.error is None
+    assert definition.file == str(path / ".agents" / "mcp.json")
+    assert project.names() == ["agents"]
+    assert project.row("agents")["file"] == definition.file
+
+
+def test_a_broken_file_does_not_hide_the_other_files_servers(tmp_path):
+    path = tmp_path / "project"
+    write_agents_file(path, {"agents": {"command": "/nonexistent/agents"}})
+    (path / ".mcp.json").write_text("{not json", encoding="utf-8")
+    project = project_for(path)
+
+    definition = project.refresh()
+    assert ".mcp.json: is not valid JSON" in definition.error
+    assert set(definition.servers) == {"agents"}
+    assert project.names() == ["agents"]
+    assert project.row("agents")["state"] == "idle"
+    file_row = next(row for row in project.status() if row["server"] == "(file)")
+    assert file_row["state"] == "invalid" and ".mcp.json" in file_row["error"]
+
+
+def test_changing_either_file_reconciles_only_the_changed_entry(tmp_path):
+    path = tmp_path / "project"
+    write_file(path, {"standard": {"command": "/nonexistent/standard"}})
+    write_agents_file(path, {"agents": {"command": "/nonexistent/agents-one"}})
+    project = project_for(path)
+    project.refresh()
+    standard = project.manager.connections["standard"]
+    agents = project.manager.connections["agents"]
+
+    write_agents_file(path, {"agents": {"command": "/nonexistent/agents-two"}})
+    definition = project.refresh()
+    assert definition.servers["agents"].command == "/nonexistent/agents-two"
+    assert project.manager.connections["standard"] is standard
+    assert project.manager.connections["agents"] is not agents
 
 
 def test_a_name_defined_in_two_wrappers_is_rejected_without_starting_anything(tmp_path):

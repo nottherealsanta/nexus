@@ -41,7 +41,6 @@ from typing import TYPE_CHECKING, Any
 from . import questions as question_contract
 from .codec import part_from_json
 from .llmhub.types import Media, Message, Text, ToolCall, ToolResult
-from .observations import FileGuard
 from .store import Store, StoredMessage
 from .tools.base import clip
 
@@ -162,7 +161,6 @@ class Recovery:
         lifecycle = self.store.wait_lifecycle(session_id)
         legacy = bool(turn["data"].get("legacy"))
         tools = self._close_tool_calls(turn, lifecycle, legacy=legacy)
-        self._restore_inserted_observations(turn)
         self._checkpoint("tools.closed")
 
         waits = self._cancel_waits(session_id, lifecycle)
@@ -230,7 +228,6 @@ class Recovery:
 
     def _finish_completed(self, turn: dict[str, Any], requests: list[dict[str, Any]]) -> dict[str, Any]:
         """Close the bookkeeping of a turn whose durable end (`turn.ended`) says it finished."""
-        self._restore_inserted_observations(turn)
         self._publish_idle(turn, reason="the daemon restarted after the turn completed")
         summary = {
             "turn_id": turn["id"], "session_id": turn["session_id"], "outcome": "completed",
@@ -307,7 +304,6 @@ class Recovery:
             # partial batch. This state is unreachable with the atomic insert above.
             return {"message_id": None, "calls": []}
         results: list[ToolResult] = []
-        observations: list[dict[str, Any]] = []
         summary: list[dict[str, Any]] = []
         for call in calls:
             row = rows.get(call.id) or {"call_id": call.id, "name": call.name, "state": "saved"
@@ -316,28 +312,9 @@ class Recovery:
             results.append(result)
             summary.append({"call_id": call.id, "name": call.name, "state": row["state"],
                             "outcome": outcome})
-            if row["state"] == "finished" and not row["is_error"]:
-                observations.extend(row["observations"])
         stored = self.store.save_tool_message(session_id, Message("tool", tuple(results)), turn_id=turn["id"])
         self._publish_message(session_id, stored)
-        if observations:
-            # Exactly the reads whose saved output was just restored; never a fresh read.
-            FileGuard(self.store, session_id, self.runtime.file_lock).restore(observations)
         return {"message_id": stored.id, "calls": summary}
-
-    def _restore_inserted_observations(self, turn: dict[str, Any]) -> None:
-        """Grant coverage only for reads whose result is already in a saved tool message.
-
-        A crash can land between saving that message and committing its observations.
-        The message is context, so restoring its recorded observation grants nothing
-        beyond the content the model has.
-        """
-        observations: list[dict[str, Any]] = []
-        for row in self.store.tools_for_turn(turn["id"]):
-            if row["state"] == "inserted" and not row["is_error"]:
-                observations.extend(row["observations"])
-        if observations:
-            FileGuard(self.store, turn["session_id"], self.runtime.file_lock).restore(observations)
 
     # -- waits -----------------------------------------------------------------
 

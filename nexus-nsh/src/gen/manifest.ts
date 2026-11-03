@@ -51,7 +51,13 @@ export const manifest = {
    "provider.signed_in",
    "has_notifications",
    "text_edit.active",
-   "view.settings"
+   "view.settings",
+   "manager.in_call",
+   "manager.listening",
+   "manager.speaking",
+   "manager.field",
+   "manager.card_focused",
+   "manager.engaged"
   ],
   "placements": [
    "palette",
@@ -68,7 +74,8 @@ export const manifest = {
    "drawer",
    "panel",
    "settings",
-   "menu"
+   "menu",
+   "stage"
   ],
   "statuses": [
    "blocked_core",
@@ -96,7 +103,8 @@ export const manifest = {
    "editor",
    "git",
    "inspect",
-   "dictation"
+   "dictation",
+   "manager"
   ]
  },
  "keymap": {
@@ -117,9 +125,45 @@ export const manifest = {
    "editor",
    "drawer",
    "dialog",
+   "manager.listening",
+   "manager.field",
+   "manager.card",
    "escape_chain"
   ],
   "escape": [
+   {
+    "id": "manager_field",
+    "when": [
+     "manager.field"
+    ],
+    "action": "manager.field_close",
+    "note": "Manager: the typed field closes and its text is dropped. The call goes on."
+   },
+   {
+    "id": "manager_listening",
+    "when": [
+     "manager.listening"
+    ],
+    "action": "manager.listen_cancel",
+    "note": "Manager: cancels the recording in progress; the call stays open and nothing is sent."
+   },
+   {
+    "id": "manager_card",
+    "when": [
+     "manager.card_focused"
+    ],
+    "action": "manager.card_dismiss",
+    "note": "Manager: a focused card closes. Unfocused cards take no keys, so they never reach this rule."
+   },
+   {
+    "id": "manager_speaking",
+    "when": [
+     "manager.speaking",
+     "!manager.card_focused"
+    ],
+    "action": "manager.speech_stop",
+    "note": "Manager: stops the speech only. The turn's work continues."
+   },
    {
     "id": "overlay",
     "when": [
@@ -212,8 +256,10 @@ export const manifest = {
    "title_click": "session.rename",
    "breadcrumbs": "root title > child title; each crumb is a link; back via nav.back",
    "extra": [
+    "manager.open_session",
     "notifications.open"
-   ]
+   ],
+   "manager_button": "manager.open_session"
   },
   "left_sidebar": {
    "default_tab": "sessions",
@@ -558,6 +604,65 @@ export const manifest = {
     ]
    },
    {
+    "id": "manager",
+    "label": "Manager",
+    "row": [
+     {
+      "id": "manager.enabled",
+      "label": "Manager on",
+      "kind": "toggle",
+      "scope": "core",
+      "clients": "both",
+      "default": false,
+      "note": "Off until the soak passes. Starting while off shows a toast that points here. Core key [manager] enabled."
+     },
+     {
+      "id": "manager.mode",
+      "label": "Mode",
+      "kind": "choice",
+      "scope": "core",
+      "clients": "both",
+      "default": "pipeline",
+      "options": [
+       "pipeline",
+       "live"
+      ],
+      "note": "pipeline: speech to text, the Manager, then text to speech. live: GPT-Live over your ChatGPT sign-in (experimental); Core holds the call; the TUI and NSH web carry the microphone and speaker. NSH on iOS and desktop has no call audio yet and stays silent in this mode. Use headphones in the TUI. Core key [manager] mode."
+     },
+     {
+      "id": "manager.model",
+      "label": "Model",
+      "kind": "text",
+      "scope": "core",
+      "clients": "both",
+      "default": "copilot/gpt-6-luna",
+      "note": "provider/model ref. No fallback: a failure is spoken and shown. Core key [manager] model."
+     },
+     {
+      "id": "manager.proactive",
+      "label": "Speak up unprompted",
+      "kind": "choice",
+      "scope": "core",
+      "clients": "both",
+      "default": "attention",
+      "options": [
+       "off",
+       "attention",
+       "all"
+      ],
+      "note": "off: never. attention: approvals, questions and failures, spoken at a pause (MANAGER_PLAN.md section 8). all: also finished sessions. A proactive line never moves the screen. Core key [manager] proactive."
+     },
+     {
+      "id": "manager.privacy",
+      "label": "Where your words and sessions go",
+      "kind": "info",
+      "scope": "core",
+      "clients": "both",
+      "note": "Speech is transcribed and spoken by local models. What the Manager reads, including session text after redaction, goes to the model above (GitHub Copilot by default). Secrets are not spoken. Live mode would also send speech to OpenAI, and shows its own notice first."
+     }
+    ]
+   },
+   {
     "id": "keybindings",
     "label": "Keybindings",
     "row": [
@@ -657,6 +762,9 @@ export const manifest = {
     "tui": "f1",
     "nsh": "cmd+/"
    },
+   "leader": [
+    "shift+/"
+   ],
    "key_context": "global",
    "when": [
     "always"
@@ -716,7 +824,7 @@ export const manifest = {
     "settings",
     "banner"
    ],
-   "note": "Device-code flow shown in the UI; OpenCode uses an API key."
+   "note": "Each provider's rows offer its sign-in methods: a browser sign-in, a device code, the provider's CLI or a local server; OpenCode uses an API key."
   },
   {
    "id": "app.sign_out",
@@ -766,6 +874,9 @@ export const manifest = {
     "tui": "ctrl+,",
     "nsh": "cmd+,"
    },
+   "leader": [
+    "s"
+   ],
    "key_context": "global",
    "when": [
     "always"
@@ -780,6 +891,9 @@ export const manifest = {
    "id": "app.reconnect",
    "title": "Reconnect to Core",
    "category": "connection",
+   "leader": [
+    "r"
+   ],
    "when": [
     "connection.lost"
    ],
@@ -810,6 +924,9 @@ export const manifest = {
    "keys": {
     "nsh": "cmd+shift+n"
    },
+   "leader": [
+    "shift+n"
+   ],
    "key_context": "global",
    "when": [
     "always"
@@ -911,6 +1028,9 @@ export const manifest = {
     "tui": "alt+b",
     "nsh": "cmd+alt+b"
    },
+   "leader": [
+    "l"
+   ],
    "key_context": "global",
    "when": [
     "always"
@@ -1087,6 +1207,9 @@ export const manifest = {
     "tui": "ctrl+n",
     "nsh": "cmd+n"
    },
+   "leader": [
+    "n"
+   ],
    "key_context": "global",
    "when": [
     "has_project"
@@ -1124,6 +1247,10 @@ export const manifest = {
     "tui": "ctrl+k",
     "nsh": "cmd+k"
    },
+   "leader": [
+    "o",
+    "b"
+   ],
    "key_context": "global",
    "when": [
     "has_project"
@@ -1704,6 +1831,9 @@ export const manifest = {
     "tui": "ctrl+m",
     "nsh": "cmd+shift+m"
    },
+   "leader": [
+    "m"
+   ],
    "key_context": "global",
    "when": [
     "has_project"
@@ -1720,6 +1850,9 @@ export const manifest = {
    "title": "Change effort",
    "category": "model",
    "slash": "effort",
+   "leader": [
+    "t"
+   ],
    "when": [
     "has_project"
    ],
@@ -1734,6 +1867,9 @@ export const manifest = {
    "keys": {
     "tui": "ctrl+g"
    },
+   "leader": [
+    "g"
+   ],
    "key_context": "global",
    "title": "Change agent",
    "category": "agent",
@@ -2489,6 +2625,9 @@ export const manifest = {
     "tui": "ctrl+d",
     "nsh": "cmd+shift+d"
    },
+   "leader": [
+    "v"
+   ],
    "key_context": "composer",
    "when": [
     "always"
@@ -2497,7 +2636,7 @@ export const manifest = {
     "composer",
     "palette"
    ],
-   "note": "Ctrl+X V is also available in the TUI. Transcribes into editable composer text and never sends by itself."
+   "note": "Ctrl+X V is also available in both clients. Transcribes into editable composer text and never sends by itself."
   },
   {
    "id": "composer.slash_menu",
@@ -2687,6 +2826,222 @@ export const manifest = {
     "settings"
    ],
    "note": "Inline rename, find bar, settings field, key capture. Not the composer: Esc never clears composer text."
+  },
+  {
+   "id": "manager.open_session",
+   "title": "Manager session",
+   "category": "manager",
+   "slash": "manager-session",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette",
+    "header"
+   ],
+   "note": "The header's Manager button, left of the right-sidebar toggle. Opens the Manager's own (hidden) session, its current episode, in the inspector at the Requests level: the full context the model is given, with its log. The Manager has no timeline in the clients (docs/manager.md); this is the one place to read it. Needs Core; with no Manager episode yet it says so."
+  },
+  {
+   "id": "manager.talk",
+   "title": "Talk to the Manager",
+   "category": "manager",
+   "keys": {
+    "tui": "alt+m",
+    "nsh": "cmd+shift+space"
+   },
+   "key_context": "global",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette"
+   ],
+   "note": "Tap to toggle, in both clients (terminals do not report key release). No call: start one and open the mic. At rest in a call: open the mic. Listening: send. Thinking or speaking: stop speech, cancel the turn if safe, open the mic (barge-in). Clicking the orb does the same. An unfocused card is focused by this key."
+  },
+  {
+   "id": "manager.start",
+   "title": "Start the Manager",
+   "category": "manager",
+   "slash": "manager",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette"
+   ],
+   "note": "Starts the call, or moves it to this client (POST /api/manager/start). `/manager <text>` sends one typed line instead. With enabled = false, shows a toast that points at Settings, Manager. `/manager stop` is manager.stop."
+  },
+  {
+   "id": "manager.stop",
+   "title": "Stop the Manager",
+   "category": "manager",
+   "slash": "manager-stop",
+   "keys": {
+    "tui": "alt+shift+m",
+    "nsh": "cmd+alt+shift+space"
+   },
+   "key_context": "global",
+   "when": [
+    "manager.in_call"
+   ],
+   "unavailable_reason": "No Manager call is running.",
+   "placement": [
+    "palette"
+   ],
+   "note": "Typed as `/manager stop`. The composer reads a leading `stop` after /manager as this command (no space is allowed in a slash name, so `/manager-stop` is the registered form). Ends the call (POST /api/manager/stop). Never stops a session."
+  },
+  {
+   "id": "manager.send",
+   "title": "Send what you said",
+   "category": "manager",
+   "keys": {
+    "tui": "enter",
+    "nsh": "enter"
+   },
+   "key_context": "manager.listening",
+   "when": [
+    "manager.listening"
+   ],
+   "unavailable_reason": "The microphone is not open.",
+   "placement": [
+    "stage"
+   ],
+   "note": "Listening: enter sends. Space also sends (client), and so does manager.talk."
+  },
+  {
+   "id": "manager.listen_cancel",
+   "title": "Cancel listening",
+   "category": "manager",
+   "keys": {
+    "tui": "esc",
+    "nsh": "esc"
+   },
+   "key_context": "escape_chain",
+   "when": [
+    "manager.listening"
+   ],
+   "unavailable_reason": "The microphone is not open.",
+   "placement": [
+    "stage"
+   ],
+   "note": "Esc rule manager_listening. Drops the recording; nothing is sent. The call stays open."
+  },
+  {
+   "id": "manager.speech_stop",
+   "title": "Stop speaking",
+   "category": "manager",
+   "keys": {
+    "tui": "esc",
+    "nsh": "esc"
+   },
+   "key_context": "escape_chain",
+   "when": [
+    "manager.speaking",
+    "!manager.card_focused"
+   ],
+   "unavailable_reason": "The Manager is not speaking.",
+   "placement": [
+    "stage"
+   ],
+   "note": "Esc rule manager_speaking. Stops the speech only; the turn's work continues. With a focused card, Esc dismisses the card instead."
+  },
+  {
+   "id": "manager.field_open",
+   "title": "Type to the Manager",
+   "category": "manager",
+   "when": [
+    "manager.engaged"
+   ],
+   "unavailable_reason": "The Manager is not listening and no card is focused.",
+   "placement": [
+    "stage"
+   ],
+   "note": "Any printable character opens the one-line field above the orb with that character in it, and discards the recording. Keys go to the field, not the session composer. Spoken and typed lines are one conversation."
+  },
+  {
+   "id": "manager.field_send",
+   "title": "Send typed line",
+   "category": "manager",
+   "keys": {
+    "tui": "enter",
+    "nsh": "enter"
+   },
+   "key_context": "manager.field",
+   "when": [
+    "manager.field"
+   ],
+   "unavailable_reason": "The typed field is not open.",
+   "placement": [
+    "stage"
+   ],
+   "note": "Enter sends the typed line into the Manager's conversation."
+  },
+  {
+   "id": "manager.field_close",
+   "title": "Close typed line",
+   "category": "manager",
+   "keys": {
+    "tui": "esc",
+    "nsh": "esc"
+   },
+   "key_context": "escape_chain",
+   "when": [
+    "manager.field"
+   ],
+   "unavailable_reason": "The typed field is not open.",
+   "placement": [
+    "stage"
+   ],
+   "note": "Esc rule manager_field. Closes the field and drops its text. Nothing is sent."
+  },
+  {
+   "id": "manager.card_pick",
+   "title": "Pick a card row",
+   "category": "manager",
+   "when": [
+    "manager.card_focused"
+   ],
+   "unavailable_reason": "No card is focused.",
+   "placement": [
+    "stage"
+   ],
+   "note": "Digits 1-9 pick the row with that number (rows are numbered across the whole card). It opens the session through the normal navigation and closes the card. A session that no longer exists says so in the caption."
+  },
+  {
+   "id": "manager.card_mic",
+   "title": "Open the mic from a card",
+   "category": "manager",
+   "keys": {
+    "tui": "space",
+    "nsh": "space"
+   },
+   "key_context": "manager.card",
+   "when": [
+    "manager.card_focused"
+   ],
+   "unavailable_reason": "No card is focused.",
+   "placement": [
+    "stage"
+   ],
+   "note": "Space opens the mic while a focused card is up, so the user can answer it by voice."
+  },
+  {
+   "id": "manager.card_dismiss",
+   "title": "Dismiss card",
+   "category": "manager",
+   "keys": {
+    "tui": "esc",
+    "nsh": "esc"
+   },
+   "key_context": "escape_chain",
+   "when": [
+    "manager.card_focused"
+   ],
+   "unavailable_reason": "No card is focused.",
+   "placement": [
+    "stage"
+   ],
+   "note": "Esc rule manager_card. Closes the card (POST /api/manager/card/dismiss); the next turn's delta says so. A click on the scrim does the same."
   }
  ]
 } as const;

@@ -72,6 +72,8 @@ pub fn leave() {
         return;
     }
     let mut out = io::stdout();
+    // The drawing modal may have left the mouse reporting pixels.
+    let _ = out.write_all(b"\x1b[?1016l");
     if ENHANCED.swap(false, Ordering::SeqCst) {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
     }

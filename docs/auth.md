@@ -24,12 +24,16 @@ Both clients offer provider sign-in and sign-out on the Settings → Providers
 page ([config.md](config.md#settings-layout)). `GET /api/provider` says how each
 provider connects (`methods`) and, for API-key providers, where to get a key
 (`key_hint`), its variable (`key_env`) and whether the key in use is stored or
-from the environment (`key_source`, from `ApiKeyAuth.key_source()`). Device
-flows use `POST /api/provider/{id}/login`; the code and link arrive through
-`provider.login` events (`verification_uri`, `user_code`) and `GET` on the same
-path reports progress. API-key providers get masked key entry; Ollama uses its
-local connection method. `DELETE` cancels a pending flow and signs out. Keys are
-never included in progress events. See [Configuration](config.md).
+from the environment (`key_source`, from `ApiKeyAuth.key_source()`). Every flow
+uses `POST /api/provider/{id}/login` with the chosen `method`; the link and, for
+device flows, the code arrive through `provider.login` events
+(`verification_uri`, `user_code`) and `GET` on the same path reports progress.
+A `browser` flow runs on the daemon's loopback listener and hands its URL to the
+client to open, so it works when the client and daemon share a machine; a remote
+client should use the device code. API-key providers get masked key entry;
+Ollama uses its local connection method. `DELETE` cancels a pending flow and
+signs out. Keys are never included in progress events. See
+[Configuration](config.md).
 
 ## The shared interface
 
@@ -45,7 +49,7 @@ Every sign-in class takes an optional `CredentialStore` and has:
 
 | Provider | `methods` | Flow |
 | --- | --- | --- |
-| `codex` | `("browser", "device")` | PKCE in a browser, or a device code. The API accepts `device` only |
+| `codex` | `("browser", "device")` | PKCE in a browser, or a device code. Clients offer both; the browser flow needs the daemon and browser on one machine |
 | `claude` | `("cli",)` | The user's Claude Code (`claude auth login`) |
 | `copilot` | `("device",)` | GitHub device code (RFC 8628) |
 | `grok` | `("device",)` | auth.x.ai device code (RFC 8628) |
@@ -64,16 +68,19 @@ Constants: issuer `https://auth.openai.com`, a public client id, redirect
 **Browser (PKCE).** A random verifier and its S256 challenge, a random `state`.
 A one-shot HTTP server listens on `127.0.0.1:1455`. The authorize URL
 (`/oauth/authorize`, with `id_token_add_organizations`, `codex_cli_simplified_flow`
-and `originator=nexus`) is opened in the browser; if it cannot be opened, the URL
-is passed to `notify`. The callback must be `GET /auth/callback`, with a code and
-a `state` that matches (constant-time compare), otherwise `AuthError`. Waits up to
-300 s. The code is exchanged at `/oauth/token` with the verifier.
+and `originator=nexus`) is opened by the `browser_open` callable, or passed to
+`notify` when that callable returns false. The daemon passes a callable that
+publishes `Open <url> to sign in to ChatGPT.` instead of launching a browser, so
+the client opens the link. The callback must be `GET /auth/callback`, with a code
+and a `state` that matches (constant-time compare), otherwise `AuthError`. Waits
+up to 300 s. The code is exchanged at `/oauth/token` with the verifier. A busy
+port 1455 fails the flow; the device code is the fallback.
 
 **Device.** `POST /api/accounts/deviceauth/usercode`, tell the user to open
 `https://auth.openai.com/codex/device` and enter the code, poll
 `/api/accounts/deviceauth/token` (HTTP 403 and 404 mean "not yet"; interval at
-least 1 s, default 5 s; gives up after 900 s), then exchange the returned
-authorization code and verifier at `/oauth/token`.
+least 1 s, default 5 s, plus a 3 s safety margin; gives up after 900 s), then
+exchange the returned authorization code and verifier at `/oauth/token`.
 
 **Headers.** `authorization: Bearer <access>`, `originator: nexus`,
 `user-agent: nexus/0.10`, plus `chatgpt-account-id` and

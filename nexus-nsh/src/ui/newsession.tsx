@@ -4,10 +4,10 @@
 // prompt); an agent's description is never sent, so it is never shown here.
 import { Scroll, Text, View, effect, signal, windowSize } from "nsh";
 import { Button, TextView } from "nsh/base";
-import { Btn, FOCUS, Icon, PROSE, T } from "./kit";
+import { Btn, FOCUS, Icon, PROSE, T, TS } from "./kit";
 import { run, toggleDraftInventory } from "../commands";
 import {
-  type ContextEntry, contextDetail, agentCatalog, currentProject, info, rememberedModel, draftContext, draftContextKey, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome,
+  type ContextEntry, contextDetail, agentCatalog, currentProject, info, rememberedModel, draftPlanContext, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome,
 } from "../store";
 import { request } from "../core/transport";
 import { Modal, ModalFooter, ModalTitle } from "./modal";
@@ -85,6 +85,7 @@ function itemDetail(item: InventoryRow): string {
   if (item.description) lines.push(item.description);
   if (item.tools !== undefined && item.tools !== null) lines.push(`${item.tools} tools`);
   if (item.error) lines.push(`unavailable: ${item.error}`);
+  if (item.warnings?.length) lines.push(`warning: ${item.warnings.join(" · ")}`);
   if (item.locked) lines.push("new session required to enable");
   return lines.join("\n");
 }
@@ -101,7 +102,7 @@ function entryOf(item: InventoryRow): ContextEntry {
   }
   return {
     key: item.name, name: item.name,
-    description: [item.meta, item.tools === null || item.tools === undefined ? "" : `${item.tools} tools`, item.error ?? ""].filter(Boolean).join(" · "),
+    description: [item.meta, item.tools === null || item.tools === undefined ? "" : `${item.tools} tools`, item.error ?? "", ...(item.warnings ?? [])].filter(Boolean).join(" · "),
     load: async () => {
       const row = await request<any>("GET", `/api/mcp/${name}`).catch(() => request<any>("GET", `/api/project/${project}/mcp/${name}`)).catch(() => null);
       return row ? `${itemDetail(item)}\n\n${JSON.stringify(row, null, 2)}` : itemDetail(item);
@@ -115,7 +116,10 @@ export function inventorySections(items: InventoryRow[], loading?: string, error
     const title = kind === "skill" ? "Skills" : "MCP";
     const noun = kind === "skill" ? "skills" : "servers";
     const off = rows.filter((item) => !item.on).length;
-    const meta = loading ?? error ?? (rows.length === 0 ? "none" : off ? `${off} off` : "");
+    const duplicates = new Set(rows.flatMap((item) => item.warnings?.filter((warning) => warning.includes("is defined in both")) ?? [])).size;
+    const meta = loading ?? error ?? (duplicates
+      ? `${duplicates} duplicate name${duplicates === 1 ? "" : "s"}; .mcp.json wins`
+      : rows.length === 0 ? "none" : off ? `${off} off` : "");
     return {
       key: kind === "skill" ? "skills" : "mcp", title, count: loading || error ? undefined : rows.length, meta,
       entries: rows.map((item) => entryOf(item)),
@@ -177,9 +181,9 @@ export function inColumns<T>(items: T[], most: number): T[][] {
   return Array.from({ length: count }, (_, x) => items.slice(x * height, (x + 1) * height)).filter((c) => c.length);
 }
 
-/** One 196 px cell fits `change_session_directory` at 12.5 px. */
+/** One cell's nominal width; long names ellipsize inside it. */
 const CELL_PX = 196;
-const HEAD = "text-[13px] leading-5";
+const HEAD = TS.base;
 
 /** A switch cell, as the TUI draws it: the marker switches and the name opens its information. */
 function Cell(p: { name: string; on: boolean; locked?: boolean; status?: string; error?: string | null; label: string; testID: string; onToggle: () => void; onInfo: () => void }) {
@@ -190,11 +194,11 @@ function Cell(p: { name: string; on: boolean; locked?: boolean; status?: string;
           <Text class={`text-[10px] leading-5 ${p.on ? "text-muted-foreground" : "text-muted-foreground opacity-60"}`}>{p.on ? "●" : "○"}</Text>
         </Button>
         <Button onPress={p.onInfo} accessibilityLabel={`${p.name} details`} testID={`${p.testID}-info`} class={`shrink min-w-0 flex-row items-center gap-2 rounded-(--radius) px-1 h-6 hover:bg-accent ${FOCUS} ${p.locked ? "opacity-60" : ""}`}>
-          <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 font-mono text-[12.5px] leading-5 ${p.on ? "text-foreground-secondary" : "text-muted-foreground line-through opacity-60"}`}>{p.name}</Text>
+          <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.mono} ${p.on ? "text-foreground-secondary" : "text-muted-foreground line-through opacity-60"}`}>{p.name}</Text>
           <If when={!!p.status}><Text style={{ numberOfLines: 1 }} class={T.meta}>{p.status!}</Text></If>
         </Button>
       </View>
-      <If when={!!p.error}><Text style={{ numberOfLines: 2 }} class="pl-6 text-[12.5px] leading-5 text-warning">{p.error!}</Text></If>
+      <If when={!!p.error}><Text style={{ numberOfLines: 2 }} class={`pl-6 ${TS.base} text-warning`}>{p.error!}</Text></If>
     </View>
   );
 }
@@ -208,7 +212,7 @@ function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: 
   return (
     <View class="py-1 gap-0.5" testID={`ctx-${s.key}`}>
       <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`}
-        tooltip={p.estimated && s.tokens !== undefined ? <Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{ESTIMATED}</Text> : undefined}
+        tooltip={p.estimated && s.tokens !== undefined ? <Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{ESTIMATED}</Text> : undefined}
         class={`self-stretch flex-row items-center gap-1.5 min-h-6 rounded-(--radius) px-1 -mx-1 hover:bg-accent ${FOCUS}`}>
         <Text class={`shrink-0 ${HEAD} font-semibold text-foreground-secondary`}>{s.title}</Text>
         <If when={s.count !== undefined}><Text class={`shrink-0 ${HEAD} text-muted-foreground tabular-nums`}>{`[${s.count}]`}</Text></If>
@@ -268,14 +272,14 @@ function EntryRow(p: { entry: () => ContextEntry; focus: boolean }) {
         class={`self-stretch flex-row items-start gap-2 rounded-(--radius) px-1 py-1 hover:bg-accent ${FOCUS}`}>
         <View class="w-4 h-5 shrink-0 items-center justify-center"><Icon name={open() ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>
         <View class="flex-1 min-w-0">
-          <Text class="font-mono text-[12.5px] leading-5 text-foreground">{e().name}</Text>
+          <Text class={`${TS.mono} text-foreground`}>{e().name}</Text>
           <If when={!!e().description}><Text style={{ numberOfLines: 2 }} class={T.sec}>{e().description}</Text></If>
         </View>
       </Button>
       <If when={open()}>
         <View class="ml-6 mr-1 mb-2" testID={`context-entry-${id}-full`}>
           <If when={loaded() !== undefined} else={<Text class={T.meta}>Loading…</Text>}>
-            {() => <If when={!!e().markdown} else={<Text style={{ userSelect: "text" }} class="font-mono text-[12.5px] leading-5 text-foreground-secondary">{loaded()!}</Text>}>
+            {() => <If when={!!e().markdown} else={<Text style={{ userSelect: "text" }} class={`${TS.mono} text-foreground-secondary`}>{loaded()!}</Text>}>
               <TextView selectable links="open" markdown={loaded()!} classes={PROSE} />
             </If>}
           </If>
@@ -294,7 +298,7 @@ export function ContextDetailModal() {
       <ModalTitle title={body().title} esc={false} />
       <Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }}>
         <If when={!!body().entries} else={
-          <If when={!!body().markdown} else={<Text testID="context-detail-text" style={{ userSelect: "text" }} class="font-mono text-[12.5px] leading-5 text-foreground-secondary">{body().detail}</Text>}>
+          <If when={!!body().markdown} else={<Text testID="context-detail-text" style={{ userSelect: "text" }} class={`${TS.mono} text-foreground-secondary`}>{body().detail}</Text>}>
             <View testID="context-detail-markdown"><TextView selectable links="open" markdown={body().detail} classes={PROSE} /></View>
           </If>
         }>
@@ -317,7 +321,7 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
     return (
     <View class="w-full bg-card px-4 py-3" testID="context-sections"
       onLayout={(b: any) => cardWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
-      <If when={!!p.reconstructed}><Text class="text-[13px] leading-5 text-warning">reconstructed</Text></If>
+      <If when={!!p.reconstructed}><Text class={`${TS.base} text-warning`}>reconstructed</Text></If>
       <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => <Section s={s()} estimated={p.estimated} width={cardWidth()} onOpen={() => detail.set(s())} onItem={(name) => detail.set({ ...s(), focus: name })} onInventoryToggle={p.onInventoryToggle} />}</Each>
       <View class="h-px bg-border mt-2" />
       <View class="flex-row items-center gap-2 pt-2" testID="context-total">
@@ -388,9 +392,8 @@ export function NewSessionView() {
   };
   const preview = () => {
     const p = project()!;
-    const answer = draftContext();
     return previewSections({
-      core: answer?.key === draftContextKey(p.id) ? answer.data : null,
+      core: draftPlanContext(p.id),
       agent: agentName(), prompt: prompts()[`${p.id}|${agentName()}`] ?? "",
       disabled_tools: sessionDraft().disabled_tools,
       file: files()[p.id] ? { path: `${fullPath().replace(/\/$/, "")}/AGENTS.md`, ...files()[p.id]! } : null,
@@ -401,7 +404,7 @@ export function NewSessionView() {
       <If when={project()} else={
         <View class="flex-1 items-center justify-center p-6">
           <View class="w-full max-w-[560px] gap-2">
-            <Text class="text-[18px] leading-7 font-semibold text-foreground">Welcome to Nexus</Text>
+            <Text class={T.title}>Welcome to Nexus</Text>
             <Text class={T.sec}>Add a project directory to begin. Sessions run inside a project and keep everything the model sees in one timeline.</Text>
             <View class="flex-row pt-1"><Btn label="Add project" icon="plus" kind="primary" onPress={() => run("project.add")} testID="welcome-add-project" /></View>
           </View>

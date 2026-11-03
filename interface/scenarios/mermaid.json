@@ -1,0 +1,11 @@
+{
+  "messages": [
+    { "id": "m1", "seq": 1, "created": 1, "role": "user", "parts": [{ "type": "text", "text": "Draw the diagrams." }] },
+    { "id": "m2", "seq": 2, "created": 2, "role": "assistant", "parts": [
+      { "type": "text", "text": "Here are the diagrams.\n\n```mermaid\nflowchart TD\n  Client --> Core --> Store\n```\n\n```mermaid\npie title Traffic\n  \"Reads\" : 3\n  \"Writes\" : 1\n```\n\n```mermaid\nmindmap\n  root((Nexus))\n    Client\n    Core\n```\n" }
+    ] }
+  ],
+  "expect": ["◇ mermaid · copy source", "Traffic", "Reads", "Writes", "mindmap", "root((Nexus))"],
+  "absent": ["Client --> Core"],
+  "expect_open": []
+}

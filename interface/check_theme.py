@@ -11,7 +11,7 @@ import tomllib
 import unicodedata
 from pathlib import Path
 
-GROUPS = ("surface", "text", "border", "interactive", "status", "diff", "agent")
+GROUPS = ("surface", "text", "border", "interactive", "status", "diff", "agent", "manager")
 STATUSES = ("running", "done", "error", "denied", "waiting", "interrupted", "cancelled")
 MONO_MODS = {"bold", "dim", "reverse", "underline"}
 
@@ -107,7 +107,9 @@ def main(path, overlay=None):
                 check(f"{p} text.faint on {s}", cc["text.faint"], cc[s], nmin)
                 for mk in ("border.focus", "interactive.accent", "interactive.multi",
                            "interactive.focus",
-                           "status.success", "status.warning", "status.error", "status.info"):
+                           "status.success", "status.warning", "status.error", "status.info",
+                           "manager.listening", "manager.thinking", "manager.speaking",
+                           "manager.idle"):
                     check(f"{p} {mk} on {s}", cc[mk], cc[s], nmin)
                 for agent in data[tn]["agent"]:
                     check(f"{p} agent.{agent} on {s}", cc[f"agent.{agent}"], cc[s], tmin)

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..llmhub.types import ToolSpec
-from .base import Tool, ToolContext, ToolError, line_span, resolve
+from .base import Tool, ToolContext, ToolError, resolve
 
 # -- Replacement ------------------------------------------------------------
 
@@ -33,10 +33,10 @@ async def _replace(args: dict[str, Any], ctx: ToolContext) -> str:
         raise ToolError("old_string (non-empty) and new_string must be strings")
     if old == new:
         raise ToolError("old_string and new_string are identical")
-    guard = ctx.files
-    if guard is None:  # a bare tool context (unit use), not a Nexus session
+    lock = ctx.file_lock
+    if lock is None:  # a bare tool context (unit use), not a Nexus session
         return _replace_now(display, path, old, new, args.get("replace_all"))
-    async with guard.mutation():
+    async with lock:
         if not path.is_file():
             raise ToolError(f"{display} does not exist")
         text = path.read_text(newline="")
@@ -46,11 +46,7 @@ async def _replace(args: dict[str, Any], ctx: ToolContext) -> str:
         if count > 1 and not args.get("replace_all"):
             raise ToolError(f"old_string occurs {count} times in {display}; add context or set replace_all")
         replaced = count if args.get("replace_all") else 1
-        positions = _occurrences(text, old, None if args.get("replace_all") else 1)
-        affected = [line_span(text, at, at + len(old)) for at in positions]
-        guard.require(display, path, affected=affected)
         path.write_text(text.replace(old, new, replaced))
-        guard.forget([path])
         return f"edited {display} ({replaced} replacement{'s' if replaced != 1 else ''})"
 
 
@@ -79,9 +75,7 @@ TOOL = Tool(
         name="edit",
         description=(
             "Replace exact text in one existing file. `old_string` must match the file exactly and be unique, "
-            "unless `replace_all` is true. The lines you change must have been read in this session, and after "
-            "any change or external edit you must read again before the next one. For several changes or "
-            "several files, use `patch`."
+            "unless `replace_all` is true. For several changes or several files, use `patch`."
         ),
         parameters={
             "type": "object",

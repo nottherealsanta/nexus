@@ -29,7 +29,26 @@ def estimate_tokens(value: Any) -> int:
     return math.ceil(len(text) / 4)
 
 
+def _context_body(body: dict[str, Any]) -> dict[str, Any]:
+    """The request with its reasoning-effort options removed.
+
+    Effort steers the model; it is not part of the context the model reads, so
+    switching it must not move the estimate.
+    """
+    body = dict(body)
+    body.pop("reasoning_effort", None)
+    body.pop("effort", None)
+    reasoning = body.get("reasoning")
+    if isinstance(reasoning, dict):
+        reasoning = {key: value for key, value in reasoning.items() if key != "effort"}
+        if reasoning:
+            body["reasoning"] = reasoning
+        else:
+            body.pop("reasoning")
+    return body
+
+
 def budget(body: dict[str, Any], window: int | None, input_tokens: int | None = None) -> dict[str, Any]:
     """Prefer measured request input; label the character-based fallback."""
-    used = input_tokens if input_tokens is not None else estimate_tokens(body)
+    used = input_tokens if input_tokens is not None else estimate_tokens(_context_body(body))
     return {"used": used, "window": window, "exact": input_tokens is not None}

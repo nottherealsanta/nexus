@@ -15,7 +15,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 
 use crate::actions::{ActionDone, ApiCall, Done, VoiceOperation, VoiceTarget};
-use crate::api::{Message, Session};
+use crate::api::{ClientView, Message, Session};
 use crate::composer::Composer;
 use crate::keys;
 use crate::layout::{contains, Flags, HitMap, Regions};
@@ -54,6 +54,12 @@ pub enum Sound {
     Finished,
     /// A session waiting for an approval or an answer.
     Input,
+    /// The Manager has been thinking for a moment: a soft cue so silence never reads as a dropped call.
+    Thinking,
+    /// `alt+m` started a Manager call.
+    ManagerStart,
+    /// GPT-Live is connected: the voice is listening.
+    LiveConnected,
 }
 
 /// Terminal notifications (Settings › Notifications › Terminal notifications).
@@ -130,6 +136,19 @@ pub const WIRED: &[&str] = &[
     "session.handoff",
     "session.open_origin",
     "session.open_continuation",
+    "manager.talk",
+    "manager.start",
+    "manager.open_session",
+    "manager.stop",
+    "manager.send",
+    "manager.field_send",
+    "manager.card_mic",
+    "manager.listen_cancel",
+    "manager.speech_stop",
+    "manager.field_close",
+    "manager.card_dismiss",
+    "manager.field_open",
+    "manager.card_pick",
     "voice.dictate",
     "voice.download_stt",
     "voice.remove_stt",
@@ -225,7 +244,7 @@ const MUTATING: &[&str] = &[
 ];
 
 const NOT_WIRED: &str = "Not available yet.";
-const READ_ONLY: &str = "Read-only until Core is connected again.";
+pub(crate) const READ_ONLY: &str = "Read-only until Core is connected again.";
 /// A second Ctrl+C this soon after the first quits the TUI.
 const CTRL_C_QUIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -498,7 +517,11 @@ pub enum PageAction {
     RefreshModels,
     /// Open one provider's detail modal.
     OpenProvider(String),
-    Connect(String),
+    /// Start one of the provider's sign-in methods (`browser`, `device`, `cli`, `local` or `api_key`).
+    Connect {
+        id: String,
+        method: String,
+    },
     Disconnect(String),
     CancelLogin(String),
     CopyCode(String),
@@ -518,6 +541,17 @@ pub enum PageAction {
     },
     /// Open one subagent's page (its models and fallbacks).
     OpenAgent(String),
+}
+
+/// The row that starts one provider sign-in method.
+fn sign_in_label(method: &str) -> String {
+    match method {
+        "browser" => "Sign in with browser".into(),
+        "device" => "Sign in with a device code".into(),
+        "cli" => "Sign in with Claude Code".into(),
+        "local" => "Use the local server".into(),
+        other => format!("Sign in ({other})"),
+    }
 }
 
 /// Which Git group a changed-file row belongs to.
@@ -655,6 +689,8 @@ pub struct ProjectInventory {
     pub mcp_error: Option<String>,
     /// `GET /api/project/{id}/mcp` failed (the global read may still have worked).
     pub project_mcp_error: Option<String>,
+    /// Names defined in both project files; `.mcp.json` wins each one.
+    pub project_mcp_duplicates: usize,
 }
 
 pub struct Ui {
@@ -729,6 +765,8 @@ pub struct Ui {
     pub overlay: Option<Overlay>,
     pub dialog: Option<Dialog>,
     pub dictation: crate::dictation::DictationUi,
+    /// The Manager's orb, caption and card (`manager.rs`).
+    pub manager: crate::manager::ManagerUi,
     /// Last `/api/voice` response used by Settings and download confirmations.
     pub voice_status: Option<Value>,
     pub voice_status_error: Option<String>,
@@ -814,6 +852,10 @@ pub struct App {
     pub size: (u16, u16),
     pub frame: usize,
     pub mouse: Option<(u16, u16)>,
+    /// The view last handed to the supervisor; `sync_view` reports a change.
+    view_sent: Option<ClientView>,
+    /// The session `ui.scroll` belongs to, so another session's offset is never reused.
+    scroll_session: Option<String>,
     pub timeline_screen: Option<ratatui::buffer::Buffer>,
     pub timeline_drag: Option<(crate::selection::Selection, Option<Target>)>,
     /// Rendered message bodies, keyed by content/width/theme (timeline.rs).
@@ -831,6 +873,8 @@ pub struct App {
     pub timeline_builds: std::cell::Cell<u64>,
     /// Terminal image protocol and the decoded states behind timeline previews.
     pub image_viewer: std::cell::RefCell<crate::images::Viewer>,
+    /// The terminal's copy of the drawing modal's picture and strokes.
+    pub annotate_live: std::cell::RefCell<crate::annotate::Live>,
     bindings: HashMap<(String, String), String>,
     shortcut_leader: Option<Instant>,
     /// Last kernel/shell refresh while a session tree was busy.
@@ -972,6 +1016,7 @@ impl App {
                 overlay: None,
                 dialog: None,
                 dictation: crate::dictation::DictationUi::default(),
+                manager: crate::manager::ManagerUi::default(),
                 voice_status: None,
                 voice_status_error: None,
                 voice_status_generation: 0,
@@ -1022,6 +1067,8 @@ impl App {
             size,
             frame: 0,
             mouse: None,
+            view_sent: None,
+            scroll_session: None,
             timeline_screen: None,
             timeline_drag: None,
             layout: std::cell::RefCell::new(crate::timeline::LayoutCache::default()),
@@ -1031,6 +1078,7 @@ impl App {
             preview_builds: std::cell::Cell::new(0),
             timeline_builds: std::cell::Cell::new(0),
             image_viewer: std::cell::RefCell::new(crate::images::Viewer::default()),
+            annotate_live: std::cell::RefCell::new(crate::annotate::Live::default()),
             bindings,
             shortcut_leader: None,
             last_resources_at: None,
@@ -1103,6 +1151,54 @@ impl App {
             .values()
             .max_by(|a, b| a.updated.total_cmp(&b.updated))
             .map(|p| p.id.clone())
+    }
+
+    /// The open panel, using the shared `files`, `file` and `diff` ids. The
+    /// left Files tab only counts while its sidebar is visible; Settings is a
+    /// centre view, not a panel.
+    fn panel_id(&self) -> Option<&'static str> {
+        if self.ui.view == View::Settings {
+            return None;
+        }
+        if self.ui.diff_open.is_some() {
+            return Some("diff");
+        }
+        if self.ui.file_open || self.ui.file_edit.is_some() {
+            return Some("file");
+        }
+        if self.ui.tab == Tab::Files && (self.ui.left_open || self.ui.drawer == Some(Side::Left)) {
+            return Some("files");
+        }
+        None
+    }
+
+    /// What this client is showing. Ids and a panel label only: never a path,
+    /// draft, scroll position or screen contents.
+    pub fn client_view(&self) -> ClientView {
+        let session = self.viewed_id().map(str::to_owned);
+        // A session implies its project. Derive it from the session so a
+        // transient project/session mismatch is never sent to Core.
+        let project = session
+            .as_deref()
+            .and_then(|id| self.state.model.sessions.get(id))
+            .map(|s| s.project_id.clone())
+            .or_else(|| self.current_project());
+        ClientView {
+            project,
+            session,
+            panel: self.panel_id().map(str::to_owned),
+        }
+    }
+
+    /// Tell the supervisor when the view changed. It owns the stream id, keeps
+    /// the latest view across reconnects, and reports after `server.connected`.
+    pub fn sync_view(&mut self) {
+        let view = self.client_view();
+        if self.view_sent.as_ref() == Some(&view) {
+            return;
+        }
+        self.view_sent = Some(view.clone());
+        self.effects.push(Effect::Sync(SyncCommand::View(view)));
     }
 
     /// Session switches in their visible order: ordinary tools, then skills,
@@ -1239,7 +1335,7 @@ impl App {
             }
         } else {
             // Core's draft plan is the model context. The project inventory adds
-            // the actual `.mcp.json` rows Core plans away: disabled, failed and
+            // the actual project-file rows Core plans away: disabled, failed and
             // invalid entries. They are shown off and locked so the section's
             // `(off)` count never claims they are in the model context.
             let inventory_rows = self.inventory_mcp_rows();
@@ -1273,7 +1369,7 @@ impl App {
         items
     }
 
-    /// The global inventory plus this project's actual `.mcp.json` rows from
+    /// The global inventory plus this project's actual MCP-file rows from
     /// `GET /api/project/{id}/mcp`, looked up by the exact current project id.
     /// Rows include enabled, disabled, failed and invalid entries; this is a
     /// read and never starts a server. A project row wins over a global row of
@@ -1314,7 +1410,7 @@ impl App {
             .push(Effect::Sync(SyncCommand::SkillMcp(project)));
     }
 
-    /// Whether an inventory row belongs to a project `.mcp.json` rather than
+    /// Whether an inventory row belongs to a project MCP file rather than
     /// the user's global configuration.
     fn is_project_mcp_row(row: &Value) -> bool {
         row["source"].as_str() == Some("project") || row["project_id"].is_string()
@@ -1393,7 +1489,7 @@ impl App {
                 }
             }
             "disabled" => label.push_str(if is_project {
-                " · disabled in .mcp.json"
+                " · disabled in project MCP"
             } else {
                 " · disabled in configuration"
             }),
@@ -1627,6 +1723,7 @@ impl App {
             let warnings: Vec<&str> = inventory_row
                 .as_ref()
                 .and_then(|s| s["warnings"].as_array())
+                .or_else(|| draft_row.and_then(|s| s["warnings"].as_array()))
                 .map(|list| list.iter().filter_map(Value::as_str).collect())
                 .unwrap_or_default();
             let mut lines = vec![match state.as_str() {
@@ -1759,7 +1856,7 @@ impl App {
                 ),
                 "invalid" if name == "(file)" => lines.push(format!(
                     "Action: fix {}{} so it parses; an invalid file starts no project server.",
-                    file.unwrap_or(".mcp.json"),
+                    file.unwrap_or("the project MCP file"),
                     if file.is_some() { "" } else { " in this project" },
                 )),
                 "invalid" => lines.push(format!(
@@ -1844,6 +1941,13 @@ impl App {
                 }
                 if let Some(error) = inventory.mcp_error.as_ref() {
                     return format!("unavailable: {error}");
+                }
+                if inventory.project_mcp_duplicates > 0 {
+                    let count = inventory.project_mcp_duplicates;
+                    return format!(
+                        "{count} duplicate name{}; .mcp.json wins",
+                        if count == 1 { "" } else { "s" }
+                    );
                 }
             }
         }
@@ -2689,6 +2793,7 @@ impl App {
             "provider.signed_in" => false,
             "has_notifications" => !self.ui.alerts.history.is_empty(),
             "text_edit.active" => self.ui.edit.is_some(),
+            n if n.starts_with("manager.") => self.manager_term(n),
             _ => return None,
         })
     }
@@ -2934,7 +3039,7 @@ impl App {
 
     // ---- focus & overlays --------------------------------------------------------
 
-    fn restore_point(&self) -> Restore {
+    pub(crate) fn restore_point(&self) -> Restore {
         Restore {
             focus: self.ui.focus,
             scroll: self.ui.scroll,
@@ -3792,10 +3897,20 @@ impl App {
                         restore,
                     });
                 } else {
+                    let method = self
+                        .state
+                        .providers
+                        .iter()
+                        .find(|p| p["id"].as_str() == Some(id.as_str()))
+                        .and_then(|p| p["methods"].as_array())
+                        .and_then(|m| m.first())
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("device")
+                        .to_owned();
                     self.api(ApiCall::Provider {
                         id,
                         sign_out,
-                        method: "device".into(),
+                        method,
                         key: None,
                     });
                 }
@@ -4435,6 +4550,18 @@ impl App {
 
     pub fn apply_capture_event(&mut self, event: crate::dictation::CaptureEvent) {
         use crate::dictation::{CaptureEvent, Phase, Transition};
+        let manager_generation = match &event {
+            CaptureEvent::Started { generation }
+            | CaptureEvent::Cancelled { generation }
+            | CaptureEvent::Failed { generation, .. }
+            | CaptureEvent::CueWarning { generation, .. }
+            | CaptureEvent::Level { generation, .. }
+            | CaptureEvent::Preview { generation, .. }
+            | CaptureEvent::Stopped { generation, .. } => *generation,
+        };
+        if manager_generation >= crate::manager::CAPTURE_BASE {
+            return self.manager_capture(event);
+        }
         let generation = match &event {
             CaptureEvent::Started { generation }
             | CaptureEvent::Cancelled { generation }
@@ -4581,7 +4708,10 @@ impl App {
                 .last_project_session
                 .insert(project.clone(), String::new());
         }
-        let from = self.draft_key();
+        let from = self
+            .scroll_session
+            .clone()
+            .unwrap_or_else(|| self.draft_key());
         self.ui.scrolls.insert(from, self.ui.scroll);
         self.state.model.select(None);
         self.effects.push(Effect::Sync(SyncCommand::Select(None)));
@@ -4597,6 +4727,7 @@ impl App {
             follow: false,
             top: 0,
         };
+        self.scroll_session = None;
     }
 
     fn step_tab(&mut self, step: isize) {
@@ -4641,6 +4772,13 @@ impl App {
         }
     }
 
+    /// The composer's text area, below the pending inputs, image strip and
+    /// collapsed paste cards: the same rect the composer is drawn in, so a
+    /// click on a paste card falls through to its hit target.
+    fn composer_text_inner(composer: Rect, images: usize, pastes: usize) -> Rect {
+        crate::render::composer_inner_with(composer, images, pastes)
+    }
+
     pub fn open_session(&mut self, id: &str) {
         if self.viewed_id() != Some(id) && self.edit_blocks() {
             return;
@@ -4655,16 +4793,21 @@ impl App {
         self.ui.file_edit = None;
         self.ui.diff_open = None;
         if self.viewed_id() == Some(id) && self.ui.view == View::Session {
+            self.scroll_session = Some(id.to_owned());
             self.after_open();
             return;
         }
-        let from = self.draft_key();
+        let from = self
+            .scroll_session
+            .clone()
+            .unwrap_or_else(|| self.draft_key());
         self.ui.scrolls.insert(from, self.ui.scroll);
         self.state.model.select(Some(id));
         // First, so the history load is not queued behind the other reads.
         self.effects
             .push(Effect::Sync(SyncCommand::Select(Some(id.to_owned()))));
         self.ui.scroll = self.ui.scrolls.get(id).copied().unwrap_or_default();
+        self.scroll_session = Some(id.to_owned());
         self.ui.timeline_sel = None;
         self.ui.timeline_sel_key = None;
         self.ui.wait_idx = 0;
@@ -4703,6 +4846,27 @@ impl App {
     fn after_open(&mut self) {
         self.ui.drawer = None;
         self.ui.focus = Focus::Composer;
+    }
+
+    /// Keep the one timeline scroll with the session it belongs to. `open_session`
+    /// already saves and restores it; this catches selection changes made by a
+    /// snapshot or a deletion, which would otherwise leave the previous session's
+    /// offset and follow flag to pin its user band over the new session.
+    fn adopt_view_scroll(&mut self) {
+        let now = self.viewed_id().map(str::to_owned);
+        if now.as_deref() == self.scroll_session.as_deref() {
+            return;
+        }
+        if let Some(old) = self.scroll_session.take() {
+            self.ui.scrolls.insert(old, self.ui.scroll);
+            self.ui.scroll = now
+                .as_ref()
+                .and_then(|id| self.ui.scrolls.get(id).copied())
+                .unwrap_or_default();
+            self.ui.timeline_sel = None;
+            self.ui.timeline_sel_key = None;
+        }
+        self.scroll_session = now;
     }
 
     fn select_project(&mut self, id: &str) {
@@ -4786,18 +4950,26 @@ impl App {
 
     /// Switch to a rail project: its remembered session, or its newest root
     /// session the first time, or an empty new-session view.
-    fn rail_activate(&mut self, index: usize) {
+    pub(crate) fn rail_activate(&mut self, index: usize) {
         if self.edit_blocks() {
             return;
         }
         let Some(project) = self.rail_project_ids().get(index).cloned() else {
             return;
         };
-        // Clicking the project already open asks for a session in it: the
-        // switcher, scoped to the project, instead of restoring the same view.
         if self.current_project().as_deref() == Some(project.as_str()) {
             self.ui.scope_all = false;
-            self.open_palette(PaletteMode::Sessions);
+            if self.narrow() {
+                if self.ui.drawer == Some(Side::Left) {
+                    self.ui.drawer = None;
+                } else {
+                    self.set_tab(Tab::Sessions);
+                }
+            } else if self.ui.left_open {
+                self.ui.left_open = false;
+            } else {
+                self.set_tab(Tab::Sessions);
+            }
             return;
         }
         let remembered = self
@@ -4831,6 +5003,7 @@ impl App {
             self.show_new_session();
             self.after_open();
         }
+        self.set_tab(Tab::Sessions);
     }
 
     fn sidebar_activate(&mut self, index: usize) {
@@ -5126,6 +5299,7 @@ impl App {
                     None => {}
                 }
             }
+            id if id.starts_with("manager.") => self.manager_execute(id),
             "voice.dictate" => self.begin_dictation(),
             "voice.download_stt" => self.ask_voice_model_download(VoiceTarget::Stt),
             "voice.download_tts" => self.ask_voice_model_download(VoiceTarget::Tts),
@@ -5660,6 +5834,10 @@ impl App {
                 if let Some(c) = self.manifest.slash(word).cloned() {
                     self.composer().take();
                     let arg = arg.trim();
+                    if c.id == "manager.start" {
+                        self.manager_slash(arg);
+                        return;
+                    }
                     if c.id == "session.rename" && !arg.is_empty() {
                         if let Some(s) = self.viewed() {
                             let call = ApiCall::Rename {
@@ -5900,7 +6078,6 @@ impl App {
         self.current_agent().hash(&mut h);
         self.ui.draft.agent.hash(&mut h);
         self.ui.draft.model.hash(&mut h);
-        self.ui.draft.effort.hash(&mut h);
         self.ui.draft.disabled_tools.hash(&mut h);
         h.finish()
     }
@@ -5921,7 +6098,12 @@ impl App {
                 .and_then(|value| value["servers"].as_array())
                 .cloned()
                 .unwrap_or_default();
-            // The project endpoint is the actual `.mcp.json` inventory, including
+            let duplicates = project_mcp
+                .as_ref()
+                .ok()
+                .and_then(|value| value["duplicates"].as_array())
+                .map_or(0, Vec::len);
+            // The project endpoint is the actual MCP-file inventory, including
             // enabled, disabled, failed and invalid entries. Its rows win over a
             // global row of the same name: a disabled global default (such as
             // browser-use) must not hide the project's enabled entry. An enabled
@@ -5953,6 +6135,7 @@ impl App {
                     skills_error: skills.err(),
                     mcp_error: mcp.err(),
                     project_mcp_error: project_mcp.err(),
+                    project_mcp_duplicates: duplicates,
                 },
             );
             return;
@@ -5979,6 +6162,17 @@ impl App {
                 options.reduced_motion = reduced;
                 self.theme = self.theme.with(options);
             }
+        }
+        if let SyncMsg::Manager { tag, result } = msg {
+            return self.manager_reply(&tag, result);
+        }
+        if let SyncMsg::Event(event) = &msg {
+            if event.kind.starts_with("manager.") {
+                self.manager_event(event);
+            }
+        }
+        if matches!(&msg, SyncMsg::Snapshot { .. }) {
+            self.manager_restore();
         }
         if let SyncMsg::Event(event) = &msg {
             if event.kind == "session.handoff" && event.data["reason"].as_str() == Some("auto") {
@@ -6080,6 +6274,7 @@ impl App {
             .and_then(|id| self.root_session(id));
         let was_busy = notice_root.as_deref().is_some_and(|id| self.tree_busy(id));
         self.state.apply(msg);
+        self.adopt_view_scroll();
         // Launched from a directory: open it as a project (Core reuses one at the same path).
         if snapshot {
             if let Some(path) = self.ui.launch_dir.take() {
@@ -6317,6 +6512,14 @@ impl App {
                 self.apply_transcription(generation, partial, done.result);
                 return;
             }
+            ApiCall::ManagerVoice { .. }
+            | ApiCall::ManagerTranscribe { .. }
+            | ApiCall::ManagerLive { .. }
+            | ApiCall::ManagerSpeak { .. } => {
+                self.manager_done(done);
+                return;
+            }
+            ApiCall::ManagerSpeakStop => return,
             _ => {}
         }
         let name = done.call_name();
@@ -7100,10 +7303,25 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// Whether two draft requests start the same context. Reasoning effort steers the model but
+    /// is not part of what it reads, so changing it keeps Core's last plan on screen.
+    fn same_draft_context(asked: &Value, now: &Value) -> bool {
+        fn without_effort(request: &Value) -> Value {
+            let mut request = request.clone();
+            if let Some(fields) = request.as_object_mut() {
+                fields.remove("effort");
+            }
+            request
+        }
+        without_effort(asked) == without_effort(now)
+    }
+
     /// Core's starting context when it answers the current draft; `None` while asking or after a failure.
     pub fn draft_context(&self) -> Option<&Value> {
         match (&self.state.draft_context, self.draft_request()) {
-            (Some((asked, Ok(data))), Some(now)) if *asked == now => Some(data),
+            (Some((asked, Ok(data))), Some(now)) if Self::same_draft_context(asked, &now) => {
+                Some(data)
+            }
             _ => None,
         }
     }
@@ -7168,6 +7386,7 @@ impl App {
             changed |= self.ui.dictation.settle_tick();
         }
         changed |= self.note_waits(now);
+        changed |= self.manager_tick(now);
         let held = self.mouse.and_then(|(x, y)| match self.hits.at(x, y) {
             Some(Target::ToastDismiss(id) | Target::ToastOpen(id)) => Some(*id),
             _ => None,
@@ -7179,6 +7398,9 @@ impl App {
             self.ui.focus = Focus::Composer;
             changed = true;
         }
+        // A tick follows every interaction closely enough, and the supervisor
+        // keeps the latest view for the next `server.connected`.
+        self.sync_view();
         changed
     }
 
@@ -7691,6 +7913,10 @@ impl App {
         if name != "ctrl+c" {
             self.ctrl_c = None;
         }
+        // The Manager's shortcuts always, its other keys only while it is engaged.
+        if self.manager_key(&ev, &name) {
+            return;
+        }
         if self.ui.dialog.is_none() && self.ui.dictation.phase != crate::dictation::Phase::Idle {
             use crate::dictation::Phase;
             let capturing = matches!(self.ui.dictation.phase, Phase::Starting | Phase::Recording);
@@ -8062,6 +8288,12 @@ impl App {
                 let restore = e.restore;
                 self.ui.edit = None;
                 self.apply_restore(restore);
+                if let EditTarget::ManagerModel { revision } = &target {
+                    if !title.is_empty() {
+                        self.manager_set_config(revision.clone(), "manager.model", json!(title));
+                    }
+                    return;
+                }
                 if let EditTarget::TitleModels { revision } = &target {
                     let refs: Vec<&str> = title
                         .split(',')
@@ -8102,7 +8334,7 @@ impl App {
                         method: "api_key".into(),
                         key: Some(crate::actions::Secret(title)),
                     }),
-                    EditTarget::TitleModels { .. } => {}
+                    EditTarget::TitleModels { .. } | EditTarget::ManagerModel { .. } => {}
                     EditTarget::AddProject => {
                         let path = match title.strip_prefix('~') {
                             Some(rest) if rest.is_empty() || rest.starts_with('/') => {
@@ -8120,6 +8352,10 @@ impl App {
     }
 
     fn overlay_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
+        if self.annotation_mut().is_some() {
+            self.annotate_key(name);
+            return true;
+        }
         if matches!(
             self.ui.overlay,
             Some(Overlay {
@@ -8328,7 +8564,10 @@ impl App {
                     .clamp(0, checklist.skills.len().saturating_sub(1) as isize)
                     as usize;
             }
-            Some(OverlayKind::Usage { .. }) | Some(OverlayKind::ImagePreview { .. }) | None => {}
+            Some(OverlayKind::Usage { .. })
+            | Some(OverlayKind::ImagePreview { .. })
+            | Some(OverlayKind::Annotate(_))
+            | None => {}
         }
     }
 
@@ -9466,6 +9705,11 @@ impl App {
                 | "mcp.max_listed_tools"
                 | "context.handoff_percent"
                 | "context.title_models"
+                | "manager.enabled"
+                | "manager.mode"
+                | "manager.model"
+                | "manager.proactive"
+                | "manager.privacy"
                 | "dictation.push_to_talk"
                 | "dictation.stt_model"
                 | "dictation.stt_download"
@@ -9609,6 +9853,11 @@ impl App {
                 self.ui.notify = modes[(now + step).rem_euclid(3) as usize];
             }
             "notifications.sound" => self.ui.sound = !self.ui.sound,
+            "manager.enabled" | "manager.mode" | "manager.proactive" => {
+                self.manager_setting_change(&row.id, step)
+            }
+            "manager.model" => self.manager_edit_model(),
+            "manager.privacy" => {}
             "mcp.full_definitions" => {
                 if let Some(config) = &self.state.config {
                     if let Some(revision) = config["revision"].as_str() {
@@ -9806,6 +10055,10 @@ impl App {
                 self.settings_change_row(row, 1)
             }
             "context.title_models" => self.edit_title_models(),
+            "manager.enabled" | "manager.mode" | "manager.proactive" => {
+                self.settings_change_row(row, 1)
+            }
+            "manager.model" => self.manager_edit_model(),
             "dictation.stt_download" => self.run_command("voice.download_stt"),
             "dictation.stt_remove" => self.run_command("voice.remove_stt"),
             "dictation.tts_download" => self.run_command("voice.download_tts"),
@@ -9871,6 +10124,62 @@ impl App {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// `[agents.efforts]` for one agent and model: the reasoning effort a subagent uses when it runs that model.
+    fn agent_effort(&self, agent: &str, model: &str) -> Option<String> {
+        self.state
+            .config
+            .as_ref()
+            .and_then(|c| c["values"]["agents"]["efforts"][agent][model].as_str())
+            .map(str::to_owned)
+    }
+
+    /// The reasoning efforts the catalog lists for a model; empty when it lists none.
+    fn model_efforts(&self, model: &str) -> Vec<String> {
+        self.state
+            .models
+            .iter()
+            .find(|m| m["ref"].as_str() == Some(model))
+            .and_then(|m| m["efforts"].as_array())
+            .map(|l| {
+                l.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// What a pool or fallback row shows for effort: the chosen level, `default`, or nothing for a model without levels.
+    fn effort_label(&self, agent: &str, model: &str) -> Option<String> {
+        if self.model_efforts(model).is_empty() && self.agent_effort(agent, model).is_none() {
+            return None;
+        }
+        Some(format!(
+            "effort {}",
+            self.agent_effort(agent, model)
+                .unwrap_or_else(|| "default".into())
+        ))
+    }
+
+    /// Step one model's effort through `default` and the levels it lists; it stops at either end.
+    fn step_agent_effort(&mut self, agent: &str, model: &str, by: isize) {
+        let levels = self.model_efforts(model);
+        if levels.is_empty() {
+            self.toast(Level::Warning, format!("{model} lists no effort levels"));
+            return;
+        }
+        let current = self.agent_effort(agent, model);
+        let at = current
+            .as_ref()
+            .and_then(|c| levels.iter().position(|l| l == c))
+            .map_or(0, |i| i + 1) as isize;
+        let next = (at + by).clamp(0, levels.len() as isize) as usize;
+        if next as isize == at {
+            return;
+        }
+        let chosen = (next > 0).then(|| levels[next - 1].clone());
+        self.patch_agent_effort(agent, model, chosen);
     }
 
     fn ref_connected(&self, model: &str) -> bool {
@@ -9967,7 +10276,7 @@ impl App {
                 .find(|a| a["name"].as_str() == Some(name.as_str()))
                 .and_then(|a| a["description"].as_str().map(str::to_owned)),
             PageAction::Ref { .. } | PageAction::Add { .. } => Some(
-                "Changes apply to new subagents; running ones keep what they started with.".into(),
+                "\u{2190}/\u{2192} sets this model's effort. Changes apply to new subagents; running ones keep what they started with.".into(),
             ),
             PageAction::Setting(row) => Some(row.note.clone()).filter(|n| !n.is_empty()),
             PageAction::OpenProvider(_) => {
@@ -9975,9 +10284,15 @@ impl App {
             }
             PageAction::OpenUrl(_) => Some("Enter opens the link in your browser.".into()),
             PageAction::CopyCode(_) => Some("Enter copies the code to the clipboard.".into()),
-            PageAction::Connect(_) => {
-                Some("Enter signs in. A device code and link appear in this dialog.".into())
-            }
+            PageAction::Connect { method, .. } => Some(
+                match method.as_str() {
+                    "browser" => "Enter opens ChatGPT sign-in in your browser.",
+                    "device" => "Enter signs in. A device code and link appear in this dialog.",
+                    "api_key" => "Enter opens a masked field for the key.",
+                    _ => "Enter starts this sign-in.",
+                }
+                .into(),
+            ),
             PageAction::CancelLogin(_) => Some("Enter stops waiting for this sign-in.".into()),
             PageAction::Disconnect(_) => {
                 Some("Enter signs out; listed models stay and are skipped.".into())
@@ -10155,7 +10470,14 @@ impl App {
                     out.push(PageLine::Item {
                         label: model.clone(),
                         value: if on {
-                            format!("{:.0}%", 100.0 / eligible as f64)
+                            [
+                                self.effort_label(name, model),
+                                Some(format!("{:.0}%", 100.0 / eligible as f64)),
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>()
+                            .join(" \u{b7} ")
                         } else {
                             "not connected \u{b7} skipped".into()
                         },
@@ -10185,7 +10507,7 @@ impl App {
                     out.push(PageLine::Item {
                         label: format!("{}. {model}", i + 1),
                         value: if on {
-                            String::new()
+                            self.effort_label(name, model).unwrap_or_default()
                         } else {
                             "not connected \u{b7} skipped".into()
                         },
@@ -10276,10 +10598,20 @@ impl App {
                     action: PageAction::CopyCode(code.into()),
                 });
             }
-            let message = login
-                .and_then(|l| l["message"].as_str())
-                .unwrap_or("Waiting for authorization\u{2026}");
-            out.push(PageLine::Text(message.to_owned(), Tone::Muted));
+            // A link or code already says what to do; otherwise show Core's
+            // progress message (a browser flow publishes its URL as the link).
+            let has_link = login.and_then(|l| l["verification_uri"].as_str()).is_some();
+            let has_code = login.and_then(|l| l["user_code"].as_str()).is_some();
+            if !has_link && !has_code {
+                let message = login
+                    .and_then(|l| l["message"].as_str())
+                    .unwrap_or("Starting sign-in\u{2026}");
+                out.push(PageLine::Text(message.to_owned(), Tone::Muted));
+            }
+            out.push(PageLine::Text(
+                "Waiting for authorization\u{2026}".into(),
+                Tone::Muted,
+            ));
             out.push(PageLine::Item {
                 label: "Cancel sign-in".into(),
                 value: "enter".into(),
@@ -10302,7 +10634,10 @@ impl App {
                 label: "Add API key".into(),
                 value: "enter".into(),
                 tone: Tone::Secondary,
-                action: PageAction::Connect(id.into()),
+                action: PageAction::Connect {
+                    id: id.into(),
+                    method: "api_key".into(),
+                },
             });
             if let Some(hint) = p["key_hint"].as_str().filter(|h| !h.is_empty()) {
                 out.push(PageLine::Text(hint.to_owned(), Tone::Muted));
@@ -10311,12 +10646,17 @@ impl App {
                 out.push(PageLine::Text(format!("Or set ${env}"), Tone::Muted));
             }
         }
-        if methods.contains(&"device") {
+        // One row per sign-in method, in the order Core lists them. Codex offers
+        // a browser sign-in and a device code, so the user can pick either.
+        for method in methods.iter().copied().filter(|m| *m != "api_key") {
             out.push(PageLine::Item {
-                label: "Sign in with a device code".into(),
+                label: sign_in_label(method),
                 value: "enter".into(),
                 tone: Tone::Secondary,
-                action: PageAction::Connect(id.into()),
+                action: PageAction::Connect {
+                    id: id.into(),
+                    method: method.into(),
+                },
             });
         }
         if methods.is_empty() {
@@ -10419,12 +10759,19 @@ impl App {
                 }
             }
             "left" | "right" => {
-                if let Some(PageAction::Setting(row)) = action {
-                    if let Some(why) = self.settings_reason(&row, None) {
-                        self.toast(Level::Warning, format!("{}: {why}", row.label));
-                    } else {
-                        self.settings_change_row(*row, if name == "left" { -1 } else { 1 });
+                let by = if name == "left" { -1 } else { 1 };
+                match action {
+                    Some(PageAction::Setting(row)) => {
+                        if let Some(why) = self.settings_reason(&row, None) {
+                            self.toast(Level::Warning, format!("{}: {why}", row.label));
+                        } else {
+                            self.settings_change_row(*row, by);
+                        }
                     }
+                    Some(PageAction::Ref { agent, model, .. }) => {
+                        self.step_agent_effort(&agent, &model, by);
+                    }
+                    _ => {}
                 }
             }
             "d" | "delete" => {
@@ -10487,21 +10834,13 @@ impl App {
                 self.ui.provider_detail = Some(id);
                 self.ui.provider_detail_row = 0;
             }
-            PageAction::Connect(id) => {
+            PageAction::Connect { id, method } => {
                 let provider = self
                     .state
                     .providers
                     .iter()
                     .find(|p| p["id"].as_str() == Some(id.as_str()));
-                let methods: Vec<String> = provider
-                    .and_then(|p| p["methods"].as_array())
-                    .map(|m| {
-                        m.iter()
-                            .filter_map(|v| v.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                if methods.iter().any(|m| m == "api_key") {
+                if method == "api_key" {
                     let label = provider
                         .and_then(|p| p["label"].as_str())
                         .unwrap_or(&id)
@@ -10517,12 +10856,7 @@ impl App {
                         buf: Composer::new(),
                         restore,
                     });
-                } else if let Some(method) = methods
-                    .iter()
-                    .find(|m| *m == "device")
-                    .or(methods.first())
-                    .cloned()
-                {
+                } else {
                     self.ui
                         .provider_logins
                         .insert(id.clone(), json!({"status": "pending"}));
@@ -10532,11 +10866,6 @@ impl App {
                         method,
                         key: None,
                     });
-                } else {
-                    self.toast(
-                        Level::Warning,
-                        format!("Sign in from a terminal: nexus login {id}"),
-                    );
                 }
             }
             PageAction::Disconnect(id) => {
@@ -10614,6 +10943,44 @@ impl App {
                 self.ui.settings_page_row = 0;
             }
         }
+    }
+
+    /// Write one agent's effort for one model; `None` clears it, and an agent with none left is removed.
+    fn patch_agent_effort(&mut self, agent: &str, model: &str, effort: Option<String>) {
+        let Some(config) = &self.state.config else {
+            self.toast(Level::Warning, "Configuration is not loaded");
+            return;
+        };
+        let Some(revision) = config["revision"].as_str().map(str::to_owned) else {
+            return;
+        };
+        let mut all = config["values"]["agents"]["efforts"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        let mut mine = all
+            .get(agent)
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        match effort {
+            Some(level) => {
+                mine.insert(model.to_owned(), json!(level));
+            }
+            None => {
+                mine.remove(model);
+            }
+        }
+        if mine.is_empty() {
+            all.remove(agent);
+        } else {
+            all.insert(agent.to_owned(), Value::Object(mine));
+        }
+        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+            revision,
+            path: "agents.efforts".into(),
+            value: Value::Object(all),
+        }));
     }
 
     /// Write one agent's model or fallback list; an empty list removes the entry.
@@ -10758,10 +11125,150 @@ impl App {
         let _ = crate::prefs::save(&sync.home, &sync.stored);
     }
 
+    // ---- drawing on a composer image -------------------------------------------------------------
+
+    fn annotation_mut(&mut self) -> Option<&mut crate::annotate::Annotation> {
+        match self.ui.overlay.as_mut() {
+            Some(Overlay {
+                kind: OverlayKind::Annotate(annotation),
+                ..
+            }) => Some(annotation),
+            _ => None,
+        }
+    }
+
+    /// The pen: a press on the picture starts a stroke, and the stroke keeps
+    /// the pointer until release, wherever it goes.
+    fn annotate_mouse(&mut self, ev: &MouseEvent, pixel: (u32, u32)) -> bool {
+        let Some(annotation) = self.annotation_mut() else {
+            return false;
+        };
+        let canvas = annotation.canvas.get();
+        let ink = annotation.ink;
+        match ev.kind {
+            MouseEventKind::Down(MouseButton::Left) if canvas.contains(pixel.0, pixel.1) => {
+                let color = crate::theme::annotation_inks()[ink];
+                annotation.begin(color, canvas.normalise(pixel.0, pixel.1));
+                true
+            }
+            MouseEventKind::Drag(MouseButton::Left) if annotation.drawing => {
+                annotation.extend(canvas.normalise(pixel.0, pixel.1));
+                true
+            }
+            MouseEventKind::Up(MouseButton::Left) if annotation.drawing => {
+                annotation.drawing = false;
+                self.annotate_changed();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Terminals without live tiles redraw the whole picture.
+    fn annotate_changed(&mut self) {
+        if self.annotate_live.borrow().supported() {
+            return;
+        }
+        if let Some(annotation) = self.annotation_mut() {
+            annotation.refresh_flattened();
+        }
+    }
+
+    fn annotate_ink(&mut self, ink: usize) {
+        if ink < crate::theme::annotation_inks().len() {
+            if let Some(annotation) = self.annotation_mut() {
+                annotation.ink = ink;
+            }
+        }
+    }
+
+    fn annotate_undo(&mut self) {
+        if let Some(annotation) = self.annotation_mut() {
+            annotation.drawing = false;
+            annotation.strokes.pop();
+        }
+        self.annotate_changed();
+    }
+
+    fn annotate_clear(&mut self) {
+        if let Some(annotation) = self.annotation_mut() {
+            annotation.drawing = false;
+            annotation.strokes.clear();
+        }
+        self.annotate_changed();
+    }
+
+    /// The marks go into the draft image: the model and the timeline get the
+    /// marked-up picture and nothing else. A failure keeps the modal open.
+    fn annotate_done(&mut self) {
+        let Some(annotation) = self.annotation_mut() else {
+            return;
+        };
+        let (index, source) = (annotation.index, annotation.data_url.clone());
+        match nexus_annotate::flatten(&source, &annotation.strokes) {
+            Ok(data_url) => {
+                // Marks can grow an image past the message limit that paste checked.
+                let images = &mut self.composer().images;
+                let others: usize = images
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != index)
+                    .map(|(_, image)| image.data_url.len())
+                    .sum();
+                if others + data_url.len() > 8 * 1024 * 1024 * 4 / 3 + 256 {
+                    self.toast(Level::Warning, "At most eight images and 8 MiB per message");
+                    return;
+                }
+                if let Some(image) = images.get_mut(index) {
+                    if image.data_url == source {
+                        image.data_url = data_url;
+                    }
+                }
+                self.close_overlay();
+            }
+            Err(error) => self.toast(Level::Error, error.to_string()),
+        }
+    }
+
+    fn annotate_key(&mut self, name: &str) {
+        match name {
+            "1" | "2" | "3" | "4" => {
+                self.annotate_ink(name.parse::<usize>().unwrap_or(1) - 1);
+            }
+            "u" => self.annotate_undo(),
+            "x" => self.annotate_clear(),
+            "enter" => self.annotate_done(),
+            "esc" => self.close_overlay(),
+            _ => {}
+        }
+    }
+
     // ---- mouse ----------------------------------------------------------------------------------
 
-    pub fn handle_mouse(&mut self, ev: MouseEvent) {
+    pub fn handle_mouse(&mut self, mut ev: MouseEvent) {
+        // In pixel mode the terminal reports pixels; everything but the pen
+        // still thinks in cells.
+        let pixel = {
+            let live = self.annotate_live.borrow();
+            let (cell_w, cell_h) = live.font();
+            let (cell_w, cell_h) = (u32::from(cell_w), u32::from(cell_h));
+            if live.pixel_mouse() {
+                let pixel = (u32::from(ev.column), u32::from(ev.row));
+                ev.column = (pixel.0 / cell_w).min(u32::from(u16::MAX)) as u16;
+                ev.row = (pixel.1 / cell_h).min(u32::from(u16::MAX)) as u16;
+                pixel
+            } else {
+                let middle = |cell: u16, size: u32| u32::from(cell) * size + size / 2;
+                (middle(ev.column, cell_w), middle(ev.row, cell_h))
+            }
+        };
         self.mouse = Some((ev.column, ev.row));
+        if self.annotate_mouse(&ev, pixel) {
+            return;
+        }
+        if self.manager_mouse(&ev) {
+            return;
+        }
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.ui.overlay.is_none()
@@ -10807,12 +11314,13 @@ impl App {
                         return;
                     }
                 }
-                let inner = crate::render::composer_inner(
+                let inner = Self::composer_text_inner(
                     crate::render::composer_without_pending(
                         self.regions.composer,
                         self.pending_inputs().len(),
                     ),
                     self.composer_ref().images.len(),
+                    self.composer_ref().pastes().len(),
                 );
                 if self.ui.overlay.is_none()
                     && self.ui.dialog.is_none()
@@ -10894,12 +11402,13 @@ impl App {
                     return;
                 }
                 if let Some((start, top)) = self.ui.composer_drag {
-                    let inner = crate::render::composer_inner(
+                    let inner = Self::composer_text_inner(
                         crate::render::composer_without_pending(
                             self.regions.composer,
                             self.pending_inputs().len(),
                         ),
                         self.composer_ref().images.len(),
+                        self.composer_ref().pastes().len(),
                     );
                     let row = ev
                         .row
@@ -11005,9 +11514,16 @@ impl App {
                 self.completion_accept();
             }
             Target::Swallow => {}
+            // The Manager's own targets are taken by `manager_mouse` before a click gets here.
+            Target::ManagerOrb
+            | Target::ManagerScrim
+            | Target::ManagerCard
+            | Target::ManagerRow(_) => {}
             Target::Scrim => {
                 if self.ui.provider_detail.is_some() {
                     self.ui.provider_detail = None;
+                } else if self.annotation_mut().is_some() {
+                    // A stray click must not throw the drawing away.
                 } else if self.ui.overlay.is_some() {
                     self.close_overlay();
                 } else if self.ui.drawer.is_some() {
@@ -11054,6 +11570,7 @@ impl App {
             }
             Target::RemoveProject(id) => self.ask_remove_project_id(id),
             Target::Notifications => self.run_command("notifications.open"),
+            Target::ManagerSession => self.run_command("manager.open_session"),
             Target::Tab(tab) => {
                 let id = match tab {
                     Tab::Sessions => "sidebar.tab.sessions",
@@ -11159,6 +11676,17 @@ impl App {
             Target::ImagePreview { name, data_url } => {
                 self.open_overlay(OverlayKind::ImagePreview { name, data_url });
             }
+            Target::ComposerImage(index) => {
+                if let Some(image) = self.composer_ref().images.get(index).cloned() {
+                    self.open_overlay(OverlayKind::Annotate(Box::new(
+                        crate::annotate::Annotation::new(index, image.name, image.data_url),
+                    )));
+                }
+            }
+            Target::AnnotateInk(ink) => self.annotate_ink(ink),
+            Target::AnnotateUndo => self.annotate_undo(),
+            Target::AnnotateClear => self.annotate_clear(),
+            Target::AnnotateDone => self.annotate_done(),
             Target::TimelinePaste(paste) => {
                 self.open_overlay(OverlayKind::ContextDetail {
                     title: "Pasted text".into(),
@@ -11599,6 +12127,11 @@ impl ActionDone {
                 VoiceOperation::Remove => "Voice model removal failed",
             },
             ApiCall::VoiceTranscribe { .. } => "Dictation failed",
+            ApiCall::ManagerVoice { .. }
+            | ApiCall::ManagerTranscribe { .. }
+            | ApiCall::ManagerSpeak { .. }
+            | ApiCall::ManagerLive { .. }
+            | ApiCall::ManagerSpeakStop => "Manager voice failed",
             ApiCall::Interrupt { .. } => "Interrupt failed",
             ApiCall::Archive { .. } => "Archive failed",
             ApiCall::Rename { .. } => "Rename failed",
@@ -11743,7 +12276,7 @@ fn edit_composer(buf: &mut Composer, ev: &KeyEvent, name: &str) {
 }
 
 /// Shared single-line/multi-line text editing keys.
-fn edit_buffer(buf: &mut Composer, ev: &KeyEvent, name: &str, single_line: bool) {
+pub(crate) fn edit_buffer(buf: &mut Composer, ev: &KeyEvent, name: &str, single_line: bool) {
     if let Some(c) = keys::printable(ev) {
         return buf.insert_char(c);
     }

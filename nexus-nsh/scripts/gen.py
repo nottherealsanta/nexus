@@ -91,11 +91,35 @@ def css(mode: str) -> dict[str, str]:
         "diff-add-bg": g("diff.add_bg"),
         "diff-del-bg": g("diff.del_bg"),
         **{f"agent-{slot}": color for slot, color in theme[mode]["agent"].items()},
+        # The Manager's orb states (MANAGER_PLAN.md 10.2): manager-listening, -thinking, -speaking, -idle
+        **{f"manager-{state}": color for state, color in theme[mode]["manager"].items()},
     }
 
 
-# Radius and fonts are NSH-medium choices (scale proposal: see README.md); colours are not.
-RADIUS = {"radius": "10px", "radius-card": "16px"}
+def diagram(mode: str) -> dict[str, object]:
+    """The Ondine raster palette, from the same tokens as the TUI's."""
+    t = flat(mode)
+    return {
+        "background": t["surface.canvas"],
+        "foreground": t["text.primary"],
+        "muted": t["text.muted"],
+        "line": t["border.strong"],
+        "border": t["border.strong"],
+        "surface": t["surface.panel"],
+        "surface_alt": t["surface.raised"],
+        "accent": t["interactive.accent"],
+        "critical": t["status.error"],
+        "font": "Monaspace Argon",
+        "stroke": "2",
+        "radius": "0",
+        "title_weight": "700",
+        "series": [t[f"agent.{slot}"] for slot in ("amber", "blue", "violet", "green", "teal", "rose", "sky", "gold")],
+    }
+
+
+# Radius and fonts are NSH-medium choices (see README.md); colours are not. Controls, cards and
+# surfaces are square, matching the TUI's cell grid; only circular indicators keep their shape.
+RADIUS = {"radius": "0", "radius-card": "0"}
 FONTS = {
     "font-sans": "Geist, ui-sans-serif, system-ui, sans-serif",
     "font-mono": "Monaspace Argon, ui-monospace, monospace",
@@ -119,6 +143,9 @@ out += "export const structure = " + json.dumps(theme["glyphs"]["structure"], in
 out += "export const attention = " + json.dumps(theme["glyphs"]["attention"], indent=2) + " as const;\n"
 out += "export const fold = " + json.dumps(theme["glyphs"]["fold"], indent=2) + " as const;\n"
 out += "export const spinner = " + json.dumps(theme["glyphs"]["spinner"]["unicode"]) + ";\n"
+out += "export const managerColors = " + json.dumps({"light": theme["light"]["manager"], "dark": theme["dark"]["manager"]}) + " as const;\n"
+out += "export const annotationInks = " + json.dumps(theme["annotation"]["ink"]) + ";\n"
+out += "export const diagramPalettes = " + json.dumps({"light": diagram("light"), "dark": diagram("dark")}) + ";\n"
 (ROOT / "src" / "gen" / "theme.ts").write_text(out)
 
 out = hdr.format("manifest.toml")

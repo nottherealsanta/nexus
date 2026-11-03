@@ -102,7 +102,7 @@ deletes only the configured repository after its own confirmation.
 
 ## Speech
 
-`POST /api/voice/speak {session_id}` reads the final text of the session's latest
+`POST /api/voice/speak {stream_id, text}` speaks one Manager sentence (holder only, masked, 1200 characters at most; [api.md](api.md#the-manager)). `POST /api/voice/speak {session_id}` reads the final text of the session's latest
 completed turn (thinking and tool calls are never spoken) and streams `audio/wav`
 (mono PCM16; the header sizes are `0xFFFFFFFF` because the length is not known).
 The client plays it. The daemon runs a warm `ptts` worker in a child process,

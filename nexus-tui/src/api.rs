@@ -167,6 +167,11 @@ fn dec(e: serde_json::Error) -> Error {
     Error::Decode(e.to_string())
 }
 
+/// A string, or nothing for `null` (a request whose call id is not known).
+fn string_or_null<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
+
 fn bool_or_int<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
     Ok(match Value::deserialize(d)? {
         Value::Bool(b) => b,
@@ -249,6 +254,9 @@ pub struct Message {
     pub parts: Vec<Value>,
     #[serde(default)]
     pub delivery: Option<String>,
+    /// `manager` when the Manager sent this on the user's words; absent when a person typed it.
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -281,7 +289,7 @@ pub struct Question {
     pub id: String,
     #[serde(default)]
     pub session_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     pub call_id: String,
     #[serde(default)]
     pub created: f64,
@@ -601,7 +609,7 @@ pub struct Event {
     pub data: Value,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Connected {
     pub version: String,
     pub generation: String,
@@ -609,6 +617,38 @@ pub struct Connected {
     pub head_cursor: String,
     pub floor: i64,
     pub resumed_from: Option<i64>,
+    /// This stream's ephemeral identity for `POST /api/client/view`. It is a
+    /// capability: never log it, show it or put it in a URL. `None` from a
+    /// Core that does not issue one.
+    pub stream_id: Option<String>,
+}
+
+/// The bearer `stream_id` is never printed: a log line or panic message must not
+/// disclose a capability that can overwrite this client's reported view.
+impl std::fmt::Debug for Connected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connected")
+            .field("version", &self.version)
+            .field("generation", &self.generation)
+            .field("head", &self.head)
+            .field("head_cursor", &self.head_cursor)
+            .field("floor", &self.floor)
+            .field("resumed_from", &self.resumed_from)
+            .field("stream_id", &self.stream_id.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+/// What this client is showing, reported to `POST /api/client/view`.
+///
+/// Ids and a panel label only. Screen contents, paths, drafts, scroll position
+/// and selected text are deliberately absent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClientView {
+    pub project: Option<String>,
+    pub session: Option<String>,
+    /// `files`, `file` or `diff`; `None` when no panel is open.
+    pub panel: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -645,6 +685,7 @@ impl Frame {
                 head_cursor: s("head_cursor").unwrap_or_default(),
                 floor: i("floor").unwrap_or(0),
                 resumed_from: i("resumed_from"),
+                stream_id: s("stream_id").filter(|id| !id.is_empty()),
             })),
             "bus.overflow" => {
                 let d = v.get("data").unwrap_or(v);
@@ -784,6 +825,38 @@ impl CoreApi {
 
     pub async fn info(&self) -> Result<Info, Error> {
         Info::from_value(&self.http.get("/api/info", &[]).await?)
+    }
+
+    /// Report what this client is showing for the event stream `stream_id`.
+    ///
+    /// `stream_id` is the capability from that stream's `server.connected`;
+    /// every reconnect issues a new one, so the caller reports again. The
+    /// daemon keeps the view in memory and never echoes the stream id.
+    pub async fn report_client_view(
+        &self,
+        stream_id: &str,
+        client_id: &str,
+        view: &ClientView,
+    ) -> Result<Value, Error> {
+        let body = json!({
+            "stream_id": stream_id,
+            "client_id": client_id,
+            "project": view.project,
+            "session": view.session,
+            "panel": view.panel,
+        });
+        Ok(self
+            .http
+            .call(
+                Method::POST,
+                "/api/client/view",
+                &[],
+                Some(&body),
+                None,
+                None,
+            )
+            .await?
+            .body)
     }
 
     pub async fn snapshot(
@@ -1275,7 +1348,7 @@ impl CoreApi {
             .await
     }
 
-    /// A project's `.mcp.json` inventory: `{file, exists, revision, error, warnings, servers}`.
+    /// A project's MCP files' inventory: `{file, exists, revision, error, warnings, servers, files, duplicates}`.
     /// Read-only: it never starts a server.
     pub async fn project_mcp(&self, project: &str) -> Result<Value, Error> {
         self.http
@@ -1477,6 +1550,23 @@ mod tests {
             serde_json::from_value(json!({"id": "s", "archived": true, "status": "busy"})).unwrap();
         assert!(a.archived && b.archived);
         assert_eq!(b.status.as_deref(), Some("busy"));
+    }
+
+    #[test]
+    fn connected_carries_its_stream_id() {
+        let v = json!({
+            "type": "server.connected", "version": "0.10.0", "generation": "log_1",
+            "head": 3, "head_cursor": "log_1:3", "floor": 0, "stream_id": "stream_test",
+        });
+        match Frame::from_value("server.connected", None, &v).unwrap() {
+            Frame::Connected(c) => assert_eq!(c.stream_id.as_deref(), Some("stream_test")),
+            other => panic!("unexpected frame: {other:?}"),
+        }
+        let v = json!({"type": "server.connected", "stream_id": ""});
+        match Frame::from_value("server.connected", None, &v).unwrap() {
+            Frame::Connected(c) => assert_eq!(c.stream_id, None),
+            other => panic!("unexpected frame: {other:?}"),
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import { Scroll, Text, View, keymap } from "nsh";
 import { Button } from "nsh/base";
-import { Btn, Icon, IconButton, T, FOCUS } from "./kit";
+import { Btn, Icon, IconButton, Spinner, T, FOCUS } from "./kit";
 import { Modal, ModalFooter, ModalTitle } from "./modal";
 import { run, availability, byId, copyText, escape, otherWaits } from "../commands";
 import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, m, native, openAlert, splitAlert, tick, TOAST_VISIBLE, toasts } from "../store";
@@ -11,11 +11,11 @@ import { TEXT_INSET, TimelineColumn } from "./reading-column";
 type Level = "info" | "warning" | "error" | "loading";
 interface Alert { key: string; level: Level; text: string; sub?: string; actions: { label: string; cmd?: string; run?: () => void }[]; dismissible: boolean }
 
-const GLYPH: Record<Level, { g: string; tone: string; word: string }> = {
-  info: { g: "i", tone: "text-info", word: "info" },
-  warning: { g: "!", tone: "text-warning", word: "warning" },
-  error: { g: statusGlyphs.error.unicode, tone: "text-error", word: "error" },
-  loading: { g: statusGlyphs.running.unicode, tone: "text-foreground", word: "loading" },
+const GLYPH: Record<Level, { g: string; tone: string; word: string; spin: boolean }> = {
+  info: { g: "i", tone: "text-info", word: "info", spin: false },
+  warning: { g: "!", tone: "text-warning", word: "warning", spin: false },
+  error: { g: statusGlyphs.error.unicode, tone: "text-error", word: "error", spin: false },
+  loading: { g: statusGlyphs.running.unicode, tone: "text-foreground", word: "loading", spin: true },
 };
 const rank: Record<Level, number> = { error: 3, warning: 2, info: 1, loading: 0 };
 
@@ -73,7 +73,9 @@ export function Banners() {
           <TimelineColumn>
             <View class={`${TEXT_INSET} ${isNarrow() ? "py-2 gap-2" : "min-h-10 flex-row items-center gap-2.5 py-1"}`}>
               <View class={`flex-row items-center gap-2.5 ${isNarrow() ? "min-h-6" : "shrink min-w-0"}`}>
-                <Text class={`w-4 text-center text-[13px] leading-5 font-semibold ${GLYPH[a().level].tone}`}>{GLYPH[a().level].g}</Text>
+                <If when={GLYPH[a().level].spin} else={<Text class={`w-4 text-center text-[13px] leading-5 font-semibold ${GLYPH[a().level].tone}`}>{GLYPH[a().level].g}</Text>}>
+                  <Spinner class={`w-4 text-center text-[13px] leading-5 font-semibold ${GLYPH[a().level].tone}`} label={GLYPH[a().level].word} />
+                </If>
                 <Text style={{ numberOfLines: isNarrow() ? 2 : 1 }} class="flex-1 shrink min-w-0 text-[13px] leading-5 font-semibold text-foreground">{a().text}</Text>
                 <If when={isNarrow() && a().dismissible}><IconButton icon="x" label="Hide" onPress={() => dismissedBanners.update((l) => [...l, a().key])} testID="banner-hide" /></If>
               </View>
@@ -103,7 +105,7 @@ export function Toasts() {
   return (
     <View class={`absolute right-3 items-end gap-2 ${isNarrow() ? "left-3" : "w-[360px]"} ${currentAlerts().length > 0 ? "top-14" : "top-3"}`} style={{ pointerEvents: "box-none" }} testID="toasts" accessibilityLabel="Notifications">
       <Each of={shown()} key={(t) => t.id}>{(t) => <ToastCard t={t} />}</Each>
-      <If when={more() > 0}><Text testID="toasts-more" class={`${T.meta} rounded-full bg-popover px-2.5 py-0.5`}>{`+${more()} more`}</Text></If>
+      <If when={more() > 0}><Text testID="toasts-more" class={`${T.meta} rounded-none bg-popover px-2.5 py-0.5`}>{`+${more()} more`}</Text></If>
     </View>
   );
 }

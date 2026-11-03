@@ -72,6 +72,14 @@ export interface SyncHost {
   sessionInput?(id: string): void;
   /** A kernel or background shell started, changed or finished. */
   resourcesChanged?(): void;
+  /**
+   * A new event stream's `server.connected` frame. `streamId` is that
+   * connection's ephemeral identity for view reporting, or null from a Core
+   * that does not issue one. It is a capability: never log or display it.
+   */
+  streamConnected?(streamId: string | null): void;
+  /** The event stream that issued `streamId` ended; a newer stream's id is untouched. */
+  streamClosed?(streamId: string): void;
   canStart: boolean;
 }
 
@@ -194,6 +202,8 @@ export class Sync {
     const signal = this.abort.signal;
     let buf: CoreEvent[] = [];
     let scheduled = false;
+    /** This connection's view-reporting capability; never logged or shown. */
+    let streamId: string | null = null;
     const flush = () => {
       scheduled = false;
       let resync: string | null = null;
@@ -227,7 +237,7 @@ export class Sync {
         }
         if (r === "applied" && (ev.type === "session.handoff" || ev.type === "session.handoff_failed")) h.handoffEvent?.(ev);
         if (r === "applied" && ["code.cell", "kernel.deleted", "bash.started", "bash.finished"].includes(ev.type)) h.resourcesChanged?.();
-        if (r === "applied" && !ev.session_id && ["skills.changed", "mcp.changed", "mcp.failed", "voice.progress", "agents.changed", "extensions.changed", "config.changed"].includes(ev.type)) h.globalEvent?.(ev);
+        if (r === "applied" && !ev.session_id && ["skills.changed", "mcp.changed", "mcp.failed", "voice.progress", "agents.changed", "extensions.changed", "config.changed", "manager.state", "manager.caption", "manager.speech", "manager.card", "manager.navigate"].includes(ev.type)) h.globalEvent?.(ev);
         if (r === "applied" && ["turn.summary", "message.added", "session.updated"].includes(ev.type) && ev.session_id && ev.session_id === m.selected?.sessionId) { h.contextChanged?.(ev.session_id); if (ev.type === "turn.summary") closed = ev.session_id; }
       }
       if (closed) void this.refreshLedger(closed).catch(() => {});
@@ -241,6 +251,13 @@ export class Sync {
         if (f.event === "server.connected") {
           this.backoff.reset(); this.everLive = true; this.startedOnce = false; // one start attempt per outage
           h.setConnection({ kind: "live" });
+          let id: string | null = null;
+          try {
+            const data = JSON.parse(f.data);
+            if (typeof data?.stream_id === "string" && data.stream_id && data.stream_id.length <= 256) id = data.stream_id;
+          } catch {}
+          streamId = id;
+          h.streamConnected?.(id);
           continue;
         }
         if (f.event === "bus.overflow") { this.needSnapshot = true; throw new ApiError(0, "event stream overflow", "overflow"); }
@@ -254,6 +271,8 @@ export class Sync {
       if (signal.aborted && !this.stopped) { flush(); throw new ApiError(0, "reconnecting"); }
       flush();
       throw e;
+    } finally {
+      if (streamId) h.streamClosed?.(streamId);
     }
     flush();
   }

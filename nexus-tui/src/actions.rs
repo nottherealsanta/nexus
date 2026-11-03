@@ -105,6 +105,27 @@ pub enum ApiCall {
         partial: bool,
         generation: u64,
     },
+    /// The Manager: is speech recognition ready? (`done.voice` is `/api/voice`.)
+    ManagerVoice {
+        token: u64,
+    },
+    /// The Manager: what the user said (`done.transcript`).
+    ManagerTranscribe {
+        wav: Vec<u8>,
+        token: u64,
+    },
+    /// The Manager: stop the sentence being spoken here.
+    ManagerSpeakStop,
+    /// GPT-Live: Core opens its call, then this client opens the call's audio.
+    ManagerLive {
+        stream_id: String,
+    },
+    /// The Manager: speak one sentence, reporting what is really playing.
+    ManagerSpeak {
+        text: String,
+        token: u64,
+        playback: crate::speech::Playback,
+    },
     Interrupt {
         session: String,
     },
@@ -270,7 +291,12 @@ impl ApiCall {
             ApiCall::VoiceStatus { .. }
             | ApiCall::VoicePrepare { .. }
             | ApiCall::VoiceSettingsStatus { .. }
-            | ApiCall::VoiceTranscribe { .. } => "",
+            | ApiCall::VoiceTranscribe { .. }
+            | ApiCall::ManagerVoice { .. }
+            | ApiCall::ManagerTranscribe { .. }
+            | ApiCall::ManagerSpeak { .. }
+            | ApiCall::ManagerLive { .. }
+            | ApiCall::ManagerSpeakStop => "",
             ApiCall::VoiceDownload { .. } => "Voice model download started",
             ApiCall::VoiceModel {
                 operation: VoiceOperation::Download,
@@ -765,6 +791,26 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                     .map_err(e)?
                     .body,
             );
+        }
+        ApiCall::ManagerSpeakStop => {
+            crate::speech::stop_local();
+        }
+        ApiCall::ManagerLive { stream_id } => {
+            crate::live::open(&api.http, stream_id).await?;
+        }
+        ApiCall::ManagerVoice { .. } => {
+            done.voice = Some(api.http.get("/api/voice", &[]).await.map_err(e)?);
+        }
+        ApiCall::ManagerTranscribe { wav, .. } => {
+            let reply = api
+                .http
+                .post_bytes("/api/voice/transcribe", &[], "audio/wav", wav.clone())
+                .await
+                .map_err(e)?;
+            done.transcript = Some(reply.body["text"].as_str().unwrap_or("").to_owned());
+        }
+        ApiCall::ManagerSpeak { text, playback, .. } => {
+            crate::speech::speak_text(&api.http, text, playback).await?;
         }
         ApiCall::VoiceTranscribe { wav, partial, .. } => {
             let query = if *partial {

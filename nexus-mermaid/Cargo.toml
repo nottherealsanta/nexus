@@ -1,0 +1,40 @@
+[package]
+name = "nexus-mermaid"
+version = "0.10.0"
+edition = "2021"
+description = "Shared Mermaid rendering for Nexus clients: text rows, Ondine SVG and PNG raster"
+license = "UNLICENSED"
+publish = false
+# The `svg` feature builds Ondine, which needs Rust 1.97 and edition 2024.
+# Leaving it off keeps the TUI's 1.85 floor; enabling it raises the caller's
+# effective toolchain to 1.97.
+rust-version = "1.85"
+
+[features]
+default = []
+# Mermaid-to-SVG through Ondine's compiler. Pinned by revision below because
+# upstream does not publish the `compiler` crate.
+svg = [
+  "dep:ondine",
+  "ondine/class",
+  "ondine/er",
+  "ondine/flowchart",
+  "ondine/gantt",
+  "ondine/pie",
+  "ondine/sequence",
+  "ondine/state",
+  "ondine/timeline",
+]
+# The same diagrams as PNG bytes, for clients that draw an image rather than
+# SVG. Uses the bundled Monaspace Argon so browser, macOS and iOS rasterize
+# identically. Requires the `svg` feature and Rust 1.97 like it.
+raster = ["svg", "dep:resvg", "dep:png"]
+
+[dependencies]
+unicode-width = "=0.2.0"
+ondine = { package = "compiler", git = "https://github.com/wevm/ondine", rev = "b19aa90e2c76ce8e0d3b718d61c05c70e2b23a3d", default-features = false, optional = true }
+resvg = { version = "=0.46.0", default-features = false, features = ["text"], optional = true }
+png = { version = "=0.17.16", optional = true }
+
+[dev-dependencies]
+serde_json = "=1.0.154"

@@ -4,8 +4,8 @@
       "font-sans": "Geist, ui-sans-serif, system-ui, sans-serif",
       "font-mono": "Monaspace Argon, ui-monospace, monospace",
       "font-code": "Monaspace Argon, ui-monospace, monospace",
-      "radius": "10px",
-      "radius-card": "16px"
+      "radius": "0",
+      "radius-card": "0"
     },
     "light": {
       "background": "#fbfbfa",
@@ -63,7 +63,11 @@
       "agent-teal": "#126d5d",
       "agent-rose": "#9a405a",
       "agent-sky": "#23687f",
-      "agent-gold": "#735d0c"
+      "agent-gold": "#735d0c",
+      "manager-listening": "#23687f",
+      "manager-thinking": "#6743ae",
+      "manager-speaking": "#0b0b0c",
+      "manager-idle": "#83838a"
     },
     "dark": {
       "background": "#000000",
@@ -121,7 +125,11 @@
       "agent-teal": "#55b9a5",
       "agent-rose": "#dc8295",
       "agent-sky": "#69b7d5",
-      "agent-gold": "#c9a94a"
+      "agent-gold": "#c9a94a",
+      "manager-listening": "#69b7d5",
+      "manager-thinking": "#a78bfa",
+      "manager-speaking": "#f4f4f5",
+      "manager-idle": "#6e6e76"
     }
   }
 }

@@ -34,11 +34,19 @@ terms = [
   # connection and accounts
   "connection.lost", "connection.no_daemon", "provider.signed_in",
   "has_notifications", "text_edit.active", "view.settings",
+  # Manager (MANAGER_PLAN.md 10.1, 10.6). Only the Manager's own keys read these.
+  "manager.in_call",       # a call is running (any client holds it)
+  "manager.listening",     # the microphone is open in this call
+  "manager.speaking",      # Manager speech is playing
+  "manager.field",         # the one-line typed field is open above the orb
+  "manager.card_focused",  # a focused card is up: it takes keys and has the scrim
+  "manager.engaged",       # listening, or a focused card is up
 ]
 placements = [
   "palette", "row_menu", "header", "composer", "sidebar", "timeline",
   "tool_line", "card", "toast", "banner", "dialog", "drawer", "panel",
   "settings", "menu",
+  "stage",  # the Manager's orb, caption, typed field and card (10.1)
 ]
 # `status`: absent = Core API ready. blocked_core = needs a Core increment
 # (PLAN.md Steps 11/11a/12a); deferred = deliberately not built yet.
@@ -47,7 +55,7 @@ categories = [
   "app", "auth", "appearance", "connection", "notifications", "navigation",
   "session", "sessions", "project", "composer", "model", "agent", "tools",
   "timeline", "tool", "waiting", "copy", "files", "editor", "git", "inspect",
-  "dictation",
+  "dictation", "manager",
 ]
 
 # --- Keymap ------------------------------------------------------------------
@@ -64,13 +72,40 @@ contexts = [
   "global", "composer", "composer_busy", "timeline", "turn", "tool", "card",
   "waiting", "sidebar", "sidebar.sessions", "sidebar.files",
   "sidebar.projects", "sidebar.git", "editor", "drawer", "dialog",
+  "manager.listening", "manager.field", "manager.card",
   "escape_chain",
 ]
 
 # Esc is evaluated top to bottom; the first rule whose `when` holds consumes the
-# key and the walk stops. Text editing always wins over interrupt, and
+# key and the walk stops. The Manager's engaged states come first: they only hold
+# while the Manager is engaged (mic open, field open, focused card, speech), so at
+# rest Esc is unchanged. Then text editing always wins over interrupt, and
 # interrupt wins over back navigation, so a stray Esc in a child session
 # while the agent works stops the turn before it leaves the page.
+[[keymap.escape]]
+id = "manager_field"
+when = ["manager.field"]
+action = "manager.field_close"
+note = "Manager: the typed field closes and its text is dropped. The call goes on."
+
+[[keymap.escape]]
+id = "manager_listening"
+when = ["manager.listening"]
+action = "manager.listen_cancel"
+note = "Manager: cancels the recording in progress; the call stays open and nothing is sent."
+
+[[keymap.escape]]
+id = "manager_card"
+when = ["manager.card_focused"]
+action = "manager.card_dismiss"
+note = "Manager: a focused card closes. Unfocused cards take no keys, so they never reach this rule."
+
+[[keymap.escape]]
+id = "manager_speaking"
+when = ["manager.speaking", "!manager.card_focused"]
+action = "manager.speech_stop"
+note = "Manager: stops the speech only. The turn's work continues."
+
 [[keymap.escape]]
 id = "overlay"
 when = ["overlay.open"]
@@ -140,7 +175,8 @@ trailing = "sidebar.right.toggle"
 note = "Toggles stay available when their sidebar is closed. Same anchors in terminal, browser and desktop, allowing for native window chrome."
 title_click = "session.rename"
 breadcrumbs = "root title > child title; each crumb is a link; back via nav.back"
-extra = ["notifications.open"]
+extra = ["manager.open_session", "notifications.open"]
+manager_button = "manager.open_session"
 
 [navigation.left_sidebar]
 default_tab = "sessions"
@@ -210,7 +246,7 @@ shows_unread_count = true
 
 # --- Settings -----------------------------------------------------------------
 # Section order is fixed (INTERFACE_PLAN.md): Appearance, Providers, Agents,
-# Tools, MCP, Context, Voice and speech, Keybindings, Notifications, About.
+# Tools, MCP, Context, Voice and speech, Manager, Keybindings, Notifications, About.
 # Rows keep their relative order in both clients; client-only rows are labelled
 # by `clients` and sit inside the matching section.
 # scope: core = read/written through the Core API; client = per-client view setting.
@@ -453,6 +489,56 @@ clients = "both"
 command = "voice.dictate"
 
 [[settings.section]]
+id = "manager"
+label = "Manager"
+
+[[settings.section.row]]
+id = "manager.enabled"
+label = "Manager on"
+kind = "toggle"
+scope = "core"
+clients = "both"
+default = false
+note = "Off until the soak passes. Starting while off shows a toast that points here. Core key [manager] enabled."
+
+[[settings.section.row]]
+id = "manager.mode"
+label = "Mode"
+kind = "choice"
+scope = "core"
+clients = "both"
+default = "pipeline"
+options = ["pipeline", "live"]
+note = "pipeline: speech to text, the Manager, then text to speech. live: GPT-Live over your ChatGPT sign-in (experimental); Core holds the call; the TUI and NSH web carry the microphone and speaker. NSH on iOS and desktop has no call audio yet and stays silent in this mode. Use headphones in the TUI. Core key [manager] mode."
+
+[[settings.section.row]]
+id = "manager.model"
+label = "Model"
+kind = "text"
+scope = "core"
+clients = "both"
+default = "copilot/gpt-6-luna"
+note = "provider/model ref. No fallback: a failure is spoken and shown. Core key [manager] model."
+
+[[settings.section.row]]
+id = "manager.proactive"
+label = "Speak up unprompted"
+kind = "choice"
+scope = "core"
+clients = "both"
+default = "attention"
+options = ["off", "attention", "all"]
+note = "off: never. attention: approvals, questions and failures, spoken at a pause (MANAGER_PLAN.md section 8). all: also finished sessions. A proactive line never moves the screen. Core key [manager] proactive."
+
+[[settings.section.row]]
+id = "manager.privacy"
+label = "Where your words and sessions go"
+kind = "info"
+scope = "core"
+clients = "both"
+note = "Speech is transcribed and spoken by local models. What the Manager reads, including session text after redaction, goes to the model above (GitHub Copilot by default). Secrets are not spoken. Live mode would also send speech to OpenAI, and shows its own notice first."
+
+[[settings.section]]
 id = "keybindings"
 label = "Keybindings"
 
@@ -514,6 +600,10 @@ clients = "both"
 command = "app.open_inspector"
 
 # --- Commands -----------------------------------------------------------------
+# `leader` is the Ctrl+X leader sequence old Nexus bound in the TUI. NSH's keymap
+# takes one keystroke per binding, so commands.ts arms these for three seconds
+# after Ctrl+X; `keys.nsh` keeps each command's direct shortcut too. Values use
+# the key syntax above ("shift+n", "shift+/").
 
 [[command]]
 id = "palette.open"
@@ -530,6 +620,7 @@ title = "Show keyboard shortcuts"
 category = "app"
 slash = "help"
 keys = { tui = "f1", nsh = "cmd+/" }
+leader = ["shift+/"]
 key_context = "global"
 when = ["always"]
 placement = ["palette", "menu"]
@@ -562,7 +653,7 @@ category = "auth"
 slash = "login"
 when = ["always"]
 placement = ["palette", "settings", "banner"]
-note = "Device-code flow shown in the UI; OpenCode uses an API key."
+note = "Each provider's rows offer its sign-in methods: a browser sign-in, a device code, the provider's CLI or a local server; OpenCode uses an API key."
 
 [[command]]
 id = "app.sign_out"
@@ -593,6 +684,7 @@ title = "Open settings"
 category = "navigation"
 slash = "settings"
 keys = { tui = "ctrl+,", nsh = "cmd+," }
+leader = ["s"]
 key_context = "global"
 when = ["always"]
 placement = ["palette", "sidebar", "menu"]
@@ -601,6 +693,7 @@ placement = ["palette", "sidebar", "menu"]
 id = "app.reconnect"
 title = "Reconnect to Core"
 category = "connection"
+leader = ["r"]
 when = ["connection.lost"]
 unavailable_reason = "Core is connected."
 placement = ["palette", "banner"]
@@ -619,6 +712,7 @@ title = "Notifications"
 category = "notifications"
 slash = "notifications"
 keys = { nsh = "cmd+shift+n" }
+leader = ["shift+n"]
 key_context = "global"
 when = ["always"]
 placement = ["palette", "header"]
@@ -676,6 +770,7 @@ id = "sidebar.right.toggle"
 title = "Toggle right sidebar"
 category = "navigation"
 keys = { tui = "alt+b", nsh = "cmd+alt+b" }
+leader = ["l"]
 key_context = "global"
 when = ["always"]
 placement = ["palette", "header", "menu"]
@@ -774,6 +869,7 @@ title = "New session"
 category = "session"
 slash = "new"
 keys = { tui = "ctrl+n", nsh = "cmd+n" }
+leader = ["n"]
 key_context = "global"
 when = ["has_project"]
 unavailable_reason = "Add or choose a project first."
@@ -795,6 +891,7 @@ title = "Switch session"
 category = "session"
 slash = "sessions"
 keys = { tui = "ctrl+k", nsh = "cmd+k" }
+leader = ["o", "b"]
 key_context = "global"
 when = ["has_project"]
 unavailable_reason = "Add or choose a project first."
@@ -1146,6 +1243,7 @@ title = "Change model"
 category = "model"
 slash = "model"
 keys = { tui = "ctrl+m", nsh = "cmd+shift+m" }
+leader = ["m"]
 key_context = "global"
 when = ["has_project"]
 unavailable_reason = "Open a project first."
@@ -1157,6 +1255,7 @@ id = "model.effort"
 title = "Change effort"
 category = "model"
 slash = "effort"
+leader = ["t"]
 when = ["has_project"]
 unavailable_reason = "Open a project first."
 placement = ["palette", "composer"]
@@ -1164,6 +1263,7 @@ placement = ["palette", "composer"]
 [[command]]
 id = "agent.change"
 keys = { tui = "ctrl+g" }
+leader = ["g"]
 key_context = "global"
 title = "Change agent"
 category = "agent"
@@ -1625,10 +1725,11 @@ title = "Dictate into composer"
 category = "dictation"
 slash = "voice"
 keys = { tui = "ctrl+d", nsh = "cmd+shift+d" }
+leader = ["v"]
 key_context = "composer"
 when = ["always"]
 placement = ["composer", "palette"]
-note = "Ctrl+X V is also available in the TUI. Transcribes into editable composer text and never sends by itself."
+note = "Ctrl+X V is also available in both clients. Transcribes into editable composer text and never sends by itself."
 
 [[command]]
 id = "composer.slash_menu"
@@ -1741,3 +1842,146 @@ when = ["text_edit.active"]
 unavailable_reason = "No text field is being edited."
 placement = ["panel", "settings"]
 note = "Inline rename, find bar, settings field, key capture. Not the composer: Esc never clears composer text."
+
+# --- Manager -------------------------------------------------------------------
+# The voice agent above all sessions (MANAGER_PLAN.md 10.1 to 10.7). Nothing here
+# is captured at rest except manager.talk, start and stop. The engaged keys apply
+# only while their `when` terms hold, through key contexts of their own, so they
+# never conflict with the app's keys. Esc is resolved by [[keymap.escape]] above.
+# Digits 1-9 pick a row of a focused card; any printable character opens the field
+# (manager.field_open). Both are client behaviour, so they carry no key here.
+
+[[command]]
+id = "manager.open_session"
+title = "Manager session"
+category = "manager"
+slash = "manager-session"
+when = ["always"]
+placement = ["palette", "header"]
+note = "The header's Manager button, left of the right-sidebar toggle. Opens the Manager's own (hidden) session, its current episode, in the inspector at the Requests level: the full context the model is given, with its log. The Manager has no timeline in the clients (docs/manager.md); this is the one place to read it. Needs Core; with no Manager episode yet it says so."
+
+[[command]]
+id = "manager.talk"
+title = "Talk to the Manager"
+category = "manager"
+keys = { tui = "alt+m", nsh = "cmd+shift+space" }
+key_context = "global"
+when = ["always"]
+placement = ["palette"]
+note = "Tap to toggle, in both clients (terminals do not report key release). No call: start one and open the mic. At rest in a call: open the mic. Listening: send. Thinking or speaking: stop speech, cancel the turn if safe, open the mic (barge-in). Clicking the orb does the same. An unfocused card is focused by this key."
+
+[[command]]
+id = "manager.start"
+title = "Start the Manager"
+category = "manager"
+slash = "manager"
+when = ["always"]
+placement = ["palette"]
+note = "Starts the call, or moves it to this client (POST /api/manager/start). `/manager <text>` sends one typed line instead. With enabled = false, shows a toast that points at Settings, Manager. `/manager stop` is manager.stop."
+
+[[command]]
+id = "manager.stop"
+title = "Stop the Manager"
+category = "manager"
+slash = "manager-stop"
+keys = { tui = "alt+shift+m", nsh = "cmd+alt+shift+space" }
+key_context = "global"
+when = ["manager.in_call"]
+unavailable_reason = "No Manager call is running."
+placement = ["palette"]
+note = "Typed as `/manager stop`. The composer reads a leading `stop` after /manager as this command (no space is allowed in a slash name, so `/manager-stop` is the registered form). Ends the call (POST /api/manager/stop). Never stops a session."
+
+[[command]]
+id = "manager.send"
+title = "Send what you said"
+category = "manager"
+keys = { tui = "enter", nsh = "enter" }
+key_context = "manager.listening"
+when = ["manager.listening"]
+unavailable_reason = "The microphone is not open."
+placement = ["stage"]
+note = "Listening: enter sends. Space also sends (client), and so does manager.talk."
+
+[[command]]
+id = "manager.listen_cancel"
+title = "Cancel listening"
+category = "manager"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["manager.listening"]
+unavailable_reason = "The microphone is not open."
+placement = ["stage"]
+note = "Esc rule manager_listening. Drops the recording; nothing is sent. The call stays open."
+
+[[command]]
+id = "manager.speech_stop"
+title = "Stop speaking"
+category = "manager"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["manager.speaking", "!manager.card_focused"]
+unavailable_reason = "The Manager is not speaking."
+placement = ["stage"]
+note = "Esc rule manager_speaking. Stops the speech only; the turn's work continues. With a focused card, Esc dismisses the card instead."
+
+[[command]]
+id = "manager.field_open"
+title = "Type to the Manager"
+category = "manager"
+when = ["manager.engaged"]
+unavailable_reason = "The Manager is not listening and no card is focused."
+placement = ["stage"]
+note = "Any printable character opens the one-line field above the orb with that character in it, and discards the recording. Keys go to the field, not the session composer. Spoken and typed lines are one conversation."
+
+[[command]]
+id = "manager.field_send"
+title = "Send typed line"
+category = "manager"
+keys = { tui = "enter", nsh = "enter" }
+key_context = "manager.field"
+when = ["manager.field"]
+unavailable_reason = "The typed field is not open."
+placement = ["stage"]
+note = "Enter sends the typed line into the Manager's conversation."
+
+[[command]]
+id = "manager.field_close"
+title = "Close typed line"
+category = "manager"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["manager.field"]
+unavailable_reason = "The typed field is not open."
+placement = ["stage"]
+note = "Esc rule manager_field. Closes the field and drops its text. Nothing is sent."
+
+[[command]]
+id = "manager.card_pick"
+title = "Pick a card row"
+category = "manager"
+when = ["manager.card_focused"]
+unavailable_reason = "No card is focused."
+placement = ["stage"]
+note = "Digits 1-9 pick the row with that number (rows are numbered across the whole card). It opens the session through the normal navigation and closes the card. A session that no longer exists says so in the caption."
+
+[[command]]
+id = "manager.card_mic"
+title = "Open the mic from a card"
+category = "manager"
+keys = { tui = "space", nsh = "space" }
+key_context = "manager.card"
+when = ["manager.card_focused"]
+unavailable_reason = "No card is focused."
+placement = ["stage"]
+note = "Space opens the mic while a focused card is up, so the user can answer it by voice."
+
+[[command]]
+id = "manager.card_dismiss"
+title = "Dismiss card"
+category = "manager"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["manager.card_focused"]
+unavailable_reason = "No card is focused."
+placement = ["stage"]
+note = "Esc rule manager_card. Closes the card (POST /api/manager/card/dismiss); the next turn's delta says so. A click on the scrim does the same."

@@ -1,0 +1,13 @@
+[package]
+name = "nexus-annotate"
+version = "0.10.0"
+edition = "2021"
+description = "Shared image annotation for Nexus clients: stroke geometry, live tiles and flattening"
+license = "UNLICENSED"
+publish = false
+rust-version = "1.85"
+
+[dependencies]
+base64 = "=0.22.1"
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+tiny-skia = { version = "=0.11.4", default-features = false, features = ["std", "simd"] }

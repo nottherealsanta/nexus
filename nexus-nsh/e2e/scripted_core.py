@@ -7,9 +7,10 @@ nexus-core/tests/test_server.py (`Scripted`); nexus-core is imported, never edit
 
 It writes <home>/daemon.json like `nexus daemon start`, so both clients discover it the same way.
 Prompt text picks the script: "scenario" runs a multi-step review with thoughts, tools, a patch, a
-failure, a child and an image; "think" streams reasoning so the live group and footer can be seen;
-"tool" asks for a bash call (waits for approval), "slow" streams text slowly, "fail" reads a
-missing file, "ask" calls the `ask` tool, anything else answers with Markdown.
+failure, a child and an image; "mermaid" answers with the shared Mermaid scenario; "think" streams
+reasoning so the live group and footer can be seen; "tool" asks for a bash call (waits for
+approval), "slow" streams text slowly, "fail" reads a missing file, "ask" calls the `ask` tool,
+anything else answers with Markdown.
 """
 import asyncio
 import json
@@ -53,6 +54,26 @@ def build_rows(messages, turns):
 - [ ] footer waits for the turn to finish
 
 The child session and image are below; open either to inspect it."""
+
+MERMAID = """Here are the diagrams.
+
+```mermaid
+flowchart TD
+  Client --> Core --> Store
+```
+
+```mermaid
+pie title Traffic
+  "Reads" : 3
+  "Writes" : 1
+```
+
+```mermaid
+mindmap
+  root((Nexus))
+    Client
+    Core
+```"""
 
 PATCH = """*** Begin Patch
 *** Update File: README.md
@@ -142,6 +163,13 @@ class Scripted:
                 yield PartDone(Text("The notes file is missing, so I stopped before changing anything."))
                 yield Usage(480, 0, 18, 0)
                 yield Done("end_turn")
+            return
+        if "mermaid" in prompt:
+            for chunk in MERMAID.split("\n"):
+                yield TextDelta(chunk + "\n")
+            yield PartDone(Text(MERMAID))
+            yield Usage(120, 0, 40, 0)
+            yield Done("end_turn")
             return
         if last.role == "tool":  # after an ordinary tool result: finish
             yield TextDelta("Done. The command finished; output is above.")

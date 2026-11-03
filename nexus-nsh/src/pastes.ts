@@ -5,9 +5,8 @@ export type DraftPaste = { id: string; marker: string; text: string; tokens: num
 
 export const pasteDrafts = signal<Record<string, DraftPaste[]>>({});
 
-/** Pastes at or above this size collapse into a `[Pasted ~N tokens]` marker, as in the TUI. */
-const COLLAPSE_CHARS = 200;
-const COLLAPSE_LINES = 3;
+/** Pastes at or above this many characters collapse into a `[Pasted ~N tokens]` marker, as in the TUI. */
+const COLLAPSE_CHARS = 500;
 
 let nextPaste = 0;
 
@@ -37,7 +36,7 @@ export function pasteLabel(text: string): string {
 }
 
 export function isBigPaste(text: string): boolean {
-  return [...text].length >= COLLAPSE_CHARS || pasteLines(text) >= COLLAPSE_LINES;
+  return [...text].length >= COLLAPSE_CHARS;
 }
 
 /**

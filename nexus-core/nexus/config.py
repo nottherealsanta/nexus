@@ -24,7 +24,7 @@ from .paths import home
 # increments can extend this inventory without changing the file format.
 DEFAULTS: dict[str, dict[str, Any]] = {
     "defaults": {"effort": "", "agent": "", "permission": "allow"},
-    "agents": {"models": {}, "fallbacks": {}},
+    "agents": {"models": {}, "fallbacks": {}, "efforts": {}},
     "tools": {"disabled": [], "permission": {}},
     "context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]},
     "sessions": {"auto_archive_idle_seconds": 3600},
@@ -33,6 +33,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "mcp": {"full_definitions": False, "max_listed_tools": 25},
     "voice": {"stt_model": "moondream/parakeet-redux"},
     "speech": {"tts_model": "gradium/phonon-31m-en"},
+    "manager": {"enabled": False, "mode": "pipeline", "model": "copilot/gpt-6-luna", "idle_episode_minutes": 30,
+                "max_episode_tokens": 24000, "proactive": "attention", "proactive_interval_seconds": 20, "approvals": "spoken", "talk": "tap"},
 }
 
 
@@ -41,6 +43,7 @@ SCHEMA: dict[str, dict[str, Any]] = {
     "ui.reduced_motion": {"type": "boolean"},
     "agents.models": {"type": "object", "description": "per-child-agent model refs; a new subagent picks one with equal probability"},
     "agents.fallbacks": {"type": "object", "description": "per-child-agent ordered fallback model refs"},
+    "agents.efforts": {"type": "object", "description": "per-child-agent, per-model reasoning effort: {agent: {provider/model: effort}}; a subagent running that model uses it"},
     "defaults.effort": {"type": "string"},
     "defaults.agent": {"type": "string"},
     "defaults.permission": {"type": "string", "enum": ["allow", "ask"]},
@@ -64,11 +67,33 @@ SCHEMA: dict[str, dict[str, Any]] = {
                              "description": "with full_definitions off: at most this many tools (all servers together) are listed by name"},
     "voice.stt_model": {"type": "string", "description": "Hugging Face repo for speech to text, read from the HF cache"},
     "speech.tts_model": {"type": "string", "description": "Hugging Face repo for text to speech, read from the HF cache"},
+    "manager.enabled": {"type": "boolean", "description": "the Manager, a voice agent above all sessions (docs/manager.md); off until its soak passes"},
+    "manager.mode": {"type": "string", "enum": ["pipeline", "live"], "description": "which voice front end runs: pipeline (STT, the Manager, TTS) or live (GPT-Live over the ChatGPT sign-in; experimental)"},
+    "manager.model": {"type": "string", "description": "provider/model the Manager always runs on; an unavailable model fails visibly, never falls back"},
+    "manager.idle_episode_minutes": {"type": "integer", "minimum": 1, "maximum": 1440, "description": "a new Manager episode starts after this many idle minutes"},
+    "manager.max_episode_tokens": {"type": "integer", "minimum": 2000, "maximum": 200000, "description": "a new Manager episode starts when the current one passes this many tokens"},
+    "manager.proactive": {"type": "string", "enum": ["off", "attention", "all"], "description": "when the Manager may speak unprompted (used from M4)"},
+    "manager.proactive_interval_seconds": {"type": "integer", "minimum": 1, "maximum": 600, "description": "at most one unprompted Manager line per this many seconds"},
+    "manager.approvals": {"type": "string", "enum": ["spoken"], "description": "how the Manager answers approvals: a spoken yes is enough (D1)"},
+    "manager.talk": {"type": "string", "enum": ["tap"], "description": "tap to talk; hands-free comes later"},
     "mcp.servers": {"type": "object", "masked_fields": ["env", "headers", "credential fields"]},
 }
 
 
 def _valid(section: str, key: str, value: Any) -> bool:
+    if section == "agents" and key == "efforts":
+        if not isinstance(value, dict) or len(value) > 200:
+            return False
+        for name, by_model in value.items():
+            if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9_-]+", name):
+                return False
+            if not isinstance(by_model, dict) or not 1 <= len(by_model) <= 40:
+                return False
+            for ref, effort in by_model.items():
+                if (not isinstance(ref, str) or "/" not in ref or ref != ref.strip() or len(ref) > 200
+                        or not isinstance(effort, str) or not re.fullmatch(r"[a-z0-9_-]{1,20}", effort)):
+                    return False
+        return True
     if section == "agents" and key in ("models", "fallbacks"):
         from .llmhub.hub import split_ref
         if not isinstance(value, dict) or len(value) > 200:
@@ -115,6 +140,24 @@ def _valid(section: str, key: str, value: Any) -> bool:
         if key == "permission":
             return value in ("allow", "ask")
         return True
+    if section == "manager":
+        if key == "enabled":
+            return isinstance(value, bool)
+        if key == "model":
+            from .llmhub.hub import split_ref
+            if not isinstance(value, str) or "/" not in value or value != value.strip() or len(value) > 200:
+                return False
+            try:
+                return bool(split_ref(value)[1].strip())
+            except ValueError:
+                return False
+        if key in ("idle_episode_minutes", "max_episode_tokens", "proactive_interval_seconds"):
+            low, high = {"idle_episode_minutes": (1, 1440), "max_episode_tokens": (2000, 200000),
+                         "proactive_interval_seconds": (1, 600)}[key]
+            return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+        allowed = {"mode": ("pipeline", "live"), "proactive": ("off", "attention", "all"),
+                   "approvals": ("spoken",), "talk": ("tap",)}[key]
+        return isinstance(value, str) and value in allowed
     if section in ("voice", "speech"):
         return isinstance(value, str) and bool(re.fullmatch(r"[\w.-]+/[\w.-]+", value))
     if section == "mcp":

@@ -3,6 +3,9 @@
 Local commands (no daemon): `login`, `logout`, `status`, `models`, `serve`,
 `daemon start|stop|status`.
 
+`manager` is a typed chat with the Manager (MANAGER_PLAN.md; docs/manager.md): it holds the call like a client,
+prints the Manager's sentences and cards, and answers navigation requests as a client with no screen.
+
 Daemon clients (they start the daemon if it is not running and talk to it over
 `/api/*`): `project`, `session`, `workspace`, `run`, `chat`. They render the daemon's event
 stream. `session` can archive/unarchive a whole tree, filter lists by archive
@@ -30,6 +33,7 @@ import signal
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 from pathlib import Path
 from typing import Any, TextIO
@@ -593,6 +597,136 @@ async def _chat(args: argparse.Namespace, renderer: Renderer) -> None:
         await client.close()
 
 
+def render_card(card: dict[str, Any]) -> list[str]:
+    """A card as plain text lines, for the CLI and for reading a scripted run."""
+    kind = card.get("type")
+    title = f" - {card['title']}" if card.get("title") else ""
+    lines = [f"[{kind} card{title}]"]
+
+    def row(item: dict[str, Any]) -> str:
+        why = f" ({item['why']})" if item.get("why") else ""
+        return f"  {item['n']}. {item['handle']} - {item['title']} [{item['project']}, {item['state']}]{why}"
+
+    if kind == "board":
+        for name, rows in card["columns"].items():
+            lines.append(f" {name.replace('_', ' ')}: {len(rows) or 'none'}" + (f" (+{card['more'][name]} more)" if card["more"][name] else ""))
+            lines.extend(row(item) for item in rows)
+    elif kind == "sessions":
+        lines.extend(row(item) for item in card["rows"])
+        if card["more"]:
+            lines.append(f"  +{card['more']} more")
+    elif kind == "approval":
+        lines.append(f"  {card['handle']} wants to {card['summary']}" + (" (clipped)" if card["clipped"] else ""))
+        lines.extend("    " + part for part in card["detail"].splitlines())
+    elif kind == "question":
+        lines.append(f"  {card['handle']} asks: {card['question']}")
+        lines.extend(f"    - {option}" for option in card["options"])
+    elif kind == "diagram":
+        lines.extend("    " + part for part in card["source"].splitlines())
+    elif kind in ("excerpt", "note"):
+        lines.append(f"  from {card['handle']}:" if kind == "excerpt" else "  note:")
+        lines.extend("    " + part for part in card["markdown"].splitlines())
+        if card["clipped"]:
+            lines.append("    [clipped]")
+    return lines
+
+
+async def _manager(args: argparse.Namespace) -> None:
+    client = Client.connect()
+    try:
+        if args.action == "episodes":
+            for episode in await client.call("GET", "/api/manager/episode"):
+                follows = f" (continues {episode['continued_from']})" if episode["continued_from"] else ""
+                print(f"{episode['id']}  {time.strftime('%Y-%m-%d %H:%M', time.localtime(episode['updated']))}  "
+                      f"{episode['model']}{follows}")
+            return
+        if args.action == "audit":
+            for item in reversed(await client.call("GET", "/api/manager/audit", limit=args.limit)):
+                mark = f"{GREEN}ok{RESET}" if item["ok"] else f"{RED}refused{RESET}"
+                print(f"{time.strftime('%H:%M:%S', time.localtime(item['time']))} {mark} {item['tool']} "
+                      f"{item['target'] or ''}  heard: {item['heard']!r}  {item['result']}")
+            return
+        status = await client.call("GET", "/api/manager")
+        if not status["enabled"]:
+            raise ValueError("the Manager is off; set `enabled = true` under [manager] in the config "
+                             "(Settings, Manager), then run this again")
+        events = client.events()
+        connected_event = await anext(events)
+        stream_id = connected_event["stream_id"]
+        started = await client.call("POST", "/api/manager/start", {"stream_id": stream_id, "client_id": "cli"})
+        call_id = started["call_id"]
+        idle = asyncio.Event()
+        idle.set()
+        busy = {"turn": False}
+
+        async def watch() -> None:
+            async for event in events:
+                data = event.get("data") or {}
+                if data.get("call_id") != call_id:
+                    continue
+                kind = event["type"]
+                if kind == "manager.speech":
+                    print(f"{CYAN}{data['text']}{RESET}")
+                elif kind == "manager.card" and data.get("card"):
+                    print(DIM + "\n".join(render_card(data["card"])) + RESET)
+                elif kind == "manager.caption" and data["role"] == "manager":
+                    print(f"{RED}{data['text']}{RESET}")
+                elif kind == "manager.navigate":
+                    print(f"{DIM}(the Manager asked to open {data.get('session') or data.get('project') or 'a view'}; "
+                          f"the CLI has no screen){RESET}")
+                    await client.call("POST", "/api/manager/navigate/result", {
+                        "stream_id": stream_id, "request_id": data["request_id"], "ok": False,
+                        "reason": "the CLI has no screen to move"})
+                elif kind == "manager.state":
+                    if data["error"]:
+                        print(f"{RED}{data['error']['message']} {data['error']['fix']}{RESET}")
+                    if not data["active"]:
+                        return
+                    busy["turn"] = data["phase"] != "idle"
+                    if data["phase"] == "idle":
+                        idle.set()
+                    else:
+                        idle.clear()
+
+        watcher = asyncio.ensure_future(watch())
+        print(f"{DIM}nexus manager · {status['model']} · typed chat (/cancel, /exit){RESET}")
+
+        async def say(text: str) -> None:
+            idle.clear()
+            await client.call("POST", "/api/manager/say", {"stream_id": stream_id, "text": text, "source": "typed"})
+            await asyncio.sleep(0.2)
+            await idle.wait()
+
+        try:
+            if args.text:
+                await say(args.text)
+                return
+            while not watcher.done():
+                try:
+                    line = await _read_answer(f"{BOLD}› {RESET}", threading.Event())
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    return
+                if line is None or line.strip() in ("/exit", "/quit"):
+                    return
+                if not line.strip():
+                    continue
+                if line.strip() == "/cancel":
+                    print(await client.call("POST", "/api/manager/cancel", {"stream_id": stream_id}))
+                    continue
+                try:
+                    await say(line.strip())
+                except ApiError as exc:
+                    print(f"{RED}{exc}{RESET}")
+        finally:
+            with contextlib.suppress(ApiError, httpx.HTTPError):
+                await client.call("POST", "/api/manager/stop", {"stream_id": stream_id})
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
+    finally:
+        await client.close()
+
+
 def _describe(session: dict[str, Any]) -> str:
     effort = f" effort {session['effort']} ({session['effort_source']})" if session["effort"] else ""
     off = f" · off: {','.join(session['disabled_tools'])}" if session["disabled_tools"] else ""
@@ -1001,6 +1135,11 @@ def main(argv: list[str] | None = None) -> int:
     session.add_argument("--force", action="store_true", help="export: overwrite an existing output file")
     session.add_argument("--wire", action="store_true", help="continue: print the raw request and every provider event")
     session.add_argument("--wire-file", help="continue: append wire traffic to this JSONL file")
+    manager = sub.add_parser("manager", help="typed chat with the Manager, which sees all sessions (docs/manager.md)")
+    manager.add_argument("action", nargs="?", choices=["chat", "episodes", "audit"], default="chat",
+                         help="chat (default), episodes (its past conversations, for the inspector), audit (what it did)")
+    manager.add_argument("text", nargs="?", help="chat: send this one line, print the answer, and exit")
+    manager.add_argument("--limit", type=int, default=30, help="audit: how many rows")
     workspace = sub.add_parser("workspace", help="workspace controls through the API: expose, directory, worktrees")
     workspace.add_argument("action", choices=["expose", "directory", "list", "create", "delete"])
     workspace.add_argument("argument", nargs="?", help="directory (directory) or worktree path (create/delete)")
@@ -1079,6 +1218,8 @@ def main(argv: list[str] | None = None) -> int:
             asyncio.run(_session(args))
         elif args.command == "workspace":
             asyncio.run(_workspace(args))
+        elif args.command == "manager":
+            asyncio.run(_manager(args))
         else:
             with contextlib.ExitStack() as stack:
                 wire_file = stack.enter_context(open(args.wire_file, "a")) if args.wire_file else None

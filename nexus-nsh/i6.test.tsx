@@ -86,7 +86,7 @@ describe("sessions sidebar (I6)", () => {
     expect(app.shows("id:rail-popup-prj_1-above")).toBe(true);
     expect(app.shows("id:rail-popup-prj_1-below")).toBe(true);
     const shown = app.texts();
-    for (const text of ["0 needs attention", "0 unread", "0 running", "1 idle"]) expect(shown.includes(text)).toBe(true);
+    for (const text of ["0 attention", "0 unread", "0 running", "1 idle"]) expect(shown.includes(text)).toBe(true);
   });
 
   test("keyboard focus on a rail project shows its card too", async () => {

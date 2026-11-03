@@ -27,7 +27,6 @@ guard and whether the result is model-visible.
 | `tools/grep.py`, `glob.py`, `ls.py`, `walk.py`, `_grep_scan.py` | Search and listing tools, the shared walk and the fallback scan worker |
 | `tools/ask.py`, `questions.py` | `ask` spec and the validated question/reply contract |
 | `tools/code.py`, `kernels.py` | Code spec and daemon-owned Monty kernels |
-| `observations.py` | Per-session read observations and the read-before-edit guard |
 | `bash_jobs.py` | Daemon-owned background bash jobs |
 | `workspace.py`, `worktrees.py` | Workspace control tools, directory moves and Git worktree operations |
 
@@ -123,50 +122,17 @@ call ([loop.md](loop.md#approval)). The daemon auto-approves `read`, `bash_outpu
 are approval-free inside the session directory by fixed policy, with no setting
 to change that. `bash` (including `background`) still asks unless the session's
 permission is `allow` (`--yes`), which is the default for new sessions. `ask`
-is not an approval: its answers are data for the model, never a grant. Path confinement and read freshness still apply to
+is not an approval: its answers are data for the model, never a grant. Path confinement still applies to
 every in-directory edit. Activation and moving do not ask a question. [Permission rules](#permission-rules)
 can make any of these ask or refuse, and let `bash` or the web tools run without asking.
 
-<a id="read-observations-and-freshness"></a>
-**Read observations and freshness.** A direct `read` whose result enters the
-model's context records an observation for that session:
-`nexus/observations.py`, table `file_observation`. An observation holds the
-resolved absolute path, a `sha256` content revision (never mtime alone), the
-total line count, the line ranges that reached context, clipped line numbers,
-whether the whole output was clipped, and the read tool call id. Observations
-are stored in SQLite and survive a daemon restart; an old observation is never
-rebuilt from the file's current contents. Reads are staged until their successful
-tool results are saved into context. A read and edit in the same provider tool
-batch cannot establish new coverage for that edit; the model must first receive
-the read result. Completed reads recovered on interruption can establish
-coverage when their results are saved; unreported reads never do.
-
-Before changing an existing file, the tool asks the session's guard whether the
-current revision is covered:
-
-* **Replacement edit and patch hunks** need coverage of the original lines they
-  change. A pure insertion needs its anchor line (or the last line when
-  appended, or a complete read of an empty file).
-* **Whole-file overwrite, deletion and move** need complete coverage: every line,
-  or a read of an empty file. Several windows add up only while they share one
-  revision.
-* A line clipped at 2,000 characters is not covered. An output clipped at 30,000
-  characters establishes no coverage at all; read a smaller window.
-* A missing observation, a different revision, or uncovered lines raises a
-  `ToolError` naming the file and requiring a fresh read.
-* A directory listing is not a file read. A read by another session does not
-  count. A read inside a `code` kernel is retained by the kernel, not shown to
-  the model, so it records nothing; the nested edit still needs a direct read.
-
-After a successful edit, patch or write, affected observations are dropped, so
-the next change needs a fresh read of the new revision. Creating a new file
-needs no read, but an existing destination is an overwrite (or a refused
-`Add File`). Nexus file mutations are serialized by one in-process lock per
-daemon; freshness is checked again inside it immediately before writing. A
-multi-file patch validates every affected file before writing any. New-file
-writes use exclusive creation so a destination appearing at write time is not
-overwritten. Replacement edits preserve existing newline bytes; patch coverage
-uses the same visible line numbering as `read`, including Unicode separators.
+<a id="file-mutations"></a>
+**File mutations.** There is no read-before-edit guard (Nexus 0.10 dropped it, as opencode and pi have none; ledger
+2026-11-03). `edit`, `patch` and `write` act on the file as it is on disk: an edit that does not match says so, and the
+model reads again. All Nexus file mutations in one daemon are serialized by one in-process lock (`Runtime.file_lock`,
+passed to tools as `ToolContext.file_lock`). A multi-file patch validates every affected file before writing any.
+New-file writes use exclusive creation so a destination appearing at write time is not overwritten. Replacement edits
+preserve existing newline bytes. The `read` tool records nothing; the old `file_observation` table is dropped.
 
 **Enforcement boundary.** This protects the `edit` and `write` tools, direct and
 nested. Unrestricted `bash` can still write files without those tools, so the
@@ -272,9 +238,7 @@ Destination instructions are reread when a pending move applies; if they differ
 from a tool's earlier result, a forward notice carries the actual instructions.
 
 Children created after the move inherit the new directory; existing children
-keep theirs. File observations are keyed by resolved absolute path, so reading
-`a.txt` in the old directory never authorizes changing a different `a.txt` in
-the destination.
+keep theirs.
 
 **Reporting while moved.** While the live directory differs from the frozen
 prompt's starting directory, `bash` results begin with `[cwd: <directory>]`, and
@@ -333,7 +297,7 @@ Read a text file with line numbers, view an image file, or list a directory.
   names, directories with a trailing `/`.
 * An image file (PNG, JPEG, GIF or WebP, recognised by its bytes) is stored as a session artifact and returned to the
   model as an image beside a one-line text, like an MCP image ([llm-providers.md](llm-providers.md)). A model without
-  image input gets the text and a "not sent" note. It records no observation, and inside a `code` cell it is an error.
+  image input gets the text and a "not sent" note. Inside a `code` cell it is an error.
 * A missing path raises an error. A file with a NUL byte in its first 8192 bytes
   is refused as binary. An empty file returns `"<path> is empty"`.
 * Lines are `{number:>6}<TAB>{text}`. A line over 2000 characters is cut and ends
@@ -341,23 +305,14 @@ Read a text file with line numbers, view an image file, or list a directory.
 * A footer `[lines A–B of N]` is added when the window is not the whole file.
 * After a directory move, the result starts with `[path: <absolute path>]` and
   errors/listings use the absolute path ([tools.md](tools.md#workspace-control-tools-on-demand)).
-* The whole output is also subject to the 30,000-character clip. A clipped
-  output establishes no freshness coverage: the clip and any clipped lines are
-  recorded, but no line range from that call authorizes an edit.
+* The whole output is also subject to the 30,000-character clip, and the clip is stated in the result.
 * File bytes are decoded as UTF-8 with replacement.
-* A direct read records an observation for this session (above). A directory
-  listing does not, and neither does a read inside a `code` cell.
-* Startup recovery restores a read's observation only when it puts that read's
-  saved result back into conversation history. A read whose result is unknown
-  grants no coverage, so recovery cannot authorize an edit from content the
-  model never received ([daemon.md](daemon.md#crash-recovery)).
 
 ## grep, glob, ls
 
 Adapted from old Nexus. All three are read-only, confined to the session
 directory (a path outside it, or a symlink out of it, is refused or skipped),
-auto-approved, and record **no** read observation: a match or a listing is not
-a read, so a file still has to be `read` before `edit`. Output is clipped to the
+and auto-approved. Output is clipped to the
 30,000-character rule, and every cut says so in the result.
 
 The walk (`tools/walk.py`) is what Git would show in a work tree (tracked and
@@ -527,9 +482,7 @@ several replacements in one file are a patch with several hunks.
 
 `old_string` must occur exactly once unless `replace_all` is true. Errors: not
 found, occurs N times (add context or set `replace_all`), identical strings, file
-does not exist. Result: `edited <path> (N replacement[s])`. Before writing, the
-session needs coverage of every original line an occurrence touches; with
-`replace_all` that means all occurrences. No approval is requested.
+does not exist. Result: `edited <path> (N replacement[s])`. No approval is requested.
 
 ### `patch` (`apply_patch` format)
 
@@ -576,12 +529,8 @@ Format:
   if all pass, so a patch applies completely or not at all (a failure while
   writing is not covered). Parent directories are created. Patches over
   1,000,000 characters are refused.
-* Freshness is checked per operation before any write: updates and hunks need
-  coverage of the original lines they change; `Delete File` and every `Move to`
-  need complete coverage; `Add File` needs no read but fails if the destination
-  exists (and is rechecked before writing). A stale file rejects the whole patch.
-* A successful patch drops the session's observations for every path it
-  changed, so the next change needs a fresh read. No approval is requested.
+* `Add File` fails if the destination exists (and is rechecked before writing).
+  A hunk whose context is not found rejects the whole patch. No approval is requested.
 * Result: one line per operation, e.g. `updated src/app.py (1 hunks)`,
   `added notes/todo.txt (2 lines)`, `deleted old.txt`,
   `updated a.py → b.py (1 hunks)`.
@@ -599,11 +548,8 @@ Create a file or replace its whole content.
 | `content` (required) | string | The complete file |
 
 Result: `created <path> (N lines, B bytes)` or `overwrote <path> (...)`. The
-description tells the model to prefer `edit` for existing files. Creating a new
-file needs no read. Overwriting an existing file needs a complete observation of
-its current revision from this session; otherwise the tool refuses and asks for
-a fresh read. A destination that appears while a create is in progress is
-refused. After writing, the observation is dropped. No approval is requested.
+description tells the model to prefer `edit` for existing files. A destination
+that appears while a create is in progress is refused. No approval is requested.
 
 ## ask
 
@@ -713,9 +659,7 @@ the nested call id.
 ## code
 
 Prefer code for multi-step inspection, independent tool batches and processing
-large results down to relevant evidence. Single simple operations and reads
-needed for edit coverage should stay direct: printing a nested read does not
-establish coverage. Scouts grant code with only their read-only nested tools.
+large results down to relevant evidence. Single simple operations should stay direct. Scouts grant code with only their read-only nested tools.
 See [agents.md](agents.md#choosing-code-mode) for rollout and evaluation.
 
 `code {code, kernel_id?, timeout_s?}` runs Python in a persistent Monty 1.1.0

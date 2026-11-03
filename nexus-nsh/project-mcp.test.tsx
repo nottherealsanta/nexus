@@ -1,7 +1,7 @@
-// Project `.mcp.json` in the Projects view: enabled entries start automatically with a
+// Project MCP files in the Projects view: enabled entries start automatically with a
 // new session, so the panel shows current status and non-secret configuration facts only.
 import { describe, expect, open, test } from "nsh/test";
-import { configMeta, configShape, stateLabel } from "./src/project-mcp";
+import { configMeta, configShape, duplicateLabel, stateLabel } from "./src/project-mcp";
 
 const sse = (frames: string) => frames;
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -63,6 +63,9 @@ describe("project MCP configuration facts", () => {
 
     expect(configShape(row({ transport: undefined }))).toBe("");
     expect(configMeta(row({ transport: undefined }))).toBe("");
+    expect(duplicateLabel(row({ duplicate: { server: "docs", used: ".mcp.json", ignored: ".agents/mcp.json" } })))
+      .toBe(".mcp.json wins over .agents/mcp.json");
+    expect(duplicateLabel(row())).toBe("");
   });
 
   test("status labels describe the current connection state", () => {
@@ -137,5 +140,40 @@ describe("project MCP in the Projects view", () => {
     expect(panel.includes("command is empty")).toBe(true);
     // No enabled entry can start, so the auto-run warning is absent.
     expect(panel.includes("start automatically with a new session")).toBe(false);
+  });
+
+  test("both project files are listed and a duplicate name says which file won", async () => {
+    const duplicate = { server: "shared", used: ".mcp.json", ignored: ".agents/mcp.json" };
+    const app = await open("./App.tsx", {
+      network: {
+        ...core(),
+        "GET */api/project/prj_1/mcp": {
+          body: summary(
+            [
+              row({ server: "shared", warnings: ["server 'shared' is defined in both .mcp.json and .agents/mcp.json; .mcp.json is used"], duplicate }),
+              row({ server: "agents-only", file: "/work/demo/.agents/mcp.json" }),
+            ],
+            {
+              files: [
+                { name: ".mcp.json", file: "/work/demo/.mcp.json", exists: true, revision: "a", warnings: [], servers: ["shared"] },
+                { name: ".agents/mcp.json", file: "/work/demo/.agents/mcp.json", exists: true, revision: "b", warnings: [], servers: ["shared", "agents-only"] },
+              ],
+              duplicates: [duplicate],
+              warnings: ["server 'shared' is defined in both .mcp.json and .agents/mcp.json; .mcp.json is used"],
+            },
+          ),
+        },
+      },
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("id:rail-project-prj_1");
+    await app.keyboard.press("mod+3");
+    await app.waitFor("id:project-mcp-server-shared");
+
+    const panel = app.texts().join("\n");
+    expect(panel.includes("/work/demo/.mcp.json")).toBe(true);
+    expect(panel.includes("/work/demo/.agents/mcp.json")).toBe(true);
+    expect(panel.includes("defined in both .mcp.json and .agents/mcp.json")).toBe(true);
+    expect(panel.includes("shared") && panel.includes("agents-only")).toBe(true);
   });
 });

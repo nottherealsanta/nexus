@@ -1,9 +1,9 @@
 import { agentColor } from "../agent-color";
-import { List, Scroll, computed, effect, signal, Text, View } from "nsh";
+import { List, Scroll, computed, effect, signal, Text, untracked, View } from "nsh";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
-import { FOCUS, Icon, IconButton, PROSE, Shimmer, Status, StatusRail, T } from "./kit";
+import { FOCUS, Icon, IconButton, PROSE, Shimmer, Status, StatusRail, T, TS } from "./kit";
 import { DiffView } from "./diff";
 import { disabledOf, startingSections, StartingContext } from "./newsession";
 import type { CtxSection } from "./newsession";
@@ -16,6 +16,9 @@ import { apiUrl } from "../core/transport";
 import type { IconName } from "../icons";
 import { roles, statusGlyphs } from "../gen/theme";
 import { pasteLabel } from "../pastes";
+import { keepIdentity } from "./keep-identity";
+import { closedFenceSources, mermaidImage, mermaidText, toneClass } from "../mermaid";
+import { WORDS } from "../manager";
 import "../../fonts/MonaspaceArgon-Regular.otf";
 import "../../fonts/MonaspaceArgon-Medium.otf";
 import "../../fonts/MonaspaceArgon-Bold.otf";
@@ -31,7 +34,7 @@ const hit = (base: string) => (isNarrow() ? "min-h-11" : base);
 type Row =
   | { key: string; kind: "footer"; segments: { text: string }[]; error?: string; interrupted: boolean }
   | {
-      key: string; kind: "user"; delivery?: string | null; images?: { name: string; data_url: string }[]; pastes?: { marker: string; text: string }[]; n: number; time: string; text: string; turnKey: string; folded: boolean;
+      key: string; kind: "user"; delivery?: string | null; origin?: string | null; images?: { name: string; data_url: string }[]; pastes?: { marker: string; text: string }[]; n: number; time: string; text: string; turnKey: string; folded: boolean;
       tools: number; duration: string; status: TurnStatus;
     }
   | {
@@ -107,14 +110,21 @@ const NOTICE = /^(?:\[(Nexus notice|Nexus recovery|Notification)|→ Background 
 const closedTurns = signal<Record<string, boolean>>({});
 // Sticky user bar: the bands' geometry (content coordinates) and the list's scroll offset.
 type Band = { key: string; top: number; height: number; n: number; text: string; turnKey: string };
+// Layout and scroll state belong to the session that measured it. A height or
+// offset from the root must never place the sticky header in a child session.
 const rowHeights = signal<Record<string, number>>({});
-const scrollY = signal(0);
+const scrollY = signal<Record<string, number>>({});
 const viewH = signal(0);
+const sessionId = () => model.selected?.sessionId ?? "";
+const heightKey = (sid: string, key: string) => `${sid}\u0000${key}`;
+const scrollOf = (sid: string) => scrollY()[sid] ?? 0;
+const setScroll = (sid: string, y: number) => scrollY.update((all) => all[sid] === y ? all : { ...all, [sid]: y });
 const focusedBand = signal<string | null>(null);
 // Sticky user bar line height (secondary text) and bar height, for the push-up geometry.
-const STICKY_LINE = 20;
+const STICKY_LINE = 24; // TS.base's leading-6
 const STICKY_BAR = 28;
 const LIST_PAD = 12; // the list's `py-3`
+const END_SLOP = 24; // scrolling down to within this of the end follows it again
 const ROW_ESTIMATE = 72; // the list's estimatedItemSize, for rows not laid out yet
 
 function open(key: string, fallback: boolean): boolean {
@@ -236,6 +246,13 @@ export function errorText(kind: unknown, message: unknown): string {
   if (msg.toLowerCase().includes(k.toLowerCase())) return msg.charAt(0).toUpperCase() + msg.slice(1);
   return `${k}: ${msg}`;
 }
+/** An approval or question the Manager answered on the user's words: what was decided, `via Manager`, and what it heard. */
+function viaManager(what: "approval" | "question", d: any, key: string, label: string): Extract<Row, { kind: "diag" }> {
+  const outcome = d.outcome === "cancelled" ? "cancelled"
+    : what === "question" ? "answered" : d.allow === false || d.outcome === "denied" ? "denied" : "approved";
+  const heard = typeof d.heard === "string" && d.heard.trim() ? `heard “${d.heard.trim()}”` : undefined;
+  return { key, kind: "diag", label, text: `${what} ${outcome} ${WORDS.via}`, detail: heard, tone: outcome === "denied" ? "warning" : "info" };
+}
 const DIAG_TYPES = new Set(["session.error", "retry_scheduled", "retry_started", "retry_exhausted", "turn.recovered", "session.directory_changed", "session.notified", "permission.replied", "question.replied"]);
 function diag(e: CoreEvent): Extract<Row, { kind: "diag" }> | null {
   const d = e.data ?? {};
@@ -249,8 +266,10 @@ function diag(e: CoreEvent): Extract<Row, { kind: "diag" }> | null {
     case "turn.recovered": return { key: k, kind: "diag", label, text: `turn ${d.outcome ?? "interrupted"}: ${d.reason ?? "daemon restarted"}`, tone: "warning" };
     case "session.directory_changed": return { key: k, kind: "diag", label, text: `directory changed: ${d.from ?? ""} → ${d.to ?? ""}`, tone: "info" };
     case "session.notified": return { key: k, kind: "diag", label, text: `child finished: ${d.from ?? "child"}`, tone: "info" };
-    case "permission.replied": return d.outcome === "cancelled" ? { key: k, kind: "diag", label, text: "approval cancelled: interrupted", tone: "warning" } : null;
-    case "question.replied": return d.outcome === "cancelled" ? { key: k, kind: "diag", label, text: "question cancelled: interrupted", tone: "warning" } : null;
+    case "permission.replied": if (d.origin === "manager") return viaManager("approval", d, k, label);
+      return d.outcome === "cancelled" ? { key: k, kind: "diag", label, text: "approval cancelled: interrupted", tone: "warning" } : null;
+    case "question.replied": if (d.origin === "manager") return viaManager("question", d, k, label);
+      return d.outcome === "cancelled" ? { key: k, kind: "diag", label, text: "question cancelled: interrupted", tone: "warning" } : null;
     default: return null;
   }
 }
@@ -488,7 +507,7 @@ function buildStableRows(): Row[] {
         const folded = closedTurns()[key] ?? false;
         foldedTurn = folded;
         out.push({
-          key: msg.id, kind: "user", delivery: msg.delivery, images: msg.parts.filter((p) => p.type === "image") as any, pastes: pastesOf(msg), n: n + 1, time: clock(msg.created), text: body, turnKey: key, folded,
+          key: msg.id, kind: "user", delivery: msg.delivery, origin: msg.origin, images: msg.parts.filter((p) => p.type === "image") as any, pastes: pastesOf(msg), n: n + 1, time: clock(msg.created), text: body, turnKey: key, folded,
           tools: meta?.tools ?? 0, duration: meta ? fmtDuration(meta.endTime - meta.startTime) : "",
           status: meta ? statusOf(meta) : "running",
         });
@@ -637,8 +656,8 @@ function buildStableRows(): Row[] {
     const i = flat.findIndex((r) => r.kind === "context");
     if (i > 0) flat.unshift(...flat.splice(i, 1));
   }
-  if (sel.messagesMore) flat.unshift({ key: "older-messages", kind: "older", text: "Older messages are not loaded", action: "load-older" });
-  if (sel.turnsGap) flat.unshift({ key: "turns-gap", kind: "older", text: `${sel.turnsGap[0].toUpperCase()}${sel.turnsGap.slice(1)}.` });
+  if (sel.messagesMore) flat.unshift({ key: `older-messages:${sid}`, kind: "older", text: "Older messages are not loaded", action: "load-older" });
+  if (sel.turnsGap) flat.unshift({ key: `turns-gap:${sid}`, kind: "older", text: `${sel.turnsGap[0].toUpperCase()}${sel.turnsGap.slice(1)}.` });
   return mergeDiagnostics(footersLast(flat));
 }
 
@@ -668,11 +687,33 @@ function mergeDiagnostics(flat: Row[]): Row[] {
 }
 
 /** Append the live streaming rows without rebuilding the settled history. */
-function withStreaming(flat: Row[], st?: { text: string; reasoning: string }): Row[] {
+/** What the live stream holds now; reading it inside a render follows each token. */
+function liveStream(part: "text" | "reasoning"): string {
+  streamRev();
+  const sel = model.selected;
+  return (sel && model.streaming.get(sel.sessionId)?.[part]) ?? "";
+}
+// One object per session and part: a new object per token would make the list forget
+// the row's height (see `keepIdentity`), and a key without the session would let a
+// height measured in one session place the sticky header in another.
+const streamRows = new Map<string, { reasoning: Row; text: Row }>();
+function streamRow(sid: string, part: "reasoning" | "text"): Row {
+  let rows = streamRows.get(sid);
+  if (!rows) {
+    rows = {
+      reasoning: { key: `stream-r:${sid}`, kind: "reasoning", get text() { return liveStream("reasoning"); }, get open() { return open("reason:streaming", true); }, running: true },
+      text: { key: `stream-t:${sid}`, kind: "assistant", get text() { return liveStream("text"); }, streaming: true },
+    };
+    streamRows.set(sid, rows);
+  }
+  return rows[part];
+}
+
+function withStreaming(flat: Row[], st: { text: string; reasoning: string } | undefined, sid: string): Row[] {
   if (!st || (!st.reasoning && !st.text)) return flat;
   const out = [...flat];
-  if (st.reasoning) out.push({ key: "stream-r", kind: "reasoning", text: st.reasoning, open: open("reason:streaming", true), running: true });
-  if (st.text) out.push({ key: "stream-t", kind: "assistant", text: st.text, streaming: true });
+  if (st.reasoning) out.push(streamRow(sid, "reasoning"));
+  if (st.text) out.push(streamRow(sid, "text"));
   return out;
 }
 
@@ -681,7 +722,7 @@ export function buildRows(): Row[] {
   m();
   const sel = model.selected;
   if (!sel) return [];
-  return groupActivities(withStreaming(buildStableRows(), model.streaming.get(sel.sessionId)), model.running.has(sel.sessionId));
+  return groupActivities(withStreaming(buildStableRows(), model.streaming.get(sel.sessionId), sel.sessionId), model.running.has(sel.sessionId));
 }
 
 type ActivityEntry = Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>;
@@ -742,16 +783,17 @@ function groupActivities(rows: Row[], busy: boolean): Row[] {
 const RAIL: Record<string, string> = { info: "bg-info", accent: "bg-primary", warning: "bg-warning" };
 
 /** Row heights for the sticky bar: an item's `onLayout` frame is relative to its own container, so content offsets are summed from the heights. */
-function reportHeight(row: Row, h: number) {
+function reportHeight(row: Row, sid: string, h: number) {
+  const key = heightKey(sid, row.key);
   const cur = rowHeights();
-  if (cur[row.key] === h) return;
-  rowHeights.set({ ...cur, [row.key]: h });
+  if (cur[key] === h) return;
+  rowHeights.set({ ...cur, [key]: h });
 }
 
-function RowView(p: { r: () => Row }) {
+function RowView(p: { r: () => Row; sid: string }) {
   const r = p.r;
   return (
-    <TimelineColumn class="items-center" testID="timeline-row" onLayout={(b: any) => reportHeight(r(), b.bounds?.size?.height ?? b.size?.height ?? 72)}>
+    <TimelineColumn class="items-center" testID="timeline-row" onLayout={(b: any) => reportHeight(r(), p.sid, b.bounds?.size?.height ?? b.size?.height ?? 72)}>
       <View class="w-full">
         <If when={r().kind === "context"}>
           {() => {
@@ -791,7 +833,12 @@ function RowView(p: { r: () => Row }) {
           <View class={`py-2 pr-4 ${TEXT_INDENT}`} testID="msg-assistant">
             <TextView
               selectable links="open" markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
-              renderCodeBlock={(block) => <CodeFence block={block} />}
+              renderCodeBlock={(block) => {
+                const source = (r() as any).text as string;
+                return block.language === "mermaid" && closedFenceSources(source).includes(block.code.trimEnd())
+                  ? <MermaidFence block={block} />
+                  : <CodeFence block={block} />;
+              }}
               classes={PROSE}
             />
           </View>
@@ -814,10 +861,10 @@ function RowView(p: { r: () => Row }) {
                 <View class="flex-row items-center gap-2 max-w-full">
                   <View class="w-4 shrink-0 items-center">
                     <If when={c.state === "running"}><Status kind="running" /></If>
-                    <If when={c.state === "done"}><Text class={`text-[13px] leading-5 ${agentColor(c.agent)}`}>⣿</Text></If>
+                    <If when={c.state === "done"}><Text class={`${TS.base} ${agentColor(c.agent)}`}>⣿</Text></If>
                   </View>
-                  <Text class={`shrink-0 text-[13px] leading-5 font-medium ${agentColor(c.agent)}`}>{capitalize(c.agent)}</Text>
-                  <Text style={{ numberOfLines: 1 }} class="shrink min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.title}</Text>
+                  <Text class={`shrink-0 ${TS.base} font-medium ${agentColor(c.agent)}`}>{capitalize(c.agent)}</Text>
+                  <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-foreground-secondary`}>{c.title}</Text>
                   <If when={c.background}><Text class="shrink-0 rounded-(--radius) bg-sidebar px-1.5 text-xs leading-4 text-foreground-secondary">Background</Text></If>
                 </View>
                 <If when={!!c.meta}><Text testID="child-meta" class={`${META} pl-6`}>{c.meta}</Text></If>
@@ -838,7 +885,7 @@ function RowView(p: { r: () => Row }) {
           <If when={(r() as any).action === "load-older"} else={<Text class={`${META} py-2 ${TEXT_INDENT}`} testID="timeline-older">{(r() as any).text}</Text>}>
             <View class={`flex-row items-center py-2 ${TEXT_INDENT}`} testID="timeline-older">
               <Button onPress={() => run("turn.load_older")} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 -ml-2 ${hit("min-h-6")} justify-center hover:bg-accent ${FOCUS}`}>
-                <Text class="text-[13px] leading-5 text-foreground-secondary">Load older messages</Text>
+                <Text class={`${TS.base} text-foreground-secondary`}>Load older messages</Text>
               </Button>
             </View>
           </If>
@@ -874,7 +921,7 @@ function NoticeRow(p: { text: () => string }) {
       <Button onPress={() => contextDetail.set({ title: shell() ? "Background shell" : "Context", detail: p.text() })} testID={shell() ? "background-shell-done" : "msg-notice"} accessibilityLabel={label()}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name="chevron-right" size={14} class="tint-muted-foreground" /></View>
-        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-muted-foreground">{label()}</Text>
+        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} text-muted-foreground`}>{label()}</Text>
       </Button>
     </View>
   );
@@ -902,6 +949,53 @@ function CodeFence(p: { block: TextViewCodeBlock }) {
   );
 }
 
+/**
+ * A Mermaid diagram as the TUI draws it: shared text rows for pie, Gantt and
+ * timeline charts, otherwise the shared PNG. The source stays one control away.
+ */
+export function MermaidFence(p: { block: TextViewCodeBlock; /** Scale the picture down to fit this height (the Manager's diagram card). */ maxHeight?: number; centered?: boolean }) {
+  const measured = signal(0);
+  const columns = () => Math.max(8, Math.floor((measured() || 640) / 7.75));
+  return (
+    <View class={`w-full my-1 ${p.centered ? "items-center" : ""}`} testID="mermaid-fence"
+      onLayout={(b: any) => measured.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
+      {() => {
+        const rows = mermaidText(p.block.code, columns());
+        const picture = rows ? null : mermaidImage(p.block.code, columns());
+        if (!rows && !picture) return <CodeFence block={p.block} />;
+        return (
+          <View class={p.centered ? "items-center" : "w-full"}>
+            {rows
+              ? (
+                <View class="gap-0" testID="mermaid-text">
+                  {rows.map((row) => (
+                    <Text style={{ userSelect: "text", numberOfLines: 1 }}
+                      class="font-(family-name:--font-code) text-[12.5px] leading-5">
+                      {row.runs.map((run) => <Text class={toneClass(run.tone)}>{run.text}</Text>)}
+                    </Text>
+                  ))}
+                </View>
+              )
+              : (
+                <Image src={picture!.url} style={fitPicture(picture!, p.maxHeight)}
+                  accessibilityLabel="Mermaid diagram" testID="mermaid-diagram" />
+              )}
+            <Button onPress={() => copyText(p.block.code, "Copied source")} accessibilityLabel="Copy Mermaid source" testID="mermaid-copy"
+              class={`self-start flex-row items-center rounded-(--radius) px-1 -ml-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
+              <Text class={META}>◇ mermaid · copy source</Text>
+            </Button>
+          </View>
+        );
+      }}
+    </View>
+  );
+}
+
+function fitPicture(picture: { width: number; height: number }, maxHeight?: number) {
+  const k = maxHeight && picture.height > maxHeight ? Math.max(0.2, maxHeight / picture.height) : 1;
+  return { width: Math.round(picture.width * k), height: Math.round(picture.height * k), objectFit: "contain" as const };
+}
+
 /** `[Handoff from session ses_x]` and the summary after it. */
 export function handoffParts(body: string): { from: string; summary: string } {
   const m = /^\[Handoff from session ([^\]]*)\]\s*/.exec(body);
@@ -919,10 +1013,10 @@ function HandoffCard(p: { r: () => Extract<Row, { kind: "handoff" }> }) {
     <View class={`w-full rounded-(--radius-card) bg-raised py-3 gap-1 ${CARD_INSET}`}>
       <Button onPress={open} accessibilityLabel="Show the whole handoff summary" testID="msg-handoff" class={`w-full flex-col items-stretch gap-1 ${FOCUS}`}>
         <View class="flex-row items-center gap-3">
-          <Text class="flex-1 min-w-0 text-[14px] leading-[22px] font-semibold text-foreground">{`Continued from ${name()}`}</Text>
+          <Text class={`flex-1 min-w-0 ${TS.body} font-semibold text-foreground`}>{`Continued from ${name()}`}</Text>
           <Text class={META}>{`handoff · ${r().time}`}</Text>
         </View>
-        <Text style={{ numberOfLines: 3 }} testID="handoff-preview" class="text-[14px] leading-[22px] text-foreground">{lines().join("\n")}</Text>
+        <Text style={{ numberOfLines: 3 }} testID="handoff-preview" class={`${TS.body} text-foreground`}>{lines().join("\n")}</Text>
       </Button>
       <View class="flex-row gap-3">
         <Button onPress={open} class={`${FOCUS}`}><Text class={META}>Show all</Text></Button>
@@ -938,7 +1032,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   const fold = () => toggleFold(r().turnKey);
   const copy = () => copyText(r().text, "Copied message");
   const glyph = () => turnGlyph(r().status);
-  const meta = () => [...deliveryTags(r().delivery), `#${r().n}`, r().time].join(" · ");
+  const meta = () => [...deliveryTags(r().delivery), ...(r().origin === "manager" ? [WORDS.via] : []), `#${r().n}`, r().time].join(" · ");
   const big = () => r().text.length > 4096 || r().text.split("\n").length > 40;
   const full = () => open(`user:${r().key}`, false);
   const body = () => big() && !full() ? r().text.split("\n").slice(0, 6).join("\n") : r().text;
@@ -976,7 +1070,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
         </If>
         <View class="flex-row items-start gap-3">
           <View class="flex-1 min-w-0">
-            <Text style={big() && !full() ? { userSelect: "text", numberOfLines: 6 } : { userSelect: "text" }} class="text-[14px] leading-[22px] text-foreground">{body()}</Text>
+            <Text style={big() && !full() ? { userSelect: "text", numberOfLines: 6 } : { userSelect: "text" }} class={`${TS.body} text-foreground`}>{body()}</Text>
             {/* A phone or tablet has no hover, so the icons and the stamp move below the text. */}
             <If when={touch}>
               <View class="flex-row items-center justify-end gap-1 pt-1">
@@ -1006,7 +1100,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
       <Button onPress={fold} accessibilityLabel={`${meta()} folded, show`} testID={`msg-user-folded-${r().n}`}
         class={`w-full flex-row items-center gap-2 rounded-(--radius) bg-band min-h-9 hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
         <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
-        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[14px] leading-[22px] text-foreground">{r().text || (r().pastes ?? []).map((p) => p.marker).join(" ")}</Text>
+        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.body} text-foreground`}>{r().text || (r().pastes ?? []).map((p) => p.marker).join(" ")}</Text>
         <If when={r().tools > 0 || !!r().duration}>
           {() => <Text class={META}>{[r().tools ? `${r().tools} tool${r().tools === 1 ? "" : "s"}` : "", r().duration].filter(Boolean).join(" · ")}</Text>}
         </If>
@@ -1020,9 +1114,10 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
 /** The sticky copy of the current turn's user band, under the header; the next band pushes it up. */
 function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void }) {
   // One band scan per row/layout change, shared by the visibility check and the render.
-  const list = computed((): Band[] => {
+  const list = computed(() => {
     const h = rowHeights();
     const rows = p.rows();
+    const sid = sessionId();
     const lastUser = rows.reduce((last, r, i) => r.kind === "user" ? i : last, -1);
     let top = LIST_PAD;
     const out: Band[] = [];
@@ -1031,24 +1126,26 @@ function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void })
       // The newest user band waits for its measured height: it is on an estimate for a
       // frame, and using that estimate makes the header jump to the wrong band and blink
       // until layout settles.
-      const height = h[r.key] ?? (i === lastUser ? undefined : ROW_ESTIMATE);
+      const height = h[heightKey(sid, r.key)] ?? (i === lastUser ? undefined : ROW_ESTIMATE);
       if (r.kind === "user" && height !== undefined) out.push({ key: r.key, top, height, n: r.n, text: firstLine(r.text), turnKey: r.turnKey });
       top += height ?? ROW_ESTIMATE;
     }
-    return out;
+    return { bands: out, total: top };
   });
   const current = computed(() => {
-    const y = scrollY();
-    const all = list();
+    const y = scrollOf(sessionId());
+    const { bands, total } = list();
+    // An offset well past the content (a shrink or a stale frame) must not pin the last band.
+    if (y < 0 || y > total + viewH()) return null;
     let idx = -1;
-    all.forEach((b, i) => { if (b.top + b.height <= y) idx = i; });
-    return idx < 0 ? null : { band: all[idx], next: all[idx + 1] as Band | undefined };
+    bands.forEach((b, i) => { if (b.top + b.height <= y) idx = i; });
+    return idx < 0 ? null : { band: bands[idx], next: bands[idx + 1] as Band | undefined };
   });
   return (
     <If when={!!current()}>
       {() => {
         const c = current()!;
-        const y = scrollY();
+        const y = scrollOf(sessionId());
         const lines = Math.max(0, Math.floor((Math.min(y, c.next?.top ?? Infinity) - c.band.top) / STICKY_LINE));
         const offset = c.next ? Math.min(0, c.next.top - y - STICKY_BAR) : 0;
         return (
@@ -1057,7 +1154,7 @@ function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void })
               <Button onPress={() => p.scrollTo(c.band.top)} accessibilityLabel="Scroll to this message" testID="sticky-user-button"
                 class={`relative w-full flex-row items-center gap-3 bg-band ${hit("min-h-7")} hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
                 <View class="absolute left-0 top-0 bottom-0 w-0.5 bg-border-strong" />
-                <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.band.text}</Text>
+                <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} text-foreground-secondary`}>{c.band.text}</Text>
                 <Text class={META}>{`↑ ${lines} lines of this turn above`}</Text>
               </Button>
             </TimelineColumn>
@@ -1108,7 +1205,7 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class={flash() ? "tint-primary" : "tint-muted-foreground"} /></View>
-        <If when={r().running} else={<Text style={{ numberOfLines: 1 }} class="shrink min-w-0 text-[13px] leading-5 text-foreground-secondary">{r().summary}</Text>}>
+        <If when={r().running} else={<Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-foreground-secondary`}>{r().summary}</Text>}>
           <Shimmer text={r().summary} reduced={reduced()} testID="group-working" />
         </If>
         <If when={!!r().diff}>
@@ -1165,11 +1262,11 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
           <Icon name="diamond" size={MEMBER_ICON} class="tint-muted-foreground" />
         </If>
         <View class="flex-row flex-1 min-w-0 items-center gap-1.5">
-          <Text class="text-[13px] leading-5 font-medium text-muted-foreground">{roles.reasoning.label}</Text>
+          <Text class={`${TS.base} font-medium text-muted-foreground`}>{roles.reasoning.label}</Text>
           <If when={!x().open && !!preview()}>
             {() => <>
-              <Text class="text-[13px] leading-5 text-muted-foreground">·</Text>
-              <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground">{preview()}</Text>
+              <Text class={`${TS.base} text-muted-foreground`}>·</Text>
+              <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} italic text-muted-foreground`}>{preview()}</Text>
             </>}
           </If>
         </View>
@@ -1181,7 +1278,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
             {() => <Text class={META}>{`… ${hidden()} earlier lines`}</Text>}
           </If>
           <View class={x().running ? "max-h-[200px] overflow-hidden justify-end" : ""}>
-            <Text style={{ userSelect: "text" }} onLayout={(b: any) => rows.set(Math.round((b.bounds?.size?.height ?? b.size?.height ?? 0) / 20))} class="shrink-0 text-[13px] leading-5 italic text-muted-foreground">
+            <Text style={{ userSelect: "text" }} onLayout={(b: any) => rows.set(Math.round((b.bounds?.size?.height ?? b.size?.height ?? 0) / 24))} class={`shrink-0 ${TS.base} italic text-muted-foreground`}>
               {x().text}
             </Text>
           </View>
@@ -1233,7 +1330,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
             </If>
           </View>}
         </If>
-        <Text class="shrink-0 text-[13px] leading-5 font-medium text-foreground">{verbLabel(r().name)}</Text>
+        <Text class={`shrink-0 ${TS.base} font-medium text-foreground`}>{verbLabel(r().name)}</Text>
         <If when={!!r().arg}><Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`shrink min-w-0 ${T.mono}`}>{r().arg}</Text></If>
         <If when={!!r().errorLine}><Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${T.mono}`}>{r().errorLine!}</Text></If>
         <If when={!!r().summary}>
@@ -1281,56 +1378,104 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
 }
 
 /** Rows wholly below the viewport (the jump pill's `N new`). */
-function newBelow(rows: Row[]): number {
+function newBelow(rows: Row[], sid: string): number {
   const h = rowHeights();
-  const bottom = scrollY() + viewH();
+  const bottom = scrollOf(sid) + viewH();
   let top = LIST_PAD, n = 0;
   for (const r of rows) {
     if (top >= bottom) n++;
-    top += h[r.key] ?? ROW_ESTIMATE;
+    top += h[heightKey(sid, r.key)] ?? ROW_ESTIMATE;
   }
   return n;
 }
 
 export function Timeline() {
   let ref: any;
+  // Read the session when a row is rendered or an event fires: this component
+  // stays mounted across sessions, so a captured id would go stale.
+  const viewId = () => sessionId();
   // Settled history is rebuilt only on structural changes; a text/reasoning delta just
   // appends the two live rows (and regroups), so a long session does not re-walk every
   // message and tool detail on every token. `computed` also stops the five or six JSX
   // accesses below from rebuilding the same timeline within one frame.
-  const stable = computed(() => buildStableRows());
+  let lastStable: Row[] = [];
+  let lastRows: Row[] = [];
+  const stable = computed(() => (lastStable = keepIdentity(lastStable, buildStableRows())));
   const rows = computed(() => {
     streamRev();
     const sel = model.selected;
     if (!sel) return [];
-    return groupActivities(withStreaming(stable(), model.streaming.get(sel.sessionId)), model.running.has(sel.sessionId));
+    return (lastRows = keepIdentity(lastRows, groupActivities(withStreaming(stable(), model.streaming.get(sel.sessionId), sel.sessionId), model.running.has(sel.sessionId))));
   });
-  const below = computed(() => newBelow(rows()));
-  jump.fn = () => { try { ref?.scrollToEnd({ animated: true }); } catch {} };
-  // A session opens at its latest message, as in the TUI; `maintainVisibleContentPosition` then follows new content while at the end.
+  const below = computed(() => newBelow(rows(), viewId()));
+  // Follow state, as in the TUI: an open session and the jump follow the end, any scroll up leaves it, and only
+  // scrolling back to the end returns to it. The list's `autoscrollToBottomThreshold` is not used: it pulled a reader
+  // within its distance of the end back down whenever content grew, including rows measured above the viewport.
+  let following = true;
+  let lastY = 0;
+  let lastGap = 0;
+  let endQueued = false;
+  // Instant: a smooth scroll restarts each time a newly measured row moves the end, crawling for seconds on a long session.
+  const toEnd = () => { try { ref?.scrollToEnd({ animated: false }); } catch {} };
+  const follow = (on: boolean) => { following = on; scrolledUp.set(!on); };
+  /** One command per engine turn, however many rows reported a new height. */
+  const keepEnd = () => {
+    if (!following || endQueued) return;
+    endQueued = true;
+    setTimeout(() => { endQueued = false; if (following) toEnd(); }, 0);
+  };
+  jump.fn = () => { follow(true); toEnd(); };
+  // Follow state is per view: a scroll position from the session just left must
+  // not keep the next one pinned or count its unseen rows.
+  let scopedSession: string | undefined;
+  effect(() => {
+    rows();
+    const sid = sessionId();
+    if (sid === scopedSession) return;
+    scopedSession = sid;
+    following = true;
+    lastY = 0;
+    lastGap = 0;
+    scrolledUp.set(false);
+    viewH.set(0);
+  });
+  // A session opens at its latest message, as in the TUI.
   let openedSession: string | undefined;
   effect(() => {
+    // `rows()` first: `model` is not reactive, so a session still loading must leave a dependency that wakes this effect.
+    const count = rows().length;
     const sel = model.selected;
-    const id = sel?.loaded && rows().length ? sel.sessionId : undefined;
+    const id = sel?.loaded && count ? sel.sessionId : undefined;
     if (!id || id === openedSession) return;
     openedSession = id;
-    scrolledUp.set(false);
-    setTimeout(() => { try { ref?.scrollToEnd({ animated: false }); } catch {} }, 0);
+    follow(true);
+    setTimeout(toEnd, 0);
   });
+  // New rows, a growing reply and rows changing height keep the end in view while following.
+  effect(() => { rows(); rowHeights(); untracked(keepEnd); });
   return (
     <View class="flex-1 min-h-0" testID="timeline">
       <If when={rows().length > 0} else={<EmptyTimeline />}>
         <List
           ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingVertical: 12 }}
-          maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 160 }}
+          onLayout={keepEnd}
           onScroll={(e) => {
-            scrollY.set(e.offset.y);
+            const y = e.offset.y, height = e.contentSize.height;
+            setScroll(viewId(), y);
             viewH.set(e.size.height);
-            scrolledUp.set(e.contentSize.height - (e.offset.y + e.size.height) > 160);
+            // Past the end counts as at it: macOS reports the offset settling back there, which is not the reader scrolling up.
+            const gap = Math.max(0, height - (y + e.size.height));
+            // The reader moved only if the offset and the gap moved opposite ways: a row changing height above the
+            // viewport moves the offset and the content alike, and one below moves the gap with the offset still.
+            if (height <= e.size.height) { if (!following) follow(true); }
+            else if (y < lastY - 0.5 && gap > lastGap + 0.5) { if (following) follow(false); }
+            else if (y > lastY && gap < lastGap && gap <= END_SLOP && !following) follow(true);
+            lastY = y;
+            lastGap = gap;
           }}
           scrollEventThrottle={64}
         >
-          {(r) => <RowView r={r} />}
+          {(r) => <RowView r={r} sid={viewId()} />}
         </List>
       </If>
       <StickyBar rows={rows} scrollTo={(offset) => { try { ref?.scrollToOffset({ offset, animated: true }); } catch {} }} />
@@ -1338,9 +1483,9 @@ export function Timeline() {
         <View class="absolute bottom-3 left-0 right-0 items-center" style={{ pointerEvents: "box-none" }}>
           <TimelineColumn>
             <View class="w-full items-end pr-4">
-              <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${below()} new`} testID="jump-latest" class={`flex-row items-center gap-2 rounded-full bg-popover px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} shadow-md hover:bg-accent ${FOCUS}`}>
-                <Text class="text-[13px] leading-5 text-foreground-secondary">↓</Text>
-                <Text class="text-[13px] leading-5 text-popover-foreground">{below() > 0 ? `${below()} new` : "latest"}</Text>
+              <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${below()} new`} testID="jump-latest" class={`flex-row items-center gap-2 rounded-none bg-popover px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} shadow-md hover:bg-accent ${FOCUS}`}>
+                <Text class={`${TS.base} text-foreground-secondary`}>↓</Text>
+                <Text class={`${TS.base} text-popover-foreground`}>{below() > 0 ? `${below()} new` : "latest"}</Text>
                 <Text class={META}>{`· ${keyLabel(byId.get("session.jump_latest")!) ?? "end"}`}</Text>
               </Button>
             </View>
@@ -1355,7 +1500,7 @@ function EmptyTimeline() {
   return (
     <View class="flex-1 items-center justify-center gap-1 p-6">
       <If when={viewed() && model.selected?.loaded} else={<Text class={T.sec}>{viewed() ? "Loading…" : "Select a session"}</Text>}>
-        <Text class="text-[14px] leading-[22px] font-medium text-foreground">No messages yet</Text>
+        <Text class={`${TS.body} font-medium text-foreground`}>No messages yet</Text>
         <Text class={T.sec}>Send a message below to start this session.</Text>
       </If>
     </View>

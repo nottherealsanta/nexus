@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..llmhub.types import ToolSpec
-from .base import MAX_PATCH_CHARS, Tool, ToolContext, ToolError, line_span, resolve
+from .base import MAX_PATCH_CHARS, Tool, ToolContext, ToolError, resolve
 
 
 @dataclass
@@ -107,26 +107,17 @@ def _find(lines: list[str], block: list[str], start: int) -> int:
     return -1
 
 
-def _apply_hunks(path: str, text: str, hunks: list[_Hunk]) -> tuple[str, list[tuple[int, int]]]:
-    """Apply hunks, also returning the original line spans they changed."""
+def _apply_hunks(path: str, text: str, hunks: list[_Hunk]) -> str:
     lines = text.split("\n")
     trailing_newline = text.endswith("\n")
     if trailing_newline:
         lines.pop()
-    original_lines = len(lines)
-    original_offsets = [0]
-    for original_line in lines:
-        original_offsets.append(original_offsets[-1] + len(original_line) + 1)
     cursor = 0
-    shift = 0
-    affected: list[tuple[int, int]] = []
     for number, hunk in enumerate(hunks, 1):
-        anchor_at = -1
         if hunk.anchor:
             at = _find(lines, [hunk.anchor], cursor)
             if at < 0:
                 raise ToolError(f"{path}: hunk {number}: anchor {hunk.anchor!r} not found")
-            anchor_at = at
             cursor = at + 1
         if not hunk.old:
             at = len(lines) if hunk.end_of_file or not hunk.anchor else cursor
@@ -138,46 +129,25 @@ def _apply_hunks(path: str, text: str, hunks: list[_Hunk]) -> tuple[str, list[tu
             at = _find(lines, hunk.old, cursor)
             if at < 0:
                 raise ToolError(f"{path}: hunk {number}: context not found:\n" + "\n".join(hunk.old[:8]))
-        original_at = at - shift
-        if hunk.old:
-            first, last = original_at + 1, original_at + len(hunk.old)
-            if first <= last and original_lines:
-                affected.append((max(1, first), min(original_lines, last)))
-        elif original_lines:
-            if hunk.end_of_file:
-                line = original_lines
-            elif hunk.anchor:
-                line = min(max(anchor_at - shift + 1, 1), original_lines)
-            else:
-                line = min(max(original_at + 1, 1), original_lines)
-            affected.append((line, line))
         lines[at : at + len(hunk.old)] = hunk.new
-        shift += len(hunk.new) - len(hunk.old)
         cursor = at + len(hunk.new)
-    # Patch matching uses LF-delimited lines; read uses splitlines(), which also
-    # recognizes Unicode separators. Translate coverage back to read's numbering.
-    visible_spans = [
-        line_span(text, original_offsets[first - 1], min(original_offsets[last], len(text)))
-        for first, last in affected if first <= last
-    ]
-    return "\n".join(lines) + ("\n" if trailing_newline or not lines else ""), visible_spans
+    return "\n".join(lines) + ("\n" if trailing_newline or not lines else "")
 
 
 async def _apply_patch(text: Any, ctx: ToolContext) -> str:
     if not isinstance(text, str):
         raise ToolError("patch must be a string")
     ops = parse_patch(text)
-    guard = ctx.files
-    if guard is None:  # a bare tool context (unit use), not a Nexus session
-        return _apply_patch_now(ops, ctx, None)
-    async with guard.mutation():
-        return _apply_patch_now(ops, ctx, guard)
+    lock = ctx.file_lock
+    if lock is None:  # a bare tool context (unit use), not a Nexus session
+        return _apply_patch_now(ops, ctx)
+    async with lock:
+        return _apply_patch_now(ops, ctx)
 
 
-def _apply_patch_now(ops: list[_Op], ctx: ToolContext, guard: Any) -> str:
+def _apply_patch_now(ops: list[_Op], ctx: ToolContext) -> str:
     writes: dict[Path, str | None] = {}  # None deletes
     created: dict[Path, str] = {}
-    forget: set[Path] = set()
     summary: list[str] = []
     for op in ops:
         path = resolve(ctx, op.path)
@@ -191,19 +161,13 @@ def _apply_patch_now(ops: list[_Op], ctx: ToolContext, guard: Any) -> str:
         elif op.kind == "delete":
             if not path.is_file():
                 raise ToolError(f"Delete File {shown}: does not exist")
-            if guard is not None:
-                guard.require(shown, path, complete=True)
             writes[path] = None
-            forget.add(path)
             summary.append(f"deleted {shown}")
         else:
             if not path.is_file():
                 raise ToolError(f"Update File {shown}: does not exist")
-            updated, affected = _apply_hunks(shown, path.read_text(newline=""), op.hunks)
+            updated = _apply_hunks(shown, path.read_text(newline=""), op.hunks)
             if op.move_to:
-                # Moving is a whole-file operation: it needs a complete observation.
-                if guard is not None:
-                    guard.require(shown, path, complete=True)
                 destination = resolve(ctx, op.move_to)
                 destination_shown = str(destination) if ctx.cwd_changed else op.move_to
                 if destination.exists():
@@ -211,21 +175,13 @@ def _apply_patch_now(ops: list[_Op], ctx: ToolContext, guard: Any) -> str:
                 writes[path] = None
                 writes[destination] = updated
                 created[destination] = destination_shown
-                forget.update({path, destination})
                 summary.append(f"updated {shown} → {destination_shown} ({len(op.hunks)} hunks)")
             else:
-                if guard is not None:
-                    if affected:
-                        guard.require(shown, path, affected=affected)
-                    else:  # a pure insertion into an empty file
-                        guard.require(shown, path, complete=True)
                 writes[path] = updated
-                forget.add(path)
                 summary.append(f"updated {shown} ({len(op.hunks)} hunks)")
     for path, display in created.items():
         if path.exists():  # appeared while the rest of the patch was validated
             raise ToolError(f"Add File {display}: destination appeared while the patch was being validated")
-    forget.update(created)
     for path, content in writes.items():
         if content is None:
             path.unlink()
@@ -236,8 +192,6 @@ def _apply_patch_now(ops: list[_Op], ctx: ToolContext, guard: Any) -> str:
                     destination.write(content)
             else:
                 path.write_text(content)
-    if guard is not None:
-        guard.forget(forget)
     return "\n".join(summary)
 
 
@@ -255,9 +209,7 @@ TOOL = Tool(
             "*** Update File: path\n@@ optional anchor line\n context\n-removed\n+added\n"
             "*** Add File: path\n+line\n"
             "*** Delete File: path\n"
-            "*** End Patch\n"
-            "The lines a hunk changes (and a deleted or moved file in full) must have been read in this session; "
-            "after any change or external edit, read again before the next change."
+            "*** End Patch"
         ),
         parameters={
             "type": "object",

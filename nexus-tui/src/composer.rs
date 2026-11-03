@@ -379,10 +379,11 @@ mod tests {
     #[test]
     fn paste_markers_remain_unambiguous_after_edit_and_undo() {
         let mut c = Composer::new();
-        let first = "aaa\nbbb\nccc";
-        let second = "xxx\nyyy\nzzz";
-        c.paste(first);
-        c.paste(second);
+        let tail = " tail".repeat(100);
+        let first = format!("aaa\nbbb\nccc{tail}");
+        let second = format!("xxx\nyyy\nzzz{tail}");
+        c.paste(&first);
+        c.paste(&second);
         assert_eq!(c.expanded_text(), format!("{first}{second}"));
         c.backspace();
         assert_eq!(c.expanded_text(), first);

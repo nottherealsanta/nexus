@@ -452,7 +452,7 @@ fn new_session_mcp_inventory_prefers_the_project_row_over_a_disabled_global_defa
         .unwrap();
     assert!(!disabled.on && disabled.locked);
     assert!(
-        disabled.label.contains("disabled in .mcp.json"),
+        disabled.label.contains("disabled in project MCP"),
         "{}",
         disabled.label
     );
@@ -504,6 +504,7 @@ fn new_session_mcp_preview_keeps_the_model_plan_and_explains_project_rows() {
             "revision": "rev",
             "error": null,
             "warnings": ["ignored unknown top-level keys: description"],
+            "duplicates": [{"server": "project-on", "used": ".mcp.json", "ignored": ".agents/mcp.json"}],
             "servers": [
                 {
                     "server": "project-on", "state": "idle", "error": null,
@@ -512,7 +513,10 @@ fn new_session_mcp_preview_keeps_the_model_plan_and_explains_project_rows() {
                     "arg_count": 2, "cwd": "/repo", "env_names": ["TOKEN"],
                     "include": ["read"], "exclude": ["delete"],
                     "connect_timeout": 20, "call_timeout": 60,
-                    "warnings": ["ignored unknown top-level keys: description"]
+                    "warnings": [
+                        "ignored unknown top-level keys: description",
+                        "server 'project-on' is defined in both .mcp.json and .agents/mcp.json; .mcp.json is used"
+                    ]
                 },
                 {
                     "server": "toggled", "state": "idle", "error": null,
@@ -566,7 +570,7 @@ fn new_session_mcp_preview_keeps_the_model_plan_and_explains_project_rows() {
     );
     for (key, state) in [
         ("mcp:broken", "invalid"),
-        ("mcp:switched-off", "disabled in .mcp.json"),
+        ("mcp:switched-off", "disabled in project MCP"),
         ("mcp:(file)", "invalid"),
     ] {
         let item = items.iter().find(|item| item.key == key).unwrap();
@@ -627,6 +631,18 @@ fn new_session_mcp_preview_keeps_the_model_plan_and_explains_project_rows() {
     assert!(info.1.contains("Environment: TOKEN"), "{}", info.1);
     assert!(info.1.contains("Include tools: read"), "{}", info.1);
     assert!(info.1.contains("Exclude tools: delete"), "{}", info.1);
+    assert!(
+        info.1
+            .contains("Warnings: ignored unknown top-level keys: description"),
+        "{}",
+        info.1
+    );
+    assert!(
+        info.1
+            .contains("server 'project-on' is defined in both .mcp.json and .agents/mcp.json"),
+        "{}",
+        info.1
+    );
     assert!(
         info.1.contains("Timeouts: connect 20s, call 60s"),
         "{}",
@@ -1480,6 +1496,7 @@ fn paste_message_shot() {
                 serde_json::json!({"type": "text", "text": log, "origin": null, "raw": null, "collapsed": true}),
             ],
             delivery: None,
+            origin: None,
         });
     let (buf, _) = draw(&mut a, 140, 44);
     let (fg, bg) = nexus_tui::svg::page_colors(false);
@@ -1688,8 +1705,8 @@ fn composer_paste_selection_undo_and_send_preserve_full_text() {
     use nexus_tui::actions::ApiCall;
     let mut a = app();
     a.effects.clear();
-    let pasted = "first line\nsecond line\nthird line";
-    a.handle_paste(pasted);
+    let pasted = format!("first line\nsecond line\n{}", "third line ".repeat(48));
+    a.handle_paste(&pasted);
     assert!(a.composer_ref().text().contains("Pasted ~"));
     assert_eq!(a.composer_ref().expanded_text(), pasted);
     press(&mut a, &["ctrl+z"]);
@@ -1716,6 +1733,16 @@ fn composer_paste_selection_undo_and_send_preserve_full_text() {
         .effects
         .iter()
         .any(|e| matches!(e, Effect::Copy(text) if text == "lo")));
+}
+
+#[test]
+fn short_multiline_pastes_stay_inline() {
+    let mut a = app();
+    let pasted = "one\ntwo\nthree";
+    a.handle_paste(pasted);
+    assert_eq!(a.composer_ref().text(), pasted);
+    assert_eq!(a.composer_ref().expanded_text(), pasted);
+    assert!(a.composer_ref().pastes().is_empty());
 }
 
 #[test]
@@ -1758,8 +1785,8 @@ fn failed_send_restores_expanded_pending_paste() {
     let mut a = app();
     typing(&mut a, "sent");
     press(&mut a, &["enter"]);
-    let pending = "first\nsecond\nthird";
-    a.handle_paste(pending);
+    let pending = format!("first\nsecond\nthird{}", " line".repeat(100));
+    a.handle_paste(&pending);
     a.apply_done(ActionDone {
         call: ApiCall::Prompt {
             mode: "send".into(),
@@ -1789,12 +1816,13 @@ fn sent_draft_history_restores_the_unsent_draft() {
 #[test]
 fn ctrl_c_clears_the_draft_and_up_recalls_it() {
     let mut a = app();
-    a.handle_paste("one\ntwo\nthree");
+    let pasted = format!("one\ntwo\nthree{}", " four".repeat(120));
+    a.handle_paste(&pasted);
     press(&mut a, &["ctrl+c"]);
     assert!(a.composer_ref().is_empty());
     assert!(!a.effects.iter().any(|e| matches!(e, Effect::Quit)));
     press(&mut a, &["up"]);
-    assert_eq!(a.composer_ref().expanded_text(), "one\ntwo\nthree");
+    assert_eq!(a.composer_ref().expanded_text(), pasted);
     assert!(!a.effects.iter().any(|e| matches!(e, Effect::Quit)));
 }
 
@@ -1857,11 +1885,11 @@ fn mouse_drag_selects_composer_text_for_copy() {
 #[test]
 fn history_keeps_expanded_pastes_and_is_scoped_to_each_session() {
     let mut a = app();
-    let first = "one\ntwo\nthree";
-    a.handle_paste(first);
+    let first = format!("one\ntwo\nthree{}", " one".repeat(125));
+    a.handle_paste(&first);
     press(&mut a, &["enter"]);
-    let scratch = "new\npending\npaste";
-    a.handle_paste(scratch);
+    let scratch = format!("new\npending\npaste{}", " new".repeat(125));
+    a.handle_paste(&scratch);
     press(&mut a, &["up"]);
     assert_eq!(a.composer_ref().expanded_text(), first);
     press(&mut a, &["down"]);
@@ -2174,7 +2202,7 @@ fn image_paste_sends_an_image_only_prompt_and_restores_it_on_failure() {
 fn big_pastes_collapse_into_a_preview_and_send_their_text() {
     use nexus_tui::actions::ApiCall;
     let big = (1..=8)
-        .map(|i| format!("row {i}: {}", "x".repeat(20)))
+        .map(|i| format!("row {i}: {}", "x".repeat(70)))
         .collect::<Vec<_>>()
         .join("\n");
     let mut a = app();
@@ -2183,7 +2211,10 @@ fn big_pastes_collapse_into_a_preview_and_send_their_text() {
     assert_eq!(a.composer_ref().text(), marker);
     let (_, rows) = draw(&mut a, 120, 40);
     assert!(rows.iter().any(|row| row.contains(&marker)));
-    assert!(!rows.iter().any(|row| row.contains("Pasted text")));
+    let shown = rows.join("\n");
+    assert!(shown.contains("Pasted text"), "{shown}");
+    assert!(shown.contains("8 lines"), "{shown}");
+    assert!(shown.contains("Show"), "{shown}");
     press(&mut a, &["enter"]);
     let call = a
         .effects
@@ -2208,12 +2239,18 @@ fn big_pastes_collapse_into_a_preview_and_send_their_text() {
         "a failed send keeps the draft"
     );
     assert_eq!(a.composer_ref().pastes().len(), 1);
+    let (_, rows) = draw(&mut a, 120, 40);
+    let shown = rows.join("\n");
+    assert!(
+        shown.contains("Pasted text") && shown.contains("Show"),
+        "the restored draft keeps its preview and Show: {shown}"
+    );
 }
 
 #[test]
 fn a_collapsed_paste_in_a_user_message_opens_in_a_modal() {
     let big = (1..=8)
-        .map(|i| format!("row {i}: {}", "x".repeat(20)))
+        .map(|i| format!("row {i}: {}", "x".repeat(70)))
         .collect::<Vec<_>>()
         .join("\n");
     let marker = format!("[Pasted ~{} tokens]", big.chars().count() / 4);
@@ -2235,6 +2272,7 @@ fn a_collapsed_paste_in_a_user_message_opens_in_a_modal() {
                 serde_json::json!({"type": "text", "text": big.clone(), "origin": null, "raw": null, "collapsed": true}),
             ],
             delivery: None,
+            origin: None,
         });
     let (_, rows) = draw(&mut a, 120, 40);
     let marker_row = rows
@@ -2609,12 +2647,18 @@ fn core_answers_the_starting_context_of_the_current_draft_only() {
         Some(Some(1234))
     );
     a.ui.draft.effort = Some("high".into());
-    assert!(
-        a.draft_context().is_none(),
-        "an answer for another draft is not shown"
+    assert_eq!(
+        a.draft_context().map(|d| d["used"].as_u64()),
+        Some(Some(1234)),
+        "effort steers the model; it is not part of the context"
     );
     a.tick(std::time::Instant::now());
     assert_eq!(asked(&a), 2);
+    a.ui.draft.disabled_tools.push("read".into());
+    assert!(
+        a.draft_context().is_none(),
+        "an answer for a draft with a different context is not shown"
+    );
 }
 
 #[test]

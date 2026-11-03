@@ -32,8 +32,8 @@ Startup shows the launch splash (`src/ui/splash.tsx`): the `_/` logo in white, a
 milestone bar (`daemon`, `workspace`, `providers`, `session`, `ready`), its percentage and the
 next step. It fades into the first live frame and is dismissed when a start fails.
 The timeline has starting
-context, Markdown (prose 14/22 in Geist; fenced code is a panel card with the language and
-a Copy button and padded code; inline code is 13 px Monaspace on the panel), and three detail levels: finished activity groups collapse in low and medium,
+context, Markdown (prose uses the 16/24 default in Geist; fenced code is a panel card with the language and
+a Copy button and padded code; inline code is Monaspace at 12.5/20 on the panel), and three detail levels: finished activity groups collapse in low and medium,
 while high expands their tools. Running groups show the latest five activities in medium (with earlier items announced), and waiting groups stay open. Each user
 message is the turn's header: a full-width raised card (`#n · time` on the right,
 with long messages previewed in six lines and expandable as sent,
@@ -41,13 +41,15 @@ Copy and Fold on hover) that folds to one line. Image previews and inline marker
 remain visible without repeating generated attachment labels below the text; previews sit side by side in bordered squares and wrap as needed. A sticky copy of the current
 user card sits under the header with `↑ N lines of this turn above`, pushed up by
 the next card and clicked to scroll back; it pins only bands whose height has been
-measured, so a newly added message cannot make it jump or blink. Turn footers are a right-aligned meta row (`models · tools · 24.5Ki · 570o · 90r · 58%c · elapsed · finished`) with no
+measured, so a newly added message cannot make it jump or blink. Its scroll offset and
+measured row heights are keyed by session, so a root's band cannot place the sticky
+header over a child. Turn footers are a right-aligned meta row (`models · tools · 24.5Ki · 570o · 90r · 58%c · elapsed · finished`) with no
 status word: a failed turn shows its first error line above it, and an
 interrupted one adds `/continue`. A turn with no usage says `usage unknown`. A running turn has no footer; it appears only
 once the turn is done, and the live thought stays inside the active activity
 group. Settled history is rebuilt only on structural changes; text and reasoning
 deltas update a coalesced live tail, and wire-only events do not redraw, so a long
-session does not re-walk every message and tool detail per token. A session opens at its latest message and follows new content while at the end. Durations read `0.4s`, `4.2s`, `1m 05s` and
+session does not re-walk every message and tool detail per token. A session opens at its latest message and follows new content until the reader scrolls up, which shows the jump pill; jumping or scrolling back to the end follows again. Durations read `0.4s`, `4.2s`, `1m 05s` and
 `1h 02m`. The finish time is omitted when unavailable or while the turn is
 running. Activity groups are 28 px rows with the TUI's content: counts in first-seen
 order (edits count the files they touch), `+N −M` beside the summary from
@@ -63,11 +65,14 @@ a tail, 100 lines each or 30 and 20 at high detail. Thoughts show `Thought · pr
 a thought still arriving stays open and keeps its last 10 lines; a thought with no tool beside it is a single row, never a group.
 Clipping is announced and the control restores the whole output. In the context card, the system prompt and instruction file open as rendered Markdown; Tools, Skills and MCP open a list of entries with their descriptions, and opening an entry shows a tool's schema, a skill's full text or a server's facts. The group's chevron starts on the text edge shared by the user message and the reply. A child session is one row, `Scout <prompt>` with `Background`, then its model and time, and a failure or a wait below; pressing it opens the child. A notice is one row, `context · … · show details`, whose text opens in a dialog.
 
-The app uses Geist for interface text and prose; inline code, fenced code, paths
-and tool arguments use Monaspace Argon. NSH imports the bundled Geist and Argon
-faces so the packaged app registers them before rendering. Child cards label background calls, distinguish failed and
-running status, and allow the full tool result to be expanded without navigating
-away from the parent session.
+The app sets a 16 px default with 24 px leading; the shared kit's title, body and
+code roles use that size, and hierarchy comes from weight and colour rather than
+size (some timeline chrome still sets a smaller size explicitly). Geist carries
+interface text and prose; inline code, fenced code, paths and tool arguments use
+Monaspace Argon. NSH imports the bundled Geist and Argon faces so the packaged
+app registers them before rendering. Child cards label background calls,
+distinguish failed and running status, and allow the full tool result to be
+expanded without navigating away from the parent session.
 
 Selecting a session loads, after the bounded snapshot view, every message, the
 frozen starting context and the turn summaries with the session's spend ledger
@@ -116,19 +121,23 @@ The chrome follows D02. The 44 px header band and both sidebars sit on `bg-sideb
 sidebar (or its rail) and the page. The centre is `bg-background` (the canvas). The
 header is three slots that match the sidebars (the resizable left sidebar, the centre, 300 px when the right
 sidebar is open). Below the band the 44 px right rail (Session, and Git with its changed-file
-count) opens the panel on demand and pushes the page; the panel starts closed, and
-Controls
-are 10 px and cards 16 px. A box rule runs a hairline along a rounded box's straight sides
-and stops before each corner's curve; a filled box needs no border. Round indicators and
-meters retain their shape. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). Drag the file panel's left edge to resize it from 360 px up to what leaves the timeline 480 px. The reading column is centred and at most 1160 px wide. The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
+count) opens the panel on demand and pushes the page; the panel starts closed. Controls, cards,
+the current-project selection, session rows, search fields, prose tables and modals are all
+square, like the TUI's cell grid; only circular status dots, spinners, image remove controls,
+the Manager orb and meters keep their shape. A box rule runs a hairline along a box's straight
+sides; a filled box needs no border. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). Drag the file panel's left edge to resize it from 360 px up to what leaves the timeline 480 px. The reading column is centred and at most 1160 px wide. The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
 Over the docked left sidebar its left slot holds the 32 px toggle and
 the Sessions and Files icons (they follow the sidebar's open state; narrow, they
-are in the drawer with labels). The session tabs are 28 px tall, aligned with
-the end of the left sidebar: the viewed tab has the selection pill with primary text, the
-others are muted with a hover fill. Their × shows on hover (and on the viewed tab). Tabs are
-root sessions only: opening a subagent keeps its root's tab in view. Under the header a
-subagent strip names the parent, offers the back button, repeats the root breadcrumb and lists
-the root's children as focusable buttons with running, waiting, failed or completed state. The run status sits at the
+are in the drawer with labels). The session tabs and the subagent strip use one
+fixed tab box (208 × 28 px, 176 × 40 narrow), so a root, a child, a parent and
+New session all keep the same width and a long title ellipsises inside its tab.
+New session's label starts on the same text edge as the session titles.
+The viewed tab has the square selection fill with primary text, the others are muted
+with a hover fill. Their × shows on hover (and on the viewed tab). Tabs are root
+sessions only: opening a subagent keeps its root's tab in view. Under the header
+a subagent strip shows the path above the viewed child as parent tabs (the last
+is the back control), a divider rail, then the root's other sessions as equal
+tabs with their state glyph and agent, with the viewed child selected. The run status sits at the
 centre's right edge; the bell and right toggle are at the far right. The context timeline
 uses the full available centre width with responsive horizontal padding (24 px narrow,
 48 px from 820 px, 64 px from 1200 px and 80 px from 1600 px). Every card shares the
@@ -144,9 +153,10 @@ split rules and tool boxes.
 
 The composer is a dock at the foot of the centre column, edge to edge on the chrome
 surface, with its input, controls and location strip in the timeline's reading column.
-The agent (in its colour), model with its muted provider, and effort are compact selectors;
-the input starts on the user band's 16 px text edge and the control row ends with dictation
-and send buttons. The location strip is its own row under the controls at every width: the
+The agent (in its colour at regular weight), model with its muted provider, and effort are compact selectors;
+the input starts on the user band's 16 px text edge, and the mic and send buttons sit
+beside it on the input's bottom edge, with the dock padded tighter. The selector row
+ends with context usage. The location strip is its own row under the controls at every width: the
 muted home-shortened path and branch on the left, a centred highlighted count of live
 kernels and running background shells (it opens their details), a linked worktree
 adding `⑂`, and the context reading (`82k · 41%`) on the right. The activity line along the dock's foot sits on the text edges. While a turn runs it is a
@@ -155,7 +165,10 @@ hidden until context reaches 80% (warning) or 95% (error). Draft context is mark
 While a session runs, a Working row at the top of the dock shimmers the word and shows the elapsed
 time and output tokens (`Working · 12s · ↓4.1k`) with Stop. Typing `/` opens a completion
 block above the dock (commands, with their key hints); `@` completes project paths from
-Core's file listing. Tab accepts, Enter runs a slash command, Esc closes. Before a session exists, the agent/model/effort pickers and slash commands
+Core's file listing. Tab accepts, Enter runs a slash command, Esc closes. Ctrl+X arms the
+manifest's leader aliases for three seconds: then M, N, O/B, G, S, L, T, R, V,
+Shift+N or ? runs model, new session, sessions, agent, settings, sidebar, effort,
+reconnect, dictation, notifications or shortcuts. Before a session exists, the agent/model/effort pickers and slash commands
 set draft creation fields. Timeline detail is a saved NSH preference. The
 agent, model and effort pickers carry the TUI's search field (fuzzy filtering),
 ↑↓ navigation and Enter to choose. The model picker names each model, puts its
@@ -163,7 +176,7 @@ provider and `current` at the row's end, and shows the highlighted model's ref,
 context and efforts beneath the list.
 The starting-context section lists the prompt, tools, instructions, skills and MCP
 servers with estimates and the catalog window share. Its text uses a consistent
-13 px size, compact section counts, gray status dots and a three-column list of
+16 px size, compact section counts, gray status dots and a three-column list of
 all tools. Disabled entries remain marked and counted. The system prompt row omits the agent name, and the instruction file
 has no inline preview (its detail remains available by clicking its title). Skills and servers have
 per-session switches; entries not available at session start are dimmed and say
@@ -181,32 +194,35 @@ newest request with known usage. A ledger that began counting well after the
 first message is labelled `Totals since …`, and requests that reported no usage
 are counted as unknown. It also counts descendant sessions. Right-click or Shift+F10 opens the
 manifest-driven session/project row menu, including confirmed project removal,
-and Projects, opened by its command, has a trailing `+ Add project` row. A 48 px project rail stays beside the sidebar whether it is open or
-closed, except on phones and below 500 px, which keep the project picker in the Sessions tab. It shows projects in creation order, with stable uppercase initials
-(collisions use the next available consonant, then a numeric suffix). Projects with running sessions or session activity
+and Projects, opened by its command, has a trailing `+ Add project` row. A 48 px project rail (NSH only; the TUI keeps its five cells) stays beside the sidebar whether it is open or
+closed, except on phones and below 500 px, which keep the project picker in the Sessions tab. A border separates it from the sidebar, and the sidebar's project-session and Files tabs keep their icons. It shows projects in creation order, with stable uppercase initials
+(collisions use the next available consonant, then a numeric suffix; the first character stays centred). Projects with running sessions or session activity
 within the last hour are lighter gray; inactive projects are darker. Selection is a soft
-filled pill with no edge marker. Each project has a counter in each corner: needs attention (violet) and unread
+filled square with no edge marker. Each project has a counter in each corner: attention (violet) and unread
 (info) on top, running (success) and idle (primary) below, with any count past
 nine shown as `*`. A project with
 no counts shows a muted rule below its initials instead. Hover or
 focus spells out all four counts with the project name;
 clicking restores the project's last selected session in this client, or its newest
-unarchived root session, or the new-session view when empty; pressing the project already open opens the session switcher scoped to it. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and Settings sits at the rail's foot while the sidebar is closed. The sidebar lists the current project's sessions only and ends in `+ New session`.
+unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and Settings sits at the rail's foot while the sidebar is closed. The sidebar lists the current project's sessions only and ends in `+ New session`.
 Projects also shows the selected
-project's `.mcp.json` servers. Enabled, valid entries start automatically with a
-new session, and the panel warns that their commands run then without asking;
-reading or refreshing it never starts a server. Each row shows its current
-status and the non-secret facts Core reports: transport, command name, argument
-count, working directory, environment or HTTP header names, and a
-credential-free URL. Disabled and invalid entries say so, with the reason.
-Settings has a section rail on the left and the selected section on the right,
-matching the TUI. The same search field filters both. Providers and Agents are
-rendered in the right pane: each provider row opens a detail modal with a
-clickable device link, a copyable code, key entry, connect/disconnect and
-catalog refresh; the default agent and effort
+project's `.mcp.json` and `.agents/mcp.json` servers. Enabled, valid entries start
+automatically with a new session, and the panel warns that their commands run then
+without asking; reading or refreshing it never starts a server. Each row shows its
+current status and the non-secret facts Core reports: transport, command name,
+argument count, working directory, environment or HTTP header names, and a
+credential-free URL. Disabled and invalid entries say so, with the reason. A name
+defined in both files shows the duplicate warning, naming the winning `.mcp.json`
+definition.
+Settings is the same square modal as the TUI's, with a section rail on the left
+and the selected section on the right. The same search field filters both. Providers and Agents are
+rendered in the right pane: each provider row opens a detail modal with one
+button per sign-in method (browser or device), a clickable link, a copyable
+code, key entry, connect/disconnect and catalog refresh; the default agent and effort
 with a line per subagent that opens its model and fallback lists (Esc returns
-from that detail). Tools keeps one permission choice, labelled with the tools it
-governs, and one clickable tool grid. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
+from that detail); each model row has an effort stepper (`‹ effort low ›`, or ←/→ after pressing it) writing
+`agents.efforts`. Tools keeps one permission choice, labelled with the tools it
+governs, and one clickable tool grid. Desktop session rows place the status mark before the title with a gap. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
 session view's `directory` differs from the one it was read for, as after a move), while directory
 and worktree actions remain disabled with a reason. Kernel state is the remaining
 session-info item not reported by Core.
@@ -282,9 +298,10 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/core/api.ts` | Wire types (including the `/turn` page: `TurnSummary`, `RequestSummary`, `AttemptSummary`, `ToolSummary`, `UsageLedger`) and `/api/info` compatibility (accepts `"1.0"` or `{major, minor}`; the client is written against 1.2). |
 | `src/core/reduce.ts` | Pure client model: snapshot, events, dedup by durable id, history merge (messages and summaries), running-turn scratch and `turn.summary`, cached views of recent sessions. |
 | `src/core/turns.ts` | Pure turn views: requests and usage per turn (summaries plus the running scratch), the newest known usage, ledger totals, tool timings, the floor position. |
-| `src/core/sync.ts` | Connection supervisor: handshake, snapshot, SSE resume, backoff, restart detection, history and `/turn` loading, ledger refresh. |
-| `src/store.ts` | Reactive view state: connection, model revision, drafts, overlays, alerts, prefs. |
-| `src/commands.ts` | The command registry from the manifest: availability terms, handlers, keys, Esc chain. |
+| `src/core/sync.ts` | Connection supervisor: handshake, snapshot, SSE resume, backoff, restart detection, history and `/turn` loading, ledger refresh, and each connection's `server.connected` stream id. |
+| `src/core/view.ts` | Client view reporting: the current project, session and panel ids (`files` or `file`; NSH has no Git diff panel), keyed by the event stream that issued them, re-sent after every reconnect and retried on a capped backoff. |
+| `src/store.ts` | Reactive view state: connection, model revision, drafts, overlays, alerts, prefs, and the view sent to Core. |
+| `src/commands.ts` | The command registry from the manifest: availability terms, handlers, direct keys, the three-second Ctrl+X leader and Esc chain. |
 | `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, code fences, thoughts, groups and members, children, diagnostics (live, or from summaries), the floor row, footers, and the sticky user bar. |
 | `src/ui/diff.tsx` | Diffs of edit, write and patch details: split at window width 1100 px and up, unified below, built from the tool detail lines (so the detail cap still applies). The empty side of an add or remove is a flat fill: NSH views cannot draw the hatch. |
 | `src/ui/connect.tsx` | The native Connect screen: the Core address, saved in NSH Storage (and reopened from the header's Core button). |
@@ -331,6 +348,18 @@ e2e/down.sh /tmp/nsh-e2e
   `src/core/transport.ts` are the single place the origin changes; `localCore()`
   there reads the daemon file, and `apiUrl()` prefixes URLs the platform loads
   itself (artifact images).
+- **Native services.** `native/` registers `Microphone` and `Mermaid` in
+  `nexus/native`. `Mermaid.render(source, width)` compiles through the shared
+  `nexus-mermaid` crate on every target. `Mermaid.renderText` returns the shared
+  pie/Gantt/timeline rows, and `Mermaid.renderPng` rasterizes with the bundled
+  font on every target, including web, because NSH's own SVG backend deliberately
+  draws no text. The timeline's `MermaidFence` draws the text rows or the PNG,
+  falls back to the source, and copies the exact source from
+  `◇ mermaid · copy source`; `src/mermaid.ts` caches by `(source, width, appearance)`
+  and looks the native module up with `nativeModule("nexus/native")` when it is
+  first needed, so importing the timeline for a pure helper does not load
+  `nexus/native` outside the app bundle. `src/mermaid-logic.ts` holds the
+  closed-fence scan and tone classes.
 - **Safe areas and touch.** The header pads by `safeArea().top`, the composer dock and
   the sidebar footer by `safeArea().bottom`, so the status bar and home indicator
   never cover chrome. Phone and tablet idioms (`platform.idiom`) keep hover-only
@@ -434,19 +463,23 @@ Paste images into the composer using the platform paste shortcut. The draft
 shows a square thumbnail for each image above its input, with the muted filename
 above the thumbnail and an individual Remove image button. Image-only messages
 are supported; after sending, the same square thumbnail sits above the user
-message text, and failed sends keep the draft. Clicking a thumbnail in either
-place opens a full-size preview modal (`esc` closes it); the sticky user header
+message text, and failed sends keep the draft. Clicking a composer thumbnail opens
+the drawing modal: drag to draw, `1`-`4` or the swatches pick a colour, `u` undoes,
+`x` clears, `enter` or Done merges the marks into the image through `nexus-annotate`,
+and `esc` cancels. Only the marked-up image is sent. Clicking a thumbnail in a sent
+message opens a read-only full-size preview (`esc` closes it); the sticky user header
 never shows an image. PNG, JPEG, GIF and WebP are supported, with up to eight
 images and 8 MiB combined. Bytes are stored by Core, so reload and continuation
 keep the same image context.
 
-A large text paste (at least 200 characters or three lines) collapses into one
-`[Pasted ~N tokens]` marker at the caret, as in the TUI, and the composer shows
-only that marker. Sending sends the marker and the full text separately: Core
+A large text paste (at least 500 characters, regardless of line count) collapses into one
+`[Pasted ~N tokens]` marker at the caret; shorter multiline pastes stay inline. The
+large-paste composer preview has a **Show** control that opens the existing full-text modal.
+Sending sends the marker and the full text separately: Core
 stores the text as a collapsed part, so the model reads it while the user
-message shows a clickable chip above its text, with no preview. Clicking the
-chip opens the full pasted text in a modal. A failed send keeps the collapsed
-draft. Smaller pastes stay inline.
+message shows a clickable chip above its text, with no inline preview in the
+message. Clicking the chip opens the full pasted text in a modal. A failed send keeps the collapsed
+draft.
 
 A background shell completion (`→ Background Shell Done: …`) is a plain context
 notice, without a user-message card or a new turn number.
@@ -488,3 +521,23 @@ estimate.
   `GET /api/usage`, with plan windows where reported and a note where not.
 - **Tool images (K8).** A tool row whose result has `media` stays folded and notes the image count; opening it shows the images
   (`/api/artifact/{id}`, same origin) under the output.
+
+## The Manager (MANAGER_PLAN.md 10)
+
+A voice agent above all sessions, drawn as three light layers over the app and present only when called: an orb
+at the bottom centre (anchored on the composer's top edge), a caption pill above it, a one-line typed field, and at
+most one card in a semi-transparent modal (scrim about 25%, panel about 80% with `backdropFilter` blur).
+
+- `src/manager.ts`: pure logic (wording, orb priority, level smoothing, speech queue, `/manager` parsing, card helpers).
+- `src/core/manager.ts`: the controller (call, exchange, voice in through the composer's dictation, speech out through
+  `speakText` in `src/speech.ts`, cards, `manager.navigate`, the engaged keys, the privacy notice). `manager-hooks.ts`
+  is the seam to the store and sync.
+- `src/ui/manager/`: `stage.tsx` (layers), `orb.ts` (canvas drawing), `cards.tsx` (the seven cards), `settings.tsx`.
+- Idle is free: with no call nothing is mounted, no frame or timer runs, and no key is bound. Keys are taken only
+  while engaged (listening or a focused card); a field takes the printable keys itself.
+- Mic level comes from `dictationLevel` (web `getUserMedia` or native `Microphone.level()`); playback level from a Web
+  Audio analyser on the output. Where the platform has no analyser (possibly native), a soft synthetic envelope drives
+  the speaking orb. Backdrop blur is a web, macOS and iOS feature; where it is not drawn the panel is the 80% surface.
+- Dev only, inert unless set: client storage key `nexus.manager.dev` = `{"level":0.7,"voice":"simulate","say":"..."}`
+  fixes the orb level and simulates mic and speech; `{"card":{...}}` shows a card with no call (screenshots, card tests).
+- Tests: `manager.test.tsx` (logic and controller), `manager-cards.test.tsx` (shared card scenarios, keys, clicks).

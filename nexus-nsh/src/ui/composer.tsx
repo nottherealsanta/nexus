@@ -1,12 +1,13 @@
 import { Image, Scroll, Text, View, effect, keymap, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Shimmer, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
+import { dockHeight } from "../core/manager";
 import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, restorePendingParts, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
-  agentCatalog, contextBudget, draftContext, draftContextKey, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
-  projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast, imagePreview,
+  agentCatalog, contextBudget, contextDetail, draftContext, draftContextKey, draftPlanContext, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
+  projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast, annotating,
   loadResources, resourceCounts, resourcesOpen,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
@@ -82,11 +83,18 @@ export function Composer() {
   const key = () => draftKey();
   const text = () => draft()[key()] ?? "";
   const images = () => imageDrafts()[key()] ?? [];
+  const pastes = () => (pasteDrafts()[key()] ?? []).filter((p) => text().includes(p.marker));
   const pasting = signal(false);
   const appendImages = (target: string, added: import("../images").DraftImage[]) => {
     const all = [...(imageDrafts()[target] ?? []), ...added];
     const bytes = all.reduce((n, i) => n + (i.data_url.length - i.data_url.indexOf(",") - 1) * 3 / 4, 0);
     if (all.length > 8 || bytes > 8 * 1024 * 1024) throw new Error("At most eight images and 8 MiB per message");
+    // TUI parity: each attachment is `Image A`, `Image B`, … so its `[Image A]` marker means one image.
+    const taken = new Set(all.map((i) => i.name));
+    for (const image of added) {
+      const letter = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").find((l) => !taken.has(`Image ${l}`));
+      if (letter) { image.name = `Image ${letter}`; taken.add(image.name); }
+    }
     imageDrafts.update((d) => ({ ...d, [target]: all }));
   };
   const pasteImages = async (files: File[]) => {
@@ -97,8 +105,41 @@ export function Composer() {
     try {
       const added = await Promise.all(files.map(readImage));
       appendImages(target, added);
+      // A session switch during the file read keeps the attachment on its own draft: markers go at
+      // the caret only for the draft still on screen, else at the end of the captured one.
+      if (key() === target) {
+        for (const image of added) insertAtCaret(`[${image.name}]`);
+      } else {
+        const markers = added.map((image) => `[${image.name}]`).join("");
+        draft.update((d) => ({ ...d, [target]: (d[target] ?? "") + markers }));
+      }
     } catch (e) { toast("error", String(e)); }
     finally { pasting.set(false); }
+  };
+  /**
+   * Remove an attachment, then rename the rest in order (`Image A`, `Image B`, …) and rewrite their
+   * markers: Core labels images by attachment order, so a gap would make the draft's letters lie.
+   */
+  const removeImage = (image: import("../images").DraftImage) => {
+    const target = key();
+    const kept = (imageDrafts()[target] ?? []).filter((i) => i.id !== image.id);
+    const renamed = kept.map((i, n) => ({ ...i, name: `Image ${String.fromCharCode(65 + n)}` }));
+    imageDrafts.update((d) => ({ ...d, [target]: renamed }));
+    const moved = new Map<string, string>();
+    kept.forEach((i, n) => {
+      const from = i.name.replace(/^Image /, ""), to = renamed[n].name.replace(/^Image /, "");
+      if (from !== to) moved.set(from, to);
+    });
+    // Drop the removed attachment's own marker before the surviving ones move up.
+    const before = draft()[target] ?? "";
+    const t = before.split(`[${image.name}]`).join("");
+    const next = moved.size
+      ? t.replace(/\[Image ([A-Z])\]/g, (m, letter: string) => moved.has(letter) ? `[Image ${moved.get(letter)!}]` : m)
+      : t;
+    if (next !== before) {
+      draft.update((d) => ({ ...d, [target]: next }));
+      prunePastes(target, next);
+    }
   };
   const ses = () => viewed();
   const busy = () => { m(); return ses()?.status === "busy"; };
@@ -162,8 +203,7 @@ export function Composer() {
     m();
     const id = ses()?.id;
     const project = currentProject();
-    const draftAnswer = draftContext();
-    const budget = id ? contextBudget()[id] : project && draftAnswer?.key === draftContextKey(project) ? draftAnswer.data : null;
+    const budget = id ? contextBudget()[id] : project ? draftPlanContext(project) : null;
     if (!budget || !Number.isFinite(budget.used)) return null;
     return { input: budget.used, pct: budget.window && budget.window > 0 ? 100 * budget.used / budget.window : null };
 
@@ -301,9 +341,9 @@ export function Composer() {
                     return (
                       <Button onPress={() => accept(r())} selected={sel()} testID={`completion-${r().key}`}
                         class={`flex-row items-center gap-3 rounded-(--radius) ${sel() ? "bg-selection" : ""} ${isNarrow() ? "min-h-11" : "h-8"} px-3 hover:bg-accent ${FOCUS}`}>
-                        <Text style={{ numberOfLines: 1 }} class={`font-mono text-[12.5px] leading-5 font-medium ${r().muted ? "text-muted-foreground" : "text-foreground"}`}>{r().value}</Text>
-                        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[12px] leading-4 text-muted-foreground">{r().muted ? `${r().help} · ${r().muted}` : r().help}</Text>
-                        <If when={!!r().hint}><Text class="text-xs leading-4 text-muted-foreground">{r().hint ?? ""}</Text></If>
+                        <Text style={{ numberOfLines: 1 }} class={`font-mono text-[16px] leading-6 font-medium ${r().muted ? "text-muted-foreground" : "text-foreground"}`}>{r().value}</Text>
+                        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[16px] leading-6 text-muted-foreground">{r().muted ? `${r().help} · ${r().muted}` : r().help}</Text>
+                        <If when={!!r().hint}><Text class="text-[16px] leading-6 text-muted-foreground">{r().hint ?? ""}</Text></If>
                       </Button>
                     );
                   }}
@@ -321,25 +361,46 @@ export function Composer() {
         </If>
       </View>
     </TimelineColumn>
-    <View class="w-full bg-background" style={{ paddingBottom: safeArea().bottom }} testID="composer-dock">
+    <View class="w-full bg-background" style={{ paddingBottom: safeArea().bottom }} testID="composer-dock"
+      onLayout={(b: any) => dockHeight.set(b.bounds?.size?.height ?? b.size?.height ?? 0)}>
     <TimelineColumn class="items-center">
         <View
-          class={`w-full pt-3 ${isNarrow() ? "pb-1" : "pb-1.5"}`}
+          class="w-full pt-3 pb-1"
           accessibilityLabel="Composer" testID="composer-panel"
           onLayout={(b: any) => dockWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}
         >
           <PendingStack />
+          <If when={pastes().length > 0}>
+            <View class="gap-1.5 pb-3" testID="paste-previews">
+              <Each of={pastes()} key={(p) => p.id}>
+                {(p) => (
+                  <Button onPress={() => contextDetail.set({ title: "Pasted text", detail: p().text })}
+                    accessibilityLabel={`Show pasted text, ${p().lines} lines`} testID={`composer-paste-${p().id}`}
+                    class={`flex-row items-center gap-2.5 rounded-(--radius) bg-raised px-2.5 ${isNarrow() ? "min-h-11" : "min-h-9"} hover:bg-accent ${FOCUS}`}>
+                    <Text class={`shrink-0 ${T.body}`}>Pasted text</Text>
+                    <View class="flex-1 min-w-0">
+                      <Text style={{ numberOfLines: 1 }} class={T.meta}>{`${p().lines} lines · ~${p().tokens} tokens`}</Text>
+                      <Text style={{ numberOfLines: 1 }} class={T.sec}>
+                        {(p().text.split("\n").find((line) => line.trim()) ?? "").trimStart()}
+                      </Text>
+                    </View>
+                    <Text class={`shrink-0 ${T.body} font-medium`}>Show</Text>
+                  </Button>
+                )}
+              </Each>
+            </View>
+          </If>
           <If when={images().length > 0}>
             <View class="flex-row flex-wrap gap-2 pb-3" testID="image-previews">
               <Each of={images()} key={(image) => image.id}>
                 {(image) => <View class="gap-1 w-20 shrink-0">
                   <View class="relative w-20 h-20">
-                    <Button onPress={() => imagePreview.set({ name: image().name, src: image().data_url })}
-                      accessibilityLabel={`Open ${image().name}`} testID={`composer-image-${image().id}`}
+                    <Button onPress={() => annotating.set({ key: key(), id: image().id })}
+                      accessibilityLabel={`Mark up ${image().name}`} testID={`composer-image-${image().id}`}
                       class={`w-20 h-20 items-center justify-center border border-border-strong overflow-hidden ${FOCUS}`}>
                       <Image class="w-20 h-20" src={image().data_url} style={{ width: 80, height: 80, objectFit: "cover" }} accessibilityLabel={image().name} />
                     </Button>
-                    <Button onPress={() => imageDrafts.update((d) => ({ ...d, [key()]: images().filter((i) => i !== image()) }))}
+                    <Button onPress={() => removeImage(image())}
                       accessibilityLabel="Remove image" testID={`remove-image-${image().id}`}
                       class={`absolute top-1 right-1 items-center justify-center rounded-full bg-popover hover:bg-accent ${isNarrow() ? "size-8" : "size-6"} ${FOCUS}`}>
                       <Icon name="x" size={12} />
@@ -352,8 +413,8 @@ export function Composer() {
           </If>
           <If when={pasting()}><Text class={T.meta}>Preparing image…</Text></If>
           <DictationStatus />
-          <View class="w-full bg-card px-4 pt-3 pb-2" testID="composer-surface">
-          <View class="w-full flex-row items-center gap-3" testID="composer-input-row">
+          <View class="w-full bg-card px-4 pt-3 pb-1" testID="composer-surface">
+          <View class="w-full flex-row items-end gap-3" testID="composer-input-row">
           <Input
             onPaste={(e) => {
               const files = (e.files ?? []).filter((f) => f.type.startsWith("image/"));
@@ -379,9 +440,9 @@ export function Composer() {
             }}
             onContentSizeChange={(s) => h.set(Math.min(220, Math.max(28, Math.ceil(s.size?.height ?? (s as any).height ?? 22) + 4)))}
             style={{ height: h() }}
-            class="flex-1 min-w-0 px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
+            class={`flex-1 min-w-0 px-0 py-0 ${T.body} placeholder:text-muted-foreground`}
           />
-            <View class="shrink-0 flex-row items-center gap-3">
+            <View class="shrink-0 flex-row items-center gap-3 pb-1">
               <If when={dictationPhase() === "recording" || dictationPhase() === "stopping"}>
                 <IconButton icon="stop" label={dictationPhase() === "recording" ? "Stop and insert transcript" : "Finishing transcription"}
                   testID="dictation-stop" disabled={dictationPhase() !== "recording"} onPress={() => void run("voice.dictate")}
@@ -401,7 +462,7 @@ export function Composer() {
           <View class="h-2" />
           <View class="flex-row items-center gap-1 min-w-0 min-h-8">
             <View class="flex-1 min-w-0 flex-row items-center gap-1">
-              <Selector command="agent.change" label={agentName()} labelClass={`font-semibold ${agentColor(agent())}`} testID="composer-agent" alignStart />
+              <Selector command="agent.change" label={agentName()} labelClass={agentColor(agent())} testID="composer-agent" alignStart />
               <Text class={T.meta}>·</Text>
               <Selector command="model.change" label={modelParts().name} sub={dockWidth() < 560 || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
               <If when={!isNarrow()}>
@@ -445,7 +506,7 @@ function DictationStatus() {
           <View class="gap-1.5 rounded-(--radius) bg-muted px-3 py-2" testID="dictation-download-progress">
             <View class="flex-row items-center gap-2">
               <Status kind="running" />
-              <Text class="flex-1 text-[13px] leading-5 text-foreground">Downloading speech recognition model…</Text>
+              <Text class="flex-1 text-[16px] leading-6 text-foreground">Downloading speech recognition model…</Text>
               <If when={!!progress()?.bytes_total}>
                 <Text class={T.meta}>{`${formatBytes(progress()?.bytes_done ?? 0)} / ${formatBytes(progress()!.bytes_total!)}`}</Text>
               </If>
@@ -461,14 +522,14 @@ function DictationStatus() {
         <If when={phase() === "recording" || phase() === "stopping"}>
           <View class="flex-row items-center gap-2" testID="dictation-recording-indicator" accessibilityLabel={reducedMotion() ? "Recording audio" : "Recording audio; level meter"}>
             <View class="size-2 rounded-full bg-error" />
-            <Text class="text-[13px] leading-5 font-medium text-foreground">{phase() === "stopping" ? "Finalizing transcript…" : "Listening…"}</Text>
+            <Text class="text-[16px] leading-6 font-medium text-foreground">{phase() === "stopping" ? "Finalizing transcript…" : "Listening…"}</Text>
             <View class="h-1.5 w-20 overflow-hidden rounded-full bg-border" testID="dictation-level-meter">
               <View class="h-full rounded-full bg-primary" style={{ width: `${level()}%` }} />
             </View>
             <Text class={T.meta}>{reducedMotion() ? "Reduced motion" : "Mic level"}</Text>
           </View>
           <If when={!!dictationPreview().trim()}>
-            <Text testID="dictation-preview" style={{ userSelect: "text" }} class="rounded-(--radius) bg-muted px-3 py-2 text-[13px] leading-5 text-foreground-secondary italic">
+            <Text testID="dictation-preview" style={{ userSelect: "text" }} class="rounded-(--radius) bg-muted px-3 py-2 text-[16px] leading-6 text-foreground-secondary italic">
               {`Pending transcript · ${dictationPreview()}`}
             </Text>
           </If>
@@ -501,8 +562,8 @@ function Selector(p: { command: string; label: string; labelClass?: string; sub?
       tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{disabled() ? `${p.label}: ${reason()}` : p.label}</Text>}
       class={`flex-row items-center gap-1.5 ${p.fixed ? "shrink-0" : "min-w-0 shrink"} h-7 ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
     >
-      <Text style={{ numberOfLines: 1 }} class={`min-w-0 shrink text-[13px] leading-5 ${p.labelClass ?? "text-foreground-secondary"}`}>{p.label}</Text>
-      <If when={!!p.sub}><Text style={{ numberOfLines: 1 }} class="min-w-0 shrink-[2] text-[13px] leading-5 text-muted-foreground">{p.sub!}</Text></If>
+      <Text style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ?? ""}`}>{p.label}</Text>
+      <If when={!!p.sub}><Text style={{ numberOfLines: 1 }} class={`min-w-0 shrink-[2] ${T.meta}`}>{p.sub!}</Text></If>
     </Button>
   );
 }
@@ -869,8 +930,8 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
         <View class="pl-4 pr-4 py-3 gap-2.5">
           <View>
           <View class="flex-row items-center gap-2 min-h-6">
-            <Text class={`text-[15px] leading-5 ${multi() ? "text-multi" : "text-primary"}`}>◆</Text>
-            <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[15px] leading-5 font-semibold text-foreground" testID="waiting-title">
+            <Text class={`text-[16px] leading-6 ${multi() ? "text-multi" : "text-primary"}`}>◆</Text>
+            <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[16px] leading-6 font-semibold text-foreground" testID="waiting-title">
               {approval() ? `Allow ${approval()!.tool}?` : "Nexus asks"}
             </Text>
             <If when={p.count > 1}>
@@ -887,7 +948,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
         </View>
         <If when={approval()}>{() => <ApprovalBody a={approval()!} />}</If>
         <If when={question()}>{() => <QuestionBody q={question()!} />}</If>
-        <If when={waitError()}><View class="flex-row gap-1.5 items-center"><Status kind="error" /><Text class="text-[13px] leading-5 text-error">{waitError()!}</Text></View></If>
+        <If when={waitError()}><View class="flex-row gap-1.5 items-center"><Status kind="error" /><Text class="text-[16px] leading-6 text-error">{waitError()!}</Text></View></If>
         </View>
       </Scroll>
     </View>
@@ -939,8 +1000,8 @@ function ApprovalBody(p: { a: Approval }) {
                 <Button onPress={() => r().run?.()} disabled={off()} testID={r().id}
                   accessibilityLabel={off() ? `${r().title}, unavailable: ${reason()}` : r().title}
                   class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-8"} ${i() === choice() && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-accent"} ${FOCUS}`}>
-                  <Text class={`shrink-0 w-5 text-center rounded-(--radius) bg-muted text-xs leading-5 font-medium ${off() ? "text-muted-foreground" : "text-foreground"}`}>{byId.get(r().cmd)?.keys?.tui ?? ""}</Text>
-                  <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[13px] leading-5 ${off() ? "text-muted-foreground" : "text-foreground"}`}>{r().title}</Text>
+                  <Text class={`shrink-0 w-5 text-center rounded-(--radius) bg-muted text-[16px] leading-6 font-medium ${off() ? "text-muted-foreground" : "text-foreground"}`}>{byId.get(r().cmd)?.keys?.tui ?? ""}</Text>
+                  <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[16px] leading-6 ${off() ? "text-muted-foreground" : "text-foreground"}`}>{r().title}</Text>
                   <If when={off()}><Text testID={`${r().id}-reason`} class={T.meta}>{reason()}</Text></If>
                 </Button>
               );
@@ -964,9 +1025,9 @@ function RadioMark(p: { on: boolean; testID?: string }) {
     <If when={p.on}><View class="size-1.5 rounded-full bg-primary" /></If>
   </View>;
 }
-/** A drawn checkbox: a 14 px rounded box with a check icon when selected. */
+/** A drawn checkbox: a 14 px square box with a check icon when selected. */
 function CheckMark(p: { on: boolean; testID?: string }) {
-  return <View testID={p.testID} class={`size-3.5 shrink-0 items-center justify-center rounded-[4px] border ${p.on ? "border-primary bg-primary" : "border-muted-foreground"}`}>
+  return <View testID={p.testID} class={`size-3.5 shrink-0 items-center justify-center rounded-none border ${p.on ? "border-primary bg-primary" : "border-muted-foreground"}`}>
     <If when={p.on}><Icon name="check" size={10} class="tint-on-accent" /></If>
   </View>;
 }
@@ -983,18 +1044,18 @@ function QuestionBody(p: { q: Question }) {
           const sel = (o: string) => (answers()[id()]?.selected ?? []).includes(o);
           return (
             <View class="gap-1.5">
-              <Text class="text-[14px] leading-[22px] font-medium text-foreground">{qq().question}</Text>
+              <Text class="text-[16px] leading-6 font-medium text-foreground">{qq().question}</Text>
               <Each of={qq().options} key={(o) => o.id}>
                 {(o, n) => (
                   <Button role={qq().multiple ? "checkbox" : "radio"} selected={sel(o().id)} accessibilityLabel={o().label}
                     onPress={() => upd(id(), (a) => ({ ...a, selected: qq().multiple ? (a.selected.includes(o().id) ? a.selected.filter((x) => x !== o().id) : [...a.selected, o().id]) : [o().id] }))}
                     class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 min-h-8 hover:bg-accent ${sel(o().id) ? "bg-selection" : ""} ${FOCUS}`}>
-                    <If when={qq().multiple} else={<Text testID={`choice-mark-${o().id}`} class={`shrink-0 w-3.5 text-center text-[13px] leading-5 ${sel(o().id) ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>}><CheckMark on={sel(o().id)} testID={`choice-mark-${o().id}`} /></If>
-                    <Text class={`flex-1 text-[13px] leading-5 ${sel(o().id) ? "font-semibold text-foreground" : "text-foreground"}`}>{o().label}</Text>
+                    <If when={qq().multiple} else={<Text testID={`choice-mark-${o().id}`} class={`shrink-0 w-3.5 text-center text-[16px] leading-6 ${sel(o().id) ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>}><CheckMark on={sel(o().id)} testID={`choice-mark-${o().id}`} /></If>
+                    <Text class={`flex-1 text-[16px] leading-6 ${sel(o().id) ? "font-semibold text-foreground" : "text-foreground"}`}>{o().label}</Text>
                   </Button>
                 )}
               </Each>
-              <Input placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class="rounded-(--radius) bg-background px-2.5 h-8 text-[13px] text-foreground" />
+              <Input placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class="rounded-(--radius) bg-background px-2.5 h-8 text-[16px] text-foreground" />
             </View>
           );
         }}

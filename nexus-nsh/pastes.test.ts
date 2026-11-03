@@ -4,10 +4,13 @@ import { isBigPaste, makePaste, normalisePaste, pasteLines, pasteTokens } from "
 describe("collapsed pastes", () => {
   test("the TUI's size rule decides what collapses", () => {
     expect(isBigPaste("one\ntwo")).toBe(false);
-    expect(isBigPaste("one\ntwo\nthree")).toBe(true);
-    expect(isBigPaste("x".repeat(199))).toBe(false);
-    expect(isBigPaste("x".repeat(200))).toBe(true);
-    expect(isBigPaste("x\r\ny\r\nz")).toBe(true);
+    expect(isBigPaste("one\ntwo\nthree")).toBe(false);
+    const manyLines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n");
+    expect(manyLines.length).toBeLessThan(500);
+    expect(isBigPaste(manyLines)).toBe(false);
+    expect(isBigPaste("x".repeat(499))).toBe(false);
+    expect(isBigPaste("x".repeat(500))).toBe(true);
+    expect(isBigPaste("x\r\n".repeat(250))).toBe(true);
   });
 
   test("markers count tokens and lines the way the TUI does", () => {

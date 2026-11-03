@@ -142,7 +142,7 @@ pub fn square_size(available: usize, max_rows: usize) -> (usize, usize) {
 }
 
 /// Image dimensions from a data URL, reading only the header where possible.
-fn dimensions(data_url: &str) -> Option<(u32, u32)> {
+pub fn dimensions(data_url: &str) -> Option<(u32, u32)> {
     let payload = payload(data_url);
     // PNG's signature and IHDR are in the first 24 bytes; the first 44 base64
     // characters decode them without touching the rest of a large image.
@@ -173,7 +173,7 @@ fn payload(data_url: &str) -> &str {
         .trim()
 }
 
-fn decode(data_url: &str) -> Option<image::DynamicImage> {
+pub fn decode(data_url: &str) -> Option<image::DynamicImage> {
     let bytes = STANDARD.decode(payload(data_url)).ok()?;
     image::load_from_memory(&bytes).ok()
 }

@@ -14,9 +14,11 @@ type AudioSourceLike = {
   start(when?: number): void;
   stop(): void;
 };
+type AnalyserLike = { fftSize: number; connect(destination: unknown): unknown; getFloatTimeDomainData(into: Float32Array): void };
 type AudioContextLike = {
   currentTime: number;
   destination: unknown;
+  createAnalyser?(): AnalyserLike;
   createBuffer(channels: number, length: number, sampleRate: number): AudioBufferLike;
   createBufferSource(): AudioSourceLike;
   resume(): Promise<void>;
@@ -28,6 +30,9 @@ type Playback = {
   controller: AbortController;
   context: AudioContextLike;
   sources: Set<AudioSourceLike>;
+  /** Measures what is really playing, for the Manager's orb; absent where the platform has no analyser. */
+  analyser?: AnalyserLike;
+  samples?: Float32Array;
   reader?: ReadableStreamDefaultReader<Uint8Array>;
   cancelled: boolean;
   streamEnded: boolean;
@@ -77,7 +82,7 @@ function schedule(playback: Playback, samples: Float32Array) {
   buffer.getChannelData(0).set(samples);
   const source = playback.context.createBufferSource();
   source.buffer = buffer;
-  source.connect(playback.context.destination);
+  source.connect(playback.analyser ?? playback.context.destination);
   playback.sources.add(source);
   source.onended = () => {
     playback.sources.delete(source);
@@ -109,13 +114,13 @@ async function stopRequest(): Promise<void> {
   if (!response.ok) throw await responseError(response);
 }
 
-async function streamAnswer(playback: Playback, sessionId: string): Promise<void> {
+async function streamAnswer(playback: Playback, request: { session_id: string } | { stream_id: string; text: string }): Promise<void> {
   let response: Response;
   try {
     response = await fetch(apiUrl("/api/voice/speak"), {
       method: "POST",
       headers: { accept: "audio/wav", "content-type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId }),
+      body: JSON.stringify(request),
       signal: playback.controller.signal,
     });
   } catch (e) {
@@ -161,14 +166,45 @@ async function streamAnswer(playback: Playback, sessionId: string): Promise<void
 
 /** Play one session's latest answer. Concurrent answer playback is deliberately refused. */
 export async function speakAnswer(sessionId: string): Promise<void> {
+  return play({ session_id: sessionId });
+}
+
+/** Speak arbitrary text (the Manager's sentences). Holder-only on Core; refused while something else speaks. */
+export async function speakText(text: string, streamId: string): Promise<void> {
+  return play({ stream_id: streamId, text });
+}
+
+/**
+ * The level (0 to 1) of what is playing now, measured by an analyser on the output, or null when
+ * nothing plays or this platform has no analyser (the caller then uses a synthetic envelope).
+ */
+export function playbackLevel(): number | null {
+  const playback = active;
+  if (!playback?.analyser) return null;
+  const samples = (playback.samples ??= new Float32Array(playback.analyser.fftSize));
+  playback.analyser.getFloatTimeDomainData(samples);
+  let power = 0;
+  for (const sample of samples) power += sample * sample;
+  return Math.min(1, Math.sqrt(power / samples.length) * 2.4);
+}
+
+async function play(request: { session_id: string } | { stream_id: string; text: string }): Promise<void> {
   if (active) throw new ApiError(409, "An answer is already speaking", "speech_busy");
   const playback = newPlayback(audioContext());
+  try {
+    const analyser = playback.context.createAnalyser?.();
+    if (analyser) {
+      analyser.fftSize = 1024;
+      analyser.connect(playback.context.destination);
+      playback.analyser = analyser;
+    }
+  } catch { /* no analyser: the orb falls back to a soft envelope */ }
   active = playback;
   speechPlaying.set(true);
   try {
     // Create/resume before the first network await so browser and desktop user gestures unlock audio.
     await playback.context.resume();
-    await streamAnswer(playback, sessionId);
+    await streamAnswer(playback, request);
   } catch (e) {
     if (!playback.cancelled) throw e;
   } finally {

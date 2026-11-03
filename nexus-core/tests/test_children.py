@@ -196,7 +196,7 @@ async def test_agent_list_reports_subagent_models(env):
     config.patch(config.read()["revision"], {"agents.models": {"helper": ["codex/child"]}}, [])
     agents = (await client.get("/api/agent", params={"directory": str(workspace)})).json()["agents"]
     by_name = {a["name"]: a for a in agents}
-    assert by_name["helper"]["subagent"] == {"pool": ["codex/child"], "fallbacks": [],
+    assert by_name["helper"]["subagent"] == {"pool": ["codex/child"], "fallbacks": [], "efforts": {},
                                              "effective": {"model": "scripted/child", "source": "agent"}}
     assert by_name["quick"]["subagent"]["effective"] == {"model": "", "source": "parent"}
     assert "subagent" not in by_name["orchestrate"]
@@ -482,3 +482,35 @@ async def test_a_child_without_the_flag_keeps_working_and_never_gains_escalate(e
     providers["child"].replies = [[Text("fine")]]
     await _prompt_and_wait(rt, client, child["id"])
     assert (await _texts(client, child["id"]))[-1] == ("assistant", "fine")
+
+
+def test_child_effort_follows_the_model_it_runs(env, monkeypatch):
+    from nexus.config import ConfigFile
+
+    rt, _, _, workspace = env
+    config = ConfigFile()
+    config.patch(config.read()["revision"], {
+        "agents.models": {"helper": ["codex/parent", "codex/child"]},
+        "agents.efforts": {"helper": {"codex/child": "low", "codex/parent": "high"}}}, [])
+    monkeypatch.setattr(runtime_module.secrets, "choice", lambda pool: pool[-1])
+    project = rt.open_project(str(workspace))
+    parent = rt.create_session(project, title=None, model=None, permission=None)
+    child = rt.create_session(project, title=None, model=None, permission=None, agent="helper", parent=parent)
+    info = rt.session_json(rt.session(child.id))
+    assert (info["model"], info["effort"], info["effort_source"]) == ("codex/child", "low", "config")
+    assert rt.snapshot_for(child)["model_efforts"] == {"codex/child": "low"}
+    # An effort the session holds itself wins, and a later config change does not move a frozen child.
+    explicit = rt.create_session(project, title=None, model="codex/parent", permission=None, effort="medium",
+                                 agent="helper", parent=parent)
+    assert rt.session_json(rt.session(explicit.id))["effort_source"] == "session"
+
+
+def test_effort_config_rejects_malformed_values(env):
+    import pytest
+
+    from nexus.config import ConfigFile
+
+    config = ConfigFile()
+    for bad in ({"helper": {"codex/child": "Very High"}}, {"helper": {"nomodel": "low"}}, {"helper": {}}, {"Bad Name": {"a/b": "low"}}):
+        with pytest.raises(ValueError):
+            config.patch(config.read()["revision"], {"agents.efforts": bad}, [])

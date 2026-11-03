@@ -60,6 +60,10 @@ for (const scheme of ["dark", "light"]) for (const [label, w, h] of sizes) {
   await shot(p, "06-settings", tag);
   await tid(p, "section-providers").click(); await settle(p, 700); await shot(p, "06b-settings-providers", tag);
   await p.keyboard.press("Escape"); await settle(p, 400);
+  // shared Mermaid presentation: PNG for the flowchart, text rows for the pie,
+  // and the source fallback for the unsupported mindmap
+  await openDrawerLeft(p, w); await tid(p, `session-${ids.diagrams}`).click(); await settle(p, 1200);
+  await shot(p, "06c-mermaid", tag);
   // confirm dialog
   await openDrawerLeft(p, w); await tid(p, `session-${ids.release}`).click(); await settle(p, 900);
   await p.keyboard.press(`${mod}+p`); await settle(p, 500); await p.keyboard.type("Delete session"); await settle(p, 300); await p.keyboard.press("Enter"); await settle(p, 700);

@@ -66,7 +66,8 @@ create table if not exists project (
   name text not null,
   created real not null,
   updated real not null,
-  revision integer not null default 1
+  revision integer not null default 1,
+  hidden integer not null default 0
 );
 create table if not exists session (
   id text primary key,
@@ -85,7 +86,10 @@ create table if not exists session (
   disabled_tools text not null default '[]',
   archived integer not null default 0,
   revision integer not null default 1,
-  continued_from text
+  continued_from text,
+  kind text not null default 'user',
+  topic text,
+  topic_seq integer not null default 0
 );
 create table if not exists event (
   id integer primary key autoincrement,
@@ -257,6 +261,7 @@ create table if not exists message (
   created real not null,
   event_id integer,
   delivery text,
+  origin text,
   unique (session_id, seq)
 );
 create table if not exists prompt_history (
@@ -282,13 +287,12 @@ create index if not exists artifact_sha on artifact(sha);
 create virtual table if not exists search_index using fts5(
   text, session_id unindexed, message_id unindexed, kind unindexed, tokenize = 'unicode61 remove_diacritics 2'
 );
-create table if not exists file_observation (
-  session_id text not null references session(id) on delete cascade,
-  path text not null,
-  data text not null,
-  updated real not null,
-  primary key (session_id, path)
+create table if not exists search_final_answer (
+  message_id text primary key,
+  session_id text not null references session(id) on delete cascade
 );
+create index if not exists search_final_answer_session on search_final_answer(session_id);
+drop table if exists file_observation;
 create table if not exists turn (
   id text primary key,
   session_id text not null references session(id) on delete cascade,
@@ -301,7 +305,8 @@ create table if not exists turn (
   recovery text not null default 'none',
   notice_id text,
   data text not null default '{}',
-  ended text
+  ended text,
+  final_answer_message_id text
 );
 create index if not exists turn_session on turn(session_id, started);
 create index if not exists turn_open on turn(status, recovery);
@@ -362,6 +367,21 @@ create index if not exists session_continued on session(continued_from);
 create index if not exists session_parent on session(parent_id);
 create index if not exists session_stale on session(updated) where archived = 0 and parent_id is null;
 create index if not exists message_event on message(event_id);
+create table if not exists manager_handle (
+  session_id text primary key references session(id) on delete cascade,
+  handle text not null unique
+);
+create table if not exists manager_audit (
+  id integer primary key autoincrement,
+  time real not null,
+  episode_id text,
+  turn_id text,
+  tool text not null,
+  target text,
+  heard text,
+  ok integer not null,
+  result text
+);
 """
 
 
@@ -394,7 +414,11 @@ _STORAGE_METRICS_DDL = """create table if not exists storage_metrics (
   pending_events integer not null default 0,
   payload_cursor integer not null default 0,
   turn_link_cursor integer not null default 0,
-  indexes_ready integer not null default 0
+  indexes_ready integer not null default 0,
+  search_cursor integer not null default 0,
+  search_coverage_cursor integer not null default 0,
+  search_dedupe_ready integer not null default 0,
+  search_ready integer not null default 0
 );"""
 
 
@@ -422,6 +446,8 @@ def _migration_schema() -> str:
 
 SCHEMA_VERSION = 1  # fresh databases get this version; additive payload storage migrates in place
 EVENT_MIGRATION_BATCH = 500
+SEARCH_MIGRATION_SECONDS = 0.25  # startup gets one bounded slice; search() continues the rest
+SEARCH_MIGRATION_SEARCH_SECONDS = 0.025
 
 log = logging.getLogger(__name__)
 
@@ -565,6 +591,7 @@ class Project:
     created: float
     updated: float
     revision: int = 1
+    hidden: int = 0  # 1 = the Manager's project; never listed (nexus/manager)
 
 
 @dataclass(frozen=True, slots=True)
@@ -586,6 +613,9 @@ class Session:
     archived: int = 0  # 0/1; archive/unarchive applies to the whole tree
     revision: int = 1  # monotonic configuration revision (expected-revision preconditions)
     continued_from: str | None = None  # the session whose handoff summary this one starts from
+    kind: str = "user"  # "user" | "manager": a Manager episode is hidden from every default list
+    topic: str | None = None  # one sentence about what the session is for, written lazily (nexus/manager/topics.py)
+    topic_seq: int = 0  # the message sequence the topic was written from
 
     def disabled(self) -> set[str]:
         return set(json.loads(self.disabled_tools or "[]"))
@@ -599,6 +629,7 @@ class StoredMessage:
     message: Message
     created: float
     delivery: str | None = None
+    origin: str | None = None  # who put this message here when it was not the user at a client: "manager"
 
 
 class Store:
@@ -617,19 +648,24 @@ class Store:
         self.on_pressure: Any = None
         self._pressure_notified = False
         self._migrate_payload_storage()
+        self._migrate_search_index()
         self._generation = self._ensure_log()
+        # Sessions that are not the user's (Manager episodes): kept in memory so the
+        # event stream can drop their events without a query per event.
+        self._hidden: set[str] = {r["id"] for r in self.db.execute("select id from session where kind != 'user'")}
 
     # -- additive payload storage -------------------------------------------
 
     def _migrate_payload_storage(self) -> None:
-        """Add the payload lifecycle columns/tables to an existing database in place.
+        """Add the payload lifecycle and search columns/tables to an existing database in place.
 
         The schema version deliberately does not change: an older 0.10 database
         keeps its projects, sessions, messages, snapshots and event ids instead
         of being renamed and replaced. Added columns are defaulted. Existing
         rows start as `payload_bytes = -1` (unmeasured); the resumable backfill
-        measures them later. Heavy partial indexes are deliberately *not* built
-        during this startup method.
+        measures them later. `turn.final_answer_message_id` lets the search
+        backfill skip turns already indexed when they closed. Heavy partial
+        indexes are deliberately *not* built during this startup method.
         """
         event_columns = {row["name"] for row in self.db.execute("pragma table_info(event)")}
         added_payload = "payload_bytes" not in event_columns
@@ -651,18 +687,28 @@ class Store:
         # missing column when SCHEMA is applied below.
         self.db.execute(_STORAGE_METRICS_DDL)
         metric_columns = {row["name"] for row in self.db.execute("pragma table_info(storage_metrics)")}
+        intermediate_search = "search_legacy_cursor" in metric_columns
         metric_additions = {
             "event_stored_bytes": "integer not null default 0",
             "pending_events": "integer not null default 0",
             "payload_cursor": "integer not null default 0",
             "turn_link_cursor": "integer not null default 0",
             "indexes_ready": "integer not null default 0",
+            "search_cursor": "integer not null default 0",
+            "search_coverage_cursor": "integer not null default 0",
+            "search_dedupe_ready": "integer not null default 0",
+            "search_ready": "integer not null default 0",
         }
         with self.db:
             for name, definition in metric_additions.items():
                 if name not in metric_columns:
                     self.db.execute(f"alter table storage_metrics add column {name} {definition}")
+        self._migrate_manager_columns()
         self.db.executescript(_migration_schema())
+        turn_columns = {row["name"] for row in self.db.execute("pragma table_info(turn)")}
+        if "final_answer_message_id" not in turn_columns:
+            with self.db:
+                self.db.execute("alter table turn add column final_answer_message_id text")
         with self.db:
             row = self.db.execute("select 1 from storage_metrics where id = 1").fetchone()
             if row is None:
@@ -684,6 +730,37 @@ class Store:
                 "select name from sqlite_master where type = 'index'")}
             ready = all(name in existing for name, _ in DEFERRED_INDEXES)
             self.db.execute("update storage_metrics set indexes_ready = ? where id = 1", (1 if ready else 0,))
+        if intermediate_search:
+            # A development build indexed final answers before the dedupe table
+            # existed: adopt those rows once, then run the wider coverage pass.
+            # The marker and reset commit together, so a crash retries cleanly.
+            dedupe_ready = self.db.execute(
+                "select search_dedupe_ready from storage_metrics where id = 1").fetchone()[0]
+            if not dedupe_ready:
+                with self.db:
+                    self.db.execute(
+                        "insert or ignore into search_final_answer (message_id, session_id)"
+                        " select message_id, session_id from search_index"
+                        " where kind = 'final_answer' and message_id is not null"
+                        " and session_id in (select id from session)")
+                    self.db.execute(
+                        "update storage_metrics set search_cursor = 0, search_coverage_cursor = 0,"
+                        " search_dedupe_ready = 1, search_ready = 0 where id = 1")
+
+    def _migrate_manager_columns(self) -> None:
+        """Add the Manager's columns to an existing 0.10 database in place (schema version unchanged)."""
+        wanted = {
+            "project": {"hidden": "integer not null default 0"},
+            "session": {"kind": "text not null default 'user'", "topic": "text",
+                        "topic_seq": "integer not null default 0"},
+            "message": {"origin": "text"},
+        }
+        with self.db:
+            for table, columns in wanted.items():
+                present = {row["name"] for row in self.db.execute(f"pragma table_info({table})")}
+                for name, definition in columns.items():
+                    if name not in present:
+                        self.db.execute(f"alter table {table} add column {name} {definition}")
 
     def _recompute_storage_metrics(self) -> None:
         """Full reconciliation, reserved for a repair of an already-measured database."""
@@ -872,7 +949,7 @@ class Store:
 
     # -- projects ------------------------------------------------------------
 
-    def project_for_path(self, path: str, name: str | None = None) -> tuple[Project, bool]:
+    def project_for_path(self, path: str, name: str | None = None, *, hidden: bool = False) -> tuple[Project, bool]:
         """The project at `path`, created if missing. Returns (project, created)."""
         resolved = str(Path(path).expanduser().resolve())
         if not Path(resolved).is_dir():
@@ -881,14 +958,17 @@ class Store:
         if row:
             return Project(**row), False
         now = time.time()
-        project = Project(new_id("prj"), resolved, name or Path(resolved).name or resolved, now, now)
+        project = Project(new_id("prj"), resolved, name or Path(resolved).name or resolved, now, now, 1, int(hidden))
         with self.db:
-            self.db.execute("insert into project (id, path, name, created, updated, revision) values (?, ?, ?, ?, ?, 1)",
-                            (project.id, project.path, project.name, now, now))
+            self.db.execute("insert into project (id, path, name, created, updated, revision, hidden)"
+                            " values (?, ?, ?, ?, ?, 1, ?)",
+                            (project.id, project.path, project.name, now, now, int(hidden)))
         return project, True
 
-    def projects(self) -> list[Project]:
-        return [Project(**r) for r in self.db.execute("select * from project order by updated desc")]
+    def projects(self, *, hidden: bool = False) -> list[Project]:
+        """The user's projects, newest first. `hidden=True` also returns the Manager's own project."""
+        clause = "" if hidden else " where hidden = 0"
+        return [Project(**r) for r in self.db.execute(f"select * from project{clause} order by updated desc")]
 
     def project(self, project_id: str) -> Project | None:
         row = self.db.execute("select * from project where id = ?", (project_id,)).fetchone()
@@ -918,26 +998,35 @@ class Store:
                        effort: str | None = None, parent: Session | None = None, parent_call_id: str | None = None,
                        launched_by: str = "user", disabled_tools: list[str] | None = None,
                        snapshot: dict[str, Any] | None = None, directory: str | None = None,
-                       continued_from: str | None = None) -> Session:
+                       continued_from: str | None = None, kind: str = "user") -> Session:
         now = time.time()
         directory = parent.directory if parent else (directory or project.path)
         disabled = json.dumps(sorted(set(disabled_tools or [])))
+        if kind not in ("user", "manager"):
+            raise ValueError("kind must be 'user' or 'manager'")
         session = Session(new_id("ses"), project.id, directory, title, model, permission, now, now, effort, agent,
-                          parent.id if parent else None, parent_call_id, launched_by, disabled, 0, 1, continued_from)
+                          parent.id if parent else None, parent_call_id, launched_by, disabled, 0, 1, continued_from,
+                          kind)
         with self.db:
             self.db.execute(
                 "insert into session (id, project_id, directory, title, model, permission, created, updated, effort, agent,"
-                " parent_id, parent_call_id, launched_by, disabled_tools, continued_from)"
-                " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " parent_id, parent_call_id, launched_by, disabled_tools, continued_from, kind)"
+                " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (session.id, session.project_id, directory, session.title, model, permission, now, now, effort, agent,
-                 session.parent_id, parent_call_id, launched_by, disabled, continued_from),
+                 session.parent_id, parent_call_id, launched_by, disabled, continued_from, kind),
             )
             if snapshot is not None:
                 self.db.execute("insert into session_snapshot (session_id, data, created) values (?, ?, ?)",
                                 (session.id, json.dumps(snapshot), now))
             self.db.execute("update project set updated = ? where id = ?", (now, project.id))
             self._index_title(session.id, session.title)
+        if kind != "user":
+            self._hidden.add(session.id)
         return session
+
+    def is_hidden(self, session_id: str | None) -> bool:
+        """Whether a session is a Manager episode (its events never reach a default stream)."""
+        return session_id is not None and session_id in self._hidden
 
     def snapshot(self, session_id: str) -> dict[str, Any] | None:
         row = self.db.execute("select data from session_snapshot where session_id = ?", (session_id,)).fetchone()
@@ -951,14 +1040,21 @@ class Store:
                 (session_id, json.dumps(snapshot), time.time()),
             )
 
-    def sessions(self, project_id: str | None = None, *, archived: str = "include") -> list[Session]:
+    def sessions(self, project_id: str | None = None, *, archived: str = "include",
+                 kind: str | None = "user") -> list[Session]:
         """Sessions of one project or all, filtered by archive state.
 
         `archived` is `include` (the storage default, all sessions), `exclude` or
         `only`. The HTTP API applies `exclude` by default. Archive state is
         stored on every session of a tree, so filtering rows filters trees.
+        `kind` defaults to the user's own sessions; the Manager's hidden episodes
+        (`kind="manager"`) are returned only when asked for, and `None` means every kind.
         """
         clause = _archive_clause(archived)
+        if kind is not None:
+            if kind not in ("user", "manager"):
+                raise ValueError("kind must be 'user', 'manager' or None")
+            clause += f" and kind = '{kind}'"
         if project_id:
             rows = self.db.execute(
                 f"select * from session where project_id = ?{clause} order by updated desc", (project_id,))
@@ -1003,7 +1099,7 @@ class Store:
         clause = f" and id not in ({', '.join('?' * len(skip))})" if skip else ""
         rows = self.db.execute(
             "with recursive candidates(id) as ("
-            f" select id from session where parent_id is null and archived = 0 and updated < ?{clause}"
+            f" select id from session where parent_id is null and archived = 0 and kind = 'user' and updated < ?{clause}"
             " order by updated limit ?),"
             " tree(root, id, updated) as ("
             " select c.id, c.id, s.updated from candidates c join session s on s.id = c.id"
@@ -1124,7 +1220,60 @@ class Store:
         with self.db:
             self.db.execute("update session set continued_from = null where continued_from = ?", (session_id,))
             self.db.execute("delete from search_index where session_id = ?", (session_id,))
-            return self.db.execute("delete from session where id = ?", (session_id,)).rowcount > 0
+            self.db.execute("delete from search_final_answer where session_id = ?", (session_id,))
+            deleted = self.db.execute("delete from session where id = ?", (session_id,)).rowcount > 0
+        self._hidden.discard(session_id)
+        return deleted
+
+    # -- topic lines, spoken handles and the Manager's audit (nexus/manager) --------
+
+    def set_topic(self, session_id: str, topic: str, seq: int) -> bool:
+        """Store a session's one-sentence topic and index it for search; does not touch `updated`.
+
+        `seq` is the message sequence the sentence was written from, so a later
+        pass can tell whether the topic is stale. Returns False for an unknown session.
+        """
+        topic = " ".join(topic.split())
+        with self.db:
+            changed = self.db.execute(
+                "update session set topic = ?, topic_seq = ? where id = ?",
+                (topic or None, seq, session_id)).rowcount
+            if not changed:
+                return False
+            self.db.execute("delete from search_index where session_id = ? and kind = 'topic'", (session_id,))
+            if topic:
+                self.db.execute("insert into search_index (text, session_id, message_id, kind) values (?, ?, null, 'topic')",
+                                (topic, session_id))
+        return True
+
+    def last_message_seq(self, session_id: str) -> int:
+        return self.db.execute("select coalesce(max(seq), 0) from message where session_id = ?",
+                               (session_id,)).fetchone()[0]
+
+    def handles(self) -> dict[str, str]:
+        """Persisted spoken handles, `{session_id: handle}`."""
+        return {r["session_id"]: r["handle"] for r in self.db.execute("select session_id, handle from manager_handle")}
+
+    def save_handle(self, session_id: str, handle: str) -> None:
+        with self.db:
+            self.db.execute("insert or ignore into manager_handle (session_id, handle) values (?, ?)", (session_id, handle))
+
+    def add_audit(self, *, tool: str, target: str | None, heard: str | None, ok: bool, result: str,
+                  episode_id: str | None = None, turn_id: str | None = None) -> int:
+        """One row for every Manager act: the heard words, the tool, the target and the outcome."""
+        with self.db:
+            return self.db.execute(
+                "insert into manager_audit (time, episode_id, turn_id, tool, target, heard, ok, result)"
+                " values (?, ?, ?, ?, ?, ?, ?, ?)",
+                (time.time(), episode_id, turn_id, tool, target, heard, int(ok), result[:2000])).lastrowid
+
+    def audit(self, *, limit: int = 100, tool: str | None = None) -> list[dict[str, Any]]:
+        sql, params = "select * from manager_audit", []
+        if tool:
+            sql += " where tool = ?"
+            params.append(tool)
+        rows = self.db.execute(sql + " order by id desc limit ?", (*params, limit))
+        return [{**dict(r), "ok": bool(r["ok"])} for r in rows]
 
     def continuation_of(self, session_id: str) -> str | None:
         """The newest session that started from this one's handoff."""
@@ -1151,32 +1300,6 @@ class Store:
                     " on conflict(name) do update set value = excluded.value",
                     (name, value),
                 )
-
-    # -- file observations ---------------------------------------------------
-
-    def file_observation(self, session_id: str, path: str) -> dict[str, Any] | None:
-        row = self.db.execute(
-            "select data from file_observation where session_id = ? and path = ?", (session_id, path)
-        ).fetchone()
-        return json.loads(row["data"]) if row else None
-
-    def set_file_observation(self, session_id: str, path: str, data: dict[str, Any]) -> None:
-        now = time.time()
-        with self.db:
-            self.db.execute(
-                "insert into file_observation (session_id, path, data, updated) values (?, ?, ?, ?)"
-                " on conflict(session_id, path) do update set data = excluded.data, updated = excluded.updated",
-                (session_id, path, json.dumps(data), now),
-            )
-
-    def delete_file_observations(self, session_id: str, paths: list[str]) -> None:
-        if not paths:
-            return
-        with self.db:
-            self.db.executemany(
-                "delete from file_observation where session_id = ? and path = ?",
-                [(session_id, path) for path in paths],
-            )
 
     # -- events --------------------------------------------------------------
 
@@ -1606,13 +1729,14 @@ class Store:
 
     # -- messages ------------------------------------------------------------
 
-    def _insert_message(self, session_id: str, message: Message, now: float) -> StoredMessage:
+    def _insert_message(self, session_id: str, message: Message, now: float,
+                        origin: str | None = None) -> StoredMessage:
         seq = self.db.execute("select coalesce(max(seq), 0) + 1 from message where session_id = ?", (session_id,)).fetchone()[0]
-        stored = StoredMessage(new_id("msg"), session_id, seq, message, now)
+        stored = StoredMessage(new_id("msg"), session_id, seq, message, now, None, origin)
         self.db.execute(
-            "insert into message (id, session_id, seq, role, parts, created, event_id)"
-            " values (?, ?, ?, ?, ?, ?, null)",
-            (stored.id, session_id, seq, message.role, json.dumps(message_to_json(message)["parts"]), now),
+            "insert into message (id, session_id, seq, role, parts, created, event_id, origin)"
+            " values (?, ?, ?, ?, ?, ?, null, ?)",
+            (stored.id, session_id, seq, message.role, json.dumps(message_to_json(message)["parts"]), now, origin),
         )
         self.db.execute("update session set updated = ? where id = ?", (now, session_id))
         if message.role == "user":
@@ -1633,35 +1757,274 @@ class Store:
             self.db.execute("insert into search_index (text, session_id, message_id, kind) values (?, ?, null, 'title')",
                             (title, session_id))
 
-    def search(self, q: str, *, project_id: str | None = None, archived: str = "include",
-               limit: int = 30) -> list[dict[str, Any]]:
-        """Sessions whose title or user messages match every word of `q` (each as a prefix), best first.
+    @staticmethod
+    def _assistant_text(parts: str) -> str:
+        """The text parts of a stored message, joined; reasoning, calls and results are not indexed."""
+        try:
+            values = json.loads(parts)
+        except (TypeError, ValueError):
+            return ""
+        if not isinstance(values, list):
+            return ""
+        return "".join(part["text"] for part in values
+                       if isinstance(part, dict) and part.get("type") == "text"
+                       and isinstance(part.get("text"), str))
 
-        One hit per session: the title when it matches, else the best-ranked user message, with a short snippet.
+    def _turn_messages(self, turn_id: str) -> tuple[str, int, int | None] | None:
+        """`(session_id, after_seq, through_seq)` for a turn's own messages.
+
+        A turn owns the messages after its `start_seq` up to the next turn's
+        `start_seq` (which is the sequence of the last message before that turn).
+        """
+        turn = self.db.execute(
+            "select session_id, start_seq, started from turn where id = ?", (turn_id,)).fetchone()
+        if turn is None:
+            return None
+        following = self.db.execute(
+            "select start_seq from turn where session_id = ?"
+            " and (started > ? or (started = ? and id > ?)) order by started, id limit 1",
+            (turn["session_id"], turn["started"], turn["started"], turn_id)).fetchone()
+        through = None
+        if following is not None:
+            if following["start_seq"] <= turn["start_seq"]:
+                return None
+            through = following["start_seq"]
+        return turn["session_id"], turn["start_seq"], through
+
+    def _final_answer(self, turn_id: str) -> tuple[str, str, str] | None:
+        """The turn's last assistant text: `(session_id, message_id, text)`, or None."""
+        bounds = self._turn_messages(turn_id)
+        if bounds is None:
+            return None
+        session_id, after, through = bounds
+        sql = "select id, parts from message where session_id = ? and role = 'assistant' and seq > ?"
+        params: list[Any] = [session_id, after]
+        if through is not None:
+            sql += " and seq <= ?"
+            params.append(through)
+        for row in self.db.execute(sql + " order by seq desc", params):
+            text = self._assistant_text(row["parts"])
+            if text.strip():
+                return session_id, row["id"], text
+        return None
+
+    def _index_final_answer(self, turn_id: str, *, replace: bool = False, once: bool = False) -> None:
+        """Index the turn's last assistant text as `final_answer`; tool output never enters.
+
+        Recovery can restore an assistant message after the turn was closed, so
+        its final pass replaces the turn's earlier row instead of adding one.
+        `once` skips a turn that already has a marker, so a deferred backfill
+        never adds a second row for a turn indexed live at its end.
+        """
+        turn = self.db.execute(
+            "select final_answer_message_id from turn where id = ?", (turn_id,)).fetchone()
+        if turn is None or (once and turn["final_answer_message_id"] is not None):
+            return
+        if replace:
+            bounds = self._turn_messages(turn_id)
+            if bounds is not None:
+                session_id, after, through = bounds
+                sql = ("select id from message where session_id = ?"
+                       " and role = 'assistant' and seq > ?")
+                params: list[Any] = [session_id, after]
+                if through is not None:
+                    sql += " and seq <= ?"
+                    params.append(through)
+                self.db.execute(
+                    "delete from search_index where kind = 'final_answer' and session_id = ?"
+                    f" and message_id in ({sql})", [session_id, *params])
+                self.db.execute(f"delete from search_final_answer where message_id in ({sql})", params)
+        found = self._final_answer(turn_id)
+        if found is None:
+            self.db.execute("update turn set final_answer_message_id = '' where id = ?", (turn_id,))
+            return
+        session_id, message_id, text = found
+        self._insert_final_answer(session_id, message_id, text)
+        self.db.execute("update turn set final_answer_message_id = ? where id = ?", (message_id, turn_id))
+
+    def _insert_final_answer(self, session_id: str, message_id: str, text: str) -> bool:
+        """Add one final answer unless that message already has a row.
+
+        Titles and user messages are indexed when their sessions and messages
+        are written; the backfill only adds assistant final answers.
+        """
+        if self.db.execute(
+                "select 1 from search_final_answer where message_id = ?", (message_id,)).fetchone():
+            return False
+        self.db.execute(
+            "insert into search_index (text, session_id, message_id, kind) values (?, ?, ?, 'final_answer')",
+            (text, session_id, message_id))
+        self.db.execute(
+            "insert into search_final_answer (message_id, session_id) values (?, ?)",
+            (message_id, session_id))
+        return True
+
+    def _index_session_gaps(self, session_id: str) -> None:
+        """Index assistant history before the earliest surviving turn.
+
+        Turn rows are pruned as an oldest prefix, so messages after the first
+        surviving turn's `start_seq` are covered by the turn pass. The prefix
+        before it contains pruned turns and turnless history: each user message
+        starts a segment and the last assistant text before the next user
+        message is that segment's final answer. Notices are user messages too,
+        so they can split a segment, which only adds searchable text.
+        """
+        row = self.db.execute(
+            "select min(start_seq) from turn where session_id = ?", (session_id,)).fetchone()
+        through = row[0] if row is not None else None
+        sql = "select id, seq, role, parts from message where session_id = ?"
+        params: list[Any] = [session_id]
+        if through is not None:
+            sql += " and seq <= ?"
+            params.append(through)
+        candidate: tuple[int, str, str] | None = None
+
+        def flush() -> None:
+            nonlocal candidate
+            if candidate is None:
+                return
+            seq, message_id, text = candidate
+            candidate = None
+            # A turn may have been created while this session was being scanned;
+            # messages at or before its start are still the uncovered prefix.
+            row = self.db.execute(
+                "select min(start_seq) from turn where session_id = ?", (session_id,)).fetchone()
+            covered_from = row[0] if row is not None else None
+            if covered_from is None or seq <= covered_from:
+                self._insert_final_answer(session_id, message_id, text)
+
+        for row in self.db.execute(sql + " order by seq", params):
+            if row["role"] == "user":
+                flush()
+            elif row["role"] == "assistant":
+                text = self._assistant_text(row["parts"])
+                if text.strip():
+                    candidate = (row["seq"], row["id"], text)
+        flush()
+
+    def _migrate_search_index(self) -> None:
+        """Advance the final-answer backfill by one bounded slice at startup.
+
+        A large database must not hold up startup. The rest continues on
+        `search()` calls, or eagerly through `backfill_final_answers`.
+        """
+        row = self.db.execute("select search_ready from storage_metrics where id = 1").fetchone()
+        if row is None or row[0]:
+            return
+        self.backfill_final_answers(budget=SEARCH_MIGRATION_SECONDS)
+
+    def backfill_final_answers(self, *, limit: int = EVENT_MIGRATION_BATCH,
+                               budget: float | None = None) -> int:
+        """Index one batch of pre-index turn answers, then uncovered session history.
+
+        Returns how many turns or sessions it examined. Durable rowid cursors
+        (`search_cursor` for turns, `search_coverage_cursor` for sessions) keep
+        each table to one pass, and `search_ready` marks completion. Coverage
+        looks only at messages before each session's earliest surviving turn,
+        so pruned and turnless history is indexed without touching turn rows.
+        Titles and user messages keep their write-time index rows; this pass
+        only adds assistant final answers.
+        `budget` bounds one call's wall-clock work; when rows exist it still
+        examines at least one. Running turns are left to `finish_turn`, which
+        indexes them when they close.
+        """
+        metric = self.db.execute(
+            "select search_cursor, search_coverage_cursor, search_ready"
+            " from storage_metrics where id = 1").fetchone()
+        if metric is None or metric["search_ready"]:
+            return 0
+        limit = max(0, limit)
+        if limit == 0:
+            return 0
+        deadline = None if budget is None else time.monotonic() + max(0.0, budget)
+        processed = 0
+        with self.db:
+            turn_cursor = metric["search_cursor"]
+            rows = self.db.execute(
+                "select rowid, id from turn where rowid > ? and status != 'running'"
+                " and final_answer_message_id is null order by rowid limit ?",
+                (turn_cursor, limit)).fetchall()
+            turns_done = len(rows) < limit
+            for row in rows:
+                if processed and deadline is not None and time.monotonic() >= deadline:
+                    turns_done = False
+                    break
+                self._index_final_answer(row["id"], once=True)
+                turn_cursor = row["rowid"]
+                processed += 1
+            if turns_done:  # no unindexed terminal turns remain; skip marked and running rows
+                head = self.db.execute("select coalesce(max(rowid), 0) from turn").fetchone()[0]
+                turn_cursor = max(turn_cursor, head)
+            if turn_cursor != metric["search_cursor"]:
+                self.db.execute("update storage_metrics set search_cursor = ? where id = 1", (turn_cursor,))
+            coverage_done = False
+            if turns_done:
+                remaining = limit - processed
+                coverage_cursor = metric["search_coverage_cursor"]
+                sessions = self.db.execute(
+                    "select rowid, id from session where rowid > ?"
+                    " order by rowid limit ?", (coverage_cursor, remaining)).fetchall()
+                coverage_done = len(sessions) < remaining
+                for row in sessions:
+                    if processed and deadline is not None and time.monotonic() >= deadline:
+                        coverage_done = False
+                        break
+                    self._index_session_gaps(row["id"])
+                    coverage_cursor = row["rowid"]
+                    processed += 1
+                if coverage_cursor != metric["search_coverage_cursor"]:
+                    self.db.execute("update storage_metrics set search_coverage_cursor = ? where id = 1",
+                                    (coverage_cursor,))
+            if turns_done and coverage_done:
+                self.db.execute("update storage_metrics set search_ready = 1 where id = 1")
+        return processed
+
+    def search(self, q: str, *, project_id: str | None = None, archived: str = "include",
+               limit: int = 30, kind: str = "user") -> list[dict[str, Any]]:
+        """Sessions whose title, topic, user messages or final answers match every word of `q`, best first.
+
+        `kind` is the session kind searched: the user's own sessions by default, or
+        `"manager"` for the Manager's past episodes. The two are never mixed.
+
+        Words match as prefixes. One hit per session, chosen before `limit` is
+        applied so a session with many matching rows cannot crowd out others:
+        the title when it matches, else the best-ranked message, with a snippet.
         """
         words = re.findall(r"\w+", q, flags=re.UNICODE)
         if not words:
             return []
+        self._continue_search_migration()
         match = " ".join(f'"{w}"*' for w in words)
-        sql = ("select i.session_id, i.kind, i.message_id, bm25(search_index) rank,"
-               " snippet(search_index, 0, '[', ']', '…', 12) snippet from search_index i"
-               " join session s on s.id = i.session_id where search_index match ?")
-        params: list[Any] = [match]
+        sql = ("with matched as ("
+               " select i.session_id session_id, i.kind kind, i.message_id message_id,"
+               " i.rowid rid, bm25(search_index) score from search_index i"
+               " join session s on s.id = i.session_id where search_index match ? and s.kind = ?")
+        params: list[Any] = [match, kind]
         if project_id:
             sql += " and s.project_id = ?"
             params.append(project_id)
         sql += _archive_clause(archived).replace(" archived", " s.archived")
-        sql += " order by rank limit ?"
-        params.append(limit * 5)
-        seen: dict[str, dict[str, Any]] = {}
-        for r in self.db.execute(sql, params):
-            hit = seen.get(r["session_id"])
-            if hit is None:
-                seen[r["session_id"]] = {"session_id": r["session_id"], "kind": r["kind"], "message_id": r["message_id"],
-                                         "snippet": r["snippet"], "rank": r["rank"]}
-            elif r["kind"] == "title" and hit["kind"] != "title":
-                hit.update(kind="title", message_id=None, snippet=r["snippet"])
-        return list(seen.values())[:limit]
+        sql += ("), ranked as ("
+                " select session_id, kind, message_id, rid, score,"
+                " min(score) over (partition by session_id) session_rank,"
+                " row_number() over (partition by session_id order by"
+                " case when kind = 'title' then 0 else 1 end, score) pick"
+                " from matched)"
+                " select session_id, kind, message_id, session_rank as rank,"
+                " (select snippet(search_index, 0, '[', ']', '…', 12)"
+                " from search_index where search_index.rowid = ranked.rid"
+                " and search_index match ?) snippet"
+                " from ranked where pick = 1"
+                " order by session_rank, session_id limit ?")
+        params.extend([match, limit])
+        return [dict(row) for row in self.db.execute(sql, params)]
+
+    def _continue_search_migration(self) -> None:
+        """Spend a small bounded slice on the deferred final-answer backfill."""
+        row = self.db.execute("select search_ready from storage_metrics where id = 1").fetchone()
+        if row is None or row[0] or self.db.in_transaction:
+            return
+        self.backfill_final_answers(budget=SEARCH_MIGRATION_SEARCH_SECONDS)
 
     @staticmethod
     def _prompt_text(message: Message) -> tuple[str, int]:
@@ -1694,10 +2057,10 @@ class Store:
         return [{"id": r["id"], "text": r["text"], "image_count": r["image_count"],
                  "session_id": r["session_id"], "created": r["created"]} for r in self.db.execute(sql, params)]
 
-    def append_message(self, session_id: str, message: Message) -> StoredMessage:
+    def append_message(self, session_id: str, message: Message, *, origin: str | None = None) -> StoredMessage:
         now = time.time()
         with self.db:
-            return self._insert_message(session_id, message, now)
+            return self._insert_message(session_id, message, now, origin)
 
     def append_handoff(self, session_id: str, message: Message) -> StoredMessage:
         """The first message of a continued session: the summary, tagged `handoff`."""
@@ -1710,7 +2073,7 @@ class Store:
     def messages(self, session_id: str) -> list[StoredMessage]:
         rows = self.db.execute("select * from message where session_id = ? order by seq", (session_id,))
         return [
-            StoredMessage(r["id"], r["session_id"], r["seq"], message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"])
+            StoredMessage(r["id"], r["session_id"], r["seq"], message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"], r["origin"])
             for r in rows
         ]
 
@@ -1728,7 +2091,8 @@ class Store:
         rows = list(reversed(rows[:limit]))
         return {"messages": [{"id": r["id"], "session_id": r["session_id"], "seq": r["seq"], "created": r["created"],
                               "role": r["role"], "parts": json.loads(r["parts"]),
-                              **({"delivery": r["delivery"]} if r["delivery"] else {})} for r in rows],
+                              **({"delivery": r["delivery"]} if r["delivery"] else {}),
+                              **({"origin": r["origin"]} if r["origin"] else {})} for r in rows],
                 "more": more, "oldest_seq": rows[0]["seq"] if rows else None}
 
     def messages_after_seq(self, session_id: str, seq: int) -> list[StoredMessage]:
@@ -1736,7 +2100,7 @@ class Store:
         rows = self.db.execute(
             "select * from message where session_id = ? and seq > ? order by seq", (session_id, seq))
         return [
-            StoredMessage(r["id"], r["session_id"], r["seq"], message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"])
+            StoredMessage(r["id"], r["session_id"], r["seq"], message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"], r["origin"])
             for r in rows
         ]
 
@@ -1753,7 +2117,7 @@ class Store:
             "select * from message where event_id is null order by created, session_id, seq")
         return [
             StoredMessage(r["id"], r["session_id"], r["seq"],
-                          message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"])
+                          message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"], r["origin"])
             for r in rows
         ]
 
@@ -2036,6 +2400,8 @@ class Store:
                 " where id = ? and status = 'running'",
                 (status, time.time(), steps, json.dumps(error) if error else None, turn_id),
             ).rowcount > 0
+            if changed:
+                self._index_final_answer(turn_id)
         return changed
 
     def mark_turn_ended(self, turn_id: str, stop: str, steps: int) -> None:
@@ -2049,6 +2415,9 @@ class Store:
             raise ValueError("recovery must be 'none', 'pending' or 'done'")
         with self.db:
             self.db.execute("update turn set recovery = ? where id = ?", (state, turn_id))
+            if state == "done":
+                # Recovery may have restored the assistant message after the turn closed.
+                self._index_final_answer(turn_id, replace=True)
 
     def set_recovery_notice(self, turn_id: str, message: Message) -> StoredMessage | None:
         """Insert a turn's recovery notice once, atomically with its marker."""
@@ -2433,8 +2802,10 @@ class Store:
             head = self.log_head()
             floor = self.log_floor()
             generation = self.log_generation()
-            projects = [dict(row) for row in self.db.execute("select * from project order by updated desc")]
-            sessions = [dict(row) for row in self.db.execute("select * from session order by updated desc")]
+            projects = [dict(row) for row in self.db.execute(
+                "select * from project where hidden = 0 order by updated desc")]
+            sessions = [dict(row) for row in self.db.execute(
+                "select * from session where kind = 'user' order by updated desc")]
             out: dict[str, Any] = {
                 "watermark": {"generation": generation, "head": head, "floor": floor,
                               "head_cursor": f"{generation}:{head}"},
@@ -2454,7 +2825,8 @@ class Store:
                         {"id": row["id"], "session_id": row["session_id"], "seq": row["seq"],
                          "created": row["created"], "role": row["role"],
                          "parts": json.loads(row["parts"]),
-                         **({"delivery": row["delivery"]} if row["delivery"] else {})}
+                         **({"delivery": row["delivery"]} if row["delivery"] else {}),
+                         **({"origin": row["origin"]} if row["origin"] else {})}
                         for row in rows
                     ],
                     "messages_limit": message_limit,

@@ -311,6 +311,10 @@ mod tests {
         assert_eq!(
             chain,
             [
+                "manager_field",
+                "manager_listening",
+                "manager_card",
+                "manager_speaking",
                 "overlay",
                 "dialog",
                 "text_edit",
@@ -339,6 +343,7 @@ mod tests {
                 "mcp",
                 "context",
                 "dictation",
+                "manager",
                 "keybindings",
                 "notifications",
                 "about"

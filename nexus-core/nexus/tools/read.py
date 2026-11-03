@@ -1,16 +1,14 @@
 """`read`: a text file with line numbers, by line window.
 
-A direct, model-visible file read records an observation for this session: the
-content hash, total lines, the line window that entered context and any clipped
-lines. Directory listings are not file reads. A read inside a `code` kernel is
-retained by the kernel, not shown to the model, so it records nothing.
+Lines over 2,000 characters and output over 30,000 characters are clipped, and
+the output says so.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from ..llmhub.types import Media, ToolSpec
-from .base import MAX_OUTPUT_CHARS, Tool, ToolContext, ToolError, ToolOutput, clip, resolve
+from .base import Tool, ToolContext, ToolError, ToolOutput, clip, resolve
 
 DEFAULT_LIMIT = 2000
 MAX_LINE_CHARS = 2000
@@ -45,26 +43,18 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
         raise ToolError(f"{display} looks binary ({len(data)} bytes)")
     lines = data.decode("utf-8", "replace").splitlines()
     if not lines:
-        _record(ctx, path, data, lines=0, ranges=[], partial=[], clipped=False)
         return f"{display} is empty"
     if offset > len(lines):
         raise ToolError(f"offset {offset} is past the end of {display} ({len(lines)} lines)")
     window = lines[offset - 1 : offset - 1 + limit]
     out = []
-    partial: list[int] = []
     for number, line in enumerate(window, start=offset):
         if len(line) > MAX_LINE_CHARS:
-            partial.append(number)
             line = line[:MAX_LINE_CHARS] + f" [… line clipped at {MAX_LINE_CHARS} of {len(line)} characters]"
         out.append(f"{number:>6}\t{line}")
     end = offset - 1 + len(window)
     footer = f"\n[lines {offset}–{end} of {len(lines)}]" if (offset > 1 or end < len(lines)) else ""
     body = "\n".join(out) + footer
-    clipped = len(body) > MAX_OUTPUT_CHARS
-    # A clipped whole-output read establishes no coverage: the middle never
-    # reached the model. Reading smaller windows does.
-    _record(ctx, path, data, lines=len(lines), ranges=[] if clipped else [(offset, end)],
-            partial=partial, clipped=clipped)
     prefix = f"[path: {display}]\n" if ctx.cwd_changed else ""
     return clip(prefix + body)
 
@@ -82,19 +72,11 @@ def _image(ctx: ToolContext, path: Any, display: str, data: bytes, mime: str) ->
                       (Media(artifact, mime, path.name),))
 
 
-def _record(ctx: ToolContext, path: Any, data: bytes, *, lines: int, ranges: list[tuple[int, int]],
-            partial: list[int], clipped: bool) -> None:
-    if ctx.files is None or not ctx.model_visible:
-        return
-    ctx.files.record_read(path, data, lines=lines, ranges=ranges, partial=partial,
-                          clipped=clipped, call_id=ctx.call_id)
-
-
 TOOL = Tool(
     ToolSpec(
         name="read",
         description="Read a text file (with line numbers), view an image file (PNG, JPEG, GIF, WebP), or list a directory. Paths are relative to the workspace. "
-                    "Use `offset` and `limit` for large files. Read a file before you change it.",
+                    "Use `offset` and `limit` for large files. Prefer one larger read over many small slices, and use `grep` to find specific content in large files.",
         parameters={
             "type": "object",
             "properties": {

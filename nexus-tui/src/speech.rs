@@ -3,7 +3,7 @@
 //! remote Core as well.
 
 use std::num::NonZero;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -25,6 +25,116 @@ pub fn stop_local() -> bool {
             true
         }
         None => false,
+    }
+}
+
+/// What is being heard right now, for the Manager's orb: the RMS of the samples the
+/// output device is pulling (not of the bytes received), and whether any sound has
+/// started. Cheap to clone and read from any thread.
+#[derive(Clone, Default)]
+pub struct Playback {
+    level: Arc<AtomicU32>,
+    started: Arc<AtomicBool>,
+}
+
+impl Playback {
+    /// Loudness of what is playing, 0 to 1 (RMS scaled so speech spans the range).
+    pub fn level(&self) -> f32 {
+        (f32::from_bits(self.level.load(Ordering::Relaxed)) * LEVEL_GAIN).clamp(0.0, 1.0)
+    }
+
+    /// True once the first sample has reached the output.
+    pub fn started(&self) -> bool {
+        self.started.load(Ordering::Relaxed)
+    }
+
+    fn set(&self, rms: f32) {
+        self.level.store(rms.to_bits(), Ordering::Relaxed);
+    }
+}
+
+impl std::fmt::Debug for Playback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Playback")
+    }
+}
+
+impl PartialEq for Playback {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.level, &other.level)
+    }
+}
+
+/// Speech RMS sits around 0.05 to 0.2; this lets a normal voice reach most of the range.
+const LEVEL_GAIN: f32 = 5.0;
+
+/// A source that reports the loudness of the samples as the mixer takes them.
+struct Metered<S> {
+    inner: S,
+    playback: Playback,
+    window: usize,
+    sum: f32,
+    count: usize,
+}
+
+impl<S: rodio::Source> Metered<S> {
+    fn new(inner: S, playback: Playback) -> Self {
+        // About 25 ms of audio per reading.
+        let window =
+            (inner.sample_rate().get() as usize * inner.channels().get() as usize / 40).max(1);
+        Self {
+            inner,
+            playback,
+            window,
+            sum: 0.0,
+            count: 0,
+        }
+    }
+}
+
+impl<S: rodio::Source> Iterator for Metered<S> {
+    type Item = rodio::Sample;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let sample = self.inner.next();
+        match sample {
+            Some(value) => {
+                if self.count == 0 {
+                    self.playback.started.store(true, Ordering::Relaxed);
+                }
+                self.sum += value * value;
+                self.count += 1;
+                if self.count >= self.window {
+                    self.playback.set((self.sum / self.count as f32).sqrt());
+                    self.sum = 0.0;
+                    self.count = 0;
+                }
+            }
+            None => self.playback.set(0.0),
+        }
+        sample
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<S: rodio::Source> rodio::Source for Metered<S> {
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+
+    fn channels(&self) -> rodio::ChannelCount {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
     }
 }
 
@@ -69,16 +179,45 @@ pub async fn speak(http: &Http, session: &str) -> Result<(), String> {
         }
         *current = Some(stop.clone());
     }
-    let result = run(http, session, &stop).await;
+    let result = run(http, &json!({ "session_id": session }), &stop, None).await;
     if let Ok(mut current) = CURRENT.lock() {
         *current = None;
     }
     result
 }
 
-async fn run(http: &Http, session: &str, stop: &Arc<AtomicBool>) -> Result<(), String> {
+/// Speak one piece of the Manager's text, returning when it has been played or
+/// stopped. `playback` reports what is really being played.
+pub async fn speak_text(http: &Http, text: &str, playback: &Playback) -> Result<(), String> {
+    let stop = Arc::new(AtomicBool::new(false));
+    if let Ok(mut current) = CURRENT.lock() {
+        *current = Some(stop.clone());
+    }
+    let Some(stream_id) = crate::sync::current_stream() else {
+        return Err("not connected".into());
+    };
+    let result = run(
+        http,
+        &json!({ "stream_id": stream_id, "text": text }),
+        &stop,
+        Some(playback),
+    )
+    .await;
+    if let Ok(mut current) = CURRENT.lock() {
+        *current = None;
+    }
+    playback.set(0.0);
+    result
+}
+
+async fn run(
+    http: &Http,
+    request: &serde_json::Value,
+    stop: &Arc<AtomicBool>,
+    playback: Option<&Playback>,
+) -> Result<(), String> {
     let resp = http
-        .post_stream("/api/voice/speak", &json!({ "session_id": session }))
+        .post_stream("/api/voice/speak", request)
         .await
         .map_err(|e| e.to_string())?;
     let mut body = resp.bytes_stream();
@@ -114,7 +253,7 @@ async fn run(http: &Http, session: &str, stop: &Arc<AtomicBool>) -> Result<(), S
                 failure = Some("Core sent audio that is not a WAV".into());
                 break;
             };
-            player = Some(start_player(rate, stop.clone()));
+            player = Some(start_player(rate, stop.clone(), playback.cloned()));
         }
         if let Some((tx, _)) = &player {
             let samples = pcm.samples(rest);
@@ -156,6 +295,7 @@ async fn run(http: &Http, session: &str, stop: &Arc<AtomicBool>) -> Result<(), S
 fn start_player(
     rate: u32,
     stop: Arc<AtomicBool>,
+    playback: Option<Playback>,
 ) -> (
     mpsc::Sender<Vec<f32>>,
     std::thread::JoinHandle<Result<(), String>>,
@@ -171,7 +311,11 @@ fn start_player(
         loop {
             match rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(samples) => {
-                    player.append(rodio::buffer::SamplesBuffer::new(channels, rate, samples))
+                    let buffer = rodio::buffer::SamplesBuffer::new(channels, rate, samples);
+                    match &playback {
+                        Some(playback) => player.append(Metered::new(buffer, playback.clone())),
+                        None => player.append(buffer),
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,

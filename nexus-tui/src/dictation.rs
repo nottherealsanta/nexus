@@ -24,12 +24,15 @@ pub const SETTLE_FRAMES: u8 = 3;
 const MAX_SAMPLES: usize = MAX_SECONDS * TARGET_RATE as usize;
 const LEVEL_WINDOW: usize = TARGET_RATE as usize / 20;
 const CUE_RATE: u32 = 44_100;
-const CUE_NOTES: [(&str, &[f32]); 5] = [
+const CUE_NOTES: [(&str, &[f32]); 7] = [
     ("start", &[660.0, 880.0]),
     ("stop", &[880.0, 587.0]),
     ("loading", &[440.0, 440.0]),
     ("complete", &[660.0]),
     ("input", &[880.0, 1174.7]),
+    // The Manager call starting, and GPT-Live connecting (a rising third that ends higher than the start cue).
+    ("manager_start", &[523.3, 784.0]),
+    ("live_connected", &[659.3, 784.0, 1046.5]),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -306,7 +309,7 @@ enum Control {
     Cancel,
 }
 
-enum AudioMessage {
+pub(crate) enum AudioMessage {
     Samples(Vec<f32>),
     Failed(String),
 }
@@ -379,6 +382,7 @@ impl Drop for CaptureHandle {
 /// Stateful linear resampling of interleaved audio to a mono 16 kHz stream.
 #[derive(Debug, Clone)]
 pub struct Resampler {
+    target_rate: u32,
     source_rate: u32,
     channels: usize,
     frames_seen: u64,
@@ -388,7 +392,13 @@ pub struct Resampler {
 
 impl Resampler {
     pub fn new(source_rate: u32, channels: usize) -> Option<Self> {
-        (source_rate > 0 && channels > 0).then_some(Self {
+        Self::to_rate(source_rate, channels, TARGET_RATE)
+    }
+
+    /// Like `new`, to mono at `target_rate` (the GPT-Live call sends 24 kHz).
+    pub fn to_rate(source_rate: u32, channels: usize, target_rate: u32) -> Option<Self> {
+        (source_rate > 0 && channels > 0 && target_rate > 0).then_some(Self {
+            target_rate,
             source_rate,
             channels,
             frames_seen: 0,
@@ -410,12 +420,12 @@ impl Resampler {
         let mut out = Vec::new();
         loop {
             let numerator = self.next_output * u64::from(self.source_rate);
-            let base = numerator / u64::from(TARGET_RATE);
-            let remainder = numerator % u64::from(TARGET_RATE);
+            let base = numerator / u64::from(self.target_rate);
+            let remainder = numerator % u64::from(self.target_rate);
             if base > end || (base == end && remainder > 0) {
                 break;
             }
-            let fraction = remainder as f32 / TARGET_RATE as f32;
+            let fraction = remainder as f32 / self.target_rate as f32;
             let sample = if base < start {
                 let Some(previous) = self.previous else {
                     break;
@@ -737,7 +747,7 @@ fn finish_capture(
     });
 }
 
-fn open_input(audio: std_mpsc::Sender<AudioMessage>) -> Result<(cpal::Stream, u32, usize), String> {
+pub(crate) fn open_input(audio: std_mpsc::Sender<AudioMessage>) -> Result<(cpal::Stream, u32, usize), String> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()

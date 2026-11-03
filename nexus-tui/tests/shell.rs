@@ -270,7 +270,12 @@ fn bracketed_paste_lands_in_the_composer_with_newlines() {
         "line one\nline two\n\u{65e5}\u{672c}\u{8a9e}"
     );
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("Pasted ~"));
+    let shown = joined(&rows);
+    assert!(shown.contains("line one"), "{shown}");
+    assert!(
+        !shown.contains("Pasted ~"),
+        "a short multiline paste stays inline: {shown}"
+    );
 }
 
 #[test]
@@ -2007,7 +2012,7 @@ fn a_sidebar_tab_opens_the_sidebar_beside_the_rail() {
 }
 
 #[test]
-fn tab_icons_show_their_label_on_hover() {
+fn tab_labels_do_not_show_a_tooltip_on_hover() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     draw(&mut app, 120, 36);
     let r = app
@@ -2018,11 +2023,7 @@ fn tab_icons_show_their_label_on_hover() {
     assert!(!rows[r.y as usize + 1].contains("Files"));
     app.mouse = Some((r.x + 1, r.y));
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(
-        rows[r.y as usize + 1].contains("Files"),
-        "{:?}",
-        rows[r.y as usize + 1]
-    );
+    assert!(!rows[r.y as usize + 1].contains("Files"));
 }
 
 fn completes(app: &nexus_tui::app::App) -> Vec<(String, u32)> {
@@ -2302,7 +2303,7 @@ fn settings_shows_what_core_reports_and_refuses_what_it_cannot_change() {
     app.execute("app.settings");
     let (_, rows) = draw(&mut app, 120, 50);
     let all = joined(&rows);
-    for needle in ["Appearance", "Providers", "Agents", "10 sections"] {
+    for needle in ["Appearance", "Providers", "Agents", "11 sections"] {
         assert!(all.contains(needle), "missing {needle:?}: {all}");
     }
     // The Providers pane.
@@ -2448,6 +2449,62 @@ fn agent_model_lists_show_odds_skip_disconnected_and_edit_the_config() {
 }
 
 #[test]
+fn agent_model_rows_step_their_effort_with_left_and_right() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    app.state.models = vec![
+        serde_json::json!({"ref": "codex/gpt-5", "efforts": ["low", "medium", "high"]}),
+        serde_json::json!({"ref": "codex/mini"}),
+    ];
+    app.state.providers = vec![
+        serde_json::json!({"id": "codex", "label": "Codex", "connected": true, "methods": ["device"]}),
+    ];
+    app.state.agents =
+        vec![serde_json::json!({"name": "scout", "mode": "subagent", "source": "builtin"})];
+    app.state.config = Some(serde_json::json!({"revision": "r1", "values": {
+        "defaults": {"effort": "", "agent": "", "permission": "allow"},
+        "agents": {"models": {"scout": ["codex/gpt-5", "codex/mini"]}, "fallbacks": {},
+                   "efforts": {"scout": {"codex/gpt-5": "low"}}}}}));
+    app.execute("app.settings");
+    app.ui.settings_section = "agents".into();
+    app.ui.settings_nav_focus = false;
+    app.ui.settings_page = None;
+    draw(&mut app, 120, 50);
+    press(&mut app, &["down", "down", "enter"]);
+    assert_eq!(app.ui.settings_page.as_deref(), Some("agents/scout"));
+    let all = joined(&draw(&mut app, 120, 50).1);
+    assert!(all.contains("effort low \u{b7} 50%"), "{all}");
+    assert!(!all.contains("effort default \u{b7} 50%\n"), "{all}");
+    let patch = |app: &nexus_tui::app::App| {
+        app.effects.iter().rev().find_map(|e| match e {
+            Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }) => {
+                Some((path.clone(), value.clone()))
+            }
+            _ => None,
+        })
+    };
+    app.effects.clear();
+    press(&mut app, &["right"]);
+    assert_eq!(
+        patch(&app),
+        Some((
+            "agents.efforts".into(),
+            serde_json::json!({"scout": {"codex/gpt-5": "medium"}})
+        ))
+    );
+    // Left from the first level returns to the default, which clears the entry.
+    app.effects.clear();
+    press(&mut app, &["left"]);
+    assert_eq!(
+        patch(&app),
+        Some(("agents.efforts".into(), serde_json::json!({})))
+    );
+    // A model that lists no levels has nothing to step.
+    app.effects.clear();
+    press(&mut app, &["down", "left"]);
+    assert_eq!(patch(&app), None);
+}
+
+#[test]
 fn a_pending_device_sign_in_shows_its_code_on_the_provider_row() {
     use nexus_tui::api::Frame;
     use nexus_tui::sync::SyncMsg;
@@ -2488,6 +2545,34 @@ fn a_pending_device_sign_in_shows_its_code_on_the_provider_row() {
         .effects
         .iter()
         .any(|e| matches!(e, Effect::OpenUrl(url) if url == "https://github.com/login/device")));
+}
+
+#[test]
+fn codex_offers_browser_and_device_sign_in() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    app.state.providers = vec![
+        serde_json::json!({"id": "codex", "label": "Codex", "connected": false, "methods": ["browser", "device"]}),
+    ];
+    app.execute("app.sign_in");
+    app.effects.clear();
+    press(&mut app, &["down", "enter"]);
+    assert_eq!(app.ui.provider_detail.as_deref(), Some("codex"));
+    let all = joined(&draw(&mut app, 120, 50).1);
+    assert!(
+        all.contains("Sign in with browser") && all.contains("Sign in with a device code"),
+        "{all}"
+    );
+    // Browser is first, and its row starts that method.
+    press(&mut app, &["enter"]);
+    assert!(app.effects.iter().any(|e| matches!(e,
+        Effect::Api(ApiCall::Provider { id, sign_out: false, method, .. }) if id == "codex" && method == "browser")), "{:?}", app.effects);
+    // The device row still starts the device flow.
+    app.effects.clear();
+    app.ui.provider_logins.clear();
+    app.ui.provider_detail_row = 1;
+    press(&mut app, &["enter"]);
+    assert!(app.effects.iter().any(|e| matches!(e,
+        Effect::Api(ApiCall::Provider { id, sign_out: false, method, .. }) if id == "codex" && method == "device")), "{:?}", app.effects);
 }
 
 #[test]
@@ -2611,6 +2696,18 @@ fn sidebar_icons_sit_in_the_band_over_the_sidebar() {
     let (buf, rows) = draw(&mut app, 120, 36);
     let left = app.regions.left.unwrap();
     let toggle = app.hits.rect_of(&Target::ToggleLeft).unwrap();
+    assert!(rows[0].contains("[Sessions] [Files]"), "{:?}", rows[0]);
+    let title_row = rows
+        .iter()
+        .skip(1)
+        .find(|row| row.contains("New session") && !row.contains("+ New session"))
+        .unwrap();
+    assert_eq!(
+        col_of(&rows[0], "[Sessions]"),
+        col_of(title_row, "New session")
+    );
+    let glyph_x = toggle.x + toggle.width / 2;
+    assert_ne!(buf[(glyph_x, 0)].symbol(), " ");
     let mut prev = toggle.right();
     for tab in [nexus_tui::ui::Tab::Sessions, nexus_tui::ui::Tab::Files] {
         let r = app.hits.rect_of(&Target::Tab(tab)).unwrap();
@@ -2626,6 +2723,21 @@ fn sidebar_icons_sit_in_the_band_over_the_sidebar() {
         rows[1]
     );
     assert_eq!(buf[(1, 0)].bg, Color::Rgb(0x14, 0x14, 0x14));
+}
+
+#[test]
+fn sidebar_search_shortcut_tracks_the_right_edge_when_resized() {
+    for width in [24, 48] {
+        let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
+        app.ui.left_width = width;
+        let (_, rows) = draw(&mut app, 160, 40);
+        let left = app.regions.left.unwrap();
+        let row = rows.iter().find(|row| row.contains("ctrl+k")).unwrap();
+        assert_eq!(
+            col_of(row, "ctrl+k") + "ctrl+k".len(),
+            left.right() as usize - 2
+        );
+    }
 }
 
 #[test]
@@ -3019,13 +3131,13 @@ fn the_mark_slot_follows_attention_precedence() {
         .unwrap(),
     );
     assert_eq!(app.session_mark(SESSION), Some("waiting"));
-    // and the row draws that mark in the slot at x=2
+    // The mark has one blank cell before the title.
     let (_, rows) = draw(&mut app, 120, 36);
     let row = sidebar(&rows, 27)
         .into_iter()
         .find(|l| l.contains("New session") && l.contains('◆'))
         .expect("waiting mark on the title row");
-    assert_eq!(col_of(&row, "◆"), 2);
+    assert_eq!(col_of(&row, "New session") - col_of(&row, "◆"), 2);
 }
 
 #[test]
@@ -3377,6 +3489,46 @@ fn the_new_session_view_shows_the_header_block_and_d10_sections_with_agents_md()
 }
 
 #[test]
+fn changing_effort_keeps_core_starting_context_on_screen() {
+    let dir = scratch_dir("effort");
+    let mut app = new_session_app(&dir, (120, 36));
+    let request = app.draft_request().unwrap();
+    app.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({
+            "used": 3210,
+            "window": 200000,
+            "exact": false,
+            "parts": {"instructions": 2500, "tools": 700, "instruction_file": 120},
+            "tools": ["read", "bash"],
+            "skills": [],
+            "mcp": []
+        })),
+    });
+    let (_, before) = draw(&mut app, 120, 36);
+    assert!(joined(&before).contains("3,210 tok"), "{}", joined(&before));
+
+    // Effort steers the model; it is not part of the starting context, so Core's
+    // last plan stays on screen until the new one arrives (and has the same counts).
+    app.ui.draft.effort = Some("high".into());
+    assert!(
+        app.draft_context().is_some(),
+        "effort must not invalidate the plan"
+    );
+    let (_, after) = draw(&mut app, 120, 36);
+    // The starting-context block does not move; only the effort label below it changes.
+    let context = |rows: &[String]| {
+        joined(rows)
+            .split("Message to start")
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(context(&before), context(&after));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn preview_context_headings_open_details_on_mouse_click() {
     use nexus_tui::ui::OverlayKind;
     let path = std::env::temp_dir();
@@ -3481,7 +3633,7 @@ fn new_session_preview_names_disabled_project_mcp_and_opens_its_details() {
         disabled.contains('○') && !disabled.contains('●'),
         "{disabled}"
     );
-    assert!(disabled.contains("disabled in .mcp.json"), "{disabled}");
+    assert!(disabled.contains("disabled in project MCP"), "{disabled}");
     assert!(
         !disabled.contains("new session"),
         "the preview is already the new session: {disabled}"
@@ -4004,12 +4156,10 @@ fn the_file_view_has_a_header_a_gutter_and_a_search_row() {
     assert!(!buf[(at - 2, r.y)]
         .modifier
         .contains(ratatui::style::Modifier::BOLD));
-    // the range sits at the right edge of the column
+    // the range sits at the right edge of the column, before the `e edit` hint
     let page = nexus_tui::paint::file_page(r.height);
-    assert!(
-        head.trim_end().ends_with(&format!("lines 1-{page} of 40")),
-        "{head:?}"
-    );
+    assert!(head.contains(&format!("lines 1-{page} of 40")), "{head:?}");
+    assert!(head.contains("edit"), "{head:?}");
     // the gutter: right-aligned numbers, then `\u{2502}`
     let first = rows
         .iter()
@@ -4562,8 +4712,7 @@ fn slash_sessions_opens_the_session_switcher() {
 }
 
 #[test]
-fn pressing_the_open_project_in_the_rail_opens_the_project_session_switcher() {
-    use nexus_tui::ui::{Overlay, OverlayKind, PaletteMode};
+fn pressing_the_open_project_in_the_rail_toggles_the_sidebar() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     let project_id = app.current_project().unwrap();
     let mut other = app.state.model.sessions[SESSION].clone();
@@ -4575,20 +4724,12 @@ fn pressing_the_open_project_in_the_rail_opens_the_project_session_switcher() {
     draw(&mut app, 120, 36);
     let rail = app.hits.rect_of(&Target::RailProject(0)).unwrap();
     click(&mut app, rail.x + 2, rail.y + 1);
-    assert!(
-        matches!(
-            app.ui.overlay,
-            Some(Overlay {
-                kind: OverlayKind::Palette(ref p),
-                ..
-            }) if p.mode == PaletteMode::Sessions
-        ),
-        "the open project opens the session switcher"
-    );
-    assert!(!app.ui.scope_all, "the switcher opens in project scope");
-    let labels: Vec<String> = app.palette_items().into_iter().map(|i| i.label).collect();
-    assert!(labels.iter().any(|l| l == "New session"), "{labels:?}");
-    assert!(!labels.iter().any(|l| l == "Elsewhere"), "{labels:?}");
+    assert!(app.ui.left_open);
+    assert!(app.ui.overlay.is_none());
+    assert!(!app.ui.scope_all);
+    draw(&mut app, 120, 36);
+    click(&mut app, rail.x + 2, rail.y + 1);
+    assert!(!app.ui.left_open);
     assert_eq!(app.current_project().as_deref(), Some(project_id.as_str()));
     assert_eq!(app.viewed_id(), Some(SESSION));
 }
@@ -4607,6 +4748,7 @@ fn project_rail_labels_activity_and_session_restoration() {
     let (buf, _) = draw(&mut app, 120, 36);
     let first = app.hits.rect_of(&Target::RailProject(0)).unwrap();
     let second = app.hits.rect_of(&Target::RailProject(1)).unwrap();
+    assert_eq!(first.y, 2, "one empty row follows the header");
     let label = |y: u16| -> String {
         (first.x + 1..first.right() - 1)
             .map(|x| buf[(x, y)].symbol().to_owned())
@@ -4616,6 +4758,10 @@ fn project_rail_labels_activity_and_session_restoration() {
     };
     assert_eq!(label(first.y + 1), "N");
     assert_eq!(label(second.y + 1), "NT");
+    assert_eq!(
+        buf[(second.x + second.width / 2, second.y + 1)].symbol(),
+        "N"
+    );
     let x = (second.x..second.right())
         .find(|x| buf[(*x, second.y + 1)].symbol() == "N")
         .unwrap();
@@ -4720,6 +4866,7 @@ fn project_rail_counters_have_colors_overflow_and_hover_details() {
             .collect()
     };
     let (left, right) = (band.x + 1, band.right() - 2);
+    assert_eq!(right - left, 2, "one cell separates the counters");
     assert_eq!(buf[(left, band.y)].symbol(), "*", "{:?}", row(band.y));
     assert_eq!(buf[(right, band.y)].symbol(), "2", "{:?}", row(band.y));
     assert_eq!(
@@ -4753,7 +4900,7 @@ fn project_rail_counters_have_colors_overflow_and_hover_details() {
     app.mouse = Some((band.x + 2, band.y + 1));
     let (buf, _) = draw(&mut app, 120, 50);
     let screen: String = buf.content.iter().map(|cell| cell.symbol()).collect();
-    for label in ["10 needs attention", "2 unread", "3 running", "4 idle"] {
+    for label in ["10 attention", "2 unread", "3 running", "4 idle"] {
         assert!(screen.contains(label), "missing {label}");
     }
     assert!(!screen.contains("means 10"));
@@ -4762,10 +4909,6 @@ fn project_rail_counters_have_colors_overflow_and_hover_details() {
         buf[(center, band.y + 1)].fg,
         app.theme.color("text.primary").unwrap()
     );
-    let (before_hover, _) = draw(&mut app, 120, 50);
-    let edge = before_hover[(band.right(), band.y)].bg;
-    assert_ne!(edge, before_hover[(band.right() - 1, band.y)].bg);
-    assert_ne!(edge, app.theme.color("surface.canvas").unwrap());
 }
 
 #[test]
@@ -4820,10 +4963,10 @@ fn the_rail_popup_sits_beside_the_rail_with_the_sidebar_open_or_closed() {
         let (_, rows) = draw(&mut app, 120, 36);
         let row = rows
             .iter()
-            .find(|row| row.contains("needs attention"))
+            .find(|row| row.contains("attention"))
             .unwrap_or_else(|| panic!("open {open}: {rows:#?}"));
-        // The rail's six cells, then the popup's two cells of padding and the count.
-        assert_eq!(col_of(row, "needs attention"), 10, "open {open}: {row:?}");
+        // The rail's five cells, then the popup's padding and the count.
+        assert_eq!(col_of(row, "attention"), 9, "open {open}: {row:?}");
     }
 }
 
@@ -4858,7 +5001,7 @@ fn project_rail_draws_a_three_cell_rule_under_a_project_without_counts() {
     for offset in 0..3 {
         assert_eq!(
             buf[(x + offset, band.y + 2)].fg,
-            app.theme.color("text.muted").unwrap()
+            app.theme.color("border.default").unwrap()
         );
     }
 }

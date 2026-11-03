@@ -10,7 +10,7 @@ yields events ([stream-events.md](stream-events.md)).
 Agent(provider, *, model, workspace, tools=DEFAULT_TOOLS, instructions=None,
       reasoning_effort=None, approve=None, max_steps=500, messages=None,
       conversation_id=None, inbox=None, steering=None, refresh=None,
-      files=None, cwd_changed=False, save_media=None, hooks=None, turn_id=None,
+      file_lock=None, cwd_changed=False, save_media=None, hooks=None, turn_id=None,
       render=None, fallback_models=None, model_ref="", retry_policy=None)
 ```
 
@@ -26,7 +26,7 @@ Agent(provider, *, model, workspace, tools=DEFAULT_TOOLS, instructions=None,
 | `max_steps` | Step limit per turn, default `MAX_STEPS = 500` |
 | `messages` | Earlier history (copied) |
 | `conversation_id` | Default is a new `uuid4().hex`; used for prompt caching and session headers |
-| `files` | The session's read observations and mutation lock, passed to tools |
+| `file_lock` | The mutation lock `edit`, `patch` and `write` hold, passed to tools |
 | `cwd_changed` | The live directory differs from the one in the frozen prompt; tools report absolute paths |
 | `inbox` | Notices to add, as a user message, before the next model call |
 | `steering` | Pending steer messages to take before the next model call |
@@ -39,7 +39,7 @@ Agent(provider, *, model, workspace, tools=DEFAULT_TOOLS, instructions=None,
 | `retry_policy` | Pre-stream retry bounds; `retry_clock`, `retry_sleep` and `retry_random` are injectable |
 
 `default_instructions` states the workspace path, today's date and the tools,
-and tells the model to read before it edits and keep answers short.
+and tells the model to keep answers short.
 
 `agent.messages` is the history (a list of `Message`). `agent.request()` builds the
 `Request` the next step would send; `provider.body(agent.request())` is the exact
@@ -79,8 +79,13 @@ attached) for `POST …/prompt`, through the same turn lifecycle.
    5. Otherwise run the calls one by one, in order: yield `ToolStart(call, args)`,
       run it, yield `ToolEnd(call, result)`.
    6. Append one `tool` message with all the results, yield `MessageAdded`.
-3. After `max_steps` steps without a final answer, yield `TurnEnd("max_steps", max_steps)`.
-   The history then ends with a tool message and no assistant reply.
+3. On the last step (`step == max_steps`, when `max_steps > 1`) the loop first adds a user notice,
+   `[Nexus notice: step limit] …`, telling the model that tools are disabled and asking for a text-only
+   summary: that the limit was reached, what was done, what remains and what to do next (opencode's
+   "maximum steps" message). The tool list is unchanged, so the provider request stays valid and cached, but any
+   call the model still makes gets an error result (`tools are disabled: the step limit …`) and is never run.
+   A turn that used the last step ends with `TurnEnd("max_steps", max_steps)`, whether the model wrote
+   its summary or called a tool anyway; the notice and the summary are ordinary history.
 
 Calls run sequentially, even when a step has several (`parallel_tool_calls` is
 sent as `false` on the wire). The next `turn()` call continues the same history.
@@ -133,8 +138,8 @@ The daemon's callback (`Runtime._approve`, see [daemon.md](daemon.md#turns))
 approves `read`, `bash_output`, `bash_kill`, `session`, `message_session`,
 `ask`, `edit`, `write`, the outer `code` call and the workspace control tools
 silently; `edit` and `write` are
-approval-free inside the session directory by fixed policy (path confinement and
-read freshness still apply). Nested code calls go through the same approval
+approval-free inside the session directory by fixed policy (path confinement
+still applies). Nested code calls go through the same approval
 callback. Permission rules (`[tools.permission]` and the agent's `permission:`, [tools.md](tools.md#permission-rules)) are checked first: a `deny` becomes an error result the model sees, an `ask` waits even in an `allow` session, and an `allow` skips the wait. For the other tools (including background `bash`) it approves when the
 session's permission is `allow` (the default for new sessions); otherwise it
 publishes `permission.asked` and waits for a client's reply. The CLI answers with `allow <tool>? [y/N]`; `--yes`
@@ -144,7 +149,7 @@ approval.
 ## Stop reasons
 
 `TurnEnd.stop` is the last `Done.stop` (`end_turn`, `max_tokens`, `other`; a final
-step has no tool calls), `max_steps`, or `blocked` when a `UserPromptSubmit` hook
+step has no tool calls), `max_steps` (the last step was used; the model was asked for a text summary first), or `blocked` when a `UserPromptSubmit` hook
 refuses the prompt before any model call (`steps` is 0). A `max_tokens` stop that also has tool
 calls continues the loop, since the tool-call check is what decides.
 

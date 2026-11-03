@@ -11,10 +11,15 @@ export type InventoryRow = {
   error?: string | null;
   tools?: number | null;
   hint?: string;
+  warnings?: string[];
 };
 
 export type SkillEntry = { name: string; description?: string; scope?: string; state?: string; locked?: boolean };
-export type McpEntry = { server: string; tools?: number | null; state?: string; locked?: boolean; error?: string | null; enabled?: boolean; scope?: string };
+export type McpEntry = {
+  server: string; tools?: number | null; state?: string; locked?: boolean;
+  error?: string | null; enabled?: boolean; scope?: string;
+  warnings?: string[];
+};
 
 export function disabledKey(kind: InventoryKind, name: string): string {
   return kind === "tool" ? name : `${kind}:${name}`;
@@ -86,6 +91,7 @@ export function sessionInventoryRows(
         tools: server.tools,
         scope: server.scope,
         error: server.state === "unavailable" ? server.error : null,
+        warnings: server.warnings,
         meta: server.state === "unavailable" ? "unavailable" : undefined,
         hint: locked ? "new session" : undefined,
       };
@@ -110,6 +116,7 @@ export function draftInventoryRows(
       on: !disabled.includes(disabledKey("mcp", server.server)),
       locked: false, tools: server.tools, scope: server.scope,
       error: server.state === "unavailable" ? server.error : null,
+      warnings: server.warnings,
       meta: server.state === "unavailable" ? "unavailable" : undefined,
     })),
   ];

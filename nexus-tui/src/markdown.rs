@@ -31,10 +31,15 @@ pub struct Palette {
     warning: Color,
     panel: Color,
     ascii: bool,
+    mono: bool,
+    /// Colours for the shared PNG raster, taken from the raw theme tokens so
+    /// the image is the same in every terminal colour tier.
+    diagram: nexus_mermaid::svg::Theme,
 }
 impl Palette {
     pub fn from_theme(theme: &Theme) -> Self {
         let color = |name| theme.color(name).unwrap_or(Color::Reset);
+        let raw = |name| theme.raw(name).unwrap_or_default().to_owned();
         Self {
             text: color("text.primary"),
             quiet: color("text.muted"),
@@ -47,6 +52,33 @@ impl Palette {
             warning: color("status.warning"),
             panel: color("surface.panel"),
             ascii: theme.opts.ascii,
+            mono: theme.mono(),
+            diagram: nexus_mermaid::svg::Theme {
+                background: raw("surface.canvas"),
+                foreground: raw("text.primary"),
+                muted: raw("text.muted"),
+                line: raw("border.strong"),
+                border: raw("border.strong"),
+                surface: raw("surface.panel"),
+                surface_alt: raw("surface.raised"),
+                accent: raw("interactive.accent"),
+                critical: raw("status.error"),
+                font: "Monaspace Argon".into(),
+                stroke: "2".into(),
+                radius: "0".into(),
+                title_weight: "700".into(),
+                series: [
+                    "agent.amber",
+                    "agent.blue",
+                    "agent.violet",
+                    "agent.green",
+                    "agent.teal",
+                    "agent.rose",
+                    "agent.sky",
+                    "agent.gold",
+                ]
+                .map(raw),
+            },
         }
     }
 
@@ -64,6 +96,28 @@ impl Palette {
         self.warning.hash(&mut h);
         self.panel.hash(&mut h);
         self.ascii.hash(&mut h);
+        self.mono.hash(&mut h);
+        let d = &self.diagram;
+        for value in [
+            &d.background,
+            &d.foreground,
+            &d.muted,
+            &d.line,
+            &d.border,
+            &d.surface,
+            &d.surface_alt,
+            &d.accent,
+            &d.critical,
+            &d.font,
+            &d.stroke,
+            &d.radius,
+            &d.title_weight,
+        ] {
+            value.hash(&mut h);
+        }
+        for value in &d.series {
+            value.hash(&mut h);
+        }
         h.finish()
     }
 }
@@ -304,12 +358,20 @@ impl<'a> Walker<'a> {
     fn fence(&mut self, body: &str, language: &str, closed: bool) {
         let index = self.fences;
         self.fences += 1;
-        if closed
-            && language == "mermaid"
-            && !self.p.ascii
-            && (self.mermaid_art(body, index) || self.mermaid_text(body, index))
-        {
-            return;
+        if closed && language == "mermaid" && !self.p.ascii {
+            // The chart types that read as rows never go through the raster;
+            // in monochrome the box-art renderer keeps them drawn instead of
+            // introducing colour an image would carry.
+            if self.mermaid_text(body, index) {
+                return;
+            }
+            if self.p.mono {
+                if self.mermaid_art(body, index) {
+                    return;
+                }
+            } else if self.mermaid_png(body, index) {
+                return;
+            }
         }
         // As in old Nexus (ratatui-markdown's code block): a rounded header with
         // the language, each code line behind a `│`, a rounded footer, with no
@@ -355,6 +417,36 @@ impl<'a> Walker<'a> {
                 fence: Some(index),
             });
         }
+        let label = Style::default().fg(self.p.quiet);
+        self.cur
+            .push(Span::styled("◇ mermaid · copy source", label));
+        let (prefix, _) = self.prefix();
+        let spans = std::mem::take(&mut self.cur);
+        self.rows.push(Row {
+            prefix,
+            spans,
+            bg: None,
+            blank: false,
+            image: None,
+            fence: Some(index),
+        });
+        true
+    }
+    /// Draw the shared PNG and reserve its rows. Both clients show the same
+    /// artifact; the terminal's image protocol (or half blocks) only decides
+    /// how it is painted.
+    fn mermaid_png(&mut self, body: &str, index: usize) -> bool {
+        let avail = self.width.saturating_sub(self.quote * 2 + self.indent());
+        let Some((data_url, columns, rows)) = diagram_cached(body, self.p, avail) else {
+            return false;
+        };
+        let (prefix, _) = self.prefix();
+        self.rows.push(Row {
+            prefix,
+            image: Some((data_url, columns, rows)),
+            fence: Some(index),
+            ..Default::default()
+        });
         let label = Style::default().fg(self.p.quiet);
         self.cur
             .push(Span::styled("◇ mermaid · copy source", label));
@@ -605,7 +697,7 @@ thread_local! {
 
 /// Lay a mermaid diagram out once per `(source, palette, width)`, so
 /// scrolling and re-wrapping do not repeat the layout.
-fn mermaid_cached(body: &str, p: &Palette, width: usize) -> Option<Art> {
+pub(crate) fn mermaid_cached(body: &str, p: &Palette, width: usize) -> Option<Art> {
     let mut hasher = DefaultHasher::new();
     body.hash(&mut hasher);
     [p.text, p.border_strong, p.quiet, p.muted].hash(&mut hasher);
@@ -634,6 +726,62 @@ fn mermaid_cached(body: &str, p: &Palette, width: usize) -> Option<Art> {
         cache.insert(key, art.clone());
     });
     art
+}
+
+/// The cell size the raster is laid out for. `ratatui-image` fits the image
+/// into the reserved cells, so the logical size keeps the same aspect.
+const DIAGRAM_CELL_W: u32 = 10;
+const DIAGRAM_CELL_H: u32 = 20;
+const DIAGRAM_CACHE_LIMIT: usize = 64;
+type Diagram = (String, usize, usize);
+
+thread_local! {
+    // (source + palette hash, available columns) -> PNG data URL and its cell
+    // size, or None when the diagram cannot be drawn there.
+    static DIAGRAM_CACHE: RefCell<HashMap<(u64, usize), Option<Diagram>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Rasterize a diagram once per `(source, palette, width)`. The PNG is the
+/// shared artifact NSH shows too; only the terminal's image protocol differs.
+fn diagram_cached(body: &str, p: &Palette, width: usize) -> Option<Diagram> {
+    let columns = width.clamp(8, 200);
+    let mut hasher = DefaultHasher::new();
+    body.hash(&mut hasher);
+    p.fingerprint().hash(&mut hasher);
+    let key = (hasher.finish(), columns);
+    if let Some(hit) = DIAGRAM_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let pixel_width = (columns as u32 * DIAGRAM_CELL_W).clamp(16, 4096);
+    // `render_png` compiles and validates the source; a text-only pre-check
+    // here would make a label-less diagram fall back in the TUI but draw in
+    // NSH. Both clients call the shared raster directly.
+    let raster = nexus_mermaid::raster::render_png(
+        body,
+        &p.diagram,
+        &nexus_mermaid::raster::RasterOptions {
+            width: pixel_width,
+            max_height: (columns as u32 * DIAGRAM_CELL_H * 2).clamp(16, 4096),
+            min_scale: 0.5,
+        },
+    )
+    .ok()
+    .and_then(|raster| {
+        let image = crate::images::Image::from_png("mermaid diagram".into(), &raster.png).ok()?;
+        let columns =
+            ((raster.css_width / f64::from(DIAGRAM_CELL_W)).ceil() as usize).clamp(1, 200);
+        let rows = ((raster.css_height / f64::from(DIAGRAM_CELL_H)).ceil() as usize).clamp(1, 200);
+        Some((image.data_url, columns, rows))
+    });
+    DIAGRAM_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() >= DIAGRAM_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, raster.clone());
+    });
+    raster
 }
 
 /// Whether the fenced block spanning `block` (opening through closing line)

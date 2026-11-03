@@ -439,6 +439,12 @@ impl LayoutCache {
                 lines.push(ratatui::text::Line::default());
                 continue;
             }
+            if let Some((_, _, rows)) = row.image {
+                for _ in 0..rows {
+                    lines.push(ratatui::text::Line::default());
+                }
+                continue;
+            }
             let prefix_width: usize = row
                 .prefix
                 .iter()
@@ -649,6 +655,13 @@ fn is_diagnostic(e: &crate::api::Event) -> bool {
             | "session.notified"
     ) || (matches!(e.kind.as_str(), "permission.replied" | "question.replied")
         && e.data["outcome"].as_str() == Some("cancelled"))
+        || is_manager_reply(e)
+}
+
+/// An approval or a question the Manager answered on the user's words.
+fn is_manager_reply(e: &crate::api::Event) -> bool {
+    matches!(e.kind.as_str(), "permission.replied" | "question.replied")
+        && e.data["origin"].as_str() == Some("manager")
 }
 
 /// Format a stored timestamp in the terminal's local timezone.
@@ -805,11 +818,16 @@ pub(crate) fn handoff_parts(text: &str) -> (String, String) {
 
 /// Delivery labels distinguish steering from the start of a queued turn.
 fn user_tags(message: &crate::api::Message) -> Vec<&'static str> {
-    match message.delivery.as_deref() {
+    let mut tags = match message.delivery.as_deref() {
         Some("steer") => vec!["steer"],
         Some("queued") => vec!["queued"],
         _ => vec![],
+    };
+    // A message the Manager sent on the user's words says so (MANAGER_PLAN.md 9).
+    if message.origin.as_deref() == Some("manager") {
+        tags.push("via Manager");
     }
+    tags
 }
 
 /// How a turn ended.
@@ -1259,28 +1277,30 @@ impl Builder<'_> {
         }
         let tail = 2 * view.messages.len() + 2;
         for (i, e) in view.scratch.iter().enumerate() {
-            if matches!(
-                e.kind.as_str(),
-                "message.added"
-                    | "step_start"
-                    | "session.status"
-                    | "session.updated"
-                    | "session.created"
-                    | "session.archived"
-                    | "session.unarchived"
-                    | "project.updated"
-                    | "project.created"
-                    | "permission.asked"
-                    | "permission.replied"
-                    | "question.asked"
-                    | "question.replied"
-                    | "usage"
-                    | "turn_end"
-                    | "tool_start"
-                    | "tool_end"
-                    | "wire_request"
-                    | "done"
-            ) {
+            if !is_manager_reply(e)
+                && matches!(
+                    e.kind.as_str(),
+                    "message.added"
+                        | "step_start"
+                        | "session.status"
+                        | "session.updated"
+                        | "session.created"
+                        | "session.archived"
+                        | "session.unarchived"
+                        | "project.updated"
+                        | "project.created"
+                        | "permission.asked"
+                        | "permission.replied"
+                        | "question.asked"
+                        | "question.replied"
+                        | "usage"
+                        | "turn_end"
+                        | "tool_start"
+                        | "tool_end"
+                        | "wire_request"
+                        | "done"
+                )
+            {
                 continue;
             }
             items.push((e.id, tail + i, 0, Item::Ev(e)));
@@ -3604,6 +3624,24 @@ impl Builder<'_> {
                 None,
                 "info",
             ),
+            // The Manager answered on the user's words: say so, with the words it heard.
+            "permission.replied" | "question.replied"
+                if d["origin"].as_str() == Some("manager") =>
+            {
+                let what = match (e.kind.as_str(), d["outcome"].as_str()) {
+                    ("permission.replied", Some("allowed")) => "approved",
+                    ("permission.replied", _) => "denied",
+                    (_, Some("answered")) => "answered",
+                    _ => "cancelled",
+                };
+                (
+                    format!("{what} via Manager"),
+                    d["heard"]
+                        .as_str()
+                        .map(|h| format!("heard \u{201c}{h}\u{201d}")),
+                    "info",
+                )
+            }
             "permission.replied" if d["outcome"].as_str() == Some("cancelled") => {
                 ("approval cancelled: interrupted".into(), None, "warning")
             }
@@ -3709,6 +3747,7 @@ impl Builder<'_> {
         let sources = crate::markdown::fence_sources(full_text);
         let mut fences: std::collections::BTreeMap<usize, (usize, usize)> =
             std::collections::BTreeMap::new();
+        let mut has_image = false;
         let rows = crate::markdown::lines(text, &palette, self.bw);
         if rows.is_empty() && !text.trim().is_empty() {
             self.legacy_markdown(text);
@@ -3718,6 +3757,36 @@ impl Builder<'_> {
             let row_start = self.out.len();
             if row.blank {
                 self.blank();
+                continue;
+            }
+            if let Some((data_url, columns, rows)) = row.image {
+                let start = self.out.len();
+                for _ in 0..rows {
+                    self.blank();
+                }
+                if let Some(index) = row.fence {
+                    let range = fences.entry(index).or_insert((start, self.out.len()));
+                    range.1 = self.out.len();
+                }
+                let prefix_width: usize = row
+                    .prefix
+                    .iter()
+                    .map(|span| crate::text::width(&span.content))
+                    .sum();
+                let key = row.fence.map_or_else(
+                    || format!("mermaid:{parent_key}:{}", self.out.len()),
+                    |index| format!("mermaid:{parent_key}:{index}"),
+                );
+                self.previews.push(crate::images::Preview {
+                    start,
+                    column: prefix_width,
+                    width: columns.min(self.bw),
+                    rows,
+                    key,
+                    name: "mermaid diagram".into(),
+                    data_url,
+                });
+                has_image = true;
                 continue;
             }
             let prefix_width: usize = row
@@ -3762,7 +3831,7 @@ impl Builder<'_> {
                 });
             }
         }
-        if cache && self.out.len() > start {
+        if cache && !has_image && self.out.len() > start {
             let entry =
                 CachedMarkdown::capture(&self.out[start..], &self.blocks[blocks_start..], start);
             self.app.layout.borrow_mut().put_markdown(key, entry);

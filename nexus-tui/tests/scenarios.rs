@@ -6,7 +6,7 @@ use common::*;
 use nexus_tui::api::{History, Message};
 use nexus_tui::app::App;
 use nexus_tui::sync::SyncMsg;
-use nexus_tui::theme::{Mode, Tier};
+use nexus_tui::theme::{Mode, Options, Theme, Tier};
 use serde_json::Value;
 
 fn open(data: &str) -> (Value, App) {
@@ -70,4 +70,33 @@ fn collapsed_paste() {
     for fact in strings(&scenario["absent"]) {
         assert!(!shown.contains(fact), "unexpected {fact:?} in:\n{shown}");
     }
+}
+
+#[test]
+fn mermaid() {
+    let (scenario, mut app) = open(include_str!("../../interface/scenarios/mermaid.json"));
+    let shown = draw(&mut app, 200, 120).1.join("\n");
+    for fact in strings(&scenario["expect"]) {
+        assert!(shown.contains(fact), "missing {fact:?} in:\n{shown}");
+    }
+    for fact in strings(&scenario["absent"]) {
+        assert!(!shown.contains(fact), "unexpected {fact:?} in:\n{shown}");
+    }
+    // The flowchart is the shared PNG; the pie is the shared text renderer.
+    let text = scenario["messages"][1]["parts"][0]["text"]
+        .as_str()
+        .unwrap();
+    let palette = nexus_tui::markdown::Palette::from_theme(&Theme::new(Options::default()));
+    let rows = nexus_tui::markdown::lines(text, &palette, 80);
+    assert!(
+        rows.iter().any(|row| row.image.is_some()),
+        "the flowchart did not reserve an image row"
+    );
+    assert!(
+        rows.iter().any(|row| row
+            .spans
+            .iter()
+            .any(|span| span.content.contains("Traffic"))),
+        "the pie did not fall back to text rows"
+    );
 }

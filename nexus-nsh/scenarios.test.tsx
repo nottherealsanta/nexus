@@ -2,6 +2,7 @@
 import { describe, expect, open, test } from "nsh/test";
 import activityGroup from "../interface/scenarios/activity-group.json";
 import collapsedPaste from "../interface/scenarios/collapsed-paste.json";
+import mermaid from "../interface/scenarios/mermaid.json";
 
 const session = {
   id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Scenario", model: "", permission: "ask",
@@ -55,5 +56,20 @@ describe("shared scenarios", () => {
     const timeline = app.texts().filter((t) => !t.includes("Disconnected") && !t.includes("event stream closed")).join("\n");
     for (const fact of scenario.expect) expect(timeline).toContain(fact);
     for (const fact of scenario.absent) expect(timeline.includes(fact)).toBe(false);
+  });
+
+  test("mermaid", async () => {
+    const scenario = mermaid;
+    const app = await open("./App.tsx", { network: network(scenario.messages), width: 1280, height: 900, platform: "web" });
+    await app.waitFor("id:session-ses_1");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:msg-user");
+    // The flowchart is the shared PNG; the pie is the shared text renderer.
+    await app.waitFor("id:mermaid-diagram");
+    await app.waitFor("id:mermaid-text");
+    const timeline = app.texts().filter((t) => !t.includes("Disconnected") && !t.includes("event stream closed")).join("\n");
+    for (const fact of scenario.expect) expect(timeline).toContain(fact);
+    for (const fact of scenario.absent) expect(timeline.includes(fact)).toBe(false);
+    await app.press("id:mermaid-copy >> nth=0");
   });
 });

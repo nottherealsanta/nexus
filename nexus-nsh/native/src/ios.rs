@@ -5,14 +5,13 @@ use std::sync::Mutex;
 
 use block2::RcBlock;
 use nsh_core::prelude::*;
-use objc2::runtime::{AnyObject, Bool};
 use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, Bool};
 use objc2::AnyThread;
 use objc2_avf_audio::{
-    AVAudioRecorder, AVAudioSession, AVAudioSessionCategoryRecord,
-    AVAudioSessionRecordPermission, AVFormatIDKey, AVLinearPCMBitDepthKey,
-    AVLinearPCMIsBigEndianKey, AVLinearPCMIsFloatKey, AVNumberOfChannelsKey,
-    AVSampleRateKey,
+    AVAudioRecorder, AVAudioSession, AVAudioSessionCategoryRecord, AVAudioSessionRecordPermission,
+    AVFormatIDKey, AVLinearPCMBitDepthKey, AVLinearPCMIsBigEndianKey, AVLinearPCMIsFloatKey,
+    AVNumberOfChannelsKey, AVSampleRateKey,
 };
 use objc2_core_audio_types::kAudioFormatLinearPCM;
 use objc2_foundation::{
@@ -88,7 +87,11 @@ impl Microphone {
             return Err("The microphone could not start recording".into());
         }
 
-        *ACTIVE.lock().unwrap() = Some(Active { recorder, url, path });
+        *ACTIVE.lock().unwrap() = Some(Active {
+            recorder,
+            url,
+            path,
+        });
         Ok(())
     }
 
@@ -103,8 +106,8 @@ impl Microphone {
         unsafe { active.recorder.stop() };
         end_session();
 
-        let data = NSData::dataWithContentsOfURL(&active.url)
-            .ok_or("The recording could not be read")?;
+        let data =
+            NSData::dataWithContentsOfURL(&active.url).ok_or("The recording could not be read")?;
         let bytes = data.to_vec();
         let _ = std::fs::remove_file(&active.path);
         if bytes.len() <= 44 {
@@ -200,8 +203,14 @@ fn recording_settings() -> Retained<NSDictionary<NSString, AnyObject>> {
     .flatten()
     .collect();
 
-    let values: Vec<Retained<AnyObject>> =
-        vec![format.into(), rate.into(), channels.into(), depth.into(), float.into(), big_endian.into()];
+    let values: Vec<Retained<AnyObject>> = vec![
+        format.into(),
+        rate.into(),
+        channels.into(),
+        depth.into(),
+        float.into(),
+        big_endian.into(),
+    ];
     let values: Vec<&AnyObject> = values.iter().map(|value| &**value).collect();
     NSDictionary::from_slices(&keys, &values)
 }

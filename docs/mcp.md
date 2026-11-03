@@ -6,15 +6,15 @@ two proxy tools (`mcp_tool_search`, `mcp_call`). Code:
 
 - **Global** servers are the user's configuration in `~/.nexus/config.toml`
   as `[mcp.servers.<name>]`. They need no approval.
-- **Project** servers are `<project>/.mcp.json`. They are trusted configuration:
-  every enabled, valid entry starts with a new session in that project, with no
-  approval prompt.
+- **Project** servers are `<project>/.mcp.json` and `<project>/.agents/mcp.json`.
+  They are trusted configuration: every enabled, valid entry starts with a new
+  session in that project, with no approval prompt.
 
-> **Warning: `<project>/.mcp.json` is arbitrary code.** Opening a project does
-> not run it, but starting a session in that project starts each enabled server
-> it names (a stdio `command` and its arguments), with the user's permissions and
-> no sandbox. A committed `.mcp.json` may come from someone else, and a project
-> directory is not a security boundary. Read the file before starting a session
+> **Warning: the project MCP files are arbitrary code.** Opening a project does
+> not run them, but starting a session in that project starts each enabled server
+> they name (a stdio `command` and its arguments), with the user's permissions and
+> no sandbox. A committed file may come from someone else, and a project
+> directory is not a security boundary. Read the files before starting a session
 > in an untrusted project. Disabling an entry (`"enabled": false` or
 > `"disabled": true`) is the only way to keep it from starting.
 
@@ -63,20 +63,22 @@ Verified 2026-10-29 against the pinned version: 16 tools discovered, and
 
 ## Project servers
 
-Only `<project>/.mcp.json` is read: the file at the project record's path, not
-`.agents/mcp.json`, not a nested file, and not the directory a session has moved
-to. Nexus does not merge it with the global table. A worktree session still uses
-its project's `.mcp.json`, and a stdio entry's default working directory is the
-project path (not the session's current directory).
+Two files are read, at the project record's path: `<project>/.mcp.json` (the
+MCP project-file convention) and `<project>/.agents/mcp.json` (Nexus's project
+agent-config folder, alongside `.agents/agents`, `.agents/skills` and
+`.agents/tools`). A nested file and the directory a session has moved to are not
+read. Nexus does not merge either file with the global table. A worktree session
+still uses its project's files, and a stdio entry's default working directory is
+the project path (not the session's current directory).
 
-The file accepts the same server maps and entry dialects as
+Both files accept the same server maps and entry dialects as
 `nexus config import-mcp` (`mcpServers`, `servers`, `mcp`, `context_servers`) and
-is deliberately strict because a repository may be committed by someone else:
+are deliberately strict because a repository may be committed by someone else:
 
-- It must be a UTF-8 JSON object in a regular file of at most 256 KiB. A symlink
+- Each file must be a UTF-8 JSON object in a regular file of at most 256 KiB. A symlink
   is refused. Duplicate keys, `NaN`/`Infinity`, comments and trailing commas are
   not accepted.
-- Unknown top-level keys produce a warning. A wrapper that is not an object, or
+- Unknown top-level keys produce a warning naming the file. A wrapper that is not an object, or
   a server name defined in more than one wrapper, makes the whole file invalid,
   and nothing in it loads.
 - An unusable entry (unknown key, bad timeout, missing command and URL, and so
@@ -92,13 +94,18 @@ is deliberately strict because a repository may be committed by someone else:
   that enabled project entry is the one a session starts. If the global entry is
   enabled later, the project entry becomes invalid at the next read (see
   [Changes and invalidation](#changes-and-invalidation)).
+- A name defined in both files is a duplicate. `<project>/.mcp.json` wins, and
+  the ignored `.agents/mcp.json` definition is reported as a warning in
+  `GET /api/project/{id}/mcp` (top-level `duplicates`, and `warnings`/`duplicate`
+  on the server row). The clients show it when the MCP details are opened. A
+  file-level error applies only to that file; the other file's servers still load.
 
 Each project has its own manager, connections and stderr logs. The same name in
 two projects is isolated: starting it in one does not start or reuse it in the
 other. A session sees the global scope plus its own project's enabled entries
 only; a child inherits the servers its parent's session started with.
 
-The file is read when that project's MCP state is used (an API read, session
+The files are read when that project's MCP state is used (an API read, session
 creation or planning, a search or call, or a session snapshot), not by a file
 watcher. A change is therefore noticed at the next use.
 
@@ -167,7 +174,7 @@ Reading a changed file publishes `mcp.changed` with its `file`.
   sessions keep what they started with; `mcp.changed` lets clients say
   "available in new sessions".
 - **Project edits apply to new sessions.** A changed, removed or invalid
-  `.mcp.json` entry closes its old connection at the next read, as described
+  project-file entry closes its old connection at the next read, as described
   above. A new session starts the current definition; a running session keeps
   its frozen list. Project servers never fall back to an old command.
 - **A dead server never fails a turn.** A call to it returns an error result and
@@ -258,15 +265,17 @@ images ([llm-providers.md](llm-providers.md#tool-result-media)).
 | `GET /api/mcp` | global scope: `{servers: [{server, state, error, tools, transport, enabled, …}]}`; `state` is `idle`, `connecting`, `connected`, `failed`, `disabled` or `invalid`. Never connects; shows no argument, env or header values |
 | `GET /api/mcp/{name}` | the same plus `tool_names` (known once connected) and `log` |
 | `POST /api/mcp/{name}/restart` | closes and reconnects; returns the row |
-| `GET /api/project/{id}/mcp` | project scope: `{project_id, file, exists, revision, error, warnings, servers: [rows]}`. Never starts a server; reads the file and may close a changed or removed connection |
+| `GET /api/project/{id}/mcp` | project scope: `{project_id, file, exists, revision, error, warnings, servers: [rows], files, duplicates}`. Never starts a server; reads the files and may close a changed or removed connection |
 | `GET /api/project/{id}/mcp/{name}` | one project row plus `tool_names` and `log`; never starts a server |
 | `POST /api/project/{id}/mcp/{name}/restart` | close and reconnect a project server |
 
-A project row also has `source: "project"`, `project_id`, `file`, `warnings`,
-and the non-secret facts from `config.describe()` (`transport`, `enabled`,
-command basename and argument count or a credential-free URL, env/header names).
-`state` is `idle`, `connecting`, `connected`, `failed`, `disabled` or `invalid`;
-a file error is the special server `(file)` with `state: "invalid"`.
+A project row also has `source: "project"`, `project_id`, `file` (the winning
+file), `warnings`, and the non-secret facts from `config.describe()`
+(`transport`, `enabled`, command basename and argument count or a
+credential-free URL, env/header names). A duplicated name also carries
+`duplicate: {server, used, ignored}`. `state` is `idle`, `connecting`,
+`connected`, `failed`, `disabled` or `invalid`; a file error is the special
+server `(file)` with `state: "invalid"`.
 
 Events are global, live only. Project-scope MCP events also carry `project_id`
 and `scope: "project"`:

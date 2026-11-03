@@ -19,30 +19,31 @@ control row shows the agent in its colour, the catalog model name (or a pending
 model change), provider, effort, and on the right the `╱` meter with
 `82.0K · 41%`, explained on hover.
 The first row is a band on the chrome surface (`surface.sidebar`, shared
-with both sidebars; no rules between them, a `│` edge only in ANSI-16 and
-mono). It holds the left toggle over the project rail, the Sessions / Files icons over the
-left sidebar (the drawer's first row when narrow; hovering shows the label), the
+with both sidebars). It holds the centred left toggle over the project rail, the
+`[Sessions]` / `[Files]` tabs over the left sidebar, aligned with session titles (the drawer's first row when narrow), the
 session tabs, the waiting status at the centre's right edge, the notification
 count and the right toggle. Sidebars are 34 / 36 cells from 160 columns and 28 / 30
-below. `paint::scrim` dims a buffer under a modal (see the modal recipe below). The
-project rail is always there, from 70 columns, whether the sidebar is open or not.
+below. `paint::scrim` dims a buffer under a modal (see the modal recipe below). Every surface is a
+rectangle on the cell grid; the TUI has no rounded corners, and only circular status marks and
+meters are round. The project rail is five cells wide and always there, from 70 columns, whether
+the sidebar is open or not; a border separates it from the open sidebar.
 Projects keep creation order with uppercase initials; collisions use the next
-available consonant, then a numeric suffix. Running or recently active projects
+available consonant, then a numeric suffix; the first character stays centred. The rail has one empty row above its projects. Running or recently active projects
 (within one hour) are lighter gray. Each tile has a counter in each corner:
 attention (purple) and unread (blue) on top, running (green) and idle (white) below,
 counting root sessions, with archived sessions left out and subagents counted under
 their root. Counts above nine display `*`, and a project with no counts shows a
-three-cell muted rule. Hovering shows the full project name and `N needs attention`, `N unread`, `N running` and `N idle` right beside the rail, over the sidebar when it is open. A `+`
+three-cell muted rule. Hovering shows the full project name and `N attention`, `N unread`, `N running` and `N idle` right beside the rail, over the sidebar when it is open. A `+`
 ends the list and adds a project; Settings sits at the rail's foot while the sidebar
 is closed. A right-click opens the project's actions. Activating a project restores
 its open tabs and last selected session or new-session view in this client; pressing
-the project already open opens the session switcher scoped to it. On first
+the project already open toggles its Sessions sidebar. On first
 selection it falls back to its newest unarchived root session or an empty new-session
 view. New-session composer text and images are kept separately per project, for the
 client process. The left sidebar (D03) lists the current project only (`ctrl+k` opens
 the switcher): `⌥ branch  ~/…/dir`
 sub-groups for linked worktrees, and two-line rows (mark slot, title, time;
-`⌥ branch`, `2 ↳`) ending with `+ New session`; `Settings` is pinned at the bottom.
+`⌥ branch`, `2 ↳`) ending with `+ New session`, whose label starts on the session titles' text edge; `Settings` is pinned at the bottom.
 Drag its inner edge to resize it (20–60 columns); dragging below 14 columns closes it.
 Settings → Sidebar switches full / rail. The project
 strip under the card shows the project name (bold), its path (muted),
@@ -57,7 +58,7 @@ drawn only in ANSI-16 and mono. Pending inputs appear in a padded card above the
 composer; their text starts where the input starts, with a highlighted `Q` for a
 queued message or `S` for a steer one cell to its left. A held queue says `held`
 after the message.
-The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`): the viewed tab is bold on the page surface, the others muted on the band, a child session shows `root › child` with clickable earlier crumbs. `alt+d`
+The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`) in one fixed-width cell for every tab, root or New session, so the strip keeps its rhythm and a long title ellipsises; the viewed tab is bold on the page surface, the others muted on the band. A viewed child's strip under the header shows its path as equal parent tabs, a rail, then the root's other sessions as equal tabs with state glyph and agent, the viewed child selected. `alt+d`
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high
 (every tool expanded, long output capped). Drag the left sidebar's edge to resize it.
@@ -75,8 +76,10 @@ counts the prompt and the tool schemas only. Previews clip with `…`. After the
 whole section folds to `▸ Context · 4 items · ~2.9k tokens`. The new-session view shows the same
 sections under a header block (`New session in <project>`, agent, model, effort, directory and
 branch, then the `Tab`/`ctrl+m`/`ctrl+e`/`ctrl+d` hints); it loads project skills, the global MCP
-list and the project's actual `.mcp.json` inventory from Core (enabled, disabled, failed and
-invalid entries, including a whole-file `(file)` error row; read without starting a server) and
+list and the project's actual MCP-file inventory from Core (`.mcp.json` and `.agents/mcp.json`;
+enabled, disabled, failed and invalid entries, including a whole-file `(file)` error row; read
+without starting a server). A name defined in both files shows the duplicate notice on the
+server's details, naming the winning file, and the section meta says `.mcp.json` wins. The TUI
 sends draft switches with session creation. Only servers in Core's draft plan count as model
 context; a project row wins over a same-named global row, so a disabled global default never
 hides the project's enabled entry. Enabled, valid project entries start automatically with the
@@ -102,9 +105,10 @@ an installed skill replaces it. Successful installs are available in new session
 MCP controls whether all tool definitions go into context and the 1–1000 name-listing limit.
 
 Every overlay (palette and pickers, Settings, confirms, help, notifications) is one
-modal recipe (`render.rs` `modal`, DESIGN_PLAN D13): the scrim over the whole frame, then
+square modal recipe (`render.rs` `modal`, DESIGN_PLAN D13): the scrim over the whole frame, then
 a borderless `surface.raised` block, 2 cells of padding left and right and 1 row top and
-bottom, within 2 cells of the frame edge and at most 70% of its height. The title is the
+bottom, within 2 cells of the frame edge and at most 70% of its height. NSH draws the same
+square recipe and the same two-pane Settings, with no rounded corners. The title is the
 first row inside with `esc` on the right, key hints the last row, the selected row is on
 the selection band with the `▌` focus bar. Confirms default to `[ Cancel ]`; `[ Delete ]`
 is in `status.error`. The `.` row menu stays an unscrimmed popover beside its row.
@@ -116,18 +120,22 @@ leaves the rail, ←/→ changes a value, Tab swaps panes and Esc steps back to 
 rail and then closes. Typing filters both the rail and the rows. Rows that
 cannot be changed are not shipped rather than shown disabled.
 `/login` opens Providers. Providers: Enter opens that provider's detail modal;
-its connection actions live there, and a device link and code are their own
-rows, so Enter opens the link (the URL is underlined) and Enter on the code
-copies it. Agents: the default agent and effort, then one line per
+its connection actions live there, one row per method Core lists (`Sign in with
+browser`, `Sign in with a device code`, the provider's CLI or local server). A
+sign-in link and code are their own rows, so Enter opens the link (the URL is
+underlined) and Enter on the code copies it. Agents: the default agent and effort, then one line per
 subagent; Enter opens its pane with its Models (and their odds) and Fallbacks,
-where Enter on `+ add …` picks a model, `d` removes one and `K`/`J` move a
-fallback. Tools shows one permission choice and one tool grid; ←/→ choose a tool
+where Enter on `+ add …` picks a model, `d` removes one, `K`/`J` move a
+fallback and ←/→ on a model step its effort (`effort default`, then the levels the
+catalog lists for it; a model with none listed shows no effort). Tools shows one permission choice and one tool grid; ←/→ choose a tool
 and Enter toggles it.
 Consecutive diagnostics (a provider retry sequence) form one tight stack with
 delays rounded to tenths.
 
 The timeline is complete for one session: turn headers and footers, folding,
-collapsed reasoning, old-Nexus CommonMark text (supported Mermaid diagrams show a clickable label to copy their source; unsupported diagrams show the source), tool-specific expansion (diffs, output
+collapsed reasoning, old-Nexus CommonMark text (supported Mermaid diagrams draw
+as shared text rows or the shared PNG, with a clickable label to copy their
+source; unsupported diagrams show the source), tool-specific expansion (diffs, output
 caps, raw arguments/results), child cards, context notices, diagnostics, and the
 frozen starting-context section. Selecting a session loads its stored history
 in the background while the event stream stays open: the newest messages, the
@@ -191,7 +199,10 @@ footer in `text.muted`, each code line behind a muted `│ ` and drawn in
 (a click copies the source). Lists use `•` and `◦`; block quotes sit behind a
 `│` in `border.strong` with `text.secondary` text; links are `status.info` and
 underlined, followed by `(url)` unless the target is a file path; task items
-show `[✓]` (success) or `[ ]`. Mermaid is unchanged. Not done yet: OSC 8
+show `[✓]` (success) or `[ ]`. Mermaid uses the shared `nexus-mermaid` renderer: pie/Gantt/timeline
+as text rows, other diagrams as the shared PNG through the terminal image protocol (half blocks
+where none is available), and the source as the fallback. The box-art renderer stays here for
+monochrome. Not done yet: OSC 8
 hyperlinks (the buffer has no cell for escape sequences) and `path:line` links
 that open the file view.
 
@@ -305,7 +316,9 @@ colour, the fold marker inside, `#n · time` at the right, `copy` on hover or
 focus; only its left edge folds it, and a click on the text just selects). When
 its text has scrolled off the top, `sticky.rs` pins a copy under
 the header (three rows at most, a `░` shade row with `↑ N lines of this turn
-above`); the next band pushes it up and a click scrolls back. The turn footer is
+above`); the next band pushes it up and a click scrolls back. The timeline keeps one
+scroll per session and adopts it after a sync-driven selection, so a root's pinned
+band never appears over a child. The turn footer is
 the right-aligned `▪ Agent · models · effort · tools · duration · tokens · cost`
 row with no end status or continue hint: a failed turn puts its first error line
 (`✕`) above, and the usage units (`i`, `o`, `r`, `c`) are fainter than their
@@ -399,11 +412,11 @@ the release build; `--bench ... --replay`
 measures it without a Core or PTY (results in
 [../TUI_PERFORMANCE_PLAN.md](../TUI_PERFORMANCE_PLAN.md)).
 
-Session rows in the left sidebar (D03) have two lines. Line 1 is the mark slot at
-x=2 (waiting `◆`, error `✕`, running spinner, unread `●`, in that order of
-precedence), the title at x=4 (bold when open, ending in `…` when clipped) and the
+Session rows in the left sidebar (D03) have two lines. Line 1 has a mark slot
+(waiting `◆`, error `✕`, running spinner, unread `●`, in that order of
+precedence), a space, the title (bold when open, ending in `…` when clipped) and the
 time of last activity right-aligned (`now`, `3m`, `4d`). Line 2 is the agent in its
-colour, `·` and `⌥ branch` muted, with the child count (`2 ↳`) right-aligned. The
+colour, `·` and `⌥ branch` muted, with the descendant-session count (`2 ↳`) right-aligned. The
 open session has the selection band on both lines; focus draws `▌` at x=0 on both.
 The title or branch is truncated first, and on a very narrow sidebar the time or
 count is dropped. The `.`/`m` row menu is a raised popover beside the row (Delete in
@@ -434,7 +447,8 @@ Environment:
 | `NEXUS_TUI_NO_START` | If set, never start Core; report offline instead. |
 
 Dependencies are pinned to exact versions in `Cargo.toml` (`=x.y.z`) and
-`Cargo.lock` is checked in. Rust 1.85+.
+`Cargo.lock` is checked in. Rust 1.97+: the shared `nexus-mermaid` crate's
+`raster` feature is enabled here, and Ondine's compiler requires 1.97.
 
 Try it against a real isolated Core:
 
@@ -533,6 +547,17 @@ shapes from the docs.
   its watermark. Gaps in ids are never treated as loss.
 - **Restart.** Every reconnect rereads `daemon.json` and `/api/info`; a different
   pid or token forces a full snapshot (`ResyncCause::DaemonRestarted`).
+- **View reporting.** Each `/api/event` connection carries its own ephemeral
+  `stream_id` on `server.connected`. When the selected project, session or panel
+  changes, and again after every reconnect, the supervisor sends
+  `POST /api/client/view` with that id, a per-process `client_id` and the view:
+  project and session ids plus a panel label (`files`, `file` or `diff`; none
+  otherwise). It never sends paths, drafts, scroll position or screen contents.
+  One report runs at a time in a background task, so event consumption never
+  waits for it and a later view always supersedes an earlier one. A transient
+  failure is quiet and retried after 1–30 s; a real view change sends at once.
+  The stream id is a capability and is never logged, shown or printed by
+  `Debug`; `stream_closed` drops the id and `client_mismatch` reopens the stream.
 - **States.** `Starting`, `Connecting`, `Live`, `Reconnecting`, `Offline`,
   `AuthFailed` (401; waits for a new token), `Incompatible`. Anything but `Live`
   is read-only: the last model stays visible.
@@ -655,21 +680,27 @@ TUI can be driven by hand in a browser.
   `xclip`; SSH clipboard reads are refused). Pasting inserts `[Image A]`,
   `[Image B]`, … at the cursor. The composer shows a square thumbnail for each
   attachment above its input, with the muted name above the thumbnail; deleting
-  a marker removes its attachment. Up to eight images, 8 MiB combined; image-only
+  a marker removes its attachment. Clicking a thumbnail opens the drawing modal:
+  drag to draw, `1`-`4` or the swatches pick a colour, `u` undoes, `x` clears, `enter`
+  or Done merges the marks into the image through `nexus-annotate`, and `esc` cancels.
+  Only the marked-up image is sent. Ghostty run directly gets pixel-precise, live
+  strokes (SGR 1016 mouse, kitty graphics tiles; `src/annotate.rs`). Elsewhere, and
+  under a multiplexer, the pen follows cells and the picture redraws when a stroke ends. Up to eight images, 8 MiB combined; image-only
   sends work and a failed send restores the images. In the timeline the
   `[Image A]` marker stays ordinary message text (no accent colour) and the
   generated attachment labels are not repeated after the text. Attachments sit side by side above the message in bordered square thumbnails with their
   muted names above them; the sticky user header never shows them. Clicking a
   thumbnail opens a full-size preview (`ratatui-image`: kitty, iTerm2 or sixel
   where the terminal supports it, half-blocks otherwise).
-- A large text paste (at least 200 characters or three lines) collapses into one
+- A large text paste (at least 500 characters, regardless of line count) collapses into one
   `[Pasted ~N tokens]` marker at the cursor, as in the old editor; pasting the
-  same text again expands the marker in place. Sending sends the marker and the
-  full text separately: Core stores the text as a collapsed part, so the model
-  reads it while the user message shows only the marker. In the message the
-  marker is a clickable chip above the text, with no preview; clicking it opens
-  the full text in a modal. A failed send restores the marker. Smaller pastes
-  stay inline.
+  same text again expands the marker in place. The composer shows a preview row
+  for each collapsed paste, with `Show` opening the full text, as in NSH. Sending
+  sends the marker and the full text separately: Core stores the text as a
+  collapsed part, so the model reads it while the user message shows only the
+  marker. In the message the marker is a clickable chip above the text, with no
+  inline content; clicking it opens the full text in a modal. A failed send
+  restores the marker. Smaller pastes stay inline.
 - The top header omits the busy spinner, working label and elapsed time.
 - The model picker shows model names on the left and providers on the right;
   `m` toggles details below the picker (they follow the selection) and is
@@ -714,3 +745,11 @@ revision before each write. Configuration errors are listed at the top of
 Settings, and rejected writes appear as warnings. A `config.changed` event
 refreshes Settings after an external edit.
 The session context meter reads Core's context budget; `~` marks estimates.
+
+## The Manager
+
+`alt+m` talks to the Manager (starts a call, opens the microphone, sends, or barges in); `alt+shift+m` or
+`/manager stop` ends it; `/manager <text>` sends a typed line. The orb, caption, typed field and card are
+painted over the finished frame (`src/orb.rs`, `src/stage.rs`; state in `src/manager.rs`) and the frame clock
+runs only while the orb is on screen. For `--dump-frame`, `NEXUS_TUI_MANAGER_PIN=state[:level]` (or `none`)
+holds the orb still and no audio device is touched; it is read nowhere else.

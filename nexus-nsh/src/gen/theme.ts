@@ -186,3 +186,6 @@ export const fold = {
   }
 } as const;
 export const spinner = ["\u28fe", "\u28fd", "\u28fb", "\u28bf", "\u287f", "\u28df", "\u28ef", "\u28f7"];
+export const managerColors = {"light": {"listening": "#23687f", "thinking": "#6743ae", "speaking": "#0b0b0c", "idle": "#83838a"}, "dark": {"listening": "#69b7d5", "thinking": "#a78bfa", "speaking": "#f4f4f5", "idle": "#6e6e76"}} as const;
+export const annotationInks = ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff"];
+export const diagramPalettes = {"light": {"background": "#fbfbfa", "foreground": "#0b0b0c", "muted": "#5f5f65", "line": "#cfcfcb", "border": "#cfcfcb", "surface": "#efefed", "surface_alt": "#ffffff", "accent": "#0b0b0c", "critical": "#c42b3d", "font": "Monaspace Argon", "stroke": "2", "radius": "0", "title_weight": "700", "series": ["#905200", "#2459ac", "#6743ae", "#396a30", "#126d5d", "#9a405a", "#23687f", "#735d0c"]}, "dark": {"background": "#000000", "foreground": "#f4f4f5", "muted": "#85858d", "line": "#2e2e33", "border": "#2e2e33", "surface": "#0e0e10", "surface_alt": "#161618", "accent": "#f4f4f5", "critical": "#f2707f", "font": "Monaspace Argon", "stroke": "2", "radius": "0", "title_weight": "700", "series": ["#d18a38", "#5c9cf5", "#a78bfa", "#86b97a", "#55b9a5", "#dc8295", "#69b7d5", "#c9a94a"]}};

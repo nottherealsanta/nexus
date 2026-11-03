@@ -30,8 +30,8 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::api::{
-    check_compat, format_cursor, Compat, CoreApi, Event, Frame, History, Info, Snapshot, TurnPage,
-    CLIENT_API,
+    check_compat, format_cursor, ClientView, Compat, CoreApi, Event, Frame, History, Info,
+    Snapshot, TurnPage, CLIENT_API,
 };
 use crate::discovery::{self, DaemonInfo, Identity};
 use crate::state::ConnectionState;
@@ -128,7 +128,7 @@ pub enum SyncMsg {
         kernels: Result<Vec<Value>, String>,
         jobs: Result<Vec<Value>, String>,
     },
-    /// Project skills, global MCP servers and this project's `.mcp.json` inventory
+    /// Project skills, global MCP servers and this project's MCP files' inventory
     /// for a new-session preview. None of the reads starts a server.
     SkillMcp {
         project: String,
@@ -137,6 +137,47 @@ pub enum SyncMsg {
         project_mcp: Result<Value, String>,
     },
     Event(Event),
+    /// The answer to a `Command::Manager`: `tag` is the caller's own label.
+    Manager {
+        tag: String,
+        result: Result<Value, ManagerError>,
+    },
+}
+
+/// The current stream's id, for the one route that streams audio back
+/// (`/api/voice/speak` with text must name the holder's stream). Never logged.
+static STREAM: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub(crate) fn current_stream() -> Option<String> {
+    STREAM.lock().ok().and_then(|s| s.clone())
+}
+
+fn remember_stream(id: Option<&str>) {
+    if let Ok(mut s) = STREAM.lock() {
+        *s = id.map(str::to_owned);
+    }
+}
+
+/// Why a Manager route failed: the status and `code` Core gave, or status 0
+/// when the call never reached it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManagerError {
+    pub status: u16,
+    pub code: Option<String>,
+    pub message: String,
+    /// The error body as Core sent it (`consent_required` carries the notice).
+    pub body: Value,
+}
+
+/// A Manager route that needs this stream's `stream_id`. The supervisor owns
+/// that bearer capability, so it adds it to `body` itself and the app never sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagerCall {
+    pub tag: String,
+    pub method: &'static str,
+    pub path: String,
+    pub body: Option<Value>,
+    pub with_stream: bool,
 }
 
 /// App -> supervisor.
@@ -145,6 +186,9 @@ pub enum Command {
     /// View this session: load its history (in the background while the
     /// stream is live) and include it in later snapshots. No resync.
     Select(Option<String>),
+    /// What the user is looking at: project, session and panel ids only. Kept
+    /// across reconnects and reported after the next `server.connected`.
+    View(ClientView),
     /// Fetch a fresh snapshot (the reducer could not continue).
     Resync,
     Config,
@@ -183,6 +227,8 @@ pub enum Command {
         query: String,
         limit: u32,
     },
+    /// A Manager route call (start, say, activity, navigate result, ...).
+    Manager(ManagerCall),
     Shutdown,
 }
 
@@ -229,6 +275,25 @@ struct Ctx {
     cfg: SyncConfig,
     out: mpsc::UnboundedSender<SyncMsg>,
     cmds: mpsc::UnboundedReceiver<Command>,
+    /// Self-asserted label for this process's view reports; stable across
+    /// reconnects so a new stream can report from the same client.
+    client_id: String,
+    /// The current stream's capability from `server.connected`, never logged.
+    stream_id: Option<String>,
+    /// The latest view from the app, kept while disconnected.
+    view: Option<ClientView>,
+    /// The view the current stream already accepted, so an unchanged view is
+    /// not re-sent.
+    view_reported: Option<ClientView>,
+    /// Sequence of view reports; a late result from an older request is ignored.
+    view_seq: u64,
+    /// The one report being sent beside the stream, if any. Serializing reports
+    /// means an older view can never land after a newer one on the same stream.
+    view_inflight: Option<ViewRequest>,
+    /// A transient failure's next attempt.
+    view_retry_at: Option<tokio::time::Instant>,
+    /// Bounded delays between failed view reports.
+    view_backoff: Backoff,
     selected: Option<String>,
     /// Set by commands; consumed by the next pass.
     resync: Option<ResyncCause>,
@@ -274,6 +339,12 @@ impl Ctx {
                 self.selected = s;
                 self.newest_turn = None;
             }
+            Command::View(view) => {
+                self.view = Some(view);
+                // A real change is sent at once instead of waiting out a
+                // previous transient failure's backoff.
+                self.view_retry_at = None;
+            }
             Command::Resync => self.resync = Some(ResyncCause::Requested),
             Command::Config => self.config = true,
             Command::Context(session) => self.context = Some(session),
@@ -306,9 +377,74 @@ impl Ctx {
                 query,
                 limit,
             } => self.complete = Some((project, session, query, limit)),
+            // Reached only while no stream is open (the stream loop intercepts it).
+            Command::Manager(call) => {
+                self.send(SyncMsg::Manager {
+                    tag: call.tag,
+                    result: Err(ManagerError {
+                        status: 0,
+                        code: None,
+                        message: "Core is not connected".into(),
+                        body: Value::Null,
+                    }),
+                });
+            }
             Command::Shutdown => self.shutdown = true,
         }
     }
+
+    /// Run a Manager call beside the stream, with this stream's `stream_id`.
+    fn run_manager(&self, api: &CoreApi, call: ManagerCall) {
+        let out = self.out.clone();
+        let mut body = call.body.clone().unwrap_or_else(|| serde_json::json!({}));
+        if call.with_stream {
+            let Some(stream_id) = self.stream_id.clone() else {
+                let _ = out.send(SyncMsg::Manager {
+                    tag: call.tag,
+                    result: Err(ManagerError {
+                        status: 0,
+                        code: None,
+                        message: "Core is not connected".into(),
+                        body: Value::Null,
+                    }),
+                });
+                return;
+            };
+            body["stream_id"] = Value::String(stream_id);
+        }
+        let api = api.clone();
+        tokio::spawn(async move {
+            let method = match call.method {
+                "GET" => reqwest::Method::GET,
+                _ => reqwest::Method::POST,
+            };
+            let body_ref = (call.method != "GET").then_some(&body);
+            let result = api
+                .http
+                .call(method, &call.path, &[], body_ref, None, None)
+                .await
+                .map(|r| r.body)
+                .map_err(|e| match e.api() {
+                    Some(a) => ManagerError {
+                        status: a.status,
+                        code: a.code.clone(),
+                        message: a.message.clone(),
+                        body: a.body.clone(),
+                    },
+                    None => ManagerError {
+                        status: 0,
+                        code: None,
+                        message: e.to_string(),
+                        body: Value::Null,
+                    },
+                });
+            let _ = out.send(SyncMsg::Manager {
+                tag: call.tag,
+                result,
+            });
+        });
+    }
+
     /// Sleep, but wake early for a command. Returns false on shutdown.
     async fn pause(&mut self, d: Duration) -> bool {
         let sleep = tokio::time::sleep(d);
@@ -318,7 +454,7 @@ impl Ctx {
                 () = &mut sleep => break,
                 cmd = self.cmds.recv() => match cmd {
                     Some(c) => {
-                        let wake = !matches!(c, Command::Select(_));
+                        let wake = !matches!(c, Command::Select(_) | Command::View(_) | Command::Manager(_));
                         self.handle(c);
                         if self.shutdown { return false; }
                         if wake { break; }
@@ -329,6 +465,150 @@ impl Ctx {
         }
         !self.shutdown
     }
+
+    /// Hand the latest unreported view to one background POST.
+    ///
+    /// At most one report is in flight, so replies for the same stream cannot
+    /// arrive out of order and make an older view win. A report never runs in
+    /// the event loop: the stream keeps consuming events while it is sent.
+    fn start_view_report(&mut self, api: &CoreApi, tx: &mpsc::UnboundedSender<ViewResult>) {
+        if self.view_inflight.is_some() {
+            return;
+        }
+        let (Some(stream_id), Some(view)) = (self.stream_id.clone(), self.view.clone()) else {
+            return;
+        };
+        if self.view_reported.as_ref() == Some(&view) {
+            return;
+        }
+        if self
+            .view_retry_at
+            .is_some_and(|at| tokio::time::Instant::now() < at)
+        {
+            return;
+        }
+        self.view_retry_at = None;
+        self.view_seq = self.view_seq.wrapping_add(1);
+        let request = ViewRequest {
+            seq: self.view_seq,
+            stream_id,
+            view,
+        };
+        self.view_inflight = Some(request.clone());
+        let (api, client_id, tx) = (api.clone(), self.client_id.clone(), tx.clone());
+        tokio::spawn(async move { send_view_report(api, client_id, request, tx).await });
+    }
+
+    /// Fold a background result into the view state. A result for an older
+    /// request or for a stream this client no longer reports on is ignored.
+    fn finish_view_report(&mut self, result: ViewResult) -> ViewAction {
+        if self.view_inflight.as_ref().map(|r| r.seq) != Some(result.seq) {
+            return ViewAction::None;
+        }
+        self.view_inflight = None;
+        if self.stream_id.as_deref() != Some(result.stream_id.as_str()) {
+            return ViewAction::None;
+        }
+        match result.outcome {
+            ReportOutcome::Sent => {
+                self.view_reported = Some(result.view);
+                self.view_retry_at = None;
+                self.view_backoff.reset();
+                ViewAction::None
+            }
+            ReportOutcome::Stale => {
+                self.stream_id = None;
+                self.view_reported = None;
+                self.view_retry_at = None;
+                ViewAction::None
+            }
+            ReportOutcome::Mismatch => {
+                self.stream_id = None;
+                self.view_reported = None;
+                self.view_retry_at = None;
+                ViewAction::Mismatch
+            }
+            ReportOutcome::Failed => {
+                if self.view.as_ref() != Some(&result.view) {
+                    // A newer view is waiting: that is a new report, not a
+                    // retry of the one that failed, so send it at once.
+                    self.view_retry_at = None;
+                    ViewAction::None
+                } else {
+                    let delay = self.view_backoff.next_delay();
+                    self.view_retry_at = Some(tokio::time::Instant::now() + delay);
+                    ViewAction::Retry(delay)
+                }
+            }
+        }
+    }
+}
+
+/// One view report handed to a background task. Deliberately not `Debug`: the
+/// stream id it carries is a bearer capability.
+#[derive(Clone)]
+struct ViewRequest {
+    seq: u64,
+    stream_id: String,
+    view: ClientView,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReportOutcome {
+    Sent,
+    Stale,
+    Mismatch,
+    Failed,
+}
+
+struct ViewResult {
+    seq: u64,
+    stream_id: String,
+    view: ClientView,
+    outcome: ReportOutcome,
+}
+
+/// What folding one result asks the stream loop to do.
+enum ViewAction {
+    None,
+    /// Retry after this delay.
+    Retry(Duration),
+    /// The stream belongs to another client: reopen it.
+    Mismatch,
+}
+
+/// A view report must never hold up the event stream.
+const VIEW_REPORT_TIMEOUT: Duration = Duration::from_secs(3);
+
+async fn send_view_report(
+    api: CoreApi,
+    client_id: String,
+    request: ViewRequest,
+    tx: mpsc::UnboundedSender<ViewResult>,
+) {
+    let result = tokio::time::timeout(
+        VIEW_REPORT_TIMEOUT,
+        api.report_client_view(&request.stream_id, &client_id, &request.view),
+    )
+    .await;
+    let outcome = match result {
+        Ok(Ok(_)) => ReportOutcome::Sent,
+        Ok(Err(Error::Api(e))) if e.status == 409 && e.code.as_deref() == Some("stream_closed") => {
+            ReportOutcome::Stale
+        }
+        Ok(Err(Error::Api(e)))
+            if e.status == 409 && e.code.as_deref() == Some("client_mismatch") =>
+        {
+            ReportOutcome::Mismatch
+        }
+        Ok(Err(_)) | Err(_) => ReportOutcome::Failed,
+    };
+    let _ = tx.send(ViewResult {
+        seq: request.seq,
+        stream_id: request.stream_id,
+        view: request.view,
+        outcome,
+    });
 }
 
 enum Handshake {
@@ -351,6 +631,14 @@ pub async fn run(
         cfg,
         out,
         cmds,
+        client_id: format!("tui-{}", uuid::Uuid::new_v4().simple()),
+        stream_id: None,
+        view: None,
+        view_reported: None,
+        view_seq: 0,
+        view_inflight: None,
+        view_retry_at: None,
+        view_backoff: Backoff::new(&[1.0, 2.0, 4.0, 8.0, 16.0, 30.0]),
         selected: None,
         resync: None,
         catalog: None,
@@ -535,7 +823,15 @@ pub async fn run(
         load_skill_mcp(&mut cx, &api).await;
         load_files(&mut cx, &api).await;
         load_git_diff(&mut cx, &api).await;
-        match stream(&mut cx, &api, &mut cursor, &mut backoff, &mut had_live).await {
+        let end = stream(&mut cx, &api, &mut cursor, &mut backoff, &mut had_live).await;
+        // A view is bound to the stream that issued its id: never report the
+        // old one while reconnecting. The next `server.connected` sets a new id.
+        cx.stream_id = None;
+        cx.view_reported = None;
+        cx.view_inflight = None;
+        cx.view_retry_at = None;
+        cx.view_backoff.reset();
+        match end {
             StreamEnd::Stop => return,
             StreamEnd::Resync { cause, progressed } => {
                 // Resync at once, but never hot-loop on a server that keeps rejecting us.
@@ -1100,6 +1396,11 @@ async fn stream(
         Err(e) => return StreamEnd::Dropped(e.to_string()),
     };
     let mut progressed = false;
+    // Reports run beside the stream. One in flight at a time keeps the latest
+    // view ordering; results wake the loop without delaying event delivery.
+    let (report_tx, mut report_rx) = mpsc::unbounded_channel();
+    let retry_sleep = tokio::time::sleep(Duration::from_secs(3600));
+    tokio::pin!(retry_sleep);
     loop {
         tokio::select! {
             frame = events.next() => {
@@ -1114,12 +1415,21 @@ async fn stream(
                         if own_generation.is_some_and(|g| g != c.generation) {
                             return StreamEnd::Resync { cause: ResyncCause::Cursor("cursor_generation".into()), progressed: false };
                         }
+                        // Every connection has its own ephemeral identity, so a
+                        // reconnect always reports the latest view again.
+                        remember_stream(c.stream_id.as_deref());
+                        cx.stream_id = c.stream_id;
+                        cx.view_reported = None;
+                        cx.view_inflight = None;
+                        cx.view_retry_at = None;
+                        cx.view_backoff.reset();
                         *had_live = true;
                         progressed = true;
                         backoff.reset();
                         if !cx.state(ConnectionState::Live) {
                             return StreamEnd::Stop;
                         }
+                        cx.start_view_report(api, &report_tx);
                     }
                     Ok(Frame::Overflow(_)) => return StreamEnd::Resync { cause: ResyncCause::Overflow, progressed },
                     Ok(Frame::Event(e)) => {
@@ -1161,10 +1471,21 @@ async fn stream(
             }
             cmd = cx.cmds.recv() => {
                 match cmd {
+                    Some(Command::Manager(call)) => {
+                        cx.run_manager(api, call);
+                        continue;
+                    }
                     Some(c) => {
+                        let view_changed = matches!(&c, Command::View(_));
                         let was_catalog = matches!(c, Command::Config | Command::Context(_) | Command::DraftContext(_) | Command::PatchConfig { .. } | Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Resources | Command::SkillMcp(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
                         cx.handle(c);
                         if cx.shutdown { return StreamEnd::Stop; }
+                        if view_changed {
+                            // A view report reads nothing and loads nothing; it
+                            // runs in the background and never stalls the stream.
+                            cx.start_view_report(api, &report_tx);
+                            continue;
+                        }
                         // History loads beside the stream, which keeps applying
                         // events; the reducer merges both in either order.
                         if let Some(sid) = cx.history.take() {
@@ -1200,6 +1521,22 @@ async fn stream(
                     }
                     None => return StreamEnd::Stop,
                 }
+            }
+            result = report_rx.recv() => {
+                if let Some(result) = result {
+                    match cx.finish_view_report(result) {
+                        ViewAction::Mismatch => return StreamEnd::Resync { cause: ResyncCause::Requested, progressed },
+                        ViewAction::Retry(delay) => {
+                            retry_sleep.as_mut().reset(tokio::time::Instant::now() + delay);
+                        }
+                        ViewAction::None => {}
+                    }
+                    cx.start_view_report(api, &report_tx);
+                }
+            }
+            () = &mut retry_sleep, if cx.view_retry_at.is_some() => {
+                cx.view_retry_at = None;
+                cx.start_view_report(api, &report_tx);
             }
         }
     }

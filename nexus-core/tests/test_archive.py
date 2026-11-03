@@ -132,7 +132,7 @@ def test_archive_persists_across_restart(tmp_path):
     store.close()
 
 
-async def test_whole_tree_archive_preserves_messages_events_snapshots_and_observations(env):
+async def test_whole_tree_archive_preserves_messages_events_and_snapshots(env):
     rt, client, provider, workspace = env
     root = await _create(client, workspace)
     child = await _child(client, root["id"])
@@ -140,13 +140,10 @@ async def test_whole_tree_archive_preserves_messages_events_snapshots_and_observ
     await client.post(f"/api/session/{root['id']}/prompt", json={"text": "read"})
     await _idle(rt, root["id"])
 
-    path = str((workspace / "a.txt").resolve())
-    assert rt.store.file_observation(root["id"], path) is not None
     before_messages = (await client.get(f"/api/session/{root['id']}/message")).json()
     before_events = rt.store.events(root["id"], limit=5000)
     before_snapshot = rt.store.snapshot(root["id"])
     before_child_snapshot = rt.store.snapshot(child["id"])
-    before_observation = rt.store.file_observation(root["id"], path)
     before_directories = {s["id"]: s["directory"] for s in (await client.get("/api/session")).json()}
     before_file = (workspace / "a.txt").read_bytes()
 
@@ -166,7 +163,6 @@ async def test_whole_tree_archive_preserves_messages_events_snapshots_and_observ
     assert [e["type"] for e in after_events[len(before_events):]] == ["session.archived"]
     assert rt.store.snapshot(root["id"]) == before_snapshot
     assert rt.store.snapshot(child["id"]) == before_child_snapshot
-    assert rt.store.file_observation(root["id"], path) == before_observation
     assert (workspace / "a.txt").read_bytes() == before_file
 
     response = await client.post(f"/api/session/{root['id']}/unarchive")
@@ -175,7 +171,6 @@ async def test_whole_tree_archive_preserves_messages_events_snapshots_and_observ
     assert (await client.get(f"/api/session/{child['id']}")).json()["archived"] is False
     assert (await client.get(f"/api/session/{root['id']}/message")).json() == before_messages
     assert rt.store.snapshot(root["id"]) == before_snapshot
-    assert rt.store.file_observation(root["id"], path) == before_observation
 
 
 async def test_archiving_does_not_touch_worktrees_or_branches(env):

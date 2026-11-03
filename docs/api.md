@@ -44,12 +44,12 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | PATCH | `/api/config` | `{expected_revision, set, unset}` | updated config; stale revision is 409 |
 | GET | `/api/info` | | `{name, version, api_version: {major, minor}, code, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retention_status, retry, idempotency}` |
 | GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
-| GET | `/api/search` | `?q=`, `?project=`, `?archived=exclude\|only\|include`, `?limit=` (1..100, default 30) | `{query, hits: [{session_id, kind: "title" or "user", message_id, snippet, rank, session}]}`: one hit per session, best first ([Search](#search-k5)) |
+| GET | `/api/search` | `?q=`, `?project=`, `?archived=exclude\|only\|include`, `?limit=` (1..100, default 30) | `{query, hits: [{session_id, kind: "title", "user" or "final_answer", message_id, snippet, rank, session}]}`: one hit per session, best first ([Search](#search-k5)) |
 | GET | `/api/usage` | | `{fetched, providers: [{id, label, source, plan, windows, notes, error}]}`: every connected provider, with plan windows where reported ([Usage](#usage-k11)) |
 | GET | `/api/artifact/{id}` | | the stored bytes, served as an attachment with the stored media type ([Artifacts](#artifacts-k8)) |
-| GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, connected, verified, methods}]`; `methods` are the sign-ins a client can start (`device`, `local`, `api_key`); an API-key provider adds `key_hint`, `key_env` and `key_source` (`stored`, `env` or null) |
+| GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, connected, verified, methods}]`; `methods` are the sign-ins a client can start (`browser`, `device`, `cli`, `local`, `api_key`); an API-key provider adds `key_hint`, `key_env` and `key_source` (`stored`, `env` or null) |
 | GET | `/api/provider/{id}/login` | | the in-progress sign-in, or `{status: "idle"}` ([Configuration](#configuration-provider-login-and-context-budget)) |
-| POST | `/api/provider/{id}/login` | `{method?, api_key?}` | 202 while a device or local flow runs; 200 `{status: "connected"}` for an accepted key. 409 if that provider is already signing in. `browser` is refused (it needs a local terminal) |
+| POST | `/api/provider/{id}/login` | `{method?, api_key?}` | 202 while a browser, device, CLI or local flow runs; 200 `{status: "connected"}` for an accepted key. 409 if that provider is already signing in. 400 for a method the provider does not list. A `browser` flow listens on the daemon's `127.0.0.1:1455` and publishes its URL; the client opens it |
 | DELETE | `/api/provider/{id}/login` | | 204; cancels a pending flow and signs out |
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
 | GET | `/api/model/last` | `?project=`, `?agent=` | `{model, source}`: the model a new session for this agent starts with: `agent` (last selected for it in the project), `last` (last selected anywhere) or `none` with `""` ([daemon.md](daemon.md#model-selection)) |
@@ -83,7 +83,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | PUT | `/api/project/{id}/file` | `?path=`, `?session=`; `{content, expected_revision}` | writes only if the revision still matches; `"new"` creates; 409 `stale_file` ([File writes](#file-writes-k10)) |
 | GET | `/api/project/{id}/files/search` | `?q=`, `?limit=`, `?directories=`, `?session=` | `{query, paths}`: visible paths containing `q` |
 | GET | `/api/project/{id}/prompts` | `?q=`, `?limit=`, `?before=` | prompt history for Up-arrow recall, newest first |
-| GET | `/api/project/{id}/mcp` | | this project's `.mcp.json`: `{project_id, file, exists, revision, error, warnings, servers}`; never starts a server ([mcp.md](mcp.md#project-servers)) |
+| GET | `/api/project/{id}/mcp` | | this project's `.mcp.json` and `.agents/mcp.json`: `{project_id, file, exists, revision, error, warnings, servers, files, duplicates}`; never starts a server ([mcp.md](mcp.md#project-servers)) |
 | GET | `/api/project/{id}/mcp/{name}` | | one project MCP row plus `tool_names` and `log`; never starts a server |
 | POST | `/api/project/{id}/mcp/{name}/restart` | | close and reconnect a project server; returns the row |
 | GET | `/api/session` | `?project=`, `?directory=` or `?parent=`, plus `?archived=exclude\|only\|include` | `[Session]` |
@@ -131,6 +131,19 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/question` | | every pending `ask` question request |
 | GET | `/api/session/{id}/question` | | pending questions for that session (empty list when none) |
 | POST | `/api/session/{id}/question/{qid}` | `{answers: [{question_id, selected?, text?}, …]}` | 204; 400 invalid answer, 404 unknown question or session, 409 already resolved |
+| POST | `/api/client/view` | `{stream_id, client_id, project?, session?, panel?}` | the stored ephemeral view; 400 invalid id, 404 unknown project or session, 409 `stream_closed` or `client_mismatch` ([Client views](#client-views-ephemeral)) |
+| GET | `/api/manager` | | `{enabled, mode, model, consent, call: {call_id, holder, phase, error, card} or null}`: restores the Manager call after a reconnect ([The Manager](#the-manager)) |
+| POST | `/api/manager/start` | `{stream_id, client_id}` | start the call on this client, or move it here: `{call_id, holder, mode, model}`; 409 `manager_disabled` or `stream_closed` |
+| POST | `/api/manager/stop` | `{stream_id}` | 204; ends the call, never stops a session |
+| POST | `/api/manager/live/start` | `{stream_id}` (holder; `[manager] mode = "live"`) | Core opens the GPT-Live call: `{call_id, audio}`; 409 `live_mode_off`, `consent_required`, `live_busy`, `live_unsupported`, `live_*` ([manager.md](manager.md#gpt-live-voice-m5-experimental-not-verified-against-the-real-service)) |
+| WS | `/api/manager/live/audio?stream_id=&token=` | binary PCM16 mono 24 kHz both ways; text `mute`/`unmute` | holder only; close codes 4401, 4403, 4404, 4409 |
+| POST | `/api/manager/say` | `{stream_id, text, source: "typed" or "speech"}` | 202 `{turn_id}`; the answer arrives as `manager.*` events |
+| POST | `/api/manager/cancel` | `{stream_id}` | `{cancelled, muted, dropped, reason?}`: barge-in |
+| POST | `/api/manager/activity` | `{stream_id, listening, speaking}` | 204 |
+| POST | `/api/manager/card/dismiss` | `{stream_id, card_id}` | 204; a stale card id changes nothing |
+| POST | `/api/manager/navigate/result` | `{stream_id, request_id, ok, reason?}` | 204; an unknown or late request id is ignored |
+| GET | `/api/manager/episode` | | the Manager's own past conversations, newest first, `[{id, created, updated, continued_from, model}]`; open one with the session routes or the inspector |
+| GET | `/api/manager/audit` | `?limit=&tool=` | what the Manager did on the user's words, newest first: `[{id, time, episode_id, turn_id, tool, target, heard, ok, result}]` |
 | GET | `/api/event` | `?session=` (that session and its descendants), `?cursor=<generation>:<id>` (or `Last-Event-ID`) | server-sent events (below) |
 | GET | `/api/info` (handshake) | | `api_version` is `{major, minor}`. A client sends nothing past `/api/info` when the major differs; a newer minor only adds fields, so older clients keep working and say what they lack |
 | GET | `/inspector` | | the session inspector page ([inspector.md](inspector.md)); static, no token needed to load it |
@@ -177,6 +190,9 @@ Configuration patch paths and polling behavior are described in [config.md](conf
 // Message (parts encoded as in stream-events.md, including raw wire items)
 {"id": "msg_…", "session_id": "ses_…", "seq": 2, "created": 1793…, "role": "assistant",
  "parts": [{"type": "tool_call", "id": "call_…", "name": "bash", "arguments": "{…}", "origin": "codex", "raw": {…}}]}
+// A message also has `"origin": "manager"` (the message level, not a part's provider) when the Manager sent it into
+// the session on the user's words; clients label it `via Manager`. A message typed by a person has no `origin`.
+// Optional `"delivery"` is `steer`, `queued` or `handoff`.
 
 // Pending approval (also the data of permission.asked)
 {"id": "per_…", "session_id": "ses_…", "tool": "bash", "call_id": "call_…", "args": {"command": "ls"},
@@ -205,7 +221,7 @@ cancellation. Shapes and limits: [tools.md](tools.md#ask).
 `permission` is `ask` (bash waits for a reply; read, `bash_output`, `bash_kill`,
 `ask`, `edit`, `write`, the outer `code` call and workspace controls never ask)
 or `allow` (the default for new sessions; nothing asks). Session-directory edits are approval-free by fixed
-policy; see [tools.md](tools.md#read-observations-and-freshness). `status` is
+policy; see [tools.md](tools.md#file-mutations). `status` is
 `busy` while a turn runs.
 
 ### Turn summaries
@@ -296,7 +312,7 @@ turn or waiting for an approval or question; nothing is interrupted. Archived
 sessions refuse a prompt (409, naming the unarchive command) and refuse a new
 child in the tree (409) until unarchived. Unarchive restores availability but
 does not start a turn. Archive state never deletes messages, events, snapshots,
-file observations, directories, worktrees or branches, and it does not stop a
+directories, worktrees or branches, and it does not stop a
 background bash job. A background job's finish notice is stored as context but
 does not wake an archived session; it is present when the user later unarchives
 and resumes.
@@ -743,7 +759,7 @@ it has no `id:` line:
 event: server.connected
 data: {"version": "0.10.0.dev0", "generation": "log_1a2b3c4d5e6f7a8b", "head": 4200,
        "head_cursor": "log_1a2b3c4d5e6f7a8b:4200", "resumed_from": null,
-       "session": null, "floor": 0}
+       "session": null, "floor": 0, "stream_id": "stream_…"}
 ```
 
 Every later frame is one durable log row (the one exception, `bus.overflow`, is
@@ -763,14 +779,15 @@ data: {"id": 4201, "cursor": "log_1a2b3c4d5e6f7a8b:4201", "seq": 77, "time": 179
 | `generation` | Identifies this database's log. In `/api/info` as `log.generation`. A new or replaced database has a new generation; a copied database keeps the same one. |
 | `seq` | The publishing daemon's own counter. It restarts at 1 on every daemon start. **Not** a cursor; after a replayed range it can jump backwards. |
 | `head`, `head_cursor`, `floor` | The durable head and retention floor at the moment of the request (`/api/info` reports the same). |
+| `stream_id` | This one event-stream subscriber's identity for ephemeral state. It is not durable and changes on every connection; see [Client views](#client-views-ephemeral). |
 
-`generation`, `head`, `head_cursor` and `floor` are stream/info metadata, not
-fields of every event; each event carries `id`, `cursor`, `seq`, `time`, `type`,
-`session_id`, `data` and `payload_state`. For a stored/replayed `wire_request`,
-`wire_response` or `wire_event`, `payload_state` is `full` or `expired`. An
-expired payload keeps its id/type/cursor and has an explicit marker in `data`:
-`{"$nexus_payload": "expired", "state": "expired", "event_type": …,
-"original_bytes": …, "expired_at": …, "reason": …, "note": …,
+`generation`, `head`, `head_cursor`, `floor` and `stream_id` are stream/info
+metadata, not fields of every event; each event carries `id`, `cursor`, `seq`,
+`time`, `type`, `session_id`, `data` and `payload_state`. For a stored/replayed
+`wire_request`, `wire_response` or `wire_event`, `payload_state` is `full` or
+`expired`. An expired payload keeps its id/type/cursor and has an explicit
+marker in `data`: `{"$nexus_payload": "expired", "state": "expired",
+"event_type": …, "original_bytes": …, "expired_at": …, "reason": …, "note": …,
 "resync": "/api/snapshot"}`. It is never an empty event and does not move the
 floor. Live SSE delivery always carries the full payload when it is first
 published; payload expiry affects subsequent replay/storage reads.
@@ -863,8 +880,8 @@ a client should reload that tree when it sees the tombstone.
 Global events are stored with `session_id: null`: `project.created`,
 `project.updated`, `project.deleted`, and the minimal `session.deleted`
 tombstone (`{"id": "ses_…"}`) so a reconnect cannot miss them for lack of a
-session row. Deleting a session still deletes its messages, events, snapshots and
-observations; the tombstone contains only the id needed for synchronization.
+session row. Deleting a session still deletes its messages, events and
+snapshots; the tombstone contains only the id needed for synchronization.
 Deleting a project publishes one tombstone per deleted session, then
 `project.deleted`.
 
@@ -912,6 +929,130 @@ Deleting a project publishes one tombstone per deleted session, then
 `wire_request` carries the exact request body and headers, with credentials
 redacted. `wire_event` carries every provider SSE event as received. Nothing the
 model sees is hidden from clients.
+
+### Client views (ephemeral)
+
+Each `GET /api/event` connection is one subscriber with its own `stream_id`
+from `server.connected`. A client reports what it is showing with
+`POST /api/client/view`:
+
+```json
+{"stream_id": "stream_…", "client_id": "nsh-ios-…", "project": "prj_…",
+ "session": "ses_…", "panel": "files"}
+```
+
+`client_id` is a stable label only. The identity is `stream_id`: two windows or
+two reconnects can share a client id and still keep separate views, and a report
+for a closed stream never attaches to another one. The daemon keys the view by
+the stream and drops it when that stream closes, whether the client disconnects,
+the response is cancelled, or the daemon stops. A reconnect gets a new
+`stream_id`; report again after its `server.connected` frame. The daemon sends
+the stream id only on that stream's `server.connected` frame. Treat it as a
+capability: do not log it, put it in a URL, or share it with another client.
+
+Ids only: `project`, `session` and `panel` are short opaque identifiers (1–128
+printable ASCII characters, no spaces), with `null` or `""` meaning none. A
+`session` implies its project, so `project` may be omitted. An unknown project
+or session is 404; a session that does not belong to the named project is 400.
+A stream id that is not currently connected is 409 `stream_closed`; changing
+`client_id` on an existing stream is 409 `client_mismatch`, so a client opens a
+new stream instead. 200 returns the stored view (`client_id`, `project`,
+`session`, `panel`, `updated`), including the project filled from a session;
+the response does not echo the stream id.
+
+There is deliberately no read route. Listing views would disclose every live
+`stream_id` and `client_id` to any caller, including on a daemon bound without
+a token, and a disclosed stream id is enough to overwrite that view. The
+registry stays inside the daemon, where the Manager reads the call holder's
+view in-process ([The Manager](#the-manager)); there is no global "current"
+view, so the holder is whichever client started the call. Nothing is stored in SQLite, published as an event, or kept
+across a restart.
+
+A view is a UI hint, not authority: it is never an approval, a claim on a
+session, or a navigation request. Screen contents, scroll position and drafts
+are not accepted. The daemon still validates the referenced ids, and a Manager
+must treat the rest as untrusted labels.
+
+### The Manager
+
+Full description: [manager.md](manager.md). This is the contract a client builds against. The Manager's events are
+ordinary durable global events (`session_id: null`), so they replay from a cursor like any other; a hidden Manager
+episode's own events (`message.added`, `session.status`, wire events) never reach any stream except one filtered to
+that episode's id.
+
+**The call.** `POST /api/manager/start` with the `stream_id` from `server.connected` makes that client the *holder*
+and returns a random, non-secret `call_id`. Every `manager.*` event carries `call_id`; a client ignores events for a
+call it does not hold, and `stream_id` never appears in an event or a response. Only the holder's `stream_id` is
+accepted by `stop`, `say`, `cancel`, `activity`, `card/dismiss` and `navigate/result`; any other value is `403
+{"error", "code": "not_holder"}` with no identifier echoed. Starting from another client moves the call (new
+`call_id`); the previous holder sees a `manager.state` with a different `call_id` and shows "Moved to <holder>". The
+call ends when the holder's event stream closes. `409 manager_disabled` when `[manager] enabled` is false.
+
+**Events** (`data` shown):
+
+| Event | Data |
+| --- | --- |
+| `manager.state` | `{call_id, active, phase: "idle" or "thinking" or "replying", holder, mode, error: {code, message, fix} or null}`. `active: false` ends the call. `error.code` is `model_unavailable`, `model_failed` or `manager_error`; it stays until a turn succeeds |
+| `manager.caption` | `{call_id, turn_id, role: "user" or "manager", text, final}` for text not otherwise spoken: the user's typed line (sent when `say` is accepted, `source: "typed"` only) and errors (`role: "manager"`) |
+| `manager.speech` | `{call_id, turn_id, seq, text, urgent, proactive?}`: one sentence of the Manager's reply, `seq` counting from 0 within the turn, `urgent` true only for an unprompted line slipped into a reply, `proactive: true` only on an unprompted line (absent otherwise). A text-only client shows it at once; a speaking client fetches and plays it in order |
+| `manager.card` | `{call_id, card: Card or null}`: the stage changed. `null` closes it (navigation confirmed, `clear_stage`, a dismiss) |
+| `manager.navigate` | `{call_id, request_id, project?, session?, panel?, back?}`: move the holder's view and answer with `POST /api/manager/navigate/result`. Sent only for a turn with the user's words, and only to the call (the holder checks `call_id`). With `back: true` the other fields are the view Core resolved from its back stack; a client may use its own history instead |
+| `manager.acted` | session-scoped (in the target session's stream): `{tool, origin: "manager", ok, heard, result}` for every act the Manager attempted on that session |
+
+**Cards.** Every card has `{id, type, focused, title?}` plus:
+
+```jsonc
+{"type": "board", "project": "nexus", "columns": {"needs_you": [Row], "running": [Row], "finished": [Row]},
+ "more": {"needs_you": 0, "running": 3, "finished": 0}}      // project is optional; 4 rows per column
+{"type": "sessions", "rows": [Row], "more": 0}                // 8 rows
+{"type": "approval", "session_id": "...", "handle": "auth-refactor", "approval_id": "...", "summary": "run: alembic upgrade head",
+ "detail": "exact command or arguments", "clipped": false}
+{"type": "question", "session_id": "...", "handle": "...", "question": "...", "options": ["..."]}
+{"type": "diagram", "source": "flowchart TD ...", "clipped": false}
+{"type": "excerpt", "handle": "...", "session_id": "...", "markdown": "...", "clipped": false}
+{"type": "note", "markdown": "...", "clipped": false}
+// Row: {n, session_id, handle, title, project, state, why?}; n numbers across the whole card (1, 2, 3 ...)
+```
+
+`state` is one of `needs_approval`, `needs_answer`, `blocked`, `failed`, `working`, `archived`, `idle` (the
+Manager never produces `finished_unread`: Core has no unread source). Clients draw title and state from their own
+store when they have the session. `focused` is true for every card a tool call produces; the unfocused proactive
+cards of M4 will set it false. A card that picks a row opens that session through the client's normal navigation.
+
+**Privacy notice.** `GET /api/manager` also returns `consent: {provider, version, required, accepted_at, notice}`
+for the provider of `[manager] model`. The Manager reads any session, so session text reaches that provider; the user
+acknowledges it once per provider and again when `version` changes. While `required` is true, `POST
+/api/manager/start` and `/say` answer `409 {"code": "consent_required", "consent": {...}}`. A client shows `notice`
+and acknowledges with `POST /api/manager/consent {accept: true, version}` (a wrong `version` is 400; `accept: false`
+revokes); the response is the new `consent` object. The offline `mock` provider needs none (`required: false`,
+empty `notice`).
+
+**Speech.** `POST /api/voice/speak` has two forms. `{session_id}` is unchanged. `{stream_id, text}` speaks one Manager
+sentence: the `stream_id` must be the call holder's (`403 not_holder` otherwise, also when `stream_id` is missing),
+`text` is non-empty and at most 1200 characters after masking (`422 speech_text_too_long`), secrets are masked first
+(`[redacted]`), and the response is a streamed WAV like the session form. If the previous sentence is still
+playing the request waits (up to 10 s) rather than answering `409 speech_busy`, so a client may ask for the next
+sentence early; sentences are spoken in the order requested. `POST /api/manager/cancel` also stops the sentence being
+synthesised and adds `speech_stopped` to its response. The thinking cue needs nothing from Core: a client plays it
+after about a second of `manager.state.phase == "thinking"`.
+
+**Unprompted lines.** Attention ([manager.md](manager.md#attention-unprompted-lines)) emits `manager.speech` with
+`proactive: true`, a `turn_id` of the form `mp_<hex>` (never one a client sent), `seq` from 0 within the line, and
+`urgent: true` when it was slipped in between two sentences of a reply. A client shows it as the caption alone, with
+no orb and no scrim, unless the user had called the Manager. The only card it may raise is an `approval` or `question`
+card with `focused: false`; it never sends `manager.navigate`.
+
+**Navigation.** After `manager.navigate` the client performs the move as if the user clicked, then sends
+`navigate/result` with `ok` (and a short `reason` when it cannot: the file panel on iOS, a deleted session) and
+reports its new view with `POST /api/client/view`. Core waits 5 s for the result; without it the Manager tells the
+user it could not confirm the move.
+
+**Origin.** A message the Manager sent into a session has `"origin": "manager"` ([manager.md](manager.md#origin--manager)).
+`permission.replied` and `question.replied` made by the Manager carry `origin: "manager"` and `heard`.
+
+**Hidden sessions.** `/api/session`, `/api/project`, `/api/snapshot` and `/api/search` never list a Manager
+episode or its project. The snapshot's raw `sessions` rows now include `kind` (`"user"`), `topic` (a one-sentence
+description once written, else `null`) and `topic_seq`.
 
 ## Crash recovery
 
@@ -1106,27 +1247,36 @@ A client that shows a large paste as `[Pasted ~N tokens]` sends the marker in
 `text` and the full content in `pastes`: `[{marker: string, text: string}]`. Core
 replaces each marker with a `text` part carrying the full text and
 `collapsed: true`, in marker order. Providers receive that text as ordinary
-context; clients render the marker instead and may show the part in a modal.
+context; clients render the marker instead and show the part in a modal.
 Markers must be unique and present in `text`. A prompt allows at most eight
 pastes, 1,000,000 characters each and 4,000,000 in total. Ordinary text parts
 keep their existing JSON shape; only a collapsed part includes the flag.
+
+The TUI and NSH collapse a paste of at least 500 characters, independent of line
+count, so shorter multiline pastes stay inline. Both composers show a preview
+row per collapsed paste with **Show** opening the full text; after sending, the
+user message shows only the marker chip, which opens the same text. A failed
+send restores the collapsed draft.
 
 ## Configuration, provider login and context budget
 
 See [Configuration](config.md) for the config revision/patch contract and the
 provider login lifecycle. `POST /api/provider/{id}/login` returns 202 for a
-device flow, or 200 for an accepted OpenCode key. `GET` reports progress;
-`DELETE` signs out (204). Global `provider.login` events report progress:
-`{provider, status, message}`, plus `verification_uri` and `user_code` while a
-device flow waits (null once it ends), so clients show the code on the
-provider's row. A key is never in an event.
+browser, device or CLI flow, or 200 for an accepted OpenCode key. `GET` reports
+progress; `DELETE` signs out (204). Global `provider.login` events report
+progress: `{provider, status, message}`, plus `verification_uri` and
+`user_code` while a flow waits (null once it ends), so clients show the link
+and code on the provider's row. A browser flow has a `verification_uri` and no
+`user_code`. A key is never in an event.
 
 `GET /api/session/{id}/context` retains the provider request fields and adds
 `used`, `window` and `exact`. The newest request's measured input is used when
 its model matches the current model; otherwise `used` is a character-based
 estimate and `exact` is false. A missing catalog window is null. Measured usage
 refers to that request, rather than tokenizing newly appended context. Clients
-label estimates with `~`.
+label estimates with `~`. The estimate counts the context-bearing request: the
+reasoning effort (`reasoning_effort`, `reasoning.effort` or Claude's `effort`)
+is a request option, not context, so changing it does not move `used`.
 
 `POST /api/draft/context` (session drafts, PLAN K4) takes the fields of a
 session-creation request (`project` or `directory`, and optionally `agent`,
@@ -1196,11 +1346,12 @@ the session's cache, and a tool call in the reply is ignored. Each request and r
 
 ### Search (K5)
 
-`GET /api/search?q=` matches the sessions' titles and the user's own messages (notices are not indexed) with
-SQLite FTS5 (`search_index`, kept up to date as messages and titles change and backfilled once). Every word of `q`
-is a prefix, all must match, and `q` is never FTS syntax. A hit is the session's title when that matches, else its
-best message; `snippet` marks the match with `[ ]`. Prompt history (`/project/{id}/prompts?q=`) stays a plain
-substring match, which is what Up-arrow recall wants.
+`GET /api/search?q=` matches the sessions' titles, the user's own messages and each turn's final assistant text
+(notices and tool output are not indexed) with SQLite FTS5 (`search_index`, kept up to date as messages and titles
+change and when a turn closes; final answers for older sessions are backfilled once in bounded slices). Every word of
+`q` is a prefix, all must match, and `q` is never FTS syntax. A hit is the session's title when that matches, else
+its best-ranked user message or final answer; `snippet` marks the match with `[ ]`. Prompt history
+(`/project/{id}/prompts?q=`) stays a plain substring match, which is what Up-arrow recall wants.
 
 ### Message paging (K6)
 
@@ -1221,15 +1372,18 @@ refusal the model reads: `the user declined this tool call: <note>`. Both show i
 
 ### Project MCP servers
 
-A project's `.mcp.json` is trusted configuration. Every enabled, valid entry starts with a new
-session in that project; there is no approval endpoint. The file is arbitrary code: opening an
-untrusted project and starting a session runs its commands ([mcp.md](mcp.md#project-servers)).
-`GET /api/project/{id}/mcp` returns
-`{project_id, file, exists, revision, error, warnings, servers}` and never starts a server
-(it reads the file and may close a changed or removed connection). `revision` is the SHA-256 of
-the file bytes, or `missing`. Each `servers` row has `server`, `state`, `error`, `tools`,
-`enabled`, `source: "project"`, `project_id`, `file`, `warnings` and the non-secret facts from
-`config.describe()`. `state` is `idle`, `connecting`, `connected`, `failed`, `disabled` or
+A project's `.mcp.json` and `.agents/mcp.json` are trusted configuration. Every enabled, valid
+entry starts with a new session in that project; there is no approval endpoint. The files are
+arbitrary code: opening an untrusted project and starting a session runs their commands
+([mcp.md](mcp.md#project-servers)). `GET /api/project/{id}/mcp` returns
+`{project_id, file, exists, revision, error, warnings, servers, files, duplicates}` and never
+starts a server (it reads the files and may close a changed or removed connection). `revision`
+combines the SHA-256 of each file's bytes, or `missing` when neither exists. `files` lists each
+file's `name`, `file`, `exists`, `revision`, `error`, `warnings` and parsed `servers`; a duplicate
+name also appears in `duplicates` as `{server, used, ignored}`. `.mcp.json` wins a duplicate name.
+Each `servers` row has `server`, `state`, `error`, `tools`, `enabled`, `source: "project"`,
+`project_id`, `file` (the winning file), `warnings`, optional `duplicate` and the non-secret facts
+from `config.describe()`. `state` is `idle`, `connecting`, `connected`, `failed`, `disabled` or
 `invalid`; a file error is the special server `(file)` with `state: "invalid"`. Environment and
 header values are never returned; a remote URL has credentials, query and fragment removed.
 
@@ -1261,7 +1415,7 @@ the user; the switches themselves are unchanged.
 MiB) only if it is still at the `revision` a read returned; `"new"` creates a file that must not exist. A stale
 revision is 409 `stale_file` with `current_revision`. Paths are opened without following symlinks and cannot leave
 the workspace; the write is a temporary file renamed over the target and keeps the file's mode. The event
-`files.changed` follows. The model's own freshness guard sees the new content as a user change.
+`files.changed` follows.
 The request body may be up to 8 MiB because JSON escaping can expand a 1 MiB file; the content limit itself is
 unchanged.
 

@@ -1,10 +1,10 @@
-"""Project `.mcp.json`: discovery, strict parsing and one server scope per project.
+"""Project MCP files: discovery, strict parsing and one server scope per project.
 
-A project `.mcp.json` is trusted configuration, like a `package.json` script: the
-user controls it and opening a project means accepting that it may run code.
-Enabled, valid entries are loaded automatically and started with a new session;
-there is no approval prompt. Disabled entries are never started, and an unusable
-entry is reported without hiding the others.
+A project's MCP configuration is trusted configuration, like a `package.json`
+script: the user controls it and opening a project means accepting that it may
+run code. Enabled, valid entries are loaded automatically and started with a new
+session; there is no approval prompt. Disabled entries are never started, and an
+unusable entry is reported without hiding the others.
 
 The file is still parsed strictly, because a repository may be committed by
 someone else. A project entry may not shadow an enabled global name, so it
@@ -13,8 +13,11 @@ cannot silently replace the user's own trusted server. A disabled global entry
 may use it, and if the global entry is enabled later the collision invalidates
 the project entry at the next read.
 
-Only `<project>/.mcp.json` is read. It accepts the same server maps and entry
-dialects as `nexus config import-mcp` (`mcpServers`, `servers`, `mcp`,
+Two files are read: `<project>/.mcp.json` (the MCP project-file convention) and
+`<project>/.agents/mcp.json` (the project's agent-config folder). `.mcp.json`
+wins a duplicate name; the ignored definition is reported as a warning rather
+than silently disappearing. Both accept the same server maps and entry dialects
+as `nexus config import-mcp` (`mcpServers`, `servers`, `mcp`,
 `context_servers`); project entries may use `${workspaceFolder}` and default
 their working directory to the project path.
 """
@@ -36,6 +39,7 @@ from .manager import McpManager, McpUnavailable
 from .search import Result
 
 FILE_NAME = ".mcp.json"
+FILE_NAMES = (FILE_NAME, ".agents/mcp.json")
 MAX_FILE_BYTES = 256 * 1024
 WRAPPERS = ("mcpServers", "servers", "mcp", "context_servers")
 _DISABLED_PREFIX = "mcp:"
@@ -55,7 +59,7 @@ def _reject_constant(value: str) -> Any:
 
 
 def _read(path: Path) -> tuple[bytes, bool, str | None]:
-    """Bounded bytes for `<project>/.mcp.json`, opened without following a symlink.
+    """Bounded bytes for one project MCP file, opened without following a symlink.
 
     `O_NOFOLLOW` and the `fstat` check happen on the same descriptor, so a symlink or a
     file swapped in after the check cannot be read out of the project (there is no
@@ -68,14 +72,14 @@ def _read(path: Path) -> tuple[bytes, bool, str | None]:
         return b"", False, None
     except OSError as exc:
         if exc.errno in (errno.ELOOP, errno.ENOTDIR):
-            return b"", True, ".mcp.json must be a regular file, not a symlink"
+            return b"", True, "must be a regular file, not a symlink"
         return b"", True, f"{type(exc).__name__}: {exc}"
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
-            return b"", True, ".mcp.json must be a regular file"
+            return b"", True, "must be a regular file"
         if info.st_size > MAX_FILE_BYTES:
-            return b"", True, f".mcp.json exceeds {MAX_FILE_BYTES} bytes"
+            return b"", True, f"exceeds {MAX_FILE_BYTES} bytes"
         chunks: list[bytes] = []
         remaining = MAX_FILE_BYTES + 1
         while remaining > 0:
@@ -86,12 +90,45 @@ def _read(path: Path) -> tuple[bytes, bool, str | None]:
             remaining -= len(chunk)
         raw = b"".join(chunks)
         if len(raw) > MAX_FILE_BYTES:
-            return b"", True, f".mcp.json exceeds {MAX_FILE_BYTES} bytes"
+            return b"", True, f"exceeds {MAX_FILE_BYTES} bytes"
         return raw, True, None
     except OSError as exc:
         return b"", True, f"{type(exc).__name__}: {exc}"
     finally:
         os.close(fd)
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectFile:
+    """One MCP file's own parse result, before it is merged with the other."""
+
+    name: str
+    file: str
+    exists: bool
+    revision: str
+    entries: dict[str, Any]
+    servers: dict[str, ServerConfig]
+    invalid: dict[str, str]
+    warnings: tuple[str, ...]
+    error: str | None
+
+    def summary(self) -> dict[str, Any]:
+        return {"name": self.name, "file": self.file, "exists": self.exists,
+                "revision": self.revision, "error": self.error,
+                "warnings": list(self.warnings), "servers": sorted(self.servers)}
+
+
+@dataclass(frozen=True, slots=True)
+class Duplicate:
+    server: str
+    used: str
+    ignored: str
+
+    def message(self) -> str:
+        return f"server {self.server!r} is defined in both {self.used} and {self.ignored}; {self.used} is used"
+
+    def summary(self) -> dict[str, str]:
+        return {"server": self.server, "used": self.used, "ignored": self.ignored}
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,13 +143,33 @@ class ProjectDefinition:
     invalid: dict[str, str]
     warnings: tuple[str, ...]
     error: str | None
+    files: tuple[ProjectFile, ...] = ()
+    duplicates: tuple[Duplicate, ...] = ()
 
     def all_names(self) -> list[str]:
         return sorted(set(self.servers) | set(self.invalid))
 
+    def file_for(self, name: str) -> str:
+        """The file whose definition won this name (the first file in precedence order)."""
+        return next((state.file for state in self.files if name in state.entries), self.file)
+
+    def duplicate_for(self, name: str) -> Duplicate | None:
+        return next((item for item in self.duplicates if item.server == name), None)
+
+    def warnings_for(self, name: str) -> list[str]:
+        """File warnings and duplicate notices relevant to one server."""
+        state = next((state for state in self.files if name in state.entries), None)
+        if state is None:
+            return list(self.warnings)
+        warnings = [f"{state.name}: {warning}" for warning in state.warnings]
+        duplicate = self.duplicate_for(name)
+        if duplicate is not None:
+            warnings.append(duplicate.message())
+        return warnings
+
 
 class ProjectMcp:
-    """One project's `.mcp.json` servers, isolated from every other project's."""
+    """One project's MCP files, isolated from every other project's."""
 
     def __init__(self, project_id: str, project_path: str, publish: Any,
                  reserved: Callable[[], set[str]] | None = None) -> None:
@@ -141,17 +198,19 @@ class ProjectMcp:
         return self._definition(frozenset(self.reserved()))
 
     def _definition(self, reserved: frozenset[str]) -> ProjectDefinition:
-        raw, exists, read_error = _read(self.file)
-        key = (hashlib.sha256(raw).hexdigest(), exists, read_error, reserved)
+        reads = [(name, Path(self.project_path) / name, *_read(Path(self.project_path) / name))
+                 for name in FILE_NAMES]
+        key = (tuple((name, hashlib.sha256(raw).hexdigest() if raw else "missing", exists, error)
+                     for name, _path, raw, exists, error in reads), reserved)
         if self._cache is not None and key == self._cache_key:
             return self._cache
-        definition = self._parse(raw, exists, read_error, reserved)
+        definition = self._parse(reads, reserved)
         self._cache = definition
-        self._cache_key = (definition.revision, exists, read_error, reserved)
+        self._cache_key = key
         return definition
 
-    def _parse(self, raw: bytes, exists: bool, read_error: str | None,
-               reserved: frozenset[str]) -> ProjectDefinition:
+    def _parse_file(self, name: str, path: Path, raw: bytes, exists: bool,
+                    read_error: str | None) -> ProjectFile:
         revision = hashlib.sha256(raw).hexdigest() if raw else "missing"
         entries: dict[str, Any] = {}
         servers: dict[str, ServerConfig] = {}
@@ -163,10 +222,10 @@ class ProjectMcp:
                 document = json.loads(raw.decode("utf-8"), object_pairs_hook=_strict_object,
                                       parse_constant=_reject_constant)
             except (UnicodeDecodeError, ValueError) as exc:
-                error = f".mcp.json is not valid JSON: {exc}"
+                error = f"is not valid JSON: {exc}"
             else:
                 if not isinstance(document, dict):
-                    error = ".mcp.json must contain a JSON object"
+                    error = "must contain a JSON object"
                 else:
                     unknown = sorted(set(document) - set(WRAPPERS))
                     if unknown:
@@ -175,29 +234,63 @@ class ProjectMcp:
                     for key in maps:
                         block = document[key]
                         if not isinstance(block, dict):
-                            error = f".mcp.json {key!r} must be an object"
+                            error = f"{key!r} must be an object"
                             entries, servers, invalid = {}, {}, {}
                             break
-                        for name, entry in block.items():
-                            if name in entries:
-                                error = f".mcp.json defines server {name!r} more than once"
+                        for server_name, entry in block.items():
+                            if server_name in entries:
+                                error = f"defines server {server_name!r} more than once"
                                 entries, servers, invalid = {}, {}, {}
                                 break
-                            entries[name] = entry
+                            entries[server_name] = entry
                         if error:
                             break
             if error is None:
                 servers, invalid = parse_all(entries, workspace=self.project_path)
+        return ProjectFile(name=name, file=str(path), exists=exists, revision=revision,
+                           entries=entries, servers=servers, invalid=invalid,
+                           warnings=tuple(warnings), error=error)
+
+    def _parse(self, reads: list[tuple[str, Path, bytes, bool, str | None]],
+               reserved: frozenset[str]) -> ProjectDefinition:
+        files = tuple(self._parse_file(*item) for item in reads)
+        entries: dict[str, Any] = {}
+        servers: dict[str, ServerConfig] = {}
+        invalid: dict[str, str] = {}
+        duplicates: list[Duplicate] = []
+        warnings: list[str] = []
+        errors: list[str] = []
+        owners: dict[str, str] = {}
+        for state in files:
+            warnings.extend(f"{state.name}: {warning}" for warning in state.warnings)
+            if state.error is not None:
+                errors.append(f"{state.name}: {state.error}")
+            for name, entry in state.entries.items():
+                if name in owners:
+                    duplicates.append(Duplicate(name, owners[name], state.name))
+                    continue
+                owners[name] = state.name
+                entries[name] = entry
+                if name in state.servers:
+                    servers[name] = state.servers[name]
+                else:
+                    invalid[name] = state.invalid[name]
+        warnings.extend(duplicate.message() for duplicate in duplicates)
         # A project server may not replace an *enabled* global server. A disabled entry (such as
         # the offered browser-use default) holds no name, so a repository may use it. Enabling that
         # entry later changes the reserved set, invalidates this definition and closes the connection.
         for name in sorted(set(servers) & reserved):
             invalid[name] = f"name {name!r} is already used by a global MCP server; rename this project entry"
             servers.pop(name, None)
+        existing = [state for state in files if state.exists]
+        revision = (hashlib.sha256("|".join(f"{state.name}:{state.revision}" for state in files).encode()).hexdigest()
+                    if existing else "missing")
         return ProjectDefinition(
-            project_id=self.project_id, project_path=self.project_path, file=str(self.file),
-            exists=exists, revision=revision, entries=entries, servers=servers,
-            invalid=invalid, warnings=tuple(warnings), error=error)
+            project_id=self.project_id, project_path=self.project_path,
+            file=existing[0].file if existing else str(self.file),
+            exists=bool(existing), revision=revision, entries=entries, servers=servers,
+            invalid=invalid, warnings=tuple(warnings), error="; ".join(errors) or None,
+            files=files, duplicates=tuple(duplicates))
 
     def _stamp(self) -> tuple[Any, ...]:
         reserved = frozenset(self.reserved())
@@ -281,13 +374,20 @@ class ProjectMcp:
             else:
                 row = {"server": name, "state": "idle" if config.enabled else "disabled",
                        "error": None, "tools": 0, **config.describe()}
-            row |= {"source": "project", "project_id": self.project_id, "file": definition.file,
-                    "warnings": list(definition.warnings)}
+            duplicate = definition.duplicate_for(name)
+            row |= {"source": "project", "project_id": self.project_id,
+                    "file": definition.file_for(name), "warnings": definition.warnings_for(name)}
+            if duplicate is not None:
+                row["duplicate"] = duplicate.summary()
             rows.append(row)
         for name, error in sorted(definition.invalid.items()):
-            rows.append({"server": name, "state": "invalid", "error": error, "tools": 0, "enabled": False,
-                         "source": "project", "project_id": self.project_id, "file": definition.file,
-                         "warnings": list(definition.warnings)})
+            row = {"server": name, "state": "invalid", "error": error, "tools": 0, "enabled": False,
+                   "source": "project", "project_id": self.project_id, "file": definition.file_for(name),
+                   "warnings": definition.warnings_for(name)}
+            duplicate = definition.duplicate_for(name)
+            if duplicate is not None:
+                row["duplicate"] = duplicate.summary()
+            rows.append(row)
         return rows
 
     def row(self, name: str) -> dict[str, Any] | None:

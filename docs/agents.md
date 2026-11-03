@@ -137,9 +137,10 @@ otherwise the first loaded agent allowed as a root is used (normally
   session model; skipped refs are recorded in the snapshot's `model_pick`
   ([config.md](config.md)). Without a pool, the agent's
   frozen `model` applies, else the parent's model is inherited. Root sessions
-  do not use these pools. **effort** uses the session's value, then the agent's, then the
-  provider's default.
-- **steps** = the agent's frozen `steps`, or 500.
+  do not use these pools. **effort** uses the session's value, then the `agents.efforts` entry for the model it runs
+  (`effort_source: "config"`, frozen at creation, [config.md](config.md)), then the agent's, then the provider's default.
+- **steps** = the agent's frozen `steps`, or 500. On the last step the loop tells the model to answer in text only
+  and refuses further tool calls ([loop.md](loop.md#turnuser_text)).
 
 ## Built-in agents
 
@@ -170,7 +171,7 @@ model it was running with, so a session never changes model by changing agent.
 Approval is a session setting (`permission`), not an agent setting: read,
 `bash_output`, `bash_kill`, `ask`, `edit`, `write` and the outer `code` call
 never ask. In-directory `edit` and `write` are approval-free by fixed policy,
-with path confinement and read freshness still enforced. bash (including
+with path confinement still enforced. bash (including
 background) still asks unless the session is `allow`. Nested code calls follow
 the same rules.
 
@@ -180,8 +181,7 @@ Built-in agents prefer code when available for multi-step inspection, concurrent
 independent calls and filtering results down to relevant evidence. Single simple
 operations stay direct. Scouts can use code, but nested functions remain limited
 to read, grep, glob and ls: no shell, network or mutation tools. Reads inside
-cells do not establish read coverage, even when printed; read affected lines
-directly before edits. Tool definitions carry API examples; prompts give
+cells are retained by the kernel, not shown to the model. Tool definitions carry API examples; prompts give
 conditional workflow advice. New sessions pick this up; existing snapshots stay
 frozen until an explicit agent switch. A global or project agent file replaces
 the built-in prompt entirely, so an override such as
@@ -198,8 +198,8 @@ calls, 7,274 bash calls and 4,347 read calls. Of 15,042 messages with tool calls
 Compare equivalent tasks with the same model and effort on correctness first,
 then provider requests (`turn_request`), input/cached/output tokens and elapsed
 time (`turn` and `turn_request`). Count outer code calls separately from nested
-`code.call` events; more code calls alone is not success. Review read-coverage
-failures and whether printed evidence supports the answer. Account for human
+`code.call` events; more code calls alone is not success. Review
+whether printed evidence supports the answer. Account for human
 waits, tool failures and retries when comparing time. No before/after provider
 benchmark has been run yet. Direct tool batches execute sequentially; nested
 calls can run concurrently using `asyncio.gather`.

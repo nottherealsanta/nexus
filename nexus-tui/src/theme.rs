@@ -55,6 +55,25 @@ pub fn shimmer(
 
 const SOURCE: &str = include_str!("../../interface/theme.toml");
 
+/// The pen colours of the drawing modal. They end up in the image, so they do
+/// not change with the theme.
+pub fn annotation_inks() -> &'static [[u8; 3]] {
+    static INKS: std::sync::OnceLock<Vec<[u8; 3]>> = std::sync::OnceLock::new();
+    INKS.get_or_init(|| {
+        let table: toml::Value = toml::from_str(SOURCE).expect("interface/theme.toml is invalid");
+        table["annotation"]["ink"]
+            .as_array()
+            .expect("annotation.ink")
+            .iter()
+            .filter_map(|value| {
+                let hex = value.as_str()?.strip_prefix('#')?;
+                let channel = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+                Some([channel(0)?, channel(2)?, channel(4)?])
+            })
+            .collect()
+    })
+}
+
 type Tokens = BTreeMap<String, BTreeMap<String, String>>;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -278,6 +297,14 @@ impl Theme {
             Mode::Dark => &self.data.dark,
             Mode::Light => &self.data.light,
         }
+    }
+
+    /// The token's literal value from `interface/theme.toml` for the current
+    /// mode, whatever the colour tier. Image renderers need the real hex value
+    /// because they cannot use the terminal's ANSI fallback.
+    pub fn raw(&self, token: &str) -> Option<&str> {
+        let (group, name) = token.split_once('.')?;
+        self.tokens().get(group)?.get(name).map(String::as_str)
     }
 
     /// The colour of a token such as `text.primary`, or `None` when the tier has

@@ -19,7 +19,11 @@ type AudioContextLike = {
 type AudioContextConstructor = new () => AudioContextLike;
 
 /** Finished is a single note; input is higher and distinct. */
-const CUES = { finished: [660], input: [880, 1174.7] } as const;
+const CUES = {
+  finished: [660], input: [880, 1174.7],
+  // The Manager call starting (alt+m), and GPT-Live connected; the same notes as the TUI.
+  manager_start: [523.3, 784], live_connected: [659.3, 784, 1046.5],
+} as const;
 export type NotificationCue = keyof typeof CUES;
 
 export function playNotificationCue(kind: NotificationCue) {

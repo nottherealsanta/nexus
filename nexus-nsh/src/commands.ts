@@ -7,7 +7,7 @@ import { Clipboard, keymap, openUrl, platform } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
   editFile, fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
-  pendingInputs, contextDetail, imagePreview, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
+  pendingInputs, contextDetail, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
 } from "./store";
@@ -23,10 +23,13 @@ import { speakAnswer, speechPlaying, stopSpeaking } from "./speech";
 import { cancelDictation, isDictationBusy, microphoneAvailable, startDictation, stopDictation } from "./dictation";
 import { appendTranscript } from "./dictation-logic";
 import { dictationPhase } from "./voice-state";
+import { answerConsent, consentOpen, cancelListening, closeField, dismissCard, managerSlash, managerTerm, openField, openManagerSession, sendListening, stopCall, startQuietly, stopSpeech, submitField, talk } from "./core/manager";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
 
 export interface Cmd {
   id: string; title: string; category: string; slash?: string; keys?: { tui?: string; nsh?: string };
+  /** The TUI's Ctrl+X leader keys (`shift+n`, `shift+/`), bound as a short sequence by NSH. */
+  leader?: string[];
   key_context?: string; when: string[]; unavailable_reason?: string; placement: string[]; status?: string; clients?: string; note?: string;
 }
 export const commands: Cmd[] = (manifest.command as unknown as Cmd[]).filter((c) => (c.clients ?? "both") !== "tui");
@@ -99,7 +102,7 @@ function evalTerm(t: string): boolean {
     case "editor.dirty": return fileDirty();
     case "editor.readonly": return openFile() !== null && openFile()?.draft === undefined && openFile()?.content !== undefined;
     case "editor.markdown": return openFile() !== null && markdownFile();
-    case "overlay.open": return paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview();
+    case "overlay.open": return paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview() || !!annotating();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
     case "drawer.open": return !!drawer();
@@ -111,7 +114,8 @@ function evalTerm(t: string): boolean {
     case "has_notifications": return notifications().length > 0;
     case "focus.tool": return !!focusedTool();
     case "tool.output_clipped_in_ui": return !!focusedTool()?.clipped;
-    default: return false; // other focus.*, editor.dirty: no per-item focus tracking in this increment
+    default: if (t.startsWith("manager.")) return managerTerm(t);
+      return false; // other focus.*, editor.dirty: no per-item focus tracking in this increment
   }
 }
 let signedIn = false;
@@ -248,11 +252,14 @@ export function runSlashCommand(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return false;
   const [name, ...tail] = trimmed.slice(1).split(/\s+/);
-  const command = commands.find((c) => c.slash === name);
+  // `/manager stop` is the registered `/manager-stop`: a slash name has no space.
+  const stop = name === "manager" && tail[0]?.toLowerCase() === "stop" && tail.length === 1;
+  const command = commands.find((c) => c.slash === (stop ? "manager-stop" : name));
   if (!command) return false;
   const arg = tail.join(" ").trim();
   if (command.id === "session.rename" && arg) void patchSession(arg);
   else if (command.id === "skills.learn") learn(arg);
+  else if (command.id === "manager.start") void managerSlash(arg);
   else if (command.id === "session.btw") { if (arg) void sideQuestion(arg); else toast("info", "Usage: /btw your question"); }
   else void run(command.id);
   return true;
@@ -485,6 +492,7 @@ export const rightWidthHint = { w: 1280 };
 
 on("palette.open", () => paletteOpen.set(true));
 on("app.settings", openSettings);
+on("app.help_keys", () => contextDetail.set({ title: "Keyboard shortcuts", detail: shortcutText() }));
 on("app.open_inspector", () => { void openUrl(new URL("/inspector", import.meta.url).href).catch(() => toast("info", "Open /inspector on the host page.")); });
 on("app.reconnect", () => sync.retryNow());
 on("app.start_daemon", async () => { try { await fetch("/__nexus/start", { method: "POST" }); } catch {} sync.retryNow(); });
@@ -492,7 +500,7 @@ on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });
 on("notifications.mark_all_read", () => { notifications.set([]); unread.set(0); });
 on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[0].id); }); // the oldest, drawn on top
 on("alert.cancel", () => { const d = confirmDialog(); if (d) { if (!d.busy) confirmDialog.set(null); } else if (connection().kind !== "incompatible") addProjectOpen.set(false); });
-on("overlay.close", () => { if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (switcherOpen()) { switcherOpen.set(false); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
+on("overlay.close", () => { if (annotating()) { annotating.set(null); return; } if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (switcherOpen()) { switcherOpen.set(false); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
 on("nav.drawer.close", () => drawer.set(null));
 on("sidebar.left.toggle", toggleLeft);
 on("sidebar.right.toggle", () => toggleRight(rightWidthHint.w));
@@ -591,6 +599,19 @@ function dictateFromComposer() {
 // requested runtime handler registered by its final ID so the mic button can invoke it
 // now and the shared manifest can expose it when that command lands.
 on("voice.dictate", dictateFromComposer, true);
+// The Manager (MANAGER_PLAN.md 10.6). Everything else of it lives in core/manager.ts.
+on("manager.talk", () => talk(), true);
+on("manager.start", () => startQuietly(), true);
+on("manager.open_session", () => openManagerSession(), true);
+on("manager.stop", () => stopCall());
+on("manager.send", () => sendListening());
+on("manager.listen_cancel", () => cancelListening());
+on("manager.speech_stop", () => stopSpeech());
+on("manager.field_open", () => openField(""));
+on("manager.field_send", () => submitField());
+on("manager.field_close", () => closeField());
+on("manager.card_mic", () => talk(), true);
+on("manager.card_dismiss", () => dismissCard());
 on("voice.download_stt", () => askVoiceDownload("stt"), true);
 on("voice.remove_stt", () => askVoiceRemove("stt"), true);
 on("voice.download_tts", () => askVoiceDownload("tts"), true);
@@ -793,12 +814,35 @@ export function keyLabel(c: Cmd): string | null {
   try { return keymap.label(toKeystroke(k)); } catch { return k; }
 }
 
+const shortcutLabel = (k: string) => { try { return keymap.label(toKeystroke(k)); } catch { return k; } };
+/** The manifest's keys as text for `?`: the Ctrl+X leader first, then every direct NSH shortcut. */
+export function shortcutText(): string {
+  const leaders = commands.flatMap((c) => (c.leader ?? []).map((k) => `${shortcutLabel(k).padEnd(8)} ${c.title}`));
+  const direct = commands
+    .filter((c) => c.keys?.nsh && c.key_context !== "escape_chain")
+    .map((c) => `${(keyLabel(c) ?? c.keys!.nsh!).padEnd(12)} ${c.title}`);
+  return [
+    `Leader · press ${shortcutLabel("ctrl+x")}, then:`,
+    ...leaders,
+    "",
+    "Direct shortcuts",
+    ...direct,
+  ].join("\n");
+}
+
 const GLOBAL_CONTEXTS = new Set(["global"]);
 /** Bare keys (enter, space, [, ], @, /, i) belong to the focused control or text field, never a global binding. */
 const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d+$/.test(k);
 /** Esc is not a per-command lookup: the manifest's ordered rules decide (interface/README.md "Esc precedence"). */
 export function escape() {
+  if (consentOpen()) { void answerConsent(false); return "manager_consent"; }
+  // The Manager's engaged states come first; at rest none of its terms holds and Esc is untouched.
+  for (const rule of manifest.keymap.escape as readonly { id: string; when: readonly string[]; action: string }[]) {
+    if (!rule.id.startsWith("manager_")) continue;
+    if (rule.when.every(term)) { void run(rule.action); return rule.id; }
+  }
   if (isDictationBusy()) { cancelDictation(); return "dictation"; }
+  if (annotating()) { annotating.set(null); return "annotate"; }
   if (imagePreview()) { imagePreview.set(null); return "image_preview"; }
   if (contextDetail()) { contextDetail.set(null); return "context_detail"; }
   if (resourcesOpen()) { resourcesOpen.set(false); return "resources"; }
@@ -829,6 +873,31 @@ export function bindOpenKeys(keys: Record<string, () => void>): () => void {
   return () => offs.forEach((f) => f());
 }
 
+const LEADER_PREFIX = "ctrl+x";
+const LEADER_MS = 3000;
+
+/** The TUI's Ctrl+X leader: arm the manifest's `leader` keys for a moment, then release them. */
+export function bindLeader(): () => void {
+  let pending: { off: () => void; timer: ReturnType<typeof setTimeout> } | null = null;
+  const disarm = () => {
+    if (!pending) return;
+    const p = pending; pending = null;
+    clearTimeout(p.timer);
+    p.off();
+  };
+  const arm = () => {
+    disarm();
+    if (term("overlay.open") || term("dialog.open") || textEdit.active()) return;
+    // Esc cancels the armed leader instead of falling through to interrupt/back.
+    const keys: Record<string, () => void> = { escape: disarm };
+    for (const c of commands) for (const key of c.leader ?? []) keys[key] = () => { disarm(); void run(c.id); };
+    pending = { timer: setTimeout(disarm, LEADER_MS), off: bindOpenKeys(keys) };
+  };
+  const off = (() => { try { return keymap.bind(LEADER_PREFIX, arm, { when: "always" }); } catch { return null; } })();
+  if (!off) return () => {};
+  return () => { disarm(); off(); };
+}
+
 export function bindKeys(): () => void {
   const offs: (() => void)[] = [];
   for (const c of commands) {
@@ -857,6 +926,7 @@ export function bindKeys(): () => void {
     try { offs.push(keymap.bind(toKeystroke(k), () => { if (openFile()) void run(id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
   }
   try { offs.push(keymap.bind("escape", () => { escape(); }, { when: "always" })); } catch {}
+  offs.push(bindLeader());
   return () => offs.forEach((f) => f());
 }
 void selectProject;

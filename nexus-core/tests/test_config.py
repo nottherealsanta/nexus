@@ -150,6 +150,51 @@ async def test_provider_login_and_signout(tmp_path: Path, monkeypatch) -> None:
         assert (await client.get("/api/provider/codex/login")).json()["status"] == "idle"
 
 
+async def test_provider_browser_login_hands_the_url_to_the_client(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+
+    import httpx
+
+    from nexus.llmhub.auth import SIGN_INS
+    from nexus.server import build_app, make_runtime
+    from nexus.store import Store
+
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    done = asyncio.Event()
+
+    class FakeAuth:
+        methods = ("browser", "device")
+
+        async def login(self, method, notify, browser_open=None):
+            assert method == "browser"
+            assert browser_open("https://example.test/authorize?state=s1")
+            await done.wait()
+
+        def logout(self):
+            pass
+
+    monkeypatch.setitem(SIGN_INS, "codex", FakeAuth)
+    runtime = make_runtime(remembering(Store(tmp_path / "store.db"), "codex/model"))
+    app = build_app(runtime, token="token", url="http://test")
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+        headers={"authorization": "Bearer token"},
+    ) as client:
+        response = await client.post("/api/provider/codex/login", json={"method": "browser"})
+        assert response.status_code == 202
+        await asyncio.sleep(0)
+        state = (await client.get("/api/provider/codex/login")).json()
+        assert state["status"] == "pending"
+        assert state["verification_uri"] == "https://example.test/authorize?state=s1"
+        assert state.get("user_code") is None and state["message"].startswith("Open https://example.test/")
+        done.set()
+        await asyncio.sleep(0)
+        assert (await client.get("/api/provider/codex/login")).json()["status"] == "connected"
+        # A method the provider does not list names the ones it does.
+        bad = await client.post("/api/provider/codex/login", json={"method": "cli"})
+        assert bad.status_code == 400 and "browser, device" in bad.json()["error"]
+
+
 def test_import_mcp_preserves_dialects_and_existing_file(tmp_path: Path) -> None:
     import json
 
@@ -225,7 +270,7 @@ async def test_provider_list_says_how_to_sign_in(tmp_path: Path, monkeypatch) ->
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                  headers={"authorization": "Bearer token"}) as client:
         providers = {p["id"]: p for p in (await client.get("/api/provider")).json()}
-    assert providers["codex"]["methods"] == ["device"] and "key_hint" not in providers["codex"]
+    assert providers["codex"]["methods"] == ["browser", "device"] and "key_hint" not in providers["codex"]
     assert providers["copilot"]["methods"] == ["device"]
     assert providers["ollama"]["methods"] == ["local"]
     groq = providers["groq"]

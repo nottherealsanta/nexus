@@ -1,7 +1,7 @@
 import type { JSX } from "nsh";
-import { Scroll, Text, View, effect, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
+import { Scroll, Text, View, effect, keymap, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, Icon, T, FOCUS, Seg } from "./kit";
+import { Btn, Icon, T, TS, FOCUS, Seg } from "./kit";
 import { Heading, Modal, ModalFooter, ModalTitle } from "./modal";
 import { manifest } from "../gen/manifest";
 import { byId, commands, copyText, escape, keyLabel, loadProviders, run } from "../commands";
@@ -10,6 +10,7 @@ import { CLIENT_API, CLIENT_VERSION } from "../core/api";
 import { request } from "../core/transport";
 import { voiceInfoLines, voiceActionReason } from "../voice-settings";
 import { voiceStatus } from "../voice-state";
+import { MANAGER_ROWS, managerControl } from "./manager/settings";
 import type { VoiceTarget } from "../voice-state";
 
 interface Row { id: string; label: string; kind: string; scope: string; clients?: string; default?: unknown; options?: string[]; command?: string; note?: string; unavailable_reason?: string }
@@ -30,7 +31,7 @@ export function loadSettingsData() {
   request<any>("GET", "/api/model").then((r) => data.update((d) => ({ ...d, models: r }))).catch(() => {});
 }
 
-function Value(p: { text: string; mono?: boolean }) { return <Text style={{ userSelect: "text" }} class={`${p.mono ? "font-mono text-xs" : "text-[13px]"} leading-5 text-foreground-secondary ${isNarrow() ? "text-left" : "text-right"}`}>{p.text}</Text>; }
+function Value(p: { text: string; mono?: boolean }) { return <Text style={{ userSelect: "text" }} class={`${p.mono ? TS.mono : TS.base} text-foreground-secondary ${isNarrow() ? "text-left" : "text-right"}`}>{p.text}</Text>; }
 
 function listFor(id: string): JSX.Element {
   const d = data();
@@ -59,7 +60,7 @@ async function refreshCatalog() {
 }
 
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["appearance.sidebar", "appearance.details", "appearance.session_scope", "appearance.show_archived", "dictation.push_to_talk", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "notifications.sound", "about.inspector", "agents.default_root", "tools.default_permission", "agents.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove"]);
+const WIRED = new Set(["appearance.sidebar", "appearance.details", "appearance.session_scope", "appearance.show_archived", "dictation.push_to_talk", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "notifications.sound", "about.inspector", "agents.default_root", "tools.default_permission", "agents.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove", ...MANAGER_ROWS]);
 
 function voiceTarget(id: string): VoiceTarget | null {
   if (id.startsWith("dictation.stt_")) return "stt";
@@ -96,7 +97,7 @@ function HandoffPercent() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="0–100" accessibilityLabel="Automatic handoff threshold (percent, 0 is off)" testID="handoff-percent"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class="h-8 w-24 rounded-(--radius) bg-background px-2 text-right font-mono text-[12.5px] text-foreground" />
+        class={`h-8 w-24 rounded-none bg-background px-2 text-right ${TS.mono} text-foreground`} />
       <Btn label="Save" onPress={save} testID="handoff-percent-save" />
     </View>
   );
@@ -118,7 +119,7 @@ function TitleModels() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="copilot/gpt-6-luna, codex/gpt-6-luna" accessibilityLabel="Title models, provider/model separated by commas" testID="title-models"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class="h-8 min-w-0 flex-1 rounded-(--radius) bg-background px-2 font-mono text-[12.5px] text-foreground" />
+        class={`h-8 min-w-0 flex-1 rounded-none bg-background px-2 ${TS.mono} text-foreground`} />
       <Btn label="Save" onPress={save} testID="title-models-save" />
     </View>
   );
@@ -147,7 +148,7 @@ function McpToolsLimit() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="1–1000" accessibilityLabel="Tools listed by name (limit)" testID="mcp-max-listed-tools"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class="h-8 w-24 rounded-(--radius) bg-background px-2 text-right font-mono text-[12.5px] text-foreground" />
+        class={`h-8 w-24 rounded-none bg-background px-2 text-right ${TS.mono} text-foreground`} />
       <Btn label="Save" onPress={save} testID="mcp-max-listed-tools-save" />
     </View>
   );
@@ -171,13 +172,21 @@ function poolUsers(provider: string): string[] {
     .filter((name) => uses(agents.models?.[name]) || uses(agents.fallbacks?.[name])).sort();
 }
 
-async function connect(p: any) {
+/** The row that starts one provider sign-in method; Core lists the methods in order. */
+const SIGN_IN_LABELS: Record<string, string> = {
+  browser: "Sign in with browser",
+  device: "Sign in with a device code",
+  cli: "Sign in with Claude Code",
+  local: "Use the local server",
+};
+
+async function connect(p: any, method?: string) {
   const methods: string[] = p.methods ?? [];
-  if (methods.includes("api_key")) { providerKey.set(""); keyEntry.set({ id: p.id, label: p.label ?? p.id }); return; }
-  const method = methods.includes("device") ? "device" : methods[0];
-  if (!method) { toast("info", `Sign in to ${p.label} from a terminal: nexus login ${p.id}`); return; }
+  if (method === "api_key" || (!method && methods.includes("api_key"))) { providerKey.set(""); keyEntry.set({ id: p.id, label: p.label ?? p.id }); return; }
+  const chosen = method ?? (methods.includes("device") ? "device" : methods[0]);
+  if (!chosen) { toast("info", `Sign in to ${p.label} from a terminal: nexus login ${p.id}`); return; }
   try {
-    const state = await request<any>("POST", `/api/provider/${p.id}/login`, { body: { method } });
+    const state = await request<any>("POST", `/api/provider/${p.id}/login`, { body: { method: chosen } });
     providerLogins.update((all) => ({ ...all, [p.id]: { provider: p.id, ...state } }));
     if (state.status === "connected") await reloadProviders();
   } catch (e) { providerLogins.update((all) => ({ ...all, [p.id]: { status: "failed", message: e instanceof Error ? e.message : String(e) } })); }
@@ -234,17 +243,17 @@ export function ProviderDetailModal() {
         <View class="flex-row"><Btn label="Disconnect" kind="danger" disabled={!live()} onPress={() => void disconnect(provider())} testID="provider-detail-disconnect" /></View>
       </View>}</If>
       <If when={pending()}>{() => <View class="gap-2">
-        <Text class={T.meta}>Open the link and enter the code below.</Text>
+        <If when={login()?.verification_uri}>{() => <Text class={T.meta}>{login()?.user_code ? "Open the link and enter the code below." : "Open the link to sign in."}</Text>}</If>
         <If when={login()?.verification_uri}>{() => <View class="flex-row items-center gap-2">
           <Button onPress={() => open(login()!.verification_uri!)} accessibilityLabel={`Open ${login()!.verification_uri}`} testID="provider-detail-link"
-            class={`flex-1 rounded-(--radius) px-2 min-h-9 items-start justify-center hover:bg-accent ${FOCUS}`}>
-            <Text style={{ userSelect: "text" }} class="font-mono text-[12.5px] leading-5 text-info underline">{login()!.verification_uri!}</Text>
+            class={`flex-1 rounded-none px-2 min-h-9 items-start justify-center hover:bg-accent ${FOCUS}`}>
+            <Text style={{ userSelect: "text" }} class={`${TS.mono} text-info underline`}>{login()!.verification_uri!}</Text>
           </Button>
           <Btn label="Open" kind="ghost" icon="web" onPress={() => open(login()!.verification_uri!)} testID="provider-detail-open" />
         </View>}</If>
         <If when={login()?.user_code}>{() => <View class="flex-row items-center gap-2">
           <Text class={T.sec}>Code</Text>
-          <Text style={{ userSelect: "text" }} class="font-mono text-[16px] leading-5 font-semibold text-foreground">{login()!.user_code!}</Text>
+          <Text style={{ userSelect: "text" }} class={`${TS.title} font-mono font-semibold text-foreground`}>{login()!.user_code!}</Text>
           <Btn label="Copy" kind="ghost" icon="copy" onPress={() => copyText(login()!.user_code!, "Code copied")} testID="provider-detail-copy" />
         </View>}</If>
         <If when={!login()?.user_code && !login()?.verification_uri}><Text class={T.meta}>{login()?.message || "Starting sign-in…"}</Text></If>
@@ -252,15 +261,17 @@ export function ProviderDetailModal() {
         <View class="flex-row"><Btn label="Cancel sign-in" onPress={() => void request("DELETE", `/api/provider/${id()}/login`).then(() => providerLogins.update((all) => { const { [id()!]: _, ...rest } = all; return rest; }))} testID="provider-detail-cancel" /></View>
       </View>}</If>
       <If when={!provider()!.connected && !pending()}>{() => <View class="gap-2">
-        <If when={failed()}><Text class="text-xs leading-4 text-error">{login()?.message ?? "Sign-in failed"}</Text></If>
+        <If when={failed()}><Text class={`${TS.base} text-error`}>{login()?.message ?? "Sign-in failed"}</Text></If>
         <If when={(provider()!.methods ?? []).includes("api_key")}>{() => <View class="flex-row"><Btn label="Add API key" kind="primary" disabled={!live()} onPress={() => void connect(provider())} testID="provider-detail-key" /></View>}</If>
-        <If when={(provider()!.methods ?? []).includes("device")}>{() => <View class="flex-row"><Btn label="Sign in with a device code" disabled={!live()} onPress={() => void connect(provider())} testID="provider-detail-device" /></View>}</If>
+        {(provider()!.methods ?? []).filter((method: string) => method !== "api_key").map((method: string) => (
+          <View class="flex-row"><Btn label={SIGN_IN_LABELS[method] ?? `Sign in (${method})`} disabled={!live()} onPress={() => void connect(provider(), method)} testID={`provider-detail-${method}`} /></View>
+        ))}
         <If when={provider()!.key_env}><Text class={T.meta}>{`Or set $${provider()!.key_env}`}</Text></If>
         <If when={provider()!.key_hint}><Text class={T.meta}>{provider()!.key_hint}</Text></If>
       </View>}</If>
       <If when={keying()}>{() => <View class="gap-2">
         <Input masked autoFocus accessibilityLabel={`${provider()!.label} API key`} placeholder={`API key ${provider()!.key_hint ?? ""}`} onChange={({ value }) => providerKey.set(value)}
-          class="h-9 rounded-(--radius) bg-background px-3 text-foreground" testID={`provider-key-${id()}`} />
+          class={`h-9 rounded-none bg-background px-3 ${TS.mono} text-foreground`} testID={`provider-key-${id()}`} />
         <View class="flex-row items-center gap-2">
           <Btn label="Save key" kind="primary" onPress={() => void saveKey()} testID={`provider-key-save-${id()}`} />
           <Btn label="Cancel" onPress={() => { providerKey.set(""); keyEntry.set(null); }} />
@@ -279,9 +290,9 @@ function ProviderRow(p: { p: any }) {
   return <View testID={`provider-${id}`}>
     <Button onPress={() => { keyEntry.set(null); providerKey.set(""); providerDetail.set(id); }} testID={`provider-open-${id}`}
       accessibilityLabel={`${p.p.label ?? id}: connection and sign-in`}
-      class={`flex-row items-center gap-3 rounded-(--radius) px-3 py-2 hover:bg-accent ${FOCUS}`}>
+      class={`flex-row items-center gap-3 rounded-none px-3 py-2 hover:bg-accent ${FOCUS}`}>
       <View class="flex-1">
-        <Text class="text-[13px] leading-5 text-foreground">{p.p.label ?? id}</Text>
+        <Text class={T.base}>{p.p.label ?? id}</Text>
         <Text class={T.meta}>{pending() ? "Sign-in pending · waiting for you" : failed() ? "Sign-in failed · open" : providerStatus(p.p)}</Text>
       </View>
       <Text class={T.meta}>Open</Text>
@@ -302,6 +313,17 @@ function ProvidersPage(p: { sec: Section }) {
   </View>;
 }
 
+/** The agent and model whose effort the arrow keys step: set when its stepper is pressed or focused. */
+const effortTarget = signal<{ agent: string; ref: string; step: (by: number) => void } | null>(null);
+let effortKeysBound = false;
+function bindEffortKeys() {
+  if (effortKeysBound) return;
+  effortKeysBound = true;
+  for (const [key, by] of [["left", -1], ["right", 1]] as const) {
+    try { keymap.bind(key, () => { const t = effortTarget(); if (t && settingsPage() === `agents/${t.agent}`) t.step(by); }, { when: "always" }); } catch { /* the platform keeps this keystroke */ }
+  }
+}
+
 function AgentCard(p: { a: any }) {
   const name = () => p.a.name;
   const live_ = () => new Set((data().providers ?? []).filter((x: any) => x.connected).map((x: any) => x.id));
@@ -312,6 +334,31 @@ function AgentCard(p: { a: any }) {
     const values = { ...(config()?.values?.agents?.[key] ?? {}) };
     if (refs.length) values[name()] = refs; else delete values[name()];
     void patchConfig(`agents.${key}`, values);
+  };
+  const efforts = (): Record<string, string> => config()?.values?.agents?.efforts?.[name()] ?? {};
+  const levels = (ref: string): string[] => ((data().models?.models ?? []).find((item: any) => item.ref === ref)?.efforts ?? []).map(String);
+  /** Step one model's effort through "default" and the levels it lists; it stops at either end. */
+  const stepEffort = (ref: string, by: number) => {
+    const all = levels(ref);
+    if (!all.length) { toast("info", `${ref} lists no effort levels`); return; }
+    const at = efforts()[ref] ? all.indexOf(efforts()[ref]) + 1 : 0;
+    const next = Math.max(0, Math.min(all.length, at + by));
+    if (next === at) return;
+    const mine = { ...efforts() };
+    if (next === 0) delete mine[ref]; else mine[ref] = all[next - 1];
+    const values = { ...(config()?.values?.agents?.efforts ?? {}) };
+    if (Object.keys(mine).length) values[name()] = mine; else delete values[name()];
+    void patchConfig("agents.efforts", values);
+  };
+  const EffortStepper = (q: { model: string }) => {
+    const target = () => { bindEffortKeys(); effortTarget.set({ agent: name(), ref: q.model, step: (by) => stepEffort(q.model, by) }); };
+    return <If when={levels(q.model).length || efforts()[q.model]}>
+      <View focusable onFocus={target} accessibilityLabel={`Effort for ${q.model}`} testID={`agent-effort-${name()}-${q.model}`} class="flex-row items-center gap-1">
+        <Btn label="‹" kind="ghost" disabled={!live()} onPress={() => { target(); stepEffort(q.model, -1); }} testID={`agent-effort-down-${name()}-${q.model}`} />
+        <Text class={`w-24 text-center ${T.meta}`}>{`effort ${efforts()[q.model] ?? "default"}`}</Text>
+        <Btn label="›" kind="ghost" disabled={!live()} onPress={() => { target(); stepEffort(q.model, 1); }} testID={`agent-effort-up-${name()}-${q.model}`} />
+      </View>
+    </If>;
   };
   const odds = (ref: string) => {
     const eligible = pool().filter(connectedRef).length;
@@ -332,26 +379,27 @@ function AgentCard(p: { a: any }) {
   return <View class="gap-2 px-3" testID={`agent-models-${name()}`}>
     <Text class={T.sec}>{p.a.description}</Text>
     <Text style={{ userSelect: "text" }} class={T.meta}>{[p.a.source, tools(), p.a.path].filter(Boolean).join(" · ")}</Text>
-    <View class="flex-row items-baseline gap-2 pt-2"><Text class="text-[13px] font-medium leading-5 text-foreground">Models</Text><Text class={T.meta}>one picked at random</Text></View>
+    <View class="flex-row items-baseline gap-2 pt-2"><Text class={T.label}>Models</Text><Text class={T.meta}>one picked at random</Text></View>
     <If when={!pool().length}><Text class={T.sec} testID={`agent-models-empty-${name()}`}>{`None: uses ${agentDefault(p.a)}.`}</Text></If>
     <Each of={pool()} key={(ref) => ref}>{(ref) => <View class="flex-row items-center gap-2" testID={`agent-model-${name()}-${ref()}`}>
       <Text class={`flex-1 ${T.mono}`}>{ref()}</Text>
-      <If when={!connectedRef(ref())}><Text class="text-xs leading-4 text-warning">not connected · skipped</Text></If>
-      <If when={connectedRef(ref())}><Text class={`w-12 text-right ${T.meta}`}>{odds(ref())}</Text></If>
+      <If when={!connectedRef(ref())}><Text class={`${TS.base} text-warning`}>not connected · skipped</Text></If>
+      <If when={connectedRef(ref())}><EffortStepper model={ref()} /><Text class={`w-12 text-right ${T.meta}`}>{odds(ref())}</Text></If>
       <Btn label="Remove" kind="ghost" disabled={!live()} onPress={() => save("models", pool().filter((v) => v !== ref()))} testID={`agent-model-remove-${name()}-${ref()}`} />
     </View>}</Each>
     <View class="flex-row"><Btn label="Add model" disabled={!live() || !data().models} testID={`agent-model-add-${name()}`} onPress={() => add("models")} /></View>
-    <View class="flex-row items-baseline gap-2 pt-2"><Text class="text-[13px] font-medium leading-5 text-foreground">Fallbacks</Text><Text class={T.meta}>tried in order on failure</Text></View>
+    <View class="flex-row items-baseline gap-2 pt-2"><Text class={T.label}>Fallbacks</Text><Text class={T.meta}>tried in order on failure</Text></View>
     <Each of={fallbacks()} key={(ref) => ref}>{(ref) => <View class="flex-row items-center gap-2" testID={`agent-fallback-${name()}-${ref()}`}>
       <Text class={`w-5 ${T.meta}`}>{`${fallbacks().indexOf(ref()) + 1}.`}</Text>
       <Text class={`flex-1 ${T.mono}`}>{ref()}</Text>
-      <If when={!connectedRef(ref())}><Text class="text-xs leading-4 text-warning">not connected · skipped</Text></If>
+      <If when={!connectedRef(ref())}><Text class={`${TS.base} text-warning`}>not connected · skipped</Text></If>
+      <If when={connectedRef(ref())}><EffortStepper model={ref()} /></If>
       <Btn label="Up" kind="ghost" disabled={!live() || fallbacks().indexOf(ref()) === 0} onPress={() => move(ref(), -1)} />
       <Btn label="Down" kind="ghost" disabled={!live() || fallbacks().indexOf(ref()) === fallbacks().length - 1} onPress={() => move(ref(), 1)} />
       <Btn label="Remove" kind="ghost" disabled={!live()} onPress={() => save("fallbacks", fallbacks().filter((v) => v !== ref()))} testID={`agent-fallback-remove-${name()}-${ref()}`} />
     </View>}</Each>
     <View class="flex-row"><Btn label="Add fallback" disabled={!live() || !data().models} testID={`agent-fallback-add-${name()}`} onPress={() => add("fallbacks")} /></View>
-    <Text class={`pt-2 ${T.meta}`}>Changes apply to new subagents; running ones keep what they started with.</Text>
+    <Text class={`pt-2 ${T.meta}`}>←/→ sets this model's effort. Changes apply to new subagents; running ones keep what they started with.</Text>
   </View>;
 }
 
@@ -379,13 +427,13 @@ function AgentsPage(p: { sec: Section }) {
     </View>
     <View class="px-3"><Heading text="Subagents" /></View>
     <If when={!data().agents}><Text class={`px-3 ${T.meta}`}>Loading agents…</Text></If>
-    <Each of={data().agents?.problems ?? []} key={(problem: any) => JSON.stringify(problem)}>{(problem) => <Text class="px-3 text-xs leading-4 text-error">{typeof problem() === "string" ? problem() : `${problem().path}: ${problem().error}`}</Text>}</Each>
+    <Each of={data().agents?.problems ?? []} key={(problem: any) => JSON.stringify(problem)}>{(problem) => <Text class={`px-3 ${TS.base} text-error`}>{typeof problem() === "string" ? problem() : `${problem().path}: ${problem().error}`}</Text>}</Each>
     <View>
       <Each of={agents()} key={(a: any) => a.name}>{(a) => (
         <Button onPress={() => settingsPage.set(`agents/${a().name}`)} testID={`agent-row-${a().name}`} accessibilityLabel={`${a().name}: ${agentSummary(a()).text}`}
-          class={`flex-row items-center gap-6 rounded-(--radius) px-3 py-2 hover:bg-accent ${FOCUS}`}>
-          <View class="flex-1"><Text class="text-[13px] leading-5 text-foreground">{a().name}</Text><Text class={T.meta} style={{ numberOfLines: 1 }}>{a().description}</Text></View>
-          <Text class={`text-[13px] leading-5 ${agentSummary(a()).warn ? "text-warning" : "text-foreground-secondary"}`}>{agentSummary(a()).text}</Text>
+          class={`flex-row items-center gap-6 rounded-none px-3 py-2 hover:bg-accent ${FOCUS}`}>
+          <View class="flex-1"><Text class={T.base}>{a().name}</Text><Text class={T.meta} style={{ numberOfLines: 1 }}>{a().description}</Text></View>
+          <Text class={`${TS.base} ${agentSummary(a()).warn ? "text-warning" : "text-foreground-secondary"}`}>{agentSummary(a()).text}</Text>
           <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
         </Button>
       )}</Each>
@@ -394,11 +442,13 @@ function AgentsPage(p: { sec: Section }) {
 }
 
 function control(r: Row): JSX.Element {
+  const managed = managerControl(r.id, r.label, r.options);
+  if (managed) return managed;
   const target = voiceTarget(r.id);
   if (target && (r.id.endsWith("_model"))) {
     return (
       <View testID={`voice-status-${target}`} class={`gap-1 ${isNarrow() ? "items-start" : "items-end"}`}>
-        <Each of={voiceInfoLines(target)} key={(line) => line}>{(line) => <Text style={{ userSelect: "text", numberOfLines: 2 }} class="text-[12px] leading-4 text-foreground-secondary">{line()}</Text>}</Each>
+        <Each of={voiceInfoLines(target)} key={(line) => line}>{(line) => <Text style={{ userSelect: "text", numberOfLines: 2 }} class={`${TS.base} text-foreground-secondary`}>{line()}</Text>}</Each>
       </View>
     );
   }
@@ -432,8 +482,8 @@ function control(r: Row): JSX.Element {
     const disabled: string[] = config()?.values?.tools?.disabled ?? [];
     return <View class="w-full flex-row flex-wrap justify-end gap-1">{["read", "grep", "glob", "ls", "bash", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code"].map((name) => {
       const off = disabled.includes(name);
-      return <Button role="switch" selected={!off} testID={`default-tool-${name}`} accessibilityLabel={`${name} ${off ? "off" : "on"}`} onPress={() => void patchConfig("tools.disabled", off ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-(--radius) px-2 min-h-7 justify-center hover:bg-accent ${FOCUS}`}>
-        <Text class={`font-mono text-[12.5px] leading-5 ${off ? "text-muted-foreground line-through opacity-60" : "text-foreground-secondary"}`}>{name}</Text>
+      return <Button role="switch" selected={!off} testID={`default-tool-${name}`} accessibilityLabel={`${name} ${off ? "off" : "on"}`} onPress={() => void patchConfig("tools.disabled", off ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-none px-2 min-h-7 justify-center hover:bg-accent ${FOCUS}`}>
+        <Text class={`${TS.mono} ${off ? "text-muted-foreground line-through opacity-60" : "text-foreground-secondary"}`}>{name}</Text>
       </Button>;
     })}</View>;
   }
@@ -444,12 +494,12 @@ function control(r: Row): JSX.Element {
     return <Button testID={`edit-${r.id}`} accessibilityLabel={`Change ${r.label}`} onPress={() => {
       const options: string[] = key === "agent" ? (data().agents?.agents ?? []).filter((a: any) => a.mode !== "subagent").map((a: any) => a.name) : ["low", "medium", "high", "xhigh"];
       picker.set({ title: r.label, items: ["", ...options].map((v) => ({ id: v || "automatic", label: v || "automatic", run: async () => { picker.set(null); await patchConfig(`defaults.${key}`, v); } })) });
-    }} class={`rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={value} mono /></Button>;
+    }} class={`rounded-none px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={value} mono /></Button>;
   }
   if (r.kind === "choice" && r.options) return <Seg label={r.label} options={r.options} value={String(r.default ?? r.options[0])} disabled />;
-  if (r.kind === "toggle") return <Text class="text-[13px] leading-5 text-muted-foreground">{r.default ? "[x] on" : "[ ] off"}</Text>;
-  if (r.kind === "number") return <Text class="text-[13px] leading-5 text-muted-foreground">{String(r.default ?? "—")}</Text>;
-  if (r.kind === "choice") return <Text class="text-[13px] leading-5 text-muted-foreground">{String(r.default ?? "not set")}</Text>;
+  if (r.kind === "toggle") return <Text class={`${TS.base} text-muted-foreground`}>{r.default ? "[x] on" : "[ ] off"}</Text>;
+  if (r.kind === "number") return <Text class={`${TS.base} text-muted-foreground`}>{String(r.default ?? "—")}</Text>;
+  if (r.kind === "choice") return <Text class={`${TS.base} text-muted-foreground`}>{String(r.default ?? "not set")}</Text>;
   if (r.kind === "action") return <Btn label={r.label} disabled reason={r.unavailable_reason} />;
   return listFor(r.id);
 }
@@ -463,13 +513,13 @@ function SettingRow(p: { r: Row; sec: Section }) {
   const notEditable = "Not editable in this NSH increment yet.";
   const why = reason ?? modelReason ?? (wired ? "" : notEditable);
   const tag = r.clients === "nsh" ? "NSH only" : r.clients === "tui" && r.id !== "appearance.timeline_detail" ? "TUI only" : "";
-  const tooltip = <Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{notEditable}</Text>;
+  const tooltip = <Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{notEditable}</Text>;
   return (
-    <View class={`${isNarrow() ? "gap-2" : "flex-row gap-3 items-center"} px-3 py-2 rounded-(--radius) hover:bg-accent`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
+    <View class={`${isNarrow() ? "gap-2" : "flex-row gap-3 items-center"} px-3 py-2 rounded-none hover:bg-accent`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
       <View class={isNarrow() ? "" : "w-[44%] pr-2"}>
         <View class="flex-row items-center gap-2">
-          <Text class={`text-[13px] leading-5 ${disabled ? "text-muted-foreground" : "text-foreground"}`}>{r.label}</Text>
-          <If when={tag}><Text class="text-xs leading-4 text-muted-foreground rounded-(--radius) px-1.5">{tag}</Text></If>
+          <Text class={`${TS.base} ${disabled ? "text-muted-foreground" : "text-foreground"}`}>{r.label}</Text>
+          <If when={tag}><Text class={`${TS.base} text-muted-foreground rounded-none px-1.5`}>{tag}</Text></If>
         </View>
         {/* A row with no control yet keeps that note in its tooltip, not in every row's second line. */}
         <If when={disabled && why && wired}><Text class={T.meta}>{why}</Text></If>
@@ -519,7 +569,7 @@ export function SettingsView(p: { inline?: boolean }) {
           <Icon name="search" size={14} class="tint-muted-foreground" />
           <Input value={settingsQuery()} placeholder="Filter settings…" accessibilityLabel="Filter settings" testID="settings-search"
             onChange={({ value }) => settingsQuery.set(value)}
-            class="h-8 min-w-0 flex-1 rounded-(--radius) bg-background px-2 text-[12.5px] text-foreground" />
+            class={`h-8 min-w-0 flex-1 rounded-none bg-background px-2 ${TS.base} text-foreground`} />
           <If when={settingsQuery()}>{() => <Btn label="Clear" kind="ghost" onPress={() => settingsQuery.set("")} testID="settings-search-clear" />}</If>
         </View>
         <View class={`${isNarrow() ? "" : "flex-row gap-4"} min-h-0 ${p.inline ? "flex-1" : ""}`} style={p.inline ? {} : { height: Math.max(240, Math.min(520, Math.round(windowSize().height * 0.76) - 48 - 32 - 12 - 12 - 28 - 36)) }}>
@@ -529,8 +579,8 @@ export function SettingsView(p: { inline?: boolean }) {
               <Each of={shown()} key={(s) => s.id}>
                 {(s) => (
                   <Button onPress={() => { settingsSection.set(s().id); settingsPage.set(null); settingsQuery.set(""); }} selected={cur().id === s().id} testID={`section-${s().id}`} accessibilityLabel={s().label}
-                    class={`relative flex-row items-center rounded-(--radius) px-3 hover:bg-accent ${cur().id === s().id ? "bg-selection" : ""} ${isNarrow() ? "min-h-10" : "min-h-8"} ${FOCUS}`}>
-                    <Text class={`flex-1 text-[13px] leading-5 ${cur().id === s().id ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{s().label}</Text>
+                    class={`relative flex-row items-center rounded-none px-3 hover:bg-accent ${cur().id === s().id ? "bg-selection" : ""} ${isNarrow() ? "min-h-10" : "min-h-8"} ${FOCUS}`}>
+                    <Text class={`flex-1 ${TS.base} ${cur().id === s().id ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{s().label}</Text>
                   </Button>
                 )}
               </Each>
@@ -547,12 +597,12 @@ export function SettingsView(p: { inline?: boolean }) {
                 <If when={page() === "agents" && agent()}>{() => <View class="gap-2 pb-2">
                   <View class="flex-row items-center gap-2 px-3">
                     <Button onPress={() => settingsPage.set(null)} testID="settings-page-back" accessibilityLabel="Back to Agents"
-                      class={`flex-row items-center gap-1 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}>
+                      class={`flex-row items-center gap-1 rounded-none px-2 min-h-8 hover:bg-accent ${FOCUS}`}>
                       <Icon name="arrow-left" size={14} class="tint-muted-foreground" />
-                      <Text class="text-[13px] leading-5 text-foreground-secondary">Agents</Text>
+                      <Text class={`${TS.base} text-foreground-secondary`}>Agents</Text>
                     </Button>
-                    <Text class="text-[13px] leading-5 text-muted-foreground">/</Text>
-                    <Text class="text-[13px] leading-5 font-medium text-foreground">{agent()}</Text>
+                    <Text class={`${TS.base} text-muted-foreground`}>/</Text>
+                    <Text class={T.label}>{agent()}</Text>
                   </View>
                   <If when={agentDef()}>{() => <AgentCard a={agentDef()} />}</If>
                 </View>}</If>

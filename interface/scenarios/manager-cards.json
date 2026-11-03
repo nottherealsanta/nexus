@@ -1,0 +1,171 @@
+{
+  "cards": [
+    {
+      "name": "board",
+      "card": {
+        "id": "card-board",
+        "type": "board",
+        "focused": true,
+        "project": "nexus",
+        "columns": {
+          "needs_you": [
+            { "n": 1, "session_id": "s_auth01", "handle": "auth-refactor", "title": "Refactor auth to tokens", "project": "nexus", "state": "waiting" },
+            { "n": 2, "session_id": "s_mig02", "handle": "migration", "title": "Add expires_at column", "project": "nexus", "state": "waiting" }
+          ],
+          "running": [
+            { "n": 3, "session_id": "s_docs03", "handle": "docs-pass", "title": "Update the API docs", "project": "nexus", "state": "running" },
+            { "n": 4, "session_id": "s_ios04", "handle": "ios-build", "title": "Build for device", "project": "nexus", "state": "running" },
+            { "n": 5, "session_id": "s_flk05", "handle": "flaky-test", "title": "Find the flaky test", "project": "nexus", "state": "running" }
+          ],
+          "finished": [
+            { "n": 6, "session_id": "s_rel06", "handle": "release-notes", "title": "Write release notes", "project": "nexus", "state": "done" }
+          ]
+        },
+        "more": { "needs_you": 0, "running": 4, "finished": 0 }
+      },
+      "expect": ["Needs you", "Running", "Finished", "1 auth-refactor", "2 migration", "3 docs-pass", "+4 more"],
+      "absent": ["Two need you", "cut"]
+    },
+    {
+      "name": "sessions",
+      "card": {
+        "id": "card-sessions",
+        "type": "sessions",
+        "focused": true,
+        "rows": [
+          { "n": 1, "session_id": "s_auth01", "handle": "auth-refactor", "title": "Refactor auth to tokens", "project": "nexus", "state": "waiting", "why": "matched \"auth\"" },
+          { "n": 2, "session_id": "s_mig02", "handle": "migration", "title": "Add expires_at column", "project": "nexus", "state": "waiting", "why": "matched \"migrate\"" }
+        ],
+        "more": 3
+      },
+      "expect": ["1 auth-refactor", "2 migration", "matched \"auth\"", "+3 more"],
+      "absent": ["cut"]
+    },
+    {
+      "name": "approval",
+      "card": {
+        "id": "card-approval",
+        "type": "approval",
+        "focused": true,
+        "session_id": "s_auth01",
+        "handle": "auth-refactor",
+        "approval_id": "ap_1",
+        "summary": "Wants to run a shell command",
+        "detail": "alembic upgrade head",
+        "clipped": false
+      },
+      "expect": ["auth-refactor", "alembic upgrade head"],
+      "absent": ["cut"]
+    },
+    {
+      "name": "approval, unfocused (proactive)",
+      "card": {
+        "id": "card-approval-proactive",
+        "type": "approval",
+        "focused": false,
+        "session_id": "s_mig02",
+        "handle": "migration",
+        "approval_id": "ap_2",
+        "summary": "Wants to run a shell command",
+        "detail": "alembic upgrade head",
+        "clipped": false
+      },
+      "expect": ["migration", "alembic upgrade head"],
+      "absent": ["cut"]
+    },
+    {
+      "name": "approval, clipped diff",
+      "card": {
+        "id": "card-approval-clipped",
+        "type": "approval",
+        "focused": true,
+        "session_id": "s_auth01",
+        "handle": "auth-refactor",
+        "approval_id": "ap_3",
+        "summary": "Wants to edit a file",
+        "detail": "--- a/db.py\n+++ b/db.py\n+def upgrade():",
+        "clipped": true
+      },
+      "expect": ["auth-refactor", "def upgrade():", "cut"],
+      "absent": ["drop_column"]
+    },
+    {
+      "name": "question",
+      "card": {
+        "id": "card-question",
+        "type": "question",
+        "focused": true,
+        "session_id": "s_mig02",
+        "handle": "migration",
+        "question": "Keep the old column until the next release?",
+        "options": ["Yes", "No", "Ask me later"]
+      },
+      "expect": ["migration", "Keep the old column until the next release?", "Ask me later"],
+      "absent": ["cut"]
+    },
+    {
+      "name": "diagram",
+      "card": {
+        "id": "card-diagram",
+        "type": "diagram",
+        "focused": true,
+        "source": "flowchart TD\n  A[Client] --> B[Core]\n  B --> C[Store]",
+        "clipped": false
+      },
+      "expect": ["Client", "Core", "Store"],
+      "absent": ["flowchart TD", "-->"]
+    },
+    {
+      "name": "excerpt",
+      "card": {
+        "id": "card-excerpt",
+        "type": "excerpt",
+        "focused": true,
+        "handle": "docs-pass",
+        "session_id": "s_docs03",
+        "markdown": "The README now lists the three new flags.\n\n- `--fast` skips the index\n- `--strict` fails on warnings",
+        "clipped": false
+      },
+      "expect": ["docs-pass", "three new flags", "--strict fails on warnings"],
+      "absent": ["cut"]
+    },
+    {
+      "name": "excerpt, clipped",
+      "card": {
+        "id": "card-excerpt-clipped",
+        "type": "excerpt",
+        "focused": true,
+        "handle": "migration",
+        "session_id": "s_mig02",
+        "markdown": "The migration adds `expires_at` and backfills it in batches of 500, then",
+        "clipped": true
+      },
+      "expect": ["migration", "backfills it in batches", "cut"],
+      "absent": ["drops the old column"]
+    },
+    {
+      "name": "note",
+      "card": {
+        "id": "card-note",
+        "type": "note",
+        "focused": true,
+        "markdown": "**Run the migration**\n\n1. `alembic upgrade head`\n2. `pytest -q`\n3. Tag the release",
+        "clipped": false
+      },
+      "expect": ["Run the migration", "alembic upgrade head", "pytest -q", "Tag the release"],
+      "absent": ["cut"]
+    },
+    {
+      "name": "note, clipped",
+      "card": {
+        "id": "card-note-clipped",
+        "type": "note",
+        "focused": true,
+        "markdown": "**Release checklist**\n\n1. Migrate\n2. Run the suite\n3. Tag",
+        "clipped": true
+      },
+      "expect": ["Release checklist", "Run the suite", "cut"],
+      "absent": ["Publish the artifacts"]
+    }
+  ]
+}

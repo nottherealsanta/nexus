@@ -5,7 +5,7 @@ import { currentProject, loadProjectMcp, m, model, projectMcp } from "../store";
 import { configMeta, configShape, stateLabel } from "../project-mcp";
 import type { ProjectMcpRow } from "../project-mcp";
 
-/** The selected project's `.mcp.json` servers, their status and non-secret configuration facts. */
+/** The selected project's MCP files, their status and non-secret configuration facts. */
 export function ProjectMcpPanel() {
   const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
   const state = () => { const id = currentProject(); return id ? projectMcp()[id] : undefined; };
@@ -24,7 +24,16 @@ export function ProjectMcpPanel() {
           <Text class="text-[13px] leading-5 font-medium text-muted-foreground">Refresh</Text>
         </Button>
       </View>
-      <If when={!!project()}>
+      <If when={!!data()?.files?.length}>
+        <Each of={data()!.files!} key={(file) => file.name}>
+          {(file) => (
+            <Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono`} testID={`project-mcp-file-${file().name.replaceAll("/", "-")}`}>
+              {midTruncate(file().exists ? file().file : `${file().file} (not found)`, 46)}
+            </Text>
+          )}
+        </Each>
+      </If>
+      <If when={!data()?.files?.length && !!project()}>
         <Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono`}>{midTruncate(data()?.file || project()!.path, 46)}</Text>
       </If>
       <If when={autoStart()}>
@@ -35,9 +44,9 @@ export function ProjectMcpPanel() {
       <If when={!!state()?.error}><Text style={{ numberOfLines: 3 }} class="text-xs leading-4 text-error">{"✕ " + state()!.error}</Text></If>
       <If when={!!data()?.error}><Text style={{ numberOfLines: 3 }} class="text-xs leading-4 text-error">{data()!.error!}</Text></If>
       <If when={!!data()?.warnings?.length}><Text style={{ numberOfLines: 2 }} class="text-xs leading-4 text-warning">{data()!.warnings!.join(" · ")}</Text></If>
-      <If when={!!state()?.loading && !data()}><Text class={T.sec}>Reading .mcp.json…</Text></If>
-      <If when={!!data() && !data()!.exists}><Text class={T.sec}>No .mcp.json in this project.</Text></If>
-      <If when={!!data()?.exists && rows().length === 0}><Text class={T.sec}>No servers in .mcp.json.</Text></If>
+      <If when={!!state()?.loading && !data()}><Text class={T.sec}>Reading MCP configuration…</Text></If>
+      <If when={!!data() && !data()!.exists}><Text class={T.sec}>No MCP configuration in this project.</Text></If>
+      <If when={!!data()?.exists && rows().length === 0}><Text class={T.sec}>No servers in the project MCP files.</Text></If>
       <If when={rows().length > 0}>
         <Scroll class="max-h-[210px]">
           <View class="gap-1">
@@ -66,6 +75,9 @@ function ProjectMcpServerRow(p: { row: () => ProjectMcpRow }) {
       </If>
       <If when={!!meta()}>
         <Text style={{ numberOfLines: 1 }} class="font-mono text-xs leading-4 text-muted-foreground" testID={`project-mcp-meta-${row().server}`}>{meta()}</Text>
+      </If>
+      <If when={!!row().warnings?.length}>
+        <Text style={{ numberOfLines: 3 }} class="text-xs leading-4 text-warning" testID={`project-mcp-warning-${row().server}`}>{row().warnings!.join(" · ")}</Text>
       </If>
       <If when={!!row().error}><Text style={{ numberOfLines: 2 }} class="text-xs leading-4 text-warning">{row().error!}</Text></If>
     </View>

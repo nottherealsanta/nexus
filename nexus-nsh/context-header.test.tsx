@@ -1,5 +1,6 @@
 import { describe, expect, test } from "nsh/test";
 import { contextTokens, inventorySections, previewSections, startingSections } from "./src/ui/newsession";
+import { draftContextKey, draftContextPlanKey } from "./src/store";
 
 describe("starting context presentation", () => {
   test("draft hides the agent name and inline instruction preview", () => {
@@ -35,5 +36,15 @@ describe("starting context presentation", () => {
     const section = startingSections({ tools, system_prompt: "Prompt" }, ["tool2"]).sections[2];
     expect([section.title, section.count, section.meta]).toEqual(["Tools", 18, "1 off"]);
     expect(typeof section.tokens === "number" || section.tokens === undefined).toBe(true);
+  });
+
+  test("reasoning effort does not change the draft's context plan", () => {
+    const draft = { agent: "build", model: "codex/gpt-5", effort: "low", disabled_tools: [] as string[] };
+    // The plan that feeds the token counts survives an effort change...
+    expect(draftContextPlanKey("prj_1", draft)).toBe(draftContextPlanKey("prj_1", { ...draft, effort: "high" }));
+    // ...while Core is still asked again for the resolved effort.
+    expect(draftContextKey("prj_1", draft)).not.toBe(draftContextKey("prj_1", { ...draft, effort: "high" }));
+    // Anything that changes the context itself still invalidates the plan.
+    expect(draftContextPlanKey("prj_1", { ...draft, disabled_tools: ["read"] })).not.toBe(draftContextPlanKey("prj_1", draft));
   });
 });

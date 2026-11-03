@@ -170,6 +170,7 @@ describe("shell", () => {
     expect(app.shows("id:header")).toBe(true);
     expect(app.shows("id:toggle-left")).toBe(true);
     expect(app.shows("id:toggle-right")).toBe(true);
+    expect(app.shows("id:open-manager-session")).toBe(true);
     expect(app.shows("id:open-settings")).toBe(true);
     // tabs: Sessions and Files, in manifest order; docked, they sit in the header's left slot
     const labels = (manifest.navigation.left_sidebar.tab as readonly { id: string }[]).map((t) => t.id);
@@ -556,6 +557,39 @@ describe("context, composer and footer parity", () => {
     expect(app.shows("id:context-detail")).toBe(true);
     expect(app.texts().join("\n").includes("Frozen instructions")).toBe(true);
 
+  });
+
+  test("changing effort leaves the starting-context counts and composer meter alone", async () => {
+    const app = await open("./App.tsx", {
+      network: {
+        ...core(),
+        "POST */api/draft/context": {
+          body: {
+            used: 4200, window: 200000, exact: false,
+            parts: { instructions: 3000, tools: 1200, instruction_file: 100 },
+            tools: ["read", "bash"], skills: [], mcp: [], session: { effort: null },
+          },
+          delay: 300,
+        },
+        "GET */api/model": { body: { source: "t", models: [{ ref: "scripted/m", provider: "scripted", name: "Scripted", context: 200000, efforts: ["low", "medium", "high"] }], model: "scripted/m" } },
+      },
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:~4,200 tok");
+    await app.waitFor("id:composer-usage");
+    expect(app.texts().join("\n").includes("~4.2K · 2.1%")).toBe(true);
+
+    await app.type("id:composer-input", "/effort");
+    await app.press("id:send");
+    await app.waitFor("id:picker");
+    await app.press("id:pick-1");
+    await app.waitFor("text:The new session will use effort medium");
+    // The re-plan is in flight: effort is not context, so the counts stay put.
+    expect(app.texts().join("\n").includes("~4,200 tok")).toBe(true);
+    expect(app.texts().join("\n").includes("~4.2K · 2.1%")).toBe(true);
+    await app.wait(400);
+    expect(app.texts().join("\n").includes("~4,200 tok")).toBe(true);
+    expect(app.texts().join("\n").includes("~4.2K · 2.1%")).toBe(true);
   });
 
   test("turn footer orders model, tools, tokens, duration and finish time", async () => {
@@ -1072,11 +1106,11 @@ describe("Core-backed settings values", () => {
     const app = await open("./App.tsx", {
       network: {
         ...core(),
-        "GET */api/model": { body: { source: "fixture catalog", models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000 }] } },
+        "GET */api/model": { body: { source: "fixture catalog", models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000, efforts: ["low", "medium", "high"] }] } },
         "GET */api/model/last*": { body: { model: "codex/gpt-5" } },
-        "GET */api/config": { body: { revision: "rev1", values: { agents: { models: { plan: ["codex/gpt-5", "groq/llama"] }, fallbacks: { plan: ["codex/gpt-4"] } }, defaults: { effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
+        "GET */api/config": { body: { revision: "rev1", values: { agents: { models: { plan: ["codex/gpt-5", "groq/llama"] }, fallbacks: { plan: ["codex/gpt-4"] }, efforts: { plan: { "codex/gpt-5": "low" } } }, defaults: { effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
         "PATCH */api/config": { body: { revision: "rev2", values: { defaults: { effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
-        "GET */api/provider": { body: [{ id: "codex", label: "Codex", connected: true, verified: true, methods: ["device"] }, { id: "groq", label: "Groq", connected: false, verified: true, methods: ["api_key"], key_env: "GROQ_API_KEY", key_hint: "from console.groq.com/keys", key_source: null }] },
+        "GET */api/provider": { body: [{ id: "codex", label: "Codex", connected: true, verified: true, methods: ["browser", "device"] }, { id: "groq", label: "Groq", connected: false, verified: true, methods: ["api_key"], key_env: "GROQ_API_KEY", key_hint: "from console.groq.com/keys", key_source: null }, { id: "grok", label: "Grok", connected: false, verified: true, methods: ["browser", "device"] }] },
         "GET */api/agent*": { body: { agents: [{ name: "build", mode: "all", source: "builtin", description: "Builds", subagent: { pool: [], fallbacks: [], effective: { model: "", source: "parent" } } }, { name: "plan", mode: "subagent", source: "builtin", description: "Plans", subagent: { pool: [], fallbacks: [], effective: { model: "", source: "parent" } } }] } },
       },
       width: 1024, height: 768, platform: "web",
@@ -1095,6 +1129,12 @@ describe("Core-backed settings values", () => {
     expect(text().includes("Add API key")).toBe(true); // a key provider; saving needs a live stream (see PLAN.md, Browser tests)
     await app.keyboard.press("escape");
     expect(app.shows("id:provider-detail")).toBe(false);
+    // A provider with both methods offers both rows; Codex no longer only has a device code.
+    await app.press("id:provider-open-grok");
+    await app.waitFor("id:provider-detail");
+    expect(text().includes("Sign in with browser") && text().includes("Sign in with a device code")).toBe(true);
+    expect(app.shows("id:provider-detail-browser") && app.shows("id:provider-detail-device")).toBe(true);
+    await app.keyboard.press("escape");
     expect(app.texts().includes("esc close")).toBe(true);
     await app.keyboard.press("escape");
     await app.waitUntil(() => !app.shows("id:settings"));
@@ -1113,6 +1153,10 @@ describe("Core-backed settings values", () => {
     expect(text().includes("100%")).toBe(true); // groq is not connected: codex has all the odds
     expect(text().includes("not connected · skipped")).toBe(true);
     expect(text().includes("1.")).toBe(true);
+    expect(text().includes("effort low")).toBe(true); // the pool model's configured effort
+    expect(app.shows("id:agent-effort-plan-groq/llama")).toBe(false); // groq lists no levels and has none set
+    await app.press("id:agent-effort-up-plan-codex/gpt-5"); // writes agents.efforts; the mock config answers unchanged
+    expect(text().includes("←/→ sets this model's effort")).toBe(true);
     await app.keyboard.press("escape"); // back to the Agents list
     await app.waitFor("id:agent-row-plan");
     await app.keyboard.press("escape"); // close Settings
@@ -1134,9 +1178,9 @@ describe("image paste and background shell context", () => {
     await app.waitFor("id:image-previews");
     await app.screenshot("/private/tmp/nexus-image-preview.png");
     await app.press("id:composer-image-1");
-    await app.waitFor("id:image-preview");
+    await app.waitFor("id:annotate");
     await app.keyboard.press("escape");
-    await app.waitUntil(() => !app.shows("id:image-preview"));
+    await app.waitUntil(() => !app.shows("id:annotate"));
     await app.press("id:remove-image-1");
     await app.waitUntil(() => !app.shows("id:image-previews"));
     await app.paste("id:composer-input", { files: ["./fixtures/clipboard.png"] });
@@ -1166,7 +1210,7 @@ describe("image paste and background shell context", () => {
 });
 
 describe("large text paste", () => {
-  const big = Array.from({ length: 8 }, (_, i) => `row ${i + 1}: ${"x".repeat(20)}`).join("\n");
+  const big = Array.from({ length: 8 }, (_, i) => `row ${i + 1}: ${"x".repeat(70)}`).join("\n");
   const marker = `[Pasted ~${Math.max(1, Math.floor([...big].length / 4))} tokens]`;
 
   test("collapses in the composer and sends a marker plus the full text", async () => {
@@ -1180,7 +1224,12 @@ describe("large text paste", () => {
     await app.paste("id:composer-input", { text: big });
     await app.waitUntil(() => app.value("id:composer-input") === marker);
     expect(app.value("id:composer-input")).toBe(marker);
-    expect(app.texts().join("\n").includes("Pasted text")).toBe(false);
+    await app.waitFor("id:paste-previews");
+    expect(app.shows("id:paste-previews")).toBe(true);
+    const shown = app.texts().join("\n");
+    expect(shown).toContain("Pasted text");
+    expect(shown).toContain("8 lines");
+    expect(shown).toContain("Show");
     await app.submit("id:composer-input");
     await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/prompt")));
     const req = app.requests().find((r) => r.method === "POST" && r.url.endsWith("/prompt"))!;
@@ -1197,8 +1246,9 @@ describe("large text paste", () => {
     await app.waitFor("text:Refactor loader");
     await app.press("text:Refactor loader");
     await app.waitFor("id:msg-user");
-    await app.paste("id:composer-input", { text: "one\ntwo" });
-    await app.waitUntil(() => app.value("id:composer-input") === "one\ntwo");
+    await app.paste("id:composer-input", { text: "one\ntwo\nthree" });
+    await app.waitUntil(() => app.value("id:composer-input") === "one\ntwo\nthree");
+    expect(app.shows("id:paste-previews")).toBe(false);
     expect(app.texts().join("\n").includes("Pasted text")).toBe(false);
   });
 

@@ -1,0 +1,53 @@
+Nexus Mermaid
+
+This product includes the Ondine Mermaid compiler.
+
+  Source:     https://github.com/wevm/ondine
+              crates/compiler (the crate is upstream-named `compiler`)
+              revision b19aa90e2c76ce8e0d3b718d61c05c70e2b23a3d
+  Copyright:  Copyright (c) 2025-present weth, LLC
+  License:    MIT
+  Used as:    the optional `svg` feature, pinned in Cargo.toml
+
+Ondine ports parts of Pele (https://github.com/obsidianmd/pele):
+
+  Copyright (c) 2026 kepano
+  License:    MIT
+
+The full MIT license follows.
+
+MIT License
+
+Copyright (c) 2025-present weth, LLC
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The Pele portions are licensed under the same MIT terms, copyright (c) 2026
+kepano. See the upstream LICENSE and NOTICE files for the complete text.
+
+The `raster` feature uses resvg 0.46.0 (MIT) and the png 0.17.16 crate
+(MIT OR Apache-2.0) from crates.io.
+
+This product includes Monaspace Argon, for rasterizing diagram labels.
+
+  Source:     https://github.com/githubnext/monaspace
+  Files:      fonts/MonaspaceArgon-Regular.otf, fonts/MonaspaceArgon-Bold.otf
+  Copyright:  Copyright (c) 2023, GitHub https://github.com/githubnext/monaspace
+              with Reserved Font Name "Monaspace"
+  License:    SIL Open Font License, Version 1.1 (fonts/Monaspace-LICENSE.txt)

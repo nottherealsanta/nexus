@@ -57,6 +57,8 @@ jobs:
       - run: python3 interface/check_manifest.py
       - run: python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml
       - run: cargo fmt --check --manifest-path nexus-tui/Cargo.toml
+      - run: cargo fmt --check --manifest-path nexus-mermaid/Cargo.toml
+      - run: cargo fmt --check --manifest-path nexus-annotate/Cargo.toml
       - run: uv build --project nexus-core    # packaging check
   core:             # Python tests, macOS and Linux
     needs: changes
@@ -97,6 +99,21 @@ jobs:
         with: {workspaces: nexus-tui}
       - run: cargo test --locked --manifest-path nexus-tui/Cargo.toml
       - run: cargo build --release --locked --manifest-path nexus-tui/Cargo.toml
+  mermaid:          # the shared crate's text rows, Ondine SVG and PNG raster
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2.8.0
+        with: {workspaces: nexus-mermaid}
+      # The Ondine revision requires Rust 1.97; GitHub's stable toolchain is newer.
+      - run: cargo test --locked --all-features --manifest-path nexus-mermaid/Cargo.toml
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo check --locked --target wasm32-unknown-unknown --all-features --manifest-path nexus-mermaid/Cargo.toml
+      - run: cargo test --locked --manifest-path nexus-annotate/Cargo.toml
+      - run: cargo check --locked --target wasm32-unknown-unknown --manifest-path nexus-annotate/Cargo.toml
   nsh:              # type-check and build the web bundle; browser tests wait for the mock-stream fix (PLAN.md)
     needs: changes
     if: false   # NSH skipped for now (PLAN.md step 4): the pinned nsh build is too slow and unproven on a runner
@@ -117,7 +134,7 @@ jobs:
         working-directory: nexus-nsh
   ci-ok:            # the one required status check; its name never changes with the matrix
     if: always()
-    needs: [changes, lint, core, tui, nsh]    # a skipped job is not a failure
+    needs: [changes, lint, core, tui, mermaid, nsh]    # a skipped job is not a failure
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

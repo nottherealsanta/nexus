@@ -54,6 +54,8 @@ const failing = await session(A.id, "fail cleanly: check the missing notes befor
 await idle(failing.id);
 const release = await session(A.id, "Hello, summarise the release notes.", "Release notes for 0.10 with a deliberately long title that must truncate");
 await idle(release.id);
+const diagrams = await session(A.id, "mermaid: draw the diagrams.", "Mermaid diagrams");
+await idle(diagrams.id);
 // Leave this one running: its live reasoning belongs in the activity group, with no footer yet.
 const think = await session(A.id, "think through the timeline footer and live thought placement in detail.", "Thinking now");
 
@@ -75,6 +77,6 @@ for (const [pid, titleText] of [[C.id, "Nimbus ideas"], [D.id, "Nova plan"], [E.
 console.log(JSON.stringify({
   projectA: A.id, projectB: B.id,
   scenario: scenario.id, failing: failing.id, think: think.id,
-  refactor: scenario.id, flaky: flaky.id, release: release.id, question: question.id,
+  refactor: scenario.id, flaky: flaky.id, release: release.id, diagrams: diagrams.id, question: question.id,
   approval: ap.id, question_id: q.id,
 }));

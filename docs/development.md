@@ -9,6 +9,8 @@ docs/             this documentation
 nexus-core/       Python (uv): everything that is not a UI
 nexus-tui/        Rust Ratatui client (its README has build, run and test steps)
 nexus-nsh/        NSH web/macOS/iOS client (TSX; its README has build and test steps)
+nexus-mermaid/    shared Rust Mermaid rendering (text rows, Ondine SVG, PNG raster)
+nexus-annotate/   shared Rust image markup (stroke geometry, live tiles, flattening)
 interface/        shared command manifest, theme and capability matrix for both clients
 scripts/nexus     development launcher (tui, web, build, restart, checks)
 ```
@@ -22,6 +24,10 @@ over the shared file by `nexus-nsh/scripts/gen.py`; check it with
 `python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml`. The TUI reads only the
 shared file.
 
+The TUI and `nexus-mermaid` need Rust 1.97 or newer: the client enables the shared crate's
+`raster` feature and Ondine's compiler requires 1.97. NSH's native crate uses the same features on
+every target, including web. The `nexus-mermaid` default feature set alone still builds on 1.85.
+
 Inside `nexus-core/` (a uv project: `pyproject.toml`, `uv.lock`, `.python-version`):
 
 ```
@@ -30,10 +36,9 @@ nexus/
   llmhub/auth/       store, device, api_key, codex, copilot, grok, opencode, claude, ollama, errors
   mock/              dev-only scripted provider (NEXUS10_DEV)
   tools/             base, read, grep, glob, ls, bash, edit, patch, write, web_search, web_fetch, ask, code
-  mcp/               MCP client, global manager, project .mcp.json
+  mcp/               MCP client, global manager, project MCP files (.mcp.json, .agents/mcp.json)
   skills/            skill files, /learn install, the skill tool
   voice/             speech-to-text and text-to-speech
-  observations.py    per-session read observations and the read-before-edit guard
   workspace.py       control tools: expose, session-directory moves, worktree specs
   worktrees.py       Git worktree list/create/delete through argument arrays
   questions.py       the ask contract: schema, bounds, validation, result text
@@ -50,9 +55,10 @@ nexus/
   paths.py           home(): $NEXUS10_HOME or ~/.nexus (marker-checked)
   migrate.py         `nexus migrate`: old ~/.nexus aside, ~/.nexus10 in
   export.py          read-only session/tree exports: Markdown and JSON
-  store.py           SQLite: projects, sessions, messages, observations, turn lifecycle, mutation journal, durable event log (~/.nexus/nexus.db)
+  store.py           SQLite: projects, sessions, messages, turn lifecycle, mutation journal, durable event log (~/.nexus/nexus.db)
   bus.py             in-process event bus; persists before publishing, bounded per subscriber
   eventlog.py        log generation, cursors, session filtering, atomic replay-to-live stream
+  manager/           the Manager: service, turn, context, tools, stage, view, retrieval, state, topics, prompt (docs/manager.md)
   payloads.py        compressed, deduplicated wire-event bodies and their expiry markers
   retention.py       bounded event/lifecycle retention and the retention floor
   autoarchive.py     scheduled archive of whole session trees idle past the configured threshold
@@ -161,9 +167,9 @@ Then, from any directory:
 | `nexus status` | Core daemon and provider status |
 | `nexus ps` | Core daemon status only |
 | `nexus logs` | Follow `$NEXUS10_HOME/logs/daemon.log` |
-| `nexus test` | Core and TUI test suites |
-| `nexus check` | Tests, lints, shared theme/manifest checks, NSH checks |
-| `nexus fmt` | `cargo fmt` and regenerate the shared NSH files |
+| `nexus test` | Core, TUI and shared Mermaid test suites |
+| `nexus check` | Tests, lints, shared Mermaid checks, shared theme/manifest checks, NSH checks |
+| `nexus fmt` | `cargo fmt` for the TUI and Mermaid crates, and regenerate the shared NSH files |
 | `nexus doctor` | Versions and paths, then Core's `nexus doctor` rows |
 | `nexus update` | Compares with the latest GitHub release; reports only |
 | `./install.sh` | In a checkout, builds and installs the `nexus` uv tool (Claude's SDK built from source, so no bundled CLI), `nexus-tui` and the NSH bundle under `$PREFIX` (default `~/.local`); `--release [vX.Y.Z]` installs a GitHub release instead; `--uninstall` removes them and never touches `$NEXUS10_HOME`. Without a checkout (`curl -LsSf https://github.com/nottherealsanta/nexus/releases/latest/download/install.sh \| sh`) it installs the latest release: it downloads the Core wheel, the TUI binary for this platform and the web bundle if the release has one, checks each against the release's `SHA256SUMS`, then installs. It is POSIX `sh`; Alpine/musl is refused. `NEXUS_RELEASE_BASE` points it at a mirror or a `file://` directory (how it is tested). On Linux it warns when `libasound.so.2` is missing, since the TUI links it |

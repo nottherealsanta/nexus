@@ -25,7 +25,6 @@ from nexus.bus import Bus
 from nexus.codec import to_json
 from nexus.eventlog import Stream
 from nexus.llmhub.types import Done, Message, PartDone, Text, ToolCall, ToolResult
-from nexus.observations import FileGuard, content_revision
 from nexus.questions import result_text
 from nexus.recovery import CRASH_POINTS, Recovery, SimulatedCrash
 from nexus.runtime import Runtime, message_json
@@ -290,13 +289,8 @@ def test_completed_result_missing_from_history_is_inserted_once(tmp_path):
     calls = [ToolCall("c1", "read", '{"path": "a.txt"}'), ToolCall("c2", "read", '{"path": "b.txt"}')]
     assistant = crash.assistant(session, turn, calls, request=request)
 
-    # c1 recorded a real observation; c2 produced no observation (as a listing or a
-    # pre-lifecycle read would not).
-    guard = FileGuard(crash.store, session.id, None, pending=[])
-    observation = guard.record_read(a, a.read_bytes(), lines=2, ranges=[(1, 2)], call_id="c1")
     crash.store.mark_tool_started(turn["id"], session.id, calls[0])
-    crash.store.mark_tool_finished(turn["id"], session.id, calls[0], ToolResult("c1", "     1\tone\n     2\ttwo"),
-                                   [observation.json() | {"path": observation.path}])
+    crash.store.mark_tool_finished(turn["id"], session.id, calls[0], ToolResult("c1", "     1\tone\n     2\ttwo"))
     crash.store.mark_tool_started(turn["id"], session.id, calls[1])
     crash.store.mark_tool_finished(turn["id"], session.id, calls[1], ToolResult("c2", "     1\tbee"))
     crash.close()
@@ -310,10 +304,6 @@ def test_completed_result_missing_from_history_is_inserted_once(tmp_path):
         assert second.output == "     1\tbee" and not second.is_error
         [tool_message] = [m for m in rt.store.messages(session.id) if m.message.role == "tool"]
         assert tool_message.id and len(tool_message.message.parts) == 2
-        # Only the read whose output was restored grants coverage, at its recorded revision.
-        stored = rt.store.file_observation(session.id, str(a))
-        assert stored is not None and stored["revision"] == content_revision(b"one\ntwo\n")
-        assert rt.store.file_observation(session.id, str(b)) is None
         [assistant_stored] = [m for m in rt.store.messages(session.id) if m.message.role == "assistant"]
         assert assistant_stored.id == assistant.id
         [notice] = texts(rt.store, session.id, "user")
