@@ -336,7 +336,6 @@ mod tests {
                 "providers",
                 "agents",
                 "tools",
-                "skills",
                 "mcp",
                 "context",
                 "dictation",

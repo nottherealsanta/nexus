@@ -790,7 +790,7 @@ function RowView(p: { r: () => Row }) {
         <If when={r().kind === "assistant"}>
           <View class={`py-2 pr-4 ${TEXT_INDENT}`} testID="msg-assistant">
             <TextView
-              selectable markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
+              selectable links="open" markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
               renderCodeBlock={(block) => <CodeFence block={block} />}
               classes={PROSE}
             />

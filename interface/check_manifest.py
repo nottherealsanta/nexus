@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 SECTION_ORDER = [
-    "appearance", "providers", "agents", "tools", "skills", "mcp",
+    "appearance", "providers", "agents", "tools", "mcp",
     "context", "dictation", "keybindings", "notifications", "about",
 ]
 TABS = ["sessions", "files"]

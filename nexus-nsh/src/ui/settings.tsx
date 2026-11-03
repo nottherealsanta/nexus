@@ -5,7 +5,7 @@ import { Btn, Icon, T, FOCUS, Seg } from "./kit";
 import { Heading, Modal, ModalFooter, ModalTitle } from "./modal";
 import { manifest } from "../gen/manifest";
 import { byId, commands, copyText, escape, keyLabel, loadProviders, run } from "../commands";
-import { archivedFilter, leftOpen, rightOpen, scopeAll, catalogSource, info, compat, isNarrow, live, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsPage, settingsReload, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker, providerLogins, confirmDialog, notificationSoundsOn, setNotificationSounds } from "../store";
+import { archivedFilter, leftOpen, rightOpen, scopeAll, catalogSource, info, compat, isNarrow, live, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsPage, settingsQuery, settingsReload, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker, providerDetail, providerLogins, confirmDialog, notificationSoundsOn, setNotificationSounds } from "../store";
 import { CLIENT_API, CLIENT_VERSION } from "../core/api";
 import { request } from "../core/transport";
 import { voiceInfoLines, voiceActionReason } from "../voice-settings";
@@ -36,7 +36,7 @@ function listFor(id: string): JSX.Element {
   const d = data();
   const lines = (xs: string[], none: string) => (xs.length ? <View class={`gap-1 ${isNarrow() ? "items-start" : "items-end"}`}>{xs.map((x) => <Value text={x} />)}</View> : <Value text={none} />);
   switch (id) {
-    case "tools.defaults": return <Value text="Per-session today (disabled_tools); no global default in Core." />;
+    case "tools.defaults": return <Value text="—" />;
     case "dictation.push_to_talk": { const c = byId.get("voice.dictate"); return <Value text={(c && keyLabel(c)) ?? "not set"} />; }
     case "keybindings.list": return <Value text={`${commands.filter((c) => c.keys?.nsh).length} commands with keys (see the palette)`} />;
     case "about.versions": {
@@ -215,45 +215,77 @@ function providerStatus(p: any): string {
   return parts.join(" · ");
 }
 
-function ProviderRow(p: { p: any }) {
-  const login = () => providerLogins()[p.p.id];
+/** One provider's connection and sign-in details, opened from its row. */
+export function ProviderDetailModal() {
+  const id = () => providerDetail();
+  const provider = () => (data().providers ?? []).find((x: any) => x.id === id());
+  const login = () => providerLogins()[id() ?? ""];
   const pending = () => login()?.status === "pending";
   const failed = () => login()?.status === "failed";
-  const keying = () => keyEntry()?.id === p.p.id;
-  return <View class="gap-2 rounded-(--radius) px-3 py-2 hover:bg-accent" testID={`provider-${p.p.id}`}>
-    <View class="flex-row items-center gap-3">
-      <View class="flex-1">
-        <Text class="text-[13px] leading-5 text-foreground">{p.p.label ?? p.p.id}</Text>
-        <Text class={T.meta}>{providerStatus(p.p)}</Text>
-      </View>
-      <If when={p.p.connected}><Btn label="Disconnect" disabled={!live()} onPress={() => void disconnect(p.p)} testID={`provider-action-${p.p.id}`} /></If>
-      <If when={!p.p.connected && !pending() && !keying()}>
-        <Btn label={(p.p.methods ?? []).includes("api_key") ? "Add key" : "Connect"} disabled={!live()} onPress={() => void connect(p.p)} testID={`provider-action-${p.p.id}`} />
-      </If>
-      <If when={pending()}><Btn label="Cancel" onPress={() => void request("DELETE", `/api/provider/${p.p.id}/login`).then(() => providerLogins.update((all) => { const { [p.p.id]: _, ...rest } = all; return rest; }))} testID={`provider-cancel-${p.p.id}`} /></If>
+  const keying = () => keyEntry()?.id === id();
+  const close = () => { providerDetail.set(null); providerKey.set(""); keyEntry.set(null); };
+  const open = (url: string) => void openUrl(url).catch(() => toast("info", "Open this link in your browser."));
+  return <If when={!!id() && !!provider()}>{() => <Modal width={560} top="top-[14%]" label={`${provider()!.label ?? id()} connection`} testID="provider-detail" onCancel={close} onOpenChange={(o) => { if (!o) close(); }}>
+    <View class="gap-3">
+      <ModalTitle title={provider()!.label ?? id()!} esc={false} />
+      <Text class={T.sec}>{pending() ? "Sign-in pending · waiting for you" : failed() ? "Sign-in failed · open" : providerStatus(provider())}</Text>
+      <If when={provider()!.connected}>{() => <View class="gap-2">
+        <If when={provider()!.key_source === "env"}>{() => <Text class={T.meta}>{`Using $${provider()!.key_env}`}</Text>}</If>
+        <View class="flex-row"><Btn label="Disconnect" kind="danger" disabled={!live()} onPress={() => void disconnect(provider())} testID="provider-detail-disconnect" /></View>
+      </View>}</If>
+      <If when={pending()}>{() => <View class="gap-2">
+        <Text class={T.meta}>Open the link and enter the code below.</Text>
+        <If when={login()?.verification_uri}>{() => <View class="flex-row items-center gap-2">
+          <Button onPress={() => open(login()!.verification_uri!)} accessibilityLabel={`Open ${login()!.verification_uri}`} testID="provider-detail-link"
+            class={`flex-1 rounded-(--radius) px-2 min-h-9 items-start justify-center hover:bg-accent ${FOCUS}`}>
+            <Text style={{ userSelect: "text" }} class="font-mono text-[12.5px] leading-5 text-info underline">{login()!.verification_uri!}</Text>
+          </Button>
+          <Btn label="Open" kind="ghost" icon="web" onPress={() => open(login()!.verification_uri!)} testID="provider-detail-open" />
+        </View>}</If>
+        <If when={login()?.user_code}>{() => <View class="flex-row items-center gap-2">
+          <Text class={T.sec}>Code</Text>
+          <Text style={{ userSelect: "text" }} class="font-mono text-[16px] leading-5 font-semibold text-foreground">{login()!.user_code!}</Text>
+          <Btn label="Copy" kind="ghost" icon="copy" onPress={() => copyText(login()!.user_code!, "Code copied")} testID="provider-detail-copy" />
+        </View>}</If>
+        <If when={!login()?.user_code && !login()?.verification_uri}><Text class={T.meta}>{login()?.message || "Starting sign-in…"}</Text></If>
+        <Text class={T.meta}>Waiting for authorization…</Text>
+        <View class="flex-row"><Btn label="Cancel sign-in" onPress={() => void request("DELETE", `/api/provider/${id()}/login`).then(() => providerLogins.update((all) => { const { [id()!]: _, ...rest } = all; return rest; }))} testID="provider-detail-cancel" /></View>
+      </View>}</If>
+      <If when={!provider()!.connected && !pending()}>{() => <View class="gap-2">
+        <If when={failed()}><Text class="text-xs leading-4 text-error">{login()?.message ?? "Sign-in failed"}</Text></If>
+        <If when={(provider()!.methods ?? []).includes("api_key")}>{() => <View class="flex-row"><Btn label="Add API key" kind="primary" disabled={!live()} onPress={() => void connect(provider())} testID="provider-detail-key" /></View>}</If>
+        <If when={(provider()!.methods ?? []).includes("device")}>{() => <View class="flex-row"><Btn label="Sign in with a device code" disabled={!live()} onPress={() => void connect(provider())} testID="provider-detail-device" /></View>}</If>
+        <If when={provider()!.key_env}><Text class={T.meta}>{`Or set $${provider()!.key_env}`}</Text></If>
+        <If when={provider()!.key_hint}><Text class={T.meta}>{provider()!.key_hint}</Text></If>
+      </View>}</If>
+      <If when={keying()}>{() => <View class="gap-2">
+        <Input masked autoFocus accessibilityLabel={`${provider()!.label} API key`} placeholder={`API key ${provider()!.key_hint ?? ""}`} onChange={({ value }) => providerKey.set(value)}
+          class="h-9 rounded-(--radius) bg-background px-3 text-foreground" testID={`provider-key-${id()}`} />
+        <View class="flex-row items-center gap-2">
+          <Btn label="Save key" kind="primary" onPress={() => void saveKey()} testID={`provider-key-save-${id()}`} />
+          <Btn label="Cancel" onPress={() => { providerKey.set(""); keyEntry.set(null); }} />
+        </View>
+      </View>}</If>
+      <View class="flex-row justify-end pt-1"><Btn label="Close" kind="ghost" onPress={close} testID="provider-detail-close" /></View>
     </View>
-    <If when={pending()}><View class="gap-1 pl-0.5" testID={`provider-device-${p.p.id}`}>
-      <If when={login()?.user_code}>{() => <View class="flex-row items-center gap-2">
-        <Text class={T.sec}>Code</Text>
-        <Text style={{ userSelect: "text" }} class="font-mono text-[15px] leading-5 font-semibold text-foreground">{login()!.user_code!}</Text>
-        <Btn label="Copy" kind="ghost" icon="copy" onPress={() => copyText(login()!.user_code!, "Code copied")} />
-      </View>}</If>
-      <If when={login()?.verification_uri}>{() => <View class="flex-row items-center gap-2">
-        <Text style={{ userSelect: "text" }} class={`flex-1 ${T.mono}`}>{login()!.verification_uri!}</Text>
-        <Btn label="Open" kind="ghost" onPress={() => void openUrl(login()!.verification_uri!)} />
-      </View>}</If>
-      <If when={!login()?.user_code}><Text class={T.meta}>{login()?.message || "Starting sign-in…"}</Text></If>
-    </View></If>
-    <If when={keying()}><View class="gap-2">
-      <Input masked autoFocus accessibilityLabel={`${p.p.label} API key`} placeholder={`API key ${p.p.key_hint ?? ""}`} onChange={({ value }) => providerKey.set(value)}
-        class="h-9 rounded-(--radius) bg-background px-3 text-foreground" testID={`provider-key-${p.p.id}`} />
-      <View class="flex-row items-center gap-2">
-        <Btn label="Save key" kind="primary" onPress={() => void saveKey()} testID={`provider-key-save-${p.p.id}`} />
-        <Btn label="Cancel" onPress={() => { providerKey.set(""); keyEntry.set(null); }} />
-        <If when={p.p.key_env}><Text class={T.meta}>{`or set $${p.p.key_env}`}</Text></If>
+  </Modal>}</If>;
+}
+
+function ProviderRow(p: { p: any }) {
+  const id = p.p.id;
+  const login = () => providerLogins()[id];
+  const pending = () => login()?.status === "pending";
+  const failed = () => login()?.status === "failed";
+  return <View testID={`provider-${id}`}>
+    <Button onPress={() => { keyEntry.set(null); providerKey.set(""); providerDetail.set(id); }} testID={`provider-open-${id}`}
+      accessibilityLabel={`${p.p.label ?? id}: connection and sign-in`}
+      class={`flex-row items-center gap-3 rounded-(--radius) px-3 py-2 hover:bg-accent ${FOCUS}`}>
+      <View class="flex-1">
+        <Text class="text-[13px] leading-5 text-foreground">{p.p.label ?? id}</Text>
+        <Text class={T.meta}>{pending() ? "Sign-in pending · waiting for you" : failed() ? "Sign-in failed · open" : providerStatus(p.p)}</Text>
       </View>
-    </View></If>
-    <If when={failed()}><Text class="text-xs leading-4 text-error" testID={`provider-error-${p.p.id}`}>{login()?.message ?? "Sign-in failed"}</Text></If>
+      <Text class={T.meta}>Open</Text>
+    </Button>
   </View>;
 }
 
@@ -452,89 +484,91 @@ function SettingRow(p: { r: Row; sec: Section }) {
   );
 }
 
-function pageSummary(sec: Section): string {
-  if (sec.id === "providers") {
-    const all = (data().providers ?? []).filter((x: any) => x.id !== "mock");
-    return data().providers ? `${all.filter((x: any) => x.connected).length} of ${all.length} connected` : "Loading…";
-  }
-  if (sec.id === "agents") {
-    const subs = (data().agents?.agents ?? []).filter((a: any) => a.mode !== "primary");
-    const set = subs.filter((a: any) => (config()?.values?.agents?.models?.[a.name] ?? []).length).length;
-    return data().agents ? `${subs.length} subagents · ${set} with their own models` : "Loading…";
-  }
-  return "";
-}
-
-/** A page section's entry in the section list: what it holds and a way in. */
-function PageEntry(p: { sec: Section }) {
-  return <View class="gap-2 px-3 py-2" testID={`page-entry-${p.sec.id}`}>
-    <If when={p.sec.note}><Text class={T.sec}>{p.sec.note!}</Text></If>
-    <Text class={T.meta}>{pageSummary(p.sec)}</Text>
-    <View class="flex-row"><Btn label={`Open ${p.sec.label}`} icon="chevron-right" onPress={() => settingsPage.set(p.sec.id)} testID={`open-page-${p.sec.id}`} /></View>
-  </View>;
-}
-
-function SettingsPage(p: { sec: Section }) {
-  const agent = () => settingsPage()?.startsWith("agents/") ? settingsPage()!.slice("agents/".length) : null;
-  const agentDef = () => (data().agents?.agents ?? []).find((a: any) => a.name === agent());
-  return <View class="gap-3 min-h-0 flex-1" testID={`settings-page-${p.sec.id}`}>
-    <View class="flex-row items-center gap-2">
-      <Button onPress={() => settingsPage.set(agent() ? "agents" : null)} testID="settings-page-back" accessibilityLabel={agent() ? "Back to Agents" : "Back to Settings"}
-        class={`flex-row items-center gap-1 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}>
-        <Icon name="arrow-left" size={14} class="tint-muted-foreground" />
-        <Text class="text-[13px] leading-5 text-foreground-secondary">{agent() ? "Agents" : "Settings"}</Text>
-      </Button>
-      <Text class="text-[13px] leading-5 text-muted-foreground">/</Text>
-      <Text class="text-[13px] leading-5 font-medium text-foreground">{agent() ?? p.sec.label}</Text>
-    </View>
-    <Scroll class="flex-1 min-h-0">
-      <View class="pb-4 w-full gap-2">
-      <Each of={config()?.errors ?? []} key={(e: string) => e}>{(e) => <Text class={`px-3 ${T.meta}`}>{e()}</Text>}</Each>
-      <If when={p.sec.id === "providers"}><ProvidersPage sec={p.sec} /></If>
-      <If when={p.sec.id === "agents" && !agent()}><AgentsPage sec={p.sec} /></If>
-      <If when={agent() && agentDef()}>{() => <AgentCard a={agentDef()} />}</If>
-      </View>
-    </Scroll>
-  </View>;
-}
-
 export function SettingsView(p: { inline?: boolean }) {
   loadSettingsData();
   let seen = settingsReload();
   effect(() => { const n = settingsReload(); if (n !== seen) { seen = n; loadSettingsData(); } });
-  const cur = () => sections.find((s) => s.id === settingsSection()) ?? sections[0];
-  const page = () => sections.find((s) => s.page && s.id === settingsPage()?.split("/")[0]);
-  const list = () => (cur().row ?? []).filter((r) => r.clients !== "tui" || r.id === "appearance.timeline_detail");
+  const query = () => settingsQuery().trim().toLowerCase();
+  const pageTerms = (s: Section): string[] => {
+    if (s.id === "providers") return (data().providers ?? []).flatMap((p: any) => [p.id ?? "", p.label ?? ""]);
+    if (s.id === "agents") {
+      const names = (data().agents?.agents ?? []).filter((a: any) => a.mode !== "primary").map((a: any) => a.name);
+      const pools = Object.values(config()?.values?.agents?.models ?? {}).flat();
+      const fallbacks = Object.values(config()?.values?.agents?.fallbacks ?? {}).flat();
+      return [...names, ...pools, ...fallbacks].filter((x): x is string => typeof x === "string");
+    }
+    return [];
+  };
+  const hit = (s: Section) => {
+    const q = query();
+    if (!q) return true;
+    return s.label.toLowerCase().includes(q) || (s.note ?? "").toLowerCase().includes(q)
+      || (s.row ?? []).some((r) => r.label.toLowerCase().includes(q) || (r.note ?? "").toLowerCase().includes(q))
+      || pageTerms(s).some((term) => term.toLowerCase().includes(q));
+  };
+  const shown = () => sections.filter(hit);
+  const cur = () => shown().find((s) => s.id === settingsSection()) ?? shown()[0] ?? sections[0];
+  const agent = () => !query() && settingsPage()?.startsWith("agents/") ? settingsPage()!.slice("agents/".length) : null;
+  const agentDef = () => (data().agents?.agents ?? []).find((a: any) => a.name === agent());
+  const list = () => (cur().row ?? []).filter((r) => (r.clients !== "tui" || r.id === "appearance.timeline_detail") && (!query() || r.label.toLowerCase().includes(query()) || (r.note ?? "").toLowerCase().includes(query())));
+  const page = () => (query() ? null : cur().page ? cur().id : null);
   void m; void model; void compat; void colorScheme; void byId; void keyLabel;
   const content = () => <View class={p.inline ? "flex-1 min-h-0 gap-3 p-4" : "gap-3"}>
         <If when={!p.inline}><ModalTitle title="Settings" esc={false} /></If>
-        <View class={`${isNarrow() || page() ? "" : "flex-row gap-4"} min-h-0 ${p.inline ? "flex-1" : ""}`} style={p.inline ? {} : { height: Math.max(240, Math.min(520, Math.round(windowSize().height * 0.76) - 48 - 32 - 12 - 12 - 28)) }}>
-          <If when={page()}>{() => <SettingsPage sec={page()!} />}</If>
-          <If when={!page()}><View class={isNarrow() ? "pb-2" : "w-[180px]"}>
+        <View class="flex-row items-center gap-2 px-3">
+          <Icon name="search" size={14} class="tint-muted-foreground" />
+          <Input value={settingsQuery()} placeholder="Filter settings…" accessibilityLabel="Filter settings" testID="settings-search"
+            onChange={({ value }) => settingsQuery.set(value)}
+            class="h-8 min-w-0 flex-1 rounded-(--radius) bg-background px-2 text-[12.5px] text-foreground" />
+          <If when={settingsQuery()}>{() => <Btn label="Clear" kind="ghost" onPress={() => settingsQuery.set("")} testID="settings-search-clear" />}</If>
+        </View>
+        <View class={`${isNarrow() ? "" : "flex-row gap-4"} min-h-0 ${p.inline ? "flex-1" : ""}`} style={p.inline ? {} : { height: Math.max(240, Math.min(520, Math.round(windowSize().height * 0.76) - 48 - 32 - 12 - 12 - 28 - 36)) }}>
+          <View class={isNarrow() ? "pb-2" : "w-[180px]"}>
             <Scroll horizontal={isNarrow()} scrollbar={false} class={isNarrow() ? "" : "flex-1"}>
-              <View class={isNarrow() ? "flex-row gap-1" : "gap-0.5"}>
-              <Each of={sections} key={(s) => s.id}>
+              <View class={isNarrow() ? "flex-row gap-2" : "gap-1"}>
+              <Each of={shown()} key={(s) => s.id}>
                 {(s) => (
-                  <Button onPress={() => { settingsSection.set(s().id); if (s().page) settingsPage.set(s().id); }} selected={cur().id === s().id} testID={`section-${s().id}`} accessibilityLabel={s().label + (s().page ? ", opens a page" : "") + (s().unavailable_reason ? " (unavailable)" : "")}
+                  <Button onPress={() => { settingsSection.set(s().id); settingsPage.set(null); settingsQuery.set(""); }} selected={cur().id === s().id} testID={`section-${s().id}`} accessibilityLabel={s().label}
                     class={`relative flex-row items-center rounded-(--radius) px-3 hover:bg-accent ${cur().id === s().id ? "bg-selection" : ""} ${isNarrow() ? "min-h-10" : "min-h-8"} ${FOCUS}`}>
-                    <Text class={`flex-1 text-[13px] leading-5 ${cur().id === s().id ? "text-foreground font-medium" : s().unavailable_reason ? "text-muted-foreground" : "text-foreground-secondary"}`}>{s().label}</Text>
+                    <Text class={`flex-1 text-[13px] leading-5 ${cur().id === s().id ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{s().label}</Text>
                   </Button>
                 )}
               </Each>
               </View>
             </Scroll>
-          </View></If>
-          <If when={!page()}><Scroll class="flex-1 min-h-0">
-            <View class="pb-4 w-full">
-            <If when={cur().id !== "appearance"}><View class="px-3"><Heading text={cur().label} first /></View></If>
-            <Each of={config()?.errors ?? []} key={(e: string) => e}>{(e) => <Text class={T.meta}>{e()}</Text>}</Each>
-            <If when={cur().unavailable_reason}><View class="flex-row gap-2 items-start pt-1 pb-1"><Text class="text-[13px] text-muted-foreground">⊖</Text><Text class={`flex-1 ${T.sec}`}>{cur().unavailable_reason!}</Text></View></If>
-            <If when={cur().page}><PageEntry sec={cur()} /></If>
-            <If when={!cur().page}><Each of={list()} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each></If>
-            </View>
-          </Scroll></If>
+          </View>
+          <View class="flex-1 min-h-0" testID={`settings-page-${page() ?? cur().id}`}>
+            <Scroll class="flex-1 min-h-0">
+              <View class="pb-4 w-full">
+                <Each of={config()?.errors ?? []} key={(e: string) => e}>{(e) => <Text class={`px-3 ${T.meta}`}>{e()}</Text>}</Each>
+                <If when={!shown().length}><Text class={`px-3 ${T.meta}`} testID="settings-no-matches">No settings match.</Text></If>
+                <If when={page() === "providers"}>{() => <ProvidersPage sec={cur()} />}</If>
+                <If when={page() === "agents" && !agent()}>{() => <AgentsPage sec={cur()} />}</If>
+                <If when={page() === "agents" && agent()}>{() => <View class="gap-2 pb-2">
+                  <View class="flex-row items-center gap-2 px-3">
+                    <Button onPress={() => settingsPage.set(null)} testID="settings-page-back" accessibilityLabel="Back to Agents"
+                      class={`flex-row items-center gap-1 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}>
+                      <Icon name="arrow-left" size={14} class="tint-muted-foreground" />
+                      <Text class="text-[13px] leading-5 text-foreground-secondary">Agents</Text>
+                    </Button>
+                    <Text class="text-[13px] leading-5 text-muted-foreground">/</Text>
+                    <Text class="text-[13px] leading-5 font-medium text-foreground">{agent()}</Text>
+                  </View>
+                  <If when={agentDef()}>{() => <AgentCard a={agentDef()} />}</If>
+                </View>}</If>
+                <If when={!page()}>
+                  <View class="px-3"><Heading text={cur().label} first /></View>
+                  <If when={query() && cur().page}>{() => <View class="px-3 pb-1">
+                    <Btn label={`Open ${cur().label}`} onPress={() => settingsQuery.set("")} testID={`open-page-${cur().id}`} />
+                  </View>}</If>
+                  <If when={cur().note}><Text class={`px-3 ${T.meta}`}>{cur().note!}</Text></If>
+                  <Each of={list()} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each>
+                </If>
+              </View>
+            </Scroll>
+          </View>
         </View>
-        <If when={!p.inline}><ModalFooter hints={page() ? "esc back" : "esc close"} right={`Core ${info()?.version ?? "—"}`} /></If>
+        <If when={!p.inline}><ModalFooter hints={agent() ? "esc back" : "esc close"} right={`Core ${info()?.version ?? "—"}`} /></If>
       </View>;
   return p.inline ? content() : <Modal width={820} top="top-[8%]" label="Settings" testID="settings" onCancel={() => escape()} onOpenChange={(open) => { if (!open && centre() === "settings") void run("app.settings"); }}>{content()}</Modal>;
 }

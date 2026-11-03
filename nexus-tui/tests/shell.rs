@@ -1209,7 +1209,7 @@ fn settings_is_a_centred_modal_over_the_session() {
         Some(&Target::SettingsEntry)
     );
     assert!(rows[top + 2].contains("Filter settings"));
-    assert!(joined(&rows).contains("APPEARANCE"));
+    assert!(joined(&rows).contains("Appearance"));
     app.click(Target::SettingsEntry);
     assert_eq!(app.ui.view, nexus_tui::ui::View::Session);
 }
@@ -1229,6 +1229,8 @@ fn settings_search_filters_rows_and_esc_clears_then_closes() {
     press(&mut app, &["esc"]);
     assert!(app.ui.settings_search.text().is_empty());
     assert_eq!(app.ui.view, nexus_tui::ui::View::Settings);
+    press(&mut app, &["esc"]); // back to the section rail
+    assert!(app.ui.settings_nav_focus);
     press(&mut app, &["esc"]);
     assert_eq!(app.ui.view, nexus_tui::ui::View::Session);
 }
@@ -2300,18 +2302,14 @@ fn settings_shows_what_core_reports_and_refuses_what_it_cannot_change() {
     app.execute("app.settings");
     let (_, rows) = draw(&mut app, 120, 50);
     let all = joined(&rows);
-    for needle in [
-        "Providers \u{203a}",
-        "1 of 2 connected",
-        "Agents \u{203a}",
-        "1 subagents",
-    ] {
+    for needle in ["Appearance", "Providers", "Agents", "10 sections"] {
         assert!(all.contains(needle), "missing {needle:?}: {all}");
     }
-    // The Providers page.
-    typing(&mut app, "providers");
-    press(&mut app, &["enter"]);
-    assert_eq!(app.ui.settings_page.as_deref(), Some("providers"));
+    // The Providers pane.
+    app.ui.settings_section = "providers".into();
+    app.ui.settings_nav_focus = false;
+    app.ui.settings_page = None;
+    assert_eq!(app.settings_open_page().as_deref(), Some("providers"));
     let all = joined(&draw(&mut app, 120, 50).1);
     for needle in [
         "Settings \u{203a} Providers",
@@ -2326,8 +2324,10 @@ fn settings_shows_what_core_reports_and_refuses_what_it_cannot_change() {
     press(&mut app, &["esc"]);
     assert_eq!(app.ui.settings_page, None);
     assert_eq!(app.ui.view, nexus_tui::ui::View::Settings);
-    // The Agents page refuses a change before the configuration has loaded.
-    app.ui.settings_page = Some("agents".into());
+    // The Agents pane refuses a change before the configuration has loaded.
+    app.ui.settings_section = "agents".into();
+    app.ui.settings_nav_focus = false;
+    app.ui.settings_page = None;
     app.ui.settings_page_row = 0;
     let all = joined(&draw(&mut app, 120, 50).1);
     for needle in [
@@ -2374,7 +2374,9 @@ fn agent_model_lists_show_odds_skip_disconnected_and_edit_the_config() {
         "defaults": {"effort": "", "agent": "", "permission": "allow"},
         "agents": {"models": {"scout": ["codex/gpt-5", "groq/x"]}, "fallbacks": {"scout": ["codex/mini", "groq/x"]}}}}));
     app.execute("app.settings");
-    app.ui.settings_page = Some("agents".into());
+    app.ui.settings_section = "agents".into();
+    app.ui.settings_nav_focus = false;
+    app.ui.settings_page = None;
     // One line per subagent; Enter opens its page.
     let all = joined(&draw(&mut app, 120, 50).1);
     assert!(
@@ -2454,9 +2456,12 @@ fn a_pending_device_sign_in_shows_its_code_on_the_provider_row() {
         serde_json::json!({"id": "copilot", "label": "GitHub Copilot", "connected": false, "methods": ["device"]}),
     ];
     app.execute("app.sign_in");
-    assert_eq!(app.ui.settings_page.as_deref(), Some("providers"));
+    assert_eq!(app.ui.settings_section, "providers");
+    assert_eq!(app.settings_open_page().as_deref(), Some("providers"));
     app.effects.clear();
     press(&mut app, &["down", "enter"]);
+    assert_eq!(app.ui.provider_detail.as_deref(), Some("copilot"));
+    press(&mut app, &["enter"]);
     assert!(app.effects.iter().any(|e| matches!(e,
         Effect::Api(ApiCall::Provider { id, sign_out: false, method, .. }) if id == "copilot" && method == "device")), "{:?}", app.effects);
     let event = serde_json::json!({"id": 300, "type": "provider.login", "cursor": "log_c915bfc9b6d826c4:300", "data": {
@@ -2467,14 +2472,22 @@ fn a_pending_device_sign_in_shows_its_code_on_the_provider_row() {
     }
     let all = joined(&draw(&mut app, 120, 50).1);
     assert!(
-        all.contains("code AB-12") && all.contains("open https://github.com/login/device"),
+        all.contains("code AB-12") && all.contains("https://github.com/login/device"),
         "{all}"
     );
-    press(&mut app, &["down", "enter"]);
+    // The modal lists the link first, then the code, then Cancel.
+    app.ui.provider_detail_row = 1;
+    press(&mut app, &["enter"]);
     assert!(app
         .effects
         .iter()
         .any(|e| matches!(e, Effect::Copy(code) if code == "AB-12")));
+    app.ui.provider_detail_row = 0;
+    press(&mut app, &["enter"]);
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::OpenUrl(url) if url == "https://github.com/login/device")));
 }
 
 #[test]
@@ -3245,22 +3258,16 @@ fn modals_are_borderless_padded_blocks_within_two_cells_of_each_edge() {
 }
 
 #[test]
-fn settings_headings_are_muted_uppercase_and_the_selected_row_is_on_the_band() {
+fn settings_marks_the_selected_section_and_row_without_an_accent_fill() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     open_modal(&mut app, "settings");
     let (buf, rows) = draw(&mut app, 120, 36);
     let r = raised_box(&app, &buf);
-    let head = rows.iter().position(|l| l.contains("APPEARANCE")).unwrap();
-    let hx = col_of(&rows[head], "APPEARANCE") as u16;
-    assert_eq!(
-        buf[(hx, head as u16)].fg,
-        app.theme.color("text.muted").unwrap()
-    );
-    assert_ne!(
-        buf[(hx, head as u16)].fg,
-        app.theme.color("agent.violet").unwrap()
-    );
-    // the selected row: selection band and the focus bar, not the accent fill
+    // the rail's selected section carries the focus bar
+    let nav = app.hits.rect_of(&Target::SettingsSection(0)).unwrap();
+    assert_eq!(buf[(nav.x, nav.y)].symbol(), "▌");
+    assert!(r.contains((nav.x, nav.y).into()));
+    // the selected row carries a focus bar too, and stays on the raised surface
     let sel = app
         .hits
         .rect_of(&Target::SettingsRow(app.ui.settings_row))
@@ -3284,6 +3291,7 @@ fn settings_headings_are_muted_uppercase_and_the_selected_row_is_on_the_band() {
         buf[(other.x + 5, other.y)].bg,
         app.theme.color("surface.raised").unwrap()
     );
+    assert!(rows.join("\n").contains("Appearance"));
 }
 
 #[test]

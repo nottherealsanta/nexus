@@ -50,15 +50,17 @@ holds defaults only.
 
 ### `[[settings.section]]` and `[[settings.section.row]]`
 
-Section order is fixed: Appearance, Providers, Models, Agents, Tools, Skills,
-MCP, Context, Dictation, Keybindings, Notifications, About. Row fields: `id`
+Section order is fixed: Appearance, Providers, Agents, Tools, MCP, Context,
+Voice and speech, Keybindings, Notifications, About. Both clients draw Settings
+as a left section rail plus the selected section in the right pane. Row fields: `id`
 (prefixed by the section id), `label`, `kind` (`choice toggle number text list
 action info keymap`), `scope` (`core`: read/written through the Core API;
 `client`: per-client view state), `clients` (`both`, `tui`, `nsh`), optional
-`default`, `options`, `command`, `note`, and `unavailable_reason` for rows
-whose capability does not exist yet. Row order within a section is the display
-order in both clients; client-only rows (NSH font size, TUI monochrome) are
-inserted in place and labelled, never reorganizing the section.
+`default`, `options`, `command` and `note`. Do not ship a row whose capability
+does not exist yet: remove it instead, and add it back with its control. Row
+order within a section is the display order in both clients; client-only rows
+(TUI monochrome and terminal notifications) are inserted in place and labelled,
+never reorganizing the section.
 
 ### `[navigation]`
 

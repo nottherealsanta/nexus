@@ -13,7 +13,7 @@ model: copilot/claude-sonnet-5                   # preferred model
 effort: high                                     # preferred reasoning effort
 tools: [read, bash]                              # allowed task tools; omit for all
 control: [session]                               # control tools; none unless listed
-steps: 20                                        # max loop steps per turn (default 50)
+steps: 20                                        # max loop steps per turn (default 500)
 ---
 You review code. Point out bugs and risks; do not edit files.
 ```
@@ -139,7 +139,7 @@ otherwise the first loaded agent allowed as a root is used (normally
   frozen `model` applies, else the parent's model is inherited. Root sessions
   do not use these pools. **effort** uses the session's value, then the agent's, then the
   provider's default.
-- **steps** = the agent's frozen `steps`, or 50.
+- **steps** = the agent's frozen `steps`, or 500.
 
 ## Built-in agents
 

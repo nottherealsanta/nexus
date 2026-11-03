@@ -10,7 +10,7 @@ model: copilot/claude-sonnet-5                   # preferred model, if the sessi
 effort: high                                     # preferred reasoning effort
 tools: [read, bash]                              # allowed task tools; omit for all task tools
 control: [session]                               # control tools; none unless listed
-steps: 20                                        # max loop steps per turn (default 50)
+steps: 20                                        # max loop steps per turn (default 500)
 permission: {"bash(git push*)": deny, web_fetch: ask}   # narrows the user's rules; ask or deny only
 ---
 You review code. Point out bugs and risks; do not edit files.

@@ -30,7 +30,9 @@ ISSUER = "https://auth.openai.com"
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 REDIRECT_URI = "http://localhost:1455/auth/callback"
 SCOPES = "openid profile email offline_access"
-DEVICE_URL = "https://auth.openai.com/deviceauth"
+# The device page that accepts the code; `/deviceauth` is the API root and
+# shows a stale session page in a browser.
+DEVICE_URL = f"{ISSUER}/codex/device"
 ENTRY = "codex"
 
 

@@ -780,6 +780,8 @@ fn mcp_settings_patch_core_values_with_a_bounded_number() {
         "values": {"mcp": {"full_definitions": false, "max_listed_tools": 1000}}
     }));
     a.execute("app.settings");
+    a.ui.settings_section = "mcp".into();
+    a.ui.settings_nav_focus = false;
     let rows = a.settings_rows();
     let items = a.settings_items();
     let position = |id: &str| {
@@ -842,6 +844,8 @@ fn voice_settings_refresh_consent_remove_and_track_progress() {
     });
     a.effects.clear();
 
+    a.ui.settings_section = "dictation".into();
+    a.ui.settings_nav_focus = false;
     let position = |a: &App, id: &str| {
         let rows = a.settings_rows();
         let items = a.settings_items();
@@ -1498,30 +1502,104 @@ fn every_vocabulary_term_is_known_to_this_client() {
 fn settings_navigation_follows_the_manifest_order() {
     let mut a = app();
     press(&mut a, &["ctrl+,"]);
-    let headings: Vec<String> = a
-        .settings_items()
+    let labels: Vec<String> = a
+        .settings_sections()
         .into_iter()
-        .filter_map(|item| match item {
-            nexus_tui::app::SettingsItem::Heading(label) => Some(label),
-            _ => None,
-        })
+        .map(|section| section.label)
         .collect();
     let manifest: Vec<String> = a
         .manifest
         .settings_for_tui()
         .into_iter()
-        .filter(|s| !s.row.is_empty())
+        .filter(|s| s.page || !s.row.is_empty())
         .map(|s| s.label)
         .collect();
-    assert_eq!(headings, manifest);
+    assert_eq!(labels, manifest);
     let (_, rows) = draw(&mut a, 120, 36);
-    assert!(rows.join("\n").contains("APPEARANCE"));
-    // down moves through the rows; esc closes
+    assert!(rows.join("\n").contains("Appearance"));
+    // The rail moves first, Enter moves into the pane, Esc steps back, then closes.
     press(&mut a, &["down", "down"]);
-    assert_eq!(a.ui.settings_row, 2);
+    assert_eq!(a.ui.settings_section, "agents");
+    press(&mut a, &["enter"]);
+    assert!(!a.ui.settings_nav_focus);
+    press(&mut a, &["esc"]);
+    assert!(a.ui.settings_nav_focus);
+    assert_eq!(a.ui.view, View::Settings);
     press(&mut a, &["esc"]);
     assert_eq!(a.ui.view, View::Session);
     assert_eq!(a.ui.tab, Tab::Sessions);
+}
+
+#[test]
+fn searching_for_a_page_then_entering_opens_that_page() {
+    let mut a = app();
+    a.state.providers = vec![serde_json::json!({
+        "id": "codex", "label": "Codex", "connected": true, "methods": ["device"]
+    })];
+    a.execute("app.settings");
+    typing(&mut a, "providers");
+    press(&mut a, &["enter"]);
+    assert_eq!(a.settings_open_page().as_deref(), Some("providers"));
+    assert!(a.ui.settings_search.text().is_empty());
+    assert_eq!(a.ui.view, View::Settings);
+    let (_, frame) = draw(&mut a, 120, 36);
+    assert!(frame.join("\n").contains("Codex"));
+}
+
+#[test]
+fn the_tools_grid_moves_with_left_right_and_toggles_with_enter() {
+    let mut a = app();
+    a.state.config = Some(serde_json::json!({
+        "revision": "cfg-1",
+        "values": {"tools": {"disabled": []}}
+    }));
+    a.execute("app.settings");
+    a.ui.settings_section = "tools".into();
+    a.ui.settings_nav_focus = false;
+    let rows = a.settings_rows();
+    let items = a.settings_items();
+    a.ui.settings_row = rows
+        .iter()
+        .position(
+            |at| matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == "tools.defaults"),
+        )
+        .unwrap();
+    press(&mut a, &["right"]);
+    assert_eq!(a.ui.tool_cursor, 1);
+    press(&mut a, &["enter"]);
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }))
+            if path == "tools.disabled" && value == &serde_json::json!(["grep"])
+    ));
+    let (_, frame) = draw(&mut a, 120, 36);
+    let text = frame.join("\n");
+    assert!(text.contains("[●grep]"), "{text}");
+}
+
+#[test]
+fn unavailable_settings_are_not_shipped() {
+    let a = app();
+    let ids: Vec<String> = a
+        .manifest
+        .settings
+        .section
+        .iter()
+        .flat_map(|section| {
+            std::iter::once(section.id.clone()).chain(section.row.iter().map(|row| row.id.clone()))
+        })
+        .collect();
+    for gone in [
+        "skills",
+        "skills.list",
+        "providers.add_custom",
+        "mcp.servers",
+        "dictation.engine",
+        "notifications.waiting",
+        "appearance.font_size",
+    ] {
+        assert!(!ids.iter().any(|id| id == gone), "{gone} is still shipped");
+    }
 }
 
 #[test]
@@ -2413,6 +2491,8 @@ fn handoff_threshold_setting_steps_by_five_and_zero_is_off() {
         serde_json::json!({"revision": "cfg-1", "values": {"context": {"handoff_percent": 5}}}),
     );
     a.execute("app.settings");
+    a.ui.settings_section = "context".into();
+    a.ui.settings_nav_focus = false;
     let rows = a.settings_rows();
     let items = a.settings_items();
     a.ui.settings_row = rows
@@ -2471,6 +2551,8 @@ fn continued_sessions_link_back_and_title_models_are_editable() {
     a.state.config = Some(serde_json::json!({"revision": "cfg-1",
         "values": {"context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]}}}));
     a.execute("app.settings");
+    a.ui.settings_section = "context".into();
+    a.ui.settings_nav_focus = false;
     let rows = a.settings_rows();
     let items = a.settings_items();
     a.ui.settings_row = rows

@@ -96,7 +96,7 @@ export function FilePanel() {
               </If>
             }>
               <Scroll class="flex-1"><View class="px-6 py-4" testID="file-markdown">
-                <TextView selectable markdown={f()?.content ?? ""} classes={PROSE} />
+                <TextView selectable links="open" markdown={f()?.content ?? ""} classes={PROSE} />
               </View></Scroll>
             </If>
           }>

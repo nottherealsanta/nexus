@@ -42,7 +42,7 @@ from .tools import DEFAULT_TOOLS, Tool, ToolContext, ToolError
 if TYPE_CHECKING:
     from .observations import FileGuard
 
-MAX_STEPS = 50
+MAX_STEPS = 500
 
 
 @dataclass(frozen=True, slots=True)

@@ -34,21 +34,38 @@ the child's model. Both clients edit both lists on the Settings → Agents page.
 
 ## Settings layout
 
-The manifest marks Providers and Agents as page sections (`page = true`): each is
-one entry in Settings that opens its own page; Esc returns to the section list.
+Both clients draw Settings as one two-pane dialog: a search field, the section
+rail on the left, and the selected section on the right. The manifest fixes the
+section order. The TUI moves with ↑/↓ inside a pane, Enter or → to leave the
+rail, ←/→ to change a value, and Esc to step back to the rail and then close;
+Tab swaps panes. NSH uses the same rail and content pane with the pointer and
+keyboard focus.
+
+Rows that cannot be changed are not shipped in the manifest. There is no Skills
+section, no custom-provider action, no dictation engine/language choice and no
+MCP server editor yet. The Providers and Agents sections render their content
+in the right pane (`page = true`) rather than opening a separate screen.
 
 - **Providers** lists every provider from `GET /api/provider` with its state
   (connected, `using $KEY` when the key comes from the environment, the model
-  count, unverified) and an action that follows its `methods`: Connect starts a
-  device flow whose code and link show on the row, Add key opens a masked field,
-  Disconnect warns when agent model lists name the provider. Refresh models
-  re-reads the catalog.
+  count, unverified). Each provider row opens a detail modal with the
+  connection actions its `methods` allow: Connect starts a device flow whose
+  link and code are separate actions (Enter or a click opens the link; Enter or
+  Copy copies the code), Add API key opens a masked field, Disconnect warns
+  when agent model lists name the provider. The row says `sign-in pending ·
+  open`; the modal waits for authorization without blocking Settings. Refresh
+  models re-reads the catalog.
 - **Agents** has "Default agent for new sessions" (`defaults.agent`) and "Default
   effort" (`defaults.effort`), then one line per agent that can run as a
   subagent, summarising its models (`parent's model`, one ref, or `3 models ·
-  2 fallbacks · 1 skipped`). Selecting one opens its page (Settings › Agents ›
-  name): its Models, each with its real odds over connected providers, and its
-  ordered Fallbacks.
+  2 fallbacks · 1 skipped`). Selecting one opens its detail pane (Settings ›
+  Agents › name): its Models, each with its real odds over connected providers,
+  and its ordered Fallbacks.
+- **Tools** keeps one "Default permission" choice for new sessions, labelled
+  with the tools it actually governs (`bash`, `web_search`, `web_fetch`;
+  read-only and file tools never ask), and one grid of the tools available to a
+  new session. The TUI highlights one chip and ←/→ choose, Enter toggles; NSH
+  toggles each chip directly. Both write `tools.disabled`.
 
 `GET /api/config` returns `{revision, values, defaults, schema, errors}`.
 `PATCH /api/config` accepts `{expected_revision, set: {"defaults.effort":

@@ -1090,11 +1090,16 @@ describe("Core-backed settings values", () => {
     const text = () => app.texts().join("\n");
     expect(text().includes("Connected · 1 model")).toBe(true);
     expect(text().includes("Not connected · API key")).toBe(true);
-    expect(text().includes("Add key")).toBe(true); // a key provider; pressing it needs a live stream (see PLAN.md, Browser tests)
-    expect(app.texts().includes("esc back")).toBe(true);
+    await app.press("id:provider-open-groq");
+    await app.waitFor("id:provider-detail");
+    expect(text().includes("Add API key")).toBe(true); // a key provider; saving needs a live stream (see PLAN.md, Browser tests)
     await app.keyboard.press("escape");
-    await app.waitFor("id:page-entry-providers");
-    expect(app.shows("id:settings")).toBe(true);
+    expect(app.shows("id:provider-detail")).toBe(false);
+    expect(app.texts().includes("esc close")).toBe(true);
+    await app.keyboard.press("escape");
+    await app.waitUntil(() => !app.shows("id:settings"));
+    await app.press("id:open-settings");
+    await app.waitFor("id:settings");
     await app.press("id:section-agents");
     await app.waitFor("id:agent-row-plan");
     expect(text().includes("Default agent for new sessions")).toBe(true);
@@ -1108,10 +1113,10 @@ describe("Core-backed settings values", () => {
     expect(text().includes("100%")).toBe(true); // groq is not connected: codex has all the odds
     expect(text().includes("not connected · skipped")).toBe(true);
     expect(text().includes("1.")).toBe(true);
-    await app.keyboard.press("escape"); // back to the list, then to Settings
+    await app.keyboard.press("escape"); // back to the Agents list
     await app.waitFor("id:agent-row-plan");
-    await app.keyboard.press("escape");
-    await app.waitFor("id:page-entry-agents");
+    await app.keyboard.press("escape"); // close Settings
+    await app.waitUntil(() => !app.shows("id:settings"));
   });
 });
 

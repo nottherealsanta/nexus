@@ -70,7 +70,7 @@ a `state` that matches (constant-time compare), otherwise `AuthError`. Waits up 
 300 s. The code is exchanged at `/oauth/token` with the verifier.
 
 **Device.** `POST /api/accounts/deviceauth/usercode`, tell the user to open
-`https://auth.openai.com/deviceauth` and enter the code, poll
+`https://auth.openai.com/codex/device` and enter the code, poll
 `/api/accounts/deviceauth/token` (HTTP 403 and 404 mean "not yet"; interval at
 least 1 s, default 5 s; gives up after 900 s), then exchange the returned
 authorization code and verifier at `/oauth/token`.

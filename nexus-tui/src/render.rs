@@ -231,7 +231,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             draw_tab_tooltip(&cx, buf, l, area);
         }
         if a.ui.view == View::Settings {
-            draw_settings_modal(&cx, buf, area, &mut hits);
+            draw_settings(&cx, buf, area, &mut hits);
         }
         draw_toasts(&cx, buf, &regions, &mut hits);
         if let Some((side, r)) = regions.drawer {
@@ -2350,11 +2350,7 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut Hit
     // A long directory is cut in the middle and the basename is kept.
     let room = (r.width as usize)
         .saturating_sub(
-            range_w as usize
-                + toggle_w as usize
-                + edit_w as usize
-                + (x - r.x) as usize
-                + 4,
+            range_w as usize + toggle_w as usize + edit_w as usize + (x - r.x) as usize + 4,
         )
         .max(8);
     let (dir, base) = match display.rfind('/') {
@@ -6581,16 +6577,26 @@ fn on_off(on: bool) -> String {
 fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
     let a = cx.app;
     let live = match row.id.as_str() {
-        id if id.starts_with("tools.default_") && id != "tools.default_permission" => {
-            let name = id.trim_start_matches("tools.default_");
-            let disabled = a
+        "tools.defaults" => {
+            let disabled: Vec<&str> = a
                 .state
                 .config
                 .as_ref()
                 .and_then(|c| c["values"]["tools"]["disabled"].as_array())
-                .is_some_and(|v| v.iter().any(|x| x.as_str() == Some(name)));
-            Some(on_off(!disabled))
+                .map(|list| list.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            let off = crate::app::TOOLS
+                .iter()
+                .filter(|name| disabled.contains(name))
+                .count();
+            Some(if off == 0 {
+                "all on".to_owned()
+            } else {
+                format!("{off} off")
+            })
         }
+        "dictation.push_to_talk" => Some("enter".into()),
+        "about.inspector" => Some("enter".into()),
         "appearance.theme" => Some(match a.theme.opts.mode {
             crate::theme::Mode::Dark => "dark".into(),
             crate::theme::Mode::Light => "light".into(),
@@ -6708,21 +6714,47 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
     }
 }
 
-/// Settings (DESIGN_PLAN.md D13): the modal recipe over the scrimmed session.
-/// A search row, then every section's rows (UPPERCASE muted headings, values
-/// right-aligned, the selected row on the selection band with the focus bar);
-/// the selected row's note or reason is the line above the key hints.
-fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
+/// A selected row in the right pane: a focus bar at `x` and bold text. The bar
+/// is muted while the section rail has focus.
+fn row_band(cx: &Cx, buf: &mut Buffer, x: u16, y: u16, token: &str, focused: bool) -> Style {
+    let bar = if focused {
+        cx.st("interactive.focus", RAISED)
+    } else {
+        cx.st(MUTED, RAISED)
+    };
+    put(buf, x, y, cx.t.structure("focus_bar"), bar, 1);
+    cx.st(token, RAISED).add_modifier(Modifier::BOLD)
+}
+
+/// Settings: a search row, a section rail on the left and the selected
+/// section, provider list or agent page on the right. Both clients use the
+/// same two-pane structure.
+fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
+    use crate::app::{PageLine, SettingsItem, Tone};
     let a = cx.app;
     hits.add(area, Target::Scrim);
     let r = settings_box(area);
     if r.width < 20 || r.height < 8 {
         return;
     }
-    if let Some(page) = a.ui.settings_page.as_deref() {
-        return draw_settings_page(cx, buf, area, r, page, hits);
-    }
-    let m = modal(cx, buf, area, r, "Settings", hits);
+    let page = a.settings_open_page();
+    let title = match page.as_deref() {
+        Some(p) => match p.strip_prefix("agents/") {
+            Some(name) => format!("Settings \u{203a} Agents \u{203a} {name}"),
+            None => {
+                let label = a
+                    .manifest
+                    .settings
+                    .section
+                    .iter()
+                    .find(|s| s.id == p)
+                    .map_or(p.to_owned(), |s| s.label.clone());
+                format!("Settings \u{203a} {label}")
+            }
+        },
+        None => "Settings".into(),
+    };
+    let m = modal(cx, buf, area, r, &title, hits);
     let (x, w) = (m.x, m.w);
     let close = Rect::new(r.right().saturating_sub(5), r.y + 1, 3, 1);
     hits.add(close, Target::SettingsEntry);
@@ -6752,125 +6784,351 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
         );
     }
 
-    let items = a.settings_items();
-    let rows = a.settings_rows();
-    let sel = a.ui.settings_row.min(rows.len().saturating_sub(1));
-    let sel_item = rows.get(sel).copied();
-    let details = sel_item
-        .and_then(|index| items.get(index))
-        .and_then(|item| match item {
-            crate::app::SettingsItem::Row {
-                row,
-                section_reason,
-            } => Some(a.settings_details(row, section_reason.as_deref())),
-            crate::app::SettingsItem::Heading(_) | crate::app::SettingsItem::Note(_) => None,
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .flat_map(|line| text::wrap(&line, w as usize))
-        .collect::<Vec<_>>();
-    let detail_count = details.len().max(1).min(m.body.height as usize);
+    let main_top = sy + 2;
+    let nav_w = 22u16.min(m.w.saturating_sub(24));
+    let content_x = m.x + nav_w + 2;
+    let content_w = m.w.saturating_sub(nav_w + 2);
+    let page_lines = page.as_deref().map(|_| a.settings_page_lines());
+    let page_items = page.as_deref().map(|_| a.settings_page_items());
+
+    // The selected row's note (or the page's detail) sits above the key hints.
+    let details: Vec<String> = match (&page, &page_lines) {
+        (Some(_), Some(_)) => a
+            .settings_page_detail()
+            .map(|d| vec![d])
+            .unwrap_or_default(),
+        _ => {
+            let items = a.settings_items();
+            let rows = a.settings_rows();
+            let sel = a.ui.settings_row.min(rows.len().saturating_sub(1));
+            rows.get(sel)
+                .and_then(|index| items.get(*index))
+                .and_then(|item| match item {
+                    SettingsItem::Row {
+                        row,
+                        section_reason,
+                    } => Some(a.settings_details(row, section_reason.as_deref())),
+                    SettingsItem::Heading(_) | SettingsItem::Note(_) => None,
+                })
+                .unwrap_or_default()
+        }
+    }
+    .into_iter()
+    .flat_map(|line| text::wrap(&line, content_w as usize))
+    .collect::<Vec<_>>();
+    let mut details = details;
+    // Voice status and a long note can run past the space above the hints;
+    // keep every line up to a readable bound and say how many were left out.
+    if details.len() > 8 {
+        let hidden = details.len() - 7;
+        details.truncate(7);
+        details.push(format!("\u{2026} {hidden} more lines"));
+    }
+    let detail_count = details.len().max(1);
     let detail_start = m.hint_y.saturating_sub(detail_count as u16);
-    let list = Rect::new(r.x, sy + 2, r.width, detail_start.saturating_sub(sy + 2));
-    if items.is_empty() {
+    let list = Rect::new(m.x, main_top, m.w, detail_start.saturating_sub(main_top));
+    let list_h = list.height as usize;
+
+    // Left: the section rail.
+    let sections = a.settings_sections();
+    let nav_sel = a
+        .settings_section_index()
+        .min(sections.len().saturating_sub(1));
+    // Breathing room between sections unless the modal is too short to spare
+    // the row; a tiny terminal keeps sections on consecutive rows.
+    let nav_step = if list_h >= 6 { 2usize } else { 1 };
+    let nav_visible = list_h.saturating_div(nav_step).max(1);
+    let nav_top = (nav_sel + 1).saturating_sub(nav_visible);
+    if sections.is_empty() {
+        put(buf, x, list.y, "No sections", cx.st(MUTED, RAISED), nav_w);
+    }
+    for (i, section) in sections.iter().enumerate().skip(nav_top).take(nav_visible) {
+        let y = list.y + ((i - nav_top) * nav_step) as u16;
+        let selected = i == nav_sel;
+        let style = if selected {
+            row_band(cx, buf, x, y, PRIMARY, a.ui.settings_nav_focus)
+        } else {
+            cx.st(SECONDARY, RAISED)
+        };
         put(
             buf,
-            x,
-            list.y,
-            "No settings match.",
-            cx.st(MUTED, RAISED),
-            w,
+            x + 2,
+            y,
+            &truncate(&section.label, nav_w.saturating_sub(4) as usize, cx.ell()),
+            style,
+            nav_w.saturating_sub(2),
+        );
+        hits.add(
+            Rect::new(x, y, nav_w, nav_step as u16),
+            Target::SettingsSection(i),
         );
     }
-    // a blank line before every heading but the first
-    let mut lines: Vec<Option<usize>> = Vec::new();
-    for (i, item) in items.iter().enumerate() {
-        if matches!(item, crate::app::SettingsItem::Heading(_)) && i > 0 {
-            lines.push(None);
-        }
-        lines.push(Some(i));
+    let below = sections
+        .len()
+        .saturating_sub(nav_top.saturating_add(nav_visible));
+    if below > 0 && list_h > 0 {
+        put(
+            buf,
+            x + 2,
+            list.y + list.height.saturating_sub(1),
+            &format!("\u{2193} {below} more"),
+            cx.st(MUTED, RAISED),
+            nav_w.saturating_sub(2),
+        );
     }
-    let h = list.height as usize;
-    let sel_line = sel_item
-        .and_then(|i| lines.iter().position(|l| *l == Some(i)))
-        .unwrap_or(0);
-    // keep the selection's heading in view when scrolling up to it
-    let top = (sel_line + 1).saturating_sub(h);
-    for (li, line) in lines.iter().enumerate().skip(top).take(h) {
-        let y = list.y + (li - top) as u16;
-        let Some(i) = line else { continue };
-        match &items[*i] {
-            crate::app::SettingsItem::Heading(label) => heading(cx, buf, &m, y, label),
-            crate::app::SettingsItem::Note(text) => {
-                put(
-                    buf,
-                    x + 2,
-                    y,
-                    &truncate(text, w.saturating_sub(2) as usize, cx.ell()),
-                    cx.st("status.warning", RAISED),
-                    w.saturating_sub(2),
-                );
+    // A rule between the rail and the pane.
+    let border = cx.t.border_set();
+    for y in main_top..m.hint_y.saturating_sub(1) {
+        put(
+            buf,
+            m.x + nav_w,
+            y,
+            border.vertical_left,
+            cx.st("border.default", RAISED),
+            1,
+        );
+    }
+
+    // Right: the selected section or page.
+    if let (Some(_), Some(lines), Some(items)) = (&page, &page_lines, &page_items) {
+        let sel = items
+            .get(a.ui.settings_page_row.min(items.len().saturating_sub(1)))
+            .copied();
+        let mut display: Vec<Option<usize>> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if matches!(line, PageLine::Heading(_) | PageLine::Title(..)) && i > 0 {
+                display.push(None);
             }
-            crate::app::SettingsItem::Row {
-                row,
-                section_reason,
-            } => {
-                let position = rows.iter().position(|p| p == i).unwrap_or(0);
-                let selected = Some(*i) == sel_item;
-                let disabled = a.settings_reason(row, section_reason.as_deref()).is_some();
-                let (value, wired) = settings_value(cx, row);
-                let rr = Rect::new(r.x + 1, y, r.width.saturating_sub(2), 1);
-                let mut style = cx.st(if disabled || !wired { MUTED } else { PRIMARY }, RAISED);
-                let mut vstyle = cx.st(if wired && !disabled { SECONDARY } else { MUTED }, RAISED);
-                if selected {
-                    style = band(
-                        cx,
+            display.push(Some(i));
+        }
+        let sel_row = sel
+            .and_then(|i| display.iter().position(|l| *l == Some(i)))
+            .unwrap_or(0);
+        let top = (sel_row + 1).saturating_sub(list_h);
+        let tone = |t: Tone| match t {
+            Tone::Muted => MUTED,
+            Tone::Secondary => SECONDARY,
+            Tone::Warning => "status.warning",
+            Tone::Error => "status.error",
+        };
+        for (li, row) in display.iter().enumerate().skip(top).take(list_h) {
+            let y = list.y + (li - top) as u16;
+            let Some(i) = row else { continue };
+            match &lines[*i] {
+                PageLine::Heading(label) => {
+                    put(
                         buf,
-                        &m,
+                        content_x,
                         y,
-                        if disabled || !wired { MUTED } else { PRIMARY },
+                        &truncate(&label.to_uppercase(), content_w as usize, cx.ell()),
+                        cx.st(MUTED, RAISED).add_modifier(Modifier::BOLD),
+                        content_w,
                     );
-                    vstyle = cx
-                        .st(if wired && !disabled { SECONDARY } else { MUTED }, RAISED)
-                        .add_modifier(Modifier::BOLD);
                 }
-                let value = if disabled {
-                    "unavailable".to_owned()
+                PageLine::Title(label, detail) => {
+                    put(
+                        buf,
+                        content_x,
+                        y,
+                        &truncate(&label.to_uppercase(), content_w as usize, cx.ell()),
+                        cx.st(MUTED, RAISED).add_modifier(Modifier::BOLD),
+                        content_w,
+                    );
+                    let dw = (width(detail) as u16).min(content_w / 2);
+                    put(
+                        buf,
+                        content_x + content_w - dw,
+                        y,
+                        &truncate(detail, dw as usize, cx.ell()),
+                        cx.st(MUTED, RAISED),
+                        dw,
+                    );
+                }
+                PageLine::Text(text, t) => {
+                    put(
+                        buf,
+                        content_x,
+                        y,
+                        &truncate(text, content_w as usize, cx.ell()),
+                        cx.st(tone(*t), RAISED),
+                        content_w,
+                    );
+                }
+                PageLine::Item {
+                    label,
+                    value,
+                    tone: t,
+                    action,
+                } => {
+                    let selected = Some(*i) == sel;
+                    let position = items.iter().position(|p| p == i).unwrap_or(0);
+                    let (value, disabled) = match action {
+                        crate::app::PageAction::Setting(row) => {
+                            let reason = a.settings_reason(row, None);
+                            let shown = if reason.is_some() {
+                                "unavailable".to_owned()
+                            } else {
+                                settings_value(cx, row).0
+                            };
+                            (shown, reason.is_some())
+                        }
+                        _ => (value.clone(), false),
+                    };
+                    let is_link = matches!(action, crate::app::PageAction::OpenUrl(_));
+                    let token = if disabled { MUTED } else { PRIMARY };
+                    let mut style = if selected {
+                        row_band(cx, buf, content_x, y, token, !a.ui.settings_nav_focus)
+                    } else {
+                        cx.st(token, RAISED)
+                    };
+                    if is_link {
+                        style = style.add_modifier(Modifier::UNDERLINED);
+                    }
+                    let mut vstyle = cx.st(if disabled { MUTED } else { tone(*t) }, RAISED);
+                    if is_link {
+                        vstyle = vstyle.add_modifier(Modifier::UNDERLINED);
+                    }
+                    if selected {
+                        vstyle = vstyle.add_modifier(Modifier::BOLD);
+                    }
+                    let lw = content_w.saturating_sub(2);
+                    let vw = (width(&value) as u16).min(lw.saturating_sub(12));
+                    put(
+                        buf,
+                        content_x + 2,
+                        y,
+                        &truncate(label, (lw - vw).saturating_sub(2) as usize, cx.ell()),
+                        style,
+                        (lw - vw).saturating_sub(2),
+                    );
+                    put(
+                        buf,
+                        content_x + content_w - vw,
+                        y,
+                        &truncate(&value, vw as usize, cx.ell()),
+                        vstyle,
+                        vw,
+                    );
+                    hits.add(
+                        Rect::new(content_x, y, content_w, 1),
+                        Target::SettingsPageRow(position),
+                    );
+                }
+            }
+        }
+    } else {
+        let items = a.settings_items();
+        let rows = a.settings_rows();
+        let sel = a.ui.settings_row.min(rows.len().saturating_sub(1));
+        let sel_item = rows.get(sel).copied();
+        let mut display: Vec<Option<usize>> = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            if matches!(item, SettingsItem::Heading(_)) && i > 0 {
+                display.push(None);
+            }
+            display.push(Some(i));
+        }
+        let sel_row = sel_item
+            .and_then(|i| display.iter().position(|l| *l == Some(i)))
+            .unwrap_or(0);
+        let top = (sel_row + 1).saturating_sub(list_h);
+        if items.is_empty() {
+            put(
+                buf,
+                content_x,
+                list.y,
+                if query.is_empty() {
+                    "This section has no settings."
                 } else {
-                    value
-                };
-                let lx = x + 2;
-                let lw = w.saturating_sub(2);
-                let vw = (width(&value) as u16).min(lw / 2);
-                let vx = x + w - vw;
-                put(
-                    buf,
-                    lx,
-                    y,
-                    &truncate(&row.label, (lw - vw).saturating_sub(2) as usize, cx.ell()),
-                    style,
-                    (lw - vw).saturating_sub(2),
-                );
-                put(
-                    buf,
-                    vx,
-                    y,
-                    &truncate(&value, vw as usize, cx.ell()),
-                    vstyle,
-                    vw,
-                );
-                hits.add(rr, Target::SettingsRow(position));
+                    "No settings match."
+                },
+                cx.st(MUTED, RAISED),
+                content_w,
+            );
+        }
+        for (li, line) in display.iter().enumerate().skip(top).take(list_h) {
+            let y = list.y + (li - top) as u16;
+            let Some(i) = line else { continue };
+            match &items[*i] {
+                SettingsItem::Heading(label) => {
+                    put(
+                        buf,
+                        content_x,
+                        y,
+                        &truncate(&label.to_uppercase(), content_w as usize, cx.ell()),
+                        cx.st(MUTED, RAISED).add_modifier(Modifier::BOLD),
+                        content_w,
+                    );
+                }
+                SettingsItem::Note(text) => {
+                    put(
+                        buf,
+                        content_x,
+                        y,
+                        &truncate(text, content_w as usize, cx.ell()),
+                        cx.st("status.warning", RAISED),
+                        content_w,
+                    );
+                }
+                SettingsItem::Row {
+                    row,
+                    section_reason,
+                } => {
+                    let position = rows.iter().position(|p| p == i).unwrap_or(0);
+                    let selected = Some(*i) == sel_item;
+                    let disabled = a.settings_reason(row, section_reason.as_deref()).is_some();
+                    let (value, wired) = settings_value(cx, row);
+                    let token = if disabled || !wired { MUTED } else { PRIMARY };
+                    let style = if selected {
+                        row_band(cx, buf, content_x, y, token, !a.ui.settings_nav_focus)
+                    } else {
+                        cx.st(token, RAISED)
+                    };
+                    let mut vstyle =
+                        cx.st(if wired && !disabled { SECONDARY } else { MUTED }, RAISED);
+                    if selected {
+                        vstyle = vstyle.add_modifier(Modifier::BOLD);
+                    }
+                    let value = if disabled {
+                        "unavailable".to_owned()
+                    } else {
+                        value
+                    };
+                    let lw = content_w.saturating_sub(2);
+                    let vw = (width(&value) as u16).min(lw.saturating_sub(12));
+                    put(
+                        buf,
+                        content_x + 2,
+                        y,
+                        &truncate(&row.label, (lw - vw).saturating_sub(2) as usize, cx.ell()),
+                        style,
+                        (lw - vw).saturating_sub(2),
+                    );
+                    put(
+                        buf,
+                        content_x + content_w - vw,
+                        y,
+                        &truncate(&value, vw as usize, cx.ell()),
+                        vstyle,
+                        vw,
+                    );
+                    hits.add(
+                        Rect::new(content_x, y, content_w, 1),
+                        Target::SettingsRow(position),
+                    );
+                }
             }
         }
     }
+
     for (offset, line) in details.iter().take(detail_count).enumerate() {
         put(
             buf,
-            x,
+            content_x,
             detail_start + offset as u16,
-            &truncate(line, w as usize, cx.ell()),
+            &truncate(line, content_w as usize, cx.ell()),
             cx.st(MUTED, RAISED),
-            w,
+            content_w,
         );
     }
     let arrows = if cx.t.opts.ascii {
@@ -6878,17 +7136,33 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
     } else {
         "\u{2190}/\u{2192}"
     };
-    hint_row(
-        cx,
-        buf,
-        &m,
-        &[(arrows, "change"), ("enter", "select"), ("esc", "close")],
-    );
-    let sections = items
-        .iter()
-        .filter(|i| matches!(i, crate::app::SettingsItem::Heading(_)))
-        .count();
-    let count = format!("{sections} sections");
+    let hints: Vec<(&str, &str)> = if a.ui.settings_nav_focus {
+        vec![(updown(cx), "section"), ("enter", "open"), ("esc", "close")]
+    } else if let Some(page) = page.as_deref() {
+        if page.starts_with("agents/") {
+            vec![
+                ("enter", "select"),
+                ("d", "remove"),
+                ("K/J", "reorder"),
+                ("esc", "back"),
+            ]
+        } else if page == "agents" {
+            vec![("enter", "open"), ("esc", "back")]
+        } else if page == "providers" {
+            vec![("enter", "open"), ("esc", "back")]
+        } else {
+            vec![("enter", "select"), ("esc", "back")]
+        }
+    } else {
+        vec![
+            (arrows, "change"),
+            ("enter", "select"),
+            ("tab", "sections"),
+            ("esc", "back"),
+        ]
+    };
+    hint_row(cx, buf, &m, &hints);
+    let count = format!("{} sections", sections.len());
     put(
         buf,
         r.right().saturating_sub(width(&count) as u16 + 2),
@@ -6897,81 +7171,82 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
         cx.st(MUTED, RAISED),
         width(&count) as u16,
     );
+    if let Some(id) = a.ui.provider_detail.as_deref() {
+        draw_provider_detail(cx, buf, area, hits, id);
+    }
 }
 
-/// A Settings page (Providers, Agents) in the settings box: headings, notes
-/// and selectable items (label left, value right), scrolled to keep the
-/// selection in view; Esc returns to the section list.
-fn draw_settings_page(
-    cx: &Cx,
-    buf: &mut Buffer,
-    area: Rect,
-    r: Rect,
-    page: &str,
-    hits: &mut HitMap,
-) {
+/// One provider's connection and sign-in actions, over Settings. Each provider
+/// row on the Providers page opens this modal; the page itself stays a list.
+fn draw_provider_detail(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap, id: &str) {
     use crate::app::{PageLine, Tone};
     let a = cx.app;
     let label = a
-        .manifest
-        .settings
-        .section
+        .state
+        .providers
         .iter()
-        .find(|s| s.id == page.split('/').next().unwrap_or(page))
-        .map_or(page.to_owned(), |s| s.label.clone());
-    let title = match page.strip_prefix("agents/") {
-        Some(agent) => format!("Settings \u{203a} Agents \u{203a} {agent}"),
-        None => format!("Settings \u{203a} {label}"),
-    };
-    let m = modal(cx, buf, area, r, &title, hits);
-    let (x, w) = (m.x, m.w);
+        .find(|p| p["id"].as_str() == Some(id))
+        .and_then(|p| p["label"].as_str())
+        .unwrap_or(id);
+    let lines = a.provider_detail_lines(id);
+    let items = a.provider_detail_items(id);
+    let height = (lines.len() as u16 + 6).clamp(10, 22);
+    let r = modal_box(area, 66, height);
+    if r.width < 20 || r.height < 8 {
+        return;
+    }
+    hits.add(area, Target::Scrim);
+    let m = modal(cx, buf, area, r, label, hits);
     let close = Rect::new(r.right().saturating_sub(5), r.y + 1, 3, 1);
     hits.add(close, Target::SettingsEntry);
-    let lines = a.settings_page_lines();
-    let items = a.settings_page_items();
     let sel = items
-        .get(a.ui.settings_page_row.min(items.len().saturating_sub(1)))
+        .get(a.ui.provider_detail_row.min(items.len().saturating_sub(1)))
         .copied();
-    // a blank line before every heading but the first line
-    let mut rows: Vec<Option<usize>> = Vec::new();
+    let mut display: Vec<Option<usize>> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         if matches!(line, PageLine::Heading(_) | PageLine::Title(..)) && i > 0 {
-            rows.push(None);
+            display.push(None);
         }
-        rows.push(Some(i));
+        display.push(Some(i));
     }
-    let detail = a
-        .settings_page_detail()
-        .map(|d| truncate(&d, w as usize, cx.ell()));
-    let list_end = m
-        .hint_y
-        .saturating_sub(if detail.is_some() { 2 } else { 1 });
-    let list = Rect::new(r.x, m.body.y, r.width, list_end.saturating_sub(m.body.y));
-    if let Some(detail) = &detail {
-        put(buf, x, m.hint_y - 1, detail, cx.st(MUTED, RAISED), w);
-    }
-    let h = list.height as usize;
+    let list_h = m.hint_y.saturating_sub(m.body.y).saturating_sub(1) as usize;
     let sel_row = sel
-        .and_then(|i| rows.iter().position(|l| *l == Some(i)))
+        .and_then(|i| display.iter().position(|l| *l == Some(i)))
         .unwrap_or(0);
-    let top = (sel_row + 1).saturating_sub(h);
+    let top = (sel_row + 1).saturating_sub(list_h.max(1));
     let tone = |t: Tone| match t {
         Tone::Muted => MUTED,
         Tone::Secondary => SECONDARY,
         Tone::Warning => "status.warning",
         Tone::Error => "status.error",
     };
-    for (li, row) in rows.iter().enumerate().skip(top).take(h) {
-        let y = list.y + (li - top) as u16;
+    for (li, row) in display.iter().enumerate().skip(top).take(list_h) {
+        let y = m.body.y + (li - top) as u16;
         let Some(i) = row else { continue };
         match &lines[*i] {
-            PageLine::Heading(text) => heading(cx, buf, &m, y, text),
-            PageLine::Title(text, detail) => {
-                heading(cx, buf, &m, y, text);
-                let dw = (width(detail) as u16).min(w / 2);
+            PageLine::Heading(text) => {
                 put(
                     buf,
-                    x + w - dw,
+                    m.x,
+                    y,
+                    &truncate(&text.to_uppercase(), m.w as usize, cx.ell()),
+                    cx.st(MUTED, RAISED).add_modifier(Modifier::BOLD),
+                    m.w,
+                );
+            }
+            PageLine::Title(text, detail) => {
+                put(
+                    buf,
+                    m.x,
+                    y,
+                    &truncate(&text.to_uppercase(), m.w as usize, cx.ell()),
+                    cx.st(MUTED, RAISED).add_modifier(Modifier::BOLD),
+                    m.w,
+                );
+                let dw = (width(detail) as u16).min(m.w / 2);
+                put(
+                    buf,
+                    m.x + m.w - dw,
                     y,
                     &truncate(detail, dw as usize, cx.ell()),
                     cx.st(MUTED, RAISED),
@@ -6981,11 +7256,11 @@ fn draw_settings_page(
             PageLine::Text(text, t) => {
                 put(
                     buf,
-                    x,
+                    m.x,
                     y,
-                    &truncate(text, w as usize, cx.ell()),
+                    &truncate(text, m.w as usize, cx.ell()),
                     cx.st(tone(*t), RAISED),
-                    w,
+                    m.w,
                 );
             }
             PageLine::Item {
@@ -6996,33 +7271,27 @@ fn draw_settings_page(
             } => {
                 let selected = Some(*i) == sel;
                 let position = items.iter().position(|p| p == i).unwrap_or(0);
-                let (value, disabled) = match action {
-                    crate::app::PageAction::Setting(row) => {
-                        let reason = a.settings_reason(row, None);
-                        let shown = if reason.is_some() {
-                            "unavailable".to_owned()
-                        } else {
-                            settings_value(cx, row).0
-                        };
-                        (shown, reason.is_some())
-                    }
-                    _ => (value.clone(), false),
-                };
-                let token = if disabled { MUTED } else { PRIMARY };
-                let style = if selected {
-                    band(cx, buf, &m, y, token)
+                let is_link = matches!(action, crate::app::PageAction::OpenUrl(_));
+                let mut style = if selected {
+                    row_band(cx, buf, m.x, y, PRIMARY, true)
                 } else {
-                    cx.st(token, RAISED)
+                    cx.st(PRIMARY, RAISED)
                 };
-                let mut vstyle = cx.st(if disabled { MUTED } else { tone(*t) }, RAISED);
+                if is_link {
+                    style = style.add_modifier(Modifier::UNDERLINED);
+                }
+                let mut vstyle = cx.st(tone(*t), RAISED);
+                if is_link {
+                    vstyle = vstyle.add_modifier(Modifier::UNDERLINED);
+                }
                 if selected {
                     vstyle = vstyle.add_modifier(Modifier::BOLD);
                 }
-                let lw = w.saturating_sub(2);
-                let vw = (width(&value) as u16).min(lw / 2);
+                let lw = m.w.saturating_sub(2);
+                let vw = (width(value) as u16).min(lw.saturating_sub(12));
                 put(
                     buf,
-                    x + 2,
+                    m.x + 2,
                     y,
                     &truncate(label, (lw - vw).saturating_sub(2) as usize, cx.ell()),
                     style,
@@ -7030,37 +7299,20 @@ fn draw_settings_page(
                 );
                 put(
                     buf,
-                    x + w - vw,
+                    m.x + m.w - vw,
                     y,
-                    &truncate(&value, vw as usize, cx.ell()),
+                    &truncate(value, vw as usize, cx.ell()),
                     vstyle,
                     vw,
                 );
                 hits.add(
-                    Rect::new(r.x + 1, y, r.width.saturating_sub(2), 1),
-                    Target::SettingsPageRow(position),
+                    Rect::new(m.x, y, m.w, 1),
+                    Target::ProviderDetailRow(position),
                 );
             }
         }
     }
-    let arrows = if cx.t.opts.ascii {
-        "</>"
-    } else {
-        "\u{2190}/\u{2192}"
-    };
-    let hints: Vec<(&str, &str)> = if page == "agents" {
-        vec![("enter", "open"), (arrows, "change"), ("esc", "back")]
-    } else if page.starts_with("agents/") {
-        vec![
-            ("enter", "select"),
-            ("d", "remove"),
-            ("K/J", "reorder"),
-            ("esc", "back"),
-        ]
-    } else {
-        vec![("enter", "select"), ("esc", "back")]
-    };
-    hint_row(cx, buf, &m, &hints);
+    hint_row(cx, buf, &m, &[("enter", "select"), ("esc", "close")]);
 }
 
 /// One modal: the scrim over everything drawn so far, then a borderless

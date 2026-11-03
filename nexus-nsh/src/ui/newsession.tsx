@@ -276,7 +276,7 @@ function EntryRow(p: { entry: () => ContextEntry; focus: boolean }) {
         <View class="ml-6 mr-1 mb-2" testID={`context-entry-${id}-full`}>
           <If when={loaded() !== undefined} else={<Text class={T.meta}>Loading…</Text>}>
             {() => <If when={!!e().markdown} else={<Text style={{ userSelect: "text" }} class="font-mono text-[12.5px] leading-5 text-foreground-secondary">{loaded()!}</Text>}>
-              <TextView selectable markdown={loaded()!} classes={PROSE} />
+              <TextView selectable links="open" markdown={loaded()!} classes={PROSE} />
             </If>}
           </If>
         </View>
@@ -295,7 +295,7 @@ export function ContextDetailModal() {
       <Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }}>
         <If when={!!body().entries} else={
           <If when={!!body().markdown} else={<Text testID="context-detail-text" style={{ userSelect: "text" }} class="font-mono text-[12.5px] leading-5 text-foreground-secondary">{body().detail}</Text>}>
-            <View testID="context-detail-markdown"><TextView selectable markdown={body().detail} classes={PROSE} /></View>
+            <View testID="context-detail-markdown"><TextView selectable links="open" markdown={body().detail} classes={PROSE} /></View>
           </If>
         }>
           <View class="gap-0.5">

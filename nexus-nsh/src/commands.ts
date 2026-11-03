@@ -9,7 +9,7 @@ import {
   editFile, fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   pendingInputs, contextDetail, imagePreview, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsSection, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
+  focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
@@ -144,11 +144,11 @@ export function toggleRight(w: number) {
 }
 export function openSettings() {
   if (centre() === "settings") { centre.set(previousCentre()); return; }
-  previousCentre.set(centre()); centre.set("settings"); if (isNarrow()) drawer.set(null);
+  previousCentre.set(centre()); centre.set("settings"); settingsQuery.set(""); providerDetail.set(null); if (isNarrow()) drawer.set(null);
   refreshVoiceOnSettingsOpen();
 }
-on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsSection.set("providers"); settingsPage.set("providers"); }, true);
-on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsSection.set("providers"); settingsPage.set("providers"); }, true);
+on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); providerDetail.set(null); }, true);
+on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); providerDetail.set(null); }, true);
 function tab(t: "sessions" | "files" | "projects") { if (t === "files") void loadFiles(); leftTab.set(t); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true); }
 
 export function newSession() {
@@ -804,7 +804,8 @@ export function escape() {
   if (resourcesOpen()) { resourcesOpen.set(false); return "resources"; }
   if (switcherOpen()) { switcherOpen.set(false); return "session_switcher"; }
   if (fileFindOpen()) { fileFindOpen.set(false); return "file_find"; }
-  if (centre() === "settings" && settingsPage()) { settingsPage.set(settingsPage()!.includes("/") ? settingsPage()!.split("/")[0] : null); return "settings_page"; }
+  if (centre() === "settings" && providerDetail()) { providerDetail.set(null); return "provider_detail"; }
+  if (centre() === "settings" && settingsPage()) { settingsPage.set(null); return "settings_page"; }
   for (const rule of manifest.keymap.escape as readonly { id: string; when: readonly string[]; action: string }[]) {
     if (rule.when.every(term)) {
       if (rule.id === "text_edit") { renaming.set(false); return rule.id; }

@@ -316,35 +316,6 @@ export const manifest = {
       "command": "app.theme"
      },
      {
-      "id": "appearance.density",
-      "label": "Density",
-      "kind": "choice",
-      "scope": "client",
-      "clients": "both",
-      "default": "comfortable",
-      "options": [
-       "compact",
-       "comfortable"
-      ]
-     },
-     {
-      "id": "appearance.font_family",
-      "label": "Font",
-      "kind": "choice",
-      "scope": "client",
-      "clients": "nsh",
-      "default": "system",
-      "note": "NSH only; the TUI uses the terminal font."
-     },
-     {
-      "id": "appearance.font_size",
-      "label": "Font size",
-      "kind": "number",
-      "scope": "client",
-      "clients": "nsh",
-      "default": 14
-     },
-     {
       "id": "appearance.monochrome",
       "label": "Monochrome mode",
       "kind": "toggle",
@@ -426,17 +397,7 @@ export const manifest = {
     "id": "providers",
     "label": "Providers",
     "page": true,
-    "note": "Connection status per provider and ways to connect.",
-    "row": [
-     {
-      "id": "providers.add_custom",
-      "label": "Add OpenAI-compatible provider",
-      "kind": "action",
-      "scope": "core",
-      "clients": "both",
-      "unavailable_reason": "Core does not support custom providers yet."
-     }
-    ]
+    "note": "Connection status per provider and ways to connect."
    },
    {
     "id": "agents",
@@ -474,88 +435,16 @@ export const manifest = {
       "options": [
        "allow",
        "ask"
-      ]
+      ],
+      "note": "For new sessions. Applies to bash, web_search and web_fetch; read-only and file tools never ask."
      },
      {
       "id": "tools.defaults",
-      "label": "Tools on by default for new sessions",
+      "label": "Tools available to new sessions",
       "kind": "list",
       "scope": "core",
       "clients": "both",
       "command": "tools.configure"
-     },
-     {
-      "id": "tools.default_read",
-      "label": "read on by default",
-      "kind": "toggle",
-      "scope": "core",
-      "clients": "tui"
-     },
-     {
-      "id": "tools.default_bash",
-      "label": "bash on by default",
-      "kind": "toggle",
-      "scope": "core",
-      "clients": "tui"
-     },
-     {
-      "id": "tools.default_edit",
-      "label": "edit on by default",
-      "kind": "toggle",
-      "scope": "core",
-      "clients": "tui"
-     },
-     {
-      "id": "tools.default_write",
-      "label": "write on by default",
-      "kind": "toggle",
-      "scope": "core",
-      "clients": "tui"
-     },
-     {
-      "id": "tools.default_ask",
-      "label": "ask on by default",
-      "kind": "toggle",
-      "scope": "core",
-      "clients": "tui"
-     },
-     {
-      "id": "tools.default_code",
-      "label": "code on by default",
-      "kind": "toggle",
-      "scope": "core",
-      "clients": "tui"
-     }
-    ]
-   },
-   {
-    "id": "skills",
-    "label": "Skills",
-    "unavailable_reason": "Skills are not available yet.",
-    "row": [
-     {
-      "id": "skills.list",
-      "label": "Discovered skills",
-      "kind": "list",
-      "scope": "core",
-      "clients": "both",
-      "unavailable_reason": "Skills are not available yet."
-     },
-     {
-      "id": "skills.defaults",
-      "label": "Skills on by default for new sessions",
-      "kind": "list",
-      "scope": "core",
-      "clients": "both",
-      "unavailable_reason": "Skills are not available yet."
-     },
-     {
-      "id": "skills.diagnostics",
-      "label": "Skill diagnostics",
-      "kind": "list",
-      "scope": "core",
-      "clients": "both",
-      "unavailable_reason": "Skills are not available yet."
      }
     ]
    },
@@ -580,38 +469,6 @@ export const manifest = {
       "clients": "both",
       "default": 25,
       "note": "1\u20131000; applies when full tool definitions are off."
-     },
-     {
-      "id": "mcp.servers",
-      "label": "Servers",
-      "kind": "list",
-      "scope": "core",
-      "clients": "both",
-      "unavailable_reason": "MCP is not available yet."
-     },
-     {
-      "id": "mcp.defaults",
-      "label": "Enabled by default",
-      "kind": "list",
-      "scope": "core",
-      "clients": "both",
-      "unavailable_reason": "MCP is not available yet."
-     },
-     {
-      "id": "mcp.connection",
-      "label": "Connect, disconnect, retry",
-      "kind": "action",
-      "scope": "core",
-      "clients": "both",
-      "unavailable_reason": "MCP is not available yet."
-     },
-     {
-      "id": "mcp.browser_use",
-      "label": "Browser-use setup",
-      "kind": "info",
-      "scope": "core",
-      "clients": "both",
-      "unavailable_reason": "MCP is not available yet."
      }
     ]
    },
@@ -691,22 +548,6 @@ export const manifest = {
       "command": "voice.remove_tts"
      },
      {
-      "id": "dictation.engine",
-      "label": "Engine",
-      "kind": "choice",
-      "scope": "client",
-      "clients": "both",
-      "unavailable_reason": "Dictation engine is undecided."
-     },
-     {
-      "id": "dictation.language",
-      "label": "Language",
-      "kind": "choice",
-      "scope": "client",
-      "clients": "both",
-      "unavailable_reason": "Dictation engine is undecided."
-     },
-     {
       "id": "dictation.push_to_talk",
       "label": "Push-to-talk key",
       "kind": "keymap",
@@ -727,13 +568,6 @@ export const manifest = {
       "scope": "client",
       "clients": "both",
       "note": "Every command in the manifest with an editable key; conflicts are refused per key_context."
-     },
-     {
-      "id": "keybindings.reset",
-      "label": "Reset to defaults",
-      "kind": "action",
-      "scope": "client",
-      "clients": "both"
      }
     ]
    },
@@ -742,30 +576,6 @@ export const manifest = {
     "label": "Notifications",
     "row": [
      {
-      "id": "notifications.waiting",
-      "label": "Notify when waiting for input",
-      "kind": "toggle",
-      "scope": "client",
-      "clients": "both",
-      "default": true
-     },
-     {
-      "id": "notifications.turn_done",
-      "label": "Notify when a turn finishes out of view",
-      "kind": "toggle",
-      "scope": "client",
-      "clients": "both",
-      "default": true
-     },
-     {
-      "id": "notifications.error",
-      "label": "Notify on error",
-      "kind": "toggle",
-      "scope": "client",
-      "clients": "both",
-      "default": true
-     },
-     {
       "id": "notifications.sound",
       "label": "Notification sounds",
       "kind": "toggle",
@@ -773,15 +583,6 @@ export const manifest = {
       "clients": "both",
       "default": true,
       "note": "A rising cue when a root session and all its subagents have finished, and a higher cue when any session needs input. NEXUS_COMPLETION_SOUNDS=off disables both."
-     },
-     {
-      "id": "notifications.os",
-      "label": "OS notifications",
-      "kind": "toggle",
-      "scope": "client",
-      "clients": "nsh",
-      "default": true,
-      "note": "The TUI uses Terminal notifications instead."
      },
      {
       "id": "notifications.terminal",

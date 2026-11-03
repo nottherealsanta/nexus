@@ -109,16 +109,20 @@ first row inside with `esc` on the right, key hints the last row, the selected r
 the selection band with the `▌` focus bar. Confirms default to `[ Cancel ]`; `[ Delete ]`
 is in `status.error`. The `.` row menu stays an unscrimmed popover beside its row.
 
-Settings is that modal, 88 cells wide: type to search, ↑/↓ to
-move, ←/→ to change a value, Enter to act, Esc to clear the search and then
-close. Sections have UPPERCASE muted headings. Rows the TUI cannot change yet are
-muted and say why on the footer line above the key hints. Providers and Agents
-are one entry each (`Providers ›`, with a summary) that opens a page in the
-same box (`/login` opens Providers too); Esc returns to the list. Providers:
-Enter connects (a device code shows on the row; Enter on it copies), adds a key
-or disconnects. Agents: the default agent and effort, then one line per subagent; Enter opens
-its page with its Models (and their odds) and Fallbacks, where Enter on `+ add …`
-picks a model, `d` removes one and `K`/`J` move a fallback.
+Settings is that modal, 88 cells wide, with a search field and two panes. The
+left rail lists every section; the right pane shows the selected section, a
+provider list or an agent page. ↑/↓ stays inside the focused pane, Enter or →
+leaves the rail, ←/→ changes a value, Tab swaps panes and Esc steps back to the
+rail and then closes. Typing filters both the rail and the rows. Rows that
+cannot be changed are not shipped rather than shown disabled.
+`/login` opens Providers. Providers: Enter opens that provider's detail modal;
+its connection actions live there, and a device link and code are their own
+rows, so Enter opens the link (the URL is underlined) and Enter on the code
+copies it. Agents: the default agent and effort, then one line per
+subagent; Enter opens its pane with its Models (and their odds) and Fallbacks,
+where Enter on `+ add …` picks a model, `d` removes one and `K`/`J` move a
+fallback. Tools shows one permission choice and one tool grid; ←/→ choose a tool
+and Enter toggles it.
 Consecutive diagnostics (a provider retry sequence) form one tight stack with
 delays rounded to tenths.
 
@@ -327,11 +331,10 @@ info totals turns, calls, tools by name, tokens, a context bar against the
 model's window and the catalog cost. Right-click (or `m`) on a sidebar row opens
 its action menu; the Projects view (`alt+3`) ends with `+ Add project` (an inline path
 field) and removal asks first. Settings shows provider connections and
-per-subagent model lists on their pages, and says why rows that need a Core
-setting cannot change.
+per-subagent model lists in the right pane. Every row it shows can change.
 
 Still Step 12.4: the vendored code editor in the file panel, worktree management
-in the UI, `path:line` links, settings editing beyond the wired sections, and steering/queueing
+in the UI, `path:line` links and steering/queueing
 (blocked on Core, Step 12a). Unavailable commands are listed disabled with their
 reason.
 

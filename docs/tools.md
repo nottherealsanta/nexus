@@ -49,6 +49,13 @@ web_fetch = "ask"
 "web_fetch(https://docs.python.org/*)" = "allow"
 ```
 
+The session's `permission` (`allow` or `ask`, set per new session in Settings)
+only decides calls for tools that can ask: `bash`, `web_search` and `web_fetch`.
+`read`, `grep`, `glob`, `ls`, `edit`, `patch`, `write`, `code` and `ask` are
+auto-approved, so Settings groups the permission choice with those three tools
+rather than presenting one switch per tool. A `[tools.permission]` rule can
+still make any tool ask or deny it.
+
 * **Key.** The pattern is matched against the call's key: `bash`, the command;
   `read`, `grep`, `glob`, `ls`, `edit`, `patch`, `write`, the path (relative
   to the session directory with `..` and symlinks resolved, or absolute when

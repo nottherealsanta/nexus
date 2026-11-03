@@ -432,6 +432,42 @@ pub enum SettingsItem {
     },
 }
 
+fn row_matches(row: &crate::manifest::Row, query: &str) -> bool {
+    row.label.to_lowercase().contains(query) || row.note.to_lowercase().contains(query)
+}
+
+/// The task tools a new session can be given, in the order the Tools row lists them.
+pub const TOOLS: [&str; 12] = [
+    "read",
+    "grep",
+    "glob",
+    "ls",
+    "bash",
+    "edit",
+    "patch",
+    "write",
+    "web_search",
+    "web_fetch",
+    "ask",
+    "code",
+];
+
+/// The one-row entry a page section gets in the search results.
+fn page_row(section: &crate::manifest::Section) -> crate::manifest::Row {
+    crate::manifest::Row {
+        id: format!("{}.page", section.id),
+        label: section.label.clone(),
+        kind: "page".into(),
+        scope: Some("core".into()),
+        clients: "both".into(),
+        default: None,
+        options: Vec::new(),
+        command: None,
+        unavailable_reason: None,
+        note: section.note.clone(),
+    }
+}
+
 /// How a line on a Settings page is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
@@ -460,10 +496,14 @@ pub enum PageLine {
 #[derive(Debug, Clone)]
 pub enum PageAction {
     RefreshModels,
+    /// Open one provider's detail modal.
+    OpenProvider(String),
     Connect(String),
     Disconnect(String),
     CancelLogin(String),
     CopyCode(String),
+    /// A sign-in link: Enter or a click opens it in the browser.
+    OpenUrl(String),
     /// A manifest row drawn on the page (default agent and effort, unavailable rows).
     Setting(Box<crate::manifest::Row>),
     /// A ref in an agent's model list (`fallback` false) or fallback list.
@@ -669,13 +709,21 @@ pub struct Ui {
     pub pending_selected: Option<usize>,
     pub settings_row: usize,
     pub settings_search: Composer,
-    /// The Settings page drilled into (`providers`, `agents`) and its selected item.
+    /// The Settings section shown in the right pane, and whether the left rail has focus.
+    pub settings_section: String,
+    pub settings_nav_focus: bool,
+    /// The tool chip highlighted by the Tools row's left/right keys.
+    pub tool_cursor: usize,
+    /// The Agents detail page drilled into (`agents/<name>`) and its selected item.
     pub settings_page: Option<String>,
     pub settings_page_row: usize,
     /// The Agents page row to return to from a subagent's page.
     pub settings_page_back: usize,
     /// The last `provider.login` state per provider: a pending sign-in shows its code on the Providers page.
     pub provider_logins: BTreeMap<String, Value>,
+    /// The provider whose detail modal is open, and its selected row.
+    pub provider_detail: Option<String>,
+    pub provider_detail_row: usize,
     /// The agent list a model chosen in the palette is added to: (agent, fallback).
     pub pool_pick: Option<(String, bool)>,
     pub overlay: Option<Overlay>,
@@ -911,10 +959,15 @@ impl App {
                 pending_selected: None,
                 settings_row: 0,
                 settings_search: Composer::new(),
+                settings_section: "appearance".into(),
+                settings_nav_focus: true,
+                tool_cursor: 0,
                 settings_page: None,
                 settings_page_row: 0,
                 settings_page_back: 0,
                 provider_logins: BTreeMap::new(),
+                provider_detail: None,
+                provider_detail_row: 0,
                 pool_pick: None,
                 overlay: None,
                 dialog: None,
@@ -4858,6 +4911,7 @@ impl App {
                 if self.ui.view == View::Settings {
                     self.ui.view = View::Session;
                     self.ui.focus = Focus::Composer;
+                    self.ui.provider_detail = None;
                 } else {
                     self.effects.push(Effect::Sync(SyncCommand::Config));
                     self.effects
@@ -4867,6 +4921,7 @@ impl App {
                     self.ui.settings_search = Composer::new();
                     self.ui.settings_row = 0;
                     self.ui.settings_page = None;
+                    self.ui.provider_detail = None;
                     self.ui.focus = Focus::Timeline;
                     self.ui.drawer = None;
                 }
@@ -4982,7 +5037,9 @@ impl App {
                 if self.ui.view != View::Settings {
                     self.execute("app.settings");
                 }
-                self.ui.settings_page = Some("providers".into());
+                self.ui.settings_section = "providers".into();
+                self.ui.settings_nav_focus = false;
+                self.ui.settings_page = None;
                 self.ui.settings_page_row = 0;
             }
             "model.change" => self.open_picker(PaletteMode::Models),
@@ -9142,8 +9199,60 @@ impl App {
 
     // ---- settings view ---------------------------------------------------------------------
 
-    /// The settings list as drawn: section headings and rows, filtered by
-    /// the search text (a section whose label matches keeps all its rows).
+    /// Sections shown in Settings' left rail, filtered by the search text.
+    pub fn settings_sections(&self) -> Vec<crate::manifest::Section> {
+        let query = self.ui.settings_search.text().to_lowercase();
+        let query = query.trim();
+        self.manifest
+            .settings_for_tui()
+            .into_iter()
+            .filter(|section| section.page || !section.row.is_empty())
+            .filter(|section| {
+                query.is_empty()
+                    || section.label.to_lowercase().contains(query)
+                    || section.note.to_lowercase().contains(query)
+                    || section.row.iter().any(|row| row_matches(row, query))
+                    || self
+                        .page_search_terms(section)
+                        .iter()
+                        .any(|term| term.to_lowercase().contains(query))
+            })
+            .collect()
+    }
+
+    /// The section the right pane shows. A filtered-away selection falls back to
+    /// the first visible section until the search is cleared.
+    pub fn settings_section(&self) -> Option<crate::manifest::Section> {
+        let sections = self.settings_sections();
+        sections
+            .iter()
+            .find(|section| section.id == self.ui.settings_section)
+            .or_else(|| sections.first())
+            .cloned()
+    }
+
+    /// The selected row of `settings_sections`; 0 when the selection is filtered out.
+    pub fn settings_section_index(&self) -> usize {
+        self.settings_sections()
+            .iter()
+            .position(|section| section.id == self.ui.settings_section)
+            .unwrap_or(0)
+    }
+
+    /// The open page, if the right pane is showing one: an Agents detail page,
+    /// or a section marked `page = true`. Search results always win.
+    pub fn settings_open_page(&self) -> Option<String> {
+        if !self.ui.settings_search.text().trim().is_empty() {
+            return None;
+        }
+        self.ui
+            .settings_page
+            .clone()
+            .or_else(|| self.settings_section().filter(|s| s.page).map(|s| s.id))
+    }
+
+    /// The settings rows in the right pane: the selected section, or every
+    /// section that matches when the search is active.
     pub fn settings_items(&self) -> Vec<SettingsItem> {
         let query = self.ui.settings_search.text().to_lowercase();
         let query = query.trim();
@@ -9170,12 +9279,21 @@ impl App {
             out.push(SettingsItem::Heading("Configuration".into()));
             out.extend(problems.into_iter().map(SettingsItem::Note));
         }
+        if query.is_empty() {
+            if let Some(section) = self.settings_section().filter(|s| !s.page) {
+                for row in section.row {
+                    out.push(SettingsItem::Row {
+                        row: Box::new(row),
+                        section_reason: section.unavailable_reason.clone(),
+                    });
+                }
+            }
+            return out;
+        }
         for section in self.manifest.settings_for_tui() {
             let section_hit = section.label.to_lowercase().contains(query);
             if section.page {
-                // One entry opens the page; search also looks at what the page holds.
-                let hit = query.is_empty()
-                    || section_hit
+                let hit = section_hit
                     || section.note.to_lowercase().contains(query)
                     || self
                         .page_search_terms(&section)
@@ -9184,18 +9302,7 @@ impl App {
                 if hit {
                     out.push(SettingsItem::Heading(section.label.clone()));
                     out.push(SettingsItem::Row {
-                        row: Box::new(crate::manifest::Row {
-                            id: format!("{}.page", section.id),
-                            label: format!("{} \u{203a}", section.label),
-                            kind: "page".into(),
-                            scope: Some("core".into()),
-                            clients: "both".into(),
-                            default: None,
-                            options: Vec::new(),
-                            command: None,
-                            unavailable_reason: None,
-                            note: section.note.clone(),
-                        }),
+                        row: Box::new(page_row(&section)),
                         section_reason: section.unavailable_reason.clone(),
                     });
                 }
@@ -9204,12 +9311,7 @@ impl App {
             let rows: Vec<_> = section
                 .row
                 .iter()
-                .filter(|row| {
-                    query.is_empty()
-                        || section_hit
-                        || row.label.to_lowercase().contains(query)
-                        || row.note.to_lowercase().contains(query)
-                })
+                .filter(|row| section_hit || row_matches(row, query))
                 .cloned()
                 .collect();
             if rows.is_empty() {
@@ -9226,6 +9328,17 @@ impl App {
         out
     }
 
+    /// Move the left rail to section `index` (in `settings_sections`), clearing search.
+    pub fn select_settings_section(&mut self, index: usize) {
+        if let Some(section) = self.settings_sections().get(index) {
+            self.ui.settings_section = section.id.clone();
+            self.ui.settings_page = None;
+            self.ui.settings_page_row = 0;
+            self.ui.settings_row = 0;
+            self.ui.settings_search = Composer::new();
+        }
+    }
+
     /// Indexes of the selectable rows in `settings_items`.
     pub fn settings_rows(&self) -> Vec<usize> {
         self.settings_items()
@@ -9236,27 +9349,78 @@ impl App {
             .collect()
     }
 
-    /// Keys while the settings modal is open. Typing filters; arrows move and
-    /// change; Esc clears the search, then closes. Returns false for keys the
-    /// shell should still handle (palette, quit).
+    /// Keys while the settings modal is open. Tab moves between the section
+    /// rail and the right pane; typing filters both. Esc clears the search,
+    /// steps back to the rail, then closes. Returns false for keys the shell
+    /// should still handle (palette, quit).
     fn settings_key(&mut self, name: &str, code: KeyCode, mods: KeyModifiers) -> bool {
-        if self.ui.settings_page.is_some() {
+        if self.ui.provider_detail.is_some() {
+            return self.provider_detail_key(name, code);
+        }
+        if !self.ui.settings_nav_focus && self.settings_open_page().is_some() {
             return self.settings_page_key(name, code);
+        }
+        if self.ui.settings_nav_focus {
+            let sections = self.settings_sections();
+            let last = sections.len().saturating_sub(1);
+            let sel = self.settings_section_index().min(last);
+            match name {
+                "esc" => {
+                    if self.ui.settings_search.text().is_empty() {
+                        self.execute("app.settings");
+                    } else {
+                        self.ui.settings_search = Composer::new();
+                        self.ui.settings_row = 0;
+                    }
+                }
+                "up" => {
+                    self.select_settings_section(sel.saturating_sub(1));
+                }
+                "down" => {
+                    self.select_settings_section((sel + 1).min(last));
+                }
+                "tab" => {
+                    self.ui.settings_nav_focus = false;
+                    self.ui.settings_page_row = 0;
+                }
+                "home" => self.select_settings_section(0),
+                "end" => self.select_settings_section(last),
+                "enter" | "right" => {
+                    self.ui.settings_nav_focus = false;
+                    self.ui.settings_row = 0;
+                    self.ui.settings_page_row = 0;
+                }
+                "left" => {}
+                "backspace" => {
+                    self.ui.settings_search.backspace();
+                    self.ui.settings_row = 0;
+                }
+                _ => match code {
+                    KeyCode::Char(c) if mods.is_empty() || mods == KeyModifiers::SHIFT => {
+                        self.ui.settings_search.insert_char(c);
+                        self.ui.settings_row = 0;
+                        self.ui.settings_nav_focus = false;
+                    }
+                    _ => return false,
+                },
+            }
+            return true;
         }
         let rows = self.settings_rows();
         let last = rows.len().saturating_sub(1);
         let sel = self.ui.settings_row.min(last);
         match name {
             "esc" => {
-                if self.ui.settings_search.text().is_empty() {
-                    self.execute("app.settings");
-                } else {
+                if !self.ui.settings_search.text().is_empty() {
                     self.ui.settings_search = Composer::new();
                     self.ui.settings_row = 0;
+                } else {
+                    self.ui.settings_nav_focus = true;
                 }
             }
-            "up" | "shift+tab" => self.ui.settings_row = sel.saturating_sub(1),
-            "down" | "tab" => self.ui.settings_row = (sel + 1).min(last),
+            "up" => self.ui.settings_row = sel.saturating_sub(1),
+            "down" => self.ui.settings_row = (sel + 1).min(last),
+            "tab" | "shift+tab" => self.ui.settings_nav_focus = true,
             "pageup" => self.ui.settings_row = sel.saturating_sub(8),
             "pagedown" => self.ui.settings_row = (sel + 8).min(last),
             "home" => self.ui.settings_row = 0,
@@ -9287,12 +9451,7 @@ impl App {
                 | "agents.default_effort"
                 | "agents.default_root"
                 | "tools.default_permission"
-                | "tools.default_read"
-                | "tools.default_bash"
-                | "tools.default_edit"
-                | "tools.default_write"
-                | "tools.default_ask"
-                | "tools.default_code"
+                | "tools.defaults"
                 | "appearance.theme"
                 | "appearance.monochrome"
                 | "appearance.animations"
@@ -9307,6 +9466,7 @@ impl App {
                 | "mcp.max_listed_tools"
                 | "context.handoff_percent"
                 | "context.title_models"
+                | "dictation.push_to_talk"
                 | "dictation.stt_model"
                 | "dictation.stt_download"
                 | "dictation.stt_remove"
@@ -9315,6 +9475,7 @@ impl App {
                 | "dictation.tts_remove"
                 | "about.versions"
                 | "about.daemon"
+                | "about.inspector"
                 | "keybindings.list"
         )
     }
@@ -9363,6 +9524,7 @@ impl App {
             return vec![reason];
         }
         match row.id.as_str() {
+            "tools.defaults" => self.tools_grid_lines(),
             "dictation.stt_model" => self.voice_info_details(VoiceTarget::Stt),
             "dictation.tts_model" => self.voice_info_details(VoiceTarget::Tts),
             "dictation.stt_download" => {
@@ -9388,26 +9550,10 @@ impl App {
 
     fn settings_change_row(&mut self, row: crate::manifest::Row, step: isize) {
         match row.id.as_str() {
-            id if id.starts_with("tools.default_") && id != "tools.default_permission" => {
-                let name = id.trim_start_matches("tools.default_");
-                if let Some(config) = &self.state.config {
-                    let mut disabled = config["values"]["tools"]["disabled"]
-                        .as_array()
-                        .cloned()
-                        .unwrap_or_default();
-                    if disabled.iter().any(|v| v.as_str() == Some(name)) {
-                        disabled.retain(|v| v.as_str() != Some(name));
-                    } else {
-                        disabled.push(serde_json::Value::String(name.to_owned()));
-                    }
-                    if let Some(revision) = config["revision"].as_str() {
-                        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
-                            revision: revision.to_owned(),
-                            path: "tools.disabled".into(),
-                            value: serde_json::Value::Array(disabled),
-                        }));
-                    }
-                }
+            "tools.defaults" => {
+                let len = TOOLS.len() as isize;
+                self.ui.tool_cursor =
+                    (self.ui.tool_cursor as isize + step).rem_euclid(len) as usize;
             }
             "agents.default_effort" | "agents.default_root" | "tools.default_permission" => {
                 let key = match row.id.as_str() {
@@ -9527,6 +9673,73 @@ impl App {
         }
     }
 
+    /// Flip the highlighted tool in the Tools row's grid.
+    fn toggle_default_tool(&mut self) {
+        let name = TOOLS[self.ui.tool_cursor.min(TOOLS.len() - 1)];
+        let Some(config) = &self.state.config else {
+            self.toast(Level::Warning, "Configuration is not loaded");
+            return;
+        };
+        let Some(revision) = config["revision"].as_str().map(str::to_owned) else {
+            return;
+        };
+        let mut disabled = config["values"]["tools"]["disabled"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if disabled.iter().any(|v| v.as_str() == Some(name)) {
+            disabled.retain(|v| v.as_str() != Some(name));
+        } else {
+            disabled.push(serde_json::Value::String(name.to_owned()));
+        }
+        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+            revision,
+            path: "tools.disabled".into(),
+            value: serde_json::Value::Array(disabled),
+        }));
+    }
+
+    /// The Tools row's grid as wrapped lines: `●on` / `○off`, the arrow key's
+    /// current tool in brackets, then the key hint.
+    fn tools_grid_lines(&self) -> Vec<String> {
+        let disabled: Vec<&str> = self
+            .state
+            .config
+            .as_ref()
+            .and_then(|c| c["values"]["tools"]["disabled"].as_array())
+            .map(|list| list.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        let cursor = self.ui.tool_cursor.min(TOOLS.len() - 1);
+        let mut lines: Vec<String> = TOOLS
+            .iter()
+            .enumerate()
+            .collect::<Vec<_>>()
+            .chunks(4)
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|(i, name)| {
+                        let mark = if disabled.contains(name) {
+                            "\u{25cb}"
+                        } else {
+                            "\u{25cf}"
+                        };
+                        if *i == cursor {
+                            format!("[{mark}{name}]")
+                        } else {
+                            format!("{mark}{name}")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            })
+            .collect();
+        lines.push(
+            "\u{2190}/\u{2192} choose a tool \u{b7} Enter toggles it for new sessions".into(),
+        );
+        lines
+    }
+
     /// The title-model list as one editable, comma-separated line.
     fn edit_title_models(&mut self) {
         let Some(config) = &self.state.config else {
@@ -9566,14 +9779,15 @@ impl App {
     fn settings_activate_row(&mut self, row: crate::manifest::Row) {
         match row.id.as_str() {
             "providers.page" | "agents.page" => {
-                self.ui.settings_page = Some(row.id.trim_end_matches(".page").to_owned());
+                self.ui.settings_section = row.id.trim_end_matches(".page").to_owned();
+                self.ui.settings_page = None;
                 self.ui.settings_page_row = 0;
+                self.ui.settings_search = Composer::new();
+                self.ui.settings_nav_focus = false;
                 self.effects
                     .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
             }
-            id if id.starts_with("tools.default_") && id != "tools.default_permission" => {
-                self.settings_change_row(row, 1)
-            }
+            "tools.defaults" => self.toggle_default_tool(),
             "appearance.theme" => self.execute("app.theme"),
             "appearance.monochrome" => self.toggle_monochrome(),
             "appearance.animations" => {
@@ -9603,6 +9817,8 @@ impl App {
             "appearance.session_scope" => self.run_command("sessions.scope_toggle"),
             "appearance.show_archived" => self.run_command("sessions.archived_filter"),
             "keybindings.list" => self.execute("app.help_keys"),
+            "dictation.push_to_talk" => self.run_command("voice.dictate"),
+            "about.inspector" => self.open_inspector(),
             _ => {}
         }
     }
@@ -9754,6 +9970,18 @@ impl App {
                 "Changes apply to new subagents; running ones keep what they started with.".into(),
             ),
             PageAction::Setting(row) => Some(row.note.clone()).filter(|n| !n.is_empty()),
+            PageAction::OpenProvider(_) => {
+                Some("Enter opens this provider's connection and sign-in details.".into())
+            }
+            PageAction::OpenUrl(_) => Some("Enter opens the link in your browser.".into()),
+            PageAction::CopyCode(_) => Some("Enter copies the code to the clipboard.".into()),
+            PageAction::Connect(_) => {
+                Some("Enter signs in. A device code and link appear in this dialog.".into())
+            }
+            PageAction::CancelLogin(_) => Some("Enter stops waiting for this sign-in.".into()),
+            PageAction::Disconnect(_) => {
+                Some("Enter signs out; listed models stay and are skipped.".into())
+            }
             _ => None,
         }
     }
@@ -9796,7 +10024,8 @@ impl App {
     /// The open page's lines, top to bottom.
     pub fn settings_page_lines(&self) -> Vec<PageLine> {
         let mut out = Vec::new();
-        let page = self.ui.settings_page.as_deref().unwrap_or_default();
+        let page = self.settings_open_page().unwrap_or_default();
+        let page = page.as_str();
         let section = self
             .manifest
             .settings_for_tui()
@@ -9811,6 +10040,13 @@ impl App {
         };
         if let Some(error) = &self.state.config_error {
             out.push(PageLine::Text(error.clone(), Tone::Error));
+        }
+        if let Some(config) = &self.state.config {
+            for error in config["errors"].as_array().into_iter().flatten() {
+                if let Some(error) = error.as_str() {
+                    out.push(PageLine::Text(error.to_owned(), Tone::Error));
+                }
+            }
         }
         match page {
             "providers" => {
@@ -9839,56 +10075,24 @@ impl App {
                     let login = self.ui.provider_logins.get(id);
                     let status = login.and_then(|l| l["status"].as_str()).unwrap_or("");
                     let connected = p["connected"].as_bool().unwrap_or(false);
-                    let action = if connected {
-                        PageAction::Disconnect(id.into())
-                    } else if status == "pending" {
-                        PageAction::CancelLogin(id.into())
-                    } else {
-                        PageAction::Connect(id.into())
-                    };
                     out.push(PageLine::Item {
                         label,
-                        value: self.provider_status(p),
+                        value: if status == "pending" {
+                            "sign-in pending \u{b7} open".to_owned()
+                        } else if status == "failed" {
+                            "sign-in failed \u{b7} open".to_owned()
+                        } else if connected {
+                            format!("{} \u{b7} open", self.provider_status(p))
+                        } else {
+                            format!("{} \u{b7} open", self.provider_status(p))
+                        },
                         tone: if connected {
                             Tone::Secondary
                         } else {
                             Tone::Muted
                         },
-                        action,
+                        action: PageAction::OpenProvider(id.into()),
                     });
-                    if status == "pending" {
-                        let login = login.expect("pending login");
-                        match login["user_code"].as_str() {
-                            Some(code) => {
-                                out.push(PageLine::Item {
-                                    label: format!("code {code}"),
-                                    value: "enter copies".into(),
-                                    tone: Tone::Warning,
-                                    action: PageAction::CopyCode(code.into()),
-                                });
-                                if let Some(url) = login["verification_uri"].as_str() {
-                                    out.push(PageLine::Text(
-                                        format!("  open {url}"),
-                                        Tone::Secondary,
-                                    ));
-                                }
-                            }
-                            None => out.push(PageLine::Text(
-                                format!(
-                                    "  {}",
-                                    login["message"]
-                                        .as_str()
-                                        .unwrap_or("starting sign-in\u{2026}")
-                                ),
-                                Tone::Muted,
-                            )),
-                        }
-                    } else if status == "failed" {
-                        let why = login
-                            .and_then(|l| l["message"].as_str())
-                            .unwrap_or("sign-in failed");
-                        out.push(PageLine::Text(format!("  {why}"), Tone::Error));
-                    }
                 }
                 for row in &rows {
                     out.push(setting(row));
@@ -10018,6 +10222,158 @@ impl App {
             .collect()
     }
 
+    /// The open provider's detail modal: what it is, how it signs in, and the
+    /// action on every row. The page outside stays a list of provider options.
+    pub fn provider_detail_lines(&self, id: &str) -> Vec<PageLine> {
+        let Some(p) = self
+            .state
+            .providers
+            .iter()
+            .find(|p| p["id"].as_str() == Some(id))
+        else {
+            return vec![PageLine::Text(
+                format!("Provider {id} is not in the list."),
+                Tone::Error,
+            )];
+        };
+        let connected = p["connected"].as_bool().unwrap_or(false);
+        let login = self.ui.provider_logins.get(id);
+        let status = login.and_then(|l| l["status"].as_str()).unwrap_or("");
+        let methods: Vec<&str> = p["methods"]
+            .as_array()
+            .map(|list| list.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        let mut out = vec![PageLine::Text(self.provider_status(p), Tone::Secondary)];
+        if connected {
+            if p["key_source"].as_str() == Some("env") {
+                out.push(PageLine::Text(
+                    format!("Using ${}", p["key_env"].as_str().unwrap_or("KEY")),
+                    Tone::Muted,
+                ));
+            }
+            out.push(PageLine::Item {
+                label: "Disconnect".into(),
+                value: "enter".into(),
+                tone: Tone::Warning,
+                action: PageAction::Disconnect(id.into()),
+            });
+            return out;
+        }
+        if status == "pending" {
+            if let Some(url) = login.and_then(|l| l["verification_uri"].as_str()) {
+                out.push(PageLine::Item {
+                    label: url.to_owned(),
+                    value: "enter opens".into(),
+                    tone: Tone::Secondary,
+                    action: PageAction::OpenUrl(url.to_owned()),
+                });
+            }
+            if let Some(code) = login.and_then(|l| l["user_code"].as_str()) {
+                out.push(PageLine::Item {
+                    label: format!("code {code}"),
+                    value: "enter copies".into(),
+                    tone: Tone::Warning,
+                    action: PageAction::CopyCode(code.into()),
+                });
+            }
+            let message = login
+                .and_then(|l| l["message"].as_str())
+                .unwrap_or("Waiting for authorization\u{2026}");
+            out.push(PageLine::Text(message.to_owned(), Tone::Muted));
+            out.push(PageLine::Item {
+                label: "Cancel sign-in".into(),
+                value: "enter".into(),
+                tone: Tone::Muted,
+                action: PageAction::CancelLogin(id.into()),
+            });
+            return out;
+        }
+        if status == "failed" {
+            out.push(PageLine::Text(
+                login
+                    .and_then(|l| l["message"].as_str())
+                    .unwrap_or("Sign-in failed")
+                    .to_owned(),
+                Tone::Error,
+            ));
+        }
+        if methods.contains(&"api_key") {
+            out.push(PageLine::Item {
+                label: "Add API key".into(),
+                value: "enter".into(),
+                tone: Tone::Secondary,
+                action: PageAction::Connect(id.into()),
+            });
+            if let Some(hint) = p["key_hint"].as_str().filter(|h| !h.is_empty()) {
+                out.push(PageLine::Text(hint.to_owned(), Tone::Muted));
+            }
+            if let Some(env) = p["key_env"].as_str().filter(|e| !e.is_empty()) {
+                out.push(PageLine::Text(format!("Or set ${env}"), Tone::Muted));
+            }
+        }
+        if methods.contains(&"device") {
+            out.push(PageLine::Item {
+                label: "Sign in with a device code".into(),
+                value: "enter".into(),
+                tone: Tone::Secondary,
+                action: PageAction::Connect(id.into()),
+            });
+        }
+        if methods.is_empty() {
+            out.push(PageLine::Text(
+                format!("Sign in from a terminal: nexus login {id}"),
+                Tone::Muted,
+            ));
+        }
+        out
+    }
+
+    pub fn provider_detail_items(&self, id: &str) -> Vec<usize> {
+        self.provider_detail_lines(id)
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| matches!(line, PageLine::Item { .. }))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    fn provider_detail_action(&self, id: &str) -> Option<PageAction> {
+        let lines = self.provider_detail_lines(id);
+        let items = self.provider_detail_items(id);
+        let at = *items.get(
+            self.ui
+                .provider_detail_row
+                .min(items.len().saturating_sub(1)),
+        )?;
+        match lines.into_iter().nth(at)? {
+            PageLine::Item { action, .. } => Some(action),
+            _ => None,
+        }
+    }
+
+    fn provider_detail_key(&mut self, name: &str, _code: KeyCode) -> bool {
+        let Some(id) = self.ui.provider_detail.clone() else {
+            return false;
+        };
+        let last = self.provider_detail_items(&id).len().saturating_sub(1);
+        match name {
+            "esc" => self.ui.provider_detail = None,
+            "up" => self.ui.provider_detail_row = self.ui.provider_detail_row.saturating_sub(1),
+            "down" => self.ui.provider_detail_row = (self.ui.provider_detail_row + 1).min(last),
+            "pageup" => self.ui.provider_detail_row = self.ui.provider_detail_row.saturating_sub(6),
+            "pagedown" => self.ui.provider_detail_row = (self.ui.provider_detail_row + 6).min(last),
+            "home" => self.ui.provider_detail_row = 0,
+            "end" => self.ui.provider_detail_row = last,
+            "enter" => {
+                if let Some(action) = self.provider_detail_action(&id) {
+                    self.page_activate(action);
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
     fn settings_page_action(&self) -> Option<PageAction> {
         let lines = self.settings_page_lines();
         let items = self.settings_page_items();
@@ -10038,8 +10394,7 @@ impl App {
             "esc" | "backspace" => {
                 self.ui.pool_pick = None;
                 if self
-                    .ui
-                    .settings_page
+                    .settings_open_page()
                     .as_deref()
                     .is_some_and(|p| p.starts_with("agents/"))
                 {
@@ -10047,10 +10402,13 @@ impl App {
                     self.ui.settings_page_row = self.ui.settings_page_back;
                 } else {
                     self.ui.settings_page = None;
+                    self.ui.settings_nav_focus = true;
+                    self.ui.settings_page_row = 0;
                 }
             }
-            "up" | "shift+tab" => self.ui.settings_page_row = sel.saturating_sub(1),
-            "down" | "tab" => self.ui.settings_page_row = (sel + 1).min(last),
+            "up" => self.ui.settings_page_row = sel.saturating_sub(1),
+            "down" => self.ui.settings_page_row = (sel + 1).min(last),
+            "tab" | "shift+tab" => self.ui.settings_nav_focus = true,
             "pageup" => self.ui.settings_page_row = sel.saturating_sub(8),
             "pagedown" => self.ui.settings_page_row = (sel + 8).min(last),
             "home" => self.ui.settings_page_row = 0,
@@ -10124,6 +10482,10 @@ impl App {
                 self.effects
                     .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
                 self.toast(Level::Info, "Refreshing the model catalog");
+            }
+            PageAction::OpenProvider(id) => {
+                self.ui.provider_detail = Some(id);
+                self.ui.provider_detail_row = 0;
             }
             PageAction::Connect(id) => {
                 let provider = self
@@ -10228,6 +10590,9 @@ impl App {
             PageAction::CopyCode(code) => {
                 self.effects.push(Effect::Copy(code));
                 self.toast(Level::Success, "Code copied");
+            }
+            PageAction::OpenUrl(url) => {
+                self.effects.push(Effect::OpenUrl(url));
             }
             PageAction::Setting(row) => {
                 if let Some(why) = self.settings_reason(&row, None) {
@@ -10641,7 +11006,9 @@ impl App {
             }
             Target::Swallow => {}
             Target::Scrim => {
-                if self.ui.overlay.is_some() {
+                if self.ui.provider_detail.is_some() {
+                    self.ui.provider_detail = None;
+                } else if self.ui.overlay.is_some() {
                     self.close_overlay();
                 } else if self.ui.drawer.is_some() {
                     self.execute("nav.drawer.close");
@@ -10876,13 +11243,27 @@ impl App {
                 self.confirm_dialog(i == 1);
             }
             Target::SettingsRow(i) => {
+                self.ui.settings_nav_focus = false;
                 self.ui.settings_row = i;
                 self.settings_activate(i);
             }
+            Target::SettingsSection(i) => {
+                self.select_settings_section(i);
+                self.ui.settings_nav_focus = true;
+            }
             Target::SettingsPageRow(i) => {
+                self.ui.settings_nav_focus = false;
                 self.ui.settings_page_row = i;
                 if let Some(action) = self.settings_page_action() {
                     self.page_activate(action);
+                }
+            }
+            Target::ProviderDetailRow(i) => {
+                self.ui.provider_detail_row = i;
+                if let Some(id) = self.ui.provider_detail.clone() {
+                    if let Some(action) = self.provider_detail_action(&id) {
+                        self.page_activate(action);
+                    }
                 }
             }
         }

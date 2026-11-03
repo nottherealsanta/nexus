@@ -33,6 +33,8 @@ The sections below are the record of the release steps and the backlog that rema
 
 - **Image markers.** TUI and NSH show inline image markers and bordered square previews, arranged side by side and wrapped as needed, without repeating generated attachment labels at the end of user messages.
 
+- **Step limit default (2026-11-03).** An agent without its own `steps` now gets 500 model calls per turn (`MAX_STEPS = 500`), not 50. A global `~/.nexus/agents/build.md` override with `steps: 500` had masked the old default; with it gone, sessions stopped at 50. Sessions whose snapshot has no explicit `steps` pick up the new default on their next turn.
+
 - **Collapsed text pastes (2026-11-02).** A paste of at least 200 characters or three lines becomes one atomic `[Pasted ~N tokens]` marker in both composers. Core stores the full text as a collapsed part, so the model reads it while the user message shows only a clickable marker chip above its text; clicking it opens the full text in a modal, with no inline content or preview. A failed send restores the collapsed draft.
 
 - **Reasoning effort memory.** Explicit root-session effort choices are remembered across new sessions and daemon restarts; choosing default clears the override while leaving subagents independent.
@@ -258,9 +260,26 @@ The TUI emits per-session OSC 7501 records; see [docs/development.md](docs/devel
 
 Follow [TURN_SUMMARY_PLAN.md](TURN_SUMMARY_PLAN.md) for the remaining real-daemon checks, documentation and step 9 (live partials and ephemeral deltas). Preserve durable `input.*` events and the ordering of delivered steers; a steer is not a new turn. The TUI benchmark is in [docs/turn-summary-benchmark.md](docs/turn-summary-benchmark.md).
 
-### Settings: Providers and Agents pages
+### Settings
 
-The pages are in both clients ([config.md](docs/config.md#settings-layout)). Remaining: sign in to a real device-flow provider from each client's Providers page; NSH browser coverage for key entry, the device-code row and the Agents page edits once the mock stream is fixed (see Browser tests); PTY screenshots of both pages at 80×24 and 160×48. Agent cards show the file path but cannot open it: the built-in editor reads project files only, and global and built-in agents live elsewhere.
+Both clients now draw Settings as one two-pane dialog: a search field, the
+section rail on the left, and the selected section, provider list or agent
+detail on the right ([config.md](docs/config.md#settings-layout)). Each
+provider row opens a detail modal with its connection actions; a device link and
+code are separate actionable rows there, links open on Enter or a click, and
+codes copy. Tools has one permission choice naming the tools it governs and one
+tool grid. Sections and rows that could not work were removed rather than
+shipped disabled. Codex device sign-in now opens `/codex/device`, the page that
+accepts the code, instead of the API root.
+
+Remaining: sign in to a real device-flow provider from each client's Providers
+pane; NSH browser coverage for search, key entry, the link/code rows and the
+Agents edits once the mock stream is fixed (see Browser tests); PTY and NSH
+screenshots at 80×24 and 160×48. NSH opens prose links in the browser; the TUI
+timeline still needs OSC 8 hit regions. Agent cards show the file path but cannot open it:
+the built-in editor reads project files only, and global and built-in agents
+live elsewhere. Add real Settings panes for MCP servers, skills and hooks when
+those controls exist; they are deliberately absent now.
 
 ### Steer, queue and prompt history
 

@@ -8,7 +8,7 @@ yields events ([stream-events.md](stream-events.md)).
 
 ```python
 Agent(provider, *, model, workspace, tools=DEFAULT_TOOLS, instructions=None,
-      reasoning_effort=None, approve=None, max_steps=50, messages=None,
+      reasoning_effort=None, approve=None, max_steps=500, messages=None,
       conversation_id=None, inbox=None, steering=None, refresh=None,
       files=None, cwd_changed=False, save_media=None, hooks=None, turn_id=None,
       render=None, fallback_models=None, model_ref="", retry_policy=None)
@@ -23,7 +23,7 @@ Agent(provider, *, model, workspace, tools=DEFAULT_TOOLS, instructions=None,
 | `instructions` | System prompt; default is `default_instructions(workspace)` |
 | `reasoning_effort` | Passed in every `Request` |
 | `approve` | Approval callback, or `None` for no questions |
-| `max_steps` | Step limit per turn, default `MAX_STEPS = 50` |
+| `max_steps` | Step limit per turn, default `MAX_STEPS = 500` |
 | `messages` | Earlier history (copied) |
 | `conversation_id` | Default is a new `uuid4().hex`; used for prompt caching and session headers |
 | `files` | The session's read observations and mutation lock, passed to tools |

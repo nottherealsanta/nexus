@@ -199,10 +199,14 @@ reading or refreshing it never starts a server. Each row shows its current
 status and the non-secret facts Core reports: transport, command name, argument
 count, working directory, environment or HTTP header names, and a
 credential-free URL. Disabled and invalid entries say so, with the reason.
-Settings has Providers and
-Agents pages (a drill-in with a back link; Esc returns): provider connections
-with device codes, key entry and catalog refresh, and the default agent and effort with a line per subagent that opens its model
-and fallback lists. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
+Settings has a section rail on the left and the selected section on the right,
+matching the TUI. The same search field filters both. Providers and Agents are
+rendered in the right pane: each provider row opens a detail modal with a
+clickable device link, a copyable code, key entry, connect/disconnect and
+catalog refresh; the default agent and effort
+with a line per subagent that opens its model and fallback lists (Esc returns
+from that detail). Tools keeps one permission choice, labelled with the tools it
+governs, and one clickable tool grid. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
 session view's `directory` differs from the one it was read for, as after a move), while directory
 and worktree actions remain disabled with a reason. Kernel state is the remaining
 session-info item not reported by Core.
@@ -211,7 +215,8 @@ Files open in a centred modal over the dimmed page, with long lines wrapped, usi
 below 1100 px it fills the window. Markdown files (`.md`, `.markdown`) open as rendered prose, and the header's
 Source control shows the numbered source, returning to the preview on a second press. `cmd+f`
 opens a find bar (plain text, a case toggle, previous/next and the match count) after returning to the source;
-Esc closes the bar before the panel.
+Esc closes the bar before the panel. Links in assistant prose, Markdown previews,
+new-session prose and context details open in the browser.
 
 Still missing (shown disabled with their reason, never as a control that appears
 to work): the file actions and live watcher, the Git workflow, worktree controls,
@@ -453,7 +458,9 @@ The system prompt opens in its detail view without an inline preview.
 Settings reads and edits shared defaults, timeline detail, reduced-motion choice and disabled tools through Core's
 `/api/config`, using the current file revision for each write. Configuration
 errors are shown in Settings, and `config.changed` refreshes the view after an
-external edit. The session context meter uses Core's budget; `~` marks an
+external edit. Typing in the Settings search filters the section rail and the
+rows; clearing it restores the selected section. The session context meter uses
+Core's budget; `~` marks an
 estimate.
 
 ## K5-K11 client parts (2026-10-29)

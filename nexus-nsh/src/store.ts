@@ -211,8 +211,12 @@ export async function loadDraftContext(project: string, force = false) {
 export const waitIndex = signal(0);
 export const tick = signal(Date.now());
 export const settingsSection = signal<string | null>(null);
-/** The Settings page drilled into (a manifest section with `page = true`), or null for the section list. */
+/** The Settings search text; it filters the section rail and the selected pane. */
+export const settingsQuery = signal("");
+/** The agent detail page drilled into (`agents/<name>`); the section rail and page content come from `settingsSection`. */
 export const settingsPage = signal<string | null>(null);
+/** The provider whose connection/sign-in modal is open. */
+export const providerDetail = signal<string | null>(null);
 /** The last `provider.login` state per provider: pending sign-ins show their code and link on the provider's row. */
 export const providerLogins = signal<Record<string, { status: string; message?: string | null; verification_uri?: string | null; user_code?: string | null }>>({});
 /** Bumped by `agents.changed` and provider changes so open Settings pages reload. */

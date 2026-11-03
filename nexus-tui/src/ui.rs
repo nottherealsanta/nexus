@@ -622,8 +622,12 @@ pub enum Target {
     CompletionRow(usize),
     /// A row of the settings list, by index into `App::settings_items`.
     SettingsRow(usize),
+    /// A section in Settings' left rail, by index into `App::settings_sections`.
+    SettingsSection(usize),
     /// A selectable item on a Settings page, by position among the page's items.
     SettingsPageRow(usize),
+    /// A row of a provider's detail modal.
+    ProviderDetailRow(usize),
 }
 
 /// One row of the composer's completion popup.

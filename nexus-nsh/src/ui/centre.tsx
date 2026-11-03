@@ -4,7 +4,7 @@ import { SubagentStrip } from "./header";
 import { Banners, Toasts } from "./alerts";
 import { Composer, WaitingCard } from "./composer";
 import { NewSessionView } from "./newsession";
-import { SettingsView } from "./settings";
+import { ProviderDetailModal, SettingsView } from "./settings";
 import { Timeline } from "./timeline";
 import { centre, previousCentre, viewed } from "../store";
 
@@ -17,6 +17,7 @@ export function Centre() {
       <SubagentStrip />
       <Banners />
       <If when={centre() === "settings"}><SettingsView /></If>
+      <If when={centre() === "settings"}><ProviderDetailModal /></If>
       <If when={base() === "session" && !!viewed()}><Timeline /></If>
       <If when={base() === "new_session" || (base() === "session" && !viewed())}><NewSessionView /></If>
       <If when={true}>
