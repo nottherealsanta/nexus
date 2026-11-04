@@ -82,6 +82,26 @@ function voiceSettingReason(id: string): string | undefined {
   return voiceActionReason(target, action, voiceStatus()?.[target]);
 }
 
+function UsageRefreshMinutes() {
+  const value = signal(String(config()?.values?.usage?.refresh_minutes ?? 10));
+  const revision = signal<any>(config()?.revision);
+  effect(() => {
+    const current = config();
+    if (current && current.revision !== revision()) { revision.set(current.revision); value.set(String(current.values?.usage?.refresh_minutes ?? 10)); }
+  });
+  const save = () => {
+    const parsed = Number(value());
+    if (!value().trim() || !Number.isInteger(parsed) || parsed < 1 || parsed > 1440) { toast("warning", "Enter a whole number from 1 to 1440."); return; }
+    void patchConfig("usage.refresh_minutes", parsed);
+  };
+  return <View class="flex-row items-center gap-2">
+    <Input value={value()} placeholder="1–1440" accessibilityLabel="Refresh interval (minutes)" testID="usage-refresh-minutes"
+      onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
+      class={`h-8 w-24 rounded-none bg-background px-2 text-right ${TS.mono} text-foreground`} />
+    <Btn label="Save" onPress={save} testID="usage-refresh-minutes-save" />
+  </View>;
+}
+
 function HandoffPercent() {
   const value = signal(String(config()?.values?.context?.handoff_percent ?? 80));
   const revision = signal<any>(config()?.revision);
@@ -476,6 +496,7 @@ function control(r: Row): JSX.Element {
   if (r.id === "mcp.full_definitions") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={config()?.values?.mcp?.full_definitions ? "on" : "off"} onPick={(v) => void patchConfig("mcp.full_definitions", v === "on")} />;
   if (r.id === "mcp.max_listed_tools") return <McpToolsLimit />;
   if (r.id === "context.handoff_percent") return <HandoffPercent />;
+  if (r.id === "context.usage_refresh_minutes") return <UsageRefreshMinutes />;
   if (r.id === "context.title_models") return <TitleModels />;
   if (r.id === "appearance.timeline_detail") {
     return <Seg onFocus={() => focusSetting(r.id)} label="Timeline detail" options={r.options ?? ["low", "medium", "high"]} value={timelineDetail()} disabled={false}

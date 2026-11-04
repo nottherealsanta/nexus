@@ -1,4 +1,6 @@
+import asyncio
 import json
+import sqlite3
 
 import httpx
 
@@ -137,3 +139,51 @@ async def test_opencode_and_grok_use_their_own_usage_endpoints(monkeypatch):
     assert rows["grok"]["plan"] == "SuperGrok"
     assert ("opencode.ai", "/zen/go/v1/usage") in seen
     assert ("cli-chat-proxy.grok.com", "/v1/billing") in seen
+
+
+async def test_usage_cache_persists_latest_snapshot_and_reads_without_fetching(monkeypatch):
+    db = sqlite3.connect(":memory:")
+    calls = 0
+
+    async def fetch():
+        nonlocal calls
+        calls += 1
+        return {"fetched": calls, "providers": [{"id": "codex"}]}
+
+    monkeypatch.setattr(provider_usage, "providers_usage", fetch)
+    cache = provider_usage.UsageCache(db, lambda: 10)
+    assert cache.snapshot() == {"fetched": None, "providers": []}
+    assert calls == 0
+    await cache.refresh()
+    assert cache.snapshot()["fetched"] == 1
+    restored = provider_usage.UsageCache(db, lambda: 10)
+    assert restored.snapshot() == cache.snapshot()
+    await restored.refresh()
+    assert restored.snapshot()["fetched"] == 2
+    assert calls == 2
+
+
+async def test_usage_cache_refreshes_when_due_and_coalesces_requests(monkeypatch):
+    db = sqlite3.connect(":memory:")
+    started, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def fetch():
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return {"fetched": provider_usage.time.time(), "providers": []}
+
+    monkeypatch.setattr(provider_usage, "providers_usage", fetch)
+    cache = provider_usage.UsageCache(db, lambda: 10)
+    watcher = asyncio.create_task(cache.run())
+    await asyncio.wait_for(started.wait(), timeout=1)
+    manual = asyncio.create_task(cache.refresh())
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.wait_for(manual, timeout=1)
+    assert calls == 1
+    assert cache.snapshot()["fetched"] is not None
+    watcher.cancel()
+    await asyncio.gather(watcher, return_exceptions=True)

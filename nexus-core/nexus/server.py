@@ -405,6 +405,9 @@ class ClientViews:
 
 def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceManager | None = None) -> Starlette:
     config = ConfigFile()
+    from .provider_usage import UsageCache
+
+    usage_cache = UsageCache(runtime.store.db, lambda: config.read()["values"]["usage"]["refresh_minutes"])
     code_fingerprint = source_fingerprint()  # what `nexus doctor` compares with the checkout
     config_lock = asyncio.Lock()
     config_revision = config.read()["revision"]
@@ -695,8 +698,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         ])
 
     async def provider_limits(request: Request) -> Response:
-        from nexus import provider_usage
-        return JSONResponse(await provider_usage.providers_usage())
+        if request.method == "POST":
+            return JSONResponse(await usage_cache.refresh())
+        return JSONResponse(usage_cache.snapshot())
 
     async def session_usage_totals(request: Request) -> Response:
         runtime.session(p(request, "id"))
@@ -1673,7 +1677,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/kernel/{id}", route(kernel), methods=["GET", "DELETE"]),
         Route("/api/provider", route(providers)),
         Route("/api/provider/{id}/login", route(provider_login), methods=["GET", "POST", "DELETE"]),
-        Route("/api/usage", route(provider_limits)),
+        Route("/api/usage", route(provider_limits), methods=["GET", "POST"]),
         Route("/api/session/{id}/usage", route(session_usage_totals)),
         Route("/api/model", route(models)),
         Route("/api/model/last", route(last_model)),
@@ -1770,6 +1774,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         await runtime.start_maintenance()
         watcher = asyncio.create_task(watch_config())
+        usage_watcher = asyncio.create_task(usage_cache.run())
         try:
             yield
         finally:
@@ -1778,6 +1783,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             if login_tasks:
                 await asyncio.gather(*login_tasks.values(), return_exceptions=True)
             watcher.cancel()
+            usage_watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await usage_watcher
             with suppress(asyncio.CancelledError):
                 await watcher
             await voice.close()

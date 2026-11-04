@@ -1,0 +1,8 @@
+{
+  "fetched": 1,
+  "providers": [
+    {"id": "grok", "label": "xAI", "windows": [{"label": "Weekly", "used_percent": 22}], "notes": ["Prepaid credits: $2.50", "Other xAI note"]},
+    {"id": "copilot", "label": "GitHub Copilot", "windows": [{"label": "Premium requests (monthly)", "used_percent": 42}, {"label": "Chat (monthly)", "used_percent": 61}, {"label": "Completions (monthly)", "used_percent": 73}], "notes": ["AI credits used this period: 10", "Chat: unlimited", "Completions: unlimited", "Other Copilot note"]},
+    {"id": "other", "label": "Other provider", "windows": [{"label": "Chat (monthly)", "used_percent": 10}], "notes": ["Prepaid credits: $1.00"]}
+  ]
+}

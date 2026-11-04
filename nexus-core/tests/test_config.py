@@ -6,6 +6,16 @@ from conftest import remembering
 from nexus.config import ConfigConflict, ConfigFile
 
 
+def test_usage_refresh_interval_config(tmp_path: Path) -> None:
+    config = ConfigFile(tmp_path / "config.toml")
+    assert config.read()["values"]["usage"]["refresh_minutes"] == 10
+    result = config.patch(config.read()["revision"], {"usage.refresh_minutes": 25}, [])
+    assert result["values"]["usage"]["refresh_minutes"] == 25
+    for value in (0, 1441, True, 1.5):
+        with pytest.raises(ValueError):
+            config.patch(config.read()["revision"], {"usage.refresh_minutes": value}, [])
+
+
 def test_defaults_and_invalid_keys(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = ConfigFile(path)

@@ -70,6 +70,8 @@ because Apple's `ar` produces a broken archive.
 
 ## Landed
 
+- **Incoming provider usage merge (11-04).** Preserved usage snapshots alongside storage, live partials, Manager and skill changes; resolved documentation conflicts and kept both usage dialogs centered in the shared large modal class. Validation: 104 focused Core tests, two TUI skill-picker tests, two TUI usage tests and shared manifest/theme checks pass. Server suite: 45 pass, one nested-code approval timing failure. Existing Manager Ruff error and NSH native `declarations` dependency mismatch remain; fresh screenshots were not captured during this merge.
+
 - **Skill picker and nested details (11-04).** Both clients keep skills inline through 12, show only `Skills [N]` above 12, and open a borderless two-column picker (dark-gray cards, lighter gray focus) from the heading at any count. Inline names also open the nested Markdown detail view: full description, complete `SKILL.md`, and supporting file/folder names. Toggles remain separate; Esc restores picker position and focus. Shared scenario: two TUI tests and three isolated NSH browser tests pass; five existing NSH context-header tests and 17 Core skill tests pass. Matching renderer/browser screenshots and keyboard/scroll checks are in `reports/skill-picker/`. Full TUI still has the seven documented failures plus the concurrently changed Manager dropdown Esc test; full NSH check/build remains blocked by the native dependency mismatch, and the unrelated shared app scenarios hit HTTP 404 in the isolated harness. No live-home changes or provider calls.
 
 - **Manager presentation refinement (11-04).** Both clients remove the dropdown outline, use solid opaque surfaces and inset input, and replace the header label with the one-row orb while visible. A Voice toggle defaults on: explicitly opening Manager or switching Voice on starts Live immediately; off preserves typing and the backend session. The orb now opens/closes the dropdown. Validation: 33 TUI Manager checks and 47 isolated NSH controller checks pass; both rendered frames compared, browser toggle/orb interactions pass without runtime errors, manifest/theme checks pass, and the TUI release is built. Native NSH remains blocked by the existing CLI/crate mismatch.
@@ -87,6 +89,7 @@ because Apple's `ar` produces a broken archive.
 - **Live microphone startup and silent audio (11-04).** TUI now explicitly starts its cpal microphone stream, reports startup failures, and gates the mic only on audible samples consumed by the speaker (plus a 200 ms echo tail), rather than the continuously queued silent WebRTC track. DeviceSink shutdown notices are suppressed for Live and pipeline playback. Five TUI audio tests and 43 isolated NSH Manager browser tests pass; real microphone verification is pending.
 
 - **Brighter, faster Working shimmer (11-04).** Both clients use the same travelling highlight and 1.5 s cycle from `interface/theme.toml`, with secondary-text base and a white/dark highlight peak; reduced motion remains static. TUI shimmer and live-group checks pass (full suite: 746 passed, 7 documented unrelated failures, 7 ignored); a browser preview confirms the moving white peak and static reduced-motion state.
+- **Provider usage snapshots (11-04).** Core stores the latest provider usage and refreshes it periodically (default 10 minutes, configurable in Settings); both clients show the saved snapshot and offer manual refresh. An already-open modal does not yet update after a background refresh; provider integration and screenshots remain to be checked.
 
 - **GPT-Live sideband certificate trust (11-04).** A real diagnostic reached call creation but the sideband failed with `CERTIFICATE_VERIFY_FAILED` on the python.org interpreter. The WebSocket now uses HTTPX’s verified CA context, and Core publishes startup failures to both clients and status. All 16 Live tests and targeted Ruff checks pass; an unauthenticated TLS handshake succeeds. A new real call remains to be checked.
 
@@ -1060,8 +1063,8 @@ Proposed design (not implemented; scope choice below is still open):
 - [ ] **J4 Anthropic Messages:** the Anthropic SDK as a plain client (Nexus owns the loop); preserve signed thinking
   blocks for lossless replay; cache-control breakpoints and tool-result media.
 - [ ] **J5 Gemini:** a dialect that preserves replayable reasoning.
-- [ ] **Antigravity:** assess fit with the one-timeline rule before porting; use the Claude Agent SDK and the
-  approach in https://github.com/NoeFabris/opencode-antigravity-auth rather than ZMX.
+- [ ] **ZMX mode (subagents only, off by default):** port the Claude Code and Antigravity workers from `nexus01`. See
+  [ZMX_plan.md](ZMX_plan.md) (user direction 2026-11-04; replaces the earlier SDK and `opencode-antigravity-auth` idea).
 - [ ] Every provider needs wire fixtures, provider/auth docs and a verified real call; group OpenAI-compatible ones.
 - [ ] Cross-provider conversion beyond text and tool calls (foreign reasoning is dropped); Copilot Responses
   encrypted reasoning replay.

@@ -256,6 +256,8 @@ pub enum ApiCall {
     },
     /// Usage of every connected provider, with plan windows where reported (`GET /api/usage`).
     Usage,
+    /// Refresh the stored provider usage snapshot.
+    RefreshUsage,
     /// Would switching to `model` or `agent` lose the prompt cache? (`GET …/switch-cost`)
     SwitchCost {
         session: String,
@@ -362,7 +364,8 @@ impl ApiCall {
             | ApiCall::Search { .. }
             | ApiCall::OlderMessages { .. }
             | ApiCall::SwitchCost { .. }
-            | ApiCall::Usage => "",
+            | ApiCall::Usage
+            | ApiCall::RefreshUsage => "",
             ApiCall::SaveFile { .. } => "Saved",
         }
     }
@@ -532,6 +535,15 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         }
         ApiCall::Usage => {
             done.usage = Some(api.http.get("/api/usage", &[]).await.map_err(e)?);
+        }
+        ApiCall::RefreshUsage => {
+            done.usage = Some(
+                api.http
+                    .call(reqwest::Method::POST, "/api/usage", &[], None, None, None)
+                    .await
+                    .map_err(e)?
+                    .body,
+            );
         }
         ApiCall::SwitchCost {
             session,

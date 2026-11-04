@@ -2353,7 +2353,7 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut Hit
         );
         return;
     };
-    if Some(project.clone()) != cx.app.current_project() || session.as_deref() != cx.app.viewed_id()
+    if Some(project.clone()) != cx.app.current_project() || session != &cx.app.files_session()
     {
         return;
     }
@@ -6927,6 +6927,9 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
                 list.join(", ")
             }
         }),
+        "context.usage_refresh_minutes" => a.state.config.as_ref()
+            .and_then(|c| c["values"]["usage"]["refresh_minutes"].as_u64())
+            .map(|value| value.to_string()),
         "context.handoff_percent" => a
             .state
             .config
@@ -7874,14 +7877,15 @@ fn draw_usage(
     hits: &mut HitMap,
 ) {
     use crate::usage::Row;
-    let b = modal_box(area, MODAL_MEDIUM, (rows.len() + 6).clamp(9, 30) as u16);
+    let b = modal_box(area, MODAL_LARGE, (rows.len() + 6).clamp(9, 30) as u16);
     let m = modal(cx, buf, area, b, "Provider usage", hits);
     let (filled, track) = if cx.t.opts.ascii {
         ("#", "-")
     } else {
         ("━", "─")
     };
-    let bar_w = (m.w as usize).saturating_sub(34).clamp(8, 24);
+    let label_w = m.w.saturating_sub(34).clamp(8, 22);
+    let bar_w = (m.w as usize).saturating_sub(label_w as usize + 26).clamp(8, 24);
     for (i, row) in rows.iter().take(m.body.height as usize).enumerate() {
         let y = m.body.y + i as u16;
         match row {
@@ -7922,12 +7926,12 @@ fn draw_usage(
                     buf,
                     m.x + 2,
                     y,
-                    &truncate(label, 8, cx.ell()),
+                    &truncate(label, label_w as usize, cx.ell()),
                     cx.st(SECONDARY, RAISED),
-                    8,
+                    label_w,
                 );
                 let _ = x;
-                let bx = m.x + 12;
+                let bx = m.x + label_w + 4;
                 let n = used.map_or(0, |u| (usize::from(u) * bar_w).div_ceil(100));
                 let tone = match used {
                     Some(90..) => "status.error",
@@ -7974,6 +7978,7 @@ fn draw_usage(
         }
     }
     hint_row(cx, buf, &m, &[("r", "refresh"), ("esc", "close")]);
+    hits.add(Rect::new(m.x, m.hint_y, m.w.min(9), 1), Target::UsageRefresh);
 }
 
 /// `/learn`'s candidate checklist. It uses the shared borderless modal and keeps

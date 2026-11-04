@@ -549,6 +549,7 @@ pub enum Target {
     ManagerSession,
     Tab(Tab),
     SettingsEntry,
+    UsageRefresh,
     SideRow(usize),
     /// The left sidebar's inner edge: drag to resize.
     SidebarEdge,

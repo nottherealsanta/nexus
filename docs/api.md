@@ -65,7 +65,7 @@ including cursors whose rows remain in another interleaved session.
 | GET | `/api/info` | | `{name, version, api_version: {major, minor}, code, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retention_status, retry, idempotency}` |
 | GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
 | GET | `/api/search` | `?q=`, `?project=`, `?archived=exclude\|only\|include`, `?limit=` (1..100, default 30) | `{query, hits: [{session_id, kind: "title", "user" or "final_answer", message_id, snippet, rank, session}]}`: one hit per session, best first ([Search](#search-k5)) |
-| GET | `/api/usage` | | `{fetched, providers: [{id, label, source, plan, windows, notes, error}]}`: every connected provider, with plan windows where reported ([Usage](#usage-k11)) |
+| GET, POST | `/api/usage` | | GET reads the saved snapshot; POST refreshes it. `{fetched, providers: [{id, label, source, plan, windows, notes, error}]}` ([Usage](#usage-k11)) |
 | GET | `/api/artifact/{id}` | | the stored bytes, served as an attachment with the stored media type ([Artifacts](#artifacts-k8)) |
 | GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, connected, verified, methods}]`; `methods` are the sign-ins a client can start (`browser`, `device`, `cli`, `local`, `api_key`); an API-key provider adds `key_hint`, `key_env` and `key_source` (`stored`, `env` or null) |
 | GET | `/api/provider/{id}/login` | | the in-progress sign-in, or `{status: "idle"}` ([Configuration](#configuration-provider-login-and-context-budget)) |
@@ -1462,7 +1462,13 @@ unchanged.
 ### Usage (K11)
 
 Per-session totals are the `session_usage` ledger (`GET /api/session/{id}/usage`, and in `/turn`). `GET /api/usage`
-returns one row per connected provider. Codex, Copilot, OpenCode, Grok and Claude are asked for their plan windows; a
+returns the last saved snapshot without contacting providers (`fetched` is null before the first snapshot). Core
+refreshes on startup when due and every `[usage] refresh_minutes` minutes (default 10, range 1–1440); POST
+`/api/usage` refreshes on demand. The snapshot survives daemon restarts. Each snapshot has one row per connected
+provider. Codex, Copilot, OpenCode, Grok and Claude are asked for their plan windows; a
 window is `{label, used_percent, resets_at, period_seconds, kind, detail}`. Providers that expose no plan limits
 (OpenAI, Groq, NVIDIA, Ollama) still get a row with a note saying so and no windows. A provider that fails has an
-`error` in its row and the others still answer. Nothing in the response is a credential.
+`error` in its row and the others still answer. Nothing in the response is a credential. Both clients open the
+usage modal immediately, show the snapshot age, and offer `r` to refresh; closing it does not wait for the response.
+The clients hide xAI prepaid credits and Copilot chat, completions and AI-credit details, including in older saved
+snapshots; the API retains those details.

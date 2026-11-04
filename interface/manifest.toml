@@ -397,6 +397,15 @@ id = "context"
 label = "Context"
 
 [[settings.section.row]]
+id = "context.usage_refresh_minutes"
+label = "Refresh interval (minutes)"
+kind = "number"
+scope = "core"
+clients = "both"
+default = 10
+note = "Refresh provider usage every 1–1440 minutes; refresh manually in the usage modal."
+
+[[settings.section.row]]
 id = "context.handoff_percent"
 label = "Automatic handoff threshold (%)"
 kind = "number"

@@ -2694,6 +2694,8 @@ fn ctrl_u_reads_plan_limits_into_a_bar_modal() {
     let mut app = app();
     app.effects.clear();
     press(&mut app, &["ctrl+u"]);
+    let (_, loading) = draw(&mut app, 120, 36);
+    assert!(loading.join("\n").contains("Reading provider usage"));
     assert!(app
         .effects
         .iter()
@@ -2730,8 +2732,13 @@ fn ctrl_u_reads_plan_limits_into_a_bar_modal() {
     assert!(app
         .effects
         .iter()
-        .any(|e| matches!(e, Effect::Api(ApiCall::Usage))));
+        .any(|e| matches!(e, Effect::Api(ApiCall::RefreshUsage))));
     press(&mut app, &["esc"]);
+    assert!(app.ui.overlay.is_none());
+    app.apply_done(ActionDone {
+        call: ApiCall::Usage,
+        result: Ok(Done::default()),
+    });
     assert!(app.ui.overlay.is_none());
 }
 

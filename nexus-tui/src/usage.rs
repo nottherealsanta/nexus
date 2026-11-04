@@ -36,8 +36,12 @@ pub const EMPTY: &str = "No provider is connected. Connect one in Settings.";
 /// The modal's rows for `GET /api/usage`: a heading per connected provider, one row per window, then its notes.
 /// Reserve, pace marks and absolute reset times are left out; the bar and "resets in" say it.
 pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
+    if usage.get("fetched").is_some_and(Value::is_null) {
+        return vec![Row::Note("No usage snapshot yet. Press r to refresh.".into())];
+    }
     let mut out = Vec::new();
     for p in usage["providers"].as_array().into_iter().flatten() {
+        let id = p["id"].as_str().unwrap_or_default();
         if !out.is_empty() {
             out.push(Row::Gap);
         }
@@ -58,6 +62,10 @@ pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
             .as_array()
             .into_iter()
             .flatten()
+            .filter(|w| {
+                let label = w["label"].as_str().unwrap_or_default();
+                id != "copilot" || !(label == "Chat (monthly)" || label == "Completions (monthly)")
+            })
             .collect::<Vec<_>>();
         for w in &windows {
             let detail = w["detail"].as_str().filter(|s| !s.is_empty());
@@ -80,6 +88,13 @@ pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
             .flatten()
             .filter_map(|n| n.as_str())
             .filter(|n| !n.is_empty())
+            .filter(|n| {
+                !(id == "grok" && n.starts_with("Prepaid credits:"))
+                    && !(id == "copilot"
+                        && (n.starts_with("AI credits used this period:")
+                            || n.starts_with("Chat: ")
+                            || n.starts_with("Completions: ")))
+            })
             .collect::<Vec<_>>();
         if windows.is_empty() && notes.is_empty() {
             out.push(Row::Note("No limit windows reported.".into()));
@@ -91,12 +106,31 @@ pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
     if out.is_empty() {
         out.push(Row::Note(EMPTY.into()));
     }
+    if let Some(fetched) = usage["fetched"].as_f64() {
+        out.push(Row::Gap);
+        out.push(Row::Note(format!("Updated {} ago", until(now, fetched))));
+    }
     out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hides_only_the_requested_provider_usage_rows_in_cached_snapshots() {
+        let usage: Value = serde_json::from_str(include_str!("../../interface/scenarios/provider-usage.json")).unwrap();
+        let rows = rows(&usage, 1.0);
+        assert!(rows.iter().any(|r| matches!(r, Row::Window { label, .. } if label == "Premium requests (monthly)")));
+        assert!(rows.iter().any(|r| matches!(r, Row::Window { label, used: Some(10), .. } if label == "Chat (monthly)")));
+        assert!(!rows.iter().any(|r| matches!(r, Row::Window { used: Some(61 | 73), .. })));
+        for text in ["Prepaid credits: $2.50", "AI credits used this period: 10", "Chat: unlimited", "Completions: unlimited"] {
+            assert!(!rows.contains(&Row::Note(text.into())));
+        }
+        for text in ["Other xAI note", "Other Copilot note", "Prepaid credits: $1.00"] {
+            assert!(rows.contains(&Row::Note(text.into())));
+        }
+    }
 
     #[test]
     fn windows_read_as_percent_and_time_left() {
