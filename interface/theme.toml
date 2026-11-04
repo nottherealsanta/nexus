@@ -15,6 +15,14 @@ nontext_min = 3.0       # border.focus, focus, accent, status marks, diff marks
 
 # Pen colours for drawing on an image. They end up in the image, so they do not
 # change with the theme, and they stay legible over most pictures.
+# Travelling text highlight. Both clients use the 125 ms animation clock:
+# 12 frames per pass = 1.5 seconds, with a three-character highlight radius.
+[motion.shimmer]
+cycle_frames = 12
+frame_ms = 125
+reach = 3.0
+crest = 0.5
+
 [annotation]
 ink = ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff"]
 
@@ -37,6 +45,7 @@ sky = "#69b7d5"
 gold = "#c9a94a"
 
 [dark.text]
+highlight = "#ffffff"  # peak of the Working shimmer
 primary   = "#e6e7e8"   # titles, user and agent text, tool names
 secondary = "#a4a9ae"   # tool arguments, summaries, labels
 muted     = "#868c93"   # metadata, counts, key hints, timestamps, reasoning
@@ -48,6 +57,8 @@ strong  = "#4a4a50"     # diff split rule, tool-detail box (decorative)
 focus   = "#e8a46e"     # focus ring / focus bar (meaningful, >= 3:1)
 
 [dark.interactive]
+settings_focus = "#ffffff" # active Settings pane marker
+settings_selection = "#303030" # full-width neutral Settings selection
 accent    = "#e8a46e"   # brand mark, active tab, links, primary action
 multi     = "#a78bfa"   # multi-select questions: rail, marker and ticks
 on_accent = "#121314"   # text on an accent fill
@@ -93,6 +104,7 @@ sky = "#23687f"
 gold = "#735d0c"
 
 [light.text]
+highlight = "#111111"  # high-contrast shimmer peak on light surfaces
 primary   = "#1f2124"
 secondary = "#4f555b"
 muted     = "#5c636a"
@@ -104,6 +116,8 @@ strong  = "#c2c3c0"
 focus   = "#a84e16"
 
 [light.interactive]
+settings_focus = "#1f2124" # dark equivalent on light surfaces
+settings_selection = "#ddddd9"
 accent    = "#a84e16"
 multi     = "#6743ae"
 on_accent = "#ffffff"
@@ -205,6 +219,9 @@ style = ""
 # surfaces collapse to the terminal background and are told apart by rails,
 # borders and labels (never by background alone).
 [fallback256.dark]
+"interactive.settings_focus" = 255
+"interactive.settings_selection" = 236
+"text.highlight" = 255
 "surface.canvas" = 232
 "surface.panel" = 234
 "surface.raised" = 235
@@ -245,6 +262,9 @@ style = ""
 "agent.gold" = 179
 
 [fallback256.light]
+"interactive.settings_focus" = 235
+"interactive.settings_selection" = 253
+"text.highlight" = 233
 "surface.canvas" = 255
 "surface.panel" = 254
 "surface.raised" = 231
@@ -285,6 +305,9 @@ style = ""
 "agent.gold" = 58
 
 [fallback16.dark]
+"interactive.settings_focus" = "bright_white"
+"interactive.settings_selection" = "bright_black"
+"text.highlight" = "bright_white"
 "surface.canvas" = "default"
 "surface.panel" = "default"
 "surface.raised" = "default"
@@ -325,6 +348,9 @@ style = ""
 "agent.gold" = "yellow"
 
 [fallback16.light]
+"interactive.settings_focus" = "black"
+"interactive.settings_selection" = "white"
+"text.highlight" = "black"
 "surface.canvas" = "default"
 "surface.panel" = "default"
 "surface.raised" = "default"
@@ -369,6 +395,9 @@ style = ""
 # Meaning that colour carried moves to glyph + label + prefix, which every
 # mode shows anyway. text.muted and text.faint are dim; titles are bold.
 [monochrome.tokens]
+"interactive.settings_focus" = ["bold"]
+"interactive.settings_selection" = ["reverse"]
+"text.highlight" = []
 "surface.canvas" = []
 "surface.panel" = []
 "surface.raised" = []

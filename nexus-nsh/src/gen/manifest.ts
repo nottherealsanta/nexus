@@ -321,6 +321,11 @@ export const manifest = {
   }
  },
  "settings": {
+  "navigation": {
+   "section_key": "left",
+   "value_key": "right",
+   "previous_value_key": "shift+right"
+  },
   "section": [
    {
     "id": "appearance",

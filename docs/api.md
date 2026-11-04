@@ -1006,6 +1006,7 @@ client_attached, pending, counts}`. `style` is the wire route (`codex`), `peer` 
 
 | Event | Data |
 | --- | --- |
+| `manager.preview` | `{call_id, preview: {source, lines: string[0..3], clipped, tool: {name, arguments, clipped, status: "running" or "done" or "failed"} or null}}`. Bounded, redacted current model excerpt; text updates at most once per 150 ms, tool transitions and final excerpts immediately. Also restored as `call.preview` in status and `preview` in the start response. |
 | `manager.state` | `{call_id, active, phase: "idle" or "thinking" or "replying", holder, mode, error: {code, message, fix} or null}`. `active: false` ends the call. `error.code` is `model_unavailable`, `model_failed` or `manager_error`; it stays until a turn succeeds |
 | `manager.caption` | `{call_id, turn_id, role: "user" or "manager", text, final}` for text not otherwise spoken: the user's typed line (sent when `say` is accepted, `source: "typed"` only) and errors (`role: "manager"`) |
 | `manager.speech` | `{call_id, turn_id, seq, text, urgent, proactive?}`: one sentence of the Manager's reply, `seq` counting from 0 within the turn, `urgent` true only for an unprompted line slipped into a reply, `proactive: true` only on an unprompted line (absent otherwise). A text-only client shows it at once; a speaking client fetches and plays it in order |

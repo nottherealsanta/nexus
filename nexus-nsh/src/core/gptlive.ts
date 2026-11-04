@@ -101,7 +101,7 @@ function play(c: Call, data: ArrayBuffer) {
   const source = c.context.createBufferSource();
   source.buffer = buffer;
   source.connect(c.outLevel);
-  const at = Math.max(c.context.currentTime + 0.02, c.nextStart);
+  const at = c.nextStart <= c.context.currentTime ? c.context.currentTime + 0.06 : c.nextStart;
   source.onended = () => c.sources.delete(source);
   c.sources.add(source);
   source.start(at);

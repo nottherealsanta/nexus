@@ -19,7 +19,7 @@ import {
 import {
   callFocused, callMinimised, captionGone, card, consent, cardCollapsed, cardFocused, dismissCard, dockHeight,
   exchange, fieldText, focusCard, frame, inCall, listening, managerCaption, managerError, minimised, notice, orbOn,
-  phase, reducedMotion, speaking, submitField, transcribing, userCaption, visual,
+  phase, reducedMotion, modelPreview, speaking, submitField, transcribing, userCaption, visual,
 } from "../../core/manager";
 import { isNarrow, live, phone, phonePage } from "../../store";
 import { byId, keyLabel, run } from "../../commands";
@@ -65,7 +65,7 @@ function Layer() {
   };
   const cardWidth = () => Math.min(narrowCard() ? 560 : 780, windowSize().width - 24);
   const focusedTop = () => Math.max(24, windowSize().height * 0.24);
-  const cardMax = () => Math.max(150, windowSize().height - focusedTop() - ORB_LARGE - 190);
+  const cardMax = () => Math.max(150, windowSize().height - focusedTop() - ORB_LARGE - 190 - (modelPreview() ? 160 : 0));
   return (
     <Overlay class="inset-0" style={{ pointerEvents: "box-none" }} testID="manager-stage">
       <If when={callFocused()}>
@@ -82,6 +82,7 @@ function Layer() {
             <Orb size="focused" />
             <Field />
             <Caption align="center" />
+            <ModelPreview />
             <Hint align="center" />
             <EndButton />
             <If when={!!card() && !cardCollapsed()}>
@@ -140,6 +141,20 @@ function Caption(p: { align: "center" | "end" }) {
       }}
     </If>
   );
+}
+
+function ModelPreview() {
+  return <If when={!!modelPreview()}>{() => {
+    const p = () => modelPreview()!;
+    return <View class="bg-popover px-4 py-2 gap-1" style={{ width: Math.min(640, windowSize().width - 24) }} testID="manager-model-preview">
+      <Text class={T.meta}>{`Model context · ${p().source}${p().clipped ? " · excerpt" : ""}`}</Text>
+      <Text class={`${TS.mono} text-muted-foreground`} style={{ numberOfLines: 3 }}>{p().lines.slice(-3).join("\n")}</Text>
+      <If when={!!p().tool}>{() => <>
+        <Text class={T.meta}>{`Tool · ${p().tool!.name} · ${p().tool!.status}`}</Text>
+        <Text class={`${TS.mono} text-muted-foreground`} style={{ numberOfLines: 1 }}>{`${p().tool!.arguments}${p().tool!.clipped ? " …" : ""}`}</Text>
+      </>}</If>
+    </View>;
+  }}</If>;
 }
 
 function Field() {

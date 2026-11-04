@@ -1,9 +1,9 @@
 // Small building blocks on NSH base components, styled only with theme tokens.
 import type { JSX } from "nsh";
-import { Image, Text, View, effect, signal } from "nsh";
+import { Image, Text, View, colorScheme, effect, signal } from "nsh";
 import { Button } from "nsh/base";
 import { icons, IconName } from "../icons";
-import { statusGlyphs, attention, spinner as spinnerFrames } from "../gen/theme";
+import { statusGlyphs, attention, spinner as spinnerFrames, shimmerColors, shimmerMotion } from "../gen/theme";
 import { config, isNarrow } from "../store";
 
 // Type sizes: one shared 16/24 for titles, prose, interface text and code. Weight
@@ -45,18 +45,18 @@ export function IconButton(p: { icon: IconName; label: string; onPress?: () => v
 }
 
 /** Text button: primary (accent fill), default (raised, hairline) or danger. */
-export function Btn(p: { initial?: boolean; label: string; onPress?: () => void; kind?: "primary" | "default" | "danger" | "ghost"; disabled?: boolean; reason?: string; testID?: string; busy?: boolean; icon?: IconName; class?: string }) {
+export function Btn(p: { initial?: boolean; label: string; onFocus?: () => void; onPress?: () => void; kind?: "primary" | "default" | "danger" | "ghost"; disabled?: boolean; reason?: string; testID?: string; busy?: boolean; icon?: IconName; class?: string }) {
   const k = p.kind ?? "default";
   const skin = k === "primary" ? "bg-primary" : k === "danger" ? "bg-secondary hover:bg-accent" : k === "ghost" ? "hover:bg-accent" : "bg-secondary hover:bg-accent";
   const fg = k === "primary" ? "text-on-accent" : k === "danger" ? "text-error" : "text-foreground";
   return (
-    <Button
-      onPress={p.onPress} disabled={p.disabled || p.busy} testID={p.testID} accessibilityLabel={p.reason && p.disabled ? `${p.label}, unavailable: ${p.reason}` : p.label}
+    <View role="button" focusable
+      onFocus={p.onFocus} onPress={p.onPress} disabled={p.disabled || p.busy} testID={p.testID} accessibilityLabel={p.reason && p.disabled ? `${p.label}, unavailable: ${p.reason}` : p.label}
       class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 active:opacity-80 ${skin} ${p.initial ? "border-ring" : ""} ${p.class ?? ""} ${FOCUS}`}
     >
       <If when={p.icon}>{() => <Icon name={p.icon!} class={k === "primary" ? "tint-on-accent" : k === "danger" ? "tint-error" : "tint-foreground-secondary"} />}</If>
       <Text class={`${TS.base} font-medium ${fg}`}>{p.busy ? "Working…" : p.label}</Text>
-    </Button>
+    </View>
   );
 }
 
@@ -84,12 +84,22 @@ export const PROSE = {
   code: `font-(family-name:--font-code) ${TS.base} rounded-none bg-card text-foreground`,
 };
 
-/** The TUI's soft shimmer: a light passes through the word, letter by letter. */
+/** The shared travelling highlight, on the same clock and curve as the TUI. */
 export function Shimmer(p: { text: string; reduced: boolean; testID?: string }) {
+  effect(() => { if (!p.reduced) return holdSpinner(); });
+  const color = (index: number) => {
+    const colors = shimmerColors[colorScheme() === "light" ? "light" : "dark"];
+    const head = (spinnerFrame() % shimmerMotion.cycle_frames) / shimmerMotion.cycle_frames * (Array.from(p.text).length + 2 * shimmerMotion.reach) - shimmerMotion.reach;
+    const distance = Math.max(0, Math.abs(index - head) - shimmerMotion.crest);
+    const near = Math.max(0, 1 - distance / (shimmerMotion.reach - shimmerMotion.crest));
+    const amount = near * near * (3 - 2 * near);
+    const channel = (hex: string, at: number) => parseInt(hex.slice(at, at + 2), 16);
+    return "#" + [1, 3, 5].map((at) => Math.round(channel(colors.base, at) + (channel(colors.peak, at) - channel(colors.base, at)) * amount).toString(16).padStart(2, "0")).join("");
+  };
   return <View class="flex-row" accessibilityLabel={p.text} testID={p.testID ?? "working-shimmer"}>
     <Each of={[...p.text]}>{(c, i) => <Text
       class={`${TS.base} font-medium text-foreground`}
-      style={p.reduced ? {} : { animationName: "pulse", animationDuration: 1800, animationDelay: i() * 110, animationIterationCount: "infinite" }}
+      style={p.reduced ? {} : { color: color(i()) }}
     >{c()}</Text>}</Each>
   </View>;
 }
@@ -102,7 +112,7 @@ function holdSpinner() {
   spinnerHolders++;
   if (!spinnerTimer) {
     const start = Date.now();
-    spinnerTimer = setInterval(() => spinnerFrame.set(Math.floor((Date.now() - start) / 125)), 125);
+    spinnerTimer = setInterval(() => spinnerFrame.set(Math.floor((Date.now() - start) / shimmerMotion.frame_ms)), shimmerMotion.frame_ms);
   }
   return () => {
     spinnerHolders--;
@@ -152,15 +162,15 @@ export function StatusRail(p: { color?: string; testID?: string }) {
 }
 
 /** The one segmented control: a square muted well with square options and the selected one on the selection band. */
-export function Seg(p: { options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string; format?: (v: string) => string }) {
+export function Seg(p: { onFocus?: () => void; options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string; format?: (v: string) => string }) {
   return (
     <View class="flex-row rounded-none bg-muted p-0.5" role="radiogroup" accessibilityLabel={p.label}>
       <Each of={p.options} key={(o) => o}>
         {(o) => (
-          <Button role="radio" selected={p.value === o()} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${(p.format ?? identity)(o())}`}
+          <View focusable onFocus={p.onFocus} role="radio" accessibilityState={{ selected: p.value === o() }} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${(p.format ?? identity)(o())}`}
             class={`rounded-none px-3 ${isNarrow() ? "min-h-10" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${p.value === o() ? "bg-selection" : ""} ${FOCUS}`}>
             <Text class={`${TS.base} ${p.value === o() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{(p.format ?? identity)(o())}</Text>
-          </Button>
+          </View>
         )}
       </Each>
     </View>

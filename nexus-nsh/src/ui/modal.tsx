@@ -1,7 +1,7 @@
 // One modal recipe (DESIGN_PLAN D13): a borderless square raised block over the scrim, 24 px
-// padding and the shadow `0 12px 40px rgb(0 0 0 / .4)`. Title first, `esc` on its right,
+// padding and the shadow `0 12px 40px rgb(0 0 0 / .4)`. Title first,
 // key hints last. Rows are 32 px with a selection band. Square corners match the TUI's modal.
-import { Text, View } from "nsh";
+import { Text, View, windowSize } from "nsh";
 import type { JSX } from "nsh";
 import { Dialog } from "nsh/base";
 import { T, TS } from "./kit";
@@ -9,9 +9,13 @@ import { config, isNarrow } from "../store";
 
 export const SCRIM = "bg-black/65";
 const SHADOW = "0 12px 40px rgb(0 0 0 / 0.4)";
+const WIDTH = { small: 500, medium: 600, large: 740 };
+
+/** Room for a scrollable body after padding, title, footer and any extra controls. */
+export const modalBodyHeight = (extra = 0) => Math.max(48, Math.floor(windowSize().height * 0.70) - 140 - extra);
 
 export function Modal(p: {
-  width: number; top?: string; testID?: string; label: string; scrim?: string;
+  size?: "small" | "medium" | "large"; testID?: string; label: string; scrim?: string;
   onCancel: () => void; onOpenChange?: (open: boolean) => void; closeOnBackdropPress?: boolean;
   padded?: boolean; children?: JSX.Element;
 }) {
@@ -19,22 +23,24 @@ export function Modal(p: {
     <Dialog
       open closeOnEscape={false} onCancel={p.onCancel} closeOnBackdropPress={p.closeOnBackdropPress ?? true}
       onOpenChange={({ open }) => p.onOpenChange?.(open)} animation={config()?.values?.ui?.reduced_motion ? "none" : "fade"} backdropClass={p.scrim ?? SCRIM}
-      style={isNarrow() ? { boxShadow: SHADOW } : { boxShadow: SHADOW, width: p.width }} testID={p.testID ? `${p.testID}-shell` : undefined}
-      class={`absolute left-0 right-0 ${p.top ?? "top-[12%]"} ${isNarrow() ? "mx-3" : "mx-auto"} max-h-[76%] rounded-none bg-popover overflow-hidden ${p.padded === false ? "" : "p-6"}`}
+      style={{ pointerEvents: "box-none" }} class="absolute inset-0 px-3 items-center justify-center"
     >
-      <View accessibilityLabel={p.label} testID={p.testID}>
-        {p.children}
+      <View testID={p.testID ? `${p.testID}-shell` : undefined}
+        style={{ boxShadow: SHADOW, width: isNarrow() ? "100%" : WIDTH[p.size ?? "medium"], maxWidth: "100%", pointerEvents: "auto" }}
+        class={`max-h-[70%] rounded-none bg-popover overflow-hidden ${p.padded === false ? "" : "p-6"}`}>
+        <View accessibilityLabel={p.label} testID={p.testID} class="min-h-0">
+          {p.children}
+        </View>
       </View>
     </Dialog>
   );
 }
 
-/** The title row: bold title, `esc` right-aligned and muted. */
-export function ModalTitle(p: { title: string; esc?: boolean }) {
+/** The title uses the full row; dismissal belongs in the footer. */
+export function ModalTitle(p: { title: string }) {
   return (
     <View class="flex-row items-center min-h-8 gap-3">
       <Text class={`flex-1 ${TS.title} font-semibold text-popover-foreground`}>{p.title}</Text>
-      <If when={p.esc !== false}><Text class={`${T.meta} rounded-none bg-muted px-1.5`}>esc</Text></If>
     </View>
   );
 }

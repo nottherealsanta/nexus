@@ -2754,8 +2754,8 @@ impl Builder<'_> {
                     &shown,
                     b.frame,
                     true,
-                    b.meta(),
-                    b.primary(),
+                    b.secondary(),
+                    b.st("text.highlight", CANVAS),
                 ));
             } else {
                 left.push(Span::styled(

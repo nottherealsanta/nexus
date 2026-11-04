@@ -70,6 +70,12 @@ because Apple's `ar` produces a broken archive.
 
 ## Landed
 
+- **Manager audio, orb and context excerpt (11-04).** Continuous buffered TUI playback and contiguous NSH packet scheduling (60 ms cushion), 350 ms speaking-state hold, smooth 24-step TUI sprite phases with eased colours and bounded compressed transfers. Both focused stages show the latest three model-context lines and the real tool arguments/status, from redacted `manager.preview` events and restorable state. Core Manager/voice/Live tests: 56 pass, plus the retired-call preview isolation check; TUI Manager: 29 pass; Live: 7 pass; orb: 11 pass; isolated NSH browser Manager tests: 44 pass. Full TUI suite retains unrelated failures; native NSH build is blocked by CLI/pin mismatch. TUI render and isolated actual NSH web stage screenshots compared (unused native microphone stubbed in the web fixture). Core restarted with no active turns; TUI release built. Real audio quality is not yet listening-verified.
+
+- **Live microphone startup and silent audio (11-04).** TUI now explicitly starts its cpal microphone stream, reports startup failures, and gates the mic only on audible samples consumed by the speaker (plus a 200 ms echo tail), rather than the continuously queued silent WebRTC track. DeviceSink shutdown notices are suppressed for Live and pipeline playback. Five TUI audio tests and 43 isolated NSH Manager browser tests pass; real microphone verification is pending.
+
+- **Brighter, faster Working shimmer (11-04).** Both clients use the same travelling highlight and 1.5 s cycle from `interface/theme.toml`, with secondary-text base and a white/dark highlight peak; reduced motion remains static. TUI shimmer and live-group checks pass (full suite: 746 passed, 7 documented unrelated failures, 7 ignored); a browser preview confirms the moving white peak and static reduced-motion state.
+
 - **GPT-Live sideband certificate trust (11-04).** A real diagnostic reached call creation but the sideband failed with `CERTIFICATE_VERIFY_FAILED` on the python.org interpreter. The WebSocket now uses HTTPX’s verified CA context, and Core publishes startup failures to both clients and status. All 16 Live tests and targeted Ruff checks pass; an unauthenticated TLS handshake succeeds. A new real call remains to be checked.
 
 - **Manager Live failure and orb (11-04).** Both clients preserve Live mode after audio fails, keep the real error and typed input, and never fall into Dictation. Focused stages leave 30% of the background visible. TUI now connects the existing smooth RGBA orb renderer on Kitty graphics terminals, with a centred cell fallback elsewhere. Validation: 28 TUI Manager tests and 11 orb tests pass; 43 NSH Manager browser tests pass in an isolated app without the native crate (the installed CLI cannot build the pinned native dependency). TUI stage/orb preview inspected; NSH screenshot blocked by that dependency. Full TUI suite retains 8 unrelated failures (Markdown, six shell cases, timeline selection). Real-service audio remains unverified.
@@ -160,7 +166,7 @@ deferred).
   so the shell and timeline failures are hidden there; run `cargo test --no-fail-fast` locally.
 - [ ] **TUI formatting:** `cargo fmt` in `nexus-tui` (`live.rs`, `manager.rs`, `dictation.rs`, `render.rs`,
   `tests/manager.rs`). This is CI's `lint` failure.
-- [ ] **TUI clippy (`-D warnings`):** unused `composer_inner` (`render.rs:703`); `if_same_then_else`
+- [ ] **TUI clippy (`-D warnings`):** `if_same_then_else`
   (`app.rs:10399`, `render.rs:7402`); `chunks_exact` with a constant size (`live.rs:68`, `speech.rs:155`); manual
   `is_multiple_of` (`paint.rs:350`, `render.rs:6330`, `splash.rs:261`); `useless_format` (`stage.rs:636`); unused
   import `SyncMsg`.
@@ -582,6 +588,22 @@ old Nexus tool-group fold, pending steer/queue rows, a general polish pass, and 
 
 ##### TUI modals
 
+Follow-up (2026-11-04): removed the blank rows between Settings sections in the TUI and the matching NSH list gap. Selected sections and setting rows use a neutral gray fill across the whole row. A subsequent user review restored the left bar in white for the focused pane, retaining the gray selection in the other pane; Left returns focus to the section heading, and Right changes/cycles the value (Shift+Right steps backward). The shared `settings-focus.json` scenario covers returning focus without mutation and then moving to the next heading. Focused TUI Settings/effort tests and the NSH keyboard scenario pass; real-browser checks pass at three sizes. The full TUI suite remains at 746 passed, seven known failures, seven ignored. Removed the obsolete, test-only `composer_inner` wrapper so normal launcher builds no longer warn.
+
+First pass implemented (2026-11-04) in both clients: three width classes (60/72/88 cells;
+500/600/740 px), centred placement including the palette, no duplicate Esc in titles,
+and footer-aware NSH body heights. Model information now stays inside the TUI picker.
+Rules are in `interface/design-language.md`. Before/after screenshots were compared at
+TUI 120×36 and 80×24, NSH 1024×768 / 1440×900 / 672×432. Five focused TUI modal checks
+and six real-browser NSH geometry checks (`e2e/modal-layout.mjs`) pass. The NSH captures
+use an isolated browser build with native audio disabled: the installed CLI cannot build
+the pinned native crate (`nsh-core` lacks `declarations`). The existing `i7` browser suite
+returns HTTP 404 against its mocks under this runtime; it is not green. TUI's full suite
+retains the seven failures listed in item 0. Long TUI confirmations retain their existing
+height fallback until the body can scroll; the complete footer/focus/provider/tool-grid
+review remains open below. Follow-up screenshots cover the compact gray selection at TUI
+160×48 / 80×24 and NSH 1440×900 dark / 1024×768 light; the TUI build is warning-free.
+
 The TUI mostly looks good, but Settings and the other modals need a design pass. Today every modal shares
 `modal()` (`render.rs:7605`: scrim, raised fill, bold title on row 1, `esc` at the right edge) and `modal_rect`
 (`paint.rs:74`: 2 cells from each edge, at most 70% of the height), but sizes and footers diverge:
@@ -602,7 +624,7 @@ The TUI mostly looks good, but Settings and the other modals need a design pass.
 
 - [ ] Define a small set of modal sizes (for example small 60, medium 72, large 88 or 70% of the width with one clamp)
   and one height rule; put every modal on one of them.
-- [ ] One position rule (centred), or a documented reason for the palette sitting high.
+- [x] One position rule (centred), including the palette (2026-11-04; both clients).
 - [ ] One footer: every modal uses `hint_row` with the same order and wording. Pick one verb per meaning (`close`
   leaves the modal, `back` goes up a level, `cancel` discards input) and drop the duplicate `esc` in the title when
   the footer already says it, as NSH did.

@@ -45,6 +45,7 @@ export const call = signal<{ id: string; holder: string; mode?: string } | null>
 /** The call is open but out of the way: a small orb in the corner, and the app has its keys back. */
 export const minimised = signal(false);
 /** The header button's read-only view of the Manager's hidden context. */
+export const modelPreview = signal<{ source: string; lines: string[]; clipped: boolean; tool: { name: string; arguments: string; status: string; clipped: boolean } | null } | null>(null);
 export const managerContext = signal<{ title: string; text: string } | null>(null);
 export const phase = signal<Phase>("idle");
 export const managerError = signal<ManagerError | null>(null);
@@ -250,8 +251,9 @@ async function start(): Promise<boolean> {
         if (c?.required && !c.accepted_at && !(await askConsent(c))) return false;
       }
     } catch { /* Core answers start itself */ }
-    const r = await request<{ call_id: string; holder: string; mode?: string }>("POST", "/api/manager/start", { body: { stream_id: streamId, client_id: viewReporter.clientId } });
+    const r = await request<{ call_id: string; holder: string; mode?: string; preview?: any }>("POST", "/api/manager/start", { body: { stream_id: streamId, client_id: viewReporter.clientId } });
     call.set({ id: r.call_id, holder: r.holder ?? "", mode: r.mode });
+    modelPreview.set(r.preview ?? null);
     lost = null;
     const buffered = held; held = [];
     starting = false;
@@ -289,9 +291,11 @@ async function openLive(callId: string) {
   if (call()?.id !== callId) { hangUpLive(); return; }
   if (notificationSoundsOn()) playNotificationCue("live_connected");
   listening.set(true);
+  let lastSpeechAt = 0;
   liveTimer = setInterval(() => {
     const l = gptLiveLevels();
-    const talking = speaking() ? l.remote > 0.015 : l.remote > 0.05;
+    if (l.remote > 0.03) lastSpeechAt = Date.now();
+    const talking = Date.now() - lastSpeechAt < 350;
     if (talking !== speaking()) { speaking.set(talking); listening.set(!talking); }
   }, 100);
 }
@@ -312,6 +316,7 @@ function endLocal() {
   call.set(null);
   minimised.set(false);
   managerContext.set(null);
+  modelPreview.set(null);
   phase.set("idle"); managerError.set(null); notice.set("");
   listening.set(false); speaking.set(false); transcribing.set(false);
   fieldText.set(null);
@@ -363,11 +368,13 @@ export function handleEvent(e: CoreEvent) {
     if (d.active === false) { lost = { id: mine, at: Date.now() }; endLocal(); return; }
     phase.set(d.phase === "thinking" || d.phase === "replying" ? d.phase : "idle");
     managerError.set(d.error ?? null);
+    if ("preview" in d) modelPreview.set(d.preview ?? null);
     if (d.error) { begin({ orb: false }); }
     return;
   }
   if (d.call_id !== mine) return;
   switch (e.type) {
+    case "manager.preview": modelPreview.set(d.preview ?? null); return;
     case "manager.caption": {
       const text = String(d.text ?? "");
       if (d.role === "user") { userCaption.set(text); begin({ orb: false }); }
@@ -828,13 +835,14 @@ function bindEngagedKeys(): () => void {
 async function restore() {
   if (!call()) return;
   try {
-    const s = await request<{ call: null | { call_id: string; holder: string; phase: Phase; error: ManagerError | null; card: unknown } }>("GET", "/api/manager");
+    const s = await request<{ call: null | { call_id: string; holder: string; phase: Phase; error: ManagerError | null; card: unknown; preview?: any } }>("GET", "/api/manager");
     const mine = call();
     if (!mine) return;
     if (!s.call) { endLocal(); return; }
     if (s.call.call_id !== mine.id) { movedAway(String(s.call.holder)); return; }
     phase.set(s.call.phase ?? "idle");
     managerError.set(s.call.error ?? null);
+    modelPreview.set(s.call.preview ?? null);
     if (s.call.card && !card()) showCard(parseCard(s.call.card));
   } catch { /* the next event or reconnect restores it */ }
 }

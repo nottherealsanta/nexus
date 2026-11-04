@@ -1203,19 +1203,13 @@ fn old_nexus_shimmer_keeps_graphemes_and_reduced_motion_static() {
 fn settings_is_a_centred_modal_over_the_session() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("app.settings");
-    let (_, rows) = draw(&mut app, 120, 36);
-    let top = rows
-        .iter()
-        .position(|r| r.contains("Settings") && r.contains("esc"))
-        .unwrap();
-    let close_x = col_of(&rows[top], "esc") as u16;
-    assert_eq!(
-        app.hits.at(close_x, top as u16),
-        Some(&Target::SettingsEntry)
-    );
+    let (buf, rows) = draw(&mut app, 120, 36);
+    let top = raised_box(&app, &buf).y as usize + 1;
+    assert!(!rows[top].contains("esc"));
     assert!(rows[top + 2].contains("Filter settings"));
     assert!(joined(&rows).contains("Appearance"));
-    app.click(Target::SettingsEntry);
+    assert!(joined(&rows).contains("esc close"));
+    press(&mut app, &["esc"]);
     assert_eq!(app.ui.view, nexus_tui::ui::View::Session);
 }
 
@@ -1347,6 +1341,13 @@ fn settings_arrows_change_animations_monochrome_and_sidebar() {
     app.click(Target::SettingsRow(0));
     assert_eq!(app.theme.opts.tier, Tier::Mono);
     press(&mut app, &["left"]);
+    assert!(app.ui.settings_nav_focus);
+    assert_eq!(
+        app.theme.opts.tier,
+        Tier::Mono,
+        "Left must not change the value"
+    );
+    press(&mut app, &["enter", "right"]);
     assert_eq!(app.theme.opts.tier, Tier::TrueColor);
     press(&mut app, &["esc"]);
     press(&mut app, &["s", "i", "d", "e", "b", "a", "r"]);
@@ -2449,7 +2450,7 @@ fn agent_model_lists_show_odds_skip_disconnected_and_edit_the_config() {
 }
 
 #[test]
-fn agent_model_rows_step_their_effort_with_left_and_right() {
+fn agent_model_rows_step_effort_with_right_and_left_returns_to_sections() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
     app.state.models = vec![
         serde_json::json!({"ref": "codex/gpt-5", "efforts": ["low", "medium", "high"]}),
@@ -2491,16 +2492,23 @@ fn agent_model_rows_step_their_effort_with_left_and_right() {
             serde_json::json!({"scout": {"codex/gpt-5": "medium"}})
         ))
     );
-    // Left from the first level returns to the default, which clears the entry.
+    // Left returns to the heading without changing the effort.
     app.effects.clear();
     press(&mut app, &["left"]);
+    assert!(app.ui.settings_nav_focus);
+    assert_eq!(patch(&app), None);
+    // Right from the last level wraps to the default and clears the entry.
+    app.ui.settings_nav_focus = false;
+    app.state.config.as_mut().unwrap()["values"]["agents"]["efforts"]["scout"]["codex/gpt-5"] =
+        serde_json::json!("high");
+    press(&mut app, &["right"]);
     assert_eq!(
         patch(&app),
         Some(("agents.efforts".into(), serde_json::json!({})))
     );
     // A model that lists no levels has nothing to step.
     app.effects.clear();
-    press(&mut app, &["down", "left"]);
+    press(&mut app, &["down", "right"]);
     assert_eq!(patch(&app), None);
 }
 
@@ -3344,7 +3352,7 @@ fn modals_are_borderless_padded_blocks_within_two_cells_of_each_edge() {
                 }
             }
             // no cell of the block carries a box-drawing border; the title is
-            // the first row inside, `esc` its right end, hints the last row
+            // the first row inside, hints the last row
             for y in r.y..r.bottom() {
                 for x in r.x..r.right() {
                     let sym = buf[(x, y)].symbol();
@@ -3353,10 +3361,9 @@ fn modals_are_borderless_padded_blocks_within_two_cells_of_each_edge() {
                 }
             }
             let title = &rows[r.y as usize + 1];
-            assert!(
-                title.contains("esc") || which == "confirm",
-                "{ctx}: {title}"
-            );
+            assert!(!title.contains("esc"), "{ctx}: title repeats Esc: {title}");
+            assert_eq!(r.x, (w - r.width) / 2, "{ctx}: horizontally centred");
+            assert_eq!(r.y, (h - r.height) / 2, "{ctx}: vertically centred");
             assert!(
                 buf[(r.x + 2, r.y + 1)]
                     .modifier
@@ -3370,25 +3377,35 @@ fn modals_are_borderless_padded_blocks_within_two_cells_of_each_edge() {
 }
 
 #[test]
-fn settings_marks_the_selected_section_and_row_without_an_accent_fill() {
+fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
+    let scenario: serde_json::Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/settings-focus.json"
+    ))
+    .unwrap();
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     open_modal(&mut app, "settings");
     let (buf, rows) = draw(&mut app, 120, 36);
     let r = raised_box(&app, &buf);
-    // the rail's selected section carries the focus bar
     let nav = app.hits.rect_of(&Target::SettingsSection(0)).unwrap();
+    let selection = app.theme.color("interactive.settings_selection").unwrap();
+    for x in nav.x..nav.right() {
+        assert_eq!(buf[(x, nav.y)].bg, selection);
+    }
     assert_eq!(buf[(nav.x, nav.y)].symbol(), "▌");
+    assert_eq!(
+        buf[(nav.x, nav.y)].fg,
+        app.theme.color("interactive.settings_focus").unwrap()
+    );
     assert!(r.contains((nav.x, nav.y).into()));
-    // the selected row carries a focus bar too, and stays on the raised surface
+    // The highlight includes both the label and the right-aligned value.
     let sel = app
         .hits
         .rect_of(&Target::SettingsRow(app.ui.settings_row))
         .unwrap();
-    let selection = app.theme.color("surface.raised").unwrap();
-    for x in [sel.x, sel.x + 5, sel.right() - 1] {
+    for x in sel.x..sel.right() {
         assert_eq!(buf[(x, sel.y)].bg, selection, "band at {x}");
     }
-    assert_eq!(buf[(sel.x, sel.y)].symbol(), "▌");
+    assert_eq!(buf[(sel.x, sel.y)].symbol(), " ");
     assert_ne!(
         buf[(sel.x + 5, sel.y)].bg,
         app.theme.color("interactive.accent").unwrap()
@@ -3404,6 +3421,26 @@ fn settings_marks_the_selected_section_and_row_without_an_accent_fill() {
         app.theme.color("surface.raised").unwrap()
     );
     assert!(rows.join("\n").contains("Appearance"));
+    press(&mut app, &[scenario["content_key"].as_str().unwrap()]);
+    let (buf, _) = draw(&mut app, 120, 36);
+    assert_eq!(buf[(sel.x, sel.y)].symbol(), "▌");
+    assert_eq!(buf[(nav.x, nav.y)].symbol(), " ");
+    app.effects.clear();
+    press(&mut app, &[scenario["return_key"].as_str().unwrap()]);
+    assert!(app.ui.settings_nav_focus);
+    assert!(
+        app.effects.is_empty(),
+        "Returning focus must not change a setting"
+    );
+    let (buf, _) = draw(&mut app, 120, 36);
+    assert_eq!(buf[(nav.x, nav.y)].symbol(), "▌");
+    assert_eq!(buf[(sel.x, sel.y)].symbol(), " ");
+    assert_eq!(buf[(sel.right() - 1, sel.y)].bg, selection);
+    press(&mut app, &[scenario["next_section_key"].as_str().unwrap()]);
+    assert_eq!(
+        app.ui.settings_section,
+        scenario["next_section"].as_str().unwrap()
+    );
 }
 
 #[test]

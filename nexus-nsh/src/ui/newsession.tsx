@@ -2,7 +2,7 @@
 // renderer for both places: the new-session view (a client-side preview) and the timeline's context
 // row (the frozen snapshot). Every preview line comes from text the model receives (the system
 // prompt); an agent's description is never sent, so it is never shown here.
-import { Scroll, Text, View, effect, signal, windowSize } from "nsh";
+import { Scroll, Text, View, effect, signal } from "nsh";
 import { Button, TextView } from "nsh/base";
 import { Btn, FOCUS, Icon, PROSE, T, TS } from "./kit";
 import { run, toggleDraftInventory } from "../commands";
@@ -10,7 +10,7 @@ import {
   type ContextEntry, contextDetail, agentCatalog, currentProject, info, rememberedModel, draftPlanContext, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome,
 } from "../store";
 import { request } from "../core/transport";
-import { Modal, ModalFooter, ModalTitle } from "./modal";
+import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import { sessionInventoryRows } from "../skills-mcp";
 import type { InventoryKind, InventoryRow, McpEntry, SkillEntry } from "../skills-mcp";
 import { TimelineColumn } from "./reading-column";
@@ -293,10 +293,10 @@ function EntryRow(p: { entry: () => ContextEntry; focus: boolean }) {
 export function ContextDetailModal() {
   const detail = contextDetail;
   const body = () => detail()!;
-  return <If when={detail()}>{() => <Modal width={760} label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}>
+  return <If when={detail()}>{() => <Modal size="large" label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}>
     <View class="gap-3">
-      <ModalTitle title={body().title} esc={false} />
-      <Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }}>
+      <ModalTitle title={body().title} />
+      <Scroll style={{ height: Math.min(480, modalBodyHeight()) }}>
         <If when={!!body().entries} else={
           <If when={!!body().markdown} else={<Text testID="context-detail-text" style={{ userSelect: "text" }} class={`${TS.mono} text-foreground-secondary`}>{body().detail}</Text>}>
             <View testID="context-detail-markdown"><TextView selectable links="open" markdown={body().detail} classes={PROSE} /></View>

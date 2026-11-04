@@ -41,6 +41,7 @@ describe("modal recipe (I7)", () => {
     await app.keyboard.press(`${mod}+p`);
     await app.waitFor("id:palette");
     expect(app.texts().includes("Command palette")).toBe(true);
+    expect(app.texts().includes("esc")).toBe(false);
     expect(app.shows("id:palette-group-Session")).toBe(true);
     expect(app.texts().includes("↑↓ move · enter run · esc close")).toBe(true);
     expect(app.texts().some((t) => /^\d+ of \d+$/.test(t))).toBe(true);

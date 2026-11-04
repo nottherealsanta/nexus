@@ -1,8 +1,8 @@
 // Drawing on a composer image: the picture, the pen colours and actions, then the keys.
-import { Canvas, Image, PanResponder, Text, View, keymap, nativeModule, signal, windowSize } from "nsh";
+import { Canvas, Image, PanResponder, Text, View, keymap, nativeModule, signal } from "nsh";
 import { Button } from "nsh/base";
 import type { AnnotateModule } from "nexus/native";
-import { Modal, ModalFooter, ModalTitle } from "./modal";
+import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import { FOCUS, T } from "./kit";
 import { annotating, toast } from "../store";
 import { imageDrafts } from "../images";
@@ -66,11 +66,11 @@ function AnnotateBody() {
       strokes.update((all) => all.length ? [...all.slice(0, -1), extend(all[all.length - 1], at(event))] : all);
     },
   });
-  // The modal may fill 76% of the window, and everything around the picture takes 196 px.
-  const pictureHeight = () => Math.max(120, Math.min(460, Math.floor(windowSize().height * 0.76) - 196));
+  // Keep the picture and pen controls inside the shared modal height cap.
+  const pictureHeight = () => Math.min(460, modalBodyHeight(60));
 
   return (
-    <Modal width={880} top="top-[8%]" label={`Mark up ${name}`} testID="annotate" closeOnBackdropPress={false}
+    <Modal size="large" label={`Mark up ${name}`} testID="annotate" closeOnBackdropPress={false}
       onCancel={close} onOpenChange={(open) => { if (!open) close(); }}>
       <View class="gap-3">
         <ModalTitle title={`Mark up ${name}`} />

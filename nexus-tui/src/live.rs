@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc};
 use std::time::{Duration, Instant};
 
+use cpal::traits::StreamTrait;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -22,6 +23,7 @@ pub type Lost = mpsc::UnboundedReceiver<String>;
 /// Levels shared with the orb, 0 to 1. Cheap to clone and read from any thread.
 #[derive(Clone, Default)]
 pub struct Levels {
+    pub speaking_until: Arc<std::sync::Mutex<Option<Instant>>>,
     mic: Arc<AtomicU32>,
     speech: Arc<AtomicU32>,
 }
@@ -30,6 +32,12 @@ impl Levels {
     pub fn mic(&self) -> f32 {
         (f32::from_bits(self.mic.load(Ordering::Relaxed)) * 5.0).clamp(0.0, 1.0)
     }
+    pub fn speaking(&self, now: Instant) -> bool {
+        self.speaking_until
+            .lock()
+            .is_ok_and(|at| at.is_some_and(|at| now < at))
+    }
+
     pub fn speech(&self) -> f32 {
         (f32::from_bits(self.speech.load(Ordering::Relaxed)) * 5.0).clamp(0.0, 1.0)
     }
@@ -102,6 +110,10 @@ impl<S: rodio::Source> Iterator for SpeechMeter<S> {
             if self.count >= 240 {
                 let level = (self.sum / self.count as f32).sqrt();
                 self.levels.speech.store(level.to_bits(), Ordering::Relaxed);
+                if level > 0.01 {
+                    *self.levels.speaking_until.lock().unwrap() =
+                        Some(Instant::now() + Duration::from_millis(350));
+                }
                 self.gate
                     .observe_at(level, self.gate.start.elapsed().as_millis() as u64);
                 self.sum = 0.0;
@@ -124,6 +136,60 @@ impl<S: rodio::Source> rodio::Source for SpeechMeter<S> {
     }
     fn total_duration(&self) -> Option<Duration> {
         self.inner.total_duration()
+    }
+}
+
+/// One continuous source keeps the output resampler alive across network packets.
+/// Collect 60 ms before starting (or recovering from an underrun).
+#[derive(Default)]
+struct AudioBuffer {
+    samples: std::collections::VecDeque<f32>,
+    started: bool,
+}
+impl AudioBuffer {
+    fn push(&mut self, samples: Vec<f32>) {
+        self.samples.extend(samples);
+    }
+    fn next_sample(&mut self) -> f32 {
+        if !self.started {
+            if self.samples.len() < RATE as usize * 60 / 1000 {
+                return 0.0;
+            }
+            self.started = true;
+        }
+        match self.samples.pop_front() {
+            Some(sample) => sample,
+            None => {
+                self.started = false;
+                0.0
+            }
+        }
+    }
+    fn clear(&mut self) {
+        self.samples.clear();
+        self.started = false;
+    }
+}
+
+struct LiveSource(Arc<std::sync::Mutex<AudioBuffer>>);
+impl Iterator for LiveSource {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        Some(self.0.lock().map_or(0.0, |mut buffer| buffer.next_sample()))
+    }
+}
+impl rodio::Source for LiveSource {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        std::num::NonZero::new(1).unwrap()
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        std::num::NonZero::new(RATE).unwrap()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        None
     }
 }
 
@@ -374,37 +440,36 @@ fn devices(
         }
     };
     sink.log_on_drop(false);
-    let mut player = rodio::Player::connect_new(sink.mixer());
+    let player = rodio::Player::connect_new(sink.mixer());
     let Some(mut resampler) = Resampler::to_rate(rate, channels, RATE) else {
         let _ = ready.send(Err("The microphone reported no usable format".into()));
         return;
     };
-    let _ = ready.send(Ok(()));
-    let (Some(one), Some(rate24)) = (std::num::NonZero::new(1u16), std::num::NonZero::new(RATE))
-    else {
+    if let Err(error) = input_stream.play() {
+        let _ = ready.send(Err(format!("Could not start microphone input: {error}")));
         return;
-    };
+    }
+    let _ = ready.send(Ok(()));
     let mut pending: Vec<f32> = Vec::new();
     let gate = EchoGuard::new();
+    let output = Arc::new(std::sync::Mutex::new(AudioBuffer::default()));
+    player.append(SpeechMeter {
+        inner: LiveSource(output.clone()),
+        gate: gate.clone(),
+        levels: levels.clone(),
+        sum: 0.0,
+        count: 0,
+    });
     while !stop.load(Ordering::SeqCst) {
         if flush.swap(false, Ordering::SeqCst) {
-            player.stop();
-            player = rodio::Player::connect_new(sink.mixer());
+            output.lock().unwrap().clear();
             while speech_rx.try_recv().is_ok() {}
             levels.speech.store(0f32.to_bits(), Ordering::Relaxed);
             gate.until_ms.store(0, Ordering::Relaxed);
+            *levels.speaking_until.lock().unwrap() = None;
         }
         while let Ok(samples) = speech_rx.try_recv() {
-            player.append(SpeechMeter {
-                inner: rodio::buffer::SamplesBuffer::new(one, rate24, samples),
-                gate: gate.clone(),
-                levels: levels.clone(),
-                sum: 0.0,
-                count: 0,
-            });
-        }
-        if player.empty() {
-            levels.speech.store(0f32.to_bits(), Ordering::Relaxed);
+            output.lock().unwrap().push(samples);
         }
         match audio_rx.recv_timeout(Duration::from_millis(10)) {
             Ok(AudioMessage::Samples(raw)) => {
@@ -438,6 +503,37 @@ fn devices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_spans_packets_and_absorbs_jitter_before_resuming() {
+        let mut buffer = AudioBuffer::default();
+        buffer.push(vec![0.25; 480]);
+        assert_eq!(buffer.next_sample(), 0.0); // wait for the 60 ms cushion
+        assert_eq!(buffer.samples.len(), 480); // no audio discarded
+        buffer.push(vec![0.5; 960]);
+        for _ in 0..480 {
+            assert_eq!(buffer.next_sample(), 0.25);
+        }
+        for _ in 0..960 {
+            assert_eq!(buffer.next_sample(), 0.5);
+        }
+        assert_eq!(buffer.next_sample(), 0.0); // underrun resets buffering
+        buffer.push(vec![0.75; 480]);
+        assert_eq!(buffer.next_sample(), 0.0);
+        buffer.push(vec![1.0; 960]);
+        assert_eq!(buffer.next_sample(), 0.75);
+        buffer.clear();
+        assert_eq!(buffer.next_sample(), 0.0);
+    }
+
+    #[test]
+    fn the_speaking_colour_survives_short_pauses() {
+        let levels = Levels::default();
+        let now = Instant::now();
+        *levels.speaking_until.lock().unwrap() = Some(now + Duration::from_millis(350));
+        assert!(levels.speaking(now + Duration::from_millis(300)));
+        assert!(!levels.speaking(now + Duration::from_millis(351)));
+    }
 
     #[test]
     fn continuous_silent_playback_does_not_block_the_microphone() {

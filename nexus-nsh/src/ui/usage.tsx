@@ -34,9 +34,9 @@ export function UsageDialog() {
   keymap.bind("r", () => { if (usageDialog()) run("app.usage"); }, { when: "notEditing" });
   return (
     <If when={usageDialog()}>{(d) => (
-      <Modal width={520} top="top-[14%]" label="Provider usage" testID="usage" onCancel={() => escape()} onOpenChange={(open) => { if (!open) usageDialog.set(null); }}>
+      <Modal size="medium" label="Provider usage" testID="usage" onCancel={() => escape()} onOpenChange={(open) => { if (!open) usageDialog.set(null); }}>
         <View class="gap-2">
-          <ModalTitle title="Provider usage" esc={false} />
+          <ModalTitle title="Provider usage" />
           <Each of={d().providers} key={(x: UsageProvider) => x.id}>{(item) => { const p = item(); return (
             <View class="gap-1 pt-2" testID="usage-provider">
               <View class="flex-row items-baseline gap-2">

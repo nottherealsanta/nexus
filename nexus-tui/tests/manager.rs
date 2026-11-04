@@ -856,3 +856,25 @@ fn graphics_orb_is_placed_by_the_stage_and_removed_on_end() {
     draw(&mut a, 120, 40);
     assert!(a.orb_sprites.borrow_mut().take().contains("a=d,d=i,"));
 }
+
+#[test]
+fn the_focused_call_shows_the_latest_model_excerpt_and_real_tool() {
+    let scenario: Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/manager-preview.json"
+    ))
+    .unwrap();
+    let mut a = app();
+    start(&mut a);
+    send(
+        &mut a,
+        900,
+        "manager.preview",
+        json!({"preview": scenario["preview"]}),
+    );
+    let shown = text(&mut a);
+    for expected in scenario["expect"].as_array().unwrap() {
+        assert!(shown.contains(expected.as_str().unwrap()), "{shown}");
+    }
+    a.manager_execute("manager.stop");
+    assert!(a.ui.manager.preview.is_none());
+}

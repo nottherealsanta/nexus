@@ -242,6 +242,11 @@ shows_unread_count = true
 # Rows that cannot be changed are left out of this file rather than shipped
 # disabled: the manifest is the product, not a roadmap.
 
+[settings.navigation]
+section_key = "left"
+value_key = "right"
+previous_value_key = "shift+right"
+
 [[settings.section]]
 id = "appearance"
 label = "Appearance"

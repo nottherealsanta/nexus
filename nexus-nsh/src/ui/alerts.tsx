@@ -1,7 +1,7 @@
 import { Scroll, Text, View, keymap } from "nsh";
 import { Button } from "nsh/base";
 import { Btn, Icon, IconButton, Spinner, T, FOCUS } from "./kit";
-import { Modal, ModalFooter, ModalTitle } from "./modal";
+import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import { run, availability, byId, copyText, escape, otherWaits } from "../commands";
 import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, m, native, openAlert, splitAlert, tick, TOAST_VISIBLE, toasts } from "../store";
 import type { Toast } from "../store";
@@ -142,13 +142,13 @@ function AlertDetailBody(p: { a: () => Toast }) {
   const copy = () => copyText(a().text, "Copied the notification");
   keymap.bind("c", copy, { when: "notEditing" });
   return (
-    <Modal width={520} top="top-[14%]" label="Notification" testID="alert-detail" onCancel={() => escape()} onOpenChange={(open) => { if (!open) alertDetail.set(null); }}>
+    <Modal size="medium" label="Notification" testID="alert-detail" onCancel={() => escape()} onOpenChange={(open) => { if (!open) alertDetail.set(null); }}>
       <View class="gap-2" role="alert" accessibilityLabel={`${a().level}: ${a().text}`}>
         <View class="flex-row items-center min-h-8 gap-3">
           <Text class={`w-4 text-center text-[15px] font-semibold ${TG[a().level].t}`}>{TG[a().level].g}</Text>
           <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[15px] leading-5 font-semibold text-popover-foreground">{splitAlert(a().text).title}</Text>
         </View>
-        <Scroll class="max-h-[320px]">
+        <Scroll style={{ maxHeight: Math.min(320, modalBodyHeight(40)) }}>
           <Text testID="alert-detail-text" style={{ userSelect: "text" }} class="text-[13px] leading-5 text-foreground">{a().text}</Text>
         </Scroll>
         <View class="flex-row justify-end"><Btn label="Copy" onPress={copy} testID="alert-detail-copy" /></View>

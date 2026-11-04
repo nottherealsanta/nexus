@@ -222,7 +222,7 @@ pub fn blend(bottom: Color, top: Color, alpha: f32) -> Color {
 }
 
 /// The colour the orb is drawn in right now: the state it left, easing to the one it is in.
-fn state_color(theme: &Theme, orb: &Orb) -> Option<[f32; 3]> {
+pub(crate) fn state_color(theme: &Theme, orb: &Orb) -> Option<[f32; 3]> {
     let of = |s: OrbState| theme.color(s.token()).and_then(rgb);
     let (a, b) = (of(orb.from)?, of(orb.to)?);
     Some(mix(a, b, ease(orb.mix)))

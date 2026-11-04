@@ -9601,6 +9601,19 @@ impl App {
         if self.ui.provider_detail.is_some() {
             return self.provider_detail_key(name, code);
         }
+        if name == self.manifest.settings.navigation.section_key {
+            self.ui.settings_nav_focus = true;
+            return true;
+        }
+        if !self.ui.settings_nav_focus
+            && name == self.manifest.settings.navigation.previous_value_key
+        {
+            if self.settings_open_page().is_some() {
+                return self.settings_page_key("left", code);
+            }
+            self.settings_change(self.ui.settings_row, -1);
+            return true;
+        }
         if !self.ui.settings_nav_focus && self.settings_open_page().is_some() {
             return self.settings_page_key(name, code);
         }
@@ -9669,7 +9682,7 @@ impl App {
             "pagedown" => self.ui.settings_row = (sel + 8).min(last),
             "home" => self.ui.settings_row = 0,
             "end" => self.ui.settings_row = last,
-            "left" => self.settings_change(sel, -1),
+            "left" => self.ui.settings_nav_focus = true,
             "right" => self.settings_change(sel, 1),
             "enter" => self.settings_activate(sel),
             "backspace" => {
@@ -10167,7 +10180,7 @@ impl App {
         ))
     }
 
-    /// Step one model's effort through `default` and the levels it lists; it stops at either end.
+    /// Step through effort levels; advancing past the last returns to `default`.
     fn step_agent_effort(&mut self, agent: &str, model: &str, by: isize) {
         let levels = self.model_efforts(model);
         if levels.is_empty() {
@@ -10179,7 +10192,11 @@ impl App {
             .as_ref()
             .and_then(|c| levels.iter().position(|l| l == c))
             .map_or(0, |i| i + 1) as isize;
-        let next = (at + by).clamp(0, levels.len() as isize) as usize;
+        let next = if by > 0 {
+            (at + by).rem_euclid(levels.len() as isize + 1) as usize
+        } else {
+            (at + by).clamp(0, levels.len() as isize) as usize
+        };
         if next as isize == at {
             return;
         }

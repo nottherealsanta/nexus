@@ -110,14 +110,20 @@ square modal recipe (`render.rs` `modal`, DESIGN_PLAN D13): the scrim over the w
 a borderless `surface.raised` block, 2 cells of padding left and right and 1 row top and
 bottom, within 2 cells of the frame edge and at most 70% of its height. NSH draws the same
 square recipe and the same two-pane Settings, with no rounded corners. The title is the
-first row inside with `esc` on the right, key hints the last row, the selected row is on
+first row inside, key hints (including Esc) the last row, the selected row is on
 the selection band with the `▌` focus bar. Confirms default to `[ Cancel ]`; `[ Delete ]`
 is in `status.error`. The `.` row menu stays an unscrimmed popover beside its row.
 
+Modal widths use three classes: small 60, medium 72 and large 88 cells, clamped to
+the frame. All are centred, including the command palette. Model information stays
+inside its picker above the footer. Long confirmations retain the existing height
+fallback until their bodies can scroll. See `interface/design-language.md` for the
+shared rules.
+
 Settings is that modal, 88 cells wide, with a search field and two panes. The
-left rail lists every section; the right pane shows the selected section, a
+left rail lists every section on consecutive rows; the right pane shows the selected section, a
 provider list or an agent page. ↑/↓ stays inside the focused pane, Enter or →
-leaves the rail, ←/→ changes a value, Tab swaps panes and Esc steps back to the
+leaves the rail, Right changes a value, Left returns to the section heading, Tab swaps panes and Esc steps back to the
 rail and then closes. Typing filters both the rail and the rows. Rows that
 cannot be changed are not shipped rather than shown disabled.
 `/login` opens Providers. Providers: Enter opens that provider's detail modal;
@@ -127,8 +133,8 @@ sign-in link and code are their own rows, so Enter opens the link (the URL is
 underlined) and Enter on the code copies it. Agents: the default agent and effort, then one line per
 subagent; Enter opens its pane with its Models (and their odds) and Fallbacks,
 where Enter on `+ add …` picks a model, `d` removes one, `K`/`J` move a
-fallback and ←/→ on a model step its effort (`effort default`, then the levels the
-catalog lists for it; a model with none listed shows no effort). Tools shows one permission choice and one tool grid; ←/→ choose a tool
+fallback and Right on a model cycles its effort (`effort default`, then the levels the
+catalog lists for it; a model with none listed shows no effort). Tools shows one permission choice and one tool grid; Right chooses a tool
 and Enter toggles it.
 Consecutive diagnostics (a provider retry sequence) form one tight stack with
 delays rounded to tenths.
@@ -761,3 +767,15 @@ inspector keeps the full raw log. The orb, caption, typed field and card are pai
 holds the orb still and no audio device is touched; it is read nowhere else. On Kitty graphics terminals the orb uses cached, smooth RGBA sprites (`src/orb_sprite.rs`); other terminals use the centred cell/glyph fallback.
 
 Live Manager calls use their own audio connection and need no Dictation setup or `nexus voice init`. A failed Live connection keeps its error visible and the typed field available; end and restart the call to retry audio.
+
+Working labels use the shared travelling shimmer: one pass every 1.5 seconds,
+with a brighter highlight over secondary text. Reduced motion keeps the label static.
+
+Settings sections have no gaps between rows. Selected sections and setting rows use a
+neutral gray highlight across the entire row, including its value. A white left bar marks the focused pane (dark in the light theme);
+Left returns focus to the section heading without changing the setting. Shift+Right
+steps a value backward; Right advances it.
+
+Live starts the microphone before reporting audio ready. Its echo guard follows audible playback and a short echo tail; continuous silent output does not mute capture. Expected speaker shutdown is quiet.
+
+The focused Manager call shows a three-line Model context excerpt and the current/latest tool with arguments and status; the header debug modal keeps the full context. Live playback has a 60 ms startup/recovery buffer, and the speaking colour holds through 350 ms pauses.

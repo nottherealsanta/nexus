@@ -192,6 +192,7 @@ pub struct ManagerUi {
     pub consent: Option<Consent>,
     /// The debugging modal opened by the header's Manager button.
     pub context: Option<ManagerContext>,
+    pub preview: Option<Value>,
     pub back: Vec<View>,
     reported: (bool, bool),
     pub orb: Orb,
@@ -240,6 +241,7 @@ impl Default for ManagerUi {
             minimised: false,
             consent: None,
             context: None,
+            preview: None,
             back: Vec::new(),
             reported: (false, false),
             orb: Orb::default(),
@@ -821,6 +823,7 @@ impl App {
         m.card = None;
         m.minimised = false;
         m.context = None;
+        m.preview = None;
         m.back.clear();
         m.reported = (false, false);
         m.thinking_since = None;
@@ -1414,6 +1417,9 @@ impl App {
                     m.thinking_since = Some(now);
                 }
                 m.phase = phase;
+                if let Some(preview) = d.get("preview") {
+                    m.preview = preview.is_object().then(|| preview.clone());
+                }
                 if let Some(call) = m.call.as_mut() {
                     if let Some(holder) = d["holder"].as_str() {
                         call.holder = holder.to_owned();
@@ -1425,6 +1431,9 @@ impl App {
                     fix: d["error"]["fix"].as_str().unwrap_or("").to_owned(),
                 });
                 m.touch(now);
+            }
+            "manager.preview" => {
+                self.ui.manager.preview = d.get("preview").filter(|p| p.is_object()).cloned();
             }
             "manager.caption" => {
                 let text = d["text"].as_str().unwrap_or("").to_owned();
@@ -1581,6 +1590,8 @@ impl App {
                         // typed line takes the stage.
                         self.ui.manager.minimised = !talk && say.is_none();
                         self.ui.manager.tts_ok = true;
+                        self.ui.manager.preview =
+                            body.get("preview").filter(|p| p.is_object()).cloned();
                         for event in std::mem::take(&mut self.ui.manager.early) {
                             self.manager_event(&event);
                         }
@@ -1716,7 +1727,12 @@ impl App {
                 let Ok(body) = result else { return };
                 let mine = self.ui.manager.call.as_ref().map(|c| c.id.clone());
                 match body["call"]["call_id"].as_str() {
-                    Some(id) if mine.as_deref() == Some(id) => {}
+                    Some(id) if mine.as_deref() == Some(id) => {
+                        self.ui.manager.preview = body["call"]
+                            .get("preview")
+                            .filter(|p| p.is_object())
+                            .cloned();
+                    }
                     Some(_) => {
                         let holder = body["call"]["holder"].as_str().unwrap_or("another client");
                         self.moved_to(holder.to_owned());
@@ -1765,7 +1781,7 @@ impl App {
         m.call.as_ref()?;
         if m.live_call {
             let levels = crate::live::levels();
-            if levels.as_ref().is_some_and(|l| l.speech() > 0.04) {
+            if levels.as_ref().is_some_and(|l| l.speaking(now)) {
                 return Some(OrbState::Speaking);
             }
             if levels.is_some() && m.phase == CallPhase::Idle {

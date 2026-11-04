@@ -293,7 +293,14 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
                 crate::ui::EditTarget::RenameSession { .. } => "Rename session",
                 _ => &e.label,
             };
-            let m = modal(&cx, buf, area, modal_box(area, 60, 8), title, &mut hits);
+            let m = modal(
+                &cx,
+                buf,
+                area,
+                modal_box(area, MODAL_SMALL, 8),
+                title,
+                &mut hits,
+            );
             let (rows, _) = e.buf.layout(m.w.max(1) as usize);
             let masked = "•".repeat(e.buf.text().chars().count());
             put(
@@ -308,14 +315,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
                 cx.st(PRIMARY, PANEL).add_modifier(Modifier::UNDERLINED),
                 m.w,
             );
-            put(
-                buf,
-                m.x,
-                m.hint_y,
-                "enter save · esc cancel",
-                cx.st(MUTED, RAISED),
-                m.w,
-            );
+            hint_row(&cx, buf, &m, &[("enter", "save"), ("esc", "cancel")]);
         }
         if let Some(o) = &a.ui.overlay {
             draw_overlay(&cx, buf, area, o, &mut hits);
@@ -646,7 +646,7 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
         return None;
     }
     if let Some(e) = &app.ui.edit {
-        let m = Modal::of(modal_box(g.area, 60, 8));
+        let m = Modal::of(modal_box(g.area, MODAL_SMALL, 8));
         let (_, (_, col)) = e.buf.layout(m.w.max(1) as usize);
         return Some(Position::new(
             m.x + (col as u16).min(m.w.saturating_sub(1)),
@@ -715,14 +715,8 @@ pub(crate) fn visible_first(total: usize, cursor_row: usize, h: usize) -> usize 
 // heights
 // ============================================================================
 
-/// The text area: inside the card (inset two cells from the column), three
-/// cells in and two rows down, below the top padding row.
-pub(crate) fn composer_inner(r: Rect, images: usize) -> Rect {
-    composer_inner_with(r, images, 0)
-}
-
-/// As `composer_inner`, also clearing the collapsed-paste cards above the
-/// thumbnails; the mouse path must pass the draft's paste count to line up.
+/// The text area inside the card, below collapsed-paste cards and thumbnails.
+/// The mouse path must pass the draft's paste count to line up.
 pub(crate) fn composer_inner_with(r: Rect, images: usize, pastes: usize) -> Rect {
     let r = composer_card(composer_content(r), images, pastes);
     Rect::new(
@@ -751,10 +745,22 @@ mod composer_geometry_tests {
     #[test]
     fn pending_cards_shift_the_input_and_respect_small_terminals() {
         let r = Rect::new(10, 20, 80, 14);
-        assert_eq!(composer_inner(composer_without_pending(r, 0), 0).y, 22);
-        assert_eq!(composer_inner(composer_without_pending(r, 1), 0).y, 25);
-        assert_eq!(composer_inner(composer_without_pending(r, 8), 0).y, 28);
-        assert_eq!(composer_inner(composer_without_pending(r, 1), 1).y, 28);
+        assert_eq!(
+            composer_inner_with(composer_without_pending(r, 0), 0, 0).y,
+            22
+        );
+        assert_eq!(
+            composer_inner_with(composer_without_pending(r, 1), 0, 0).y,
+            25
+        );
+        assert_eq!(
+            composer_inner_with(composer_without_pending(r, 8), 0, 0).y,
+            28
+        );
+        assert_eq!(
+            composer_inner_with(composer_without_pending(r, 1), 1, 0).y,
+            28
+        );
         let short = Rect::new(0, 0, 80, 10);
         assert_eq!(composer_without_pending(short, 1), short);
     }
@@ -5815,13 +5821,16 @@ fn draw_working(cx: &Cx, buf: &mut Buffer, start: u16, y: u16, end: u16) {
         cx.st(MUTED, CANVAS),
     );
     let animate = !cx.t.opts.reduced_motion && !cx.t.mono();
-    let peak = cx.st(PRIMARY, CANVAS);
     let spans = crate::theme::shimmer(
         "Working",
         a.frame,
         animate,
-        if animate { cx.st(MUTED, CANVAS) } else { peak },
-        cx.st(SECONDARY, CANVAS),
+        if animate {
+            cx.st(SECONDARY, CANVAS)
+        } else {
+            cx.st(PRIMARY, CANVAS)
+        },
+        cx.st("text.highlight", CANVAS),
     );
     for span in spans {
         x = put(buf, x, y, &span.content, span.style, end.saturating_sub(x));
@@ -6991,16 +7000,26 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
     }
 }
 
-/// A selected row in the right pane: a focus bar at `x` and bold text. The bar
-/// is muted while the section rail has focus.
-fn row_band(cx: &Cx, buf: &mut Buffer, x: u16, y: u16, token: &str, focused: bool) -> Style {
-    let bar = if focused {
-        cx.st("interactive.focus", RAISED)
-    } else {
-        cx.st(MUTED, RAISED)
-    };
-    put(buf, x, y, cx.t.structure("focus_bar"), bar, 1);
-    cx.st(token, RAISED).add_modifier(Modifier::BOLD)
+/// Selected Settings rows fill their entire hit area with a neutral gray band.
+fn row_band(cx: &Cx, buf: &mut Buffer, r: Rect, token: &str, focused: bool) -> Style {
+    let style = cx
+        .st(token, "interactive.settings_selection")
+        .add_modifier(Modifier::BOLD);
+    clear(buf, r, style);
+    if focused {
+        put(
+            buf,
+            r.x,
+            r.y,
+            cx.t.structure("focus_bar"),
+            cx.st(
+                "interactive.settings_focus",
+                "interactive.settings_selection",
+            ),
+            1,
+        );
+    }
+    style
 }
 
 /// Settings: a search row, a section rail on the left and the selected
@@ -7033,8 +7052,6 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
     };
     let m = modal(cx, buf, area, r, &title, hits);
     let (x, w) = (m.x, m.w);
-    let close = Rect::new(r.right().saturating_sub(5), r.y + 1, 3, 1);
-    hits.add(close, Target::SettingsEntry);
     let query = a.ui.settings_search.text();
     let sy = m.body.y;
     put(buf, x, sy, "\u{2315}", cx.st(MUTED, RAISED), 1);
@@ -7111,19 +7128,22 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
     let nav_sel = a
         .settings_section_index()
         .min(sections.len().saturating_sub(1));
-    // Breathing room between sections unless the modal is too short to spare
-    // the row; a tiny terminal keeps sections on consecutive rows.
-    let nav_step = if list_h >= 6 { 2usize } else { 1 };
-    let nav_visible = list_h.saturating_div(nav_step).max(1);
+    let nav_visible = list_h.max(1);
     let nav_top = (nav_sel + 1).saturating_sub(nav_visible);
     if sections.is_empty() {
         put(buf, x, list.y, "No sections", cx.st(MUTED, RAISED), nav_w);
     }
     for (i, section) in sections.iter().enumerate().skip(nav_top).take(nav_visible) {
-        let y = list.y + ((i - nav_top) * nav_step) as u16;
+        let y = list.y + (i - nav_top) as u16;
         let selected = i == nav_sel;
         let style = if selected {
-            row_band(cx, buf, x, y, PRIMARY, a.ui.settings_nav_focus)
+            row_band(
+                cx,
+                buf,
+                Rect::new(x, y, nav_w, 1),
+                PRIMARY,
+                a.ui.settings_nav_focus,
+            )
         } else {
             cx.st(SECONDARY, RAISED)
         };
@@ -7135,10 +7155,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
             style,
             nav_w.saturating_sub(2),
         );
-        hits.add(
-            Rect::new(x, y, nav_w, nav_step as u16),
-            Target::SettingsSection(i),
-        );
+        hits.add(Rect::new(x, y, nav_w, 1), Target::SettingsSection(i));
     }
     let below = sections
         .len()
@@ -7254,14 +7271,27 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                     let is_link = matches!(action, crate::app::PageAction::OpenUrl(_));
                     let token = if disabled { MUTED } else { PRIMARY };
                     let mut style = if selected {
-                        row_band(cx, buf, content_x, y, token, !a.ui.settings_nav_focus)
+                        row_band(
+                            cx,
+                            buf,
+                            Rect::new(content_x, y, content_w, 1),
+                            token,
+                            !a.ui.settings_nav_focus,
+                        )
                     } else {
                         cx.st(token, RAISED)
                     };
                     if is_link {
                         style = style.add_modifier(Modifier::UNDERLINED);
                     }
-                    let mut vstyle = cx.st(if disabled { MUTED } else { tone(*t) }, RAISED);
+                    let mut vstyle = cx.st(
+                        if disabled { MUTED } else { tone(*t) },
+                        if selected {
+                            "interactive.settings_selection"
+                        } else {
+                            RAISED
+                        },
+                    );
                     if is_link {
                         vstyle = vstyle.add_modifier(Modifier::UNDERLINED);
                     }
@@ -7357,12 +7387,24 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                     let (value, wired) = settings_value(cx, row);
                     let token = if disabled || !wired { MUTED } else { PRIMARY };
                     let style = if selected {
-                        row_band(cx, buf, content_x, y, token, !a.ui.settings_nav_focus)
+                        row_band(
+                            cx,
+                            buf,
+                            Rect::new(content_x, y, content_w, 1),
+                            token,
+                            !a.ui.settings_nav_focus,
+                        )
                     } else {
                         cx.st(token, RAISED)
                     };
-                    let mut vstyle =
-                        cx.st(if wired && !disabled { SECONDARY } else { MUTED }, RAISED);
+                    let mut vstyle = cx.st(
+                        if wired && !disabled { SECONDARY } else { MUTED },
+                        if selected {
+                            "interactive.settings_selection"
+                        } else {
+                            RAISED
+                        },
+                    );
                     if selected {
                         vstyle = vstyle.add_modifier(Modifier::BOLD);
                     }
@@ -7408,11 +7450,8 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
             content_w,
         );
     }
-    let arrows = if cx.t.opts.ascii {
-        "</>"
-    } else {
-        "\u{2190}/\u{2192}"
-    };
+    let arrows = if cx.t.opts.ascii { ">" } else { "\u{2192}" };
+    let left = if cx.t.opts.ascii { "<" } else { "\u{2190}" };
     let hints: Vec<(&str, &str)> = if a.ui.settings_nav_focus {
         vec![(updown(cx), "section"), ("enter", "open"), ("esc", "close")]
     } else if let Some(page) = page.as_deref() {
@@ -7422,6 +7461,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                 (arrows, "effort"),
                 ("d", "remove"),
                 ("K/J", "reorder"),
+                (left, "sections"),
                 ("esc", "back"),
             ]
         } else if page == "agents" {
@@ -7435,7 +7475,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
         vec![
             (arrows, "change"),
             ("enter", "select"),
-            ("tab", "sections"),
+            (left, "sections"),
             ("esc", "back"),
         ]
     };
@@ -7469,14 +7509,12 @@ fn draw_provider_detail(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap
     let lines = a.provider_detail_lines(id);
     let items = a.provider_detail_items(id);
     let height = (lines.len() as u16 + 6).clamp(10, 22);
-    let r = modal_box(area, 66, height);
+    let r = modal_box(area, MODAL_MEDIUM, height);
     if r.width < 20 || r.height < 8 {
         return;
     }
     hits.add(area, Target::Scrim);
     let m = modal(cx, buf, area, r, label, hits);
-    let close = Rect::new(r.right().saturating_sub(5), r.y + 1, 3, 1);
-    hits.add(close, Target::SettingsEntry);
     let sel = items
         .get(a.ui.provider_detail_row.min(items.len().saturating_sub(1)))
         .copied();
@@ -7551,14 +7589,21 @@ fn draw_provider_detail(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap
                 let position = items.iter().position(|p| p == i).unwrap_or(0);
                 let is_link = matches!(action, crate::app::PageAction::OpenUrl(_));
                 let mut style = if selected {
-                    row_band(cx, buf, m.x, y, PRIMARY, true)
+                    row_band(cx, buf, Rect::new(m.x, y, m.w, 1), PRIMARY, true)
                 } else {
                     cx.st(PRIMARY, RAISED)
                 };
                 if is_link {
                     style = style.add_modifier(Modifier::UNDERLINED);
                 }
-                let mut vstyle = cx.st(tone(*t), RAISED);
+                let mut vstyle = cx.st(
+                    tone(*t),
+                    if selected {
+                        "interactive.settings_selection"
+                    } else {
+                        RAISED
+                    },
+                );
                 if is_link {
                     vstyle = vstyle.add_modifier(Modifier::UNDERLINED);
                 }
@@ -7595,8 +7640,8 @@ fn draw_provider_detail(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap
 
 /// One modal: the scrim over everything drawn so far, then a borderless
 /// `surface.raised` block (DESIGN_PLAN.md D13) with 2 cells of padding left
-/// and right and 1 row top and bottom. Inside: the title row (bold, `esc`
-/// right-aligned), a blank row, the body, a blank row, the key-hint row.
+/// and right and 1 row top and bottom. Inside: the bold title row, a blank
+/// row, the body, a blank row, and the key-hint row (including Esc).
 struct Modal {
     /// The whole block, padding included.
     r: Rect,
@@ -7632,7 +7677,7 @@ fn modal(cx: &Cx, buf: &mut Buffer, area: Rect, r: Rect, title: &str, hits: &mut
     clear(buf, r, cx.st(PRIMARY, RAISED));
     hits.add(r, Target::Swallow);
     let m = Modal::of(r);
-    let tw = m.w.saturating_sub(5);
+    let tw = m.w;
     put(
         buf,
         m.x,
@@ -7640,14 +7685,6 @@ fn modal(cx: &Cx, buf: &mut Buffer, area: Rect, r: Rect, title: &str, hits: &mut
         &truncate(title, tw as usize, cx.ell()),
         cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD),
         tw,
-    );
-    put(
-        buf,
-        r.right().saturating_sub(5),
-        r.y + 1,
-        "esc",
-        cx.st(MUTED, RAISED),
-        3,
     );
     m
 }
@@ -7734,16 +7771,20 @@ fn review_arrow(cx: &Cx) -> &'static str {
 
 /// The block for a modal of `width` and `height` cells: centred, within 2
 /// cells of each edge and at most 70% of the frame high.
+const MODAL_SMALL: u16 = 60;
+const MODAL_MEDIUM: u16 = 72;
+const MODAL_LARGE: u16 = 88;
+
 fn modal_box(area: Rect, width: u16, height: u16) -> Rect {
-    paint::modal_rect(area, width, height, false)
+    paint::modal_rect(area, width, height)
 }
 
 pub(crate) fn settings_box(area: Rect) -> Rect {
-    modal_box(area, 88, 40)
+    modal_box(area, MODAL_LARGE, 40)
 }
 
 fn palette_box(area: Rect) -> Rect {
-    paint::modal_rect(area, 64, 22, true)
+    modal_box(area, MODAL_MEDIUM, 22)
 }
 
 // ============================================================================
@@ -7833,7 +7874,7 @@ fn draw_usage(
     hits: &mut HitMap,
 ) {
     use crate::usage::Row;
-    let b = modal_box(area, 64, (rows.len() + 6).clamp(9, 30) as u16);
+    let b = modal_box(area, MODAL_MEDIUM, (rows.len() + 6).clamp(9, 30) as u16);
     let m = modal(cx, buf, area, b, "Provider usage", hits);
     let (filled, track) = if cx.t.opts.ascii {
         ("#", "-")
@@ -7949,7 +7990,7 @@ fn draw_learn_checklist(
         .len()
         .min(area.height.saturating_sub(12) as usize)
         .max(1);
-    let r = modal_box(area, 76, visible.saturating_add(8) as u16);
+    let r = modal_box(area, MODAL_LARGE, visible.saturating_add(8) as u16);
     if r.width < 24 || r.height < 9 {
         return;
     }
@@ -8141,11 +8182,7 @@ fn draw_row_menu(cx: &Cx, buf: &mut Buffer, area: Rect, row: Rect, p: &Palette, 
 }
 
 fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut HitMap) {
-    let mut b = palette_box(area);
-    if p.mode == PaletteMode::Models && p.model_info && area.height >= 12 {
-        b.height = b.height.min(area.height.saturating_sub(6));
-        b.y = area.y + area.height.saturating_sub(b.height + 5) / 2;
-    }
+    let b = palette_box(area);
     let title = match p.mode {
         PaletteMode::Commands => "Command palette",
         PaletteMode::ProviderLogin => "Sign in to a provider",
@@ -8211,11 +8248,16 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         );
     }
     let items = cx.app.palette_items();
+    let info_height = if p.mode == PaletteMode::Models && p.model_info {
+        4
+    } else {
+        0
+    };
     let list = Rect::new(
         b.x + 1,
         sy + 2,
         b.width - 2,
-        m.body.height.saturating_sub(2),
+        m.body.height.saturating_sub(2 + info_height),
     );
     if items.is_empty() {
         put(
@@ -8319,8 +8361,13 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         hits.add(rr, Target::PaletteItem(i));
     }
     let explain = items.get(p.selected).is_some_and(|i| i.reason.is_some());
-    if p.mode == PaletteMode::Models && p.model_info && b.bottom() + 4 <= area.bottom() {
-        let panel = Rect::new(b.x, b.bottom(), b.width, 4);
+    if info_height > 0 && m.body.height >= 6 {
+        let panel = Rect::new(
+            b.x,
+            m.body.bottom().saturating_sub(info_height),
+            b.width,
+            info_height,
+        );
         clear(buf, panel, cx.st(PRIMARY, RAISED));
         if let Some(PaletteItem {
             kind: PaletteKind::Model(reference),
@@ -8412,7 +8459,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
 
 /// The notification history: the modal recipe, one entry per two rows at most.
 fn draw_notifications(cx: &Cx, buf: &mut Buffer, area: Rect, selected: usize, hits: &mut HitMap) {
-    let b = modal_box(area, 64, 30);
+    let b = modal_box(area, MODAL_MEDIUM, 30);
     let m = modal(cx, buf, area, b, "Notifications", hits);
     hint_row(
         cx,
@@ -8460,7 +8507,7 @@ fn draw_notifications(cx: &Cx, buf: &mut Buffer, area: Rect, selected: usize, hi
 /// The full text of one alert: the modal recipe, the title from the alert,
 /// the whole text wrapped and scrollable (D15).
 fn context_detail_layout(area: Rect, text: &str) -> (Rect, Vec<String>) {
-    let wide = (area.width as usize * 6 / 10).clamp(48, 92) as u16;
+    let wide = MODAL_LARGE;
     let actual_width = modal_box(area, wide, 10).width.saturating_sub(4) as usize;
     let rows: Vec<String> = text
         .split('\n')
@@ -8486,8 +8533,7 @@ fn draw_image_preview(
     data_url: &str,
     hits: &mut HitMap,
 ) {
-    let wide = (area.width as u32 * 85 / 100).clamp(24, area.width.saturating_sub(4).max(24) as u32)
-        as u16;
+    let wide = MODAL_LARGE;
     let high = (area.height as u32 * 80 / 100)
         .clamp(10, area.height.saturating_sub(4).max(10) as u32) as u16;
     let b = modal_box(area, wide, high);
@@ -8514,8 +8560,7 @@ fn draw_annotate(
     hits: &mut HitMap,
 ) {
     use crate::annotate::{fit, PixelRect};
-    let wide = (area.width as u32 * 85 / 100).clamp(24, area.width.saturating_sub(4).max(24) as u32)
-        as u16;
+    let wide = MODAL_LARGE;
     let high = (area.height as u32 * 80 / 100)
         .clamp(12, area.height.saturating_sub(4).max(12) as u32) as u16;
     let b = modal_box(area, wide, high);
@@ -8723,7 +8768,7 @@ fn draw_context_detail(
 /// Live kernels and background shells of the viewed session tree, newest
 /// state first. One line per fact, scrollable like an alert's full text.
 fn draw_resources(cx: &Cx, buf: &mut Buffer, area: Rect, top: usize, hits: &mut HitMap) {
-    let wide = (area.width as usize * 7 / 10).clamp(52, 100) as u16;
+    let wide = MODAL_LARGE;
     let inner = modal_box(area, wide, 10).width.saturating_sub(4) as usize;
     let kernels = cx.app.view_kernels();
     let jobs = cx.app.view_jobs();
@@ -8888,7 +8933,7 @@ fn session_label(app: &App, id: &str) -> String {
 
 /// The modal's width and the Markdown rows of a document at that width.
 fn context_doc_rows(area: Rect, theme: &Theme, text: &str) -> (u16, Vec<Vec<Span<'static>>>) {
-    let wide = (area.width as usize * 7 / 10).clamp(48, 100) as u16;
+    let wide = MODAL_LARGE;
     let inner = modal_box(area, wide, 10).width.saturating_sub(4) as usize;
     let palette = crate::markdown::Palette::from_theme(theme);
     let rows = crate::markdown::lines(text, &palette, inner.max(1))
@@ -8971,7 +9016,7 @@ fn context_entry_body(
 }
 
 fn context_entries_box(area: Rect) -> (u16, usize) {
-    let wide = (area.width as usize * 7 / 10).clamp(48, 100) as u16;
+    let wide = MODAL_LARGE;
     (
         wide,
         modal_box(area, wide, 10).width.saturating_sub(8) as usize,
@@ -9085,8 +9130,8 @@ fn draw_alert_detail(
         return;
     };
     let (title, _) = crate::ui::split_title(full);
-    let wide = (area.width as usize * 6 / 10).clamp(48, 92) as u16;
-    let inner = wide.saturating_sub(4) as usize;
+    let wide = MODAL_MEDIUM;
+    let inner = modal_box(area, wide, 10).width.saturating_sub(4) as usize;
     // The body repeats the title only when the text is one line.
     let text = match full.split_once('\n') {
         Some((_, rest)) => rest.trim().to_owned(),
@@ -9239,7 +9284,7 @@ fn draw_dialog(
 ) {
     // modal: swallow everything underneath
     hits.add(area, Target::Swallow);
-    let w = area.width.saturating_sub(4).clamp(20, 60);
+    let w = MODAL_SMALL.min(area.width.saturating_sub(4));
     let inner = w.saturating_sub(4) as usize;
     let rows: Vec<String> = body.iter().flat_map(|l| text::wrap(l, inner)).collect();
     // padding 2 + title + blank + body + blank + buttons + blank + hints
@@ -9247,7 +9292,7 @@ fn draw_dialog(
     let want = (rows.len() as u16 + extra).max(8);
     let b = modal_box(area, w, want.min(area.height.saturating_sub(4).max(8)));
     let b = if want > b.height {
-        // a long body: take the room it needs (up to 70% was already tried)
+        // Confirmation text must remain visible until these dialogs have a scrollable body.
         let h = want.min(area.height);
         Rect::new(b.x, area.y + area.height.saturating_sub(h) / 2, b.width, h)
     } else {
@@ -9320,15 +9365,6 @@ fn draw_dialog(
             );
         }
         None => {
-            // Esc does nothing on a blocking dialog: drop the title's `esc`
-            put(
-                buf,
-                b.right().saturating_sub(5),
-                b.y + 1,
-                "   ",
-                cx.st(MUTED, RAISED),
-                3,
-            );
             hint_row(cx, buf, &m, &[("ctrl+q", "quit")]);
         }
     }

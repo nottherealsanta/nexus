@@ -822,7 +822,7 @@ fn mcp_settings_patch_core_values_with_a_bounded_number() {
     ));
     a.state.config.as_mut().unwrap()["values"]["mcp"]["max_listed_tools"] = 1.into();
     a.effects.clear();
-    press(&mut a, &["left"]);
+    press(&mut a, &["shift+right"]);
     assert!(matches!(
         a.effects.last(),
         Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }))
@@ -2537,7 +2537,7 @@ fn handoff_threshold_setting_steps_by_five_and_zero_is_off() {
         .iter()
         .position(|at| matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == "context.handoff_percent"))
         .unwrap();
-    press(&mut a, &["left"]);
+    press(&mut a, &["shift+right"]);
     assert!(
         matches!(a.effects.last(), Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }))
         if path == "context.handoff_percent" && value == &serde_json::json!(0))

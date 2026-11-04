@@ -10,7 +10,7 @@ use ratatui::text::Span;
 use serde::Deserialize;
 use unicode_segmentation::UnicodeSegmentation;
 
-/// Soft travelling shimmer adapted from old Nexus `rust/tui/src/render.rs`.
+/// Travelling shimmer adapted from old Nexus `rust/tui/src/render.rs`.
 /// Grapheme boundaries keep combined characters intact. Static when animation is disabled.
 pub fn shimmer(
     word: &str,
@@ -23,12 +23,16 @@ pub fn shimmer(
         return vec![Span::styled(word.to_owned(), base)];
     }
     let count = word.graphemes(true).count() as f32;
-    let reach = 4.0_f32;
-    let head = (frame % 54) as f32 / 54.0 * (count + 2.0 * reach) - reach;
+    let motion = shimmer_motion();
+    let reach = motion.reach;
+    let head = (frame % motion.cycle_frames) as f32 / motion.cycle_frames as f32
+        * (count + 2.0 * reach)
+        - reach;
     word.graphemes(true)
         .enumerate()
         .map(|(index, grapheme)| {
-            let near = (1.0 - (index as f32 - head).abs() / reach).clamp(0.0, 1.0);
+            let distance = ((index as f32 - head).abs() - motion.crest).max(0.0);
+            let near = (1.0 - distance / (reach - motion.crest)).clamp(0.0, 1.0);
             let amount = near * near * (3.0 - 2.0 * near);
             let color = match (base.fg, peak.fg) {
                 (Some(Color::Rgb(r, g, b)), Some(Color::Rgb(pr, pg, pb))) => {
@@ -54,6 +58,25 @@ pub fn shimmer(
 }
 
 const SOURCE: &str = include_str!("../../interface/theme.toml");
+
+#[derive(Deserialize)]
+pub struct ShimmerMotion {
+    pub cycle_frames: usize,
+    pub frame_ms: u64,
+    pub reach: f32,
+    pub crest: f32,
+}
+
+pub fn shimmer_motion() -> &'static ShimmerMotion {
+    static MOTION: std::sync::OnceLock<ShimmerMotion> = std::sync::OnceLock::new();
+    MOTION.get_or_init(|| {
+        let table: toml::Value = toml::from_str(SOURCE).expect("interface/theme.toml is invalid");
+        table["motion"]["shimmer"]
+            .clone()
+            .try_into()
+            .expect("motion.shimmer")
+    })
+}
 
 /// The pen colours of the drawing modal. They end up in the image, so they do
 /// not change with the theme.

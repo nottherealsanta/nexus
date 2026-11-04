@@ -9,10 +9,11 @@ import type { Card } from "./src/manager";
 import cards from "../interface/scenarios/manager-cards.json";
 import liveFailure from "../interface/scenarios/manager-live-failure.json";
 import liveSilence from "../interface/scenarios/manager-live-silence.json";
+import previewScenario from "../interface/scenarios/manager-preview.json";
 import {
   backStackSize, call, callFocused, callMinimised, cancelTurn, card, cardCollapsed, cardFocused, closeField, dismissCard, engaged, fieldText, focusCard,
   handleEvent, idleCost, inCall, listening, managerContext, managerEscapeRule, managerTerm, minimise, answerConsent, consent, notice,
-  openManagerContext, phase, pickRow, say, setStreamForTest, speaking, stopCall, stopSpeech, talk, minimised, managerError,
+  openManagerContext, phase, pickRow, say, setStreamForTest, speaking, stopCall, stopSpeech, talk, minimised, managerError, modelPreview,
 } from "./src/core/manager";
 import { manifest } from "./src/gen/manifest";
 import { connection, model } from "./src/store";
@@ -429,6 +430,7 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
     const log: string[] = [];
     const sockets: any[] = [];
     const worklets: any[] = [];
+    const starts: number[] = [];
     const track = { stop: () => log.push("track") };
     const stream = { getTracks: () => [track] };
     const analyser = { fftSize: 1024, connect() {}, getFloatTimeDomainData: (into: Float32Array) => into.fill(0) };
@@ -441,7 +443,7 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
       currentTime = 0; destination = {}; audioWorklet = { addModule: async () => {} };
       createAnalyser() { return { ...analyser }; } createGain() { return { gain: { value: 1 }, connect() {} }; }
       createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
-      createBuffer() { return { copyToChannel() {} }; } createBufferSource() { return { buffer: null, onended: null, connect() {}, start() {}, stop() {} }; }
+      createBuffer() { return { copyToChannel() {} }; } createBufferSource() { return { buffer: null, onended: null, connect() {}, start(at: number) { starts.push(at); }, stop() {} }; }
       async resume() {} async close() { log.push("context"); }
     };
     g.AudioWorkletNode = class { port = { onmessage: null as any }; constructor() { worklets.push(this); } connect() {} disconnect() {} };
@@ -450,7 +452,7 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
       constructor(public url: string) { sockets.push(this); setTimeout(() => this.onopen?.(), 0); }
       send(d: unknown) { this.sent.push(d); } close() { log.push("socket"); }
     };
-    return { log, sockets, worklets, restore: () => Object.assign(g, saved) };
+    return { log, sockets, worklets, starts, restore: () => Object.assign(g, saved) };
   }
 
   test("live mode starts Core's call, opens the audio socket for this stream, and hangs up with the call", async () => {
@@ -472,6 +474,8 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
         browser.worklets[0].port.onmessage({ data: new Int16Array(liveSilence.samples_per_packet).fill(8000).buffer });
       }
       expect(socket.sent.filter((d: unknown) => d instanceof ArrayBuffer)).toHaveLength(liveSilence.silent_packets);
+      expect(Math.abs(browser.starts[0] - 0.06)).toBeLessThan(0.0001);
+      expect(Math.abs(browser.starts[1] - browser.starts[0] - 0.02)).toBeLessThan(0.0001);
       await stopCall();
       for (const part of ["track", "socket", "context"]) expect(browser.log).toContain(part);
       expect(listening()).toBe(false);
@@ -704,5 +708,17 @@ describe("call mode: the four actions and the close phrase", () => {
     expect(managerHint({ ...base, minimised: true }, key)).toBe("talk-key talk · esc end");
     expect(managerHint({ ...base, minimised: true, card: true }, key)).toBe("talk-key open · esc end");
     expect(managerHint({ ...base, consent: true }, key)).toBe("enter accept · esc cancel");
+  });
+});
+
+
+describe("Manager model excerpt", () => {
+  test("receives the shared current excerpt and tool, and clears it on hangup", async () => {
+    core(); setStreamForTest("stream_t"); connection.set({ kind: "live" });
+    await talk();
+    handleEvent(ev("manager.preview", { call_id: call()!.id, preview: previewScenario.preview }));
+    expect(modelPreview()).toEqual(previewScenario.preview);
+    await stopCall();
+    expect(modelPreview()).toBe(null);
   });
 });

@@ -16,6 +16,9 @@ import type { VoiceTarget } from "../voice-state";
 interface Row { id: string; label: string; kind: string; scope: string; clients?: string; default?: unknown; options?: string[]; command?: string; note?: string; unavailable_reason?: string }
 interface Section { id: string; label: string; unavailable_reason?: string; page?: boolean; note?: string; row?: Row[] }
 const sections = manifest.settings.section as unknown as Section[];
+const settingsNavFocused = signal(true);
+const focusedSetting = signal<string | null>(null);
+const focusSetting = (id: string) => { settingsNavFocused.set(false); focusedSetting.set(id); };
 
 const data = signal<{ providers: any[] | null; models: any | null; agents: any | null }>({ providers: null, models: null, agents: null });
 const keyEntry = signal<{ id: string; label: string } | null>(null);
@@ -234,9 +237,9 @@ export function ProviderDetailModal() {
   const keying = () => keyEntry()?.id === id();
   const close = () => { providerDetail.set(null); providerKey.set(""); keyEntry.set(null); };
   const open = (url: string) => void openUrl(url).catch(() => toast("info", "Open this link in your browser."));
-  return <If when={!!id() && !!provider()}>{() => <Modal width={560} top="top-[14%]" label={`${provider()!.label ?? id()} connection`} testID="provider-detail" onCancel={close} onOpenChange={(o) => { if (!o) close(); }}>
+  return <If when={!!id() && !!provider()}>{() => <Modal size="medium" label={`${provider()!.label ?? id()} connection`} testID="provider-detail" onCancel={close} onOpenChange={(o) => { if (!o) close(); }}>
     <View class="gap-3">
-      <ModalTitle title={provider()!.label ?? id()!} esc={false} />
+      <ModalTitle title={provider()!.label ?? id()!} />
       <Text class={T.sec}>{pending() ? "Sign-in pending · waiting for you" : failed() ? "Sign-in failed · open" : providerStatus(provider())}</Text>
       <If when={provider()!.connected}>{() => <View class="gap-2">
         <If when={provider()!.key_source === "env"}>{() => <Text class={T.meta}>{`Using $${provider()!.key_env}`}</Text>}</If>
@@ -277,7 +280,10 @@ export function ProviderDetailModal() {
           <Btn label="Cancel" onPress={() => { providerKey.set(""); keyEntry.set(null); }} />
         </View>
       </View>}</If>
-      <View class="flex-row justify-end pt-1"><Btn label="Close" kind="ghost" onPress={close} testID="provider-detail-close" /></View>
+      <View class="flex-row items-center justify-between pt-1">
+        <ModalFooter hints="esc close" />
+        <Btn label="Close" kind="ghost" onPress={close} testID="provider-detail-close" />
+      </View>
     </View>
   </Modal>}</If>;
 }
@@ -319,7 +325,7 @@ let effortKeysBound = false;
 function bindEffortKeys() {
   if (effortKeysBound) return;
   effortKeysBound = true;
-  for (const [key, by] of [["left", -1], ["right", 1]] as const) {
+  for (const [key, by] of [[manifest.settings.navigation.value_key, 1], [manifest.settings.navigation.previous_value_key, -1]] as const) {
     try { keymap.bind(key, () => { const t = effortTarget(); if (t && settingsPage() === `agents/${t.agent}`) t.step(by); }, { when: "always" }); } catch { /* the platform keeps this keystroke */ }
   }
 }
@@ -337,12 +343,12 @@ function AgentCard(p: { a: any }) {
   };
   const efforts = (): Record<string, string> => config()?.values?.agents?.efforts?.[name()] ?? {};
   const levels = (ref: string): string[] => ((data().models?.models ?? []).find((item: any) => item.ref === ref)?.efforts ?? []).map(String);
-  /** Step one model's effort through "default" and the levels it lists; it stops at either end. */
+  /** Advancing past the last effort returns to "default". */
   const stepEffort = (ref: string, by: number) => {
     const all = levels(ref);
     if (!all.length) { toast("info", `${ref} lists no effort levels`); return; }
     const at = efforts()[ref] ? all.indexOf(efforts()[ref]) + 1 : 0;
-    const next = Math.max(0, Math.min(all.length, at + by));
+    const next = by > 0 ? (at + by) % (all.length + 1) : Math.max(0, Math.min(all.length, at + by));
     if (next === at) return;
     const mine = { ...efforts() };
     if (next === 0) delete mine[ref]; else mine[ref] = all[next - 1];
@@ -455,52 +461,52 @@ function control(r: Row): JSX.Element {
   const action = voiceAction(r.id);
   if (target && action && r.command) {
     const reason = voiceSettingReason(r.id);
-    return <Btn label={r.label} onPress={() => void run(r.command!)} disabled={!!reason} reason={reason} testID={`setting-${r.id}-action`} />;
+    return <Btn onFocus={() => focusSetting(r.id)} label={r.label} onPress={() => void run(r.command!)} disabled={!!reason} reason={reason} testID={`setting-${r.id}-action`} />;
   }
   if (r.id === "appearance.theme") {
-    return <Seg label="Theme" options={["system", "light", "dark"]} value={themeChoice()} disabled={false} format={(v) => `${v[0].toUpperCase()}${v.slice(1)}`}
+    return <Seg onFocus={() => focusSetting(r.id)} label="Theme" options={["system", "light", "dark"]} value={themeChoice()} disabled={false} format={(v) => `${v[0].toUpperCase()}${v.slice(1)}`}
       onPick={(v) => { themeChoice.set(v as any); setColorScheme(v as "light" | "dark" | "system"); savePrefs(); }} />;
   }
-  if (r.id === "appearance.sidebar") return <Seg label={r.label} options={["full", "rail"]} value={leftOpen() ? "full" : "rail"} onPick={(v) => { leftOpen.set(v === "full"); savePrefs(); }} />;
-  if (r.id === "appearance.details") return <Seg label={r.label} options={["off", "on"]} value={rightOpen() ? "on" : "off"} onPick={(v) => { rightOpen.set(v === "on"); savePrefs(); }} />;
-  if (r.id === "appearance.session_scope") return <Seg label={r.label} options={["this project", "all projects"]} value={scopeAll() ? "all projects" : "this project"} onPick={(v) => scopeAll.set(v === "all projects")} />;
-  if (r.id === "appearance.show_archived") return <Seg label={r.label} options={["off", "on"]} value={archivedFilter() ? "on" : "off"} onPick={(v) => archivedFilter.set(v === "on")} />;
-  if (r.id === "appearance.animations") return <Seg label={r.label} options={["on", "off"]} value={config()?.values?.ui?.reduced_motion ? "off" : "on"} onPick={(v) => void patchConfig("ui.reduced_motion", v === "off")} />;
-  if (r.id === "notifications.sound") return <Seg label={r.label} options={["off", "on"]} value={notificationSoundsOn() ? "on" : "off"} onPick={(v) => setNotificationSounds(v === "on")} />;
-  if (r.id === "mcp.full_definitions") return <Seg label={r.label} options={["off", "on"]} value={config()?.values?.mcp?.full_definitions ? "on" : "off"} onPick={(v) => void patchConfig("mcp.full_definitions", v === "on")} />;
+  if (r.id === "appearance.sidebar") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["full", "rail"]} value={leftOpen() ? "full" : "rail"} onPick={(v) => { leftOpen.set(v === "full"); savePrefs(); }} />;
+  if (r.id === "appearance.details") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={rightOpen() ? "on" : "off"} onPick={(v) => { rightOpen.set(v === "on"); savePrefs(); }} />;
+  if (r.id === "appearance.session_scope") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["this project", "all projects"]} value={scopeAll() ? "all projects" : "this project"} onPick={(v) => scopeAll.set(v === "all projects")} />;
+  if (r.id === "appearance.show_archived") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={archivedFilter() ? "on" : "off"} onPick={(v) => archivedFilter.set(v === "on")} />;
+  if (r.id === "appearance.animations") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["on", "off"]} value={config()?.values?.ui?.reduced_motion ? "off" : "on"} onPick={(v) => void patchConfig("ui.reduced_motion", v === "off")} />;
+  if (r.id === "notifications.sound") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={notificationSoundsOn() ? "on" : "off"} onPick={(v) => setNotificationSounds(v === "on")} />;
+  if (r.id === "mcp.full_definitions") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={config()?.values?.mcp?.full_definitions ? "on" : "off"} onPick={(v) => void patchConfig("mcp.full_definitions", v === "on")} />;
   if (r.id === "mcp.max_listed_tools") return <McpToolsLimit />;
   if (r.id === "context.handoff_percent") return <HandoffPercent />;
   if (r.id === "context.title_models") return <TitleModels />;
   if (r.id === "appearance.timeline_detail") {
-    return <Seg label="Timeline detail" options={r.options ?? ["low", "medium", "high"]} value={timelineDetail()} disabled={false}
+    return <Seg onFocus={() => focusSetting(r.id)} label="Timeline detail" options={r.options ?? ["low", "medium", "high"]} value={timelineDetail()} disabled={false}
       onPick={(v) => setTimelineDetail(v as "low" | "medium" | "high")} />;
   }
 
-  if (r.id === "about.inspector") return <Btn label="Open inspector" onPress={() => { void openUrl(new URL("/inspector", import.meta.url).href).catch(() => toast("info", "Open /inspector on the host page.")); }} />;
-  if (r.id === "tools.default_permission") return <Seg label={r.label} options={["allow", "ask"]} value={config()?.values?.defaults?.permission ?? "allow"} onPick={(v) => void patchConfig("defaults.permission", v)} />;
+  if (r.id === "about.inspector") return <Btn onFocus={() => focusSetting(r.id)} label="Open inspector" onPress={() => { void openUrl(new URL("/inspector", import.meta.url).href).catch(() => toast("info", "Open /inspector on the host page.")); }} />;
+  if (r.id === "tools.default_permission") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["allow", "ask"]} value={config()?.values?.defaults?.permission ?? "allow"} onPick={(v) => void patchConfig("defaults.permission", v)} />;
   if (r.id === "tools.defaults") {
     const disabled: string[] = config()?.values?.tools?.disabled ?? [];
     return <View class="w-full flex-row flex-wrap justify-end gap-1">{["read", "grep", "glob", "ls", "bash", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code"].map((name) => {
       const off = disabled.includes(name);
-      return <Button role="switch" selected={!off} testID={`default-tool-${name}`} accessibilityLabel={`${name} ${off ? "off" : "on"}`} onPress={() => void patchConfig("tools.disabled", off ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-none px-2 min-h-7 justify-center hover:bg-accent ${FOCUS}`}>
+      return <View focusable onFocus={() => focusSetting(r.id)} role="switch" accessibilityState={{ selected: !off }} testID={`default-tool-${name}`} accessibilityLabel={`${name} ${off ? "off" : "on"}`} onPress={() => void patchConfig("tools.disabled", off ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-none px-2 min-h-7 justify-center hover:bg-accent ${FOCUS}`}>
         <Text class={`${TS.mono} ${off ? "text-muted-foreground line-through opacity-60" : "text-foreground-secondary"}`}>{name}</Text>
-      </Button>;
+      </View>;
     })}</View>;
   }
   const paths: Record<string, string> = { "agents.default_effort": "effort", "agents.default_root": "agent" };
   if (paths[r.id]) {
     const key = paths[r.id];
     const value = config()?.values?.defaults?.[key] || "automatic";
-    return <Button testID={`edit-${r.id}`} accessibilityLabel={`Change ${r.label}`} onPress={() => {
+    return <View role="button" focusable onFocus={() => focusSetting(r.id)} testID={`edit-${r.id}`} accessibilityLabel={`Change ${r.label}`} onPress={() => {
       const options: string[] = key === "agent" ? (data().agents?.agents ?? []).filter((a: any) => a.mode !== "subagent").map((a: any) => a.name) : ["low", "medium", "high", "xhigh"];
       picker.set({ title: r.label, items: ["", ...options].map((v) => ({ id: v || "automatic", label: v || "automatic", run: async () => { picker.set(null); await patchConfig(`defaults.${key}`, v); } })) });
-    }} class={`rounded-none px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={value} mono /></Button>;
+    }} class={`rounded-none px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={value} mono /></View>;
   }
-  if (r.kind === "choice" && r.options) return <Seg label={r.label} options={r.options} value={String(r.default ?? r.options[0])} disabled />;
+  if (r.kind === "choice" && r.options) return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={r.options} value={String(r.default ?? r.options[0])} disabled />;
   if (r.kind === "toggle") return <Text class={`${TS.base} text-muted-foreground`}>{r.default ? "[x] on" : "[ ] off"}</Text>;
   if (r.kind === "number") return <Text class={`${TS.base} text-muted-foreground`}>{String(r.default ?? "—")}</Text>;
   if (r.kind === "choice") return <Text class={`${TS.base} text-muted-foreground`}>{String(r.default ?? "not set")}</Text>;
-  if (r.kind === "action") return <Btn label={r.label} disabled reason={r.unavailable_reason} />;
+  if (r.kind === "action") return <Btn onFocus={() => focusSetting(r.id)} label={r.label} disabled reason={r.unavailable_reason} />;
   return listFor(r.id);
 }
 
@@ -515,7 +521,10 @@ function SettingRow(p: { r: Row; sec: Section }) {
   const tag = r.clients === "nsh" ? "NSH only" : r.clients === "tui" && r.id !== "appearance.timeline_detail" ? "TUI only" : "";
   const tooltip = <Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{notEditable}</Text>;
   return (
-    <View class={`${isNarrow() ? "gap-2" : "flex-row gap-3 items-center"} px-3 py-2 rounded-none hover:bg-accent`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
+    <View focusable onFocus={() => focusSetting(r.id)}
+      onPress={() => { settingsNavFocused.set(false); focusedSetting.set(r.id); }}
+      class={`relative ${isNarrow() ? "gap-2" : "flex-row gap-3 items-center"} px-3 py-2 rounded-none hover:bg-settings-selection focus-within:bg-settings-selection ${focusedSetting() === r.id ? "bg-settings-selection" : ""}`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
+      <If when={!settingsNavFocused() && focusedSetting() === r.id}><View testID="settings-row-focus" class="absolute left-0 top-0 bottom-0 w-[2px] bg-settings-focus" /></If>
       <View class={isNarrow() ? "" : "w-[44%] pr-2"}>
         <View class="flex-row items-center gap-2">
           <Text class={`${TS.base} ${disabled ? "text-muted-foreground" : "text-foreground"}`}>{r.label}</Text>
@@ -558,13 +567,32 @@ export function SettingsView(p: { inline?: boolean }) {
   };
   const shown = () => sections.filter(hit);
   const cur = () => shown().find((s) => s.id === settingsSection()) ?? shown()[0] ?? sections[0];
+  const sectionRefs = new Map<string, { focus: () => void }>();
+  settingsNavFocused.set(true);
+  const focusSection = () => {
+    if (providerDetail() || picker()) return;
+    settingsNavFocused.set(true);
+    effortTarget.set(null);
+    sectionRefs.get(cur().id)?.focus();
+  };
+  keymap.bind(manifest.settings.navigation.section_key, focusSection, { when: "notEditing" });
+  effect(() => {
+    if (!settingsNavFocused() || providerDetail() || picker()) return;
+    const offs = ([ ["up", -1], ["down", 1] ] as const).map(([key, by]) => keymap.bind(key, () => {
+      const index = shown().findIndex((s) => s.id === cur().id);
+      const next = shown()[Math.max(0, Math.min(shown().length - 1, index + by))];
+      if (next) { settingsSection.set(next.id); settingsPage.set(null); sectionRefs.get(next.id)?.focus(); }
+    }, { when: "notEditing" }));
+    return () => offs.forEach((off) => off());
+  });
   const agent = () => !query() && settingsPage()?.startsWith("agents/") ? settingsPage()!.slice("agents/".length) : null;
   const agentDef = () => (data().agents?.agents ?? []).find((a: any) => a.name === agent());
   const list = () => (cur().row ?? []).filter((r) => (r.clients !== "tui" || r.id === "appearance.timeline_detail") && (!query() || r.label.toLowerCase().includes(query()) || (r.note ?? "").toLowerCase().includes(query())));
   const page = () => (query() ? null : cur().page ? cur().id : null);
+  effect(() => { focusedSetting.set(list()[0]?.id ?? null); });
   void m; void model; void compat; void colorScheme; void byId; void keyLabel;
   const content = () => <View class={p.inline ? "flex-1 min-h-0 gap-3 p-4" : "gap-3"}>
-        <If when={!p.inline}><ModalTitle title="Settings" esc={false} /></If>
+        <If when={!p.inline}><ModalTitle title="Settings" /></If>
         <View class="flex-row items-center gap-2 px-3">
           <Icon name="search" size={14} class="tint-muted-foreground" />
           <Input value={settingsQuery()} placeholder="Filter settings…" accessibilityLabel="Filter settings" testID="settings-search"
@@ -572,16 +600,19 @@ export function SettingsView(p: { inline?: boolean }) {
             class={`h-8 min-w-0 flex-1 rounded-none bg-background px-2 ${TS.base} text-foreground`} />
           <If when={settingsQuery()}>{() => <Btn label="Clear" kind="ghost" onPress={() => settingsQuery.set("")} testID="settings-search-clear" />}</If>
         </View>
-        <View class={`${isNarrow() ? "" : "flex-row gap-4"} min-h-0 ${p.inline ? "flex-1" : ""}`} style={p.inline ? {} : { height: Math.max(240, Math.min(520, Math.round(windowSize().height * 0.76) - 48 - 32 - 12 - 12 - 28 - 36)) }}>
+        <View class={`${isNarrow() ? "" : "flex-row gap-4"} min-h-0 ${p.inline ? "flex-1" : ""}`} style={p.inline ? {} : { height: Math.max(64, Math.min(520, Math.floor(windowSize().height * 0.70) - 180)) }}>
           <View class={isNarrow() ? "pb-2" : "w-[180px]"}>
             <Scroll horizontal={isNarrow()} scrollbar={false} class={isNarrow() ? "" : "flex-1"}>
-              <View class={isNarrow() ? "flex-row gap-2" : "gap-1"}>
+              <View class={isNarrow() ? "flex-row gap-2" : "gap-0"}>
               <Each of={shown()} key={(s) => s.id}>
                 {(s) => (
-                  <Button onPress={() => { settingsSection.set(s().id); settingsPage.set(null); settingsQuery.set(""); }} selected={cur().id === s().id} testID={`section-${s().id}`} accessibilityLabel={s().label}
-                    class={`relative flex-row items-center rounded-none px-3 hover:bg-accent ${cur().id === s().id ? "bg-selection" : ""} ${isNarrow() ? "min-h-10" : "min-h-8"} ${FOCUS}`}>
+                  <View role="button" focusable ref={(n: any) => { if (n) sectionRefs.set(s().id, n); else sectionRefs.delete(s().id); }}
+                    onFocus={() => settingsNavFocused.set(true)}
+                    onPress={() => { settingsNavFocused.set(true); settingsSection.set(s().id); settingsPage.set(null); settingsQuery.set(""); }} accessibilityState={{ selected: cur().id === s().id }} testID={`section-${s().id}`} accessibilityLabel={s().label}
+                    class={`relative flex-row items-center rounded-none px-3 hover:bg-settings-selection ${cur().id === s().id ? "bg-settings-selection" : ""} ${isNarrow() ? "min-h-10" : "min-h-8"}`}>
+                    <If when={cur().id === s().id && settingsNavFocused()}><View testID="settings-section-focus" class="absolute left-0 top-0 bottom-0 w-[2px] bg-settings-focus" /></If>
                     <Text class={`flex-1 ${TS.base} ${cur().id === s().id ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{s().label}</Text>
-                  </Button>
+                  </View>
                 )}
               </Each>
               </View>
@@ -618,7 +649,7 @@ export function SettingsView(p: { inline?: boolean }) {
             </Scroll>
           </View>
         </View>
-        <If when={!p.inline}><ModalFooter hints={agent() ? "esc back" : "esc close"} right={`Core ${info()?.version ?? "—"}`} /></If>
+        <If when={!p.inline}><ModalFooter hints={agent() ? "← sections · esc back" : "← sections · esc close"} right={`Core ${info()?.version ?? "—"}`} /></If>
       </View>;
-  return p.inline ? content() : <Modal width={820} top="top-[8%]" label="Settings" testID="settings" onCancel={() => escape()} onOpenChange={(open) => { if (!open && centre() === "settings") void run("app.settings"); }}>{content()}</Modal>;
+  return p.inline ? content() : <Modal size="large" label="Settings" testID="settings" onCancel={() => escape()} onOpenChange={(open) => { if (!open && centre() === "settings") void run("app.settings"); }}>{content()}</Modal>;
 }

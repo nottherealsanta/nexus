@@ -143,7 +143,15 @@ pub struct Centre {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Settings {
+    pub navigation: SettingsNavigation,
     pub section: Vec<Section>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettingsNavigation {
+    pub section_key: String,
+    pub value_key: String,
+    pub previous_value_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

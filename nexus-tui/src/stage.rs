@@ -194,6 +194,7 @@ fn draw_focused(
     if let Some((lines, fade)) = caption_lines(app, look, now, target) {
         y = draw_caption_below(look, buf, area, y, &lines, fade).saturating_add(1);
     }
+    y = draw_preview(app, look, buf, area, y);
     let hint = app.manager_hint();
     if !hint.is_empty() {
         draw_hint(look, buf, area, y, &hint, false);
@@ -1192,7 +1193,9 @@ fn draw_orb(app: &App, buf: &mut Buffer, area: Rect, anchor: Anchor, width: u16,
             level: orb.level,
             t: orb.t,
             presence: orb.presence,
-            color: rgb(orb.to.token()),
+            color: orb::state_color(&app.theme, orb)
+                .map(|c| c.map(|v| v.round().clamp(0.0, 255.0) as u8))
+                .unwrap_or_else(|| rgb(orb.to.token())),
             white: rgb("text.primary"),
             light: app.theme.opts.mode == crate::theme::Mode::Light,
             col: zone.x,
@@ -1200,4 +1203,66 @@ fn draw_orb(app: &App, buf: &mut Buffer, area: Rect, anchor: Anchor, width: u16,
             width: zone.width,
             height: zone.height,
         }));
+}
+
+/// The current model excerpt and latest tool, without a log or chat surface.
+fn draw_preview(app: &App, look: &Look, buf: &mut Buffer, area: Rect, mut y: u16) -> u16 {
+    let Some(preview) = &app.ui.manager.preview else {
+        return y;
+    };
+    let w = area.width.saturating_sub(4).min(76);
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let source = preview["source"].as_str().unwrap_or("Model");
+    let clipped = if preview["clipped"].as_bool() == Some(true) {
+        " · excerpt"
+    } else {
+        ""
+    };
+    let mut lines = vec![format!("Model context · {source}{clipped}")];
+    if let Some(rows) = preview["lines"].as_array() {
+        lines.extend(
+            rows.iter()
+                .take(3)
+                .filter_map(|v| v.as_str().map(str::to_owned)),
+        );
+    }
+    if let Some(tool) = preview.get("tool").filter(|v| v.is_object()) {
+        lines.push(format!(
+            "Tool · {} · {}",
+            tool["name"].as_str().unwrap_or("tool"),
+            tool["status"].as_str().unwrap_or("running")
+        ));
+        lines.push(format!(
+            "{}{}",
+            tool["arguments"].as_str().unwrap_or(""),
+            if tool["clipped"].as_bool() == Some(true) {
+                " …"
+            } else {
+                ""
+            }
+        ));
+    }
+    let available = area.bottom().saturating_sub(3).saturating_sub(y) as usize;
+    if lines.len() > available && available > 0 {
+        lines.truncate(available);
+        *lines.last_mut().unwrap() = "… more in Manager context".to_owned();
+    }
+    for line in lines {
+        if y >= area.bottom().saturating_sub(3) {
+            break;
+        }
+        for col in x..x + w {
+            buf[(col, y)].set_symbol(" ").set_style(look.st(MUTED));
+        }
+        put(
+            buf,
+            x,
+            y,
+            &truncate(&line, w as usize, "…"),
+            look.st(MUTED),
+            w,
+        );
+        y += 1;
+    }
+    y.saturating_add(1)
 }

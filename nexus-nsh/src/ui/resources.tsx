@@ -1,7 +1,7 @@
 // The kernels and background shells of the viewed session tree: the counts on
 // the location strip open this one scrollable list.
-import { Scroll, Text, View, windowSize } from "nsh";
-import { Heading, Modal, ModalFooter, ModalTitle } from "./modal";
+import { Scroll, Text, View } from "nsh";
+import { Heading, Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import { T } from "./kit";
 import { model, resourcesError, resourcesOpen, viewResources } from "../store";
 import { fmtDuration } from "./timeline";
@@ -27,13 +27,13 @@ function ResourcesBody() {
   const running = () => r().jobs.filter((job) => job.status === "running").length;
   const close = () => resourcesOpen.set(false);
   return (
-    <Modal width={700} top="top-[10%]" label="Kernels and shells" testID="resources" onCancel={close} onOpenChange={(open) => { if (!open) close(); }}>
+    <Modal size="large" label="Kernels and shells" testID="resources" onCancel={close} onOpenChange={(open) => { if (!open) close(); }}>
       <View class="gap-3">
-        <ModalTitle title="Kernels and shells" esc={false} />
+        <ModalTitle title="Kernels and shells" />
         <If when={!!resourcesError()}>
           <Text class="text-xs leading-4 text-warning">Could not refresh: {resourcesError()}</Text>
         </If>
-        <Scroll style={{ height: Math.min(480, Math.round(windowSize().height * 0.55)) }} testID="resources-list">
+        <Scroll style={{ height: Math.min(480, modalBodyHeight()) }} testID="resources-list">
           <View class="gap-2">
             <Heading text={`Kernels (${r().kernels.length})`} first />
             <If when={r().kernels.length === 0} else={

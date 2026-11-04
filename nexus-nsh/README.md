@@ -214,13 +214,18 @@ argument count, working directory, environment or HTTP header names, and a
 credential-free URL. Disabled and invalid entries say so, with the reason. A name
 defined in both files shows the duplicate warning, naming the winning `.mcp.json`
 definition.
-Settings is the same square modal as the TUI's, with a section rail on the left
+Modals share three width classes with the TUI: small 500 px, medium 600 px and large
+740 px, clamped to the window gutters. They are centred in both directions and capped
+at 70% of window height; scrollable bodies reserve space for their title, controls and
+footer, including in short windows. Titles have no duplicate Esc chip; dismissal hints
+live in `ModalFooter`. See `interface/design-language.md` for the shared rules.
+Settings is the same square modal as the TUI's, with a compact section rail on the left
 and the selected section on the right. The same search field filters both. Providers and Agents are
 rendered in the right pane: each provider row opens a detail modal with one
 button per sign-in method (browser or device), a clickable link, a copyable
 code, key entry, connect/disconnect and catalog refresh; the default agent and effort
 with a line per subagent that opens its model and fallback lists (Esc returns
-from that detail); each model row has an effort stepper (`‹ effort low ›`, or ←/→ after pressing it) writing
+from that detail); each model row has an effort stepper (`‹ effort low ›`, or Right after pressing it) writing
 `agents.efforts`. Tools keeps one permission choice, labelled with the tools it
 governs, and one clickable tool grid. Desktop session rows place the status mark before the title with a gap. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
 session view's `directory` differs from the one it was read for, as after a move), while directory
@@ -549,3 +554,20 @@ hidden context (`GET /api/manager/context`); the inspector keeps the full raw lo
 - Tests: `manager.test.tsx` (logic and controller), `manager-cards.test.tsx` (shared card scenarios, keys, clicks).
 
 Live Manager calls use their own audio connection and need no Dictation setup or `nexus voice init`. A failed Live connection keeps its error visible and the typed field available; end and restart the call to retry audio.
+
+Working labels use the shared travelling shimmer: one pass every 1.5 seconds,
+with a brighter highlight over secondary text. Reduced motion keeps the label static.
+
+For modal geometry checks against a disposable visual host, run
+`node e2e/modal-layout.mjs --url http://127.0.0.1:4820 --out /tmp/modal-shots`
+(optionally `--browser /path/to/chrome`). It checks centred placement, width classes,
+the height cap, visible footers and Esc at normal and short window sizes.
+
+Settings sections have no gaps between rows. Selected sections and setting rows use a
+neutral gray highlight across the entire row, including its value. A white left bar marks the focused pane (dark in the light theme);
+Left returns focus to the section heading without changing the setting. Shift+Right
+steps a value backward; Right advances it.
+
+Live microphone packets continue during silent output, with browser echo cancellation enabled. The shared silent-output regression scenario covers both clients.
+
+The focused Manager call shows a three-line Model context excerpt and the current/latest tool with arguments and status; the header debug modal keeps the full context. Live playback has a 60 ms startup/recovery buffer, and the speaking colour holds through 350 ms pauses.

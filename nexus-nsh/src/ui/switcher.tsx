@@ -9,7 +9,7 @@ import { attention as attentionGlyph, statusGlyphs } from "../gen/theme";
 import { escape } from "../commands";
 import { currentProject, m, model, scopeAll, selectSession, switcherOpen, tick } from "../store";
 import { FOCUS, Spinner, T, TONE, relTime } from "./kit";
-import { Modal, ModalFooter, ModalTitle } from "./modal";
+import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import { attention } from "./sidebar";
 
 /** The TUI-style fuzzy filter: the query's characters appear in order. */
@@ -124,10 +124,10 @@ function SessionSwitcherBody() {
   try { keymap.bind("tab", toggleScope, { when: "always" }); } catch {}
 
   return (
-    <Modal width={520} top="top-[14%]" label="Session switcher" testID="session-switcher"
+    <Modal size="medium" label="Session switcher" testID="session-switcher"
       onCancel={() => escape()} onOpenChange={(open) => { if (!open) close(); }}>
       <View role="menu" class="gap-2">
-        <ModalTitle title={`Search sessions \u00b7 ${scopeAll() ? "Global" : "Project"}`} esc={false} />
+        <ModalTitle title={`Search sessions \u00b7 ${scopeAll() ? "Global" : "Project"}`} />
         <View class="border-b border-border">
           <Input autoFocus value={query()} placeholder="type to find a session" accessibilityLabel="Search sessions"
             testID="session-switcher-input" onChange={({ value }) => setQuery(value)} onSubmit={() => choose()} submitBehavior="submit"
@@ -138,7 +138,7 @@ function SessionSwitcherBody() {
             <Text class={T.sec}>{query().trim() ? `No session matches \u201c${query()}\u201d.` : "No sessions yet."}</Text>
           </View>
         }>
-          <Scroll class="max-h-[380px]" testID="session-switcher-list">
+          <Scroll style={{ maxHeight: Math.min(380, modalBodyHeight(40)) }} testID="session-switcher-list">
             <View class="gap-0.5">
               <Each of={rows()} key={(row) => row.id}>
                 {(row, i) => {

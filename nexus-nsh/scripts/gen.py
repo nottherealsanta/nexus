@@ -78,6 +78,8 @@ def css(mode: str) -> dict[str, str]:
         "raised": g("surface.raised"),
         "band": g("surface.band"),
         "selection": g("interactive.selection"),
+        "settings-selection": g("interactive.settings_selection"),
+        "settings-focus": g("interactive.settings_focus"),
         "hover": g("interactive.hover"),
         "on-accent": g("interactive.on_accent"),
         "multi": g("interactive.multi"),
@@ -144,6 +146,8 @@ out += "export const attention = " + json.dumps(theme["glyphs"]["attention"], in
 out += "export const fold = " + json.dumps(theme["glyphs"]["fold"], indent=2) + " as const;\n"
 out += "export const spinner = " + json.dumps(theme["glyphs"]["spinner"]["unicode"]) + ";\n"
 out += "export const managerColors = " + json.dumps({"light": theme["light"]["manager"], "dark": theme["dark"]["manager"]}) + " as const;\n"
+out += "export const shimmerMotion = " + json.dumps(theme["motion"]["shimmer"]) + " as const;\n"
+out += "export const shimmerColors = " + json.dumps({mode: {"base": theme[mode]["text"]["secondary"], "peak": theme[mode]["text"]["highlight"]} for mode in ["dark", "light"]}) + " as const;\n"
 out += "export const annotationInks = " + json.dumps(theme["annotation"]["ink"]) + ";\n"
 out += "export const diagramPalettes = " + json.dumps({"light": diagram("light"), "dark": diagram("dark")}) + ";\n"
 (ROOT / "src" / "gen" / "theme.ts").write_text(out)

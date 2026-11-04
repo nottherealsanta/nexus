@@ -23,8 +23,10 @@ no authority for the attention queue.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import secrets
+import textwrap
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable
@@ -81,6 +83,8 @@ class Call:
     speaking: bool = False
     turns: int = 0
     active: bool = True
+    preview: dict[str, Any] | None = None
+    preview_at: float = 0.0
 
 
 @dataclass
@@ -158,11 +162,11 @@ class ManagerService:
                 "call": None if call is None or not call.active else {
                     "call_id": call.call_id, "holder": call.client_id, "phase": call.phase,
                     "error": call.error, "card": self.stage.payload,
-                    "live": self.live.info() if self.live is not None else None}}
+                    "live": self.live.info() if self.live is not None else None, "preview": call.preview}}
 
     def _state_data(self, call: Call) -> dict[str, Any]:
         return {"call_id": call.call_id, "active": call.active, "phase": call.phase if call.active else "idle",
-                "holder": call.client_id, "mode": self.settings()["mode"], "error": call.error}
+                "holder": call.client_id, "mode": self.settings()["mode"], "error": call.error, "preview": call.preview}
 
     def _publish_state(self, call: Call) -> None:
         self.bus.publish("manager.state", self._state_data(call))
@@ -252,7 +256,7 @@ class ManagerService:
 
     def _start_result(self, call: Call) -> dict[str, Any]:
         return {"call_id": call.call_id, "holder": call.client_id, "mode": self.settings()["mode"],
-                "model": self.settings()["model"]}
+                "model": self.settings()["model"], "preview": call.preview}
 
     async def stop(self, stream_id: str) -> None:
         """End the call. Never stops a session."""
@@ -524,6 +528,8 @@ class ManagerService:
                    *([("This turn was started by a notification, not by the user speaking. You may inform and ask; "
                       "you may not act.")] if not turn.authority else [])] or None)
         self.proactive_notes.clear()
+        call.preview = None
+        self._preview(call, text, "Input", force=True)
         subscription = self.bus.open()
         pump = asyncio.ensure_future(self._pump(call, turn, subscription, episode.id))
         try:
@@ -556,10 +562,27 @@ class ManagerService:
         return {"code": "model_unavailable", "message": message,
                 "fix": "Choose a model in Settings, Manager."}
 
+    def _preview(self, call: Call, text: str, source: str, *, tool: dict[str, Any] | None = None,
+                 force: bool = False) -> None:
+        """A bounded debug excerpt, never a conversation/history surface."""
+        if self.call is not call or not call.active:
+            return
+        clean = redact(text)
+        lines = [part for line in clean.splitlines() for part in textwrap.wrap(line, 100)]
+        previous_tool = (call.preview or {}).get("tool")
+        call.preview = {"source": source, "lines": lines[-3:], "clipped": len(lines) > 3,
+                        "tool": tool if tool is not None else previous_tool}
+        now = self.clock()
+        if force or now - call.preview_at >= 0.15:
+            call.preview_at = now
+            self._publish("manager.preview", {"preview": call.preview})
+
     async def _pump(self, call: Call, turn: TurnState, subscription: Any, episode_id: str) -> None:
         """Turn the episode's streamed text into ``manager.speech``, one sentence at a time."""
         splitter = SentenceSplitter()
         fed = False
+        preview_text = ""
+        preview_source = "Response"
 
         def emit(sentence: str) -> None:
             if turn.muted or not call.active:
@@ -576,7 +599,26 @@ class ManagerService:
             if event.get("session_id") != episode_id:
                 continue
             data = event.get("data") or {}
-            if event["type"] == "text_delta":
+            kind = event["type"]
+            if kind in ("text_delta", "reasoning_delta"):
+                source = "Response" if kind == "text_delta" else "Reasoning"
+                if source != preview_source:
+                    preview_text = ""
+                preview_source = source
+                preview_text += str(data.get("text") or "")
+                self._preview(call, preview_text, source)
+            elif kind in ("tool_start", "tool_end"):
+                tool_call = data.get("call") or {}
+                arguments = redact(json.dumps(data.get("args", tool_call.get("arguments", {})), ensure_ascii=False))
+                tool = {"name": tool_call.get("name", "tool"), "arguments": arguments[:240],
+                        "clipped": len(arguments) > 240, "status": "running" if kind == "tool_start" else "done"}
+                if kind == "tool_end":
+                    result = data.get("result") or {}
+                    tool["status"] = "failed" if result.get("is_error") else "done"
+                    self._preview(call, str(result.get("output") or ""), "Tool result", tool=tool, force=True)
+                else:
+                    self._preview(call, preview_text, preview_source, tool=tool, force=True)
+            if kind == "text_delta":
                 fed = True
                 for sentence in splitter.feed(str(data.get("text") or "")):
                     emit(sentence)
@@ -588,6 +630,7 @@ class ManagerService:
                 for sentence in splitter.flush():
                     emit(sentence)
                 fed = False
+                self._preview(call, preview_text or "".join(p.get("text", "") for p in data.get("parts", []) if p.get("type") == "text"), preview_source, force=True)
 
     def record_proactive(self, note: str, session_ids: list[str], line: str) -> None:
         """Remember an unprompted line (and card) for the Manager's next turn, and in the audit."""

@@ -1,7 +1,7 @@
 import { agentColor } from "../agent-color";
 import { List, Scroll, Text, View, keymap, signal } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Heading, Modal, ModalFooter, ModalTitle } from "./modal";
+import { Heading, Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import type { JSX } from "nsh";
 import { Btn, Empty, IconButton, T, TS, FOCUS } from "./kit";
 import { availability, closeLearnChecklist, commands, escape, installLearnChecklist, keyLabel, renameSession, run, Cmd } from "../commands";
@@ -44,14 +44,14 @@ function PaletteBody() {
   const offs = [keymap.bind("down", () => idx.set(clamp(idx() + 1)), { when: "always" }), keymap.bind("up", () => idx.set(clamp(idx() - 1)), { when: "always" })];
   void offs;
   return (
-    <Modal width={560} top="top-[12%]" label="Command palette" testID="palette" onCancel={() => escape()} onOpenChange={(open) => { if (!open) paletteOpen.set(false); }}>
+    <Modal size="medium" label="Command palette" testID="palette" onCancel={() => escape()} onOpenChange={(open) => { if (!open) paletteOpen.set(false); }}>
       <View role="menu" class="gap-2">
         <ModalTitle title="Command palette" />
         <View class="border-b border-border">
           <Input autoFocus placeholder="type to filter commands" accessibilityLabel="Search commands" testID="palette-input" onChange={({ value: t }) => { q.set(t); idx.set(0); }} onSubmit={() => { const it = items()[idx()]; if (it) pick(it.c); }} submitBehavior="submit" class={`h-10 ${TS.base} text-foreground placeholder:text-muted-foreground`} />
         </View>
         <If when={items().length > 0} else={<View class="py-4"><Text class={T.sec}>No command matches “{q()}”.</Text></View>}>
-          <Scroll class="max-h-[380px]" testID="palette-list">
+          <Scroll style={{ maxHeight: Math.min(380, modalBodyHeight(40)) }} testID="palette-list">
             <View class="gap-0.5">
             <Each of={items()} key={(x) => x.c.id}>
               {(it, i) => {
@@ -118,9 +118,9 @@ function PickerBody() {
   ];
   void keys;
   return (
-    <Modal width={520} top="top-[14%]" label={p().title} onCancel={() => escape()} onOpenChange={(open) => { if (!open) picker.set(null); }}>
+    <Modal size="medium" label={p().title} onCancel={() => escape()} onOpenChange={(open) => { if (!open) picker.set(null); }}>
       <View testID="picker" accessibilityLabel={p().title} role="menu" class="gap-2">
-        <ModalTitle title={p().title} esc={false} />
+        <ModalTitle title={p().title} />
         <View class="border-b border-border">
           <Input autoFocus value={query()} placeholder={placeholder()} accessibilityLabel={placeholder()} testID="picker-input"
             onChange={({ value }) => { query.set(value); idx.set(0); }} onSubmit={() => choose()} submitBehavior="submit"
@@ -128,7 +128,7 @@ function PickerBody() {
         </View>
         <If when={p().items.length > 0} else={<View class="py-3"><Text class={T.sec}>{p().note ?? "Nothing to choose from."}</Text></View>}>
           <If when={filtered().length > 0} else={<View class="py-3"><Text class={T.sec}>Nothing matches “{query()}”.</Text></View>}>
-            <Scroll class="max-h-[340px]">
+            <Scroll style={{ maxHeight: Math.min(340, modalBodyHeight(40 + (chosen()?.detail?.length ? 120 : 0))) }}>
               <View class="gap-0.5">
               <Each of={filtered()} key={(x) => x.id}>
                 {(it, i) => (
@@ -181,9 +181,9 @@ function SkillChecklistBody() {
   keymap.bind("enter", () => { if (learnChecklist()?.fetch_id === fetchId && !plan().busy) installLearnChecklist(selected()); }, { when: "always" });
   const cancel = () => { if (!plan().busy) closeLearnChecklist(); };
   return (
-    <Modal width={620} top="top-[10%]" label="Choose skills to install" testID="learn-checklist" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}>
+    <Modal size="large" label="Choose skills to install" testID="learn-checklist" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}>
       <View class="gap-3" testID="learn-checklist-body">
-        <ModalTitle title="Choose skills to install" esc={false} />
+        <ModalTitle title="Choose skills to install" />
         <Text class={T.meta}>{plan().source} · {plan().scope === "global" ? "every project" : "this project"}</Text>
         <View class="flex-row flex-wrap gap-1.5">
           <Btn label="Select all" onPress={() => selected.set(names())} testID="learn-select-all" />
@@ -191,7 +191,7 @@ function SkillChecklistBody() {
           <Btn label="Invert" onPress={() => selected.set(names().filter((name) => !selected().includes(name)))} testID="learn-invert" />
         </View>
         <If when={plan().found.length > 0} else={<View class="py-3"><Text class={T.sec}>No skills were found in this source.</Text></View>}>
-          <Scroll class="max-h-[320px]" testID="learn-skills">
+          <Scroll style={{ maxHeight: Math.min(320, modalBodyHeight(160)) }} testID="learn-skills">
             <View class="gap-0.5">
             <Each of={plan().found} key={(skill) => skill.name}>
               {(skill, i) => {
@@ -233,10 +233,10 @@ export function Confirm() {
   return (
     <If when={confirmDialog()}>
       {(d) => (
-        <Modal width={440} top="top-[22%]" label={d().title} onCancel={() => escape()} closeOnBackdropPress={false}>
+        <Modal size="small" label={d().title} onCancel={() => escape()} closeOnBackdropPress={false}>
           <ConfirmKeys />
           <View testID="confirm-dialog" role="alert" accessibilityLabel={d().title} class="gap-3">
-            <ModalTitle title={d().title} esc={false} />
+            <ModalTitle title={d().title} />
             <View class="gap-2">
               <Text class={T.sec}>{d().body}</Text>
               <If when={d().error}><Text class={`${TS.base} text-error`}>{"✕ " + d().error}</Text></If>
@@ -273,7 +273,7 @@ export function Blocking() {
   const c = () => connection();
   return (
     <If when={c().kind === "incompatible"}>
-      <Modal width={460} top="top-[24%]" label="Incompatible Core" scrim="bg-black/60" onCancel={() => escape()} closeOnBackdropPress={false}>
+      <Modal size="small" label="Incompatible Core" scrim="bg-black/60" onCancel={() => escape()} closeOnBackdropPress={false}>
         <View testID="blocking-dialog" role="alert" accessibilityLabel="Incompatible Core" class="gap-3">
           <View class="flex-row items-center min-h-8 gap-2"><Text class={`text-error ${TS.title}`}>✕</Text><Text class={`${TS.title} font-semibold text-popover-foreground`}>Incompatible Nexus Core</Text></View>
           <Text class={T.sec}>{(() => { const k = c(); return k.kind === "incompatible" ? `Core reports API ${k.core}; this client speaks 1.x. ${k.update === "client" ? "Update NSH (this app)." : "Update Nexus Core."} No requests are sent until this is fixed.` : ""; })()}</Text>
@@ -304,9 +304,9 @@ function AddProjectBody() {
     busy.set(false);
   };
   return (
-    <Modal width={480} top="top-[22%]" label="Add project" onCancel={() => escape()} onOpenChange={(open) => { if (!open) addProjectOpen.set(false); }}>
+    <Modal size="small" label="Add project" onCancel={() => escape()} onOpenChange={(open) => { if (!open) addProjectOpen.set(false); }}>
       <View testID="add-project-dialog" class="gap-3" accessibilityLabel="Add project">
-        <ModalTitle title="Add project" esc={false} />
+        <ModalTitle title="Add project" />
         <Text class={T.sec}>Absolute path of a directory on the machine running Core. Core creates the project if it is new.</Text>
         <Input autoFocus placeholder="/path/to/repo" accessibilityLabel="Project path" testID="project-path" onChange={({ value: t }) => path.set(t)} onSubmit={() => void submit()} submitBehavior="submit" class={`h-10 rounded-none px-3 ${TS.mono} text-foreground ${err() ? "bg-error/10" : "bg-background"}`} />
         <If when={err()}><Text class={`${TS.base} text-error`}>{"✕ " + err()}</Text></If>
@@ -381,9 +381,9 @@ function RenameSessionBody() {
     if (title !== initial) void renameSession(title);
   };
   return (
-    <Modal width={440} label="Rename session" testID="rename-dialog" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}>
+    <Modal size="small" label="Rename session" testID="rename-dialog" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}>
       <View class="gap-3">
-        <ModalTitle title="Rename session" esc={false} />
+        <ModalTitle title="Rename session" />
         <Input autoFocus defaultValue={initial} onChange={({ value }) => text.set(value)} onSubmit={save} submitBehavior="submit"
           accessibilityLabel="Session title" testID="rename-input" class={`rounded-none bg-card px-3 h-10 ${TS.base} text-foreground`} />
         <View class="flex-row justify-end gap-2">

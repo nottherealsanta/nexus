@@ -70,8 +70,8 @@ pub fn scrim_by(theme: &Theme, buf: &mut Buffer, area: Rect, percent: u8) {
 
 /// The block of a modal (DESIGN_PLAN.md D13): `width` by `height` cells,
 /// clamped to fit within 2 cells of every edge of `area` and to at most 70% of
-/// its height, centred (`high`: a quarter of the way down, for the palette).
-pub fn modal_rect(area: Rect, width: u16, height: u16, high: bool) -> Rect {
+/// its height, centred. Every modal, including the palette, uses this rule.
+pub fn modal_rect(area: Rect, width: u16, height: u16) -> Rect {
     let w = width.min(area.width.saturating_sub(4)).max(1);
     let cap = (u32::from(area.height) * 7 / 10) as u16;
     let h = height
@@ -81,7 +81,7 @@ pub fn modal_rect(area: Rect, width: u16, height: u16, high: bool) -> Rect {
     let spare = area.height.saturating_sub(h);
     Rect::new(
         area.x + area.width.saturating_sub(w) / 2,
-        area.y + if high { spare / 4 } else { spare / 2 },
+        area.y + spare / 2,
         w,
         h,
     )

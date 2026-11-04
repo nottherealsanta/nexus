@@ -38,7 +38,7 @@ async def test_start_returns_a_call_and_status_restores_it_without_secrets(h):
     status = (await h.client.get("/api/manager")).json()
     assert status["call"] == {
         "call_id": started["call_id"], "holder": "tui", "phase": "idle", "error": None,
-        "card": None, "live": None}
+        "card": None, "live": None, "preview": None}
     assert stream.stream_id not in str(status) and stream.stream_id not in str(h.events)
     assert [e["data"]["active"] for e in h.of("manager.state")] == [True]
 
@@ -374,3 +374,31 @@ async def test_a_wake_turn_cannot_act_and_says_so(h):
 
 async def _async(value):
     return value
+
+
+async def test_model_excerpt_is_bounded_redacted_and_restored_with_tool_status(h):
+    h.project()
+    h.open_stream()
+    await h.start()
+    await h.say("what's going on?")
+    previews = [e["data"]["preview"] for e in h.of("manager.preview")]
+    assert previews
+    assert any(p["tool"] and p["tool"]["status"] == "running" for p in previews)
+    assert any(p["tool"] and p["tool"]["status"] == "done" for p in previews)
+    h.manager._preview(h.manager.call, "\n".join(["earlier"] * 4 + ['password = "hidden"']), "Input", force=True)
+    status = (await h.client.get("/api/manager")).json()["call"]["preview"]
+    assert len(status["lines"]) <= 3 and status["clipped"]
+    assert "hidden" not in str(status)
+    assert status["tool"]["status"] == "done"
+
+
+async def test_a_retired_call_cannot_update_the_new_holders_excerpt(h):
+    stream = h.open_stream()
+    await h.start("first", stream)
+    retired = h.manager.call
+    other = h.open_stream([])
+    await h.start("second", other)
+    before = len(h.of("manager.preview"))
+    h.manager._preview(retired, "old call output", "Model", force=True)
+    assert h.manager.call.preview is None
+    assert len(h.of("manager.preview")) == before

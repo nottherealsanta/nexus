@@ -21,12 +21,12 @@ use crate::orb::OrbState;
 
 /// Fixed image ids of the sprite set: `BASE` plus the sprite's index.
 pub const BASE: u32 = 0x6d00_0000;
-const LEVELS: u32 = 6;
-const PHASES: u32 = 12;
-const PRESENCES: u32 = 5;
+const LEVELS: u32 = 24;
+const PHASES: u32 = 120;
+const PRESENCES: u32 = 16;
 const CHUNK: usize = 4096;
 /// Seconds of lobe drift between two phase buckets.
-const PHASE_STEP: f32 = 0.5;
+const PHASE_STEP: f32 = 1.0 / 24.0;
 
 /// What to draw: the state, how loud, how far through its drift, how present,
 /// in which colours, and where (top-left cell of the 14 by 4 box).
@@ -136,7 +136,7 @@ impl Sprites {
             return;
         };
         let palette = (req.color, req.white, req.light, req.width, req.height);
-        if self.palette != Some(palette) {
+        if self.palette != Some(palette) || self.sent.len() >= 96 {
             // A new theme: every sprite is the wrong colour.
             let old: Vec<u32> = self.sent.drain().collect();
             for id in old {
@@ -187,8 +187,27 @@ impl Sprites {
             u32::from(req.width) * u32::from(self.font.0),
             u32::from(req.height) * u32::from(self.font.1),
         );
+        // A soft glow needs no more than this raster resolution even with a
+        // large terminal font; placements still use the exact cell bounds.
+        let scale = (320.0 / w as f32).min(192.0 / h as f32).min(1.0);
+        let (w, h) = (
+            (w as f32 * scale).round().max(1.0) as u32,
+            (h as f32 * scale).round().max(1.0) as u32,
+        );
         let pixels = render(req, level, t, presence, w, h);
-        let data = STANDARD.encode(&pixels);
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, w, h);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_compression(png::Compression::Fast);
+            encoder
+                .write_header()
+                .expect("orb PNG header")
+                .write_image_data(&pixels)
+                .expect("orb PNG pixels");
+        }
+        let data = STANDARD.encode(&png_bytes);
         let mut chunks = data.as_bytes().chunks(CHUNK).peekable();
         let mut first = true;
         while let Some(chunk) = chunks.next() {
@@ -197,7 +216,7 @@ impl Sprites {
             if first {
                 let _ = write!(
                     self.queue,
-                    "\x1b_Ga=t,i={id},f=32,s={w},v={h},q=2,m={more};{chunk}\x1b\\"
+                    "\x1b_Ga=t,i={id},f=100,s={w},v={h},q=2,m={more};{chunk}\x1b\\"
                 );
                 first = false;
             } else {
@@ -465,7 +484,7 @@ mod tests {
         s.sync(Some(&request(OrbState::Listening, 0.5, 4)));
         let first = s.take();
         assert!(first.contains("a=t,i="), "transmitted");
-        assert!(first.contains("f=32,s=112,v=64"), "{}", &first[..60]);
+        assert!(first.contains("f=100,s=112,v=64"), "{}", &first[..60]);
         assert!(first.contains("a=p,"), "placed");
         assert!(first.contains(&"c=14,r=4,z=1,C=1".to_string()));
         assert!(first.contains("\x1b[21;5H"), "at the box's cell");

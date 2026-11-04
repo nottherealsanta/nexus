@@ -540,10 +540,14 @@ fn waiting_groups_stay_open_and_live_groups_settle_without_changing_key() {
     let mut options = a.theme.opts;
     options.reduced_motion = false;
     a.theme = a.theme.with(options);
-    // The grey sweep (muted to secondary) starts off the word's left edge, so
-    // compare frames far enough apart for the highlight to have reached `W`.
+    // Compare the start with a quarter pass, when the highlight reaches `W`.
     let frame0 = build(&a, &a.theme, 0, 100);
-    let frame1 = build(&a, &a.theme, 12, 100);
+    let frame1 = build(
+        &a,
+        &a.theme,
+        nexus_tui::theme::shimmer_motion().cycle_frames / 4,
+        100,
+    );
     let index0 = frame0
         .blocks
         .iter()
@@ -1005,7 +1009,7 @@ fn activity_counts_cover_every_tool_family_and_group_unknown_tools() {
 }
 
 #[test]
-fn working_shimmer_peaks_in_primary_grey() {
+fn working_shimmer_peaks_in_highlight_with_a_fast_shared_cycle() {
     use nexus_tui::timeline::{build, BlockKind};
     let mut a = app();
     calls(&mut a, &[("bash", None)]);
@@ -1013,8 +1017,14 @@ fn working_shimmer_peaks_in_primary_grey() {
     let mut options = a.theme.opts;
     options.reduced_motion = false;
     a.theme = a.theme.with(options);
-    let peak = a.theme.fg("text.primary").fg;
-    let seen = (0..54).any(|frame| {
+    let motion = nexus_tui::theme::shimmer_motion();
+    assert_eq!(motion.cycle_frames as u64 * motion.frame_ms, 1500);
+    assert_eq!(
+        motion.frame_ms as u128,
+        nexus_tui::frames::TICK_INTERVAL.as_millis()
+    );
+    let peak = a.theme.fg("text.highlight").fg;
+    let seen = (0..motion.cycle_frames).any(|frame| {
         let t = build(&a, &a.theme, frame, 100);
         let group = t
             .blocks
@@ -1026,7 +1036,7 @@ fn working_shimmer_peaks_in_primary_grey() {
             .iter()
             .any(|s| s.style.fg == peak)
     });
-    assert!(seen, "the highlight reaches primary grey");
+    assert!(seen, "the highlight reaches the brighter peak");
     // Reduced motion stays static.
     options.reduced_motion = true;
     a.theme = a.theme.with(options);

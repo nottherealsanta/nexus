@@ -4,6 +4,42 @@ NSH follows the Void design instead (archived plan: `git show e438b61:VOID_DESIG
 `nexus-nsh/theme-void.toml` overrides `theme.toml` for NSH only, and the NSH sections of
 these rules are historical. The rules below describe the TUI.
 
+## Shared modal rules (2026-11-04)
+
+These rules apply to both clients, including NSH's Void palette. Modal widths have three
+classes: small (TUI 60 cells / NSH 500 px) for confirmations and short input; medium
+(72 cells / 600 px) for palettes, pickers, provider details, usage and notifications;
+large (88 cells / 740 px) for Settings, context documents, resources and images.
+Clamp once to the window's edge gutters (2 TUI cells / 12 NSH px). Every modal is
+centred vertically and horizontally, including the command palette. Content determines
+the height, capped at 70% of the window; scrollable bodies reserve space for the title,
+controls and footer. The existing TUI long-confirmation fallback can exceed this cap
+until its body supports scrolling; never hide confirmation text just to meet a size rule.
+The file editor keeps its dedicated workspace geometry, and a row menu remains anchored
+to its row because it is a popover rather than a modal.
+
+Titles use the full content width, without a duplicate Esc chip. Key hints occupy the
+last row: navigation, primary action, then dismissal. Use **close** to leave a modal,
+**back** to return one level, and **cancel** to discard input. The TUI uses `hint_row`,
+NSH `ModalFooter`; input dialogs use the same footer as other modals. Settings selection uses `interactive.settings_selection`: a neutral gray band across the
+whole section or setting row (including its value). A white left bar marks the focused
+pane (a dark bar in the light theme); inactive selections retain their gray background. NSH uses
+the same fill for selected sections and hovered or keyboard-focused setting rows.
+Left returns focus from a setting or detail page to its section heading without
+changing the value; Up/Down then move among sections. Right changes values and Shift+Right steps backward, cycling
+model effort back to default after the final level. The search field retains normal
+caret movement. Settings uses a compact section rail with no empty rows between sections and keeps
+its search and section rail visible while its rows scroll. This first pass establishes
+the shared geometry; a complete footer, focus and provider/tool-grid review is still
+tracked in PLAN.md 8.0.
+
+Working uses the shared `[motion.shimmer]` recipe: a 12-frame pass at 125 ms per
+frame (1.5 s), secondary text at rest and `text.highlight` at the crest (white in
+dark mode, dark in light mode). Both clients use the same travelling smoothstep
+curve and retain plain primary text when reduced motion is enabled.
+
+## TUI surfaces
+
 The visual reference is the old Nexus TUI in `../nexus/rust/tui/src`. This
 client adapts its patterns to the Core API and the one-timeline model. The
 shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
@@ -19,7 +55,7 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   One modal recipe (palette, pickers, Settings, confirms, help, notifications): the
   scrim over the whole frame, then a borderless `surface.raised` block with 2 cells of
   padding left and right and 1 row top and bottom; the title (bold) is the first row
-  inside with `esc` muted on its right, key hints (bold key, muted label) the last row;
+  inside, key hints (bold key, muted label, including Esc) the last row;
   at most 70% of the frame high and within 2 cells of its edge. The fill resets
   modifiers. Rows use the selection band and the `▌` focus bar, section headings are
   UPPERCASE bold muted, a disabled row is muted with its reason in the footer.
@@ -71,7 +107,7 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   by its edge and collapses to a rail of one letter per session whose hover
   shows the title and place. Settings is the modal recipe over the scrimmed
   session: search, UPPERCASE muted section headings, values right-aligned, the selected
-  row on the selection band with the focus bar, ←/→ to change. Escape clears the search, then closes.
+  row on a full-width neutral gray band with a white focus bar, → to change and ← to return to sections. Escape clears the search, then closes.
 - The waiting card is docked above the composer on the panel surface with a heavy accent
   rail: `◆ Allow bash?`, `waiting on you · 0:42`, the parameter table, the diff capped at
   12 rows and the choices as key chips on `surface.raised` (the selected row on the
