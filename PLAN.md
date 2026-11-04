@@ -281,10 +281,8 @@ kernel run.
 
 Nothing here needs new code unless a check fails. Each needs a scratch `$NEXUS10_HOME` or a copy of a real home.
 
-- [ ] **Real OpenAI and Ollama calls.** Codex and the device-flow providers (Copilot, Grok, OpenCode) are done.
-- [ ] **`nexus migrate` on a copy of a real old `~/.nexus`**, on a fresh machine. Never the real home.
 - [ ] **Real daemon with both clients:**
-  - model memory with no default model: a draft with no model asks for one (Core's draft-context returns 400 "no
+  - model memory with no default model: a draft with no model asks for one (Core's draft-context returns 40 "no
     model selected", so the preview is empty until one is chosen; consider a provider-independent estimate); a
     remembered model whose provider is signed out is shown, not replaced; a pre-change session with no model asks;
   - sign-in from each client's Providers pane, one device-flow and one browser-flow provider;
