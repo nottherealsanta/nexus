@@ -622,6 +622,12 @@ def test_inspector_load_and_replay_have_independent_deduplication():
     node = shutil.which("node")
     if not node:
         pytest.skip("Node is required for inspector state regression")
+    try:
+        probe = subprocess.run([node, "--version"], check=False, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"node cannot run: {exc}")
+    if probe.returncode != 0:
+        pytest.skip(f"node --version failed (exit {probe.returncode}): {probe.stderr.strip()[:120]}")
     source = (Path(__file__).parents[1] / "nexus/inspector/index.html").read_text()
     loading = source[source.index("let loadSeq = 0;"):source.index("// -- rendering")]
     applying = source[source.index("function applyEvent(e)"):source.index('document.addEventListener("keydown"')]
