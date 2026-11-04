@@ -530,12 +530,8 @@ waits for a profile or workload that needs it.
 
 From the session retrospective (2026-11-03, 261 sessions):
 
-- [ ] **Automatic compaction for long turns.** A 499-step DeepSeek turn ran at 280–370K tokens per request;
-  opencode's summary template is the reference. It must stay visible on the timeline.
 - [ ] **Tiered fuzzy matching in `edit`** (curly quotes, dashes, trailing whitespace, CRLF), as opencode does, and
   a multi-edit input like pi's `edits[]`.
-- [ ] **DeepSeek file reading:** it batches 5% of its messages and reads through `bash sed -n`; consider a hint on
-  plain `sed -n`/`cat` results and re-measure after the prompt change.
 - [ ] **Soft nudge at about 80% of `steps`**, and a default effort for `scout`/`quick`.
 - [ ] **Code mode:** measure comparable real-provider tasks for correctness, requests, tokens and elapsed time
   ([docs/agents.md](docs/agents.md#choosing-code-mode)). The live `~/.nexus/agents/build.md` override needs the
