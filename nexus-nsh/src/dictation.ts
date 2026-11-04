@@ -1,5 +1,6 @@
 import { ApiError, apiUrl, request, sleep } from "./core/transport";
-import { Microphone } from "nexus/native";
+import { nativeModule } from "nsh";
+import type { MicrophoneModule } from "nexus/native";
 import { downmixChannels, hasMicrophoneCapture, MAX_RECORDING_SECONDS, MIN_RECORDING_SECONDS, PREVIEW_WINDOW_SECONDS, previewDue, recordingToWav, rmsLevel, transitionDictation } from "./dictation-logic";
 import type { DictationEvent, DictationPhase } from "./dictation-logic";
 import { confirmDialog, toast } from "./store";
@@ -43,6 +44,15 @@ type Capture = {
   native?: NativeCapture;
 };
 
+// Look the native module up at call time, as `mermaid.ts` does: a static
+// `nexus/native` import makes every test that reaches the composer's commands
+// load the native module outside the app bundle, which fails under `nsh test`.
+let microphone: MicrophoneModule | null = null;
+function nativeMicrophone(): MicrophoneModule {
+  microphone ??= nativeModule<{ Microphone: MicrophoneModule }>("nexus/native").Microphone;
+  return microphone;
+}
+
 let generation = 0;
 let capture: Capture | null = null;
 let previewInFlight: Promise<void> | null = null;
@@ -60,7 +70,7 @@ export function isDictationBusy(): boolean {
 
 /** Whether this client can open a microphone at all. */
 export function microphoneAvailable(): boolean {
-  return hasMicrophoneCapture(environment().navigator) || Microphone.available();
+  return hasMicrophoneCapture(environment().navigator) || nativeMicrophone().available();
 }
 
 function environment() {
@@ -358,13 +368,13 @@ function beginCapture(insert: (text: string) => void, expectedGeneration: number
         if (loadingCue) clearInterval(loadingCue);
       }
       if (generation !== expectedGeneration || dictationPhase() !== "requesting") return;
-      if (!hasMicrophoneCapture(environment().navigator) && Microphone.available()) {
-        await Microphone.start();
+      if (!hasMicrophoneCapture(environment().navigator) && nativeMicrophone().available()) {
+        await nativeMicrophone().start();
         if (generation !== expectedGeneration || dictationPhase() !== "requesting") {
-          await Microphone.cancel();
+          await nativeMicrophone().cancel();
           return;
         }
-        const timer = setInterval(() => dictationLevel.set(Microphone.level()), 100);
+        const timer = setInterval(() => dictationLevel.set(nativeMicrophone().level()), 100);
         move("ready");
         capture = {
           generation: expectedGeneration,
@@ -547,7 +557,7 @@ export async function stopDictation() {
     clearInterval(current.native.timer);
     duration = (Date.now() - current.native.started) / 1000;
     try {
-      wav = await Microphone.stop();
+      wav = await nativeMicrophone().stop();
     } catch (error) {
       if (current.generation === generation) {
         move("fail");
@@ -611,7 +621,7 @@ export function cancelDictation() {
     current.finalController?.abort();
     if (current.native) {
       clearInterval(current.native.timer);
-      void Microphone.cancel();
+      void nativeMicrophone().cancel();
     } else {
       void stopRecorder(current).then(() => { if (wasActive) cue([660, 440]); });
     }
