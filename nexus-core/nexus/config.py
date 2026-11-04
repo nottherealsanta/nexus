@@ -28,6 +28,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "tools": {"disabled": [], "permission": {}},
     "context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]},
     "sessions": {"auto_archive_idle_seconds": 3600},
+    "usage": {"refresh_minutes": 10},
     "ui": {"detail": "medium", "reduced_motion": False},
     "web": {"search_url": "http://127.0.0.1:18765/search", "fetch_timeout_s": 15},
     "mcp": {"full_definitions": False, "max_listed_tools": 25},
@@ -41,6 +42,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 SCHEMA: dict[str, dict[str, Any]] = {
     "ui.detail": {"type": "string", "enum": ["low", "medium", "high"]},
     "ui.reduced_motion": {"type": "boolean"},
+    "usage.refresh_minutes": {"type": "integer", "minimum": 1, "maximum": 1440,
+                              "description": "minutes between provider usage refreshes"},
     "agents.models": {"type": "object", "description": "per-child-agent model refs; a new subagent picks one with equal probability"},
     "agents.fallbacks": {"type": "object", "description": "per-child-agent ordered fallback model refs"},
     "agents.efforts": {"type": "object", "description": "per-child-agent, per-model reasoning effort: {agent: {provider/model: effort}}; a subagent running that model uses it"},
@@ -81,6 +84,8 @@ SCHEMA: dict[str, dict[str, Any]] = {
 
 
 def _valid(section: str, key: str, value: Any) -> bool:
+    if section == "usage":
+        return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 1440
     if section == "agents" and key == "efforts":
         if not isinstance(value, dict) or len(value) > 200:
             return False

@@ -644,7 +644,7 @@ fn files_tree_expands_with_git_marks_and_hides_ignored() {
     app.execute("sidebar.tab.files");
     app.apply_sync(SyncMsg::Files {
         project: project.clone(),
-        session: Some(SESSION.into()),
+        session: None,
         path: String::new(),
         file: false,
         data: Ok(serde_json::json!({"entries": [
@@ -685,7 +685,7 @@ fn files_tree_expands_with_git_marks_and_hides_ignored() {
     press(&mut app, &["enter"]);
     app.apply_sync(SyncMsg::Files {
         project,
-        session: Some(SESSION.into()),
+        session: None,
         path: "src".into(),
         file: false,
         data: Ok(serde_json::json!({"entries": [{"name": "b.rs", "kind": "file"}]})),
@@ -726,7 +726,7 @@ fn file_actions_copy_mention_and_switch_the_root() {
     app.execute("sidebar.tab.files");
     app.apply_sync(SyncMsg::Files {
         project: project.clone(),
-        session: Some(SESSION.into()),
+        session: None,
         path: String::new(),
         file: false,
         data: Ok(serde_json::json!({"entries": [
@@ -770,17 +770,16 @@ fn file_actions_copy_mention_and_switch_the_root() {
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     // D16: the root header is the checkout name as written, then its branch
-    assert!(all.contains("\u{25be} ws"), "{all}");
-    assert!(all.contains("\u{2325} feature"), "{all}");
+    assert!(all.contains("\u{25be} x"), "{all}");
     assert!(app.hits.rect_of(&Target::FilesRoot).is_some());
     app.effects.clear();
     app.execute("files.root_toggle");
-    assert!(app.ui.files_project_root);
+    assert!(!app.ui.files_project_root);
     assert!(
         app.effects.iter().any(|effect| matches!(
             effect,
             Effect::Sync(Command::Files {
-                session: None,
+                session: Some(_),
                 path,
                 file: false,
                 ..
@@ -878,7 +877,7 @@ fn files_list_open_read_and_return_to_timeline() {
     app.execute("sidebar.tab.files");
     app.apply_sync(SyncMsg::Files {
         project: project.clone(),
-        session: Some(SESSION.into()),
+        session: None,
         path: String::new(),
         file: false,
         data: Ok(serde_json::json!({"entries": [{"name": "hello.txt", "kind": "file"}]})),
@@ -889,7 +888,7 @@ fn files_list_open_read_and_return_to_timeline() {
     assert!(app.ui.file_open);
     app.apply_sync(SyncMsg::Files {
         project,
-        session: Some(SESSION.into()),
+        session: None,
         path: "hello.txt".into(),
         file: true,
         data: Ok(serde_json::json!({"content": "the file contents\n"})),
@@ -915,7 +914,7 @@ fn open_named_file_view(name: &str, content: &str) -> nexus_tui::app::App {
     app.execute("sidebar.tab.files");
     app.apply_sync(SyncMsg::Files {
         project: project.clone(),
-        session: Some(SESSION.into()),
+        session: None,
         path: String::new(),
         file: false,
         data: Ok(serde_json::json!({"entries": [{"name": name, "kind": "file"}]})),
@@ -924,7 +923,7 @@ fn open_named_file_view(name: &str, content: &str) -> nexus_tui::app::App {
     app.click(Target::SideRow(0));
     app.apply_sync(SyncMsg::Files {
         project,
-        session: Some(SESSION.into()),
+        session: None,
         path: name.into(),
         file: true,
         data: Ok(serde_json::json!({"content": content, "revision": "rev1"})),
@@ -1028,7 +1027,7 @@ fn a_stale_save_keeps_the_text_and_a_reload_replaces_it() {
     let project = app.current_project().unwrap();
     app.apply_sync(SyncMsg::Files {
         project,
-        session: Some(SESSION.into()),
+        session: None,
         path: "hello.txt".into(),
         file: true,
         data: Ok(serde_json::json!({"content": "theirs\n", "revision": "rev9"})),
@@ -1073,7 +1072,7 @@ fn an_outside_change_reloads_a_clean_editor_and_warns_a_dirty_one() {
     );
     app.apply_sync(SyncMsg::Files {
         project: project.clone(),
-        session: Some(SESSION.into()),
+        session: None,
         path: "hello.txt".into(),
         file: true,
         data: Ok(serde_json::json!({"content": "new\n", "revision": "rev5"})),
@@ -3873,7 +3872,7 @@ fn the_files_root_header_and_indent_guides_follow_d16() {
     app.execute("sidebar.tab.files");
     app.apply_sync(SyncMsg::Files {
         project: project.clone(),
-        session: Some(SESSION.into()),
+        session: None,
         path: String::new(),
         file: false,
         data: Ok(serde_json::json!({"entries": [
@@ -3902,7 +3901,7 @@ fn the_files_root_header_and_indent_guides_follow_d16() {
     press(&mut app, &["enter"]);
     app.apply_sync(SyncMsg::Files {
         project: project.clone(),
-        session: Some(SESSION.into()),
+        session: None,
         path: "src".into(),
         file: false,
         data: Ok(serde_json::json!({"entries": [{"name": "deep", "kind": "directory"}]})),
@@ -3910,7 +3909,7 @@ fn the_files_root_header_and_indent_guides_follow_d16() {
     press(&mut app, &["down", "enter"]);
     app.apply_sync(SyncMsg::Files {
         project,
-        session: Some(SESSION.into()),
+        session: None,
         path: "src/deep".into(),
         file: false,
         data: Ok(serde_json::json!({"entries": [{"name": "x.rs", "kind": "file"}]})),
@@ -4027,7 +4026,7 @@ fn a_covered_timeline_shows_its_waiting_badge() {
     app.execute("sidebar.tab.files");
     app.apply_sync(SyncMsg::Files {
         project: project.clone(),
-        session: Some(SESSION.into()),
+        session: None,
         path: String::new(),
         file: false,
         data: Ok(serde_json::json!({"entries": [{"name": "hello.txt", "kind": "file"}]})),
@@ -4036,7 +4035,7 @@ fn a_covered_timeline_shows_its_waiting_badge() {
     app.click(Target::SideRow(0));
     app.apply_sync(SyncMsg::Files {
         project,
-        session: Some(SESSION.into()),
+        session: None,
         path: "hello.txt".into(),
         file: true,
         data: Ok(serde_json::json!({"content": "hello\n", "revision": "rev1"})),

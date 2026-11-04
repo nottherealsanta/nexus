@@ -6,19 +6,21 @@ two processes never rotate the same refresh token at once.
 """
 from __future__ import annotations
 
+import asyncio
 import fcntl
 import json
 import os
 import secrets
 import stat
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 
 from ...paths import home
 
 _MAX_BYTES = 256 * 1024
+_ASYNC_LOCKS: dict[asyncio.AbstractEventLoop, asyncio.Lock] = {}
 
 
 class CredentialError(Exception):
@@ -83,3 +85,19 @@ class CredentialStore:
         finally:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
+
+    @asynccontextmanager
+    async def alocked(self) -> AsyncIterator[None]:
+        """`locked()` for code that awaits while holding it. Coroutines in one process
+        queue on an asyncio lock, and the file lock is waited for off the event loop,
+        so a refresh in flight never blocks the loop that would finish it."""
+        loop = asyncio.get_running_loop()
+        async with _ASYNC_LOCKS.setdefault(loop, asyncio.Lock()):
+            self._ensure_dir()
+            fd = os.open(self.path.parent / "auth.lock", os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                await asyncio.to_thread(fcntl.flock, fd, fcntl.LOCK_EX)
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)

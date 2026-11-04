@@ -518,7 +518,10 @@ estimate.
   (asking first when dirty); `files.changed` reloads a clean editor and warns a dirty one. Esc
   asks before dropping changes. Not built: find (`editor.find`), syntax highlighting.
 - **Provider usage (K11).** `/usage` (palette: Show provider usage) shows every connected provider from
-  `GET /api/usage`, with plan windows where reported and a note where not.
+  `GET /api/usage`, with plan windows where reported and a note where not. The modal hides xAI prepaid credits
+  and Copilot chat, completions and AI-credit details; other providers' corresponding rows are unchanged. Core stores the latest snapshot and
+  refreshes it every 10 minutes by default; Settings → Context changes the interval, and `r` refreshes it on demand.
+  Esc closes the modal without waiting.
 - **Tool images (K8).** A tool row whose result has `media` stays folded and notes the image count; opening it shows the images
   (`/api/artifact/{id}`, same origin) under the output.
 

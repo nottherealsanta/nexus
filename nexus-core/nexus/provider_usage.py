@@ -31,8 +31,9 @@ import calendar
 import json
 import math
 import re
+import sqlite3
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -527,3 +528,41 @@ async def providers_usage(client: httpx.AsyncClient | None = None) -> dict[str, 
         if own:
             await client.aclose()
     return {"fetched": datetime.now(UTC).timestamp(), "providers": list(rows)}
+
+
+class UsageCache:
+    """One durable snapshot shared by clients and the daemon's periodic refresh."""
+
+    def __init__(self, db: sqlite3.Connection, interval: Callable[[], int]) -> None:
+        self.db = db
+        self.interval = interval
+        self.lock = asyncio.Lock()
+        self.db.execute("create table if not exists provider_usage_cache (id integer primary key, snapshot text not null)")
+        self.db.commit()
+        row = self.db.execute("select snapshot from provider_usage_cache where id = 1").fetchone()
+        self.value = json.loads(row[0]) if row else {"fetched": None, "providers": []}
+
+    def snapshot(self) -> dict[str, Any]:
+        return self.value
+
+    async def refresh(self) -> dict[str, Any]:
+        previous = self.value
+        async with self.lock:
+            if self.value is not previous:
+                return self.value
+            value = await providers_usage()
+            self.db.execute("insert or replace into provider_usage_cache (id, snapshot) values (1, ?)",
+                            (json.dumps(value),))
+            self.db.commit()
+            self.value = value
+            return value
+
+    async def run(self) -> None:
+        while True:
+            fetched = self.value.get("fetched") or 0
+            if time.time() >= fetched + self.interval() * 60:
+                try:
+                    await self.refresh()
+                except Exception:  # noqa: BLE001 - retain the last snapshot and retry later
+                    await asyncio.sleep(60)
+            await asyncio.sleep(2)

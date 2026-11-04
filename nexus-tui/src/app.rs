@@ -995,7 +995,7 @@ impl App {
                 file_search: None,
                 files_expanded: std::collections::BTreeSet::new(),
                 files_hide_ignored: false,
-                files_project_root: false,
+                files_project_root: true,
                 composer_drag: None,
                 scope_all: false,
                 show_archived: false,
@@ -3152,7 +3152,7 @@ impl App {
 
     /// The session whose directory the Files tree browses. The project checkout
     /// is requested when the user chose it or there is no session.
-    fn files_session(&self) -> Option<String> {
+    pub fn files_session(&self) -> Option<String> {
         if self.ui.files_project_root {
             return None;
         }
@@ -4833,8 +4833,9 @@ impl App {
                     )));
             }
         }
-        self.ui.files_project_root = false;
-        self.reset_files();
+        if !self.ui.files_project_root {
+            self.reset_files();
+        }
         self.refresh_history();
         self.ui.view = View::Session;
         self.effects
@@ -5083,7 +5084,12 @@ impl App {
                     self.reload_file();
                 }
             }
-            "app.usage" => self.api(ApiCall::Usage),
+            "app.usage" => {
+                self.open_overlay(OverlayKind::Usage {
+                    rows: vec![crate::usage::Row::Note("Reading provider usage…".into())],
+                });
+                self.api(ApiCall::Usage);
+            }
             "app.quit" => self.effects.push(Effect::Quit),
             "app.settings" => {
                 if self.ui.view == View::Settings {
@@ -6623,19 +6629,30 @@ impl App {
             }
             return;
         }
-        if let ApiCall::Usage = &done.call {
+        if matches!(&done.call, ApiCall::Usage | ApiCall::RefreshUsage) {
             match done.result {
                 Ok(r) => {
                     let rows = crate::usage::rows(&r.usage.unwrap_or_default(), now_secs());
-                    match self.ui.overlay.as_mut().map(|o| &mut o.kind) {
-                        Some(OverlayKind::Usage { rows: shown }) => *shown = rows,
-                        _ => self.open_overlay(OverlayKind::Usage { rows }),
+                    if let Some(OverlayKind::Usage { rows: shown }) =
+                        self.ui.overlay.as_mut().map(|o| &mut o.kind)
+                    {
+                        *shown = rows;
                     }
                 }
-                Err(error) => self.toast(
-                    Level::Error,
-                    format!("Provider usage failed to load: {error}"),
-                ),
+                Err(error) => {
+                    if matches!(
+                        self.ui.overlay.as_ref().map(|o| &o.kind),
+                        Some(OverlayKind::Usage { .. })
+                    ) {
+                        if matches!(&done.call, ApiCall::Usage) {
+                            self.close_overlay();
+                        }
+                        self.toast(
+                            Level::Error,
+                            format!("Provider usage failed to load: {error}"),
+                        );
+                    }
+                }
             }
             return;
         }
@@ -8429,7 +8446,7 @@ impl App {
                 })
             ) =>
             {
-                self.api(ApiCall::Usage);
+                self.api(ApiCall::RefreshUsage);
             }
             "up" => self.overlay_move(-1),
             "down" => self.overlay_move(1),
@@ -9709,6 +9726,7 @@ impl App {
                 | "mcp.full_definitions"
                 | "mcp.max_listed_tools"
                 | "context.handoff_percent"
+                | "context.usage_refresh_minutes"
                 | "context.title_models"
                 | "manager.enabled"
                 | "manager.mode"
@@ -9873,6 +9891,22 @@ impl App {
                             revision: revision.to_owned(),
                             path: "mcp.full_definitions".into(),
                             value: json!(value),
+                        }));
+                    }
+                } else {
+                    self.toast(Level::Warning, "Configuration is not loaded");
+                }
+            }
+            "context.usage_refresh_minutes" => {
+                if let Some(config) = &self.state.config {
+                    if let Some(revision) = config["revision"].as_str() {
+                        let current = config["values"]["usage"]["refresh_minutes"]
+                            .as_i64()
+                            .unwrap_or(10);
+                        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+                            revision: revision.to_owned(),
+                            path: "usage.refresh_minutes".into(),
+                            value: json!((current + step.signum() as i64).clamp(1, 1440)),
                         }));
                     }
                 } else {
@@ -10056,7 +10090,10 @@ impl App {
             | "notifications.sound"
             | "notifications.terminal"
             | "appearance.timeline_detail" => self.settings_change_row(row, 1),
-            "mcp.full_definitions" | "mcp.max_listed_tools" | "context.handoff_percent" => {
+            "mcp.full_definitions"
+            | "mcp.max_listed_tools"
+            | "context.handoff_percent"
+            | "context.usage_refresh_minutes" => {
                 self.settings_change_row(row, 1)
             }
             "context.title_models" => self.edit_title_models(),
@@ -11588,6 +11625,7 @@ impl App {
                 self.run_command(id);
             }
             Target::SettingsEntry => self.run_command("app.settings"),
+            Target::UsageRefresh => self.api(ApiCall::RefreshUsage),
             Target::SideRow(i) => {
                 self.ui.focus = Focus::Sidebar;
                 self.ui.cursor.insert(self.ui.tab, i);
@@ -12159,7 +12197,7 @@ impl ActionDone {
             ApiCall::Prompts { .. } | ApiCall::Search { .. } => "",
             ApiCall::OlderMessages { .. } => "Older messages failed to load",
             ApiCall::SwitchCost { .. } => "",
-            ApiCall::Usage => "Provider usage failed to load",
+            ApiCall::Usage | ApiCall::RefreshUsage => "Provider usage failed to load",
             ApiCall::SaveFile { .. } => "Save failed",
             ApiCall::Shell { .. } => "Shell command failed",
         }

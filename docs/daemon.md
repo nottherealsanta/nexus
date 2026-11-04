@@ -6,6 +6,9 @@ tool approvals, pending questions, workspace control operations, session
 archiving, pending directory moves and startup recovery, and exposes them over
 the [HTTP API](api.md). Clients never read Nexus state files.
 
+The daemon also keeps the latest provider-usage snapshot in its database, refreshing it every 10 minutes by default
+while running. `[usage] refresh_minutes` changes the interval (1–1440); clients can request an immediate refresh.
+
 An explicit reasoning-effort selection on a root session is remembered for new
 root sessions, including after a daemon restart. Selecting default remembers the
 absence of an override; otherwise the configured default applies until a choice

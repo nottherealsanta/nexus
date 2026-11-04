@@ -128,11 +128,14 @@ interface Handler { run: () => void | Promise<void>; mutates?: boolean }
 export const handlers = new Map<string, Handler>();
 /** `app.usage`: every connected provider's usage (K11), in the provider-usage dialog; again while open refreshes. */
 async function showUsage() {
-  usageDialog.set({ providers: usageDialog()?.providers ?? [], loading: true });
+  const refresh = !!usageDialog();
+  const previous = usageDialog();
+  const pending = { providers: previous?.providers ?? [], fetched: previous?.fetched, loading: true };
+  usageDialog.set(pending);
   try {
-    const u = await request<{ providers: UsageProvider[] }>("GET", "/api/usage");
-    usageDialog.set({ providers: u.providers ?? [], loading: false });
-  } catch (e) { usageDialog.set(null); toast("error", `Provider usage failed to load: ${e instanceof ApiError ? e.message : String(e)}`); }
+    const u = await request<{ providers: UsageProvider[]; fetched?: number | null }>(refresh ? "POST" : "GET", "/api/usage");
+    if (usageDialog() === pending) usageDialog.set({ providers: u.providers ?? [], loading: false, missing: u.fetched === null, fetched: u.fetched });
+  } catch (e) { if (usageDialog() === pending) { usageDialog.set(previous); toast("error", `Provider usage failed to load: ${e instanceof ApiError ? e.message : String(e)}`); } }
 }
 
 const on = (id: string, run: Handler["run"], mutates = false) => handlers.set(id, { run, mutates });

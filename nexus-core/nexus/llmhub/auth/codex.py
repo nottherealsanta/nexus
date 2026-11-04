@@ -98,7 +98,7 @@ class CodexAuth:
         return values
 
     async def _refresh(self) -> None:
-        with self.store.locked():
+        async with self.store.alocked():
             entry = self.store.read(ENTRY)
             if not entry or not entry.get("refresh_token"):
                 raise AuthError("codex: not logged in; run `nexus login codex`")

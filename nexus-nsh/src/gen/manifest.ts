@@ -502,6 +502,15 @@ export const manifest = {
     "label": "Context",
     "row": [
      {
+      "id": "context.usage_refresh_minutes",
+      "label": "Refresh interval (minutes)",
+      "kind": "number",
+      "scope": "core",
+      "clients": "both",
+      "default": 10,
+      "note": "Refresh provider usage every 1\u20131440 minutes; refresh manually in the usage modal."
+     },
+     {
       "id": "context.handoff_percent",
       "label": "Automatic handoff threshold (%)",
       "kind": "number",

@@ -517,7 +517,7 @@ export const alertDetail = signal<Toast | null>(null);
 /** One row of `GET /api/usage` (K11): a connected provider with its plan and limit windows, notes, or why it could not be read. */
 export interface UsageProvider { id: string; label?: string; plan?: string; error?: string; notes?: string[]; windows?: { label?: string; used_percent?: number | null; resets_at?: number | null; detail?: string }[] }
 /** The open provider-usage dialog (`app.usage`); `null` when closed. */
-export const usageDialog = signal<{ providers: UsageProvider[]; loading: boolean } | null>(null);
+export const usageDialog = signal<{ providers: UsageProvider[]; loading: boolean; missing?: boolean; fetched?: number | null } | null>(null);
 /**
  * The toast's `text` is the whole message and stays on the record (notifications, detail modal). The
  * card shows a title and an optional body: the first line, or the text up to an early `: `.
@@ -792,7 +792,7 @@ export const fileDirty = () => { const f = openFile(); return !!f && f.draft !==
 export const gitStatus = signal<{ session: string; data?: any; error?: string } | null>(null);
 let filesRequest = 0;
 export async function loadFiles(path = "") {
-  const project = currentProject(), session = viewed()?.id;
+  const project = currentProject(), session = undefined;
   if (!project) { fileListing.set(null); return; }
   const seq = ++filesRequest;
   fileListing.set(null);
@@ -802,7 +802,7 @@ export async function loadFiles(path = "") {
   } catch (e) { if (seq === filesRequest) fileListing.set({ path, entries: [], error: String(e) }); }
 }
 export async function showFile(path: string) {
-  const project = currentProject(), session = viewed()?.id;
+  const project = currentProject(), session = undefined;
   if (!project) return;
   const seq = ++filesRequest;
   openFile.set({ path, project, session }); centre.set("file"); drawer.set(null); fileFindOpen.set(false); fileSource.set(false);
@@ -919,7 +919,6 @@ export async function selectSession(id: string) {
   bump();
   void loadGit(id);
   loadSessionWorktrees(id);
-  if (leftTab() === "files") void loadFiles();
   if (isNarrow()) drawer.set(null);
   void request<any>("GET", `/api/session/${id}`).then((full) => {
     const cur = model.sessions.get(id);

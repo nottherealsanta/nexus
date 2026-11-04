@@ -57,6 +57,24 @@ async def test_token_is_required(setup):
     assert response.status_code == 401
 
 
+async def test_provider_usage_reads_saved_snapshot_and_refreshes_on_post(setup, monkeypatch):
+    from nexus import provider_usage
+
+    _, client, _, _ = setup
+    calls = 0
+
+    async def fetch():
+        nonlocal calls
+        calls += 1
+        return {"fetched": calls, "providers": [{"id": "codex"}]}
+
+    monkeypatch.setattr(provider_usage, "providers_usage", fetch)
+    assert (await client.get("/api/usage")).json() == {"fetched": None, "providers": []}
+    assert (await client.post("/api/usage")).json()["fetched"] == 1
+    assert (await client.get("/api/usage")).json()["fetched"] == 1
+    assert calls == 1
+
+
 async def test_an_anonymous_server_answers_without_a_token(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     app = build_app(make_runtime(remembering(Store(tmp_path / "anon.db"), "scripted/m")), token="", url="http://test")

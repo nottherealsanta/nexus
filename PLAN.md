@@ -70,6 +70,8 @@ because Apple's `ar` produces a broken archive.
 
 ## Landed
 
+- **Provider usage snapshots (11-04).** Core stores the latest provider usage and refreshes it periodically (default 10 minutes, configurable in Settings); both clients show the saved snapshot and offer manual refresh. An already-open modal does not yet update after a background refresh; provider integration and screenshots remain to be checked.
+
 - **GPT-Live sideband certificate trust (11-04).** A real diagnostic reached call creation but the sideband failed with `CERTIFICATE_VERIFY_FAILED` on the python.org interpreter. The WebSocket now uses HTTPX’s verified CA context, and Core publishes startup failures to both clients and status. All 16 Live tests and targeted Ruff checks pass; an unauthenticated TLS handshake succeeds. A new real call remains to be checked.
 
 - **Manager Live failure and orb (11-04).** Both clients preserve Live mode after audio fails, keep the real error and typed input, and never fall into Dictation. Focused stages leave 30% of the background visible. TUI now connects the existing smooth RGBA orb renderer on Kitty graphics terminals, with a centred cell fallback elsewhere. Validation: 28 TUI Manager tests and 11 orb tests pass; 43 NSH Manager browser tests pass in an isolated app without the native crate (the installed CLI cannot build the pinned native dependency). TUI stage/orb preview inspected; NSH screenshot blocked by that dependency. Full TUI suite retains 8 unrelated failures (Markdown, six shell cases, timeline selection). Real-service audio remains unverified.
@@ -1007,8 +1009,8 @@ Proposed design (not implemented; scope choice below is still open):
 - [ ] **J4 Anthropic Messages:** the Anthropic SDK as a plain client (Nexus owns the loop); preserve signed thinking
   blocks for lossless replay; cache-control breakpoints and tool-result media.
 - [ ] **J5 Gemini:** a dialect that preserves replayable reasoning.
-- [ ] **Antigravity:** assess fit with the one-timeline rule before porting; use the Claude Agent SDK and the
-  approach in https://github.com/NoeFabris/opencode-antigravity-auth rather than ZMX.
+- [ ] **ZMX mode (subagents only, off by default):** port the Claude Code and Antigravity workers from `nexus01`. See
+  [ZMX_plan.md](ZMX_plan.md) (user direction 2026-11-04; replaces the earlier SDK and `opencode-antigravity-auth` idea).
 - [ ] Every provider needs wire fixtures, provider/auth docs and a verified real call; group OpenAI-compatible ones.
 - [ ] Cross-provider conversion beyond text and tool calls (foreign reasoning is dropped); Copilot Responses
   encrypted reasoning replay.
