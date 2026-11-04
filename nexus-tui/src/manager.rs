@@ -160,6 +160,16 @@ pub struct View {
 pub struct ManagerUi {
     pub call: Option<Call>,
     pub starting: bool,
+    pub dropdown_open: bool,
+    pub dropdown_interactive: bool,
+    pub audio_requested: bool,
+    pub voice_enabled: bool,
+    pub debug_session: Option<String>,
+    debug_refreshed: Option<Instant>,
+    debug_dirty: bool,
+    start_epoch: u64,
+    pub details_scroll: usize,
+    pub details_max: Cell<usize>,
     talk_after_start: bool,
     say_after_start: Option<String>,
     early: Vec<Event>,
@@ -215,6 +225,16 @@ impl Default for ManagerUi {
         Self {
             call: None,
             starting: false,
+            dropdown_open: false,
+            dropdown_interactive: false,
+            audio_requested: false,
+            voice_enabled: true,
+            debug_session: None,
+            debug_refreshed: None,
+            debug_dirty: false,
+            start_epoch: 0,
+            details_scroll: 0,
+            details_max: Cell::new(0),
             talk_after_start: false,
             say_after_start: None,
             early: Vec::new(),
@@ -258,12 +278,12 @@ impl Default for ManagerUi {
 impl ManagerUi {
     /// A call that takes the stage: large orb, dimmed app and the call's keys.
     pub fn focused_call(&self) -> bool {
-        self.call.is_some() && !self.minimised
+        self.dropdown_open && self.dropdown_interactive
     }
 
     /// A call that is open but out of the way; the app keeps its keys.
     pub fn minimised_call(&self) -> bool {
-        self.call.is_some() && self.minimised
+        (self.call.is_some() || self.starting) && self.minimised
     }
 
     pub fn focused_card(&self) -> bool {
@@ -280,7 +300,8 @@ impl ManagerUi {
 
     /// Something of the Manager is on screen or about to be.
     pub fn live(&self) -> bool {
-        self.call.is_some()
+        self.dropdown_open
+            || self.call.is_some()
             || self.starting
             || self.caption.is_some()
             || self.card.is_some()
@@ -381,7 +402,7 @@ impl App {
     pub fn manager_term(&self, name: &str) -> bool {
         let m = &self.ui.manager;
         match name {
-            "manager.in_call" => m.call.is_some(),
+            "manager.in_call" => m.call.is_some() || m.starting,
             "manager.focused" => m.focused_call(),
             "manager.minimised" => m.minimised_call(),
             "manager.listening" => m.listening(),
@@ -449,7 +470,12 @@ impl App {
             self.run_command("manager.talk");
             return true;
         }
-        if self.ui.manager.call.is_none() {
+        if name == "esc" && self.ui.manager.dropdown_open {
+            self.ui.manager.dropdown_open = false;
+            self.ui.manager.dropdown_interactive = false;
+            return true;
+        }
+        if !self.ui.manager.focused_call() {
             return false;
         }
         // The four call actions stay distinct: silent speech, a cancelled turn,
@@ -466,16 +492,13 @@ impl App {
             self.run_command("manager.card_dismiss");
             return true;
         }
-        // Esc is the call's End in every state, focused or minimised. It never
-        // minimises and never falls through to the session interrupt.
-        if name == "esc" {
-            self.end_call();
+        if name == "pageup" || name == "pagedown" {
+            self.manager_execute(if name == "pageup" {
+                "manager.details_up"
+            } else {
+                "manager.details_down"
+            });
             return true;
-        }
-        if self.ui.manager.minimised {
-            // Out of the way: the app has the keys. The manifest's interrupt
-            // rule excludes an open call, so Esc cannot stop a session.
-            return false;
         }
         if self.ui.manager.field.is_some() {
             if name == "enter" {
@@ -527,14 +550,53 @@ impl App {
 
     /// A mouse press on one of the Manager's own targets.
     pub fn manager_mouse(&mut self, ev: &MouseEvent) -> bool {
+        if self.ui.manager.dropdown_open && self.ui.manager.context.is_none() {
+            if matches!(
+                ev.kind,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+            ) {
+                if self.hits.at(ev.column, ev.row) == Some(&Target::ManagerDetails) {
+                    self.manager_scroll_details(if ev.kind == MouseEventKind::ScrollUp {
+                        -3
+                    } else {
+                        3
+                    });
+                }
+                return true;
+            }
+        }
         if !matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
             return false;
         }
         let Some(target) = self.hits.at(ev.column, ev.row).cloned() else {
             return false;
         };
+        if self.ui.manager.dropdown_open
+            && !matches!(
+                target,
+                Target::ManagerSession
+                    | Target::ManagerOrb
+                    | Target::ManagerVoice
+                    | Target::ManagerDebugSession
+                    | Target::ManagerInput
+                    | Target::ManagerDetails
+                    | Target::ManagerRow(_)
+                    | Target::ManagerCard
+                    | Target::Swallow
+            )
+        {
+            self.ui.manager.dropdown_open = false;
+            self.ui.manager.dropdown_interactive = false;
+            return true;
+        }
         match target {
-            Target::ManagerOrb => self.run_command("manager.talk"),
+            Target::ManagerOrb => self.run_command("manager.header"),
+            Target::ManagerVoice => self.run_command("manager.audio_toggle"),
+            Target::ManagerDebugSession => self.run_command("manager.open_session"),
+            Target::ManagerInput => {
+                self.ui.manager.dropdown_interactive = true;
+                self.ui.manager.field.get_or_insert_with(Composer::new);
+            }
             Target::ManagerScrim => self.execute("manager.card_dismiss"),
             Target::ManagerEnd => self.run_command("manager.stop"),
             Target::ManagerRow(n) => self.pick_row(n),
@@ -548,8 +610,12 @@ impl App {
 
     pub fn manager_execute(&mut self, id: &str) {
         match id {
+            "manager.details_up" => self.manager_scroll_details(-10),
+            "manager.details_down" => self.manager_scroll_details(10),
             "manager.talk" => self.talk(),
             "manager.start" => self.start_call(false),
+            "manager.header" => self.toggle_manager_dropdown(),
+            "manager.audio_toggle" => self.toggle_manager_audio(),
             "manager.context" => self.open_manager_context(),
             "manager.open_session" => self.open_manager_session(),
             "manager.stop" => self.stop_call(),
@@ -634,9 +700,9 @@ impl App {
         }
         self.effects
             .push(Effect::Sync(SyncCommand::Manager(ManagerCall {
-                tag: "episode".into(),
-                method: "GET",
-                path: "/api/manager/episode".into(),
+                tag: "debug_session".into(),
+                method: "POST",
+                path: "/api/manager/session".into(),
                 body: None,
                 with_stream: false,
             })));
@@ -676,20 +742,20 @@ impl App {
     }
 
     fn talk(&mut self) {
+        self.ui.manager.dropdown_open = true;
+        self.ui.manager.dropdown_interactive = true;
+        self.ui.manager.audio_requested = true;
+        self.ui.manager.voice_enabled = true;
         let now = self.clock;
         if self.ui.manager.call.is_none() {
             return self.start_call(true);
-        }
-        // The typed field has the keys while it is open; Enter sends it.
-        if self.ui.manager.field.is_some() {
-            return;
         }
         // Talking brings a minimised call back to the stage.
         self.ui.manager.minimised = false;
         self.ui.manager.touch(now);
         if self.ui.manager.call.as_ref().is_some_and(|c| c.live) {
             if !self.ui.manager.live_call {
-                self.open_field(None);
+                self.start_call(true);
                 return;
             }
             // The call listens by itself: the key only interrupts what the voice is saying.
@@ -737,12 +803,13 @@ impl App {
         let now = self.clock;
         let m = &mut self.ui.manager;
         m.minimised = true;
+        m.dropdown_open = false;
+        m.dropdown_interactive = false;
         m.touch(now);
     }
 
     fn start_call(&mut self, talk: bool) {
-        if self.ui.manager.call.is_some() {
-            self.ui.manager.minimised = false;
+        if self.ui.manager.call.is_some() && !(talk && !self.ui.manager.live_call) {
             if talk {
                 self.open_mic();
             }
@@ -750,37 +817,36 @@ impl App {
         }
         let m = &mut self.ui.manager;
         m.talk_after_start |= talk;
+        m.audio_requested |= talk;
         if m.starting {
             return;
         }
         m.starting = true;
+        m.orb.pin(OrbState::Thinking, 0.3);
+        m.minimised = !talk && m.say_after_start.is_none();
+        m.start_epoch += 1;
+        let epoch = m.start_epoch;
+        m.touch(self.clock);
         if self.ui.sound && !self.ui.manager.silent {
             self.effects.push(Effect::Sound(Sound::ManagerStart));
         }
-        self.call_core("start", "/api/manager/start", json!({ "client_id": "TUI" }));
+        self.call_core(
+            &format!("start:{epoch}"),
+            "/api/manager/start",
+            json!({ "client_id": "TUI", "audio": talk }),
+        );
     }
 
     fn stop_call(&mut self) {
+        if self.ui.manager.starting {
+            self.clear_all();
+            return;
+        }
         if self.ui.manager.call.is_none() {
             return;
         }
         self.call_core("stop", "/api/manager/stop", json!({}));
         self.clear_all();
-    }
-
-    /// Esc: cancel the whole call, not just hide it. Speech, the recording, the
-    /// typed field and the card go here, and Core stops the turn; `/manager/stop`
-    /// does the same server-side. It is never the session interrupt.
-    fn end_call(&mut self) {
-        if self.ui.manager.call.is_none() {
-            return;
-        }
-        let now = self.clock;
-        self.silence(now);
-        self.cancel_listening();
-        self.close_field();
-        self.ui.manager.card = None;
-        self.stop_call();
     }
 
     /// Drop everything the Manager had on screen and in flight. The orb is
@@ -804,7 +870,13 @@ impl App {
         }
         let m = &mut self.ui.manager;
         m.call = None;
+        m.dropdown_open = false;
+        m.dropdown_interactive = false;
+        m.start_epoch += 1;
+        m.details_scroll = 0;
+        m.details_max.set(0);
         m.starting = false;
+        m.audio_requested = false;
         m.talk_after_start = false;
         m.say_after_start = None;
         m.early.clear();
@@ -1187,9 +1259,8 @@ impl App {
     // ---- field --------------------------------------------------------------------------
 
     fn open_field(&mut self, first: Option<char>) {
-        if self.ui.manager.call.is_none() {
-            return;
-        }
+        self.ui.manager.dropdown_open = true;
+        self.ui.manager.dropdown_interactive = true;
         if self.ui.manager.listening() {
             self.cancel_listening();
         }
@@ -1205,15 +1276,20 @@ impl App {
     }
 
     fn send_field(&mut self) {
-        let now = self.clock;
-        let Some(field) = self.ui.manager.field.take() else {
+        let Some(field) = self.ui.manager.field.as_ref() else {
             return;
         };
         let text = field.text().trim().to_owned();
+        self.ui.manager.field = Some(Composer::new());
         if text.is_empty() {
             return;
         }
-        self.say(text, "typed", now);
+        if self.ui.manager.call.is_none() {
+            self.ui.manager.say_after_start = Some(text);
+            self.start_call(false);
+        } else {
+            self.say(text, "typed", self.clock);
+        }
     }
 
     fn close_field(&mut self) {
@@ -1368,6 +1444,11 @@ impl App {
         if !event.kind.starts_with("manager.") || event.kind == "manager.acted" {
             return;
         }
+        self.ui.manager.debug_dirty = true;
+        self.refresh_manager_debug();
+        if event.kind == "manager.session" {
+            return;
+        }
         let call_id = event.data["call_id"].as_str().unwrap_or("");
         let mine = self.ui.manager.call.as_ref().map(|c| c.id.clone());
         match mine {
@@ -1447,6 +1528,12 @@ impl App {
                 }
             }
             "manager.speech" => {
+                if !self.ui.manager.audio_requested {
+                    self.ui
+                        .manager
+                        .set_caption(now, None, d["text"].as_str().map(str::to_owned));
+                    return;
+                }
                 let text = d["text"].as_str().unwrap_or("").trim().to_owned();
                 if text.is_empty() {
                     return;
@@ -1473,6 +1560,10 @@ impl App {
                 self.pump_speech(now);
             }
             "manager.card" => {
+                if d["card"].is_object() {
+                    self.ui.manager.dropdown_open = true;
+                }
+
                 let m = &mut self.ui.manager;
                 m.touch(now);
                 match d["card"].as_object() {
@@ -1573,6 +1664,17 @@ impl App {
 
     /// The answer to a call made through the supervisor.
     pub fn manager_reply(&mut self, tag: &str, result: Result<Value, ManagerError>) {
+        let tag = if let Some(epoch) = tag.strip_prefix("start:") {
+            if epoch.parse::<u64>().ok() != Some(self.ui.manager.start_epoch) {
+                if result.is_ok() && !self.ui.manager.starting && self.ui.manager.call.is_none() {
+                    self.call_core("stop", "/api/manager/stop", json!({}));
+                }
+                return;
+            }
+            "start"
+        } else {
+            tag
+        };
         let now = self.clock;
         match tag {
             "start" => {
@@ -1588,7 +1690,7 @@ impl App {
                         });
                         // `/manager` opens quietly in the corner; a talk or a
                         // typed line takes the stage.
-                        self.ui.manager.minimised = !talk && say.is_none();
+                        self.ui.manager.minimised = !self.ui.manager.dropdown_open;
                         self.ui.manager.tts_ok = true;
                         self.ui.manager.preview =
                             body.get("preview").filter(|p| p.is_object()).cloned();
@@ -1596,7 +1698,7 @@ impl App {
                             self.manager_event(&event);
                         }
                         let mode_live = body["mode"].as_str() == Some("live");
-                        if mode_live {
+                        if mode_live && self.ui.manager.audio_requested {
                             self.start_live();
                         }
                         if let Some(text) = say {
@@ -1604,7 +1706,7 @@ impl App {
                         }
                         if mode_live {
                             // GPT-Live listens by itself; the talk key only interrupts.
-                        } else if talk {
+                        } else if talk && self.ui.manager.audio_requested {
                             self.open_mic();
                         } else if self.ui.manager.silent {
                             // Nothing to announce in a captured frame.
@@ -1662,43 +1764,32 @@ impl App {
                     m.set_caption(now, None, Some(e.message));
                 }
             }
-            "episode" => {
+            "debug_session" | "debug_refresh" => {
                 let Ok(body) = result else {
-                    self.toast(
-                        Level::Error,
-                        "Could not read the Manager's session from Core",
-                    );
+                    self.toast(Level::Error, "Could not open the Manager session");
                     return;
                 };
-                // Newest first. The inspector takes the token and the session in its URL fragment.
-                let Some(id) = body.get(0).and_then(|e| e["id"].as_str()) else {
-                    self.toast(
-                        Level::Info,
-                        "The Manager has no session yet. Start it with alt+m, then talk to it.",
-                    );
+                let Ok(session) = serde_json::from_value::<crate::api::Session>(body) else {
                     return;
                 };
-                let Some(info) = self.state.core.as_ref() else {
-                    self.toast(Level::Info, "Not connected to Core");
+                if tag == "debug_refresh" && !self.manager_debug_view() {
                     return;
-                };
-                // The token is read from the daemon's own file at the moment of use, not kept in the app.
-                let Some(token) =
-                    crate::discovery::read_info(std::path::Path::new(&info.home)).map(|d| d.token)
-                else {
-                    self.toast(
-                        Level::Info,
-                        "Could not read Core's token to open the inspector",
-                    );
-                    return;
-                };
-                // Level 3 (Requests) shows what the model is given: the state snapshot, the recap and each request.
-                let url = format!(
-                    "{}/inspector#token={token}&session={id}&level=requests",
-                    info.url.trim_end_matches('/')
-                );
-                self.effects.push(Effect::OpenUrl(url));
+                }
+                let id = session.id.clone();
+                self.state.model.sessions.insert(id.clone(), session);
+                self.ui.manager.debug_session = Some(id.clone());
+                if tag == "debug_session" {
+                    self.ui.manager.dropdown_open = false;
+                    self.ui.manager.dropdown_interactive = false;
+                    self.open_session(&id);
+                } else if self.viewed_id() != Some(id.as_str()) {
+                    self.open_session(&id);
+                } else {
+                    self.effects
+                        .push(Effect::Sync(SyncCommand::Select(Some(id))));
+                }
             }
+            "audio_stop" => {}
             "context" => {
                 let Ok(body) = result else {
                     self.toast(
@@ -1778,6 +1869,12 @@ impl App {
         if let Some(pin) = m.pin {
             return pin.map(|(state, _)| state);
         }
+        if m.starting || (m.live_call && !crate::live::is_open()) {
+            return Some(OrbState::Thinking);
+        }
+        if m.call.is_none() && m.dropdown_open {
+            return Some(OrbState::Idle);
+        }
         m.call.as_ref()?;
         if m.live_call {
             let levels = crate::live::levels();
@@ -1830,6 +1927,9 @@ impl App {
         let m = &self.ui.manager;
         if m.consent.is_some() {
             return "enter accept · esc cancel".to_owned();
+        }
+        if self.manager_connecting() {
+            return "esc end".to_owned();
         }
         if m.call.is_none() {
             return String::new();
@@ -1940,6 +2040,9 @@ impl App {
 
     /// The slow clock (and the frame clock while animating). True when something changed.
     pub fn manager_tick(&mut self, now: Instant) -> bool {
+        if self.ui.manager.debug_dirty {
+            self.refresh_manager_debug();
+        }
         if !self.ui.manager.live() {
             return false;
         }
@@ -2081,6 +2184,189 @@ pub fn ends_call(text: &str) -> bool {
 // ---- Settings › Manager ---------------------------------------------------------------------
 
 impl App {
+    pub fn manager_debug_view(&self) -> bool {
+        self.viewed_id()
+            .is_some_and(|id| self.ui.manager.debug_session.as_deref() == Some(id))
+    }
+
+    fn refresh_manager_debug(&mut self) {
+        if !self.manager_debug_view() {
+            return;
+        }
+        if self
+            .ui
+            .manager
+            .debug_refreshed
+            .is_some_and(|at| self.clock.saturating_duration_since(at) < Duration::from_millis(750))
+        {
+            return;
+        }
+        self.ui.manager.debug_refreshed = Some(self.clock);
+        self.ui.manager.debug_dirty = false;
+        self.effects
+            .push(Effect::Sync(SyncCommand::Manager(ManagerCall {
+                tag: "debug_refresh".into(),
+                method: "GET",
+                path: "/api/manager/session".into(),
+                body: None,
+                with_stream: false,
+            })));
+    }
+
+    fn toggle_manager_dropdown(&mut self) {
+        let m = &mut self.ui.manager;
+        m.dropdown_open = !m.dropdown_open;
+        m.dropdown_interactive = m.dropdown_open;
+        m.minimised = !m.dropdown_open;
+        if m.dropdown_open {
+            m.field.get_or_insert_with(Composer::new);
+            m.orb.pin(OrbState::Idle, 0.2);
+        }
+        m.touch(self.clock);
+        if m.dropdown_open && m.voice_enabled && !m.audio_requested {
+            self.start_call(true);
+        }
+    }
+
+    fn toggle_manager_audio(&mut self) {
+        self.ui.manager.voice_enabled = !self.ui.manager.voice_enabled;
+        if self.ui.manager.voice_enabled {
+            if !self.ui.manager.audio_requested {
+                self.talk();
+            }
+        } else {
+            self.end_live();
+            self.cancel_listening();
+            self.silence(self.clock);
+            self.ui.manager.audio_requested = false;
+            if self.ui.manager.call.is_some() {
+                self.call_core("audio_stop", "/api/manager/live/stop", json!({}));
+            }
+        }
+    }
+
+    pub fn manager_connecting(&self) -> bool {
+        self.ui.manager.starting || (self.ui.manager.live_call && !crate::live::is_open())
+    }
+
+    fn manager_scroll_details(&mut self, delta: isize) {
+        let m = &mut self.ui.manager;
+        m.details_scroll = m
+            .details_scroll
+            .saturating_add_signed(delta)
+            .min(m.details_max.get());
+    }
+
+    pub fn manager_dropdown_text(&self) -> String {
+        let m = &self.ui.manager;
+        let mut lines = Vec::new();
+        if self.manager_connecting() {
+            lines.push("Connecting…".into());
+        }
+        if let Some(error) = &m.error {
+            lines.push(error.message.clone());
+        }
+        if let Some(caption) = &m.caption {
+            if let Some(text) = caption.manager.as_ref().or(caption.user.as_ref()) {
+                lines.push(text.clone());
+            }
+        }
+        if lines.is_empty() {
+            lines.push(
+                if m.speaking {
+                    "Speaking"
+                } else if m.listening() {
+                    "Listening"
+                } else if m.phase != CallPhase::Idle {
+                    "Thinking"
+                } else {
+                    "Ready"
+                }
+                .into(),
+            );
+        }
+        if let Some(preview) = &m.preview {
+            if let Some(excerpt) = preview["lines"].as_array() {
+                if !excerpt.is_empty() {
+                    lines.push("Model context · excerpt".into());
+                }
+                lines.extend(
+                    excerpt
+                        .iter()
+                        .filter_map(|line| line.as_str().map(str::to_owned)),
+                );
+            }
+            if let Some(name) = preview["tool"]["name"].as_str() {
+                lines.push(format!(
+                    "Tool · {name} · {}",
+                    preview["tool"]["status"].as_str().unwrap_or("")
+                ));
+            }
+        }
+        if lines.is_empty() {
+            "Ready".into()
+        } else {
+            lines.join("\n")
+        }
+    }
+
+    pub fn manager_details_text(&self) -> String {
+        let m = &self.ui.manager;
+        let mut sections = Vec::new();
+        if self.manager_connecting() {
+            sections.push("Connecting…".to_owned());
+        }
+        if let Some(error) = &m.error {
+            sections.push(format!("{}\n{}", error.message, error.fix));
+        }
+        if let Some(c) = &m.caption {
+            if let Some(user) = &c.user {
+                sections.push(format!("You\n{user}"));
+            }
+            if let Some(text) = &c.manager {
+                sections.push(format!("Manager\n{text}"));
+            }
+        }
+        if let Some(p) = &m.preview {
+            let fallback = p["lines"]
+                .as_array()
+                .map(|v| {
+                    v.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            let text = p["text"].as_str().unwrap_or(&fallback);
+            let clipped = if p["details_clipped"].as_bool() == Some(true) {
+                "Earlier content omitted.\n"
+            } else {
+                ""
+            };
+            sections.push(format!(
+                "Model context · {}\n{clipped}{text}",
+                p["source"].as_str().unwrap_or("Response")
+            ));
+            if let Some(tool) = p.get("tool").filter(|t| t.is_object()) {
+                sections.push(format!(
+                    "Tool · {} · {}\n{}{}",
+                    tool["name"].as_str().unwrap_or("tool"),
+                    tool["status"].as_str().unwrap_or("running"),
+                    tool["arguments"].as_str().unwrap_or(""),
+                    if tool["clipped"].as_bool() == Some(true) {
+                        "\nArguments clipped; full details in Manager context."
+                    } else {
+                        ""
+                    }
+                ));
+            }
+        }
+        if sections.is_empty() {
+            sections.push("Ready".to_owned());
+        }
+        sections.join("\n\n")
+    }
+
     /// The value shown for a Manager row of Settings, from Core's config.
     pub fn manager_setting_value(&self, id: &str) -> Option<String> {
         let values = &self.state.config.as_ref()?["values"]["manager"];

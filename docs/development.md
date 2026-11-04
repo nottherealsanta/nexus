@@ -59,7 +59,9 @@ nexus/
   bus.py             in-process event bus; persists before publishing, bounded per subscriber
   eventlog.py        log generation, cursors, session filtering, atomic replay-to-live stream
   manager/           the Manager: service, turn, context, tools, stage, view, retrieval, state, topics, prompt (docs/manager.md)
-  payloads.py        compressed, deduplicated wire-event bodies and their expiry markers
+  payloads.py         shared request components, compressed wire bodies and expiry markers
+  live.py             request-scoped streaming partial checkpoints (never model context)
+  db_maintenance.py   backup-first offline compaction and verified atomic replacement
   retention.py       bounded event/lifecycle retention and the retention floor
   autoarchive.py     scheduled archive of whole session trees idle past the configured threshold
   retry.py           bounded, visible provider-request retry policy
@@ -345,3 +347,22 @@ a ledger row for deliberate changes from old Nexus). Write the contract and the
 reason, briefly, in the present tense; say "not verified" where it is not. A
 new module gets a mention in the doc for its area and in the layout above. Index
 new pages in [README.md](README.md).
+
+## Offline database compaction
+
+`nexus db compact` is a read-only dry run. `nexus db compact --apply` requires the
+daemon and all cooperating database users to be stopped. `--path /scratch/nexus.db`
+selects a copied database for verification. Never test on the real home.
+
+Apply acquires an exclusive database lock, backs up through SQLite's backup API
+to `nexus.db.bak-<date>-<suffix>`, adopts lifecycle state, compacts finished
+sessions and deduplicates retained requests. Protected sessions remain intact.
+It runs `VACUUM INTO nexus.db.new` with incremental auto-vacuum, checks integrity,
+log generation and session/message/snapshot/turn/request/tool/usage row counts,
+then replaces the file atomically. The backup is kept. Free disk must cover the
+backup plus the rebuilt file. A pre-existing `.new` file is refused; inspect it
+before retrying. Failure leaves the backup available for explicit restoration.
+
+The 2026-11-04 scratch-copy check reduced 178,216,960 bytes to 2,367,488 bytes,
+removing 44,105 diagnostic events while preserving canonical counts and log
+generation; `integrity_check` passed. The live database was not compacted.

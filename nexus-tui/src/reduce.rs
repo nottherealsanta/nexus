@@ -198,6 +198,7 @@ pub struct Model {
     pub approvals: BTreeMap<String, Approval>,
     pub questions: BTreeMap<String, Question>,
     pub streaming: BTreeMap<String, Streaming>,
+    pub partials: BTreeMap<String, crate::partial::Partial>,
     pub selected: Option<SelectedView>,
     /// Views of recently viewed sessions, most recent first, at most
     /// `VIEW_CACHE`. Events reach them as they reach the selected view.
@@ -365,6 +366,7 @@ impl Model {
     }
 
     pub fn apply_history(&mut self, mut h: crate::api::History) {
+        self.seed_partials(&h.session_id, &h.turns, &h.messages);
         if self.view_mut(&h.session_id).is_none() {
             return;
         }
@@ -437,6 +439,7 @@ impl Model {
     /// Summaries re-read after a reconnect (`/turn?after=`): they replace the
     /// ones held, and the page's ledger is current for all of them.
     pub fn apply_turns(&mut self, session: &str, page: TurnPage) {
+        self.seed_partials(session, &page.turns, &[]);
         let Some(view) = self.view_mut(session) else {
             return;
         };
@@ -454,6 +457,55 @@ impl Model {
         }
     }
 
+    fn seed_partials(&mut self, sid: &str, turns: &[TurnSummary], messages: &[Message]) {
+        for turn in turns.iter().rev().filter(|t| t.status == "running") {
+            if self
+                .selected
+                .iter()
+                .chain(self.cached.iter())
+                .filter(|v| v.session_id == sid)
+                .any(|v| {
+                    v.turns
+                        .iter()
+                        .any(|t| t.id == turn.id && t.status != "running")
+                })
+            {
+                continue; // A terminal summary arrived after this HTTP read.
+            }
+            for request in turn
+                .requests
+                .iter()
+                .rev()
+                .filter(|r| r.message_id.is_none())
+            {
+                let Some(checkpoint) = &request.partial else {
+                    continue;
+                };
+                let saved = messages
+                    .iter()
+                    .chain(
+                        self.selected
+                            .iter()
+                            .chain(self.cached.iter())
+                            .filter(|v| v.session_id == sid)
+                            .flat_map(|v| &v.messages),
+                    )
+                    .any(|m| {
+                        m.role == "assistant" && request.started.is_some_and(|t| m.created >= t)
+                    });
+                if saved {
+                    continue;
+                }
+                let partial = self.partials.entry(sid.into()).or_default();
+                partial.seed(checkpoint);
+                let (text, reasoning) = partial.text();
+                self.streaming
+                    .insert(sid.into(), Streaming { text, reasoning });
+                return;
+            }
+        }
+    }
+
     pub fn apply_event(&mut self, event: &Event) -> Applied {
         let Some(have) = self.generation.clone() else {
             return Applied::NeedsResync(ResyncReason::NoSnapshot);
@@ -466,10 +518,30 @@ impl Model {
                 });
             }
         }
-        if event.id <= self.last_id {
+        if event.id > 0 && event.id <= self.last_id {
             return Applied::Duplicate;
         }
-        self.last_id = event.id;
+        if event.id > 0 {
+            self.last_id = event.id;
+        }
+        if let (Some(sid), Some(_)) = (event.session_id.as_ref(), event.data["request_id"].as_str())
+        {
+            if matches!(
+                event.kind.as_str(),
+                "text_delta"
+                    | "reasoning_delta"
+                    | "tool_call_started"
+                    | "tool_args_delta"
+                    | "part_done"
+            ) {
+                let partial = self.partials.entry(sid.clone()).or_default();
+                partial.event(&event.data);
+                let (text, reasoning) = partial.text();
+                self.streaming
+                    .insert(sid.clone(), Streaming { text, reasoning });
+                return Applied::Applied;
+            }
+        }
         self.reduce(event);
         if let Some(view) = event
             .session_id
@@ -548,6 +620,7 @@ impl Model {
                 if e.data["turn_finished"] == true {
                     self.running.remove(&sid);
                     self.streaming.remove(&sid);
+                    self.partials.remove(&sid);
                 } else if status == "busy" {
                     if let Some(turn) = str_field(&e.data, "turn_id") {
                         self.running.insert(sid, turn);
@@ -555,6 +628,7 @@ impl Model {
                 } else {
                     self.running.remove(&sid);
                     self.streaming.remove(&sid);
+                    self.partials.remove(&sid);
                 }
             }
             "turn.summary" => {
@@ -571,6 +645,7 @@ impl Model {
                 if let Some(sid) = sid {
                     self.running.remove(&sid);
                     self.streaming.remove(&sid);
+                    self.partials.remove(&sid);
                 }
             }
             "message.added" => {
@@ -584,6 +659,7 @@ impl Model {
                 };
                 if m.role == "assistant" {
                     self.streaming.remove(&sid);
+                    self.partials.remove(&sid);
                 }
                 if let Some(view) = self.view_mut(&sid) {
                     if !view.messages.iter().any(|x| x.id == m.id) {
@@ -595,6 +671,7 @@ impl Model {
             "step_start" => {
                 if let Some(sid) = sid {
                     self.streaming.remove(&sid);
+                    self.partials.remove(&sid);
                 }
             }
             "text_delta" | "reasoning_delta" => {
@@ -636,6 +713,7 @@ impl Model {
         self.sessions.remove(id);
         self.running.remove(id);
         self.streaming.remove(id);
+        self.partials.remove(id);
         self.approvals.retain(|_, a| a.session_id != id);
         self.questions.retain(|_, q| q.session_id != id);
         self.cached.retain(|v| v.session_id != id);

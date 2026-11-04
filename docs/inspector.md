@@ -144,3 +144,12 @@ nested `code` question shows the synthetic nested id). Pending status comes from
 `GET /api/session/{id}/question` and refreshes on `question.asked` and
 `question.replied`. Questions asked by a child appear on the child's page, as
 the inspector shows a session's own events. Schema: [tools.md](tools.md#ask).
+
+Event storage (2026-11-04): Questions reads durable wait records, and Steps reads
+paged `/turn` records (model, usage, attempts, tools, HTTP status and first-byte
+time). Old rows without these measurements say unknown. Interrupted request
+partials are labelled diagnostic-only and are not part of model context.
+Streaming detail remains available in retained `wire_event` records; token and
+argument deltas are live-only. Raw shows an explicit earlier-events-compacted
+notice from cumulative session metadata. Compacted sessions retain Conversation
+and state-based Steps/Questions; Requests/Raw only show retained diagnostics.

@@ -6,8 +6,10 @@ execution rows and semantic lifecycle events stay in their own columns: they are
 the context and recovery evidence and are not made dependent on a diagnostic
 payload.
 
-A wire payload is content-addressed by its SHA-256 and compressed as one
-`event_body` row. Every event row keeps its durable id, type, time, sequence and
+Wire payloads are compressed and content-addressed in `event_body`. A request
+manifest shares history items, instructions, schemas and inline media components;
+reference edges retain each child until its last parent disappears. Legacy
+whole-body encodings remain readable. Every event row keeps its id, type, time, sequence and
 session; `body_sha` points at the shared body while the payload is live. Expiry
 never deletes the envelope or renumbers anything: it clears `body_sha`, writes
 an explicit marker into `data` and sets `payload_state = 'expired'`. Replay,
@@ -124,6 +126,90 @@ def unavailable_marker(type_: str, original_bytes: int, *, at: float, reason: st
     return marker
 
 
+def store_body(db: sqlite3.Connection, data: Any, *, request: bool = False) -> str:
+    """Store lossless request components once, including exact data-URI strings.
+
+    A versioned manifest separates history items and schemas shared by later
+    requests. Image strings are blobs addressed by SHA, retaining their exact
+    spelling (including MIME/base64 formatting). Diagnostics never depend on
+    the mutable artifact catalogue. Reference edges own children until the last
+    envelope using the manifest expires.
+    """
+    import time
+
+    def put(value: Any, *, tree: bool = False, children: set[str] | None = None) -> str:
+        raw = json.dumps(value, separators=(",", ":")).encode()
+        # Distinguish a manifest from an ordinary wire JSON value with equal bytes.
+        sha = body_sha((b"request-tree-v1\0" if tree else b"") + raw)
+        encoding, body = encode_body(raw)
+        if tree:
+            encoding = "tree-v1:" + encoding
+        db.execute("insert or ignore into event_body"
+                   " (sha, encoding, body, raw_bytes, stored_bytes, refs, created) values (?, ?, ?, ?, ?, 0, ?)",
+                   (sha, encoding, body, len(raw), len(body), time.time()))
+        for child in children or ():
+            db.execute("insert or ignore into event_body_child values (?, ?)", (sha, child))
+        return sha
+
+    if not request:
+        return put(data)
+    children: set[str] = set()
+
+    def reference(value: Any) -> list[Any]:
+        sha = put(value)
+        children.add(sha)
+        return ["ref", sha]
+
+    def walk(value: Any, key: str = "") -> list[Any]:
+        if isinstance(value, str) and value.startswith("data:"):
+            return reference(value)
+        if isinstance(value, dict):
+            return ["dict", [[k, walk(v, k)] for k, v in value.items()]]
+        if isinstance(value, list):
+            nodes = []
+            for item in value:
+                if key in ("input", "messages", "tools", "contents"):
+                    # An item may itself contain inline media. Its own manifest
+                    # owns media refs; subsequent requests share the entire item.
+                    sha = store_body(db, item, request=True)
+                    children.add(sha)
+                    nodes.append(["ref", sha])
+                else:
+                    nodes.append(walk(item))
+            return ["list", nodes]
+        if key in ("instructions", "system"):
+            return reference(value)
+        return ["value", value]
+
+    manifest = walk(data)
+    return put(manifest, tree=True, children=children)
+
+
+def read_body(db: sqlite3.Connection, sha: str) -> Any:
+    body = db.execute("select encoding, body from event_body where sha = ?", (sha,)).fetchone()
+    if body is None:
+        raise LookupError(sha)
+    encoding = body["encoding"]
+    tree = encoding.startswith("tree-v1:")
+    value = json.loads(decode_body(encoding.removeprefix("tree-v1:"), body["body"]))
+    if not tree:
+        return value
+
+    def walk(node: list[Any]) -> Any:
+        kind, value = node
+        if kind == "ref":
+            return read_body(db, value)
+        if kind == "dict":
+            return {k: walk(v) for k, v in value}
+        if kind == "list":
+            return [walk(v) for v in value]
+        if kind == "value":
+            return value
+        raise ValueError(f"unknown request manifest node {kind!r}")
+
+    return walk(value)
+
+
 def event_data(db: sqlite3.Connection, row: sqlite3.Row) -> Any:
     """Decode one stored event's payload, including an explicit expiry marker."""
     state = row["payload_state"] if has_column(row, "payload_state") else FULL
@@ -131,11 +217,11 @@ def event_data(db: sqlite3.Connection, row: sqlite3.Row) -> Any:
         return expand_marker(json.loads(row["data"]))
     sha = row["body_sha"] if has_column(row, "body_sha") else None
     if sha:
-        body = db.execute("select encoding, body, raw_bytes from event_body where sha = ?", (sha,)).fetchone()
-        if body is None:
+        try:
+            return read_body(db, sha)
+        except LookupError:
             return unavailable_marker(row["type"], row["payload_bytes"] if has_column(row, "payload_bytes") else 0,
-                                      at=row["time"], reason="the stored event body record is missing")
-        return json.loads(decode_body(body["encoding"], body["body"]))
+                                      at=row["time"], reason="a stored event body component is missing")
     return json.loads(row["data"])
 
 

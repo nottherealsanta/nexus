@@ -8,7 +8,9 @@ for deliberate changes from old Nexus.
   (`git worktree add ~/repos/nexus-old nexus01`). Copy
   code from it deliberately, and add a row in docs/porting-ledger.md when you change a
   behavior. Its AGENTS.md and docs do not apply here.
-- Keep the context visible: wire events are never dropped, and clipping is announced.
+- Keep the context visible: wire events are delivered live; finished diagnostic history is dropped only with a
+  `session.compacted` announcement, and clipping is announced. Token deltas are live-only
+  with request partial checkpoints; canonical model context is always retained.
 - TUI and NSH are peers: **every UI change must be reflected in both, in the same
   change**, including layout, styling, wording, pickers, modals, sidebars, shortcuts
   and interactions. Follow
@@ -23,11 +25,11 @@ for deliberate changes from old Nexus.
   Presenting context well is a core idea of Nexus. **Exception: the Manager**
   ([docs/manager.md](docs/manager.md)). Its own context (hidden episodes, the state
   snapshot and deltas it is given each turn) has no timeline; the user sees its
-  stage (orb, caption, one card), a read-only context modal for debugging, and
-  the full log in the inspector. The rule still holds for every session the
+  header orb and notification dropdown (caption, card and typed input), an explicit read-only backend session
+  view for debugging, and the full raw log in the inspector. The rule still holds for every session the
   Manager touches: whatever it sends or answers
   shows there, labelled `via Manager`, and what a card shows is what the Manager
-  asked to show. Do not add a Manager timeline or chat view.
+  asked to show. Do not add a separate Manager chat implementation; the explicit read-only backend session is for debugging.
 - Task tools (`nexus-core/nexus/tools/`) act on the workspace. Changes to Nexus state
   (session, workspace, worktree, model) belong to the control plane, never a task
   tool; the model reaches control only through exposed control tools.

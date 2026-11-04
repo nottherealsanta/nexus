@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 use crate::transport::{ApiError, Error, Http, SseFrame};
 
 /// The Core API major/minor this client was written against.
-pub const CLIENT_API: ApiVersion = ApiVersion { major: 1, minor: 4 };
+pub const CLIENT_API: ApiVersion = ApiVersion { major: 1, minor: 5 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ApiVersion {
@@ -438,6 +438,8 @@ pub struct RequestSummary {
     pub reasoning_seconds: Option<f64>,
     #[serde(default)]
     pub attempts: Vec<AttemptSummary>,
+    #[serde(default)]
+    pub partial: Option<Value>,
 }
 
 /// One tool call of a turn: timing and outcome; output stays in the messages.
@@ -699,9 +701,25 @@ impl Frame {
                 }))
             }
             _ => {
-                let cursor = s("cursor").or_else(|| sse_id.map(str::to_owned));
+                let ephemeral = v.get("id").is_some_and(Value::is_null);
+                let cursor = if ephemeral {
+                    None
+                } else {
+                    s("cursor").or_else(|| sse_id.map(str::to_owned))
+                };
                 let id = i("id")
                     .or_else(|| cursor.as_deref().and_then(parse_cursor).map(|(_, id)| id))
+                    .or_else(|| {
+                        (ephemeral
+                            && matches!(
+                                kind,
+                                "text_delta"
+                                    | "reasoning_delta"
+                                    | "tool_call_started"
+                                    | "tool_args_delta"
+                            ))
+                        .then_some(0)
+                    })
                     .ok_or_else(|| Error::Decode(format!("event {kind} has no durable id")))?;
                 Ok(Frame::Event(Event {
                     id,
@@ -1665,8 +1683,8 @@ mod tests {
             Some(ApiVersion { major: 2, minor: 0 })
         );
         assert_eq!(
-            ApiVersion::from_value(&json!({"major": 1, "minor": 4})),
-            Some(ApiVersion { major: 1, minor: 4 })
+            ApiVersion::from_value(&json!({"major": 1, "minor": 5})),
+            Some(ApiVersion { major: 1, minor: 5 })
         );
         assert_eq!(ApiVersion::from_value(&json!("x")), None);
     }

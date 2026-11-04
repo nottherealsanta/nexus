@@ -5,10 +5,11 @@ row id in the `event` table: stable across daemon restarts and the canonical
 reconnect identity (`nexus/eventlog.py` turns it into a cursor). `seq` is only
 this daemon's publish order; it resets on restart and is never a cursor.
 
-**Persist before publish.** `publish` commits the event with the attached log
+**Persist before publish.** For durable events, `publish` commits to the attached log
 before any subscriber queue receives it, and gives the event its durable `id`.
 If the log raises, the exception reaches the caller and nothing is delivered: a
-subscriber never sees an event that was not stored. A session event whose
+durable subscriber never sees an event that was not stored. `durable=False`
+delivers live only with `id: None`, preserving the last durable watermark. A session event whose
 session row is already gone cannot be stored; `append_event` returns `None`,
 and the bus does not deliver it (the session's deletion event covers it).
 
@@ -72,7 +73,7 @@ class Bus:
         self._subscribers: dict[asyncio.Queue[dict[str, Any] | None], int | None] = {}  # queue -> last enqueued id
 
     def attach(self, log: EventLog) -> None:
-        """Publish through `log`, so every event is durable before delivery."""
+        """Attach storage for durable publishes."""
         self._log = log
 
     @property
@@ -80,7 +81,7 @@ class Bus:
         return len(self._subscribers)
 
     def publish(self, type_: str, data: Any = None, *, session_id: str | None = None,
-                turn_id: str | None = None) -> dict[str, Any]:
+                turn_id: str | None = None, durable: bool = True) -> dict[str, Any]:
         with self._lock:
             self._seq += 1
             if type_ == "session.deleted":
@@ -89,7 +90,9 @@ class Bus:
                 session_id = None
             event: dict[str, Any] = {"seq": self._seq, "time": time.time(), "type": type_,
                                      "session_id": session_id, "data": data}
-            if self._log is not None:
+            if not durable:
+                event["id"] = None
+            if self._log is not None and durable:
                 # Internal storage metadata: the store records it for payload
                 # retention, and it is removed before any subscriber sees it.
                 if turn_id is not None:
@@ -102,6 +105,11 @@ class Bus:
                 event["id"] = event_id
             self._deliver(event)
             return event
+
+    def deliver_stored(self, event: dict[str, Any]) -> None:
+        """Deliver an announcement already committed atomically with maintenance."""
+        with self._lock:
+            self._deliver(event)
 
     def open(self) -> Subscription:
         """Register a subscriber and read the durable head as one atomic boundary."""
@@ -134,7 +142,8 @@ class Bus:
                 })
                 queue.put_nowait(None)
             else:
-                self._subscribers[queue] = event.get("id")
+                if event.get("id") is not None:
+                    self._subscribers[queue] = event["id"]
                 queue.put_nowait(event)
 
     def _drop(self, queue: asyncio.Queue[dict[str, Any] | None]) -> None:

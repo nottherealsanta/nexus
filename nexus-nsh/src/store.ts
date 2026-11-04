@@ -19,7 +19,8 @@ export type Toast = { id: number; level: "success" | "info" | "warning" | "error
 export const model = new Model();
 /** A tool, skill or server in the context modal: its description, and its full definition once opened. */
 export type ContextEntry = { key: string; name: string; description: string; full?: string; load?: () => Promise<string>; markdown?: boolean };
-export const contextDetail = signal<{ title: string; detail: string; markdown?: boolean; entries?: ContextEntry[]; focus?: string } | null>(null);
+export const contextDetail = signal<{ title: string; detail: string; markdown?: boolean; entries?: ContextEntry[]; focus?: string; skillRows?: InventorySkillRows } | null>(null);
+type InventorySkillRows = { rows: import("./skills-mcp").InventoryRow[]; toggle?: (kind: import("./skills-mcp").InventoryKind, name: string, locked: boolean) => void };
 /** The attachment open in the full-size preview modal (composer or timeline). */
 export const imagePreview = signal<{ name: string; src: string } | null>(null);
 /** The composer image open in the drawing modal: its draft and id. */

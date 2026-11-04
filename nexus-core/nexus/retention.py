@@ -13,6 +13,10 @@ Three lifetimes are independent:
   payloads sooner. Expiry replaces the body with an explicit marker while the
   event envelope, durable id, type and cursor position stay put.
 
+Finished session diagnostics compact independently of the prefix, with an atomic
+announcement and conservative cursor resync floor. Canonical context stays put.
+Free pages in incremental-vacuum databases are reclaimed in bounded batches.
+
 Whole-row prefix pruning still exists for ordinary diagnostic events after
 `event_age_seconds`; it moves `floor` and is announced by `log.retention`.
 Payload expiry is selective and does not move the floor, so an unfinished
@@ -58,6 +62,9 @@ class Settings:
     event_batches: int = 4
     catchup_delay_seconds: float = 0.05
     announce_seconds: float = 60.0
+    session_idle_seconds: float = 86400
+    reclaim_threshold_bytes: int = 8 * MIB
+    reclaim_pages: int = 1000
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -82,6 +89,9 @@ class Settings:
             batch_size=int(number("NEXUS10_RETENTION_BATCH_SIZE", 2000, floor=1)),
             event_batches=int(number("NEXUS10_RETENTION_EVENT_BATCHES", 4, floor=1)),
             catchup_delay_seconds=number("NEXUS10_RETENTION_CATCHUP_DELAY_SECONDS", 0.05, floor=0),
+            session_idle_seconds=number("NEXUS10_SESSION_EVENT_IDLE_SECONDS", 86400),
+            reclaim_threshold_bytes=int(number("NEXUS10_RECLAIM_THRESHOLD_BYTES", 8 * MIB)),
+            reclaim_pages=int(number("NEXUS10_RECLAIM_PAGES", 1000)),
             announce_seconds=number("NEXUS10_RETENTION_ANNOUNCE_SECONDS", 60, floor=0),
         )
 
@@ -124,6 +134,7 @@ class Retention:
 
         indexes = store.ensure_payload_indexes(limit=1)
         migration = store.backfill_event_payloads(limit=min(500, settings.batch_size))
+        deduplicated = store.deduplicate_requests(limit=min(50, settings.batch_size))
         turn_links = store.backfill_wire_turn_ids(limit=min(500, settings.batch_size))
         scheduled = store.schedule_wire_expiry(
             success_seconds=settings.wire_success_seconds,
@@ -139,6 +150,22 @@ class Retention:
             batch_size=settings.batch_size)
         if not wire["over_budget"]:
             store._pressure_notified = False
+
+        compacted = []
+        # LIMIT bounds candidate work; exclude protected sessions in SQL so a
+        # busy old session cannot starve unrelated finished sessions.
+        marks = ",".join("?" for _ in protected)
+        candidates = store.db.execute(
+            "select s.id from session s where (s.archived = 1 or s.updated <= ?)"
+            + (f" and s.id not in ({marks})" if protected else "") +
+            " and exists (select 1 from event e where e.session_id = s.id and e.type != 'session.compacted')"
+            " order by s.updated limit ?", (now - settings.session_idle_seconds, *protected, settings.event_batches)).fetchall()
+        for row in candidates:
+            info = store.compact_session(row[0], now=now, idle_seconds=settings.session_idle_seconds,
+                                         protect_sessions=protected, batch_size=settings.batch_size)
+            if info:
+                self.runtime.bus.deliver_stored(info.pop("event"))
+                compacted.append(info)
 
         events = {"removed": 0, "floor": store.log_floor(), "head": store.log_head(),
                   "protected": sorted(protected), "pinned": bool(store._pins),
@@ -159,14 +186,18 @@ class Retention:
         turns = store.prune_turns(
             now=now, age_seconds=settings.turn_age_seconds, keep_per_session=settings.keep_turns_per_session)
         mutations = store.prune_mutations(now)
+        before_reclaim = store.storage_inventory()
+        reclaim = store.reclaim_space(dry_run=before_reclaim["free_bytes"] < settings.reclaim_threshold_bytes,
+                                      max_pages=settings.reclaim_pages)
         inventory = store.storage_inventory()
-        worked = bool(indexes["built"] or migration["rows"] or turn_links
+        worked = bool(compacted or deduplicated or reclaim["performed"] or indexes["built"] or migration["rows"] or turn_links
                       or scheduled["scheduled"] or scheduled["unlinked"]
                       or wire["expired"] or events["removed"] or turns["turns_removed"] or mutations)
         summary = {
             "at": now, "elapsed_ms": 0.0,
             "events": events, "wire": wire, "indexes": indexes, "migration": migration,
-            "turn_links": turn_links,
+            "turn_links": turn_links, "deduplicated_requests": deduplicated,
+            "compacted": compacted, "reclaim": reclaim,
             "scheduled": scheduled, "turns": turns, "mutations": mutations,
             "storage": inventory,
             "blockers": {

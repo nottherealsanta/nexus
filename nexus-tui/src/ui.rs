@@ -646,8 +646,12 @@ pub enum Target {
     ProviderDetailRow(usize),
     /// The Manager's orb: a click talks.
     ManagerOrb,
+    ManagerVoice,
     /// The Manager's End button: a click ends the call.
     ManagerEnd,
+    ManagerDetails,
+    ManagerInput,
+    ManagerDebugSession,
     /// Outside a focused Manager card: a click dismisses it.
     ManagerScrim,
     /// An unfocused Manager card: a click focuses it.

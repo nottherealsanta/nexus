@@ -6,6 +6,26 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 `/api/*` (opencode.ai/v2/docs/api), cut down to what exists. Code:
 `nexus-core/nexus/server.py`.
 
+API 1.5 adds request-local streaming checkpoints. `text_delta`, `reasoning_delta`,
+`tool_call_started` and `tool_args_delta` now have `id: null` and no SSE id/cursor.
+Their data (and `part_done`) carries `request_id`, request-local `seq` and
+`part_index`. Register the stream before reading `/turn`; seed the running
+request's `partial`, merge only newer queued events, and replace the indexed part
+on `part_done`. Id-less events never advance `Last-Event-ID`. Updated clients are required for streaming. Older clients may drop id-less
+deltas or repeatedly resync until the response is saved; canonical assistant
+messages remain available.
+Requests in `/turn` also carry nullable `partial`, `http_status` and `ttfb`
+(seconds); interrupted partials are diagnostic-only, never model context.
+
+`GET /api/session/{id}/diagnostics` returns `{keep, compaction, waits}` (durable
+question/permission asked/replied records). `POST` accepts `{"keep": true|false}`
+to protect diagnostic events and wire bodies. A compaction record has
+`session_id`, `first_id`, `last_id`, cumulative `removed` and `time`.
+`GET .../event` includes `compaction`; JSON session exports include
+`events_compacted`. The inspector explains lost diagnostics. Compaction advances
+the global resync floor conservatively: any cursor below it receives 410,
+including cursors whose rows remain in another interleaved session.
+
 ## Basics
 
 - **Base URL.** `http://127.0.0.1:4747` (`$NEXUS_PORT`), loopback by default.
@@ -58,7 +78,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/skill` | `?project=` or `?directory=` | `{skills: [{name, description, scope, path, sha256, allowed_tools, warnings}], problems: [{path, error, kind}]}` ([tools.md](tools.md#skills-and-the-skill-tool)) |
 | POST | `/api/skill/install` | `{fetch_id, skills?, scope, project?, overwrite?}` or `{source, scope, …}` | `{installed, skipped, problems, available, scope}`: `/learn`, copies skills from a Git repo or folder ([tools.md](tools.md#learn-installing-skills)) |
 | POST | `/api/skill/preview` | `{source, scope, project?}` | `{fetch_id, source, scope, requested, problems, found: [{name, description, installed, warnings}]}`; the fetch is kept 10 minutes ([tools.md](tools.md#learn-installing-skills)) |
-| GET | `/api/skill/{name}` | same | one skill plus `body`, `extra`, `files` |
+| GET | `/api/skill/{name}` | same | one skill plus `body`, `content` (complete UTF-8 `SKILL.md`, including frontmatter), `extra`, `files` (tool-readable resource paths), and `children` (sorted immediate supporting file/folder names, excluding `SKILL.md`; directories end in `/`, symlinks are not followed) |
 | GET | `/api/mcp` | | `{servers: [...]}`: MCP server states, no secrets, never connects ([mcp.md](mcp.md#api-and-events)) |
 | GET | `/api/mcp/{name}` | | one server plus `tool_names`, `log` |
 | POST | `/api/mcp/{name}/restart` | | close and reconnect; returns the row |
@@ -133,7 +153,9 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | POST | `/api/session/{id}/question/{qid}` | `{answers: [{question_id, selected?, text?}, …]}` | 204; 400 invalid answer, 404 unknown question or session, 409 already resolved |
 | POST | `/api/client/view` | `{stream_id, client_id, project?, session?, panel?}` | the stored ephemeral view; 400 invalid id, 404 unknown project or session, 409 `stream_closed` or `client_mismatch` ([Client views](#client-views-ephemeral)) |
 | GET | `/api/manager` | | `{enabled, mode, model, consent, live_consent, call: {call_id, holder, phase, error, card, live} or null}`: restores the Manager call after a reconnect; `call.live` is the GPT-Live diagnostics or `null` ([The Manager](#the-manager)) |
-| POST | `/api/manager/start` | `{stream_id, client_id}` | start the call on this client, or move it here: `{call_id, holder, mode, model}`; 409 `manager_disabled` or `stream_closed` |
+| GET/POST | `/api/manager/session` | none | GET current Manager session metadata or null; POST ensures/reuses it without audio or model work. An explicit `/api/snapshot?session=ID` retains this selected session metadata across reconnects; default snapshots still hide it. Explicit read-only debug navigation; normal session prompt returns 409 `manager_session_read_only` |
+| POST | `/api/manager/live/stop` | `{stream_id}` | 204; holder only, closes audio while preserving the control call and backend session |
+| POST | `/api/manager/start` | `{stream_id, client_id, audio?: boolean}` | start the call on this client, or move it here: `{call_id, holder, mode, model}`; 409 `manager_disabled` or `stream_closed` |
 | POST | `/api/manager/stop` | `{stream_id}` | 204; ends the call, never stops a session |
 | POST | `/api/manager/live/start` | `{stream_id}` (holder; `[manager] mode = "live"`) | Core opens the GPT-Live call: `{call_id, audio}`; 409 `live_mode_off`, `consent_required`, `live_busy`, `live_cancelled`, `live_unsupported`, `live_*` ([manager.md](manager.md#gpt-live-voice-m5-experimental-not-verified-against-the-real-service)) |
 | WS | `/api/manager/live/audio?stream_id=&token=` | binary PCM16 mono 24 kHz both ways; text `mute`/`unmute` | holder only; close codes 4401, 4403, 4404, 4409 |
@@ -632,8 +654,8 @@ why a running session's export is labelled durable partial state.
 An export never calls a provider, starts or interrupts a turn, activates a tool,
 writes a notice or event, reconstructs a missing snapshot, or reads a workspace
 file or a credential. A running session exports what is durably stored at the
-boundary; it is not interrupted or waited for. The JSON event log may contain
-stream deltas that had not yet been saved as a message.
+boundary; it is not interrupted or waited for. The JSON event log excludes live-only deltas. The inspector exposes checkpointed
+request partials separately as diagnostic-only output.
 
 Events are read in pages of 1,000 by event row id until a short page; this is
 not the `/event` endpoint's 5,000-event page cap, and there is no `limit` query
@@ -783,7 +805,7 @@ data: {"id": 4201, "cursor": "log_1a2b3c4d5e6f7a8b:4201", "seq": 77, "time": 179
 | `stream_id` | This one event-stream subscriber's identity for ephemeral state. It is not durable and changes on every connection; see [Client views](#client-views-ephemeral). |
 
 `generation`, `head`, `head_cursor`, `floor` and `stream_id` are stream/info
-metadata, not fields of every event; each event carries `id`, `cursor`, `seq`,
+metadata, not fields of every event; each durable event carries `id`, `cursor`, `seq`,
 `time`, `type`, `session_id`, `data` and `payload_state`. For a stored/replayed
 `wire_request`, `wire_response` or `wire_event`, `payload_state` is `full` or
 `expired`. An expired payload keeps its id/type/cursor and has an explicit
@@ -981,6 +1003,8 @@ ordinary durable global events (`session_id: null`), so they replay from a curso
 episode's own events (`message.added`, `session.status`, wire events) never reach any stream except one filtered to
 that episode's id.
 
+**Audio is optional.** `audio: false` on start only requires the Manager model consent. It does not open a microphone or GPT-Live; `/live/start` retains its separate Live consent check.
+
 **The call.** `POST /api/manager/start` with the `stream_id` from `server.connected` makes that client the *holder*
 and returns a random, non-secret `call_id`. Every `manager.*` event carries `call_id`; a client ignores events for a
 call it does not hold, and `stream_id` never appears in an event or a response. Only the holder's `stream_id` is
@@ -989,7 +1013,7 @@ accepted by `stop`, `say`, `cancel`, `activity`, `card/dismiss` and `navigate/re
 `call_id`); the previous holder sees a `manager.state` with a different `call_id` and shows "Moved to <holder>". The
 call ends when the holder's event stream closes. `409 manager_disabled` when `[manager] enabled` is false.
 
-`GET /api/manager/context` is the header's read-only debug view. It needs no call or holder and returns the same text
+`GET /api/manager/context` is the palette's read-only formatted debug view. It needs no call or holder and returns the same text
 for both clients: `document` has the hidden episodes (current and earlier), the recap the current episode started
 with, each turn's `<nexus_state>` block (snapshot or delta, with the user view when sent), and the recent log of
 messages, reasoning summaries, tool calls and results. It is bounded and says what it cut: the last 40 log entries
@@ -1006,7 +1030,8 @@ client_attached, pending, counts}`. `style` is the wire route (`codex`), `peer` 
 
 | Event | Data |
 | --- | --- |
-| `manager.preview` | `{call_id, preview: {source, lines: string[0..3], clipped, tool: {name, arguments, clipped, status: "running" or "done" or "failed"} or null}}`. Bounded, redacted current model excerpt; text updates at most once per 150 ms, tool transitions and final excerpts immediately. Also restored as `call.preview` in status and `preview` in the start response. |
+| `manager.session` | `{session}` current Manager session metadata after episode creation/rollover; no call id because debug navigation also works without a call. Clients reload canonical context only while explicitly viewing the debug session. |
+| `manager.preview` | `{call_id, preview: {source, lines: string[0..3], clipped, text, details_clipped, tool: {name, arguments, clipped, status: "running" or "done" or "failed"} or null}}`. Bounded, redacted current model details: `text` retains up to 12,000 trailing characters (`details_clipped` announces omission), and tool `arguments` are formatted JSON up to 4,096 characters with a `clipped` flag. The legacy three-line excerpt remains. Text updates at most once per 150 ms, tool transitions and final excerpts immediately. Also restored as `call.preview` in status and `preview` in the start response. |
 | `manager.state` | `{call_id, active, phase: "idle" or "thinking" or "replying", holder, mode, error: {code, message, fix} or null}`. `active: false` ends the call. `error.code` is `model_unavailable`, `model_failed` or `manager_error`; it stays until a turn succeeds |
 | `manager.caption` | `{call_id, turn_id, role: "user" or "manager", text, final}` for text not otherwise spoken: the user's typed line (sent when `say` is accepted, `source: "typed"` only) and errors (`role: "manager"`) |
 | `manager.speech` | `{call_id, turn_id, seq, text, urgent, proactive?}`: one sentence of the Manager's reply, `seq` counting from 0 within the turn, `urgent` true only for an unprompted line slipped into a reply, `proactive: true` only on an unprompted line (absent otherwise). A text-only client shows it at once; a speaking client fetches and plays it in order |

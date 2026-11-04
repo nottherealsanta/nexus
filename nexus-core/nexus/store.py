@@ -15,8 +15,8 @@ descendants.
 `session_snapshot` stores the JSON configuration a session froze at creation:
 the agent, rendered prompt, tool descriptions, child catalog and the
 session's `AGENTS.md` record (`nexus/snapshot.py`). `event` is the durable event
-log: every published event, in publish order, so the inspector can show any past
-session down to the raw wire traffic and a client can reconnect from a cursor.
+log: durable events in publish order; token deltas are live-only with
+checkpointed request partials. Finished diagnostics compact with an announcement.
 Session events are deleted with their session; global events (`session_id` null:
 projects and `session.deleted` tombstones) are not. `log` holds this database's
 log generation and retention floor (`nexus/eventlog.py`). Messages are
@@ -41,6 +41,7 @@ never zero.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -117,6 +118,36 @@ create index if not exists event_wire_order on event(id)
 create index if not exists event_lifecycle on event(session_id, type, id)
   where type in ('bash.started', 'bash.finished', 'permission.asked', 'permission.replied',
                  'question.asked', 'question.replied');
+create table if not exists wait_record (
+  session_id text not null references session(id) on delete cascade,
+  kind text not null,
+  ident text not null,
+  asked text,
+  replied text,
+  asked_at real,
+  replied_at real,
+  primary key (session_id, kind, ident)
+);
+create table if not exists bash_job (
+  session_id text not null references session(id) on delete cascade,
+  ident text not null,
+  started text,
+  finished text,
+  primary key (session_id, ident)
+);
+create table if not exists session_diagnostics (
+  session_id text primary key references session(id) on delete cascade,
+  code_used integer not null default 0,
+  keep integer not null default 0,
+  migrated integer not null default 0
+);
+create table if not exists session_compaction (
+  session_id text primary key references session(id) on delete cascade,
+  first_id integer not null,
+  last_id integer not null,
+  removed integer not null,
+  time real not null
+);
 create table if not exists event_body (
   sha text primary key,
   encoding text not null,
@@ -126,6 +157,18 @@ create table if not exists event_body (
   refs integer not null default 0,
   created real not null
 );
+create table if not exists event_body_child (
+  parent text not null references event_body(sha) on delete cascade,
+  child text not null references event_body(sha),
+  primary key (parent, child)
+);
+create trigger if not exists body_child_insert after insert on event_body_child begin
+  update event_body set refs = refs + 1 where sha = new.child;
+end;
+create trigger if not exists body_child_delete after delete on event_body_child begin
+  update event_body set refs = refs - 1 where sha = old.child;
+  delete from event_body where sha = old.child and refs <= 0;
+end;
 create table if not exists storage_metrics (
   id integer primary key check (id = 1),
   event_count integer not null default 0,
@@ -185,7 +228,7 @@ create trigger if not exists event_body_ref_insert after insert on event when ne
   update event_body set refs = refs + 1 where sha = new.body_sha;
 end;
 create trigger if not exists event_body_ref_link after update of body_sha on event
-  when old.body_sha is null and new.body_sha is not null begin
+  when new.body_sha is not null and old.body_sha is not new.body_sha begin
   update event_body set refs = refs + 1 where sha = new.body_sha;
 end;
 create trigger if not exists event_body_ref_delete after delete on event when old.body_sha is not null begin
@@ -193,7 +236,7 @@ create trigger if not exists event_body_ref_delete after delete on event when ol
   delete from event_body where sha = old.body_sha and refs <= 0;
 end;
 create trigger if not exists event_body_ref_unlink after update of body_sha on event
-  when old.body_sha is not null and new.body_sha is null begin
+  when old.body_sha is not null and old.body_sha is not new.body_sha begin
   update event_body set refs = refs - 1 where sha = old.body_sha;
   delete from event_body where sha = old.body_sha and refs <= 0;
 end;
@@ -486,6 +529,7 @@ def _build_fresh(path: Path) -> None:
         leftover.unlink(missing_ok=True)
     db = sqlite3.connect(path)
     try:
+        db.execute("pragma auto_vacuum = incremental")
         db.execute("pragma journal_mode = wal")
         db.executescript(SCHEMA)
         db.execute(f"pragma user_version = {SCHEMA_VERSION}")
@@ -543,6 +587,17 @@ def prepare_database(path: Path) -> Path | None:
     log.warning("database schema %s is not version %s: kept it as %s and started a new database",
                 label, SCHEMA_VERSION, backup)
     return backup
+
+
+def database_lock(path: Path, *, exclusive: bool = False) -> Any:
+    """Cooperate with offline maintenance; held for the entire Store lifetime."""
+    lock = path.with_name(path.name + ".lock").open("a+b")
+    try:
+        fcntl.flock(lock, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        raise StoreError("database is in use; stop the daemon and other database users before compacting") from None
+    return lock
 
 
 def new_id(prefix: str) -> str:
@@ -633,14 +688,16 @@ class StoredMessage:
 
 
 class Store:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, *, _locked: bool = False) -> None:
         self.path = path or home() / "nexus.db"
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._database_lock = None if _locked else database_lock(self.path)
         self.backup: Path | None = prepare_database(self.path)
         self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("pragma journal_mode = wal")
         self.db.execute("pragma foreign_keys = on")
+        self.db.execute("pragma recursive_triggers = on")
         self.db.execute("pragma synchronous = normal")  # WAL + normal: safe across crashes, fast per-event commits
         self._pins: dict[int, tuple[int, int]] = {}
         self._pin_seq = 0
@@ -704,7 +761,12 @@ class Store:
                 if name not in metric_columns:
                     self.db.execute(f"alter table storage_metrics add column {name} {definition}")
         self._migrate_manager_columns()
+        self.db.executescript("drop trigger if exists event_body_ref_link; drop trigger if exists event_body_ref_unlink;")
         self.db.executescript(_migration_schema())
+        request_columns = {row["name"] for row in self.db.execute("pragma table_info(turn_request)")}
+        for name, definition in {"partial": "text", "http_status": "integer", "ttfb": "real", "wire_started": "real"}.items():
+            if name not in request_columns:
+                self.db.execute(f"alter table turn_request add column {name} {definition}")
         turn_columns = {row["name"] for row in self.db.execute("pragma table_info(turn)")}
         if "final_answer_message_id" not in turn_columns:
             with self.db:
@@ -858,6 +920,28 @@ class Store:
             "select pending_events from storage_metrics where id = 1").fetchone()[0]
         return {"rows": len(rows), "remaining": remaining}
 
+    def deduplicate_requests(self, *, limit: int = 50) -> int:
+        """Upgrade retained whole-body requests in bounded, resumable batches."""
+        cursor = int(self.preference("storage.request_cursor") or 0)
+        rows = self.db.execute(
+            "select * from event where id > ? and type = 'wire_request' order by id limit ?",
+            (cursor, max(0, limit))).fetchall()
+        with self.db:
+            for row in rows:
+                if row["payload_state"] != payloads.FULL:
+                    continue
+                data = payloads.event_data(self.db, row)
+                if payloads.is_expired(data):
+                    continue
+                sha = payloads.store_body(self.db, data, request=True)
+                marker = payloads.stored_marker(sha)
+                self.db.execute("update event set body_sha = ?, data = ?, stored_bytes = ?, payload_bytes = ? where id = ?",
+                                (sha, marker, len(marker.encode()), payloads.payload_bytes(data), row["id"]))
+            if rows:
+                self.db.execute("insert into preference values ('storage.request_cursor', ?)"
+                                " on conflict(name) do update set value = excluded.value", (str(rows[-1]["id"]),))
+        return len(rows)
+
     def backfill_wire_turn_ids(self, *, limit: int = EVENT_MIGRATION_BATCH) -> int:
         """Attach old diagnostic events to a request turn, resumably and once each.
 
@@ -946,6 +1030,8 @@ class Store:
 
     def close(self) -> None:
         self.db.close()
+        if self._database_lock is not None:
+            self._database_lock.close()
 
     # -- projects ------------------------------------------------------------
 
@@ -1019,6 +1105,7 @@ class Store:
                 self.db.execute("insert into session_snapshot (session_id, data, created) values (?, ?, ?)",
                                 (session.id, json.dumps(snapshot), now))
             self.db.execute("update project set updated = ? where id = ?", (now, project.id))
+            self.db.execute("insert into session_diagnostics (session_id, migrated) values (?, 1)", (session.id,))
             self._index_title(session.id, session.title)
         if kind != "user":
             self._hidden.add(session.id)
@@ -1323,21 +1410,12 @@ class Store:
         body_sha = None
         stored_bytes = size
         data = raw_text
-        if event["type"] in payloads.WIRE_TYPES:
-            body_sha = payloads.body_sha(raw)
-            encoding, body = payloads.encode_body(raw)
-            data = payloads.stored_marker(body_sha)
-            # The event row stores a small body reference; the compressed
-            # payload lives once in event_body. Count both separately.
-            stored_bytes = len(data.encode("utf-8"))
         try:
             with self.db:
-                if body_sha is not None:
-                    self.db.execute(
-                        "insert or ignore into event_body"
-                        " (sha, encoding, body, raw_bytes, stored_bytes, refs, created)"
-                        " values (?, ?, ?, ?, ?, 0, ?)",
-                        (body_sha, encoding, body, size, stored_bytes, time.time()))
+                if event["type"] in payloads.WIRE_TYPES:
+                    body_sha = payloads.store_body(self.db, event["data"], request=event["type"] == "wire_request")
+                    data = payloads.stored_marker(body_sha)
+                    stored_bytes = len(data.encode("utf-8"))
                 row = self.db.execute(
                     "insert into event (session_id, seq, time, type, data, payload_bytes,"
                     " stored_bytes, payload_state, body_sha, turn_id, turn_link_checked)"
@@ -1346,6 +1424,7 @@ class Store:
                      size, stored_bytes, body_sha, turn_id, 1 if turn_id is not None else 0),
                 )
                 event_id = row.lastrowid
+                self._record_lifecycle(event["session_id"], event["type"], event["data"], event["time"])
                 self.db.execute("update log set head_high = max(head_high, ?) where id = 1", (event_id,))
                 if body_sha is not None and self.pressure_bytes is not None:
                     wire = self.db.execute(
@@ -1394,56 +1473,132 @@ class Store:
         row = self.db.execute("select floor from log where id = 1").fetchone()
         return row["floor"] if row else 0
 
+    def _record_lifecycle(self, sid: str | None, kind: str, data: Any, at: float) -> None:
+        if sid is None:
+            return
+        if kind in ("code.cell", "code.call", "kernel.deleted"):
+            self.db.execute("insert into session_diagnostics (session_id, code_used) values (?, 1)"
+                            " on conflict(session_id) do update set code_used = 1", (sid,))
+        if not isinstance(data, dict) or not data.get("id"):
+            return
+        raw = json.dumps(data, separators=(",", ":"))
+        if kind in ("question.asked", "question.replied", "permission.asked", "permission.replied"):
+            category, action = kind.split(".")
+            self.db.execute(f"insert into wait_record (session_id, kind, ident, {action}, {action}_at)"
+                            f" values (?, ?, ?, ?, ?) on conflict(session_id, kind, ident) do update set"
+                            f" {action} = excluded.{action}, {action}_at = excluded.{action}_at",
+                            (sid, category, data["id"], raw, at))
+        elif kind in ("bash.started", "bash.finished"):
+            action = kind.split(".")[1]
+            self.db.execute(f"insert into bash_job (session_id, ident, {action}) values (?, ?, ?)"
+                            f" on conflict(session_id, ident) do update set {action} = excluded.{action}",
+                            (sid, data["id"], raw))
+
+    def _migrate_session_lifecycle(self, sid: str) -> None:
+        row = self.db.execute("select migrated from session_diagnostics where session_id = ?", (sid,)).fetchone()
+        if row and row[0]:
+            return
+        # Only a legacy session is scanned, once. Subsequent startup/recovery
+        # reads the small state tables, even after the event log is flushed.
+        with self.db:
+            for event in self.db.execute(
+                    "select type, data, time from event where session_id = ? and type in"
+                    " ('question.asked', 'question.replied', 'permission.asked', 'permission.replied',"
+                    " 'bash.started', 'bash.finished', 'code.cell', 'code.call', 'kernel.deleted') order by id", (sid,)):
+                self._record_lifecycle(sid, event["type"], json.loads(event["data"]), event["time"])
+            self.db.execute("insert into session_diagnostics (session_id, migrated) values (?, 1)"
+                            " on conflict(session_id) do update set migrated = 1", (sid,))
+
     def _lifecycle_index(self) -> str:
-        """Force the small partial lifecycle index once maintenance has built it."""
         row = self.db.execute("select indexes_ready from storage_metrics where id = 1").fetchone()
         return " indexed by event_lifecycle" if row is not None and row[0] else ""
 
     def protected_sessions(self) -> set[str]:
-        """Sessions whose events still carry recovery or lifecycle evidence.
-
-        An unfinished turn, an unfinished provider request, a live background job
-        started event with no finish, or an open wait all pin that session's log
-        out of retention. Idle alone is not proof that its events are disposable.
-        """
-        out: set[str] = {row["session_id"] for row in self.db.execute(
-            "select distinct session_id from turn_tool where state != 'inserted'")}
-        for row in self.db.execute(
-                "select distinct session_id from turn where status = 'running' or recovery = 'pending'"):
-            out.add(row["session_id"])
-        for row in self.db.execute(
-                "select distinct session_id from turn_request where status = 'started'"):
-            out.add(row["session_id"])
-        index = self._lifecycle_index()
-        for row in self.db.execute(
-                f"select distinct session_id from event{index} where session_id is not null and type in"
-                f" ({LIFECYCLE_TYPES_SQL})"):
-            session_id = row["session_id"]
-            if self._has_open_lifecycle(session_id):
-                out.add(session_id)
+        """Unfinished execution and open lifecycle state protect diagnostics."""
+        # Incremental adoption: one legacy session per maintenance/startup call.
+        row = self.db.execute("select s.id from session s left join session_diagnostics d on s.id = d.session_id"
+                              " where coalesce(d.migrated, 0) = 0 limit 1").fetchone()
+        if row:
+            self._migrate_session_lifecycle(row[0])
+        out = {row[0] for row in self.db.execute(
+            "select session_id from turn_tool where state != 'inserted' union"
+            " select session_id from turn where status = 'running' or recovery = 'pending' union"
+            " select session_id from turn_request where status = 'started' union"
+            " select session_id from wait_record where asked is not null and replied is null union"
+            " select session_id from bash_job where started is not null and finished is null union"
+            " select session_id from session_diagnostics where keep = 1")}
+        # Until adopted, legacy logs cannot be touched by retention.
+        out.update(row[0] for row in self.db.execute(
+            "select s.id from session s left join session_diagnostics d on s.id = d.session_id"
+            " where coalesce(d.migrated, 0) = 0"))
         return out
 
     def _has_open_lifecycle(self, session_id: str) -> bool:
-        started: set[str] = set()
-        finished: set[str] = set()
-        index = self._lifecycle_index()
-        for row in self.db.execute(
-                f"select type, json_extract(data, '$.id') as ident from event{index} where session_id = ?"
-                f" and type in ({LIFECYCLE_TYPES_SQL}) order by id", (session_id,)):
-            if row["type"] not in ("bash.started", "bash.finished") or not row["ident"]:
-                continue
-            (started.add if row["type"] == "bash.started" else finished.add)(row["ident"])
-        if started - finished:
-            return True
-        asked = {row["id"] for row in self.db.execute(
-            f"select type, json_extract(data, '$.id') as id from event{index} where session_id = ?"
-            f" and type in ({LIFECYCLE_TYPES_SQL})", (session_id,))
-            if row["type"] in ("permission.asked", "question.asked") and row["id"]}
-        replied = {row["id"] for row in self.db.execute(
-            f"select type, json_extract(data, '$.id') as id from event{index} where session_id = ?"
-            f" and type in ({LIFECYCLE_TYPES_SQL})", (session_id,))
-            if row["type"] in ("permission.replied", "question.replied") and row["id"]}
-        return bool(asked - replied)
+        self._migrate_session_lifecycle(session_id)
+        return bool(self.unfinished_bash_jobs(session_id) or self.db.execute(
+            "select 1 from wait_record where session_id = ? and asked is not null and replied is null limit 1",
+            (session_id,)).fetchone())
+
+    def keep_diagnostics(self, session_id: str, keep: bool) -> None:
+        with self.db:
+            self.db.execute("insert into session_diagnostics (session_id, keep) values (?, ?)"
+                            " on conflict(session_id) do update set keep = excluded.keep", (session_id, int(keep)))
+
+    def code_used(self, session_id: str) -> bool:
+        self._migrate_session_lifecycle(session_id)
+        row = self.db.execute("select code_used from session_diagnostics where session_id = ?", (session_id,)).fetchone()
+        return bool(row and row[0])
+
+    def compaction(self, session_id: str) -> dict[str, Any] | None:
+        row = self.db.execute("select * from session_compaction where session_id = ?", (session_id,)).fetchone()
+        return dict(row) if row else None
+
+    def compact_session(self, session_id: str, *, now: float, idle_seconds: float = 86400,
+                        protect_sessions: set[str] | None = None, batch_size: int = 2000) -> dict[str, Any] | None:
+        """Flush a bounded finished-session batch and announce it in the same transaction.
+
+        The global resync floor advances to the last removed id, conservatively
+        invalidating every older cursor even when retained ids are interleaved.
+        Canonical messages, snapshots and execution records are never rewritten.
+        """
+        self._migrate_session_lifecycle(session_id)
+        if session_id in ((protect_sessions or set()) | self.protected_sessions()):
+            return None
+        if self.db.execute("select 1 from message where session_id = ? and event_id is null limit 1",
+                           (session_id,)).fetchone():
+            return None
+        session = self.session(session_id)
+        if session is None or (not session.archived and session.updated > now - idle_seconds):
+            return None
+        # Include event times: a resumed session's new diagnostics get a full window.
+        latest = self.db.execute("select max(time) from event where session_id = ? and type != 'session.compacted'",
+                                 (session_id,)).fetchone()[0]
+        if latest is None or (not session.archived and latest > now - idle_seconds):
+            return None
+        ids = [r[0] for r in self.db.execute(
+            "select id from event where session_id = ? and type != 'session.compacted' order by id limit ?",
+            (session_id, max(1, batch_size)))]
+        bounds = self.db.execute("select min(id), max(id) from event where session_id = ?", (session_id,)).fetchone()
+        if not ids or any(start <= bounds[1] and end >= bounds[0] for start, end in self._pins.values()):
+            return None
+        info = {"session_id": session_id, "first_id": ids[0], "last_id": ids[-1], "removed": len(ids), "time": now}
+        with self.db:
+            self.db.execute("delete from event where session_id = ? and (id <= ? or type = 'session.compacted')",
+                            (session_id, ids[-1]))
+            self.db.execute("update log set floor = max(floor, ?) where id = 1", (ids[-1],))
+            self.db.execute("insert into session_compaction values (?, ?, ?, ?, ?) on conflict(session_id) do update set"
+                            " first_id = min(first_id, excluded.first_id), last_id = excluded.last_id,"
+                            " removed = removed + excluded.removed, time = excluded.time",
+                            (session_id, ids[0], ids[-1], len(ids), now))
+            # append_event normally commits its own transaction. The compaction
+            # marker is inserted here directly to keep deletion + announcement atomic.
+            raw = json.dumps(info, separators=(",", ":"))
+            row = self.db.execute("insert into event (session_id, seq, time, type, data, payload_bytes, stored_bytes)"
+                                  " values (?, 0, ?, 'session.compacted', ?, ?, ?)",
+                                  (session_id, now, raw, len(raw.encode()), len(raw.encode())))
+            self.db.execute("update log set head_high = max(head_high, ?) where id = 1", (row.lastrowid,))
+        info["event"] = self.events(session_id, after=ids[-1], types=["session.compacted"])[-1]
+        return info
 
     def schedule_wire_expiry(self, *, success_seconds: float, failure_seconds: float,
                              debug_seconds: float = 0.0, limit: int = EVENT_MIGRATION_BATCH) -> dict[str, int]:
@@ -1516,6 +1671,7 @@ class Store:
         for start, end in pinned:
             conditions.append("not (e.id between ? and ?)")
             params.extend([start, end])
+        conditions.append("not exists (select 1 from session_diagnostics d where d.session_id = e.session_id and d.keep = 1)")
         base = (
             "select e.id, e.session_id, e.turn_id, e.type, e.payload_bytes, e.expires"
             " from event e left join turn t on t.id = e.turn_id"
@@ -1573,7 +1729,7 @@ class Store:
     def reclaim_space(self, *, dry_run: bool = True, max_pages: int = 1000) -> dict[str, Any]:
         """Report, and only explicitly perform, bounded SQLite free-page reclamation.
 
-        Maintenance never vacuums automatically. A full `VACUUM` rewrites the
+        A full `VACUUM` rewrites the
         whole file and needs free disk equal to the database, so it stays an
         operator decision; this method only uses `incremental_vacuum` when the
         database was created with auto_vacuum, and always reports inventory first.
@@ -1595,8 +1751,11 @@ class Store:
             return {**plan, "performed": False}
         pages = plan["bounded_pages"]
         if pages:
-            self.db.execute(f"pragma incremental_vacuum({int(pages)})")
-        return {**plan, "performed": True, "after": self.storage_inventory()}
+            self.db.execute(f"pragma incremental_vacuum({int(pages)})").fetchall()
+            # Publish the smaller page count into the main file when readers
+            # allow it; PASSIVE never waits for readers to release snapshots.
+            self.db.execute("pragma wal_checkpoint(passive)").fetchall()
+        return {**plan, "performed": bool(pages), "after": self.storage_inventory()}
 
     def prune_turns(self, *, now: float, age_seconds: float, keep_per_session: int = 200) -> dict[str, int]:
         """Remove old terminal execution rows, keeping recovery evidence and recent turns."""
@@ -1668,12 +1827,12 @@ class Store:
         pinned = self._pinned_cutoff()
         if pinned is not None:
             limit = min(limit, pinned)
-        if limit <= floor:
+        if limit <= 0:
             return self._retention_pressure(floor, head, protecting, byte_budget)
         rows = self.db.execute(
             "select id, time, payload_state, payload_bytes from event"
-            " where id > ? and id <= ? order by id limit ?",
-            (floor, limit, max(1, batch_size))).fetchall()
+            " where id <= ? order by id limit ?",
+            (limit, max(1, batch_size))).fetchall()
         if not rows:
             return self._retention_pressure(floor, head, protecting, byte_budget)
         chosen: int | None = None
@@ -1699,11 +1858,11 @@ class Store:
         cutoff = min(chosen, limit)
         with self.db:
             removed = self.db.execute(
-                "delete from event where id > ? and id <= ?", (floor, cutoff)).rowcount
-            self.db.execute("update log set floor = ? where id = 1", (cutoff,))
+                "delete from event where id <= ?", (cutoff,)).rowcount
+            self.db.execute("update log set floor = max(floor, ?) where id = 1", (cutoff,))
         retained_bytes = self.db.execute(
             "select payload_bytes from storage_metrics where id = 1").fetchone()[0]
-        return {"removed": removed, "floor": cutoff, "head": head, "protected": sorted(protecting),
+        return {"removed": removed, "floor": max(floor, cutoff), "head": head, "protected": sorted(protecting),
                 "pinned": bool(self._pins), "batches": 1,
                 "retained_bytes": retained_bytes,
                 "over_budget": (retained_bytes > byte_budget) if byte_budget is not None else False}
@@ -2452,6 +2611,28 @@ class Store:
             )
         return request
 
+    def note_wire(self, request_id: str, data: dict[str, Any]) -> None:
+        with self.db:
+            if data["type"] == "wire_request":
+                self.db.execute("update turn_request set wire_started = ?, http_status = null, ttfb = null where id = ?",
+                                (time.time(), request_id))
+            elif data["type"] == "wire_response":
+                self.db.execute("update turn_request set http_status = ? where id = ?", (data.get("status"), request_id))
+            elif data["type"] == "wire_event":
+                self.db.execute("update turn_request set ttfb = max(0, ? - coalesce(wire_started, started))"
+                                " where id = ? and ttfb is null", (time.time(), request_id))
+
+    def save_partial(self, request_id: str, partial: dict[str, Any]) -> None:
+        with self.db:
+            self.db.execute("update turn_request set partial = ? where id = ? and message_id is null",
+                            (json.dumps(partial, separators=(",", ":")), request_id))
+
+    def partial_summary(self, request: dict[str, Any]) -> dict[str, Any]:
+        from .live import partial_summary
+        partial = request.get("partial")
+        return partial_summary(partial) if partial is not None else self.stream_summary(
+            request["session_id"], request["event_after"])
+
     def record_usage(self, request_id: str, attempt_id: str | None, usage: Usage) -> None:
         """Store one attempt's reported usage, re-sum its request and update the ledger.
 
@@ -2519,6 +2700,8 @@ class Store:
             "parts": json.loads(row["parts"] or "[]"), "data": json.loads(row["data"] or "{}"),
             "model": row["model"], "effort": row["effort"], "usage": _usage_json(row),
             "reasoning_seconds": row["reasoning_seconds"],
+            "partial": json.loads(row["partial"]) if row["partial"] else None,
+            "http_status": row["http_status"], "ttfb": row["ttfb"],
         }
 
     def request(self, request_id: str) -> dict[str, Any] | None:
@@ -2642,7 +2825,7 @@ class Store:
             stored = self._insert_message(session_id, message, now)
             if request_id is not None:
                 self.db.execute(
-                    "update turn_request set message_id = ?, parts = '[]' where id = ? and message_id is null",
+                    "update turn_request set message_id = ?, parts = '[]', partial = null where id = ? and message_id is null",
                     (stored.id, request_id),
                 )
             for part in message.parts:
@@ -2703,6 +2886,17 @@ class Store:
 
     def has_event(self, type_: str, fields: dict[str, Any], *, session_id: str | None = None) -> bool:
         """Whether a stored event of `type_` carries every field value (exact JSON match)."""
+        if session_id is not None and type_ in ("question.asked", "question.replied", "permission.asked",
+                                                 "permission.replied", "bash.started", "bash.finished"):
+            self._migrate_session_lifecycle(session_id)
+            if type_.startswith("bash."):
+                action = type_.split(".")[1]
+                rows = self.db.execute(f"select {action} as data from bash_job where session_id = ?", (session_id,))
+            else:
+                category, action = type_.split(".")
+                rows = self.db.execute(f"select {action} as data from wait_record where session_id = ? and kind = ?",
+                                       (session_id, category))
+            return any(row["data"] and all(json.loads(row["data"]).get(k) == v for k, v in fields.items()) for row in rows)
         conditions = ["type = ?"]
         params: list[Any] = [type_]
         if session_id is not None:
@@ -2715,71 +2909,29 @@ class Store:
             "select 1 from event where " + " and ".join(conditions) + " limit 1", params).fetchone()
         return row is not None
 
-    def has_event_type(self, session_id: str, types: list[str]) -> bool:
-        row = self.db.execute(
-            "select 1 from event where session_id = ? and type in (" + ", ".join("?" * len(types)) + ") limit 1",
-            (session_id, *types),
-        ).fetchone()
-        return row is not None
-
     def unfinished_bash_jobs(self, session_id: str) -> list[str]:
-        """Job ids whose durable `bash.started` has no matching `bash.finished`."""
-        rows = self.db.execute(
-            "select type, json_extract(data, '$.id') as job from event"
-            " where session_id = ? and type in ('bash.started', 'bash.finished') order by id",
-            (session_id,),
-        )
-        started: list[str] = []
-        finished: set[str] = set()
-        for row in rows:
-            job = row["job"]
-            if not job:
-                continue
-            if row["type"] == "bash.started":
-                if job not in started:
-                    started.append(job)
-            else:
-                finished.add(job)
-        return [job for job in started if job not in finished]
+        self._migrate_session_lifecycle(session_id)
+        return [r[0] for r in self.db.execute(
+            "select ident from bash_job where session_id = ? and started is not null and finished is null order by rowid",
+            (session_id,))]
 
     def open_bash_jobs(self) -> list[tuple[str, str]]:
-        """Every `(session_id, job_id)` with a durable `bash.started` and no `bash.finished`.
-
-        A background job lives only in the daemon's memory, so after a restart no
-        open pair can still be running. `protected_sessions` treats one as live
-        evidence and pins that session's whole log out of retention, so a pair left
-        open by a crash keeps the event log from ever being pruned.
-        """
-        jobs: dict[tuple[str, str], bool] = {}
-        for row in self.db.execute(
-                "select session_id, type, json_extract(data, '$.id') as job from event"
-                " where type in ('bash.started', 'bash.finished') and session_id is not null"):
-            job = row["job"]
-            if not job:
-                continue
-            key = (row["session_id"], job)
-            if row["type"] == "bash.started":
-                jobs.setdefault(key, True)
-            elif key in jobs:
-                jobs[key] = False
-        return [key for key, open_ in jobs.items() if open_]
+        # Legacy adoption is one time; no cold-start scan of the global event log.
+        for row in self.db.execute("select id from session").fetchall():
+            self._migrate_session_lifecycle(row[0])
+        return [(r[0], r[1]) for r in self.db.execute(
+            "select session_id, ident from bash_job where started is not null and finished is null")]
 
     def wait_lifecycle(self, session_id: str, *, since: float | None = None) -> dict[str, Any]:
-        """Durable asked/replied records for approvals and questions in one session."""
-        rows = self.db.execute(
-            "select type, data from event where session_id = ? and type in"
-            " ('question.asked', 'question.replied', 'permission.asked', 'permission.replied')"
-            " and (? is null or time >= ?) order by id",
-            (session_id, since, since),
-        )
-        out: dict[str, Any] = {
-            "questions_asked": [], "questions_replied": [], "approvals_asked": [], "approvals_replied": [],
-        }
-        for row in rows:
-            data = json.loads(row["data"])
-            key = {"question.asked": "questions_asked", "question.replied": "questions_replied",
-                   "permission.asked": "approvals_asked", "permission.replied": "approvals_replied"}[row["type"]]
-            out[key].append(data)
+        self._migrate_session_lifecycle(session_id)
+        out: dict[str, Any] = {"questions_asked": [], "questions_replied": [],
+                               "approvals_asked": [], "approvals_replied": []}
+        for action in ("asked", "replied"):
+            for row in self.db.execute(
+                    f"select kind, {action} as data from wait_record where session_id = ? and {action} is not null"
+                    f" and (? is null or {action}_at >= ?) order by {action}_at, rowid", (session_id, since, since)):
+                category = "questions" if row["kind"] == "question" else "approvals"
+                out[f"{category}_{action}"].append(json.loads(row["data"]))
         return out
 
     # -- consistent reads ------------------------------------------------------
@@ -2919,6 +3071,8 @@ class Store:
                 "error": json.loads(row["error"]) if row["error"] else None,
                 "message_id": row["message_id"], "usage": _usage_json(row),
                 "reasoning_seconds": row["reasoning_seconds"], "attempts": attempts,
+                "partial": json.loads(row["partial"]) if row["partial"] else None,
+                "http_status": row["http_status"], "ttfb": row["ttfb"],
             })
         for row in self.db.execute(
                 f"select * from turn_attempt where turn_id in ({marks}) order by attempt, started, id", ids):

@@ -402,3 +402,60 @@ async def test_a_retired_call_cannot_update_the_new_holders_excerpt(h):
     h.manager._preview(retired, "old call output", "Model", force=True)
     assert h.manager.call.preview is None
     assert len(h.of("manager.preview")) == before
+
+
+async def test_details_include_full_current_text_and_pretty_tool_arguments(h):
+    h.project(); h.open_stream(); await h.start()
+    await h.say("what's going on?")
+    previews = [event["data"]["preview"] for event in h.of("manager.preview")]
+    tool = next(p["tool"] for p in previews if p.get("tool"))
+    assert not tool["arguments"].startswith('"{')
+    text = "full detail\n" * 100
+    h.manager._preview(h.manager.call, text, "Response", force=True)
+    assert h.manager.call.preview["text"] == text
+    assert not h.manager.call.preview["details_clipped"]
+    h.manager._preview(h.manager.call, "x" * 13000, "Response", force=True)
+    assert len(h.manager.call.preview["text"]) == 12000
+    assert h.manager.call.preview["details_clipped"]
+
+
+async def test_debug_session_is_fixed_without_a_call_or_model_request(h):
+    first = await h.client.post("/api/manager/session")
+    assert first.status_code == 200
+    session = first.json()
+    assert session["kind"] == "manager"
+    assert (await h.client.post("/api/manager/session")).json()["id"] == session["id"]
+    assert (await h.client.get("/api/manager/session")).json()["id"] == session["id"]
+    assert h.manager.call is None and h.manager.live is None
+    assert not h.of("request.start")
+    normal = (await h.client.get("/api/session")).json()
+    assert session["id"] not in str(normal)
+    snapshot = (await h.client.get("/api/snapshot", params={"session": session["id"]})).json()
+    assert any(row["id"] == session["id"] and row["kind"] == "manager" for row in snapshot["sessions"])
+    assert session["id"] not in str((await h.client.get("/api/snapshot")).json())
+    refused = await h.client.post(f"/api/session/{session['id']}/prompt", json={"text": "bypass"})
+    assert refused.status_code == 409 and refused.json()["code"] == "manager_session_read_only"
+
+
+async def test_audio_stop_preserves_the_manager_control_call_and_debug_session(h):
+    stream = h.open_stream()
+    started = await h.client.post("/api/manager/start", json={"stream_id": stream.stream_id, "client_id": "tui", "audio": False})
+    assert started.status_code == 200
+    session = (await h.client.post("/api/manager/session")).json()
+    response = await h.client.post("/api/manager/live/stop", json={"stream_id": stream.stream_id})
+    assert response.status_code == 204
+    assert h.manager.call.active and h.manager.call.call_id == started.json()["call_id"]
+    assert h.manager.current_episode().id == session["id"]
+
+
+async def test_typed_start_in_live_mode_needs_no_live_consent(tmp_path, monkeypatch):
+    h = Harness(tmp_path, monkeypatch, mode="live")
+    try:
+        stream = h.open_stream()
+        response = await h.client.post("/api/manager/start", json={"stream_id": stream.stream_id, "client_id": "tui", "audio": False})
+        assert response.status_code == 200 and response.json()["mode"] == "live"
+        assert h.manager.live is None
+        refused = await h.client.post("/api/manager/live/start", json={"stream_id": stream.stream_id})
+        assert refused.status_code == 409 and refused.json()["code"] == "consent_required"
+    finally:
+        await h.close()

@@ -130,16 +130,17 @@ export const manifest = {
    "manager.listening",
    "manager.field",
    "manager.card",
+   "manager.focused",
    "escape_chain"
   ],
   "escape": [
    {
     "id": "manager_call",
     "when": [
-     "manager.in_call"
+     "manager.focused"
     ],
-    "action": "manager.stop",
-    "note": "A Manager call is open, focused or minimised: Esc ends the whole call. It stops the speech, cancels the Manager's turn, drops any recording and typed field, clears the card and tears the call down (POST /api/manager/stop). It never minimises and never reaches the session interrupt."
+    "action": "manager.header",
+    "note": "Close the Manager dropdown without ending audio, the control call or model work."
    },
    {
     "id": "overlay",
@@ -186,10 +187,10 @@ export const manifest = {
     "id": "interrupt",
     "when": [
      "session.busy",
-     "!manager.in_call"
+     "!manager.focused"
     ],
     "action": "session.interrupt",
-    "note": "Interrupt the viewed session. Never also navigates back on the same press. While a Manager call is open, Esc never reaches this: it ends the call instead."
+    "note": "Interrupt the viewed session. Never also navigates back on the same press. An interactive Manager dropdown takes Esc first; background audio does not."
    },
    {
     "id": "editor",
@@ -230,12 +231,12 @@ export const manifest = {
    "leading": "sidebar.left.toggle",
    "centre": "title_breadcrumbs",
    "trailing": "sidebar.right.toggle",
-   "manager_button": "manager.context",
+   "manager_button": "manager.header",
    "note": "Toggles stay available when their sidebar is closed. Same anchors in terminal, browser and desktop, allowing for native window chrome.",
    "title_click": "session.rename",
    "breadcrumbs": "root title > child title; each crumb is a link; back via nav.back",
    "extra": [
-    "manager.context",
+    "manager.header",
     "manager.open_session",
     "notifications.open"
    ]
@@ -2812,6 +2813,68 @@ export const manifest = {
    "note": "Inline rename, find bar, settings field, key capture. Not the composer: Esc never clears composer text."
   },
   {
+   "id": "manager.details_up",
+   "title": "Scroll Manager details up",
+   "category": "manager",
+   "keys": {
+    "tui": "pageup",
+    "nsh": "pageup"
+   },
+   "key_context": "manager.focused",
+   "when": [
+    "manager.focused",
+    "!manager.field"
+   ],
+   "unavailable_reason": "Open the focused Manager call to scroll its details.",
+   "placement": [
+    "stage"
+   ]
+  },
+  {
+   "id": "manager.details_down",
+   "title": "Scroll Manager details down",
+   "category": "manager",
+   "keys": {
+    "tui": "pagedown",
+    "nsh": "pagedown"
+   },
+   "key_context": "manager.focused",
+   "when": [
+    "manager.focused",
+    "!manager.field"
+   ],
+   "unavailable_reason": "Open the focused Manager call to scroll its details.",
+   "placement": [
+    "stage"
+   ]
+  },
+  {
+   "id": "manager.header",
+   "title": "Manager",
+   "category": "manager",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "header",
+    "palette"
+   ],
+   "note": "Toggle the borderless opaque Manager dropdown. The header orb replaces the label while visible. Voice defaults on: explicitly opening Manager starts audio immediately unless Voice was switched off. Esc closes the dropdown."
+  },
+  {
+   "id": "manager.audio_toggle",
+   "title": "Toggle Manager audio",
+   "category": "manager",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "header",
+    "palette"
+   ],
+   "note": "The dropdown Voice toggle defaults on. Switching it on starts GPT-Live immediately; switching it off stops only audio. The header orb toggles the dropdown; debug session navigation remains independent."
+  },
+  {
    "id": "manager.context",
    "title": "Manager context",
    "category": "manager",
@@ -2822,11 +2885,11 @@ export const manifest = {
     "palette",
     "header"
    ],
-   "note": "The header's Manager button. Opens a read-only, scrollable modal with the Manager's current hidden context: its episodes and recap, the state snapshot and deltas it was given each turn, and its recent log (messages, tool calls and results). It is an inspector-style debug view, not a timeline or chat (docs/manager.md). Clipping is announced. Available with or without a call."
+   "note": "A palette debug command. Opens a read-only, scrollable modal with the Manager's current hidden context: its episodes and recap, the state snapshot and deltas it was given each turn, and its recent log (messages, tool calls and results). It is an inspector-style debug view, not a timeline or chat (docs/manager.md). Clipping is announced. Available with or without a call."
   },
   {
    "id": "manager.open_session",
-   "title": "Manager session in the inspector",
+   "title": "Open Manager session",
    "category": "manager",
    "slash": "manager-session",
    "when": [
@@ -2835,7 +2898,7 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "note": "Opens the Manager's own (hidden) session, its current episode, in the inspector at the Requests level: the full raw context the model is given, with its log. The Manager has no timeline in the clients (docs/manager.md); the header button shows the current context in a modal, and this opens the inspector for everything. Needs Core; with no Manager episode yet it says so."
+   "note": "Ensure and open the current persistent backend Manager session inside Nexus, read-only for debugging. Creates no model or audio call; reconnecting audio reuses the session. Follow existing episode rollover."
   },
   {
    "id": "manager.talk",
@@ -2865,7 +2928,7 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "note": "Starts the call, or moves it to this client (POST /api/manager/start), minimised in the corner. `/manager <text>` sends one typed line instead and focuses the call. With enabled = false, shows a toast that points at Settings, Manager. `/manager stop` is manager.stop."
+   "note": "Starts the call, or moves it to this client (POST /api/manager/start), with its dropdown closed. `/manager <text>` sends one typed line instead and opens the dropdown. With enabled = false, shows a toast that points at Settings, Manager. `/manager stop` is manager.stop."
   },
   {
    "id": "manager.stop",

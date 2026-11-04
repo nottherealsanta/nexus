@@ -9,7 +9,7 @@ separate plan files and `TODO.md` (see [Archived plans](#archived-plans)). Curre
 Rules that every item below must keep:
 
 - Preserve the visible, ordered context timeline: everything the model receives is shown in order, the UI shows
-  nothing the model does not have, wire events are never dropped and clipping is announced. Do not rewrite context
+  nothing the model does not have, wire events are delivered live, diagnostic deletion is announced and clipping is announced. Do not rewrite context
   already sent to a provider. The Manager's own context is the one exception (`docs/manager.md`).
 - Task tools act on the workspace; changes to Nexus state belong to the control plane.
 - Every UI change lands in the TUI and NSH in the same change
@@ -30,16 +30,16 @@ was only reviewed statically, or only tested offline, says so.
 | Release 0.10.0 | Published 2026-10-30 | Release PR #98 (`release 0.11.0`) is open; see [1](#1-release-and-installation) |
 | **Tests and lint** | **Red locally:** 7 TUI and 3 Core tests fail, TUI fmt and clippy fail, 5 NSH browser tests fail | [0](#0-make-the-tests-green) first |
 | CI | Red on `main`, NSH not in CI. **Deferred by the user (2026-11-04): do not work on CI for now** | [Deferred](#deferred-ci-user-decision-2026-11-04) |
-| Turn summaries | Steps 0–6 and 8 done, 7 partly done | Real-daemon checks, docs, step 9 (live partial) — [5](#5-turn-summaries) |
+| Turn summaries | Steps 0–6, 8 and 9 done; 7 partly done. Live partials verified with two TUI joins and shared client tests | Remaining step 7 verification and full NSH app checks — [5](#5-turn-summaries) |
 | TUI render performance | Phases 1–3 done, phase 4 partly | Only if a profile asks for it — [6](#6-tui-render-performance-and-launch-time) |
 | NSH Void design | Mostly complete; both passes done, since made square (radius 0) | Two open questions — [8.4](#84-nsh-void-design-leftovers) |
-| Polish | TUI modals, Manager call mode, scroll model, spinners, group fold, iOS app | [8.0](#80-polish-user-review-2026-11-04) |
+| Polish | Modal first pass, compact Settings navigation/focus and brighter Working shimmer done in both clients | Finish modal audit; scroll model, tab/subagent spinners, group fold, iOS — [8.0](#80-polish-user-review-2026-11-04) |
 | Editor, explorer, Git page | Steps 0–1 done, step 2 in progress. The TUI app still edits in the plain `Composer` buffer; the vendored editor is used only by `examples/editor_demo.rs`. NSH's Files tab is one directory at a time; no Git tab in either client | Wire the vendored editor into the TUI — [4](#4-file-explorer-file-editor-and-git-page) |
-| Manager | Core for M1–M5 built and tested offline; clients' stage, cards, orb, voice and `via Manager` built | M0 spikes and every real-model / real-audio check — [3](#3-manager) |
+| Manager | M1–M5 implemented; a real TUI GPT-Live conversation with delegated search/read tools worked (11-04). Audio/orb/context polish built; latest sound quality not yet listening-verified | Remaining spikes, real-model evals, native/iOS audio, long-call reliability and hands-free — [3](#3-manager) |
 | Mermaid (Manager step 0) | Done in both clients | Real terminal image-protocol check, screenshots — [3.2](#32-mermaid-verification) |
-| Settings | One two-pane dialog in both clients | Real sign-ins, screenshots, browser coverage — [8.3](#83-settings) |
+| Settings | Compact two-pane dialog; gray selections, white active-pane bar, Left returns to headings; focused checks and screenshots done | Real sign-ins, provider/tool-grid review, native/full browser coverage — [8.3](#83-settings) |
 | Providers | Codex, Copilot, Grok, OpenCode, Claude (Agent SDK) work | OpenAI and Ollama real calls; Anthropic Messages, Gemini — [10](#10-providers) |
-| Event storage | Every event is durable; full request bodies with base64 images grow quadratically; the running daemon predates wire expiry; the file never shrinks | Deploy, reclaim, ephemeral deltas, dedupe requests, compact finished sessions — [13](#13-event-storage-harden-finished-sessions-into-messages-and-flush-their-events) |
+| Event storage | Shared request components, live-only deltas with client checkpoints, finished-session compaction and incremental reclamation implemented; offline scratch copy 178.2 MB → 2.37 MB | Deployment and any real-home compaction remain explicit follow-up — [13](#13-event-storage-harden-finished-sessions-into-messages-and-flush-their-events) |
 
 ## Health check (2026-11-04)
 
@@ -69,6 +69,18 @@ with that interpreter (python.org 3.14.5 works); `~/.nsh/bin/nsh` is 0.2.0 while
 because Apple's `ar` produces a broken archive.
 
 ## Landed
+
+- **Skill picker and nested details (11-04).** Both clients keep skills inline through 12, show only `Skills [N]` above 12, and open a borderless two-column picker (dark-gray cards, lighter gray focus) from the heading at any count. Inline names also open the nested Markdown detail view: full description, complete `SKILL.md`, and supporting file/folder names. Toggles remain separate; Esc restores picker position and focus. Shared scenario: two TUI tests and three isolated NSH browser tests pass; five existing NSH context-header tests and 17 Core skill tests pass. Matching renderer/browser screenshots and keyboard/scroll checks are in `reports/skill-picker/`. Full TUI still has the seven documented failures plus the concurrently changed Manager dropdown Esc test; full NSH check/build remains blocked by the native dependency mismatch, and the unrelated shared app scenarios hit HTTP 404 in the isolated harness. No live-home changes or provider calls.
+
+- **Manager presentation refinement (11-04).** Both clients remove the dropdown outline, use solid opaque surfaces and inset input, and replace the header label with the one-row orb while visible. A Voice toggle defaults on: explicitly opening Manager or switching Voice on starts Live immediately; off preserves typing and the backend session. The orb now opens/closes the dropdown. Validation: 33 TUI Manager checks and 47 isolated NSH controller checks pass; both rendered frames compared, browser toggle/orb interactions pass without runtime errors, manifest/theme checks pass, and the TUI release is built. Native NSH remains blocked by the existing CLI/crate mismatch.
+
+- **Manager top bar and dropdown (11-04).** Both clients move the orb into the first row and show caption/context excerpt/tool/cards with typed input in a notification-style dropdown. Audio, dropdown visibility and native read-only Manager session navigation are separate. Typed first sends do not request Live consent/audio. Esc closes the dropdown; automatic cards do not steal keys. Core ensures/reuses the backend session without a call and protects its prompt route. Validation: 32 TUI Manager tests and 45 isolated browser controller tests pass; 241 Core Manager checks pass with the known local two-peer WebRTC timeout, and the final service/store checks pass (42). Header/dropdown and debug navigation verified in the actual isolated browser UI; TUI/NSH frames compared. Full TUI suite retains seven unrelated failures. Isolated UI card suite: 12 pass, five fail (diagram fallback, test-driver HTTP stubs and fixture loading); native NSH remains blocked by the installed CLI/pinned crate mismatch. TUI release built; real Core restart deferred while another session is busy.
+
+- **Event storage (11-04).** Request manifests share history, schemas, instructions and exact inline media components, with reference-counted cleanup and legacy readers. Token/argument deltas are live-only; Core checkpoints request partials and both clients merge them by request/sequence. Finished-session diagnostics compact atomically with an announcement and cursor resync floor; waits/jobs/code state survive in tables. New databases reclaim free pages incrementally; `nexus db compact` is dry-run by default, backup-first and verified before atomic replacement. Scratch copy: 178,216,960 → 2,367,488 bytes, 44,105 events removed, canonical counts/generation and integrity verified. Focused Core suite: 178 passed. Full Core: 1,158 passed, one skipped, the existing two-peer WebRTC failure. Shared partial tests: four TUI and four isolated NSH browser checks pass; two real TUI joins show identical restored text with zero delta rows (screenshots inspected). Changed-file Ruff passes; full Ruff retains the unrelated `manager/context.py:371` implicit-string-concatenation error. Full TUI retains its seven documented unrelated failures; full NSH build/check and app screenshots remain blocked by the native `nsh-core` declarations mismatch. No deployment or real-home compaction was performed by this task.
+
+- **Manager details modal, immediate connecting and voice barge-in (11-04).** Both clients group the current caption, full bounded model context and formatted tool arguments/status in a scrollable modal below the orb; End stays outside. The orb appears immediately with “Connecting…” and Esc cancels pending starts without late replies reopening them. TUI restores the `nexus01` mic RMS > 0.12 echo-gate override. Validation: 31 TUI Manager tests, 8 audio tests, 46 isolated NSH browser tests, manifest/theme checks; 57 Core Manager/voice/Live tests pass, but the unchanged two-peer WebRTC connection test fails locally (also fails alone). Full TUI suite retains unrelated failures. Real talk-over interruption still needs listening verification.
+
+- **Modal and Settings polish (11-04).** Both clients use three modal width classes and centred placement, with Esc in the footer. Settings sections have no blank gaps; selected rows retain a full-width gray background, and a white bar marks the focused pane (dark in light mode). Left returns to the heading without changing the value; Right advances, Shift+Right steps backward. Shared keyboard/geometry checks and before/after renderer/browser screenshots pass; the TUI build no longer warns about `composer_inner`. Full TUI: 746 passed, seven known failures, seven ignored. NSH verification uses an isolated browser build with native audio disabled; native/full-suite blockers and the remaining modal audit are in 8.0.
 
 - **Manager audio, orb and context excerpt (11-04).** Continuous buffered TUI playback and contiguous NSH packet scheduling (60 ms cushion), 350 ms speaking-state hold, smooth 24-step TUI sprite phases with eased colours and bounded compressed transfers. Both focused stages show the latest three model-context lines and the real tool arguments/status, from redacted `manager.preview` events and restorable state. Core Manager/voice/Live tests: 56 pass, plus the retired-call preview isolation check; TUI Manager: 29 pass; Live: 7 pass; orb: 11 pass; isolated NSH browser Manager tests: 44 pass. Full TUI suite retains unrelated failures; native NSH build is blocked by CLI/pin mismatch. TUI render and isolated actual NSH web stage screenshots compared (unused native microphone stubbed in the web fixture). Core restarted with no active turns; TUI release built. Real audio quality is not yet listening-verified.
 
@@ -291,20 +303,19 @@ Nothing here needs new code unless a check fails. Each needs a scratch `$NEXUS10
 ### 3. Manager
 
 Design: [docs/manager-design.md](docs/manager-design.md) (section numbers below refer to it). What is built:
-[docs/manager.md](docs/manager.md). **Nothing has run against a real model or real audio yet.** Decisions D1–D10
-and Q1–Q3, Q5–Q7 are settled; Q4 is open.
+[docs/manager.md](docs/manager.md). **Not complete. A real TUI GPT-Live conversation worked on 2026-11-04:** the user confirmed speech/replies, and the stored Manager episode shows real `copilot/gpt-6-luna` delegation through `find_sessions` and `read_session`. The subsequent buffered-audio/orb/context polish is built and tested, but its sound quality still needs a listening check. Other clients and the longer acceptance checks below remain unverified. Decisions D1–D10 and Q1–Q3, Q5–Q7 are settled; Q4 is open.
 
 #### 3.1 Milestones
 
 | # | Delivers | State | Done when |
 | --- | --- | --- | --- |
-| M0 | Spikes: (a) STT → Luna → TTS latency, (b) Luna through the loop with control-style tools, (c) stage mock-ups, (d) a real GPT-Live call over the Codex sign-in | Scripts written (`nexus-core/scripts/spikes/pipeline_latency.py`, `luna_tools.py`), **not run** | Findings and screenshots written into the design; effort setting and stage look agreed |
+| M0 | Spikes: (a) STT → Luna → TTS latency, (b) Luna through the loop with control-style tools, (c) stage mock-ups, (d) a real GPT-Live call over the Codex sign-in | Scripts written (`nexus-core/scripts/spikes/pipeline_latency.py`, `luna_tools.py`), **not run**; (d) verified in a real TUI conversation, (c) partly reviewed | Findings and screenshots written into the design; effort setting and stage look agreed |
 | M1 | State, search and view | Core done | Both clients' own view-reporting tests (`POST /api/client/view`) run and pass |
-| M2 | Typed Manager on the stage | Core and clients implemented; TUI `tests/manager.rs` (18) and NSH `manager.test.tsx` / `manager-cards.test.tsx` pass (2026-11-04, Chrome for Testing) | A typed Manager runs a whole day of real use; the interaction model is reworked (8.0) |
+| M2 | Typed Manager on the stage | Core and clients implemented; latest TUI Manager tests: 29 pass; isolated NSH Manager browser tests: 44 pass (11-04). Full native NSH build blocked by CLI/pin mismatch | A typed Manager runs a whole day of real use; the interaction model is reworked (8.0) |
 | M3 | Pipeline voice | Core done | Real microphone and speaker in the TUI and NSH: tap to talk, orb on real levels, thinking cue, playback, cancel; latency recorded (target under 1.5 s from end of speech to first audio) |
 | M4 | Attention and acting | Core done | The injection and mishearing suite passes; the approval/question flow works by voice end to end |
-| M5 | GPT-Live | Core done offline; NSH web and TUI stub-tested | iOS and native NSH mic/speaker loop; M0 spike (d) decides the route and the meaning of `speakable`/`commentary`; reconnect/pause polish; a 30-minute real call in each client surviving interruption, reconnect and a long delegation |
-| M6 | Hands-free and polish | Not started | VAD and barge-in, TUI echo cancellation, iOS check, settings, notices, optional API-key route for GPT-Live; a week of daily use, then consider `enabled = true` |
+| M5 | GPT-Live | Core/clients implemented; real TUI speech, replies and Manager delegation verified (11-04); latest audio polish awaits listening check | iOS and native NSH mic/speaker loop; M0 spike (d) decides the route and the meaning of `speakable`/`commentary`; reconnect/pause polish; a 30-minute real call in each client surviving interruption, reconnect and a long delegation |
+| M6 | Hands-free and polish | Audio/orb/context polish started; hands-free and TUI echo cancellation remain unfinished | VAD and barge-in, TUI echo cancellation, iOS check, settings, notices, optional API-key route for GPT-Live; a week of daily use, then consider `enabled = true` |
 
 Detail for each:
 
@@ -315,7 +326,7 @@ Detail for each:
   `navigate` over a seeded scratch home; record tool choice accuracy, spoken phrasing, whether ids are read aloud.
 - [ ] **M0 (c)** stage mock-ups: orb, a `board` card and a `diagram` card from a fixture in both clients behind a
   dev flag; screenshots side by side; agree the look.
-- [ ] **M0 (d)** a real GPT-Live call over the Codex sign-in with client delegation.
+- [x] **M0 (d)** a real GPT-Live call over the Codex sign-in with client delegation (2026-11-04). User confirmed working speech/replies; the stored episode includes real Luna `find_sessions` and `read_session` calls. This does not complete M5’s long-call, reconnect or cross-client checks.
 - [ ] **M2 manifest check:** `manager.start` (`/manager`, palette, `alt+m` / `cmd+shift+space`, Q3 to confirm),
   `manager.talk`, `manager.stop` and the engaged keys of 10.6; run `check_manifest.py`.
 - [ ] **Evals with real Luna** (section 11): retrieval (~50 sessions, ~100 phrasings including mangled STT;
@@ -485,7 +496,7 @@ Preserve durable `input.*` events and the ordering of delivered steers; a steer 
   next daemon start (0.4 s on a copy; usage for 578 of 587 requests).
 - [ ] **Step 7 remainder:** `docs/development.md` where it mentions event history; `interface/design-language.md`
   for the floor row ("the turns above have no recorded details…").
-- [ ] **Step 9: live partial; stop saving deltas.** Not started.
+- [x] **Step 9: live partial; stop saving deltas.** Implemented and checked (see Event storage in Landed).
   - New `nexus/live.py` with `LivePartial` (`request_id`, `seq`, `parts`, `reasoning_seconds`): a text or reasoning
     delta appends to the last open part of its kind or opens one; `tool_call` opens a part, `tool_args` appends raw
     argument text to the open call with that id; `done` closes the oldest open part with its final encoding and
@@ -496,7 +507,7 @@ Preserve durable `input.*` events and the ordering of delivered steers; a steer 
   - `Bus.publish(..., durable=False)`: no `append_event`, `id = None`, delivered live only; the SSE writer, client
     cursor parsing and `bus.overflow` (which reports the last durable id) must handle id-less events, and
     `Last-Event-ID` never points at an ephemeral event.
-  - Delta fields gain `request_id`, `part` and `seq`. A joining or reconnecting client reads `/turn`, takes the
+  - Delta fields gain `request_id`, `part_index` and `seq`. A joining or reconnecting client reads `/turn`, takes the
     running request's `partial`, applies only deltas for that `request_id` with a greater `seq`, and starts a new
     scratch for another request. TUI and NSH seed from `partial`.
   - The partial is a diagnostic, never shown as an assistant message: streaming while it runs; after an
@@ -509,7 +520,7 @@ Preserve durable `input.*` events and the ordering of delivered steers; a steer 
   - Done when a second TUI opened during a long response shows the same text as the first, and the session's event
     log holds no delta rows. If rewriting the growing JSON each second costs too much, store parts in their own rows
     and append (as pi-durable's `PartialChanges`).
-- [ ] Old clients reconnecting mid-response will lose the deltas they missed (the message still arrives): note it
+- [x] Old clients reconnecting mid-response will lose the deltas they missed (the message still arrives): noted it
   in the API changelog when step 9 lands.
 
 Out of scope: a windowed message transcript, server-side views with patches, changing wire-event retention.
@@ -586,52 +597,69 @@ The Void design is mostly complete. What the user called out next (2026-11-04): 
 interaction model, scrolling (the sent message at the top; NSH must stop yanking the reader), new spinners, the
 old Nexus tool-group fold, pending steer/queue rows, a general polish pass, and the iOS app.
 
-##### TUI modals
+##### Modals and Settings: first pass done in both clients (2026-11-04)
 
-Follow-up (2026-11-04): removed the blank rows between Settings sections in the TUI and the matching NSH list gap. Selected sections and setting rows use a neutral gray fill across the whole row. A subsequent user review restored the left bar in white for the focused pane, retaining the gray selection in the other pane; Left returns focus to the section heading, and Right changes/cycles the value (Shift+Right steps backward). The shared `settings-focus.json` scenario covers returning focus without mutation and then moving to the next heading. Focused TUI Settings/effort tests and the NSH keyboard scenario pass; real-browser checks pass at three sizes. The full TUI suite remains at 746 passed, seven known failures, seven ignored. Removed the obsolete, test-only `composer_inner` wrapper so normal launcher builds no longer warn.
+Completed:
 
-First pass implemented (2026-11-04) in both clients: three width classes (60/72/88 cells;
-500/600/740 px), centred placement including the palette, no duplicate Esc in titles,
-and footer-aware NSH body heights. Model information now stays inside the TUI picker.
-Rules are in `interface/design-language.md`. Before/after screenshots were compared at
-TUI 120×36 and 80×24, NSH 1024×768 / 1440×900 / 672×432. Five focused TUI modal checks
-and six real-browser NSH geometry checks (`e2e/modal-layout.mjs`) pass. The NSH captures
-use an isolated browser build with native audio disabled: the installed CLI cannot build
-the pinned native crate (`nsh-core` lacks `declarations`). The existing `i7` browser suite
-returns HTTP 404 against its mocks under this runtime; it is not green. TUI's full suite
-retains the seven failures listed in item 0. Long TUI confirmations retain their existing
-height fallback until the body can scroll; the complete footer/focus/provider/tool-grid
-review remains open below. Follow-up screenshots cover the compact gray selection at TUI
-160×48 / 80×24 and NSH 1440×900 dark / 1024×768 light; the TUI build is warning-free.
+- [x] Three modal width classes: small 60 / 500, medium 72 / 600, large 88 / 740
+  (TUI cells / NSH pixels), clamped to the window gutters. Standard height cap: 70%.
+- [x] Centre modals, including the command palette. Row menus remain anchored popovers;
+  the file editor keeps its dedicated workspace geometry.
+- [x] Remove duplicate Esc hints from modal titles; use the full title width. Input dialogs
+  use the shared footer helper, and the TUI model-info panel stays inside its picker.
+- [x] Bound NSH scrollable bodies so titles, controls and footers fit in short windows.
+- [x] Remove blank rows between Settings sections in the TUI and the matching NSH list gap.
+- [x] Keep the current section and setting selected with a neutral gray background across
+  the whole row, including the right-aligned value. A **white left bar identifies the
+  focused pane**; the inactive selection keeps its gray fill. Light mode uses a dark bar.
+- [x] **Left returns focus to the section heading without changing a value.** Up/Down then
+  navigate sections. Right changes values; Shift+Right steps backward. Model effort can
+  cycle from the last level back to default. Keys and colors live in the shared manifest/theme.
+- [x] Record the shared rules in `interface/design-language.md`, update both client READMEs
+  and the porting ledger, and add `interface/scenarios/settings-focus.json` plus the
+  browser regression check `nexus-nsh/e2e/modal-layout.mjs`.
+- [x] Remove the obsolete `composer_inner` wrapper and use the active geometry helper in
+  its tests; the normal TUI build no longer emits the unused-function warning.
 
-The TUI mostly looks good, but Settings and the other modals need a design pass. Today every modal shares
-`modal()` (`render.rs:7605`: scrim, raised fill, bold title on row 1, `esc` at the right edge) and `modal_rect`
-(`paint.rs:74`: 2 cells from each edge, at most 70% of the height), but sizes and footers diverge:
+Verification performed:
 
-| Modal | Drawn by | Size | Footer |
-| --- | --- | --- | --- |
-| Settings | `draw_settings` (`render.rs:6984`) | 88×40 | Own; wording changes per pane (`esc close` / `esc back` / `esc cancel`) |
-| Provider detail | `draw_provider_detail` (`:7434`) | 66 × 10–22 | Own |
-| Palette, row menu | `draw_palette` (`:8118`), `draw_row_menu` (`:8044`) | 64×22, placed a quarter down; row menu anchored to its row | Own |
-| Kernels and shells | `draw_resources` (`:8700`) | 70% width, 52–100 | `hint_row` |
-| Help, Notifications | `draw_help` (`:9129`), `draw_notifications` (`:8389`) | 64×30 fixed | `hint_row` / own |
-| Alert detail, context detail | `:9051`, `:8672` | 60% width, 48–92 | `esc close` |
-| Context doc, context entries | `:8901`, `:8973` | 70% width, 48–100 | `scroll`/`move`, `esc close` |
-| Usage | `draw_usage` (`:7803`) | 64 × rows+6 | `r refresh, esc close` |
-| Learn checklist | `:7915` | 76 | Own, built dynamically |
-| Image preview, annotate | `:8456`, `:8484` | 85% width | `esc close` / own `esc cancel` |
-| Confirm dialog, inline edit | `draw_dialog` (`:9206`), `:296`/`:632` | computed / 60×8 | `←/→ choose, enter confirm, esc cancel` / `enter save, esc cancel` |
+- TUI: focused modal, Settings, composer-geometry and agent-effort checks pass. The full
+  `cargo test --no-fail-fast` run has **746 passed, seven known failures, seven ignored**;
+  the remaining failures are listed in item 0. Debug build succeeds without the warning.
+- NSH: six real-browser palette/Settings layout checks pass at 1024×768 dark, 1440×900 dark
+  and 672×432 light. The shared keyboard scenario checks Left-to-heading, no value mutation,
+  the white marker, retained gray selection and moving to the next heading afterward.
+- Screenshots compared: TUI `--dump-frame` at 80×24, 120×36 and 160×48; NSH at the browser
+  sizes above, with additional 1024×768 light and focused/unfocused pane views.
+- Shared manifest and theme checks pass (144 commands, 576 contrast checks); touched Rust
+  files pass formatting checks. This does **not** establish that repo-wide fmt/clippy is green.
+- NSH checks use an isolated actual browser build with unused native audio stubbed. The normal
+  native build is blocked by the installed CLI/pinned-crate mismatch (`nsh-core` lacks
+  `declarations`). The `i7` mock-based suite returns HTTP 404 under that runtime. Isolated
+  type checking still reports existing nullable `app.clock` errors and missing native-module
+  declarations; no new Settings/control type errors remain. Native and full-suite verification
+  are still open.
 
-- [ ] Define a small set of modal sizes (for example small 60, medium 72, large 88 or 70% of the width with one clamp)
-  and one height rule; put every modal on one of them.
-- [x] One position rule (centred), including the palette (2026-11-04; both clients).
-- [ ] One footer: every modal uses `hint_row` with the same order and wording. Pick one verb per meaning (`close`
-  leaves the modal, `back` goes up a level, `cancel` discards input) and drop the duplicate `esc` in the title when
-  the footer already says it, as NSH did.
-- [ ] Settings: review spacing, hierarchy and focus in both panes at 80×24 (where 88×40 does not fit) and 160×48;
-  the provider detail modal with its link and code rows; the tool grid.
-- [ ] Record the rules in `interface/design-language.md`, apply the same rules to NSH's modals, and take PTY and
-  NSH screenshots before and after.
+Remaining:
+
+- [ ] Give long TUI confirmation dialogs a scrollable body so they can obey the same 70%
+  height cap; they currently retain the existing height fallback to keep confirmation text visible.
+- [ ] Finish the footer audit across every modal: consistent helper, ordering and
+  close/back/cancel wording, including provider and nested-page hints.
+- [ ] Review provider detail with pending sign-in links/codes and the full tool grid at small
+  and large sizes in both clients; exercise the remaining keyboard-only paths.
+- [ ] Capture real PTY/terminal modal screenshots (the TUI evidence above is the real renderer's
+  `--dump-frame` output), and repeat NSH verification with the supported native toolchain.
+
+##### Working shimmer: done in both clients (2026-11-04)
+
+- [x] Brighter travelling highlight over secondary text, with a white peak in dark mode and
+  a dark peak in light mode. Both clients use the shared `[motion.shimmer]` recipe:
+  12 frames × 125 ms = **1.5 seconds per pass**. Reduced motion stays static.
+- [x] TUI shimmer/live-group checks pass; the actual NSH component's browser preview confirms
+  a moving white peak and an unchanged reduced-motion label. Screenshots inspected in both.
+
+The new tab and subagent spinners below remain separate, unfinished work.
 
 ##### Manager interaction in the TUI (and NSH)
 
@@ -854,9 +882,9 @@ rename, confirm, usage, alerts, image preview, annotate, Manager stage, edge dra
 - [ ] **Keyboard avoidance.** `keyboardFrame()` is used only by Connect (`connect.tsx:68`); the composer dock
   (`composer.tsx:364`) pads only `safeArea().bottom`, so the keyboard can cover the composer; rename, new-session,
   palette and search modals have the same gap. Add the keyboard height to the dock and anchor modals above it.
-- [ ] **Desktop affordances in modals.** `ModalTitle` draws an `esc` chip (`modal.tsx:37`), footers and the composer
-  show key hints (`composer.tsx:354`, `:536`), and there is no touch close button; modals use desktop padding
-  (`p-6`, `top-[12%]`, `max-h-[76%]`). On touch: a 44 px close button, no key hints, bottom sheets.
+- [ ] **Desktop affordances in modals.** The shared pass removed the title's Esc chip, but footers and the composer
+  still show key hints, and there is no touch close button. Modals retain desktop padding (`p-6`), centred
+  placement and a 70% height cap. On touch: a 44 px close button, no key hints, bottom sheets.
 - [ ] **Touch targets under 44 px:** composer selectors `h-7` (`composer.tsx:563`), working row, location strip and
   chips (`:633`, `:781`, `:807`), attachment remove `size-8` (`:405`), new-session toggles (`newsession.tsx:193`,
   `:216`), `project-mcp.tsx:23`, Settings rows and pills (`settings.tsx:497`, `:582`, `:600`), `Seg`
@@ -928,7 +956,10 @@ rename, confirm, usage, alerts, image preview, annotate, Manager stage, edge dra
 #### 8.3 Settings
 
 - [ ] Sign in to a real device-flow and a real browser-flow provider from each client's Providers pane.
-- [ ] NSH browser coverage (after the mock-stream fix) and PTY / NSH screenshots at 80×24 and 160×48.
+- [x] Focused shared Settings navigation/layout coverage and renderer/browser screenshots;
+  see 8.0 for the checked sizes and native-audio stub limitation.
+- [ ] Complete NSH suite coverage after the mock-stream/toolchain fixes, real PTY screenshots,
+  and provider sign-in/detail and tool-grid verification.
 - [ ] State the required Claude Code version (2.1.248 or newer) and show "Claude Code is not installed" on the
   Providers page when `cli_path()` is empty.
 - [ ] Real Settings panes for MCP servers, skills and hooks when those controls exist; they are deliberately absent.
@@ -1065,10 +1096,23 @@ Separate from the Git page (section 4), and builds on it.
 
 ### 13. Event storage: harden finished sessions into messages and flush their events
 
+**Implementation complete (2026-11-04).** Request deduplication, live-only deltas with partial
+checkpoints in both clients, finished-session compaction and space reclamation are implemented.
+Steps **13.1–13.3, 13.5 and 13.6** are checked below; the verification record is in Landed.
+
+Remaining follow-up:
+
+- **13.0:** deploy/restart and verify the installed daemon; not performed by this task.
+- **13.4:** remove the legacy recovery fallbacks after one release; state-table readers are implemented.
+- Complete full NSH app validation/screenshots once its native dependency mismatch is resolved.
+- Apply offline compaction to the real home only with the user's approval. Scratch-copy verification
+  passed: **178.2 MB → 2.37 MB**, with canonical records preserved and integrity checked.
+
+
 User request (2026-11-04): the event log has grown very large; old events should not be kept. Only active sessions
 need their events; everything else should be "hardened" into messages and full context, and the events flushed.
 
-**Findings (2026-11-04, measured on a read-only copy of `~/.nexus/nexus.db`):**
+**Original findings (2026-11-04, before this implementation; measured on a read-only copy of `~/.nexus/nexus.db`):**
 
 - **The running daemon is old code.** It is the `uv tool` install built from the 10-30 wheel, running since 10-30.
   None of the 10-31 retention work (expirable wire bodies, `event_body`, `payload_state`, `storage_metrics`) is
@@ -1114,7 +1158,7 @@ need their events; everything else should be "hardened" into messages and full c
 | Export (events section) | Yes; expired markers are already supported |
 
 **Decided (user, 2026-11-04): compact finished sessions.** **Rules this touches.** The one-timeline rule holds (what the model had is messages plus snapshots, kept). Two
-written promises change and need the user's sign-off and a ledger row: `AGENTS.md` "wire events are never dropped"
+written promises change under the user's approved decision, recorded in the ledger: `AGENTS.md` "wire events are never dropped"
 (becomes "dropped only when announced", with a compaction record), and the inspector's raw wire "for any past
 session" (becomes "for active and recent sessions").
 
@@ -1124,23 +1168,25 @@ session" (becomes "for active and recent sessions").
   runs the in-place migrations: 0.3 s on the copy). Done when `nexus doctor` no longer reports different code and
   `/api/info` `retention_status` shows wire payloads expiring. Restarting also rotates the daemon token, which was
   printed into a tool log during this investigation.
-- [ ] **13.1 Reclaim space automatically.** New databases get `pragma auto_vacuum = incremental` (it must be set
+- [x] **13.1 Reclaim space automatically.** New databases get `pragma auto_vacuum = incremental` (it must be set
   before the first table). `Retention.run_once` runs a bounded `incremental_vacuum(N)` whenever free pages exceed a
   threshold (for example 8 MB). Files: `store.py` (`prepare_database`, `Store.__init__`, `reclaim_space`),
   `retention.py`, `docs/daemon.md`. Tests: a new DB reports `auto_vacuum = 2`; after expiry and a pass the file
   shrinks; the pass stays bounded. Existing databases convert in 13.6.
-- [ ] **13.2 Deltas are not stored** (section 5, step 9): `text_delta`, `reasoning_delta`, `tool_call_started` and
+- [x] **13.2 Deltas are not stored** (section 5, step 9): `text_delta`, `reasoning_delta`, `tool_call_started` and
   `tool_args_delta` go through `Bus.publish(..., durable=False)`; `LivePartial` and `turn_request.partial` replace
   `stream_summary`. Here that removes 48% of rows. Both clients in the same change.
-- [ ] **13.3 Stop the quadratic `wire_request`.** Store each request body's `input[]` items content-addressed in
+- [x] **13.3 Stop the quadratic `wire_request`.** Store each request body's `input[]` items content-addressed in
   `event_body`, so a request is an envelope plus item SHAs (each history item is stored once per session), and
-  replace `data:` image URIs with artifact SHA references before storing. Optionally fold a request's `wire_event`
+  replace `data:` image URIs with SHA references to independent event-body components before storing
+  (keeps exact URI spelling and remains self-contained if artifact files are deleted). Optionally fold a request's `wire_event`
   SSE chunks into one stored stream body instead of one row per chunk. Files: `payloads.py` (encode and
   `event_data` reassembly), `store.append_event`, the wire emitters in `llmhub/`, `export.py`, the inspector read
   path. Tests: a reassembled body is byte-identical to the original; N requests store about O(N) bytes, not O(N²);
   export output unchanged; readers handle both formats. Done when the 141 MB session's wire storage is a few MB
   while still retained.
-- [ ] **13.4 Move the remaining history readers onto state tables.** Question/permission asked/replied into a small
+- [ ] **13.4 Move the remaining history readers onto state tables.** State tables and inspector Steps/Questions landed. Legacy `stream_summary` and `turn_end` recovery fallbacks remain for pre-checkpoint requests during the transition; remove after one release. Full NSH visual verification remains blocked by the native dependency mismatch.
+  Original scope: Question/permission asked/replied into a small
   `wait` table (also serving the inspector's Questions card); background jobs into a `bash_job` table, replacing
   `open_bash_jobs` / `unfinished_bash_jobs` (which also removes the cold-start full scan in section 6); `code_used`
   becomes a session flag; inspector Steps reads the `turn*` tables (add `http_status` and `ttfb` columns if
@@ -1148,28 +1194,28 @@ session" (becomes "for active and recent sessions").
   `continuation.py`, `runtime.py`, `server.py`, `inspector/index.html`, `docs/inspector.md`. Done when
   `grep "from event"` hits only replay, the outbox and maintenance, and the recovery suites pass with the `event`
   table emptied for terminal sessions.
-- [ ] **13.5 Harden and flush finished sessions.** A session is compactable when it has no running turn, no pending
+- [x] **13.5 Harden and flush finished sessions.** A session is compactable when it has no running turn, no pending
   recovery, no open wait or job, no replay pin, no message without its `event_id`, and is archived or idle longer
   than a configurable window (default 24 h, alongside `auto_archive_idle_seconds`). Retention deletes all its
   events and writes one durable `session.compacted` record (the removed id range and counts); cursors that fall in
-  a compacted range get 410 and resync. Global events stay. This replaces prefix-only `prune_events`, which stalls
+  a compacted range get 410 and resync; the implemented floor conservatively resyncs every older cursor. Global events stay. This complements prefix-only `prune_events`, which stalls
   behind one protected session. A per-session "keep diagnostics" switch keeps raw wire for a session the user is
   debugging. Files: `retention.py`, `store.py` (`compact_session`), `eventlog.py` (cursor check), `export.py` (an
   "events compacted" section), the inspector ("earlier events compacted" notice), `docs/daemon.md`, `docs/api.md`,
   `docs/stream-events.md`, `docs/inspector.md`, the ledger, `AGENTS.md`. Tests: a compacted session renders the same
-  in both clients from snapshot, messages and `/turn`; `/context` is unchanged; a cursor below the compaction gets
-  410; a protected session is never compacted; announcements are rate-limited. Done when the steady-state `event`
+  in both clients from snapshot, messages and `/turn`; `/context` is unchanged; any cursor below the conservative compaction floor gets
+  410 (even an interleaved retained row); a protected session is never compacted; announcements are rate-limited. Done when the steady-state `event`
   table holds only active and recent sessions.
-- [ ] **13.6 Migrate an existing large database.** An offline `nexus db compact`, dry-run by default, that requires
+- [x] **13.6 Migrate an existing large database.** An offline `nexus db compact`, dry-run by default, that requires
   the daemon to be stopped: back up through the SQLite backup API (`nexus.db.bak-<date>`), run 13.1–13.5
   maintenance to completion, `VACUUM INTO nexus.db.new` with `auto_vacuum = incremental`, run `integrity_check` and
   compare the log generation and message, session, snapshot and turn counts, then swap atomically and keep the
-  backup. Needs free disk of roughly the backup plus the new file. Files: `cli.py`, `store.py`,
+  backup. Verified on a scratch copy: **178,216,960 → 2,367,488 bytes**, 44,105 events removed; canonical counts, log generation and integrity match. No live-home write. Needs free disk of roughly the backup plus the new file. Files: `cli.py`, `store.py`,
   `docs/development.md`. Done when it is verified on a scratch copy of the real DB (expected here: 177 MB → 2–16 MB);
   run against the real `~/.nexus` only with the user's approval.
 
 Risks: the inspector loses raw wire, deltas and step detail for compacted sessions; JSON exports of old sessions have
-no events section; old clients reconnecting mid-response lose missed deltas; per-session deletion makes cursor
+an explicit `events_compacted` marker and only retained events; old clients reconnecting mid-response lose missed deltas; per-session deletion makes cursor
 validity non-contiguous, so the floor and compaction semantics must be documented; 13.3 changes the stored wire
 format, so readers must handle both during the transition.
 
@@ -1177,7 +1223,8 @@ format, so readers must handle both during the transition.
 
 | Decision | Answer |
 | --- | --- |
-| Manager interaction (8.0) | **Call mode (A):** orb centred, the app dimmed behind it. **Esc ends the whole call** (stop speech, cancel the turn, drop the recording/field/card; never minimises, never interrupts a session); an explicit End also ends it. This supersedes the same day's first "Esc minimises" answer |
+| Manager interaction (8.0) | **Top-bar dropdown (latest user revision):** keep Manager label, one-row glowing audio orb, notification cards and typed input, one Open Manager session action for the persistent backend session. Audio is independent; Esc closes the dropdown. Supersedes the earlier centred call stage and Esc-ends-call decision |
+| Settings focus (8.0) | **Left returns to section headings without changing a value.** Keep full-row gray selections and restore the left bar in white for the focused pane (dark in light mode); Right advances, Shift+Right steps backward |
 | Scroll pinning (8.0) | **Only a session's first message** goes to the top of the screen; later sends keep the normal behaviour, still without yanking a reader who scrolled up |
 | Pending rows (8.0) | **`S` / `Q`** in primary text, and NSH is aligned with the TUI's pending-row UI |
 | Event compaction (13.5) | **Yes:** a finished (idle or archived) session's events are deleted, announced by a `session.compacted` record; continuing the session later writes new events as usual. Losing the inspector's raw wire, step timings and the export's events section for compacted turns is accepted |

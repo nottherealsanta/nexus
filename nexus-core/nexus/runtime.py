@@ -73,6 +73,7 @@ from .continuation import ContextInvalid, Reconciliation, predecessor, reconcile
 from .counting import budget, estimate_tokens
 from .hooks import HookRunner, config_hooks
 from .kernels import Kernels
+from .live import EPHEMERAL, PART_EVENTS, LivePartial
 from .llmhub import catalog
 from .llmhub.auth import AuthError, CredentialError
 from .llmhub.hub import connected, provider_for, split_ref
@@ -185,6 +186,11 @@ class ReasoningClock:
             self.total = (self.total or 0.0) + time.monotonic() - self.open
             self.open = None
 
+    def peek(self) -> float | None:
+        if self.total is None and self.open is None:
+            return None
+        return round((self.total or 0.0) + (time.monotonic() - self.open if self.open is not None else 0), 3)
+
     def seconds(self) -> float | None:
         """Total so far, closing an open part; `None` when no reasoning streamed."""
         self.close()
@@ -213,6 +219,7 @@ class Runtime:
         self.kernels = Kernels()
         self.jobs = Jobs()
         self.store = store
+        self.live_partials: dict[str, LivePartial] = {}
         from .inputs import Inputs
         self.inputs = Inputs(store)
         self.bus = bus
@@ -2620,6 +2627,16 @@ class Runtime:
                                 continuation=link, mutation=mutation)
         return {**response, "turn_id": turn["id"]}
 
+    def turn_summaries(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
+        page = self.store.turn_summaries(session_id, **kwargs)
+        live = self.live_partials.get(session_id)
+        if live is not None:
+            for turn in page["turns"]:
+                for request in turn["requests"]:
+                    if request["id"] == live.request_id and request["message_id"] is None:
+                        request["partial"] = live.json()
+        return page
+
     async def _run(self, session_id: str, user_text: str | Message | NoUserMessage, turn_id: str, *,
                    origin: str = "prompt", continuation: dict[str, Any] | None = None, input_id: str | None = None,
                    via: str | None = None) -> None:
@@ -2629,6 +2646,9 @@ class Runtime:
         active_attempt: str | None = None
         request_parts: list[dict[str, Any]] = []
         clock = ReasoningClock()
+        partial: LivePartial | None = None
+        last_partial_save = 0.0
+        first_byte_recorded = False
         step = 0
         closed = False
         completed = False
@@ -2644,6 +2664,8 @@ class Runtime:
                         finished.clear()
                         stored = self.store.save_assistant_message(
                             session_id, event.message, turn_id=turn_id, request_id=active_request)
+                        self.live_partials.pop(session_id, None)
+                        partial = None
                         active_request = None
                         active_attempt = None
                         request_parts = []
@@ -2672,6 +2694,9 @@ class Runtime:
                         active_request = self.store.start_request(
                             turn_id, session_id, event.step, model=self._model_ref(session_id),
                             effort=agent.reasoning_effort)["id"]
+                        partial = LivePartial(active_request)
+                        self.live_partials[session_id] = partial
+                        last_partial_save = 0.0
                         active_attempt = f"{active_request}:1"
                         self.store.start_attempt(turn_id, session_id, active_request, active_attempt, 1)
                         self.store.mark_attempt_started(active_attempt)
@@ -2690,6 +2715,8 @@ class Runtime:
                             self.store.record_usage(active_request, active_attempt, event)
                     elif isinstance(event, Done):
                         if active_request is not None:
+                            if partial is not None:
+                                self.store.save_partial(active_request, partial.json())
                             self.store.finish_request(
                                 active_request, stop=event.stop, response_id=event.response_id,
                                 parts=request_parts, reasoning_seconds=clock.seconds())
@@ -2720,6 +2747,8 @@ class Runtime:
                         if self._model_ref(session_id) != event.previous:
                             raise ValueError("model changed while the fallback was being selected")
                         if active_request is not None:
+                            if partial is not None:
+                                self.store.save_partial(active_request, partial.json())
                             self.store.fail_request(active_request, {"kind": "provider", "message": event.reason},
                                                     reasoning_seconds=clock.seconds())
                         if active_attempt is not None:
@@ -2730,13 +2759,30 @@ class Runtime:
                         agent.render = lambda message: self.render_media(message, agent.model)
                         active_request = self.store.start_request(turn_id, session_id, step, model=event.model,
                                                                   effort=agent.reasoning_effort)["id"]
+                        partial = LivePartial(active_request)
+                        self.live_partials[session_id] = partial
+                        last_partial_save = 0.0
                         active_attempt = f"{active_request}:1"
                         self.store.start_attempt(turn_id, session_id, active_request, active_attempt, 1)
                         self.store.mark_attempt_started(active_attempt)
                         request_parts = []
                         clock = ReasoningClock()
                     data = to_json(event)
-                    self.bus.publish(data["type"], data, session_id=session_id, turn_id=turn_id)
+                    if data["type"] == "wire_request":
+                        first_byte_recorded = False
+                    if active_request is not None and (data["type"] in ("wire_request", "wire_response")
+                                                       or (data["type"] == "wire_event" and not first_byte_recorded)):
+                        self.store.note_wire(active_request, data)
+                        if data["type"] == "wire_event":
+                            first_byte_recorded = True
+                    if partial is not None and data["type"] in PART_EVENTS:
+                        partial.reasoning_seconds = clock.peek()
+                        data = partial.apply(data)
+                        if time.monotonic() - last_partial_save >= 1.0 or data["type"] == "part_done":
+                            self.store.save_partial(partial.request_id, partial.json())
+                            last_partial_save = time.monotonic()
+                    self.bus.publish(data["type"], data, session_id=session_id, turn_id=turn_id,
+                                     durable=data["type"] not in EPHEMERAL)
             self.store.finish_turn(turn_id, "completed", steps=step)
             completed = True
             closed = True
@@ -2773,6 +2819,10 @@ class Runtime:
             self.store.finish_turn(turn_id, "failed", steps=step, error=error)
             closed = True
         finally:
+            if partial is not None:
+                partial.reasoning_seconds = clock.peek()
+                self.store.save_partial(partial.request_id, partial.json())
+            self.live_partials.pop(session_id, None)
             if not closed:  # an unexpected failure still closes the durable turn visibly
                 if active_request is not None:
                     self.store.interrupt_request(active_request, reason="the turn ended without a recorded outcome",

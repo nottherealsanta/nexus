@@ -1,7 +1,7 @@
 """Durable event identity, cursors, and the replay-to-live stream (PLAN.md Step 11).
 
-**Identity.** Every published event is stored in the `event` table before it is
-delivered, and its row `id` is its durable id. The `log` table holds one
+**Identity.** Durable events are stored before delivery; live-only deltas carry no
+durable id or cursor. A stored row `id` is its durable id. The `log` table holds one
 `generation` (`log_<hex>`) identifying the database's log. A row id alone is
 meaningless across databases, so a cursor is `"<generation>:<event id>"`.
 Ordering is the ascending row id, which is also publish order. A replacement or
@@ -31,7 +31,7 @@ dropped from every stream except one filtered to that episode's own id.
 **Invalid cursors.** Malformed text, another generation, a cursor ahead of the
 head, and (later, with retention) history below the log floor raise
 `CursorError` with an actionable resync payload before any stream is opened.
-This increment does not expire history: the floor stays 0.
+Compaction advances the conservative resync floor even across interleaved retained rows.
 
 **Stream identity.** Every opened `Stream` gets a fresh, unguessable
 `stream_id`. It is the identity of that one event-stream subscriber, not of a

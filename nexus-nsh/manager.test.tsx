@@ -9,11 +9,13 @@ import type { Card } from "./src/manager";
 import cards from "../interface/scenarios/manager-cards.json";
 import liveFailure from "../interface/scenarios/manager-live-failure.json";
 import liveSilence from "../interface/scenarios/manager-live-silence.json";
+import bargeScenario from "../interface/scenarios/manager-barge-in.json";
+import dropdownScenario from "../interface/scenarios/manager-dropdown.json";
 import previewScenario from "../interface/scenarios/manager-preview.json";
 import {
-  backStackSize, call, callFocused, callMinimised, cancelTurn, card, cardCollapsed, cardFocused, closeField, dismissCard, engaged, fieldText, focusCard,
+  voiceEnabled, toggleManagerAudio, orbOn, dropdownOpen, dropdownInteractive, toggleManagerDropdown, closeManagerDropdown, audioRequested, submitField, openManagerSession, debugSessionId, backStackSize, call, callFocused, callMinimised, cancelTurn, card, cardCollapsed, cardFocused, closeField, dismissCard, engaged, fieldText, focusCard,
   handleEvent, idleCost, inCall, listening, managerContext, managerEscapeRule, managerTerm, minimise, answerConsent, consent, notice,
-  openManagerContext, phase, pickRow, say, setStreamForTest, speaking, stopCall, stopSpeech, talk, minimised, managerError, modelPreview,
+  openManagerContext, phase, pickRow, say, setStreamForTest, speaking, stopCall, stopSpeech, talk, minimised, managerError, modelPreview, managerDetailsText, detailsScroll, scrollDetails, connecting,
 } from "./src/core/manager";
 import { manifest } from "./src/gen/manifest";
 import { connection, model } from "./src/store";
@@ -49,6 +51,7 @@ async function inACall() {
   return sent;
 }
 async function reset() {
+  voiceEnabled.set(false); // text-only cases explicitly opt out of Voice
   await stopCall();
   managerContext.set(null);
   setStreamForTest(null);
@@ -474,6 +477,9 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
         browser.worklets[0].port.onmessage({ data: new Int16Array(liveSilence.samples_per_packet).fill(8000).buffer });
       }
       expect(socket.sent.filter((d: unknown) => d instanceof ArrayBuffer)).toHaveLength(liveSilence.silent_packets);
+      socket.onmessage({ data: new Int16Array(liveSilence.samples_per_packet).fill(bargeScenario.speaker_rms * 32768).buffer });
+      browser.worklets[0].port.onmessage({ data: new Int16Array(liveSilence.samples_per_packet).fill(bargeScenario.microphone_rms * 32768).buffer });
+      expect(socket.sent.filter((d: unknown) => d instanceof ArrayBuffer)).toHaveLength(liveSilence.silent_packets + 1);
       expect(Math.abs(browser.starts[0] - 0.06)).toBeLessThan(0.0001);
       expect(Math.abs(browser.starts[1] - browser.starts[0] - 0.02)).toBeLessThan(0.0001);
       await stopCall();
@@ -499,12 +505,12 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
       expect(inCall()).toBe(true);
       expect(browser.sockets).toHaveLength(0);
       expect(listening()).toBe(false);
-      expect(fieldText()).toBe("");
+      expect(dropdownOpen()).toBe(true);
       expect(notice()).not.toBe(WORDS.noVoice);
       expect(managerError()?.code).toBe("live_forbidden");
       closeField();
       await talk();
-      expect(fieldText()).toBe("");
+      expect(dropdownOpen()).toBe(true);
       expect(managerError()?.code).toBe("live_forbidden");
     } finally {
       browser.restore();
@@ -513,149 +519,53 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
   });
 });
 
-describe("call mode: Esc ends the call in every state", () => {
-  /** A focused call in a known state, with no microphone and no field. */
-  async function focused() {
-    const sent = await inACall();
-    closeField();
-    minimised.set(false);
-    listening.set(false); speaking.set(false); phase.set("idle");
-    return sent;
-  }
-
-  const ended = (sent: Sent[]) => sent.some((s) => s.path === "/api/manager/stop");
-
-  test("no call: Esc is the app's, and nothing of the Manager runs", async () => {
-    await reset();
-    const rule = managerEscapeRule();
-    expect(rule).toBe(null);
-    expect(callFocused()).toBe(false);
-    expect(callMinimised()).toBe(false);
+describe("Manager dropdown and independent audio", () => {
+  test("Voice defaults on and starts immediately on Manager open; off preserves typing", async () => {
+    await reset(); voiceEnabled.set(true); connection.set({kind:"live"}); setStreamForTest("stream_t");
+    const sent=core(); toggleManagerDropdown(); expect(connecting()).toBe(true); await settleAsync();
+    expect(sent.find(s=>s.path==="/api/manager/start")?.body.audio).toBe(true);
+    await toggleManagerAudio(); expect(voiceEnabled()).toBe(false); expect(inCall()).toBe(true);
+    expect(sent.some(s=>s.path==="/api/manager/live/stop")).toBe(true);
+    expect(sent.some(s=>s.path==="/api/manager/stop")).toBe(false); await reset();
   });
-
-  test("focused idle, listening, typing, thinking, speaking and card all end the whole call", async () => {
-    // Idle.
-    let sent = await focused();
-    expect(callFocused()).toBe(true);
-    sent.length = 0;
-    expect(managerEscapeRule()).toBe("manager.stop");
-    await settleAsync(0);
-    expect(inCall()).toBe(false);
-    expect(callMinimised()).toBe(false);
-    expect(ended(sent)).toBe(true);
-
-    // Listening: the recording and the call go.
-    await reset(); sent = await focused();
-    listening.set(true);
-    sent.length = 0;
-    expect(managerEscapeRule()).toBe("manager.stop");
-    await settleAsync(0);
-    expect(!listening() && !inCall()).toBe(true);
-    expect(ended(sent)).toBe(true);
-
-    // Typing: the field goes with the call.
-    await reset(); sent = await focused();
-    fieldText.set("hi");
-    sent.length = 0;
-    expect(managerEscapeRule()).toBe("manager.stop");
-    await settleAsync(0);
-    expect(fieldText() === null && !inCall()).toBe(true);
-
-    // Thinking: Core's stop ends the turn; there is no minimised call left.
-    await reset(); sent = await focused();
-    phase.set("thinking");
-    sent.length = 0;
-    expect(managerEscapeRule()).toBe("manager.stop");
-    await settleAsync(0);
-    expect(inCall()).toBe(false);
-    expect(ended(sent)).toBe(true);
-
-    // Speaking: ending the call stops it.
-    await reset(); sent = await focused();
-    speaking.set(true);
-    sent.length = 0;
-    expect(managerEscapeRule()).toBe("manager.stop");
-    await settleAsync(0);
-    expect(!speaking() && !inCall()).toBe(true);
-
-    // A focused card: it goes with the call.
-    await reset(); sent = await focused();
-    handleEvent(ev("manager.card", { card: { id: "c", type: "note", focused: true, markdown: "x" } }));
-    expect(cardFocused()).toBe(true);
-    sent.length = 0;
-    expect(managerEscapeRule()).toBe("manager.stop");
-    await settleAsync(0);
-    expect(!card() && !inCall()).toBe(true);
-    await reset();
+  test("closing an unused dropdown releases its orb loop", async () => {
+    await reset(); toggleManagerDropdown(); expect(orbOn()).toBe(true);
+    toggleManagerDropdown(); expect(dropdownOpen()).toBe(false); expect(orbOn()).toBe(false);
   });
-
-  test("a minimised call also ends on Esc, and never reaches the session interrupt", async () => {
-    let sent = await focused();
-    minimise();
-    expect(callMinimised()).toBe(true);
-    sent.length = 0;
-    expect(managerEscapeRule()).toBe("manager.stop");
-    await settleAsync(0);
-    expect(inCall()).toBe(false);
-    expect(ended(sent)).toBe(true);
-
-    // Minimised while speaking.
-    await reset(); sent = await focused();
-    speaking.set(true);
-    minimise();
-    sent.length = 0;
-    expect(managerEscapeRule()).toBe("manager.stop");
-    await settleAsync(0);
-    expect(!speaking() && !inCall()).toBe(true);
-    expect(ended(sent)).toBe(true);
-
-    // Minimised with a waiting card.
-    await reset(); sent = await focused();
-    handleEvent(ev("manager.card", { card: { id: "c", type: "note", focused: false, markdown: "x" } }));
-    minimise();
-    sent.length = 0;
-    expect(managerEscapeRule()).toBe("manager.stop");
-    await settleAsync(0);
-    expect(!card() && !inCall()).toBe(true);
-    expect(ended(sent)).toBe(true);
-    // The manifest's interrupt rule excludes an open call, so it can never fire
-    // while one is there; a second Esc now belongs to the app.
-    const interrupt = (manifest.keymap.escape as readonly { id: string; when: readonly string[] }[]).find((r) => r.id === "interrupt");
-    expect(interrupt?.when).toEqual(["session.busy", "!manager.in_call"]);
-    expect(managerEscapeRule()).toBe(null);
-    await reset();
+  test("opening the dropdown makes no request; first typed send does not start audio", async () => {
+    await reset(); const sent = core(); connection.set({kind:"live"}); setStreamForTest("stream_t");
+    toggleManagerDropdown(); expect(dropdownOpen()).toBe(true); expect(sent.length).toBe(0);
+    fieldText.set(dropdownScenario.input); submitField(); await settleAsync();
+    expect(sent.find(s=>s.path==="/api/manager/start")?.body.audio).toBe(dropdownScenario.start_audio);
+    expect(sent.find(s=>s.path==="/api/manager/say")?.body.text).toBe(dropdownScenario.input);
+    expect(audioRequested()).toBe(false); expect(fieldText()).toBe(""); await reset();
   });
-
-  test("consent: Esc cancels the notice and starts nothing", async () => {
-    await reset();
-    consent.set({ provider: "copilot", version: "v1", notice: "Your words go to the model." });
-    expect(managerEscapeRule()).toBe("manager_consent");
-    await settleAsync(0);
-    expect(consent()).toBe(null);
-    expect(inCall()).toBe(false);
+  test("Esc closes only the dropdown in every work phase", async () => {
+    for (const work of ["idle","thinking","replying"] as const) {
+      await reset(); const sent = await inACall(); phase.set(work);
+      expect(managerEscapeRule()).toBe("manager_dropdown");
+      expect(inCall()).toBe(true); expect(dropdownOpen()).toBe(false);
+      expect(sent.some(s=>s.path==="/api/manager/stop")).toBe(false);
+    }
+    await reset(); expect(managerEscapeRule()).toBe(null);
   });
-
-  test("the context modal is a layer above the call: Esc closes it first, then ends the call", async () => {
-    await focused();
-    core({ "GET /api/manager/context": () => ({ body: { title: "Manager context", document: "Episodes\n─────\ncurrent  ses_1\n" } }) });
-    await openManagerContext();
-    expect(managerContext()?.text).toContain("current  ses_1");
-    expect(managerEscapeRule()).toBe("manager_context");
-    expect(managerContext()).toBe(null);
-    expect(inCall()).toBe(true);
-    expect(managerEscapeRule()).toBe("manager.stop");
-    await settleAsync(0);
-    expect(inCall()).toBe(false);
+  test("background audio leaves the session's Escape available", async () => {
+    await reset(); await inACall(); closeManagerDropdown();
+    expect(callFocused()).toBe(false); expect(managerEscapeRule()).toBe(null); expect(inCall()).toBe(true);
+    const rule = manifest.keymap.escape.find(r=>r.id==="interrupt");
+    expect(rule?.when).toEqual(["session.busy","!manager.focused"]); await reset();
   });
-
-  test("talking from the minimised orb brings the call back", async () => {
-    await focused();
-    minimise();
-    expect(callMinimised()).toBe(true);
-    await talk();
-    expect(minimised()).toBe(false);
-    expect(inCall()).toBe(true);
-    await reset();
+  test("auto notification opens a card without stealing text input", async () => {
+    await reset(); await inACall(); closeManagerDropdown();
+    handleEvent(ev("manager.card",{card:{id:"c",type:"note",focused:false,markdown:"Notification"}}));
+    expect(dropdownOpen()).toBe(true); expect(dropdownInteractive()).toBe(false); expect(engaged()).toBe(false); await reset();
+  });
+  test("debug session opens inside Nexus without starting a call", async () => {
+    await reset(); connection.set({kind:"live"});
+    const sent=core({"POST /api/manager/session":()=>({body:{id:"ses_manager",project_id:"p",kind:"manager",title:"Manager",status:"idle"}})});
+    await openManagerSession(); expect(debugSessionId()).toBe("ses_manager"); expect(model.selected?.sessionId).toBe("ses_manager");
+    expect(inCall()).toBe(false); expect(audioRequested()).toBe(false);
+    expect(sent.some(s=>s.path==="/api/manager/start")).toBe(false); model.select(null); await reset();
   });
 });
 
@@ -720,5 +630,31 @@ describe("Manager model excerpt", () => {
     expect(modelPreview()).toEqual(previewScenario.preview);
     await stopCall();
     expect(modelPreview()).toBe(null);
+  });
+});
+
+
+describe("Manager details modal and immediate connection", () => {
+  test("the full current context and tool remain available inside the scrollable modal", async () => {
+    core(); setStreamForTest("stream_t"); connection.set({ kind: "live" }); await talk();
+    handleEvent(ev("manager.preview", {call_id:call()!.id, preview:previewScenario.long_preview}));
+    expect(managerDetailsText()).toContain("Context detail line 1");
+    expect(managerDetailsText()).toContain("Final context detail remains available.");
+    expect(managerDetailsText()).toContain("read_session");
+    scrollDetails(200); expect(detailsScroll()).toBe(200);
+    await stopCall(); expect(detailsScroll()).toBe(0);
+  });
+  test("connecting shows immediately and a cancelled pending start cannot reopen the call", async () => {
+    core(); setStreamForTest("stream_t"); connection.set({ kind:"live" });
+    const original = (globalThis as any).fetch;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    (globalThis as any).fetch = async (...args: any[]) => { await gate; return original(...args); };
+    const pending = talk();
+    expect(connecting()).toBe(true); expect(callFocused()).toBe(true);
+    expect(managerDetailsText()).toContain("Connecting…");
+    await stopCall(); release(); await pending;
+    expect(call()).toBe(null); expect(connecting()).toBe(false);
+    (globalThis as any).fetch = original;
   });
 });

@@ -80,6 +80,8 @@ def css(mode: str) -> dict[str, str]:
         "selection": g("interactive.selection"),
         "settings-selection": g("interactive.settings_selection"),
         "settings-focus": g("interactive.settings_focus"),
+        "skill-card": g(theme["roles"]["skill_card"]["bg"]),
+        "skill-card-focus": g(theme["roles"]["skill_card_focus"]["bg"]),
         "hover": g("interactive.hover"),
         "on-accent": g("interactive.on_accent"),
         "multi": g("interactive.multi"),

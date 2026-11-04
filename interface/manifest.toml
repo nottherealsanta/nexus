@@ -74,22 +74,17 @@ contexts = [
   "global", "composer", "composer_busy", "timeline", "turn", "tool", "card",
   "waiting", "sidebar", "sidebar.sessions", "sidebar.files",
   "sidebar.projects", "sidebar.git", "editor", "drawer", "dialog",
-  "manager.listening", "manager.field", "manager.card",
+  "manager.listening", "manager.field", "manager.card", "manager.focused",
   "escape_chain",
 ]
 
-# Esc is evaluated top to bottom; the first rule whose `when` holds consumes the
-# key and the walk stops. An open Manager call comes first: Esc ends the whole
-# call (speech, turn, recording, field, card). While a call is open Esc never
-# interrupts a session, so the interrupt rule excludes `manager.in_call`. Then
-# text editing always wins over interrupt,
-# and interrupt wins over back navigation, so a stray Esc in a child session
-# while the agent works stops the turn before it leaves the page.
+# Esc closes an interactive Manager dropdown, leaving audio and work running.
+# With the dropdown closed, the normal session escape chain applies.
 [[keymap.escape]]
 id = "manager_call"
-when = ["manager.in_call"]
-action = "manager.stop"
-note = "A Manager call is open, focused or minimised: Esc ends the whole call. It stops the speech, cancels the Manager's turn, drops any recording and typed field, clears the card and tears the call down (POST /api/manager/stop). It never minimises and never reaches the session interrupt."
+when = ["manager.focused"]
+action = "manager.header"
+note = "Close the Manager dropdown without ending audio, the control call or model work."
 
 [[keymap.escape]]
 id = "overlay"
@@ -123,9 +118,9 @@ note = "Toast or banner with focus dismisses (it stays in the notifications draw
 
 [[keymap.escape]]
 id = "interrupt"
-when = ["session.busy", "!manager.in_call"]
+when = ["session.busy", "!manager.focused"]
 action = "session.interrupt"
-note = "Interrupt the viewed session. Never also navigates back on the same press. While a Manager call is open, Esc never reaches this: it ends the call instead."
+note = "Interrupt the viewed session. Never also navigates back on the same press. An interactive Manager dropdown takes Esc first; background audio does not."
 
 [[keymap.escape]]
 id = "editor"
@@ -157,11 +152,11 @@ note = "Last resort: move focus to the composer. Never destructive."
 leading = "sidebar.left.toggle"
 centre = "title_breadcrumbs"
 trailing = "sidebar.right.toggle"
-manager_button = "manager.context"
+manager_button = "manager.header"
 note = "Toggles stay available when their sidebar is closed. Same anchors in terminal, browser and desktop, allowing for native window chrome."
 title_click = "session.rename"
 breadcrumbs = "root title > child title; each crumb is a link; back via nav.back"
-extra = ["manager.context", "manager.open_session", "notifications.open"]
+extra = ["manager.header", "manager.open_session", "notifications.open"]
 
 [navigation.left_sidebar]
 default_tab = "sessions"
@@ -1843,21 +1838,57 @@ note = "Inline rename, find bar, settings field, key capture. Not the composer: 
 # (manager.field_open). Both are client behaviour, so they carry no key here.
 
 [[command]]
+id = "manager.details_up"
+title = "Scroll Manager details up"
+category = "manager"
+keys = { tui = "pageup", nsh = "pageup" }
+key_context = "manager.focused"
+when = ["manager.focused", "!manager.field"]
+unavailable_reason = "Open the focused Manager call to scroll its details."
+placement = ["stage"]
+
+[[command]]
+id = "manager.details_down"
+title = "Scroll Manager details down"
+category = "manager"
+keys = { tui = "pagedown", nsh = "pagedown" }
+key_context = "manager.focused"
+when = ["manager.focused", "!manager.field"]
+unavailable_reason = "Open the focused Manager call to scroll its details."
+placement = ["stage"]
+
+[[command]]
+id = "manager.header"
+title = "Manager"
+category = "manager"
+when = ["always"]
+placement = ["header", "palette"]
+note = "Toggle the borderless opaque Manager dropdown. The header orb replaces the label while visible. Voice defaults on: explicitly opening Manager starts audio immediately unless Voice was switched off. Esc closes the dropdown."
+
+[[command]]
+id = "manager.audio_toggle"
+title = "Toggle Manager audio"
+category = "manager"
+when = ["always"]
+placement = ["header", "palette"]
+note = "The dropdown Voice toggle defaults on. Switching it on starts GPT-Live immediately; switching it off stops only audio. The header orb toggles the dropdown; debug session navigation remains independent."
+
+[[command]]
 id = "manager.context"
 title = "Manager context"
 category = "manager"
 when = ["always"]
 placement = ["palette", "header"]
-note = "The header's Manager button. Opens a read-only, scrollable modal with the Manager's current hidden context: its episodes and recap, the state snapshot and deltas it was given each turn, and its recent log (messages, tool calls and results). It is an inspector-style debug view, not a timeline or chat (docs/manager.md). Clipping is announced. Available with or without a call."
+note = "A palette debug command. Opens a read-only, scrollable modal with the Manager's current hidden context: its episodes and recap, the state snapshot and deltas it was given each turn, and its recent log (messages, tool calls and results). It is an inspector-style debug view, not a timeline or chat (docs/manager.md). Clipping is announced. Available with or without a call."
 
 [[command]]
 id = "manager.open_session"
-title = "Manager session in the inspector"
+title = "Open Manager session"
 category = "manager"
 slash = "manager-session"
 when = ["always"]
 placement = ["palette"]
-note = "Opens the Manager's own (hidden) session, its current episode, in the inspector at the Requests level: the full raw context the model is given, with its log. The Manager has no timeline in the clients (docs/manager.md); the header button shows the current context in a modal, and this opens the inspector for everything. Needs Core; with no Manager episode yet it says so."
+note = "Ensure and open the current persistent backend Manager session inside Nexus, read-only for debugging. Creates no model or audio call; reconnecting audio reuses the session. Follow existing episode rollover."
 
 [[command]]
 id = "manager.talk"
@@ -1876,7 +1907,7 @@ category = "manager"
 slash = "manager"
 when = ["always"]
 placement = ["palette"]
-note = "Starts the call, or moves it to this client (POST /api/manager/start), minimised in the corner. `/manager <text>` sends one typed line instead and focuses the call. With enabled = false, shows a toast that points at Settings, Manager. `/manager stop` is manager.stop."
+note = "Starts the call, or moves it to this client (POST /api/manager/start), with its dropdown closed. `/manager <text>` sends one typed line instead and opens the dropdown. With enabled = false, shows a toast that points at Settings, Manager. `/manager stop` is manager.stop."
 
 [[command]]
 id = "manager.stop"

@@ -18,7 +18,7 @@ export interface QuestionOption { id: string; label: string; preview?: string }
 export interface QuestionItem { id: string; question: string; options: QuestionOption[]; multiple: boolean; allow_free_text: boolean }
 export interface Question { id: string; session_id: string; call_id: string; created: number; questions: QuestionItem[] }
 export interface CoreEvent {
-  id: number; cursor?: string; seq?: number; time: number; type: string; session_id: string | null;
+  id: number | null; cursor?: string; seq?: number; time: number; type: string; session_id: string | null;
   data: any;
 }
 /** Token counts of one request or attempt (`GET …/turn`); `null` where it appears means unknown, never zeros. */
@@ -32,6 +32,7 @@ export interface RequestSummary {
   started: number | null; finished: number | null; stop: string | null; error: any;
   message_id: string | null; usage: TokenUsage | null; reasoning_seconds: number | null;
   attempts: AttemptSummary[];
+  partial?: { request_id: string; seq: number; parts: Part[] } | null;
 }
 export interface ToolSummary { call_id: string; name: string; state: string; started: number | null; finished: number | null; is_error: boolean }
 /** One turn as Core records it (also the data of the durable `turn.summary` event). */
@@ -64,7 +65,7 @@ export interface Info {
 
 export const CLIENT_VERSION = "0.10.0";
 /** The API version this client was written against (same convention as nexus-tui). */
-export const CLIENT_API = { major: 1, minor: 4 };
+export const CLIENT_API = { major: 1, minor: 5 };
 
 export interface ApiVersion { major: number; minor: number }
 

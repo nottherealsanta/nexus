@@ -12,12 +12,31 @@
       "arguments": "{\"handle\":\"liquid-ai-audio-model\",\"what\":\"last_answer\"}",
       "clipped": false,
       "status": "running"
-    }
+    },
+    "text": "Finding the requested audio session.\nReading the latest answer from that session.\nPreparing a brief with the measured memory and latency.",
+    "details_clipped": false
   },
   "expect": [
     "Model context",
     "read_session",
     "running",
     "measured memory"
-  ]
+  ],
+  "long_preview": {
+    "source": "Response",
+    "lines": [
+      "Finding the requested audio session.",
+      "Reading the latest answer from that session.",
+      "Preparing a brief with the measured memory and latency."
+    ],
+    "clipped": true,
+    "tool": {
+      "name": "read_session",
+      "arguments": "{\"handle\":\"liquid-ai-audio-model\",\"what\":\"last_answer\"}",
+      "clipped": false,
+      "status": "running"
+    },
+    "text": "Context detail line 1: full current model context\nContext detail line 2: full current model context\nContext detail line 3: full current model context\nContext detail line 4: full current model context\nContext detail line 5: full current model context\nContext detail line 6: full current model context\nContext detail line 7: full current model context\nContext detail line 8: full current model context\nContext detail line 9: full current model context\nContext detail line 10: full current model context\nContext detail line 11: full current model context\nContext detail line 12: full current model context\nContext detail line 13: full current model context\nContext detail line 14: full current model context\nContext detail line 15: full current model context\nContext detail line 16: full current model context\nContext detail line 17: full current model context\nContext detail line 18: full current model context\nContext detail line 19: full current model context\nContext detail line 20: full current model context\nContext detail line 21: full current model context\nContext detail line 22: full current model context\nContext detail line 23: full current model context\nContext detail line 24: full current model context\nContext detail line 25: full current model context\nContext detail line 26: full current model context\nContext detail line 27: full current model context\nContext detail line 28: full current model context\nContext detail line 29: full current model context\nContext detail line 30: full current model context\nContext detail line 31: full current model context\nContext detail line 32: full current model context\nContext detail line 33: full current model context\nContext detail line 34: full current model context\nContext detail line 35: full current model context\nContext detail line 36: full current model context\nContext detail line 37: full current model context\nContext detail line 38: full current model context\nContext detail line 39: full current model context\nContext detail line 40: full current model context\nFinal context detail remains available.",
+    "details_clipped": false
+  }
 }

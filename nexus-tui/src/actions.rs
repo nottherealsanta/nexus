@@ -11,6 +11,35 @@ use crate::api::{CoreApi, Outcome, RequestId};
 use crate::discovery;
 use crate::transport::Http;
 
+pub fn skill_detail(body: &Value) -> String {
+    let resources = body["children"]
+        .as_array()
+        .or_else(|| body["files"].as_array());
+    let resources = resources.filter(|rows| !rows.is_empty()).map_or_else(
+        || "No other files or folders.".to_owned(),
+        |rows| {
+            rows.iter()
+                .filter_map(|row| row.as_str())
+                .map(|name| format!("- `{}`", name.replace('`', "\\`")))
+                .collect::<Vec<_>>()
+                .join("\n")
+        },
+    );
+    let content = body["content"]
+        .as_str()
+        .or_else(|| body["body"].as_str())
+        .unwrap_or("")
+        .replace("\r\n", "\n");
+    let markdown = content
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.find("\n---\n").map(|end| end + 8))
+        .map_or_else(
+            || content.to_owned(),
+            |end| format!("```yaml\n{}\n```\n{}", &content[..end], &content[end..]),
+        );
+    format!("## Description\n\n{}\n\n## Supporting resources\n\n{resources}\n\n## SKILL.md\n\n{markdown}", body["description"].as_str().unwrap_or(""))
+}
+
 #[derive(Clone, PartialEq)]
 pub struct Secret(pub String);
 impl std::fmt::Debug for Secret {
@@ -720,7 +749,7 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             }
             let body = reply.map_err(e)?.body;
             done.answer = Some(if *kind == "skill" {
-                body["body"].as_str().unwrap_or("").to_owned()
+                skill_detail(&body)
             } else {
                 serde_json::to_string_pretty(&body).unwrap_or_default()
             });

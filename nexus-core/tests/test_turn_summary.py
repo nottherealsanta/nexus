@@ -346,3 +346,68 @@ def test_a_page_costs_the_same_queries_for_five_turns_or_fifty(tmp_path):
         assert counts[0] == counts[1]
     finally:
         store.close()
+
+
+async def test_running_partial_served_exactly_and_deltas_are_never_stored(daemon):
+    rt, client, provider, workspace = daemon
+    provider.replies = [[TextDelta("start"), "hang", TextDelta(" end"), PartDone(Text("start end")), Done("end_turn")]]
+    session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    sid = session["id"]
+    sub = rt.bus.open()
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "go"})
+    for _ in range(100):
+        if sid in rt.live_partials and rt.live_partials[sid].seq:
+            break
+        await asyncio.sleep(0.01)
+    page = (await client.get(f"/api/session/{sid}/turn")).json()
+    [request] = page["turns"][-1]["requests"]
+    assert request["partial"]["parts"][0]["text"] == "start"
+    assert rt.store.request(request["id"])["partial"]["parts"][0]["text"] == "start"
+    assert "text_delta" not in rt.store.event_counts(sid)
+    deltas = []
+    while not sub._queue.empty():
+        e = sub._queue.get_nowait()
+        if e["type"] == "text_delta":
+            deltas.append(e)
+    assert len(deltas) == 1 and deltas[0]["id"] is None
+    assert deltas[0]["data"]["request_id"] == request["id"]
+    provider.hold.set()
+    await _idle(rt, sid)
+    assert rt.store.request(request["id"])["partial"] is None
+    assert sid not in rt.live_partials
+    sub.close()
+
+
+async def test_interruption_keeps_partial_separate_from_model_context(daemon):
+    rt, client, provider, workspace = daemon
+    provider.replies = [[TextDelta("diagnostic"), "hang"]]
+    session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    sid = session["id"]
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "go"})
+    for _ in range(100):
+        if sid in rt.live_partials and rt.live_partials[sid].seq:
+            break
+        await asyncio.sleep(0.01)
+    await client.post(f"/api/session/{sid}/interrupt")
+    await _idle(rt, sid)
+    turn = rt.store.turns_for_session(sid)[-1]
+    [request] = rt.store.requests_for_turn(turn["id"])
+    assert request["partial"]["parts"][0]["text"] == "diagnostic"
+    assert not any(m.message.role == "assistant" for m in rt.store.messages(sid))
+    assert rt.store.partial_summary(request)["counts"]["text_delta"]["chars"] == 10
+
+
+async def test_finished_session_compaction_does_not_change_context_or_turns(daemon):
+    import time
+    rt, client, _, workspace = daemon
+    session, _turn_row, _requests = await _turn(rt, client, workspace, reply(Text("canonical answer")))
+    sid = session["id"]
+    before_context = (await client.get(f"/api/session/{sid}/context")).json()
+    before_turns = (await client.get(f"/api/session/{sid}/turn")).json()
+    rt.store.set_tree_archived(sid, True)
+    assert rt.store.compact_session(sid, now=time.time()) is not None
+    assert (await client.get(f"/api/session/{sid}/context")).json() == before_context
+    assert (await client.get(f"/api/session/{sid}/turn")).json() == before_turns
+    page = (await client.get(f"/api/session/{sid}/event")).json()
+    assert page["compaction"]["removed"] > 0
+    assert (await client.post(f"/api/session/{sid}/diagnostics", json={"keep": True})).json()["keep"]

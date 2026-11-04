@@ -6,69 +6,49 @@ All types are frozen dataclasses with `slots`.
 
 ## Durable event identity
 
-Every event the daemon publishes is stored in the `event` table **before** any
-subscriber sees it, and its row `id` is flushed into the event as the durable
-`id`. `nexus/bus.py` does that; `nexus/eventlog.py` owns the cursor and replay
-contract:
+Durable events are committed before delivery. Their `id` is an autoincrement
+row id and their SSE `cursor` is `<generation>:<id>`. `seq` is daemon-local
+publish order and is never a reconnect cursor. Session events carry `session_id`;
+globals carry null. Generation is stable across restarts/copies. Malformed,
+wrong-generation, ahead and below-floor cursors require explicit resync.
 
-| Field | Meaning |
-| --- | --- |
-| `id` | Durable row id in this database's event log; never reused, stable across restarts. |
-| `seq` | The publishing daemon's counter (`1, 2, 3…`). Restarts with the daemon and is **not** a cursor. |
-| `time` | Wall-clock publish time. |
-| `type` | Event name (`text_delta`, `message.added`, `session.created`, …). |
-| `session_id` | The owning session, or `null` for a global event. |
-| `data` | The event payload. |
-| `payload_state` | `full` or `expired` on stored/replayed events. Expired wire events keep the same id/type and carry an explicit `$nexus_payload: "expired"` marker in `data`. |
-| `cursor` | On the SSE stream only: `<log generation>:<id>`. |
+`text_delta`, `reasoning_delta`, `tool_call_started` and `tool_args_delta` are
+live-only: `id: null`, no SSE id or cursor. Their data gains `request_id`,
+`seq` (request-local) and `part_index`. `part_done` has the same correlation
+fields and remains durable. A client registers its stream, reads `/turn`, seeds
+from the running request's `partial`, then applies only events beyond that
+partial's sequence for the same request. `part_done` replaces the indexed part
+with its exact final encoding; it does not append the folded text a second time.
+A new request starts fresh scratch. Saving the assistant message clears it.
+Older clients may drop these deltas or repeatedly resync while streaming; update
+both clients. Saved messages remain canonical and available.
 
-The `log` table holds one generation (`log_<hex>`) for the database. A new,
-deleted or replaced database gets a new generation; a copy keeps the same one,
-because it is the same log. A client resumes with `cursor`, and the server
-rejects a cursor from another generation, ahead of the head, malformed, or
-older than the log floor with an actionable resync response. Filtered streams
-skip unrelated ids, so a numeric gap is normal and is not evidence of loss.
+`turn_request.partial` is a diagnostic checkpoint, persisted at one-second
+intervals and completed-part/terminal boundaries. `/turn` serves current memory
+while running. Interrupted partials never become assistant messages or model
+context; the inspector labels them diagnostic-only.
 
-Session events are deleted with their session. Global lifecycle events are
-stored with `session_id: null` and survive: `project.created`,
-`project.updated`, `project.deleted`, and a minimal `session.deleted` tombstone
-(`{"id": "ses_…"}`). A deleted session's messages, events, snapshots and
-observations are gone; the tombstone is only what a client needs to drop it.
-`bus.overflow` is stream control, is never stored, and has no durable id.
-Details and response codes: [api.md](api.md#event-stream).
+Wire envelopes use `payload_state: full|expired`. Their bodies are compressed
+and content-addressed in `event_body`; request manifests share history items,
+schemas, instructions and inline data-URI components. Reference edges release
+unreferenced components when an envelope expires or is removed. Readers accept
+both versioned manifests and legacy whole bodies. Expiry returns an explicit
+`$nexus_payload: expired` marker while keeping id/type/cursor position.
 
-**Retention.** There are two independent diagnostic lifetimes. Heavy wire
-payloads (`wire_request`, `wire_response`, `wire_event`) are content-addressed
-in `event_body`, compressed when that is smaller and deduplicated by SHA-256.
-Their event envelopes stay in the log: a successful terminal turn's payload
-expires up to an hour after completion, a failed or interrupted turn's after 24
-hours, and a soft 256 MiB budget expires the oldest eligible payloads first.
-Expiry is selective: it clears the body pointer, stores a compact expiry marker
-in `data`, sets `payload_state` and never renumbers or removes the envelope or
-moves `floor`. The human-readable note and `/api/snapshot` resync guidance are
-synthesized at replay/export time rather than written once per event, so
-expiry does not grow the database with repeated prose. A terminal turn's linked
-payload expires even
-if another turn in the same session is running; unlinked legacy payloads retain
-session-wide protection. A replay or export in progress is not half-expired:
-in-flight replay pins still hold.
+Finished sessions lose diagnostic events once archived or idle for 24 hours,
+subject to recovery, waits, jobs, replay/outbox and keep-diagnostics protection.
+Deletion and a `session.compacted` marker commit atomically. Cumulative removed
+range/count/time live in `session_compaction` for inspector/export notices.
+Messages, snapshots, turn records and usage remain independent of diagnostics.
+Continuing a compacted session writes new events normally.
 
-Normalized `text_delta`, `reasoning_delta`, `tool_args_delta`, `part_done` and
-`tool_call_started` events are deliberately **not** selectively expired yet:
-recovery reads them to describe an interrupted stream when the request row has
-no complete parts. They remain full semantic events and are removed only by the
-ordinary prefix retention below until an equivalent durable summary is
-checkpointed. This is a documented deferral, not an invisible expiry rule.
-
-Separately, ordinary diagnostic events are removed from a contiguous prefix
-after the event age and `floor` becomes the last removed id. The head
-high-water mark remains even when no rows are retained. A cursor at the floor
-may resume; below it the response is 410 `history_unavailable`. Messages,
-snapshots, turn/request/tool execution records and `session_usage` are
-independent of both event expiry and payload expiry. A `log.retention` global
-event reports each pass, including wire payload counts, bytes, blockers and the
-last run. Maintenance runs at most every 60 seconds, wakes on terminal turns and
-on soft-budget pressure, and rate-limits its own `log.retention` announcements.
+The log floor is the conservative resync boundary: **every cursor below it**
+gets 410, including cursors whose interleaved rows remain retained. At the floor
+resumption is valid. Prefix retention and compaction never reuse ids. Numeric
+gaps on a filtered stream do not by themselves mean loss. `bus.overflow` is
+explicit stream control with the last durable id; id-less events never advance it.
+Global `log.retention` announcements are rate-limited. Details and settings:
+[daemon.md](daemon.md#durable-event-log), [api.md](api.md#event-stream).
 
 ## Conversation
 

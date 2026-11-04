@@ -110,7 +110,7 @@ export function ledgerTotals(ledger: UsageLedger | null, scratch: CoreEvent[], m
   let model = fallbackModel;
   for (const e of scratch) {
     if (e.type === "wire_request" && typeof e.data?.body?.model === "string") model = e.data.body.model;
-    if (e.type !== "usage" || e.id <= mark) continue;
+    if (e.type !== "usage" || e.id == null || e.id <= mark) continue;
     const u = usageOfEvent(e);
     const row = out.get(model) ?? { requests: 0, input: 0, cached: 0, output: 0, reasoning: 0 };
     row.requests++; row.input += u.input; row.cached += u.cached; row.output += u.output; row.reasoning += u.reasoning;

@@ -69,6 +69,13 @@ renderer for the timeline and the new-session view): System prompt, AGENTS.md, T
 MCP and Child agents or Workspace tools when present. Tool, skill and MCP rows show their
 on/off state; click a row or focus the timeline and use ↑/↓ then Enter/Space to switch it.
 Tools use up to four columns as space allows, both before and after a message.
+Skills stay inline through 12 entries; above 12 only the clickable `Skills [N]` heading remains.
+The heading opens a scrollable two-column card picker at any count. Names open a separate
+Markdown detail view. Cards are borderless dark gray, with a lighter focused card.
+The detail view shows the full description, complete `SKILL.md` and names of other files
+and folders. Inline skill names also open that view. In the picker, arrows/Tab move,
+Enter opens details and Space toggles; the marker and name have separate mouse targets.
+Esc returns from details to the same picker card, then closes the picker.
 Locked session rows are dimmed and say `new session`; in the new-session preview a locked row
 names its state or configuration instead, because that view already is the next session. Each header keeps its estimated count
 (`~2,140 tok`, characters ÷ 4) and meta, a text row gives the total and the share of the model's
@@ -755,18 +762,21 @@ The session context meter reads Core's context budget; `~` marks estimates.
 
 ## The Manager
 
-The Manager uses call mode: `alt+m` or `space` talks (starts a call, opens the microphone, sends, or barges in);
-a focused call takes the stage as a large centred orb over a 30% scrim, with the caption, a state hint and End
-under it and a card below. `esc` ends the whole call in every state (speech, turn, recording, field and card
-included) and never reaches the session interrupt; the palette's `manager.minimise` tucks it into the corner, and
-`/manager` starts there. `alt+shift+m`, End or `/manager stop` also end it; `/manager <text>` sends a typed line.
-`alt+s` stops speaking, `alt+c` cancels the turn and `alt+shift+d` dismisses a card. The header's Manager button
-opens a read-only, scrollable modal with the hidden context Core formats (`GET /api/manager/context`); the
-inspector keeps the full raw log. The orb, caption, typed field and card are painted over the finished frame
-(`src/orb.rs`, `src/stage.rs`; state in `src/manager.rs`) and the frame clock runs only while the orb is moving. For `--dump-frame`, `NEXUS_TUI_MANAGER_PIN=state[:level]` (or `none`)
-holds the orb still and no audio device is touched; it is read nowhere else. On Kitty graphics terminals the orb uses cached, smooth RGBA sprites (`src/orb_sprite.rs`); other terminals use the centred cell/glyph fallback.
+The header's **Manager** label toggles a borderless, fully opaque notification dropdown: caption, recent model-context lines,
+current tool/status, the Manager's card, **Tell the Manager…** input and **Open Manager session**. Its glowing
+orb replaces the label while visible, several cells wide and one row high; click it to toggle the dropdown.
+The dropdown's **Voice: on/off** toggle defaults on: opening Manager or switching Voice on starts Live immediately.
+Switching Voice off stops only audio. The input has a solid inset surface; debug navigation does not start audio. Enter sends text; with Voice off, the first typed request starts a control
+call with audio disabled. Esc/outside click closes the dropdown while audio continues. Automatic cards do not steal
+keyboard focus. With the dropdown closed, session keys work normally. The explicit stop shortcut or `/manager stop`
+ends the control call. The debug button reuses the current persistent Manager session and follows episode rollover;
+it shows canonical context inside Nexus with its composer disabled. The palette's Manager context view and the raw
+inspector remain available. See [Manager](../docs/manager.md).
 
-Live Manager calls use their own audio connection and need no Dictation setup or `nexus voice init`. A failed Live connection keeps its error visible and the typed field available; end and restart the call to retry audio.
+Live uses its own audio connection and does not require Dictation setup. The header orb appears immediately with
+**Connecting…** in the dropdown. Playback has a 60 ms startup/recovery buffer and the speaking colour holds through
+350 ms pauses. The TUI uses compressed cached sprites on graphics terminals and a cell fallback elsewhere; NSH
+uses the same colours and motion on Canvas. Real audio quality and talk-over interruption still need listening checks.
 
 Working labels use the shared travelling shimmer: one pass every 1.5 seconds,
 with a brighter highlight over secondary text. Reduced motion keeps the label static.
@@ -778,4 +788,8 @@ steps a value backward; Right advances it.
 
 Live starts the microphone before reporting audio ready. Its echo guard follows audible playback and a short echo tail; continuous silent output does not mute capture. Expected speaker shutdown is quiet.
 
-The focused Manager call shows a three-line Model context excerpt and the current/latest tool with arguments and status; the header debug modal keeps the full context. Live playback has a 60 ms startup/recovery buffer, and the speaking colour holds through 350 ms pauses.
+Running responses use request-local streaming checkpoints: after subscribing,
+the client reads `/turn`, seeds the running partial, and merges newer deltas by
+request id and sequence. A completed part replaces its folded text; a saved
+assistant message clears scratch. Token deltas have no durable cursor. Finished
+session compaction leaves messages, starting context and turn summaries intact.

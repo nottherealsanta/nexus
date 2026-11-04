@@ -334,12 +334,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
             draw_dialog(&cx, buf, area, &title, &body, None, &mut hits);
         }
         // The Manager's orb, caption and card are painted over everything else.
-        crate::stage::draw(a, buf, area, regions.composer, &mut hits);
-        // The focused call swallows the app's clicks, but the header's Manager
-        // button stays a global control: it is the one way into the debug modal.
-        if regions.manager.width > 0 && a.ui.manager.context.is_none() {
-            hits.add(regions.manager, Target::ManagerSession);
-        }
+        crate::stage::draw(a, buf, area, regions.composer, regions.manager, &mut hits);
         // The Manager's debug context is a modal above even the call stage.
         if let Some(context) = &a.ui.manager.context {
             draw_context_detail(
@@ -950,14 +945,15 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
 
     // The Manager button, left of the right toggle: the hidden context modal.
     if g.manager.width > 0 {
-        let label = " Manager ";
+        let m = &cx.app.ui.manager;
+        let label = if m.dropdown_open || m.call.is_some() || m.starting || m.orb.visible() { "" } else { "Manager" };
         let live = cx.app.ui.manager.call.is_some();
         let style = if live {
             cx.st("status.info", SIDEBAR)
         } else {
             cx.st(SECONDARY, SIDEBAR)
         };
-        let x = g.manager.x + g.manager.width.saturating_sub(width(label) as u16);
+        let x = g.manager.x;
         put(buf, x, g.manager.y, label, style, g.manager.width);
         hits.add(g.manager, Target::ManagerSession);
     }
@@ -5976,6 +5972,10 @@ fn draw_composer_images(
 }
 
 fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
+    if cx.app.manager_debug_view() {
+        put(buf, r.x + 2, r.y + 1, "Manager session · read-only debug view", cx.st(SECONDARY, PANEL), r.width.saturating_sub(4));
+        return;
+    }
     let inputs = cx.app.pending_inputs();
     let composer = composer_without_pending(r, inputs.len());
     let extra = composer.y - r.y;
@@ -8938,7 +8938,15 @@ fn context_doc_rows(area: Rect, theme: &Theme, text: &str) -> (u16, Vec<Vec<Span
     let palette = crate::markdown::Palette::from_theme(theme);
     let rows = crate::markdown::lines(text, &palette, inner.max(1))
         .into_iter()
-        .map(|row| row.prefix.into_iter().chain(row.spans).collect())
+        .flat_map(|row| {
+            let prefix_width: usize = row.prefix.iter().map(|span| text::width(&span.content)).sum();
+            crate::markdown::wrap_spans(&row.spans, inner.saturating_sub(prefix_width).max(1))
+                .into_iter().enumerate().map(move |(index, spans)| {
+                    let mut line = if index == 0 { row.prefix.clone() } else { vec![Span::raw(" ".repeat(prefix_width))] };
+                    line.extend(spans);
+                    line
+                })
+        })
         .collect();
     (wide, rows)
 }
@@ -8977,6 +8985,14 @@ fn draw_context_doc(
     top: usize,
     hits: &mut HitMap,
 ) {
+    draw_context_doc_hint(cx, buf, area, title, text, top, "close", hits);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_context_doc_hint(
+    cx: &Cx, buf: &mut Buffer, area: Rect, title: &str, text: &str,
+    top: usize, escape_hint: &str, hits: &mut HitMap,
+) {
     let (wide, rows) = context_doc_rows(area, cx.t, text);
     let b = modal_box(area, wide, (rows.len() + 6).clamp(10, 40) as u16);
     let m = modal(cx, buf, area, b, title, hits);
@@ -8985,7 +9001,7 @@ fn draw_context_doc(
     for (i, row) in rows.iter().skip(top).take(h).enumerate() {
         draw_spans(cx, buf, m.x, m.body.y + i as u16, row, m.w);
     }
-    hint_row(cx, buf, &m, &[(updown(cx), "scroll"), ("esc", "close")]);
+    hint_row(cx, buf, &m, &[(updown(cx), "scroll"), ("esc", escape_hint)]);
 }
 
 /// A context entry's rows at `inner` cells: the open entry's definition, as Markdown
@@ -9052,6 +9068,14 @@ fn draw_context_entries(
     hits: &mut HitMap,
 ) {
     let (wide, inner) = context_entries_box(area);
+    if title == "Skills" {
+        if let Some(entry) = open.and_then(|index| entries.get(index)) {
+            draw_context_doc_hint(cx, buf, area, &entry.name, entry.full.as_deref().unwrap_or("Loading…"), top, "back to skills", hits);
+        } else {
+            draw_skill_picker(cx, buf, area, entries, cursor, hits);
+        }
+        return;
+    }
     let body = open
         .and_then(|i| entries.get(i))
         .map(|entry| context_entry_body(cx.t, entry, inner))
@@ -9115,6 +9139,76 @@ fn draw_context_entries(
         buf,
         &m,
         &[(updown(cx), "move"), ("enter", "details"), ("esc", "close")],
+    );
+}
+
+fn draw_skill_picker(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    entries: &[crate::ui::ContextEntry],
+    cursor: usize,
+    hits: &mut HitMap,
+) {
+    let b = modal_box(area, MODAL_LARGE, 40);
+    let m = modal(cx, buf, area, b, "Skills", hits);
+    let column_len = entries.len().div_ceil(2).max(1);
+    let page = (m.body.height as usize / 7).max(1);
+    let row = cursor % column_len;
+    let first = row.saturating_sub(page - 1);
+    let width = m.w.saturating_sub(2) / 2;
+    let items = cx.app.context_items_for("Skills");
+    for (index, entry) in entries.iter().enumerate() {
+        let row = index % column_len;
+        if row < first || row >= first + page {
+            continue;
+        }
+        let x = m.x + (index / column_len) as u16 * (width + 2);
+        let y = m.body.y + ((row - first) * 7) as u16;
+        if y + 5 >= m.body.bottom() {
+            continue;
+        }
+        let selected = index == cursor;
+        let role = if selected { "skill_card_focus" } else { "skill_card" };
+        let background = &cx.t.role(role).bg;
+        clear(buf, Rect::new(x, y, width, 6), cx.t.role_style(role));
+        put(
+            buf, x + 1, y + 1,
+            &truncate(&entry.name, width.saturating_sub(2) as usize, cx.ell()),
+            cx.st(PRIMARY, background).add_modifier(
+                if selected { Modifier::BOLD | Modifier::UNDERLINED } else { Modifier::BOLD },
+            ),
+            width.saturating_sub(2),
+        );
+        hits.add(Rect::new(x, y + 1, width, 1), Target::ContextEntry(index));
+        let description = entry.description.split_whitespace().collect::<Vec<_>>().join(" ");
+        let lines = text::wrap(&description, width.saturating_sub(2).max(1) as usize);
+        for (i, line) in lines.iter().take(2).enumerate() {
+            put(
+                buf, x + 1, y + 2 + i as u16, line,
+                cx.st(SECONDARY, background), width.saturating_sub(2),
+            );
+        }
+        if let Some(item) = items.get(index) {
+            let label = if item.locked {
+                "Locked · new session"
+            } else if item.on {
+                "● Enabled"
+            } else {
+                "○ Disabled"
+            };
+            put(buf, x + 1, y + 4, label, cx.st(SECONDARY, background), width.saturating_sub(2));
+            if !item.locked {
+                hits.add(
+                    Rect::new(x + 1, y + 4, width.saturating_sub(2), 1),
+                    Target::ContextToggle(item.index),
+                );
+            }
+        }
+    }
+    hint_row(
+        cx, buf, &m,
+        &[(updown(cx), "move"), ("enter", "details"), ("space", "toggle"), ("esc", "close")],
     );
 }
 

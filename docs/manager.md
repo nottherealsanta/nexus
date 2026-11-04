@@ -40,8 +40,8 @@ They are excluded in `Store`, so a call site that forgets cannot leak one: `sess
 sessions unless asked (`kind="manager"`, `hidden=True`). A stream drops every event of a hidden session unless it
 is filtered to that episode's own id (`eventlog.Stream`), so no client's rail ever sees one. The events stay in the
 durable log: `GET /api/manager/episode` lists the episode ids, and `/api/session/{id}/event`, `/message` and the
-inspector open one by id. The clients' header button shows a bounded, read-only version of the current context in a
-debug modal (below); the full raw log stays in the inspector (D5). `tests/test_manager_store.py` is the leak test.
+inspector open one by id. The clients' dropdown opens the current episode as an explicit read-only debug session (below); the full raw wire
+log stays in the inspector. Normal discovery still hides these sessions. `tests/test_manager_store.py` is the leak test.
 
 `Session` gained `kind`, `topic` and `topic_seq`; `Project` gained `hidden`; `message` gained `origin`. An existing
 0.10 database gains the columns in place on open (schema version unchanged, like the payload-storage columns).
@@ -55,7 +55,7 @@ the call: the old holder is locked out, the new `call_id` differs, and the first
 it. Starting again from the same stream returns the same call. If the holder's event stream closes, the call ends
 (`manager.state` with `active: false`). Ending a call never stops a session.
 
-Every event carries `call_id` (random, not secret) and never `stream_id`. The Manager's events are ordinary durable
+Every call-scoped event carries `call_id` (random, not secret) and never `stream_id`. The Manager's events are ordinary durable
 global events, so a reconnecting client resumes them from its cursor and `GET /api/manager` restores the state.
 Routes and event fields are in [api.md](api.md#the-manager).
 
@@ -75,44 +75,31 @@ A turn: `say` queues the utterance and returns `202 {turn_id}`. The worker runs 
 interrupts the turn only if no tool has changed a session yet (`TurnState.acted`); otherwise the turn keeps going
 and the response says so.
 
-## Call mode in the clients
+## Manager in the clients
 
-Both clients draw the Manager as a call (docs/manager-design.md 10.1 and 10.6). **No call** is nothing at all. A
-**focused call** takes the stage: a large centred orb, the app behind dimmed to about 30%, the caption under the
-orb, one quiet hint line and an explicit **End** under that, and a card, if any, below them. **Esc ends the whole
-call** in every state, focused or minimised: it stops speech, cancels the Manager's turn, drops the recording and
-the typed field, clears the card and tears the call down. It never minimises and, while any call is open, it never
-reaches the session interrupt. **Minimise** is only the palette action `manager.minimise`: `/manager` starts a
-call that way (the quiet corner), and the palette can tuck a focused call away. A **minimised call** shows the orb,
-its caption (a proactive line, or a waiting card's one-line caption) and the hint/End. `alt+m` brings it back and
-talks.
+The header shows **Manager** at rest; the one-row glowing orb replaces that label while the dropdown or a call is active. Clicking the label or orb opens a notification-style dropdown below the first row,
+with the current caption, the last three model-context lines, the active tool/status, the Manager's card,
+a **Tell the Manager…** input, a **Voice: on/off** toggle and **Open Manager session**. The app remains undimmed. The dropdown is borderless and fully opaque; a solid inset input surface makes its focus clear.
+The glowing audio orb occupies several cells of the header and only one row of height; it keeps the existing
+idle, listening, thinking and speaking colours. Clicking it toggles the dropdown. A separate **Voice: on/off** button controls audio. Voice defaults on, so explicitly opening Manager starts Live immediately; switching Voice on starts it immediately too. Switching it off stops audio while preserving typing and the backend session.
+It appears immediately while startup shows **Connecting…**. Opening Manager with Voice off makes no model or audio call.
 
-The hint line names the current state's keys and always how to end: `esc end` is in every state. The four actions
-stay separate: `alt+s` (NSH `cmd+shift+s`) stops speaking; `alt+c` (NSH `cmd+shift+c`) cancels the Manager's turn;
-`alt+shift+d` (NSH `cmd+alt+shift+d`) dismisses the card; Esc, End under the orb, `alt+shift+m` (NSH
-`cmd+alt+shift+space`), `/manager stop` or saying "that's all" ends the call. Ending never stops a session.
-`space` (when the call is focused) or `alt+m` talks; talking over the Manager is a barge-in. `enter` sends while
-listening or typing, digits pick a card row, and a click on a row opens it, outside a card dismisses it, the orb
-talking and End ending the call. A focused call takes every bare key (the app's global modifier shortcuts still work);
-a minimised call leaves the app's bare keys alone, except Esc, which ends the call. While the context modal is open
-it takes Esc first (see below).
+Type in the dropdown and press Enter to send. With Voice off, the first typed request starts the control call with `audio: false`;
+Live consent, the microphone and speech playback are only used when audio is requested. Esc and an outside click
+close the dropdown while audio and model work continue. A card can open the dropdown without capturing typing.
+With the dropdown closed the session keeps its keys, including its own Escape. The explicit stop shortcut or
+`/manager stop` ends the whole control call. Speech stop, turn cancellation and card dismissal remain separate.
 
-## The context modal (debugging)
+**Open Manager session** opens the current persistent backend Manager session inside Nexus as a read-only debug
+view. It creates the initial session if necessary, without a model request or audio connection. Audio reconnects
+reuse the same session; existing context-limit/idle episode rollover still applies, and an open debug view follows
+the current episode. Canonical context is reloaded on public Manager updates without exposing hidden episode events
+to the normal global stream. Normal session discovery still excludes Manager sessions. Prompting directly into
+this debug session is rejected; use the dropdown to address the Manager. This explicit debug view supersedes the
+earlier inspector-only decision; it is not a separate Manager conversation implementation.
 
-The header's **Manager** button opens a read-only, scrollable modal with the Manager's current hidden context. It is
-an inspector-style debug view, not a timeline or a chat: it does not add a Manager session to the rail and it is not
-a second place to talk to it. Core formats the same text for both clients (`GET /api/manager/context`):
-
-* **Episodes:** the current hidden episode (id, start, model, `continued_from`) and the earlier ones.
-* **Recap:** the recap carried into this episode, or that there is none.
-* **State snapshot and deltas:** each turn's `<nexus_state>` block (the first turn's full snapshot; later turns'
-  deltas), with the user view when it was sent.
-* **Recent log:** the stored messages, the Manager's sentences, reasoning summaries, tool calls and results,
-  newest last.
-
-It is bounded: the last 40 log entries and the last 12 state blocks are shown, each entry is cut at 1200 characters,
-and Core says how many were left out or cut. The full raw log stays in the inspector (`Manager session in the
-inspector`, or `/manager-session`). Esc closes the modal; if a call is open, a second Esc ends it.
+The palette's **Manager context** command still opens Core's bounded formatted context (`GET /api/manager/context`)
+with episodes, recap, state snapshots/deltas and the recent log. The full raw wire log remains in the inspector.
 
 ## Episodes, recap, snapshot and delta (plan section 6)
 
@@ -395,6 +382,8 @@ GPT-Live sideband TLS uses HTTPX’s verified certificate context (the bundled C
 
 The TUI starts microphone capture before reporting Live audio ready. Its half-duplex echo guard measures samples consumed by the output device: silent WebRTC packets leave capture open, while audible speech holds it through a 200 ms echo tail. With `NEXUS_LIVE_HEADPHONES=1` the guard is bypassed. Expected audio-device teardown never writes diagnostics into the terminal frame. NSH keeps browser echo cancellation and forwards microphone packets while output is silent.
 
-The focused call includes a compact **Model context** debug excerpt: at most three recent wrapped lines from the real input, emitted reasoning/text, or tool result, plus the latest tool’s name, arguments and running/done/failed status. It is current state, not a transcript or history. Core masks secret patterns and marks clipping; the complete context remains in the header debug modal and inspector. `manager.preview` updates are throttled to 150 ms for text, with immediate tool transitions and final excerpts; `call.preview` restores it.
+The focused call puts the current caption, model context and latest tool in one opaque, scrollable **Manager** modal below the orb. Text wraps rather than truncating each row. Mouse/touch scrolling and PageUp/PageDown keep long details accessible while End remains outside the scroll area. This is current state, not a transcript or history. Core masks secret patterns and bounds current text to 12,000 characters and formatted tool arguments to 4,096; omitted content is announced, and the header debug modal and inspector keep the broader context. `manager.preview` updates are throttled to 150 ms for text, with immediate tool transitions and final excerpts; `call.preview` restores it.
 
 Live playback uses a continuous TUI source with a 60 ms startup/recovery cushion; NSH schedules contiguous packets with the same initial cushion. The speaking orb stays orange through pauses shorter than 350 ms. TUI image frames use 24 phase steps per animation second, eased colours, compressed PNG transfers, a bounded sprite cache and a bounded raster size. These changes have offline tests; live sound quality still needs a listening check.
+
+Calling the Manager draws the orb immediately with “Connecting…” while Core and audio open. Esc cancels that pending start; a late reply cannot reopen it. Live voice barge-in follows the `nexus01` helper: without headphones the TUI echo guard still permits microphone RMS above 0.12 during audible playback, allowing the service to detect speech over its reply. NSH keeps browser echo cancellation and forwards that speech continuously. This is a threshold gate, not native acoustic echo cancellation.

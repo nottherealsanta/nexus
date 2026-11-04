@@ -275,9 +275,10 @@ def test_wire_payloads_are_compressed_deduped_and_lossless(tmp_path):
                                   (first["id"], second["id"])).fetchall()
     assert all(row["payload_state"] == "full" and row["body_sha"] for row in event_rows)
     assert event_rows[0]["stored_bytes"] < event_rows[0]["payload_bytes"]
-    body_row = store.db.execute("select refs, raw_bytes, stored_bytes from event_body").fetchone()
+    body_row = store.db.execute("select refs, raw_bytes, stored_bytes from event_body where sha = ?",
+                                (event_rows[0]["body_sha"],)).fetchone()
     assert body_row["refs"] == 2 and body_row["stored_bytes"] < body_row["raw_bytes"]
-    assert store.db.execute("select count(*) from event_body").fetchone()[0] == 1
+    assert store.db.execute("select count(*) from event_body").fetchone()[0] == 3
     # Both replay and the live event keep the exact payload, not the storage marker.
     assert [event["data"] for event in store.replay(0, store.log_head(), 10)] == [body, body]
     assert first["data"] == second["data"] == body
@@ -286,7 +287,7 @@ def test_wire_payloads_are_compressed_deduped_and_lossless(tmp_path):
         "select coalesce(sum(length(cast(data as blob))), 0) from event").fetchone()[0]
     assert inventory["body_bytes"] == store.db.execute(
         "select coalesce(sum(stored_bytes), 0) from event_body").fetchone()[0]
-    assert inventory["stored_event_bytes"] > inventory["body_bytes"]  # two body references
+    assert inventory["body_bytes"] < inventory["payload_bytes"]  # shared compressed components
     store.close()
 
 
@@ -739,7 +740,7 @@ def test_expiry_stores_a_compact_marker_and_still_explains_it_on_read(tmp_path):
     _, wire, _ = _terminal_wire_turn(store, bus, session, status="completed",
                                      finished=now - 7200, pad=2000)
     before = store.storage_inventory()
-    assert before["bodies"] == 1 and before["stored_event_bytes"] > 0
+    assert before["bodies"] == 3 and before["stored_event_bytes"] > 0
     store.schedule_wire_expiry(success_seconds=3600, failure_seconds=24 * 3600)
     store.expire_wire_payloads(now=now, byte_budget=10**9)
     after = store.storage_inventory()
@@ -765,7 +766,7 @@ def test_lifecycle_queries_and_backfill_selection_use_small_indexes(tmp_path):
     store.db.set_trace_callback(calls.append)
     store.protected_sessions()
     store.db.set_trace_callback(None)
-    assert any("indexed by event_lifecycle" in sql.lower() for sql in calls)
+    assert not any("from event" in sql.lower() for sql in calls)  # state tables after adoption
     plan = " ".join(row["detail"] for row in store.db.execute(
         "explain query plan select id from event where id > 100 and payload_bytes < 0"
         " order by id limit 10"))
@@ -802,7 +803,7 @@ def test_inventory_event_bytes_match_serialized_rows_and_bodies_are_deduplicated
     bus.publish("wire_request", body, session_id=session.id)
     bus.publish("wire_request", body, session_id=session.id)
     inventory = store.storage_inventory()
-    assert inventory["events"] == 2 and inventory["bodies"] == 1
+    assert inventory["events"] == 2 and inventory["bodies"] == 3
     assert inventory["stored_event_bytes"] == store.db.execute(
         "select coalesce(sum(length(cast(data as blob))), 0) from event").fetchone()[0]
     assert inventory["body_bytes"] == store.db.execute(

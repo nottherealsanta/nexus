@@ -1429,6 +1429,13 @@ async fn stream(
                         if !cx.state(ConnectionState::Live) {
                             return StreamEnd::Stop;
                         }
+                        // Register the stream before fetching the checkpoint: deltas
+                        // produced during this read are queued and deduplicated by seq.
+                        if let Some(sid) = cx.selected.clone() {
+                            if let Ok(page) = api.turns(&sid, None, None, Some(1)).await {
+                                cx.send(SyncMsg::Turns { session: sid, page: Box::new(page) });
+                            }
+                        }
                         cx.start_view_report(api, &report_tx);
                     }
                     Ok(Frame::Overflow(_)) => return StreamEnd::Resync { cause: ResyncCause::Overflow, progressed },
@@ -1450,7 +1457,7 @@ async fn stream(
                             }
                         }
                         let next = e.cursor.clone().or_else(|| {
-                            cursor.as_deref().and_then(crate::api::parse_cursor).map(|(g, _)| format_cursor(g, e.id))
+                            cursor.as_deref().and_then(crate::api::parse_cursor).filter(|_| e.id > 0).map(|(g, _)| format_cursor(g, e.id))
                         });
                         if !cx.send(SyncMsg::Event(e)) {
                             return StreamEnd::Stop;

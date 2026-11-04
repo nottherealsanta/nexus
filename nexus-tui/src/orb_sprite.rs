@@ -286,7 +286,9 @@ pub fn render(req: &Request, level: f32, t: f32, presence: f32, w: u32, h: u32) 
     let white: Rgb = [255.0, 255.0, 255.0];
     let core = mix(col, white, if req.light { 0.35 } else { 0.62 });
     let p = smooth(presence);
-    let size = h as f32;
+    // Render a flattened sphere into the physical row; Kitty preserves image aspect ratio.
+    let size = if req.height == 1 { w as f32 } else { h as f32 };
+    let vertical_scale = size / h as f32;
     let nominal = size * 0.30;
     let mut r = match req.state {
         OrbState::Listening | OrbState::Speaking => nominal * (0.8 + 0.3 * level),
@@ -319,7 +321,7 @@ pub fn render(req: &Request, level: f32, t: f32, presence: f32, w: u32, h: u32) 
                 for sx in 0..2 {
                     let (fx, fy) = (
                         pxl as f32 + 0.25 + 0.5 * sx as f32,
-                        py as f32 + 0.25 + 0.5 * sy as f32,
+                        (py as f32 + 0.25 + 0.5 * sy as f32) * vertical_scale,
                     );
                     let mut px = [0.0f32; 4];
                     let dist = |cx: f32, cy: f32| (fx - cx).hypot(fy - cy);
@@ -424,7 +426,7 @@ pub fn render(req: &Request, level: f32, t: f32, presence: f32, w: u32, h: u32) 
                 }
             }
             // Nothing is cut off at the box: fade to clear over the outer fifth.
-            let window = edge(pxl as f32 + 0.5, w as f32) * edge(py as f32 + 0.5, size);
+            let window = edge(pxl as f32 + 0.5, w as f32) * edge(py as f32 + 0.5, h as f32);
             let a = (acc[3] / 4.0) * p * window;
             let i = ((py * w + pxl) * 4) as usize;
             if a > 0.0 && acc[3] > 0.0 {

@@ -203,7 +203,7 @@ class ManagerService:
         """Raise :class:`Forbidden` unless ``stream_id`` is the holder's (for routes outside ``/api/manager``)."""
         self._holder(stream_id)
 
-    async def start(self, stream_id: str, client_id: str) -> dict[str, Any]:
+    async def start(self, stream_id: str, client_id: str, *, audio: bool = True) -> dict[str, Any]:
         """Start the call on this client, or move it here from another. Same holder again: the same call."""
         from ..runtime import Conflict
 
@@ -214,7 +214,7 @@ class ManagerService:
         if self.views is None or not self.views.has_stream(stream_id):
             raise Conflict("the event stream for this call is not connected; reconnect and start again",
                            code="stream_closed")
-        self._require_consent(Conflict)
+        self._require_consent(Conflict, audio=audio)
         retired = None
         async with self._lock:
             call = self.call
@@ -243,10 +243,10 @@ class ManagerService:
             await self._teardown(retired)
         return result
 
-    def _require_consent(self, conflict: type[Exception]) -> None:
+    def _require_consent(self, conflict: type[Exception], *, audio: bool = True) -> None:
         settings = self.settings()
         refs = [settings["model"]]
-        if settings["mode"] == "live":
+        if settings["mode"] == "live" and audio:
             refs.append(LIVE_CONSENT_REF)  # GPT-Live also sends the user's voice and the Manager's words to OpenAI
         for ref in refs:
             status = self.consent.status(ref)
@@ -369,6 +369,23 @@ class ManagerService:
             raise Conflict("the Manager call ended while the voice was starting", code="live_cancelled")
         return {"call_id": call.call_id, "audio": AUDIO_FORMAT}
 
+    async def live_stop(self, stream_id: str) -> None:
+        """Stop voice without ending the Manager control call or its session."""
+        async with self._lock:
+            call = self._holder(stream_id)
+            voice, self.live = self.live, None
+            self._live_starting = False
+            call.listening = call.speaking = False
+            self._publish_state(call)
+        if voice is not None:
+            await voice.close("audio_stopped")
+
+    async def debug_session(self) -> dict[str, Any]:
+        """Ensure the persistent current backend session; never start audio or a model request."""
+        async with self._lock:
+            session = self.current_episode() or self._new_episode(self.settings()["model"])
+            return self.session_json(session)
+
     def live_voice(self, stream_id: str) -> LiveVoice:
         """The open GPT-Live voice for the holder's stream, for the audio socket."""
         self._holder(stream_id)
@@ -419,7 +436,7 @@ class ManagerService:
             raise ValueError(f"text is {len(text)} characters; the limit is {MAX_UTTERANCE_CHARS}")
         if not self.settings()["enabled"]:
             raise Conflict("the Manager is off", code="manager_disabled")
-        self._require_consent(Conflict)
+        self._require_consent(Conflict, audio=self.live is not None)
         self.last_activity = self.clock()
         return self._enqueue(call, text.strip(), source)
 
@@ -571,6 +588,7 @@ class ManagerService:
         lines = [part for line in clean.splitlines() for part in textwrap.wrap(line, 100)]
         previous_tool = (call.preview or {}).get("tool")
         call.preview = {"source": source, "lines": lines[-3:], "clipped": len(lines) > 3,
+                        "text": clean[-12000:], "details_clipped": len(clean) > 12000,
                         "tool": tool if tool is not None else previous_tool}
         now = self.clock()
         if force or now - call.preview_at >= 0.15:
@@ -609,9 +627,15 @@ class ManagerService:
                 self._preview(call, preview_text, source)
             elif kind in ("tool_start", "tool_end"):
                 tool_call = data.get("call") or {}
-                arguments = redact(json.dumps(data.get("args", tool_call.get("arguments", {})), ensure_ascii=False))
-                tool = {"name": tool_call.get("name", "tool"), "arguments": arguments[:240],
-                        "clipped": len(arguments) > 240, "status": "running" if kind == "tool_start" else "done"}
+                args = data.get("args", tool_call.get("arguments", {}))
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except ValueError:
+                        pass
+                arguments = redact(json.dumps(args, ensure_ascii=False, indent=2))
+                tool = {"name": tool_call.get("name", "tool"), "arguments": arguments[:4096],
+                        "clipped": len(arguments) > 4096, "status": "running" if kind == "tool_start" else "done"}
                 if kind == "tool_end":
                     result = data.get("result") or {}
                     tool["status"] = "failed" if result.get("is_error") else "done"
@@ -712,6 +736,7 @@ class ManagerService:
             snapshot=self._snapshot(ref), directory=project.path, continued_from=continued_from)
         self.store.set_preference(EPISODE_PREF, session.id)
         self.baseline = None
+        self.bus.publish("manager.session", {"session": self.session_json(session)})
         return session
 
     def _episode_tokens(self, episode: Session) -> int:

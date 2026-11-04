@@ -179,7 +179,14 @@ servers with estimates and the catalog window share. Its text uses a consistent
 16 px size, compact section counts, gray status dots and a three-column list of
 all tools. Disabled entries remain marked and counted. The system prompt row omits the agent name, and the instruction file
 has no inline preview (its detail remains available by clicking its title). Skills and servers have
-per-session switches; entries not available at session start are dimmed and say
+per-session switches. Skills remain inline at 12 or fewer; above 12 only the clickable
+`Skills [N]` heading remains. At any count the heading opens a scrollable two-column
+card picker with description excerpts and separate enable/disable switches. A card name
+or an inline skill name opens a second Markdown modal. Cards are borderless dark gray,
+with a lighter focused card. The detail modal shows the full description,
+complete `SKILL.md`, and other file/folder names. Tab reaches names and switches independently;
+Enter activates the focused control. Esc returns to the picker with its scroll and focus
+preserved, then closes it. Entries not available at session start are dimmed and say
 “new session”. Before a session exists, NSH loads the project skills and enabled
 MCP servers into the draft and sends its `disabled_tools` with session creation.
 `/learn` previews a source, installs an unambiguous requested skill directly,
@@ -527,33 +534,23 @@ estimate.
 - **Tool images (K8).** A tool row whose result has `media` stays folded and notes the image count; opening it shows the images
   (`/api/artifact/{id}`, same origin) under the output.
 
-## The Manager (docs/manager-design.md 10)
+## The Manager
 
-A voice agent above all sessions, drawn as light layers over the app and present only when called. A focused call
-takes the stage: a large centred orb, the app behind it dimmed to 30%, the caption under the orb, one state hint
-and End under that, and at most one card below. Esc ends the whole call in every state (speech, turn, recording,
-field and card included) and never reaches the session interrupt; `manager.minimise` in the palette tucks it into
-the bottom-right corner, and `/manager` starts there. `alt+m`/Space talks, End or `cmd+alt+shift+space` also ends,
-`cmd+shift+s` stops speech, `cmd+shift+c` cancels the turn and `cmd+alt+shift+d` dismisses a card. The hint line
-always says `esc end`. The header's Manager button opens a read-only, scrollable debug modal with Core's formatted
-hidden context (`GET /api/manager/context`); the inspector keeps the full raw log.
+The header's **Manager** label toggles a borderless, fully opaque notification dropdown: caption, recent model-context lines,
+current tool/status, the Manager's card, **Tell the Manager…** input and **Open Manager session**. Its glowing
+orb replaces the label while visible, several cells wide and one row high; click it to toggle the dropdown.
+The dropdown's **Voice: on/off** toggle defaults on: opening Manager or switching Voice on starts Live immediately.
+Switching Voice off stops only audio. The input has a solid inset surface; debug navigation does not start audio. Enter sends text; with Voice off, the first typed request starts a control
+call with audio disabled. Esc/outside click closes the dropdown while audio continues. Automatic cards do not steal
+keyboard focus. With the dropdown closed, session keys work normally. The explicit stop shortcut or `/manager stop`
+ends the control call. The debug button reuses the current persistent Manager session and follows episode rollover;
+it shows canonical context inside Nexus with its composer disabled. The palette's Manager context view and the raw
+inspector remain available. See [Manager](../docs/manager.md).
 
-- `src/manager.ts`: pure logic (wording, orb priority, level smoothing, speech queue, `/manager` parsing, card helpers).
-- `src/core/manager.ts`: the controller (call, exchange, voice in through the composer's dictation, speech out through
-  `speakText` in `src/speech.ts`, cards, `manager.navigate`, the engaged keys, the privacy notice). `manager-hooks.ts`
-  is the seam to the store and sync.
-- `src/ui/manager/`: `stage.tsx` (layers), `orb.ts` (canvas drawing), `cards.tsx` (the seven cards), `context-modal.tsx` (the read-only debug modal), `settings.tsx`.
-- Idle is free: with no call nothing is mounted, no frame or timer runs, and no key is bound. A focused call takes
-  the keys; a minimised call leaves bare keys to the app except Esc, which ends the call (the manifest keeps Esc off
-  the session interrupt); a field takes the printable keys itself.
-- Mic level comes from `dictationLevel` (web `getUserMedia` or native `Microphone.level()`); playback level from a Web
-  Audio analyser on the output. Where the platform has no analyser (possibly native), a soft synthetic envelope drives
-  the speaking orb. Backdrop blur is a web, macOS and iOS feature; where it is not drawn the panel is the 80% surface.
-- Dev only, inert unless set: client storage key `nexus.manager.dev` = `{"level":0.7,"voice":"simulate","say":"..."}`
-  fixes the orb level and simulates mic and speech; `{"card":{...}}` shows a card with no call (screenshots, card tests).
-- Tests: `manager.test.tsx` (logic and controller), `manager-cards.test.tsx` (shared card scenarios, keys, clicks).
-
-Live Manager calls use their own audio connection and need no Dictation setup or `nexus voice init`. A failed Live connection keeps its error visible and the typed field available; end and restart the call to retry audio.
+Live uses its own audio connection and does not require Dictation setup. The header orb appears immediately with
+**Connecting…** in the dropdown. Playback has a 60 ms startup/recovery buffer and the speaking colour holds through
+350 ms pauses. The TUI uses compressed cached sprites on graphics terminals and a cell fallback elsewhere; NSH
+uses the same colours and motion on Canvas. Real audio quality and talk-over interruption still need listening checks.
 
 Working labels use the shared travelling shimmer: one pass every 1.5 seconds,
 with a brighter highlight over secondary text. Reduced motion keeps the label static.
@@ -570,4 +567,8 @@ steps a value backward; Right advances it.
 
 Live microphone packets continue during silent output, with browser echo cancellation enabled. The shared silent-output regression scenario covers both clients.
 
-The focused Manager call shows a three-line Model context excerpt and the current/latest tool with arguments and status; the header debug modal keeps the full context. Live playback has a 60 ms startup/recovery buffer, and the speaking colour holds through 350 ms pauses.
+Running responses use request-local streaming checkpoints: after subscribing,
+the client reads `/turn`, seeds the running partial, and merges newer deltas by
+request id and sequence. A completed part replaces its folded text; a saved
+assistant message clears scratch. Token deltas have no durable cursor. Finished
+session compaction leaves messages, starting context and turn summaries intact.

@@ -21,8 +21,8 @@ marker that says it was inserted, a tool message is inserted together with the
 log before it is published again. So a crash during recovery, followed by another
 start, appends no duplicate result, notice, cancellation or completion event.
 
-**Partial output.** Deltas and completed parts of an interrupted stream stay in
-the event log: they are preserved for inspection, with their `raw` and `origin`.
+**Partial output.** The last checkpoint of an interrupted stream is kept on
+`turn_request.partial` for inspection, with completed parts and their `raw` and `origin`.
 They do not enter conversation history, because an interrupted response cannot
 be represented as a completed message without inventing a completion, complete
 arguments or reasoning. Only a response that durably reached `Done` is restored:
@@ -169,8 +169,7 @@ class Recovery:
         losses = self._losses(session_id, turn)
         partial = None
         if last_request is not None and last_request["status"] != "completed":
-            partial = {"diagnostic_only": True, **self.store.stream_summary(
-                session_id, last_request["event_after"])}
+            partial = {"diagnostic_only": True, **self.store.partial_summary(last_request)}
         notice = self._notice(turn, last_request, assistant, tools, waits, losses, partial)
         self._checkpoint("notice")
 
@@ -353,7 +352,7 @@ class Recovery:
 
     def _losses(self, session_id: str, turn: dict[str, Any]) -> dict[str, Any]:
         """Report in-memory runtime state the restart necessarily discarded."""
-        code_used = self.store.has_event_type(session_id, ["code.cell", "code.call", "kernel.deleted"])
+        code_used = self.store.code_used(session_id)
         if not code_used:
             code_used = any(row["name"] == "code" and row["state"] != "saved"
                             for row in self.store.tools_for_turn(turn["id"]))
@@ -441,10 +440,10 @@ class Recovery:
             lines.append(
                 f"The provider request in step {request['step']} had failed "
                 f"({error.get('message') or 'an unrecorded error'}) before the daemon stopped; the turn did not "
-                "finish. Any output received before the failure remains in the event log for inspection. Saved "
+                "finish. Its last partial-output checkpoint remains diagnostic-only for inspection. Saved "
                 "messages and events are unchanged.")
         else:
-            summary = partial or self.store.stream_summary(turn["session_id"], request["event_after"])
+            summary = partial or self.store.partial_summary(request)
             counts = summary["counts"]
             text_chars = counts.get("text_delta", {}).get("chars") or 0
             reasoning_chars = counts.get("reasoning_delta", {}).get("chars") or 0
@@ -457,7 +456,7 @@ class Recovery:
                 f"Received before the stop: {text_chars} text characters, {reasoning_chars} reasoning characters, "
                 f"{arg_chars} tool-argument characters, started tool call(s) {names}, and completed part(s) {parts}.")
             lines.append(
-                "That output remains in the session's event log for inspection, with its provider raw data. It is "
+                "The last checkpoint of that output remains diagnostic-only in the request partial for inspection. It is "
                 "not added to the conversation: an interrupted response cannot be replayed safely, because restoring "
                 "it would present a partial response, partial arguments or partial reasoning as complete.")
         if tools["calls"]:

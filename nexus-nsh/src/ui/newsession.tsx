@@ -97,7 +97,13 @@ function entryOf(item: InventoryRow): ContextEntry {
   if (item.kind === "skill") {
     return {
       key: item.name, name: item.name, description: item.description ?? "", markdown: true,
-      load: async () => (await request<any>("GET", `/api/skill/${name}`, { query: { project } })).body || "This skill has no body.",
+      load: async () => {
+        const skill = await request<any>("GET", `/api/skill/${name}`, { query: { project } });
+        const resources: string[] = skill.children ?? skill.files ?? [];
+        const content = String(skill.content ?? skill.body ?? "This skill has no body.");
+        const markdown = content.replace(/^(---\r?\n[\s\S]*?\r?\n---)(\r?\n|$)/, "```yaml\n$1\n```\n");
+        return `## Description\n\n${skill.description ?? item.description ?? ""}\n\n## Supporting resources\n\n${resources.length ? resources.map((name) => `- \`${name.replaceAll("`", "\\`")}\``).join("\n") : "No other files or folders."}\n\n## SKILL.md\n\n${markdown}`;
+      },
     };
   }
   return {
@@ -234,7 +240,7 @@ function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: 
           </Each>
         </View>
       </If>
-      <If when={s.body.kind === "inventory"}>
+      <If when={s.body.kind === "inventory" && !(s.key === "skills" && (s.count ?? 0) > 12)}>
         <View class="flex-row gap-x-4 pl-1" testID={`ctx-${s.key}-inventory`}>
           <Each of={inColumns((s.body as { items: InventoryRow[] }).items, fit(2))} key={(_, i) => `${i}`}>
             {(column) => (
@@ -289,6 +295,55 @@ function EntryRow(p: { entry: () => ContextEntry; focus: boolean }) {
   );
 }
 
+function SkillPicker(p: { entries: ContextEntry[]; rows: InventoryRow[]; focus?: string; toggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
+  const selected = signal<ContextEntry | null>(null);
+  const focused = signal(p.focus ?? p.entries[0]?.key);
+  const focusedAction = signal<"name" | "toggle">("name");
+  const names = new Map<string, { focus: () => void }>();
+  const text = signal("Loading…");
+  const close = () => {
+    const entry = selected();
+    if (!entry) return;
+    selected.set(null);
+    setTimeout(() => names.get(entry.key)?.focus(), 0);
+  };
+  const open = (entry: ContextEntry) => {
+    selected.set(entry);
+    text.set("Loading…");
+    (entry.load ? entry.load() : Promise.resolve(entry.full ?? "Nothing more recorded.")).then((value) => {
+      if (selected() === entry) text.set(value);
+    }).catch((error) => { if (selected() === entry) text.set(`Could not load this: ${String(error)}`); });
+  };
+  const initial = p.entries.find((entry) => entry.key === p.focus);
+  if (initial) setTimeout(() => open(initial), 0);
+  else setTimeout(() => names.get(p.entries[0]?.key)?.focus(), 0);
+  return <>
+    <View class="flex-row gap-3">
+      <Each of={inColumns(p.entries, 2)} key={(_, index) => String(index)}>{(column) => <View class="flex-1 min-w-0 gap-3">
+        <Each of={column()} key={(entry) => entry.key}>{(entry) => {
+          const row = () => p.rows.find((row) => row.name === entry().key);
+          return <View class={`p-3 gap-2 min-w-0 ${focused() === entry().key ? "bg-skill-card-focus" : "bg-skill-card"}`} testID={`skill-card-${entry().key}`}>
+            <View role="button" focusable ref={(node: any) => names.set(entry().key, node)} onFocus={() => { focused.set(entry().key); focusedAction.set("name"); }} onPress={() => open(entry())} accessibilityLabel={`${entry().name} details`} testID={`skill-name-${entry().key}`} class="self-stretch min-w-0 focus-visible:outline-none">
+              <Text class={`${TS.mono} font-semibold text-foreground ${focused() === entry().key && focusedAction() === "name" ? "underline" : ""}`}>{entry().name}</Text>
+            </View>
+            <Text style={{ numberOfLines: 2 }} class={T.sec}>{entry().description}</Text>
+            <Button role="switch" selected={row()?.on ?? false} onFocus={() => { focused.set(entry().key); focusedAction.set("toggle"); }} onPress={() => p.toggle?.("skill", entry().key, row()?.locked ?? true)} accessibilityLabel={`${entry().name} ${row()?.on ? "on" : "off"}`} testID={`skill-toggle-${entry().key}`} class="self-start px-2 py-1 hover:bg-accent focus-visible:outline-none">
+              <Text class={`${T.sec} ${focused() === entry().key && focusedAction() === "toggle" ? "underline" : ""}`}>{row()?.locked ? "Locked · new session" : row()?.on ? "● Enabled" : "○ Disabled"}</Text>
+            </Button>
+          </View>;
+        }}</Each>
+      </View>}</Each>
+    </View>
+    <If when={selected()}>{() => <Modal size="large" label={`${selected()!.name} details`} testID="skill-detail" onCancel={close} onOpenChange={(open) => { if (!open) close(); }}>
+      <View class="gap-3">
+        <ModalTitle title={selected()!.name} />
+        <Scroll focusable ref={(node: any) => { setTimeout(() => node?.focus(), 0); }} style={{ height: Math.min(480, modalBodyHeight()) }} testID="skill-detail-scroll"><TextView selectable links="open" markdown={text()} classes={PROSE} /></Scroll>
+        <ModalFooter hints="esc back to skills" />
+      </View>
+    </Modal>}</If>
+  </>;
+}
+
 /** A single detail dialog remains mounted even when the context section is folded. */
 export function ContextDetailModal() {
   const detail = contextDetail;
@@ -296,19 +351,21 @@ export function ContextDetailModal() {
   return <If when={detail()}>{() => <Modal size="large" label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}>
     <View class="gap-3">
       <ModalTitle title={body().title} />
-      <Scroll style={{ height: Math.min(480, modalBodyHeight()) }}>
+      <Scroll style={{ height: Math.min(480, modalBodyHeight()) }} testID="context-picker-scroll">
         <If when={!!body().entries} else={
           <If when={!!body().markdown} else={<Text testID="context-detail-text" style={{ userSelect: "text" }} class={`${TS.mono} text-foreground-secondary`}>{body().detail}</Text>}>
             <View testID="context-detail-markdown"><TextView selectable links="open" markdown={body().detail} classes={PROSE} /></View>
           </If>
         }>
-          <View class="gap-0.5">
+          <If when={body().skillRows} else={<View class="gap-0.5">
             <If when={(body().entries ?? []).length === 0}><Text class={T.sec}>{body().detail}</Text></If>
             <Each of={body().entries ?? []} key={(entry) => entry.key}>{(entry) => <EntryRow entry={entry} focus={body().focus === entry().key} />}</Each>
-          </View>
+          </View>}>
+            <SkillPicker entries={body().entries ?? []} rows={body().skillRows!.rows} toggle={body().skillRows!.toggle} focus={body().focus} />
+          </If>
         </If>
       </Scroll>
-      <ModalFooter hints="esc close" />
+      <ModalFooter hints={body().skillRows ? "tab focus · enter activate · esc close" : "esc close"} />
     </View>
   </Modal>}</If>;
 }
@@ -318,11 +375,21 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
   const pct = () => share(p.total, p.window);
   const detail = contextDetail;
   const cardWidth = signal(0);
+  effect(() => {
+    const active = detail();
+    const section = p.sections.find((section) => section.key === "skills");
+    if (active?.skillRows && section?.body.kind === "inventory" && JSON.stringify(active.skillRows.rows) !== JSON.stringify(section.body.items)) {
+      detail.set({ ...active, skillRows: { ...active.skillRows, rows: section.body.items } });
+    }
+  });
     return (
     <View class="w-full bg-card px-4 py-3" testID="context-sections"
       onLayout={(b: any) => cardWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
       <If when={!!p.reconstructed}><Text class={`${TS.base} text-warning`}>reconstructed</Text></If>
-      <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => <Section s={s()} estimated={p.estimated} width={cardWidth()} onOpen={() => detail.set(s())} onItem={(name) => detail.set({ ...s(), focus: name })} onInventoryToggle={p.onInventoryToggle} />}</Each>
+      <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => {
+        const open = (name?: string) => detail.set({ ...s(), focus: name, skillRows: s().key === "skills" && s().body.kind === "inventory" ? { rows: (s().body as { items: InventoryRow[] }).items, toggle: p.onInventoryToggle } : undefined });
+        return <Section s={s()} estimated={p.estimated} width={cardWidth()} onOpen={() => open()} onItem={open} onInventoryToggle={p.onInventoryToggle} />;
+      }}</Each>
       <View class="h-px bg-border mt-2" />
       <View class="flex-row items-center gap-2 pt-2" testID="context-total">
         <Text class={`${HEAD} font-semibold text-foreground-secondary`}>total</Text>

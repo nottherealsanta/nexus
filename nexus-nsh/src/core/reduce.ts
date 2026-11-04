@@ -8,6 +8,7 @@
 //    so switching back shows them at once; selecting one still reloads its history, which
 //    merges into what is held.
 import { Approval, CoreEvent, Message, Project, Question, Session, Snapshot, TurnSummary, UsageLedger, formatCursor, parseCursor } from "./api";
+import { LivePartial } from "./livepartial";
 
 export type Applied = "applied" | "duplicate" | { resync: string };
 
@@ -78,6 +79,7 @@ export class Model {
   approvals = new Map<string, Approval>();
   questions = new Map<string, Question>();
   streaming = new Map<string, Streaming>();
+  partials = new Map<string, LivePartial>();
   selected: SelectedView | null = null;
   /** Views of recently viewed sessions, most recent first, at most `VIEW_CACHE`. */
   cached: SelectedView[] = [];
@@ -120,6 +122,7 @@ export class Model {
     this.approvals = new Map(s.approvals.map((a) => [a.id, a]));
     this.questions = new Map(s.questions.map((q) => [q.id, q]));
     this.streaming = new Map();
+    this.partials.clear();
     // Cached views may have missed events; selecting one reloads its history. Their live
     // scratch has gaps, so it goes, as the selected view's does.
     this.cached = this.cached.filter((v) => this.sessions.has(v.sessionId));
@@ -173,10 +176,11 @@ export class Model {
     let turns = [...h.turns];
     for (const t of v.turns) {
       const fetched = turns.find((x) => x.id === t.id);
-      if (fetched && t.status === "running" && fetched.status !== "running") continue;
+      if (fetched && t.status === "running") continue;
       turns = upsertTurn(turns, t);
     }
     v.turns = turns;
+    this.seedPartials(h.sessionId, turns, msgs);
     v.floor = h.floor;
     v.usage = h.usage;
     v.usageMark = h.usageMark ?? this.lastId;
@@ -198,12 +202,28 @@ export class Model {
     v.usageMark = mark;
   }
 
+  seedPartials(sid: string, turns: TurnSummary[], messages: Message[] = []) {
+    for (const t of [...turns].reverse().filter((t) => t.status === "running")) {
+      for (const r of [...t.requests].reverse()) {
+        if (r.message_id || !r.partial) continue;
+        if ([...messages, ...(this.viewOf(sid)?.messages ?? [])].some((m) => m.role === "assistant" && r.started != null && m.created >= r.started)) continue;
+        const p = this.partials.get(sid) ?? new LivePartial();
+        p.seed(r.partial); this.partials.set(sid, p); this.streaming.set(sid, p.text()); return;
+      }
+    }
+  }
+
   applyEvent(e: CoreEvent): Applied {
     if (!this.generation) return { resync: "no snapshot yet" };
     const c = parseCursor(e.cursor);
     if (c && c.generation !== this.generation) return { resync: `event log changed (${this.generation} -> ${c.generation})` };
-    if (e.id <= this.lastId) return "duplicate";
-    this.lastId = e.id;
+    if (e.id != null && e.id <= this.lastId) return "duplicate";
+    if (e.id != null) this.lastId = e.id;
+    if (e.session_id && e.data?.request_id && ["text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done"].includes(e.type)) {
+      const p = this.partials.get(e.session_id) ?? new LivePartial();
+      p.event(e.data); this.partials.set(e.session_id, p); this.streaming.set(e.session_id, p.text());
+      return "applied";
+    }
     this.reduce(e);
     const v = this.viewOf(e.session_id);
     if (v) {
@@ -251,20 +271,20 @@ export class Model {
         const s = this.sessions.get(sid);
         if (s) s.status = d.status;
         if (d.status === "busy") this.failedSessions.delete(sid);
-        if (d.turn_finished) { this.running.delete(sid); this.streaming.delete(sid); }
+        if (d.turn_finished) { this.running.delete(sid); this.streaming.delete(sid); this.partials.delete(sid); }
         else if (d.status === "busy") { if (d.turn_id) this.running.set(sid, d.turn_id); }
-        else { this.running.delete(sid); this.streaming.delete(sid); }
+        else { this.running.delete(sid); this.streaming.delete(sid); this.partials.delete(sid); }
         break;
       }
       case "session.error": if (sid && d.kind !== "interrupted") this.failedSessions.add(sid); break;
       case "turn.recovered":
-        if (sid) { this.running.delete(sid); this.streaming.delete(sid); }
+        if (sid) { this.running.delete(sid); this.streaming.delete(sid); this.partials.delete(sid); }
         break;
       case "message.added": {
         const m = d as Message;
         const id = m.session_id || sid || "";
         if (id && this.selected?.sessionId !== id) this.unreadSessions.add(id);
-        if (m.role === "assistant") this.streaming.delete(id);
+        if (m.role === "assistant") { this.streaming.delete(id); this.partials.delete(id); }
         const v = this.viewOf(id);
         if (v && !v.messages.some((x) => x.id === m.id)) {
           const msgs = v.messages;
@@ -274,7 +294,7 @@ export class Model {
         }
         break;
       }
-      case "step_start": if (sid) this.streaming.delete(sid); break;
+      case "step_start": if (sid) { this.streaming.delete(sid); this.partials.delete(sid); } break;
       case "text_delta":
       case "reasoning_delta":
         if (sid && typeof d.text === "string") {
@@ -292,7 +312,7 @@ export class Model {
   }
 
   private dropSession(id: string) {
-    this.sessions.delete(id); this.running.delete(id); this.streaming.delete(id);
+    this.sessions.delete(id); this.running.delete(id); this.streaming.delete(id); this.partials.delete(id);
     this.failedSessions.delete(id);
     this.unreadSessions.delete(id);
     for (const [k, a] of this.approvals) if (a.session_id === id) this.approvals.delete(k);

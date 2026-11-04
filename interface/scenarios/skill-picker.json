@@ -1,0 +1,7 @@
+{
+  "names": ["accessibility", "api-design", "build-tools", "code-review", "data-analysis", "debugging", "documentation", "feature-design", "incident-response", "performance", "release-notes", "security", "testing"],
+  "description": "Build accessible interfaces with clear typography, reliable keyboard focus and predictable nested navigation. This deliberately long description explains how to preserve scroll position, distinguish opening details from toggling, and discover supporting resources without clipping the full description in the detail view.",
+  "content": "---\nname: accessibility\ndescription: Build accessible interfaces\n---\n\n# Accessible interfaces\n\nUse **clear typography** and _predictable focus_.\n\n## Checklist\n\n- Keep names separate from toggles\n- Return to the same card\n\n```typescript\nconst enabled = true;\n```\n\n[Reference](https://example.com/accessibility)\n",
+  "children": ["LICENSE", "assets/", "references/", "scripts/"],
+  "detail_expect": ["Description", "Supporting resources", "LICENSE", "assets/", "references/", "scripts/", "SKILL.md", "Accessible interfaces", "Checklist"]
+}

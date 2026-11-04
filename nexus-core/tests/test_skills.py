@@ -158,6 +158,8 @@ async def test_index_in_the_prompt_and_the_tool_loads_the_body(env):
     folder = write_skill(root, "deploy", "Ship the app. Use when deploying.", "# Deploy\nRun it.\n")
     (folder / "references").mkdir()
     (folder / "references" / "env.md").write_text("ENV DOC")
+    (folder / "assets").mkdir()
+    (folder / "LICENSE").write_text("License text")
     session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
     context = (await client.get(f"/api/session/{session['id']}/context")).json()
     assert "`deploy`: Ship the app. Use when deploying." in rt.store.snapshot(session["id"])["tool_definitions"]["skill"]["description"]
@@ -166,6 +168,8 @@ async def test_index_in_the_prompt_and_the_tool_loads_the_body(env):
     assert [s["name"] for s in listed["skills"]] == ["deploy"]
     one = (await client.get("/api/skill/deploy", params={"directory": str(workspace)})).json()
     assert "Run it." in one["body"] and one["files"] == ["references/env.md"]
+    assert one["content"] == (folder / "SKILL.md").read_text()
+    assert one["children"] == ["LICENSE", "assets/", "references/"]
 
     sid = session["id"]
     await _ask(rt, client, provider, sid, [[ToolCall("c1", "skill", json.dumps({"name": "deploy"}))],
@@ -176,6 +180,16 @@ async def test_index_in_the_prompt_and_the_tool_loads_the_body(env):
     assert '<skill name="deploy"' in first and "Run it." in first and "references/env.md" in first
     assert "ENV DOC" in second
     assert "outside" in third or "must not contain" in third
+    await rt.shutdown()
+
+
+async def test_skill_details_without_supporting_resources(env):
+    rt, client, _, workspace, root = env
+    folder = write_skill(root, "minimal", "A minimal skill.", "# Minimal\nNo resources.\n")
+    one = (await client.get("/api/skill/minimal", params={"directory": str(workspace)})).json()
+    assert one["children"] == []
+    assert one["files"] == []
+    assert one["content"] == (folder / "SKILL.md").read_text()
     await rt.shutdown()
 
 

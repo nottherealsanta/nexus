@@ -143,7 +143,7 @@ MAX_SPEAK_CHARS = 1200  # one Manager sentence is at most 400; this leaves room 
 # The HTTP API contract clients check before sending anything else. A change
 # that a client written for an older major cannot survive is a new major; new
 # fields and endpoints are a minor bump.
-API_VERSION = {"major": 1, "minor": 4}
+API_VERSION = {"major": 1, "minor": 5}
 INSPECTOR = Path(__file__).parent / "inspector" / "index.html"
 INSPECTOR_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
 MAX_BODY_BYTES = 1024 * 1024
@@ -308,7 +308,7 @@ class EventStreamResponse(StreamingResponse):
 
 
 def sse(event: dict[str, Any]) -> str:
-    """One SSE frame. Events without a durable id (stream control) carry no `id:` line."""
+    """One SSE frame; live-only deltas and stream control carry no `id:` line."""
     lines = []
     if event.get("id") is not None:
         lines.append(f"id: {event.get('cursor') or event['id']}")
@@ -797,9 +797,13 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         skill = found.skills.get(p(request, "name"))
         if skill is None:
             raise NotFound(f"no skill {p(request, 'name')}")
-        parsed = skills_module.frontmatter.parse(Path(skill.path).read_bytes())
+        content = Path(skill.path).read_text(encoding="utf-8")
+        parsed = skills_module.frontmatter.parse(content.encode("utf-8"))
         return JSONResponse(skill_json(skill) | {
-            "body": parsed.body, "extra": parsed.extra,
+            "body": parsed.body, "content": content, "extra": parsed.extra,
+            "children": [entry.name + ("/" if not entry.is_symlink() and entry.is_dir() else "")
+                         for entry in sorted(Path(skill.directory).iterdir(), key=lambda entry: entry.name)
+                         if entry.name != "SKILL.md"],
             "files": skills_module.resources.listing(skill.directory)})
 
     async def voice_status(request: Request) -> Response:
@@ -1165,6 +1169,18 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             return Response(status_code=204)
         return JSONResponse(runtime.session_json(runtime.session(sid)))
 
+    async def diagnostics(request: Request) -> Response:
+        sid = p(request, "id")
+        runtime.session(sid)
+        if request.method == "POST":
+            body = await request.json()
+            if not isinstance(body.get("keep"), bool):
+                raise ValueError("keep must be a boolean")
+            runtime.store.keep_diagnostics(sid, body["keep"])
+        row = runtime.store.db.execute("select keep from session_diagnostics where session_id = ?", (sid,)).fetchone()
+        return JSONResponse({"keep": bool(row and row[0]), "compaction": runtime.store.compaction(sid),
+                             "waits": runtime.store.wait_lifecycle(sid)})
+
     async def stored_events(request: Request) -> Response:
         sid = p(request, "id")
         runtime.session(sid)
@@ -1174,14 +1190,15 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         return JSONResponse({"events": rows, "counts": runtime.store.event_counts(sid), "more": len(rows) == limit,
                              "floor": runtime.store.log_floor(), "head": runtime.store.log_head(),
                              "generation": runtime.store.log_generation(),
-                             "history_truncated": runtime.store.log_floor() > 0})
+                             "history_truncated": runtime.store.log_floor() > 0,
+                             "compaction": runtime.store.compaction(sid)})
 
     async def turns(request: Request) -> Response:
         """Turn summaries, oldest first: the newest page, or one page after/before a turn."""
         sid = p(request, "id")
         runtime.session(sid)
         query = request.query_params
-        return JSONResponse(runtime.store.turn_summaries(
+        return JSONResponse(runtime.turn_summaries(
             sid, after=query.get("after") or None, before=query.get("before") or None,
             limit=min(int(query.get("limit") or TURN_PAGE), TURN_PAGE_MAX)))
 
@@ -1197,6 +1214,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             runtime.session(sid)
         limit = max(1, min(int(request.query_params.get("message_limit") or 200), 1000))
         data = runtime.store.state_snapshot(session_id=sid, message_limit=limit)
+        # An explicit debug selection must survive reconnect snapshots. Ordinary
+        # discovery still excludes every Manager session and its hidden project.
+        if sid is not None and runtime.session(sid).kind == "manager":
+            data["sessions"].append(runtime.manager.session_json(runtime.session(sid)))
         data["running"] = runtime.store.running_turns()
         data["approvals"] = [request_ for sid_, _, request_ in runtime.approvals.values()]
         data["questions"] = runtime.pending_questions()
@@ -1274,6 +1295,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     async def prompt(request: Request) -> Response:
         body = await _body(request)
         mutation = getattr(request.state, "mutation", None)
+        if runtime.session(p(request, "id")).kind == "manager":
+            raise Conflict("The Manager debug session is read-only; type to the Manager in its dropdown.", code="manager_session_read_only")
         result = runtime.prompt(p(request, "id"), str(body.get("text", "")), images=body.get("images"), pastes=body.get("pastes"), mutation=mutation, mode=body.get("mode", "send"), typed=True)
         if mutation is not None:
             result = {**result, "idempotency_key": mutation["key"]}
@@ -1505,11 +1528,25 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             raise ValueError("limit must be an integer") from None
         return JSONResponse(runtime.store.audit(limit=limit, tool=request.query_params.get("tool") or None))
 
+    async def manager_session(request: Request) -> Response:
+        if request.method == "POST":
+            return JSONResponse(await runtime.manager.debug_session(), headers={"cache-control": "no-store"})
+        session = runtime.manager.current_episode()
+        return JSONResponse(runtime.manager.session_json(session) if session else None, headers={"cache-control": "no-store"})
+
+    async def manager_live_stop(request: Request) -> Response:
+        body = await _body(request)
+        await runtime.manager.live_stop(_view_text(body.get("stream_id"), "stream_id", required=True) or "")
+        return Response(status_code=204)
+
     async def manager_start(request: Request) -> Response:
         body = await _body(request)
         stream_id = _view_text(body.get("stream_id"), "stream_id", required=True)
         client_id = _view_text(body.get("client_id"), "client_id", required=True)
-        return JSONResponse(await runtime.manager.start(stream_id or "", client_id or ""),
+        audio = body.get("audio", True)
+        if not isinstance(audio, bool):
+            raise TypeError("audio must be a boolean")
+        return JSONResponse(await runtime.manager.start(stream_id or "", client_id or "", audio=audio),
                             headers={"cache-control": "no-store"})
 
     async def manager_stop(request: Request) -> Response:
@@ -1694,6 +1731,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/session/{id}/interrupt", route(interrupt), methods=["POST"]),
         Route("/api/session/{id}/message", route(messages)),
         Route("/api/session/{id}/event", route(stored_events)),
+        Route("/api/session/{id}/diagnostics", route(diagnostics), methods=["GET", "POST"]),
         Route("/api/session/{id}/turn", route(turns)),
         Route("/api/session/{id}/children", route(children)),
         Route("/api/session/{id}/tree", route(tree)),
@@ -1714,6 +1752,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/manager/context", route(manager_context)),
         Route("/api/manager/audit", route(manager_audit)),
         Route("/api/manager/consent", route(manager_consent), methods=["POST"]),
+        Route("/api/manager/session", route(manager_session), methods=["GET", "POST"]),
+        Route("/api/manager/live/stop", route(manager_live_stop), methods=["POST"]),
         Route("/api/manager/start", route(manager_start), methods=["POST"]),
         Route("/api/manager/stop", route(manager_stop), methods=["POST"]),
         Route("/api/manager/live/start", route(manager_live_start), methods=["POST"]),

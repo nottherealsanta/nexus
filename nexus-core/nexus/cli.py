@@ -1162,10 +1162,25 @@ def main(argv: list[str] | None = None) -> int:
         cmd.add_argument("--wire", action="store_true", help="print the raw request and every provider event")
         cmd.add_argument("--wire-file", help="append wire traffic to this JSONL file")
         cmd.add_argument("--yes", action="store_true", help="set the session to run bash/edit/write without asking")
+    db = sub.add_parser("db", help="offline database maintenance (daemon must be stopped)")
+    db.add_argument("action", choices=["compact"])
+    db.add_argument("--apply", action="store_true", help="back up, compact and atomically replace; default is dry-run")
+    db.add_argument("--path", type=Path, help="database path; defaults to the Nexus home database")
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "config":
+        if args.command == "db":
+            from .db_maintenance import compact_database
+            from .paths import home
+            from .store import StoreError
+            path = args.path or home() / "nexus.db"
+            if args.apply and path.resolve() == (home() / "nexus.db").resolve() and daemon._registered_pid() is not None:
+                raise ValueError("stop the daemon before running nexus db compact --apply")
+            try:
+                print(json.dumps(compact_database(path, apply=args.apply), indent=2))
+            except StoreError as exc:
+                raise ValueError(str(exc)) from exc
+        elif args.command == "config":
             from .config import import_mcp
             names = import_mcp(Path(args.path))
             print(f"Imported {len(names)} MCP server(s): {', '.join(names)}")

@@ -164,6 +164,20 @@ rail = "text.muted"
 label = ""              # fallback rail identifies the user when surfaces collapse
 style = ""
 
+[roles.skill_card]
+fg = "text.secondary"
+bg = "surface.panel"
+rail = ""
+label = ""
+style = ""
+
+[roles.skill_card_focus]
+fg = "text.secondary"
+bg = "interactive.settings_selection"
+rail = ""
+label = ""
+style = ""
+
 [roles.agent_text]
 fg = "text.primary"
 bg = "surface.canvas"
@@ -438,6 +452,8 @@ style = ""
 "agent.gold" = ["bold"]
 
 [monochrome.roles]
+skill_card = []
+skill_card_focus = ["reverse"]
 user_text = ["bold"]                   # rail glyph, no label
 agent_text = []
 reasoning = ["dim"]                    # label "Thought", rail "│"

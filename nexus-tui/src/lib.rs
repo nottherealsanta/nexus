@@ -32,6 +32,7 @@ pub mod orb;
 pub mod orb_sprite;
 pub use nexus_mermaid::text as mermaid_text;
 pub mod paint;
+pub mod partial;
 pub mod prefs;
 pub mod program_status;
 pub mod reduce;

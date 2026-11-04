@@ -23,7 +23,7 @@ import { speakAnswer, speechPlaying, stopSpeaking } from "./speech";
 import { cancelDictation, isDictationBusy, microphoneAvailable, startDictation, stopDictation } from "./dictation";
 import { appendTranscript } from "./dictation-logic";
 import { dictationPhase } from "./voice-state";
-import { cancelListening, cancelTurn, closeField, dismissCard, managerEscapeRule, managerSlash, managerTerm, minimise, openField, openManagerContext, openManagerSession, sendListening, startQuietly, stopCall, stopSpeech, submitField, talk } from "./core/manager";
+import { toggleManagerDropdown, toggleManagerAudio, cancelListening, cancelTurn, closeField, dismissCard, managerEscapeRule, managerSlash, managerTerm, minimise, openField, openManagerContext, openManagerSession, sendListening, scrollDetails, startQuietly, stopCall, stopSpeech, submitField, talk } from "./core/manager";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
 
 export interface Cmd {
@@ -600,7 +600,11 @@ function dictateFromComposer() {
 // now and the shared manifest can expose it when that command lands.
 on("voice.dictate", dictateFromComposer, true);
 // The Manager (docs/manager-design.md 10.6). Everything else of it lives in core/manager.ts.
+on("manager.details_up", () => scrollDetails(-200));
+on("manager.details_down", () => scrollDetails(200));
 on("manager.talk", () => talk(), true);
+on("manager.header", () => toggleManagerDropdown(), true);
+on("manager.audio_toggle", () => toggleManagerAudio(), true);
 on("manager.start", () => startQuietly(), true);
 on("manager.context", () => openManagerContext(), true);
 on("manager.open_session", () => openManagerSession(), true);

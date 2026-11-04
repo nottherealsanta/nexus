@@ -15,6 +15,20 @@ export const roles = {
     "label": "",
     "style": ""
   },
+  "skill_card": {
+    "fg": "text.secondary",
+    "bg": "surface.panel",
+    "rail": "",
+    "label": "",
+    "style": ""
+  },
+  "skill_card_focus": {
+    "fg": "text.secondary",
+    "bg": "interactive.settings_selection",
+    "rail": "",
+    "label": "",
+    "style": ""
+  },
   "agent_text": {
     "fg": "text.primary",
     "bg": "surface.canvas",

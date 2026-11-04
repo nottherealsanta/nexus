@@ -224,8 +224,8 @@ async function select(id) {
   const main = document.getElementById("main");
   main.replaceChildren(h("div", { class: "empty" }, "Loading…"));
   try {
-    const [session, messages, pendingQuestions] = await Promise.all([
-      api(`/api/session/${id}`), api(`/api/session/${id}/message`), api(`/api/session/${id}/question`)]);
+    const [session, messages, pendingQuestions, diagnostics] = await Promise.all([
+      api(`/api/session/${id}`), api(`/api/session/${id}/message`), api(`/api/session/${id}/question`), api(`/api/session/${id}/diagnostics`)]);
     const events = []; let after = 0, more = true, floor = 0, truncated = false;
     while (more && events.length < MAX_EVENTS) {
       const page = await api(`/api/session/${id}/event?after=${after}&limit=${PAGE}`);
@@ -234,7 +234,7 @@ async function select(id) {
     }
     if (token !== loadSeq || S.sel !== id) return;
     Object.assign(S, { session, messages, events, eventsMore: more, pendingQuestions, eventFloor: floor,
-      eventHistoryTruncated: truncated });
+      eventHistoryTruncated: truncated, diagnostics });
     // HTTP resources have independent boundaries. Only stream delivery advances lastId;
     // deduplicate loaded events and messages separately when replay reaches them.
     render();
@@ -299,9 +299,9 @@ function viewConversation() {
 // Questions asked by the `ask` tool (including questions nested in a code cell), with
 // their reply or cancellation and whether Core still considers the request pending.
 function questionsView() {
-  const asked = S.events.filter((e) => e.type === "question.asked");
+  const asked = (S.diagnostics?.waits?.questions_asked || []).map((data) => ({ data }));
   if (!asked.length) return null;
-  const replies = new Map(S.events.filter((e) => e.type === "question.replied").map((e) => [e.data.id, e.data]));
+  const replies = new Map((S.diagnostics?.waits?.questions_replied || []).map((data) => [data.id, data]));
   const pending = new Set((S.pendingQuestions || []).map((q) => q.id));
   return h("div", { class: "card" },
     h("div", { class: "section" }, `Questions (${asked.length})`),
@@ -377,27 +377,31 @@ const noEvents = () => h("div", { class: "note" }, "No stored events for this se
 
 // Level 2: each model call, with timing, usage and tool runs.
 function viewSteps() {
-  const turns = steps();
-  if (!turns.length) return noEvents();
-  return h("div", {}, turns.map((t, ti) => h("div", {},
-    h("div", { class: "turn" }, `Turn ${ti + 1} `, h("span", { class: "q" }, clip(t.prompt, 160))),
-    h("table", {}, h("thead", {}, h("tr", {}, ["step", "model", "input items", "tools offered", "HTTP", "first byte", "total", "tokens in (cached)", "out (reasoning)", "stop", "tools run"].map((c) => h("th", {}, c)))),
-      h("tbody", {}, t.steps.map((s) => {
-        const b = (s.request && s.request.body) || {}, u = s.usage || {};
-        const items = (b.input || b.messages || []).length;
-        return h("tr", {},
-          h("td", { class: "num" }, s.n), h("td", { class: "mono" }, b.model || "?"), h("td", { class: "num" }, items), h("td", { class: "num" }, (b.tools || []).length),
-          h("td", { class: s.response && s.response.status >= 400 ? "err" : "" }, s.response ? s.response.status : "–"),
-          h("td", { class: "num" }, ms(s.reqTime, s.firstByte)), h("td", { class: "num" }, ms(s.reqTime, s.doneTime)),
-          h("td", { class: "num" }, u.input_tokens != null ? `${u.input_tokens} (${u.cached_input_tokens})` : "–"),
-          h("td", { class: "num" }, u.output_tokens != null ? `${u.output_tokens} (${u.reasoning_tokens})` : "–"),
-          h("td", { class: s.error ? "err" : "" }, s.error ? `${s.error.kind}: ${s.error.message}` : (s.done ? s.done.stop : "running…")),
-          h("td", {}, s.tools.map((x) => h("div", {}, h("span", { class: "mono" }, x.start.call.name), " ",
-            x.end ? h("span", { class: x.end.result.is_error ? "err" : "okc" }, x.end.result.is_error ? "error" : "ok") : h("span", { class: "warn" }, "running"),
-            " ", h("span", { class: "note" }, ms(x.t0, x.t1))))));
-      }))))));
+  const box = h("div", {}, h("div", { class: "note" }, "Loading turn records…"));
+  const sid = S.session.id;
+  (async () => {
+    const turns = []; let before = "";
+    for (;;) {
+      const page = await api(`/api/session/${sid}/turn?limit=100${before ? "&before=" + before : ""}`);
+      turns.unshift(...page.turns);
+      if (!page.more_before || !page.turns.length) break;
+      before = page.turns[0].id;
+    }
+    if (S.session?.id !== sid) return;
+    box.replaceChildren(...turns.map((t, i) => h("div", { class: "card" },
+      h("div", { class: "section" }, `Turn ${i + 1} · ${t.status}`),
+      ...t.requests.map((r) => h("div", { class: "part" },
+        kv("kv", "step", r.step, "model", r.model || "unknown", "HTTP", r.http_status ?? "unknown",
+           "first byte", r.ttfb == null ? "unknown" : `${Math.round(r.ttfb * 1000)} ms`,
+           "total", ms(r.started, r.finished), "stop", r.stop || r.status),
+        r.usage ? jsonBlock("usage", r.usage) : null,
+        r.attempts?.length ? jsonBlock("attempts", r.attempts) : null,
+        r.partial ? jsonBlock("Partial output — diagnostic only, not in context", r.partial) : null)),
+      t.tools?.length ? jsonBlock("tools", t.tools) : null)));
+    if (!turns.length) box.replaceChildren(h("div", { class: "note" }, "No turn records for this session."));
+  })().catch((e) => box.replaceChildren(h("div", { class: "err" }, String(e))));
+  return box;
 }
-
 // Level 3: every request body, as labelled sections.
 function viewRequests() {
   const box = h("div", {});
@@ -477,6 +481,7 @@ function viewRaw() {
   search.addEventListener("input", () => { S.rawFilter = search.value; S.rawShown = RAW_ROWS; render(); document.querySelector("input[type=search]").focus(); });
   const deltas = h("input", { type: "checkbox", checked: S.hideDeltas ? "" : null, onchange: (ev) => { S.hideDeltas = ev.target.checked; render(); } });
   return h("div", {},
+    S.diagnostics?.compaction ? h("div", { class: "note warn" }, `Earlier events compacted: ${S.diagnostics.compaction.removed} diagnostic events removed. Messages, snapshots and turn records are retained.`) : null,
     S.eventHistoryTruncated ? h("div", { class: "note warn" },
       `Earlier diagnostic events expired at the retention floor (event ${S.eventFloor}). Messages and snapshots above are complete; the wire log before this boundary is not retained.`) : null,
     expired ? h("div", { class: "note warn" },
@@ -628,9 +633,10 @@ function applyEvent(e) {
     api(`/api/session/${S.sel}`).then((s) => { S.session = s; renderSoon(); }).catch(() => {});
   }
   if (S.session && e.session_id === S.session.id) {
-    if (!S.events.some((stored) => stored.id === e.id)) S.events.push(e);
+    if (e.id != null && !S.events.some((stored) => stored.id === e.id)) S.events.push(e);
     if (e.type === "message.added" && !S.messages.some((stored) => stored.id === e.data.id)) S.messages.push(e.data);
-    if (e.type === "question.asked" || e.type === "question.replied") {
+    if (e.type === "question.asked" || e.type === "question.replied" || e.type === "session.compacted") {
+      api(`/api/session/${S.session.id}/diagnostics`).then((d) => { S.diagnostics = d; renderSoon(); }).catch(() => {});
       api(`/api/session/${S.session.id}/question`).then((qs) => { S.pendingQuestions = qs; renderSoon(); }).catch(() => {});
     }
     if (e.type === "session.updated" || e.type === "session.status" || e.type === "session.directory_changed" || e.type === "session.workspace_tools") api(`/api/session/${S.session.id}`).then((s) => { S.session = s; renderSoon(); });

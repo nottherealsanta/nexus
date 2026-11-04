@@ -802,6 +802,14 @@ A skill is a folder `<name>/SKILL.md` in `<project>/.agents/skills/` or
 `~/.agents/skills/` (the project's wins a name clash, and the clash is a
 `shadowed` problem). `nexus/skills/`.
 
+Both clients keep up to 12 skills inline in the starting-context card; above that,
+only `Skills [N]` remains. The heading opens a scrollable two-column picker at any
+count, with description excerpts and separate switches. Card names and inline skill
+names open the same nested Markdown detail view: full description, complete `SKILL.md`
+and immediate supporting file/folder names (including resources outside the tool's
+readable paths). This is discovery, not permission to read arbitrary resources through
+the skill tool. Esc returns to the picker without losing its place, then closes it.
+
 ```markdown
 ---
 name: deploy                 # optional; the folder name by default

@@ -162,103 +162,85 @@ pinning agent inherits its parent's current model.
 
 ## Durable event log
 
-`nexus/bus.py` commits every published event to `event` before any subscriber
-receives it, and gives it its durable row `id`. `nexus/eventlog.py` turns that
-id into a cursor, `<generation>:<id>`, and serves the reconnect stream.
+`nexus/bus.py` commits durable events before delivering them. Their stable row
+ids form cursors `<generation>:<id>`; the generation survives restarts and
+copies, and a replacement database gets a new generation. Globals survive a
+session deletion; its minimal `session.deleted` tombstone lets clients remove it.
 
-- **Generation.** `log.generation` (`log_<hex>`) identifies this database's log.
-  It is created on the first open of a database and kept across restarts. A new,
-  deleted or replaced database gets a new generation; a copy keeps it. `/api/info`
-  reports it with the current head and the retention floor.
-- **Ordering and ids.** `event.id` is a never-reused autoincrement row id, so
-  ordering is publish order and ids survive restarts. The bus `seq` is only the
-  current daemon's counter and is not a cursor.
-- **Globals and deletion.** Session events are deleted with their session. Global
-  events are stored with `session_id: null`: project create/update/delete and a
-  minimal `session.deleted` tombstone (`{"id": "ses_…"}`). Deleting a session or
-  project publishes one tombstone per deleted session, so a reconnecting client
-  cannot miss a deletion that no longer has a session row. Statistics, messages,
-  snapshots still disappear with the session.
-- **Reconnect.** `GET /api/event` accepts `?cursor=` or `Last-Event-ID`, registers
-  the live subscription and reads the head atomically, replays the stored log up
-  to that head in pages, then continues live while skipping the overlap. Cursor
-  errors (wrong generation, ahead, malformed, below the floor) are 400/409/410
-  JSON responses with the current head, not a silent "start now". The full
-  contract, filtering and overflow are in [api.md](api.md#event-stream).
-- **Retention.** `nexus/retention.py` has two independent diagnostic lifetimes.
-  Heavy wire payloads are content-addressed, compressed and deduplicated.
-  Successful terminal turns expire their payload up to one hour after completion
-  (default 3,600 s), failed/interrupted turns after 24 hours, and a soft 256 MiB
-  wire budget expires the oldest eligible payloads first. A linked terminal
-  turn is the evidence boundary, so its payload can expire even while another
-  turn in the same session is running; a legacy/unlinked payload keeps the
-  conservative session-wide protection. Expiry keeps the event envelope/id/type
-  and writes an explicit `$nexus_payload: "expired"` marker; it never moves
-  `floor`. Defaults:
-  `NEXUS10_WIRE_SUCCESS_RETENTION_SECONDS`,
-  `NEXUS10_WIRE_FAILURE_RETENTION_SECONDS`, `NEXUS10_WIRE_PAYLOAD_BYTES`;
-  `NEXUS10_WIRE_DEBUG_RETENTION_DAYS` explicitly extends both lifetimes for
-  debugging (0 disables the extension). Expiry writes a compact marker (metadata
-  only); the explanatory note and resync hint are synthesized on read.
-  `stored_event_bytes` counts the serialized event rows (including compact
-  markers/body references), while `body_bytes` counts unique compressed bodies;
-  the two are reported separately rather than double-counting shared bodies.
+`text_delta`, `reasoning_delta`, `tool_call_started` and `tool_args_delta` are
+live-only (`id: null`, no SSE id or cursor). The bus still delivers every wire
+event live. Overflow reports the last **durable** id and explicitly requires a
+resync. Clients must fetch the running request's partial after registering their
+stream; a request-local sequence merges queued deltas with that checkpoint.
 
-  Normalized stream deltas/`part_done`/`tool_call_started` are not selectively
-  expired yet because recovery uses them for an interrupted request's partial
-  summary; they remain full events until ordinary prefix retention, which is a
-  deliberate, documented deferral.
+`LivePartial` folds ordered text, reasoning and tool-argument parts. Runtime
+checkpoints it to `turn_request.partial` at most once a second while streaming,
+and at completed-part and terminal boundaries. `/turn` substitutes the current
+in-memory partial while the request runs. Saving its assistant message clears
+the partial atomically. Interrupted/failed requests retain diagnostic partials;
+recovery describes their counts, never puts them into model context. Legacy
+requests without checkpoints still use their retained events during transition.
 
-  Ordinary diagnostic events are additionally removed from a contiguous prefix
-  after 14 days or the 256 MiB budget and advance `log.floor`
-  (`NEXUS10_EVENT_RETENTION_DAYS`, `NEXUS10_EVENT_RETENTION_BYTES`). Events are
-  pinned by an in-flight replay and protected by an unfinished turn/request, an
-  open wait or a live background job. A background job lives only in the
-  daemon's memory, so startup recovery closes every `bash.started` a restart
-  discarded with a terminal `bash.finished` (`outcome: "lost"`) after the
-  recovery notice names it; without that pair the protection would pin the
-  session's whole log forever and the database would grow without bound.
-  Messages, snapshots, turn/request/tool
-  evidence and model context never expire with the wire log. Terminal
-  turn/request/tool rows are pruned after 30 days while keeping 200 turns per
-  session; mutation entries expire seven days after terminal resolution.
+Wire payloads remain content-addressed in `event_body`. A versioned request
+manifest shares `input`, `messages`, `contents` and tool-schema items, instructions,
+and exact inline data-URI strings across requests. Inline media uses independent
+SHA references in the same store, so reassembly does not depend on an artifact
+file surviving; exact URI spelling is preserved. Reference edges keep components
+alive until the last owning envelope expires. Whole-body raw/zlib encodings stay
+readable; maintenance upgrades retained requests in batches of 50. Body counters
+measure actual compressed component bytes separately from envelope bytes.
 
-  Maintenance is continuous and bounded: it wakes on a terminal turn, on
-  pressure and on the periodic interval (`NEXUS10_RETENTION_INTERVAL_SECONDS`,
-  default and maximum 60 seconds). A pass measures a small migration batch,
-  expires one payload batch, removes a few event/turn/mutation batches
-  (`NEXUS10_RETENTION_BATCH_SIZE` 2000, `NEXUS10_RETENTION_EVENT_BATCHES` 4),
-  then yields for 50 ms
-  (`NEXUS10_RETENTION_CATCHUP_DELAY_SECONDS`, default 0.05). Catch-up is
-  therefore not limited by an hourly cadence. Every step is skipped when its
-  trigger-maintained counter says there is nothing to do: a pass used to walk
-  the whole measured suffix (hundreds of milliseconds on a 1.9 M-event log)
-  only to find no unmeasured row, which stalled the event loop and therefore
-  both clients once a minute. `log.retention` announcements
-  are rate-limited to one per 60 seconds
-  (`NEXUS10_RETENTION_ANNOUNCE_SECONDS`), so an impossible budget cannot make
-  maintenance flood its own log. Deferred partial indexes are built at most one
-  per pass; each still requires its own one-time table scan after startup, not
-  during it. `log.retention` and `/api/info`'s `retention_status` report bytes,
-  blockers (protected sessions, replay pins, unmeasured events), index progress,
-  last run/duration/error and `over_budget`. Pressure is reported, never
-  resolved by silently dropping incoming events.
-  `Store.reclaim_space` is a dry-run inventory by default and only performs a
-  bounded `incremental_vacuum` when the database was created with auto_vacuum;
-  a full `VACUUM` is never automatic.
-- **Reconnect.** `GET /api/event` accepts `?cursor=` or `Last-Event-ID`, registers
-  the live subscription and reads the head atomically, replays the stored log up
-  to that head in pages, then continues live while skipping the overlap. Cursor
-  errors (wrong generation, ahead, malformed, below the floor) are 400/409/410
-  JSON responses with the current head, not a silent "start now". The full
-  contract, filtering and overflow are in [api.md](api.md#event-stream). The
-  Python client reconnects with bounded backoff, deduplicates by durable id and
-  resyncs from `/api/snapshot` on a cursor failure or overflow. Locally discovered
-  clients refresh the daemon token on a restart; explicitly configured remote
-  clients keep their supplied credentials.
-- **Failures.** A storage error from the log propagates out of `publish`; the
-  event is not delivered and does not get an `id`. An event naming a session
-  whose row is already gone is not delivered either; the tombstone covers it.
+Wire expiry keeps each envelope/id/type and returns an explicit expired marker.
+Successful terminal requests retain wire for one hour; failed/interrupted ones
+for 24 hours. Environment settings: `NEXUS10_WIRE_SUCCESS_RETENTION_SECONDS`,
+`NEXUS10_WIRE_FAILURE_RETENTION_SECONDS`, `NEXUS10_WIRE_PAYLOAD_BYTES` (soft
+256 MiB budget), and `NEXUS10_WIRE_DEBUG_RETENTION_DAYS` (0 by default).
+
+Finished sessions are compacted in bounded event batches once archived or idle
+for `NEXUS10_SESSION_EVENT_IDLE_SECONDS` (default 86400). Running turns/requests,
+pending recovery, uninserted tool results, open waits/jobs, replay pins and
+unannounced messages prevent compaction. `session_diagnostics.keep` protects
+a debugging session from both compaction and wire expiry; set it through
+`POST /api/session/{id}/diagnostics` with `{"keep": true}`. Legacy lifecycle
+history is adopted once per session into `wait_record`, `bash_job` and a code-use
+flag; recovery subsequently reads state tables rather than scanning old events.
+
+Compaction deletes only diagnostics and commits a `session.compacted` record
+in the same transaction, replacing the session's previous marker. The
+`session_compaction` table keeps cumulative counts/range/time for the inspector
+and exports, even if prefix retention later removes the marker. Global events,
+messages, snapshots, usage and turn records survive. Continuing a session writes
+new events normally. Raw wire, fine step detail and old export events are lost
+explicitly; model context is unchanged.
+
+The global floor advances conservatively to the highest removed diagnostic id.
+Retained events can exist below that floor when sessions interleave: clients
+must resync for **any cursor below it**, even if that cursor's own row remains.
+A cursor at the floor is valid. Prefix retention still removes old diagnostics
+(default 14 days or 256 MiB), including retained rows below the floor, while
+honouring protections. Turn rows have their separate 30-day / keep-200 policy;
+canonical usage outlives them. Mutation entries expire seven days after resolution.
+
+Maintenance wakes on terminal turns, pressure and a periodic interval (at most
+60 s). Passes limit event batches (`NEXUS10_RETENTION_BATCH_SIZE` 2000,
+`NEXUS10_RETENTION_EVENT_BATCHES` 4), then yield for 50 ms while catching up.
+`log.retention` summaries are rate-limited to once per 60 s. `/api/info` reports
+storage, blockers, migration, compaction, reclamation and errors.
+
+New databases use `auto_vacuum = incremental` before any table is created.
+Maintenance reclaims at most `NEXUS10_RECLAIM_PAGES` (1000) free pages per pass
+when free space reaches `NEXUS10_RECLAIM_THRESHOLD_BYTES` (8 MiB). A passive WAL
+checkpoint makes the smaller file visible as readers permit. A full vacuum
+is never automatic. `Store.reclaim_space` remains dry-run by default. Older
+files require the offline `nexus db compact --apply` conversion described in
+[development.md](development.md#offline-database-compaction).
+
+Replay registers a subscriber and reads the head atomically, pins the replay
+range, pages through durable history, then hands off to the live queue. Cursor
+errors (malformed, wrong generation, ahead, below floor) return actionable
+400/409/410 errors before opening the stream. The Python client deduplicates
+by durable id and preserves its cursor across id-less live events. A storage
+error propagates before a durable event can be delivered.
 
 ## Mutations and provider retries
 
@@ -563,9 +545,10 @@ authority; the durable turn and request rows are.
   restart does not lose why the turn started. A `turn.summary` follows for each
   turn it closed.
 
-**Partial output.** An interrupted stream is not a completed response. Its
-deltas, completed `part_done` items, `raw` data and `origin` stay in the event
-log for inspection, but they do not enter conversation history: doing so would
+**Partial output.** An interrupted stream is not a completed response. Its last
+`turn_request.partial` checkpoint retains text, reasoning and arguments, including
+completed parts with their `raw` and `origin`, for inspection. It never enters
+conversation history: doing so would
 present partial text, partial arguments or partial reasoning as a finished
 answer. Only a response whose `Done` is durable is replayable from the stored
 parts. The session's next request gets the normal history plus the recovery

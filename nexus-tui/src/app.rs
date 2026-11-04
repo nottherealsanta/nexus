@@ -138,6 +138,8 @@ pub const WIRED: &[&str] = &[
     "session.open_continuation",
     "manager.talk",
     "manager.start",
+    "manager.header",
+    "manager.audio_toggle",
     "manager.context",
     "manager.open_session",
     "manager.stop",
@@ -1315,7 +1317,9 @@ impl App {
             };
             let key = format!("skill:{name}");
             let label = name.to_owned();
-            let on = skill["state"].as_str() == Some("on")
+            let available = skill["state"].as_str() == Some("on")
+                || (session.is_none() && skill["state"].as_str() == Some("off") && skill["locked"].as_bool() != Some(true));
+            let on = available
                 && !disabled.iter().any(|entry| entry == &key);
             push(key, label, on, skill["locked"].as_bool().unwrap_or(false));
         }
@@ -3122,6 +3126,13 @@ impl App {
     }
 
     fn close_overlay(&mut self) {
+        if let Some(Overlay { kind: OverlayKind::ContextEntries { title, open, top, .. }, .. }) = self.ui.overlay.as_mut() {
+            if title == "Skills" && open.is_some() {
+                *open = None;
+                *top = 0;
+                return;
+            }
+        }
         if let Some(Overlay {
             kind:
                 OverlayKind::AlertDetail {
@@ -5796,6 +5807,7 @@ impl App {
     }
 
     fn send(&mut self) {
+        if self.manager_debug_view() { self.toast(Level::Info, "Manager session · read-only debug view"); return; }
         self.send_mode(None);
     }
 
@@ -7304,6 +7316,15 @@ impl App {
     /// One list (`tools`, `skills`, `mcp`) of Core's plan for the draft; empty until Core answers.
     pub fn draft_values(&self, key: &str) -> Vec<Value> {
         self.draft_context()
+            .or_else(|| {
+                if !matches!(key, "skills" | "mcp") { return None; }
+                let (asked, data) = self.state.draft_context.as_ref()?;
+                let mut asked = asked.clone();
+                let mut now = self.draft_request()?;
+                asked.as_object_mut()?.remove("disabled_tools");
+                now.as_object_mut()?.remove("disabled_tools");
+                Self::same_draft_context(&asked, &now).then(|| data.as_ref().ok()).flatten()
+            })
             .and_then(|d| d[key].as_array().cloned())
             .unwrap_or_default()
     }
@@ -8378,6 +8399,26 @@ impl App {
                 ..
             })
         );
+        if let Some(Overlay { kind: OverlayKind::ContextEntries { title, cursor, open, .. }, .. }) = &self.ui.overlay {
+            if title == "Skills" && open.is_none() {
+                let cursor = *cursor;
+                match name {
+                    "space" => {
+                        if let Some(item) = self.context_items_for("Skills").get(cursor) {
+                            let index = item.index;
+                            if !item.locked { self.toggle_context_item(index); }
+                        }
+                        return true;
+                    }
+                    "left" | "right" | "tab" | "shift+tab" => {
+                        let columns = self.context_items_for("Skills").len().div_ceil(2) as isize;
+                        self.overlay_move(match name { "left" => -columns, "right" => columns, "shift+tab" => -1, _ => 1 });
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+        }
         match name {
             "tab"
                 if matches!(
@@ -8544,12 +8585,23 @@ impl App {
                 *top = (*top as isize + delta).clamp(0, max as isize) as usize;
             }
             Some(OverlayKind::ContextEntries {
+                title,
                 entries,
                 cursor,
                 open,
                 top,
                 ..
             }) => {
+                if title == "Skills" {
+                    if let Some(index) = *open {
+                        let text = entries[index].full.as_deref().unwrap_or("Loading…");
+                        let max = crate::render::context_doc_max(area, &self.theme, text);
+                        *top = (*top as isize + delta).clamp(0, max as isize) as usize;
+                    } else {
+                        *cursor = (*cursor as isize + delta).clamp(0, entries.len().saturating_sub(1) as isize) as usize;
+                    }
+                    return;
+                }
                 // Inside an open entry the arrows read it first, then leave it.
                 let extra = open.filter(|o| o == cursor).map_or(0, |_| {
                     crate::render::context_entry_overflow(area, &self.theme, entries, *cursor)
@@ -9016,6 +9068,12 @@ impl App {
         let Some(item) = self.context_items().get(index).cloned() else {
             return;
         };
+        let skill_index = self.context_items_for("Skills").iter().position(|item| item.index == index);
+        if let Some(Overlay { kind: OverlayKind::ContextEntries { title, cursor, open: None, .. }, .. }) = self.ui.overlay.as_mut() {
+            if title == "Skills" {
+                if let Some(index) = skill_index { *cursor = index; }
+            }
+        }
         self.ui.context_cursor = index;
         self.ui.focus = Focus::Timeline;
         if self.viewed_id().is_some() {
@@ -11537,7 +11595,11 @@ impl App {
             }
             Target::Swallow => {}
             // The Manager's own targets are taken by `manager_mouse` before a click gets here.
-            Target::ManagerOrb
+            Target::ManagerInput
+            | Target::ManagerVoice
+            | Target::ManagerDebugSession
+            | Target::ManagerDetails
+            | Target::ManagerOrb
             | Target::ManagerEnd
             | Target::ManagerScrim
             | Target::ManagerCard
@@ -11595,7 +11657,7 @@ impl App {
             }
             Target::RemoveProject(id) => self.ask_remove_project_id(id),
             Target::Notifications => self.run_command("notifications.open"),
-            Target::ManagerSession => self.run_command("manager.context"),
+            Target::ManagerSession => self.run_command("manager.header"),
             Target::Tab(tab) => {
                 let id = match tab {
                     Tab::Sessions => "sidebar.tab.sessions",

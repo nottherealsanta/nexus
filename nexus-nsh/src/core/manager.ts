@@ -4,8 +4,8 @@
 // Idle is free: with no call and nothing on screen there are no timers, no animation frames and no
 // key bindings from here. The frame loop runs only while the orb is visible; the engaged keys are
 // bound only while the Manager is engaged.
-import { Storage, effect, keymap, openUrl, signal } from "nsh";
-import { ApiError, apiBase, localCore, request } from "./transport";
+import { Storage, effect, keymap, signal } from "nsh";
+import { ApiError, request } from "./transport";
 import { managerHooks } from "./manager-hooks";
 import type { CoreEvent } from "./api";
 import {
@@ -14,7 +14,7 @@ import {
 } from "../manager";
 import {
   config, connection, currentClientView, notificationSoundsOn, drawer, isNarrow, leftOpen, leftTab, live, loadFiles, model, phone, selectProject,
-  selectSession, syncView, toast, viewReporter,
+  selectSession, sync, bump, syncView, toast, viewReporter,
 } from "../store";
 import type { ClientView } from "./view";
 import { playbackLevel, speakText, stopSpeaking } from "../speech";
@@ -44,8 +44,51 @@ const cancelDictation = () => voiceIn.cancel();
 export const call = signal<{ id: string; holder: string; mode?: string } | null>(null);
 /** The call is open but out of the way: a small orb in the corner, and the app has its keys back. */
 export const minimised = signal(false);
+export const connecting = signal(false);
+export const dropdownOpen = signal(false);
+export const dropdownInteractive = signal(false);
+export const audioRequested = signal(false);
+export const voiceEnabled = signal(true);
+export const debugSessionId = signal<string | null>(null);
+export function toggleManagerDropdown() {
+  if (dropdownOpen()) { closeManagerDropdown(); return; }
+  dropdownOpen.set(true); dropdownInteractive.set(true);
+  minimised.set(!dropdownOpen());
+  if (dropdownOpen()) { if (fieldText() === null) fieldText.set(""); begin({ orb: true }); }
+  if (voiceEnabled() && !audioRequested()) void start(true);
+}
+export function closeManagerDropdown() {
+  dropdownOpen.set(false); dropdownInteractive.set(false); minimised.set(true);
+  if (!call() && !connecting()) { orbOn.set(false); exchange.set(false); stopLoop(); }
+}
+export async function toggleManagerAudio() {
+  voiceEnabled.set(!voiceEnabled());
+  if (!voiceEnabled()) {
+    audioRequested.set(false); hangUpLive(); skipSpeech(); cancelListening();
+    if (call()) await request("POST", "/api/manager/live/stop", { body: { stream_id: streamId } }).catch(() => {});
+  } else if (!audioRequested()) { await talk(); }
+}
+
+let debugRefreshAt = 0;
+let debugRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+async function refreshManagerDebug() {
+  if (!debugSessionId() || model.selected?.sessionId !== debugSessionId()) return;
+  if (Date.now() - debugRefreshAt < 750) {
+    if (!debugRefreshTimer) debugRefreshTimer = setTimeout(() => { debugRefreshTimer = null; void refreshManagerDebug(); }, 750 - (Date.now() - debugRefreshAt));
+    return;
+  }
+  debugRefreshAt = Date.now();
+  try {
+    const session = await request<any>("GET", "/api/manager/session");
+    if (!session?.id) return;
+    model.sessions.set(session.id, session); bump(); debugSessionId.set(session.id);
+    if (model.selected?.sessionId !== session.id) await selectSession(session.id); else await sync.loadSelected();
+  } catch {}
+}
+export const detailsScroll = signal(0);
+export function scrollDetails(delta: number) { detailsScroll.set(detailsScroll() + delta); }
 /** The header button's read-only view of the Manager's hidden context. */
-export const modelPreview = signal<{ source: string; lines: string[]; clipped: boolean; tool: { name: string; arguments: string; status: string; clipped: boolean } | null } | null>(null);
+export const modelPreview = signal<{ source: string; lines: string[]; clipped: boolean; text?: string; details_clipped?: boolean; tool: { name: string; arguments: string; status: string; clipped: boolean } | null } | null>(null);
 export const managerContext = signal<{ title: string; text: string } | null>(null);
 export const phase = signal<Phase>("idle");
 export const managerError = signal<ManagerError | null>(null);
@@ -81,8 +124,8 @@ export const hasStream = () => streamId !== null;
 // --- terms the keymap reads --------------------------------------------------------------------------------
 
 export const inCall = () => call() !== null;
-export const callFocused = () => call() !== null && !minimised();
-export const callMinimised = () => call() !== null && minimised();
+export const callFocused = () => dropdownOpen() && dropdownInteractive();
+export const callMinimised = () => inCall() && minimised();
 export const cardFocused = () => { const c = card(); return !minimised() && !!c && !cardCollapsed() && (c.focused || cardUnlocked()); };
 export const fieldOpen = () => fieldText() !== null;
 export const consentOpen = () => consent() !== null;
@@ -90,7 +133,7 @@ export const engaged = () => callFocused() || consentOpen();
 
 export function managerTerm(name: string): boolean {
   switch (name) {
-    case "manager.in_call": return inCall();
+    case "manager.in_call": return inCall() || connecting();
     case "manager.focused": return callFocused();
     case "manager.minimised": return callMinimised();
     case "manager.listening": return listening();
@@ -123,6 +166,7 @@ function targetLevel(mode: OrbMode, ts: number): number {
 }
 
 function currentMode(): OrbMode {
+  if (connecting()) return "thinking";
   const settling = !orbOn() && visual.presence > 0;
   return orbMode({ listening: listening(), speaking: speaking(), phase: phase() !== "idle" || transcribing() ? "thinking" : "idle", settling }) ?? "settling";
 }
@@ -200,6 +244,7 @@ function begin(opts: { orb: boolean }) {
 // --- the call -----------------------------------------------------------------------------------------------
 
 let starting = false;
+let startEpoch = 0;
 let held: CoreEvent[] = [];
 
 /** The privacy notice Core asks the user to accept before the first call (null when none is pending). */
@@ -234,42 +279,60 @@ export async function answerConsent(accept: boolean) {
 export function managerEscapeRule(): string | null {
   if (managerContext()) { managerContext.set(null); return "manager_context"; }
   if (consentOpen()) { void answerConsent(false); return "manager_consent"; }
-  if (inCall()) { void stopCall(); return "manager.stop"; }
+  if (dropdownOpen()) { closeManagerDropdown(); return "manager_dropdown"; }
   return null;
 }
 
-async function start(): Promise<boolean> {
+let startupWaiters: ((ok: boolean) => void)[] = [];
+async function start(audio = true): Promise<boolean> {
   if (!streamId) { toast("warning", "Core is not connected: the Manager is unavailable."); return false; }
+  if (starting) return new Promise<boolean>((resolve) => startupWaiters.push(resolve));
+  audioRequested.set(audio);
+  const epoch = ++startEpoch;
   starting = true; held = [];
+  connecting.set(true); minimised.set(false);
+  visual.presence = 1; visual.mode = "thinking"; visual.from = "thinking"; visual.blend = 1;
+  begin({ orb: true });
   if (notificationSoundsOn()) playNotificationCue("manager_start");
   try {
     // Before a call: if the privacy notice is required and not yet accepted, ask first.
     try {
       type Notice = { provider: string; version: string; required: boolean; accepted_at: unknown; notice: string };
       const status = await request<{ consent?: Notice; live_consent?: Notice | null }>("GET", "/api/manager");
-      for (const c of [status?.consent, status?.live_consent]) {
+      for (const c of [status?.consent, ...(audio ? [status?.live_consent] : [])]) {
         if (c?.required && !c.accepted_at && !(await askConsent(c))) return false;
       }
     } catch { /* Core answers start itself */ }
-    const r = await request<{ call_id: string; holder: string; mode?: string; preview?: any }>("POST", "/api/manager/start", { body: { stream_id: streamId, client_id: viewReporter.clientId } });
+    if (epoch !== startEpoch) return false;
+    const r = await request<{ call_id: string; holder: string; mode?: string; preview?: any }>("POST", "/api/manager/start", { body: { stream_id: streamId, client_id: viewReporter.clientId, audio } });
+    if (epoch !== startEpoch) {
+      if (!call() && !starting) void request("POST", "/api/manager/stop", { body: { stream_id: streamId } }).catch(() => {});
+      return false;
+    }
     call.set({ id: r.call_id, holder: r.holder ?? "", mode: r.mode });
     modelPreview.set(r.preview ?? null);
     lost = null;
     const buffered = held; held = [];
     starting = false;
     for (const e of buffered) handleEvent(e);
-    if (r.mode === "live") await openLive(r.call_id);
+    if (r.mode === "live" && audioRequested()) await openLive(r.call_id);
     return true;
   } catch (e) {
     if (e instanceof ApiError && e.code === "consent_required" && e.body?.consent && !consent()) {
       starting = false;
-      if (await askConsent(e.body.consent)) return start();
+      if (await askConsent(e.body.consent)) return start(audio);
       return false;
     }
     if (e instanceof ApiError && e.code === "manager_disabled") toast("info", WORDS.disabled);
     else toast("error", e instanceof ApiError ? e.message : String(e));
     return false;
-  } finally { starting = false; held = []; }
+  } finally {
+    if (epoch === startEpoch) {
+      starting = false; held = []; connecting.set(false);
+      for (const resolve of startupWaiters.splice(0)) resolve(call() !== null);
+      if (!call() && !consent()) { orbOn.set(false); exchange.set(false); }
+    }
+  }
 }
 
 let liveTimer: ReturnType<typeof setInterval> | null = null;
@@ -282,13 +345,14 @@ async function openLive(callId: string) {
   begin({ orb: true });
   try {
     await request("POST", "/api/manager/live/start", { body: { stream_id: streamId } });
+    if (call()?.id !== callId || !audioRequested()) return;
     await startGptLive(streamId ?? "", (why) => { hangUpLive(); managerError.set({ code: "live_lost", message: why, fix: "Start the call again." }); });
   } catch (e) {
     const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
     managerError.set({ code: e instanceof ApiError && e.code ? e.code : "live_failed", message, fix: "The call is still open for typing; start it again to retry the voice." });
     return;
   }
-  if (call()?.id !== callId) { hangUpLive(); return; }
+  if (call()?.id !== callId || !audioRequested()) { hangUpLive(); return; }
   if (notificationSoundsOn()) playNotificationCue("live_connected");
   listening.set(true);
   let lastSpeechAt = 0;
@@ -308,12 +372,17 @@ function hangUpLive() {
 
 /** Clear everything the Manager shows or holds, without telling Core. */
 function endLocal() {
+  ++startEpoch;
+  starting = false; held = [];
+  for (const resolve of startupWaiters.splice(0)) resolve(false);
+  connecting.set(false); detailsScroll.set(0); audioRequested.set(false);
   hangUpLive();
   micOwned = false;
   if (dictationPhase() !== "idle") cancelDictation();
   skipSpeech();
   clearTimers();
   call.set(null);
+  dropdownOpen.set(false); dropdownInteractive.set(false);
   minimised.set(false);
   managerContext.set(null);
   modelPreview.set(null);
@@ -353,6 +422,8 @@ function onEvent(e: CoreEvent) {
 let lost: { id: string; at: number } | null = null;
 
 export function handleEvent(e: CoreEvent) {
+  void refreshManagerDebug();
+  if (e.type === "manager.session") return;
   const d = e.data ?? {};
   const mine = call()?.id;
   if (!mine) {
@@ -381,7 +452,7 @@ export function handleEvent(e: CoreEvent) {
       else if (text) { managerCaption.set(text); begin({ orb: false }); }
       return;
     }
-    case "manager.speech": enqueue({ turn_id: String(d.turn_id ?? ""), seq: Number(d.seq ?? 0), text: String(d.text ?? ""), urgent: !!d.urgent, proactive: !!d.proactive }); return;
+    case "manager.speech": if (!audioRequested()) { managerCaption.set(String(d.text ?? "")); return; } enqueue({ turn_id: String(d.turn_id ?? ""), seq: Number(d.seq ?? 0), text: String(d.text ?? ""), urgent: !!d.urgent, proactive: !!d.proactive }); return;
     case "manager.card": showCard(d.card == null ? null : parseCard(d.card, dev?.unfocused)); return;
     case "manager.navigate": void navigate(d); return;
   }
@@ -392,6 +463,7 @@ function showCard(next: Card | null) {
   cardUnlocked.set(false); cardCollapsed.set(false);
   card.set(next);
   if (!next) return;
+  dropdownOpen.set(true);
   if (next.focused) {
     // A card that follows the user's words keeps the orb up with it.
     begin({ orb: true });
@@ -416,6 +488,7 @@ export function dismissCard() {
 
 /** The shortcut or a click on a collapsed or unfocused card: it takes focus (locally). */
 export function focusCard() {
+  dropdownOpen.set(true); dropdownInteractive.set(true);
   if (!card()) return;
   minimised.set(false);
   cardUnlocked.set(true); cardCollapsed.set(false);
@@ -562,6 +635,7 @@ export function cancelListening() {
 
 /** `manager.minimise`: out of the way, not ended. A recording and the field close. Esc ends the call. */
 export function minimise() {
+  closeManagerDropdown();
   if (!call() || consent()) return;
   cancelListening();
   closeField();
@@ -676,10 +750,11 @@ let exchangeOwned = false;
 
 /** `manager.talk`: the shortcut, or a click on the orb. */
 export async function talk() {
+  dropdownOpen.set(true); dropdownInteractive.set(true); audioRequested.set(true); voiceEnabled.set(true);
   if (!live()) { toast("warning", "Core is not connected: the Manager is unavailable."); return; }
   const fresh = !call();
   if (fresh) {
-    if (!(await start())) return;
+    if (!(await start(true))) return;
   }
   // Talking brings a minimised call back to the stage. An unfocused or
   // waiting card is opened first, as the shortcut always has.
@@ -687,7 +762,7 @@ export async function talk() {
   if (!fresh && card() && !cardFocused()) { focusCard(); return; }
   exchangeOwned = true;
   if (call()?.mode === "live") {
-    if (!gptLiveOpen()) { openField(""); return; }
+    if (!gptLiveOpen()) { await start(true); return; }
     // GPT-Live listens by itself: the shortcut only interrupts what it is saying.
     begin({ orb: true });
     interruptGptLive();
@@ -695,7 +770,6 @@ export async function talk() {
     return;
   }
   if (listening()) { await sendListening(); return; }
-  if (fieldOpen()) { openField(fieldText() ?? ""); return; }
   if (!fresh && (phase() !== "idle" || speaking() || playing())) {
     // Barge-in: stop speech, cancel the turn if it is safe, open the mic.
     skipSpeech();
@@ -716,7 +790,7 @@ async function sayWords(text: string, source: "typed" | "speech") {
   const words = text.trim();
   if (!words) return;
   if (!live()) { toast("warning", "Core is not connected: the Manager is unavailable."); return; }
-  if (!call()) { if (!(await start())) return; }
+  if (!call()) { if (!(await start(source === "speech"))) return; }
   minimised.set(false);
   exchangeOwned = true;
   skipSpeech();
@@ -743,14 +817,9 @@ async function sayWords(text: string, source: "typed" | "speech") {
 export async function openManagerSession() {
   if (!live()) { toast("warning", "Core is not connected: the Manager is unavailable."); return; }
   try {
-    const episodes = await request<{ id: string }[]>("GET", "/api/manager/episode");
-    const id = episodes?.[0]?.id;
-    if (!id) { toast("info", "The Manager has no session yet. Start it, then talk to it."); return; }
-    const base = apiBase();
-    const url = new URL("/inspector", base || import.meta.url);
-    const token = base ? ((await localCore())?.token ?? "none") : "nsh-host";
-    url.hash = `token=${encodeURIComponent(token)}&session=${encodeURIComponent(id)}&level=requests`;
-    await openUrl(url.href);
+    const session = await request<any>("POST", "/api/manager/session");
+    model.sessions.set(session.id, session); bump(); debugSessionId.set(session.id);
+    closeManagerDropdown(); await selectSession(session.id);
   } catch (e) {
     toast("error", e instanceof ApiError ? e.message : "Could not open the Manager's session.");
   }
@@ -778,7 +847,7 @@ export async function openManagerContext() {
 export async function startQuietly() {
   if (!live()) { toast("warning", "Core is not connected: the Manager is unavailable."); return; }
   if (!call()) {
-    await start();
+    await start(false);
     if (call()) minimised.set(true);
   }
 }
@@ -794,6 +863,7 @@ export async function managerSlash(arg: string) {
 // --- the typed field --------------------------------------------------------------------------------------------------------
 
 export function openField(initial: string) {
+  dropdownOpen.set(true); dropdownInteractive.set(true);
   if (listening()) cancelListening();
   minimised.set(false);
   begin({ orb: true });
@@ -802,7 +872,7 @@ export function openField(initial: string) {
 export function closeField() { fieldText.set(null); }
 export function submitField() {
   const text = fieldText() ?? "";
-  fieldText.set(null);
+  fieldText.set("");
   if (text.trim()) void say(text, "typed");
 }
 
@@ -814,6 +884,8 @@ function bindEngagedKeys(): () => void {
   const bind = (key: string, fn: (keystroke: string) => void) => {
     try { offs.push(keymap.bind(key, (e: { keystroke: string }) => fn(e.keystroke), { when: "always" })); } catch { /* the platform keeps this keystroke */ }
   };
+  bind("pageup", () => scrollDetails(-200));
+  bind("pagedown", () => scrollDetails(200));
   bind("space", () => { if (listening()) void sendListening(); else void talk(); });
   bind("enter", () => { if (listening()) void sendListening(); });
   for (const key of PRINTABLE_KEYS) {
@@ -828,6 +900,20 @@ function bindEngagedKeys(): () => void {
     });
   }
   return () => offs.forEach((off) => off());
+}
+
+export function managerDetailsText(): string {
+  const sections: string[] = [];
+  if (connecting()) sections.push("Connecting…");
+  const error = managerError(); if (error) sections.push([error.message, error.fix].filter(Boolean).join("\n"));
+  if (userCaption()) sections.push(`You\n${userCaption()}`);
+  if (managerCaption()) sections.push(`Manager\n${managerCaption()}`);
+  const p = modelPreview();
+  if (p) {
+    sections.push(`Model context · ${p.source}\n${p.details_clipped ? "Earlier content omitted.\n" : ""}${p.text ?? p.lines.join("\n")}`);
+    if (p.tool) sections.push(`Tool · ${p.tool.name} · ${p.tool.status}\n${p.tool.arguments}${p.tool.clipped ? "\nArguments clipped; full details in Manager context." : ""}`);
+  }
+  return sections.join("\n\n") || "Ready";
 }
 
 // --- install -------------------------------------------------------------------------------------------------------------------

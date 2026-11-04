@@ -1,0 +1,6 @@
+{
+  "speaker_rms": 0.05,
+  "microphone_rms": 0.2,
+  "echo_rms": 0.02,
+  "microphone_allowed": true
+}

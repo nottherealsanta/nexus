@@ -527,6 +527,9 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
         }
         rows.push(clip_row(head, layout));
         if let CtxBody::Inventory(items) = &section.body {
+            if section.title == "Skills" && items.len() > 12 {
+                continue;
+            }
             if layout.columns {
                 // Tools take up to four columns; skills and servers two.
                 let most = if section.title == "Tools" { 4 } else { 2 };

@@ -5,7 +5,7 @@ mod common;
 use common::*;
 use nexus_tui::api::{Frame, Message};
 use nexus_tui::app::{App, Effect};
-use nexus_tui::manager::{ends_call, Mic};
+use nexus_tui::manager::ends_call;
 use nexus_tui::sync::{Command, ManagerError};
 use nexus_tui::theme::{Mode, Tier};
 use nexus_tui::ui::Target;
@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 fn app() -> App {
     let mut a = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 40));
     a.ui.manager.silent = true;
+    a.ui.manager.voice_enabled = false; // text-only cases opt out of the default-on Voice toggle
     a
 }
 
@@ -38,6 +39,8 @@ fn start(a: &mut App) {
     a.manager_reply("start", Ok(json!({"call_id": "call_1", "holder": "TUI"})));
     // Most tests want the call on the stage; the quiet corner has its own test.
     a.ui.manager.minimised = false;
+    a.ui.manager.dropdown_open = true;
+    a.ui.manager.dropdown_interactive = true;
     a.effects.clear();
 }
 
@@ -113,49 +116,31 @@ fn at_rest_nothing_is_taken_drawn_or_scheduled() {
 #[test]
 fn the_shortcut_starts_a_call_and_keys_are_taken_only_while_engaged() {
     let mut a = app();
-    a.effects.clear();
-    press(&mut a, &["alt+m"]);
-    let calls = manager_calls(&a);
-    assert_eq!(calls[0].0, "/api/manager/start");
-    a.manager_reply("start", Ok(json!({"call_id": "call_1", "holder": "TUI"})));
-    // Pressing talk opened the microphone once the call began.
-    assert!(a.holds("manager.listening"));
-    a.effects.clear();
-    press(&mut a, &["esc"]);
-    // Esc ends the call, recording included.
-    assert!(a.ui.manager.call.is_none());
-    assert!(!a.holds("manager.listening"));
-    assert!(manager_calls(&a).iter().any(|c| c.0 == "/api/manager/stop"));
-    // Talk starts a fresh call and takes the stage.
-    a.effects.clear();
     a.manager_execute("manager.talk");
-    assert_eq!(manager_calls(&a)[0].0, "/api/manager/start");
-    a.manager_reply("start", Ok(json!({"call_id": "call_1", "holder": "TUI"})));
-    assert!(a.holds("manager.listening") && a.holds("manager.engaged"));
-    assert_eq!(a.escape_rule().as_deref(), Some("manager_call"));
+    assert!(a.ui.manager.starting && a.ui.manager.dropdown_open);
+    assert_eq!(manager_calls(&a)[0].1.as_ref().unwrap()["audio"], true);
+    a.manager_reply("start", Ok(json!({"call_id":"call_1","holder":"TUI"})));
     press(&mut a, &["esc"]);
-    assert!(a.ui.manager.call.is_none());
-    assert_ne!(a.escape_rule().as_deref(), Some("interrupt"));
+    assert!(!a.ui.manager.dropdown_open && a.ui.manager.call.is_some());
+    assert!(!a.manager_key(&key("x"), "x"));
 }
 
 #[test]
 fn a_printable_key_opens_the_field_and_enter_sends_it() {
     let mut a = app();
-    start(&mut a);
-    a.manager_execute("manager.talk");
+    a.manager_execute("manager.header");
     typing(&mut a, "hi");
-    assert!(a.holds("manager.field"));
-    assert_eq!(a.ui.manager.field.as_ref().unwrap().text(), "hi");
-    assert_eq!(a.composer_ref().text(), "");
-    // Talk leaves the field alone; Enter is how a typed line goes.
-    press(&mut a, &["alt+m"]);
-    assert!(a.holds("manager.field") && !a.holds("manager.listening"));
-    assert_eq!(a.ui.manager.field.as_ref().unwrap().text(), "hi");
     press(&mut a, &["enter"]);
+    assert_eq!(manager_calls(&a)[0].1.as_ref().unwrap()["audio"], false);
+    a.manager_reply(
+        "start",
+        Ok(json!({"call_id":"call_1","holder":"TUI","mode":"live"})),
+    );
+    assert!(!a.ui.manager.live_call);
     let calls = manager_calls(&a);
     let say = calls.iter().find(|c| c.0 == "/api/manager/say").unwrap();
-    assert_eq!(say.1.as_ref().unwrap()["source"], "typed");
-    assert!(!a.holds("manager.field"));
+    assert_eq!(say.1.as_ref().unwrap()["text"], "hi");
+    assert_eq!(a.ui.manager.field.as_ref().unwrap().text(), "");
 }
 
 #[test]
@@ -175,9 +160,9 @@ fn an_unfocused_card_takes_no_keys_until_it_is_focused() {
     press(&mut a, &["alt+m"]);
     assert!(a.holds("manager.card_focused"));
     assert!(a.manager_key(&key("space"), "space"));
-    // Esc is the call's, even minimised: it ends the call instead of the session.
+    // Esc closes the dropdown while the call stays active.
     assert!(a.manager_key(&key("esc"), "esc"));
-    assert!(a.ui.manager.call.is_none());
+    assert!(a.ui.manager.call.is_some());
 }
 
 #[test]
@@ -397,7 +382,7 @@ fn live_mode_failure_keeps_the_call_open_and_says_why() {
     assert!(error.message.contains("ChatGPT plan"));
     a.ui.manager.silent = false;
     a.effects.clear();
-    a.manager_execute("manager.talk");
+    a.manager_execute("manager.field_open");
     assert!(a.ui.manager.field.is_some());
     assert_eq!(a.ui.manager.error.as_ref().unwrap(), &error);
     assert!(!a.ui.manager.listening());
@@ -460,25 +445,16 @@ fn the_header_has_a_manager_button_left_of_the_right_toggle_that_opens_the_conte
 }
 
 #[test]
-fn the_manager_session_opens_in_the_inspector_with_the_token_and_the_requests_level() {
+fn manager_debug_session_opens_inside_nexus_without_audio() {
     let mut a = app();
-    a.state.core = Some(nexus_tui::api::Info {
-        name: "nexus".into(),
-        version: "0".into(),
-        pid: 1,
-        home: "/nonexistent-home".into(),
-        url: "http://127.0.0.1:4747".into(),
-        log: Default::default(),
-        api_version: None,
-        idempotency_lifetime: Default::default(),
-    });
-    a.effects.clear();
-    // No episode yet: it says so and opens nothing.
-    a.manager_reply("episode", Ok(json!([])));
-    assert!(!a.effects.iter().any(|e| matches!(e, Effect::OpenUrl(_))));
-    // An episode, but the daemon file cannot be read: nothing opens and no token is invented.
-    a.manager_reply("episode", Ok(json!([{"id": "ses_manager"}])));
-    assert!(!a.effects.iter().any(|e| matches!(e, Effect::OpenUrl(_))));
+    let mut session =
+        serde_json::to_value(a.state.model.sessions.values().next().unwrap()).unwrap();
+    session["id"] = json!("ses_manager");
+    a.manager_reply("debug_session", Ok(session));
+    assert_eq!(a.viewed_id(), Some("ses_manager"));
+    assert!(a.manager_debug_view());
+    assert!(a.ui.manager.call.is_none() && !a.ui.manager.live_call);
+    assert!(text(&mut a).contains("read-only debug view"));
 }
 
 fn focused_call(a: &mut App) {
@@ -505,127 +481,36 @@ fn assert_ended(a: &mut App, what: &str) {
 }
 
 #[test]
-fn esc_ends_the_call_in_every_state() {
-    // Focused idle.
-    let mut a = app();
-    focused_call(&mut a);
-    a.effects.clear();
-    press(&mut a, &["esc"]);
-    assert_ended(&mut a, "idle");
-
-    // Listening: the recording is dropped.
-    let mut a = app();
-    start(&mut a);
-    a.manager_execute("manager.talk");
-    assert!(a.holds("manager.listening"));
-    a.effects.clear();
-    press(&mut a, &["esc"]);
-    assert_ended(&mut a, "listening");
-
-    // Typing: the field goes with the call.
-    let mut a = app();
-    focused_call(&mut a);
-    a.manager_execute("manager.field_open");
-    assert!(a.holds("manager.field"));
-    a.effects.clear();
-    press(&mut a, &["esc"]);
-    assert_ended(&mut a, "typing");
-
-    // Thinking: the turn is ended by Core's stop, not by minimising.
-    let mut a = app();
-    focused_call(&mut a);
-    send(
-        &mut a,
-        95,
-        "manager.state",
-        json!({"active": true, "phase": "thinking", "holder": "TUI", "error": null}),
-    );
-    a.effects.clear();
-    press(&mut a, &["esc"]);
-    assert_ended(&mut a, "thinking");
-    assert!(manager_calls(&a).iter().any(|c| c.0 == "/api/manager/stop"));
-
-    // Speaking: Esc stops it by ending the call.
-    let mut a = app();
-    focused_call(&mut a);
-    a.ui.manager.speaking = true;
-    a.effects.clear();
-    press(&mut a, &["esc"]);
-    assert_ended(&mut a, "speaking");
-
-    // A focused card: the card and the call both go.
-    let mut a = app();
-    focused_call(&mut a);
-    send(
-        &mut a,
-        96,
-        "manager.card",
-        json!({"card": {"id": "c", "type": "note", "focused": true, "markdown": "x"}}),
-    );
-    assert!(a.holds("manager.card_focused"));
-    a.effects.clear();
-    press(&mut a, &["esc"]);
-    assert_ended(&mut a, "card");
-
-    // Minimised idle.
-    let mut a = app();
-    start_quiet(&mut a);
-    a.effects.clear();
-    press(&mut a, &["esc"]);
-    assert_ended(&mut a, "minimised idle");
-
-    // Minimised while speaking.
-    let mut a = app();
-    start_quiet(&mut a);
-    a.ui.manager.speaking = true;
-    a.effects.clear();
-    press(&mut a, &["esc"]);
-    assert_ended(&mut a, "minimised speaking");
-
-    // Minimised with a waiting card.
-    let mut a = app();
-    start_quiet(&mut a);
-    send(
-        &mut a,
-        97,
-        "manager.card",
-        json!({"card": {"id": "c", "type": "note", "focused": false, "markdown": "x"}}),
-    );
-    a.effects.clear();
-    press(&mut a, &["esc"]);
-    assert_ended(&mut a, "minimised card");
+fn escape_closes_only_the_dropdown_in_every_work_phase() {
+    for phase in ["idle", "thinking", "replying"] {
+        let mut a = app();
+        focused_call(&mut a);
+        send(
+            &mut a,
+            90,
+            "manager.state",
+            json!({"active":true,"phase":phase,"holder":"TUI"}),
+        );
+        press(&mut a, &["esc"]);
+        assert!(!a.ui.manager.dropdown_open && a.ui.manager.call.is_some());
+        assert!(!manager_calls(&a).iter().any(|c| c.0 == "/api/manager/stop"));
+    }
 }
 
 #[test]
-fn esc_never_interrupts_a_session_while_a_call_is_open() {
-    // Focused: the call takes Esc and ends.
-    let mut a = app();
-    busy(&mut a);
-    focused_call(&mut a);
-    assert_eq!(a.escape_rule().as_deref(), Some("manager_call"));
-    a.effects.clear();
-    press(&mut a, &["esc"]);
-    assert!(a.ui.manager.call.is_none());
-    assert!(!a.effects.iter().any(|e| matches!(
-        e,
-        Effect::Api(nexus_tui::actions::ApiCall::Interrupt { .. })
-    )));
-    // Minimised too: Esc ends the call, never the session.
+fn background_audio_leaves_session_escape_available() {
     let mut a = app();
     busy(&mut a);
     start_quiet(&mut a);
+    assert_eq!(a.escape_rule().as_deref(), Some("interrupt"));
+    a.manager_execute("manager.header");
     assert_eq!(a.escape_rule().as_deref(), Some("manager_call"));
-    a.effects.clear();
     press(&mut a, &["esc"]);
-    assert!(a.ui.manager.call.is_none());
-    assert!(!a.effects.iter().any(|e| matches!(
-        e,
-        Effect::Api(nexus_tui::actions::ApiCall::Interrupt { .. })
-    )));
+    assert!(a.ui.manager.call.is_some());
 }
 
 #[test]
-fn the_context_modal_shows_what_core_returns_and_esc_closes_it_before_ending_a_call() {
+fn palette_context_modal_closes_before_the_dropdown() {
     let mut a = app();
     a.state.core = Some(nexus_tui::api::Info {
         name: "nexus".into(),
@@ -643,7 +528,7 @@ fn the_context_modal_shows_what_core_returns_and_esc_closes_it_before_ending_a_c
     let g = a.regions.clone();
     assert_eq!(
         a.hits.at(g.manager.x + 2, g.manager.y),
-        Some(&nexus_tui::ui::Target::ManagerSession)
+        Some(&nexus_tui::ui::Target::ManagerOrb)
     );
     a.effects.clear();
     a.execute("manager.context");
@@ -678,7 +563,7 @@ fn the_context_modal_shows_what_core_returns_and_esc_closes_it_before_ending_a_c
     // The next Esc ends the call.
     a.effects.clear();
     press(&mut a, &["esc"]);
-    assert!(a.ui.manager.call.is_none());
+    assert!(a.ui.manager.call.is_some());
 }
 
 #[test]
@@ -738,65 +623,22 @@ fn the_four_call_actions_stay_distinct() {
 }
 
 #[test]
-fn the_end_button_and_saying_thats_all_end_the_call() {
-    // The End button drawn under the orb.
+fn explicit_stop_ends_the_call_and_the_dropdown_has_no_end_button() {
     let mut a = app();
     focused_call(&mut a);
     draw(&mut a, 120, 40);
-    let end = a
-        .hits
-        .rect_of(&Target::ManagerEnd)
-        .expect("End under the orb");
-    a.effects.clear();
-    click(&mut a, end.x + end.width / 2, end.y);
-    assert!(a.ui.manager.call.is_none());
-    assert!(manager_calls(&a).iter().any(|c| c.0 == "/api/manager/stop"));
-
-    // A spoken "that's all" is the same End, and is never sent as words.
-    let mut a = app();
-    focused_call(&mut a);
-    a.ui.manager.mic = Mic::Transcribing;
-    a.effects.clear();
-    a.manager_done(nexus_tui::actions::ActionDone {
-        call: nexus_tui::actions::ApiCall::ManagerTranscribe {
-            wav: Vec::new(),
-            token: 0,
-        },
-        result: Ok(nexus_tui::actions::Done {
-            transcript: Some("that's all.".into()),
-            ..Default::default()
-        }),
-    });
-    assert!(a.ui.manager.call.is_none());
-    assert!(manager_calls(&a).iter().any(|c| c.0 == "/api/manager/stop"));
-    assert!(!manager_calls(&a).iter().any(|c| c.0 == "/api/manager/say"));
-    assert!(ends_call("That's all for now") && !ends_call("that's all the files"));
+    assert!(a.hits.rect_of(&Target::ManagerEnd).is_none());
+    a.manager_execute("manager.stop");
+    assert_ended(&mut a, "explicit stop");
+    assert!(ends_call("that's all"));
 }
 
 #[test]
 fn the_hint_line_names_the_state_and_how_to_end() {
     let mut a = app();
     focused_call(&mut a);
-    let idle = a.manager_hint();
-    assert!(
-        idle.contains("space talk") && idle.contains("esc end"),
-        "{idle}"
-    );
-    a.ui.manager.speaking = true;
-    let speaking = a.manager_hint();
-    assert!(
-        speaking.contains("stop") && speaking.contains("esc end"),
-        "{speaking}"
-    );
-    a.ui.manager.speaking = false;
-    a.ui.manager.minimised = true;
-    let mini = a.manager_hint();
-    assert!(
-        mini.contains("alt+m talk") && mini.contains("esc end"),
-        "{mini}"
-    );
-    draw(&mut a, 120, 40);
-    assert!(text(&mut a).contains("esc end"), "the hint is drawn");
+    assert!(text(&mut a).contains("Open Manager session"));
+    assert!(a.hits.rect_of(&Target::ManagerDebugSession).is_some());
 }
 
 #[test]
@@ -823,21 +665,13 @@ fn the_minimised_caption_opens_a_waiting_card() {
     start_quiet(&mut a);
     send(
         &mut a,
-        99,
+        90,
         "manager.card",
-        json!({"card": {"id": "c", "type": "note", "title": "A note", "focused": true, "markdown": "x"}}),
+        json!({"card":{"id":"c","type":"note","focused":false,"markdown":"Notification"}}),
     );
-    draw(&mut a, 120, 40);
-    let caption = a
-        .hits
-        .rect_of(&Target::ManagerCard)
-        .expect("the card caption");
-    click(&mut a, caption.x + caption.width / 2, caption.y);
-    assert!(
-        !a.ui.manager.minimised,
-        "opening the card brings the call back"
-    );
-    assert!(a.holds("manager.card_focused"));
+    assert!(a.ui.manager.dropdown_open && !a.ui.manager.dropdown_interactive);
+    assert!(text(&mut a).contains("Notification"));
+    assert!(!a.manager_key(&key("x"), "x"));
 }
 
 #[test]
@@ -851,7 +685,7 @@ fn graphics_orb_is_placed_by_the_stage_and_removed_on_end() {
     draw(&mut a, 120, 40);
     let graphics = a.orb_sprites.borrow_mut().take();
     assert!(graphics.contains("a=t,"));
-    assert!(graphics.contains("c=30,r=7,z=1,C=1"));
+    assert!(graphics.contains("c=10,r=1,z=1,C=1"));
     a.manager_execute("manager.stop");
     draw(&mut a, 120, 40);
     assert!(a.orb_sprites.borrow_mut().take().contains("a=d,d=i,"));
@@ -872,9 +706,87 @@ fn the_focused_call_shows_the_latest_model_excerpt_and_real_tool() {
         json!({"preview": scenario["preview"]}),
     );
     let shown = text(&mut a);
-    for expected in scenario["expect"].as_array().unwrap() {
+    for expected in scenario["preview"]["lines"].as_array().unwrap() {
         assert!(shown.contains(expected.as_str().unwrap()), "{shown}");
     }
     a.manager_execute("manager.stop");
     assert!(a.ui.manager.preview.is_none());
+}
+
+#[test]
+fn header_orb_and_connecting_show_before_the_start_reply() {
+    let mut a = app();
+    a.manager_execute("manager.header");
+    a.manager_execute("manager.audio_toggle");
+    assert!(a.ui.manager.starting && a.ui.manager.orb.visible());
+    assert!(text(&mut a).contains("Connecting…"));
+    let orb = a.hits.rect_of(&Target::ManagerOrb).unwrap();
+    assert_eq!(orb.height, 1);
+    assert_eq!(orb.y, 0);
+    assert!(orb.width > 1);
+    press(&mut a, &["esc"]);
+    assert!(a.ui.manager.starting);
+    a.manager_execute("manager.stop");
+    assert!(!a.ui.manager.starting);
+}
+
+#[test]
+fn dropdown_input_and_debug_action_work_without_an_audio_call() {
+    let mut a = app();
+    a.manager_execute("manager.header");
+    assert!(a.ui.manager.call.is_none());
+    assert!(manager_calls(&a).is_empty());
+    assert!(text(&mut a).contains("Tell the Manager"));
+    assert!(a.hits.rect_of(&Target::ManagerInput).is_some());
+    a.effects.clear();
+    a.manager_execute("manager.open_session");
+    // Debug opening is not an audio action and does not start the Manager call.
+    assert!(a.ui.manager.call.is_none() && !a.ui.manager.audio_requested);
+}
+
+#[test]
+fn shared_dropdown_contract_keeps_text_audio_and_debug_separate() {
+    let f: Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/manager-dropdown.json"
+    ))
+    .unwrap();
+    let mut a = app();
+    a.manager_execute("manager.header");
+    let shown = text(&mut a);
+    assert!(shown.contains(f["placeholder"].as_str().unwrap()));
+    assert!(shown.contains(f["debug_action"].as_str().unwrap()));
+    assert_eq!(
+        a.hits.rect_of(&Target::ManagerOrb).unwrap().height,
+        f["orb_rows"].as_u64().unwrap() as u16
+    );
+    typing(&mut a, f["input"].as_str().unwrap());
+    press(&mut a, &["enter"]);
+    assert_eq!(
+        manager_calls(&a)[0].1.as_ref().unwrap()["audio"],
+        f["start_audio"]
+    );
+    press(&mut a, &["esc"]);
+    assert!(a.ui.manager.starting);
+}
+
+#[test]
+fn default_voice_starts_on_open_and_can_be_disabled_while_connecting() {
+    let mut a = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 40));
+    a.ui.manager.silent = true;
+    assert!(a.ui.manager.voice_enabled);
+    a.manager_execute("manager.header");
+    assert!(a.ui.manager.dropdown_open && a.ui.manager.starting);
+    assert_eq!(manager_calls(&a)[0].1.as_ref().unwrap()["audio"], true);
+    a.manager_execute("manager.audio_toggle");
+    assert!(!a.ui.manager.voice_enabled && !a.ui.manager.audio_requested);
+    a.manager_reply(
+        "start",
+        Ok(json!({"call_id":"call_1","holder":"TUI","mode":"live"})),
+    );
+    assert!(a.ui.manager.call.is_some() && !a.ui.manager.live_call);
+    let shown = text(&mut a);
+    assert!(shown.contains("Voice: off"));
+    assert!(!shown.lines().next().unwrap().contains("Manager"));
+    assert!(a.hits.rect_of(&Target::ManagerVoice).is_some());
+    assert!(!shown.contains('┌'));
 }

@@ -1,11 +1,4 @@
-//! The Manager's stage (docs/manager-design.md 10.1, 10.3, 10.4): the caption, the
-//! typed field, the card in its semi-transparent modal, and the orb on top.
-//! Everything is painted over the finished frame, so no layout moves.
-//!
-//! True colour blends: the scrim moves every cell 25% toward the canvas, the
-//! panel and the pills are the raised surface blended 80% over whatever is
-//! underneath, and the orb is alpha-blended last. The other colour tiers draw
-//! solid surfaces and a static glyph.
+//! Manager header orb and notification dropdown, painted over the finished frame.
 
 use std::time::Instant;
 
@@ -17,9 +10,9 @@ use serde_json::Value;
 
 use crate::app::App;
 use crate::layout::HitMap;
-use crate::manager::{RowKind, RowView, CAPTION_FADE, CAPTION_QUIET, CARD_ENTER, PLACEHOLDER};
+use crate::manager::{RowKind, RowView, PLACEHOLDER};
 use crate::markdown::{self, wrap_spans};
-use crate::orb::{self, blend, Anchor, OrbState};
+use crate::orb::{self, blend, Anchor};
 use crate::paint;
 use crate::text::{truncate, width};
 use crate::theme::{Theme, Tier};
@@ -38,11 +31,6 @@ pub const SCRIM_PERCENT: u8 = 25;
 pub const CALL_SCRIM_PERCENT: u8 = 70;
 /// How much of the raised surface shows over what is underneath.
 pub const PANEL_OPACITY: f32 = 0.8;
-
-fn ease(x: f32) -> f32 {
-    let x = x.clamp(0.0, 1.0);
-    x * x * (3.0 - 2.0 * x)
-}
 
 type Line = Vec<Span<'static>>;
 
@@ -103,7 +91,14 @@ fn wrapped(text: &str, w: usize, style: Style) -> Vec<Line> {
 }
 
 /// Paint the stage over a finished frame. Cheap when there is nothing to show.
-pub fn draw(app: &App, buf: &mut Buffer, area: Rect, composer: Rect, hits: &mut HitMap) {
+pub fn draw(
+    app: &App,
+    buf: &mut Buffer,
+    area: Rect,
+    composer: Rect,
+    header: Rect,
+    hits: &mut HitMap,
+) {
     let m = &app.ui.manager;
     m.cursor.set(None);
     if !m.orb.visible() || m.consent.is_some() || m.context.is_some() {
@@ -146,232 +141,175 @@ pub fn draw(app: &App, buf: &mut Buffer, area: Rect, composer: Rect, hits: &mut 
         );
         return;
     }
-    if m.focused_call() {
-        paint::scrim_by(t, buf, area, CALL_SCRIM_PERCENT);
-        draw_focused(app, &look, buf, area, now, hits);
-        return;
+    // The header owns audio; the dropdown owns text, cards and debug navigation.
+    let strip = Rect::new(header.x, header.y, header.width, 1).intersection(area);
+    if strip.width > 0 {
+        hits.add(strip, Target::ManagerOrb);
+        draw_orb(
+            app,
+            buf,
+            area,
+            Anchor {
+                x: strip.x + strip.width / 2,
+                bottom: strip.bottom(),
+            },
+            strip.width,
+            1,
+        );
     }
-    if m.minimised_call() {
-        draw_minimised(app, &look, buf, area, composer, now, hits);
+    if m.dropdown_open {
+        draw_dropdown(app, &look, buf, area, header, hits);
     }
 }
 
-/// The focused call: a large orb centred, the caption under it, the hint and
-/// End under that, and a card below them all. The app behind is dimmed.
-fn draw_focused(
+/// Notification-style popover, anchored below the first row. No app scrim.
+fn draw_dropdown(
     app: &App,
     look: &Look,
     buf: &mut Buffer,
     area: Rect,
-    now: Instant,
+    header: Rect,
     hits: &mut HitMap,
 ) {
     let m = &app.ui.manager;
-    // The call takes the stage: a click outside its controls goes nowhere.
-    hits.add(area, Target::Swallow);
-    let (ow, oh) = orb::focused_size(area);
-    let centre_x = area.x + area.width / 2;
-    // A card needs room below the caption, so the orb steps up when one is up.
-    let spacer = if m.card.as_ref().is_some_and(|c| !c.collapsed) {
-        (area.height.saturating_sub(oh) / 5).max(1)
-    } else {
-        (area.height.saturating_sub(oh) * 2 / 5).max(1)
-    };
-    let top = area.y.saturating_add(spacer);
-    let orb_rect = Rect::new(centre_x.saturating_sub(ow / 2), top, ow, oh).intersection(area);
-    if m.orb.presence > 0.5 && orb_rect.width > 0 && orb_rect.height > 0 {
-        hits.add(orb_rect, Target::ManagerOrb);
+    let w = 68.min(area.width.saturating_sub(2));
+    let max_h = 24.min(area.height.saturating_sub(2));
+    if w < 12 || max_h < 10 {
+        return;
     }
-    let anchor = Anchor {
-        x: centre_x,
-        bottom: orb_rect.bottom(),
-    };
-    let mut y = orb_rect.bottom().saturating_add(1);
-    if m.field.is_some() {
-        y = draw_field_at(app, look, buf, area, y).saturating_add(1);
+    let mut lines = wrapped(
+        &app.manager_dropdown_text(),
+        (w - 4) as usize,
+        look.st(PRIMARY),
+    );
+    let mut rows = Vec::new();
+    if let Some(card) = m.card.as_ref() {
+        lines.push(Vec::new());
+        lines.extend(wrapped(
+            &default_title(&card.value),
+            (w - 4) as usize,
+            look.bold(PRIMARY),
+        ));
+        let offset = lines.len();
+        let built = build(app, look, &card.value, (w - 4) as usize);
+        lines.extend(built.lines);
+        rows = built.rows;
+        for row in &mut rows {
+            row.line += offset;
+        }
     }
-    let target = app.orb_target(now);
-    if let Some((lines, fade)) = caption_lines(app, look, now, target) {
-        y = draw_caption_below(look, buf, area, y, &lines, fade).saturating_add(1);
+    let h = (lines.len() as u16 + 8).clamp(10, max_h);
+    let r = Rect::new(
+        header
+            .right()
+            .min(area.right())
+            .saturating_sub(w)
+            .max(area.x),
+        header.bottom(),
+        w,
+        h,
+    )
+    .intersection(area);
+    buf.set_style(r, look.st(PRIMARY));
+    for y in r.y..r.bottom() {
+        put(
+            buf,
+            r.x,
+            y,
+            &" ".repeat(r.width as usize),
+            look.st(PRIMARY),
+            r.width,
+        );
     }
-    y = draw_preview(app, look, buf, area, y);
-    let hint = app.manager_hint();
-    if !hint.is_empty() {
-        draw_hint(look, buf, area, y, &hint, false);
-        y = y.saturating_add(1);
+    hits.add(r, Target::Swallow);
+    put(buf, r.x + 2, r.y + 1, "Manager", look.bold(PRIMARY), w - 4);
+    let inner = Rect::new(r.x + 2, r.y + 2, w - 4, h - 8);
+    let max = lines.len().saturating_sub(inner.height as usize);
+    m.details_max.set(max);
+    let scroll = m.details_scroll.min(max);
+    hits.add(inner, Target::ManagerDetails);
+    for (i, line) in lines
+        .iter()
+        .skip(scroll)
+        .take(inner.height as usize)
+        .enumerate()
+    {
+        put_line(buf, inner.x, inner.y + i as u16, line, inner.width);
     }
-    if y < area.bottom() {
-        y = draw_end(look, buf, area, y, false, hits).saturating_add(1);
+    for row in rows {
+        if row.line >= scroll && row.line < scroll + inner.height as usize {
+            hits.add(
+                Rect::new(
+                    inner.x + row.x as u16,
+                    inner.y + (row.line - scroll) as u16,
+                    row.w.min(inner.width as usize) as u16,
+                    row.count.min(1) as u16,
+                ),
+                Target::ManagerRow(row.n),
+            );
+        }
     }
-    if let Some(card) = m.card.as_ref().filter(|c| !c.collapsed) {
-        let enter = if look.t.opts.reduced_motion {
-            1.0
+    let input = Rect::new(inner.x, r.bottom() - 6, inner.width, 3);
+    let input_style = look.t.style(PRIMARY, PANEL);
+    for y in input.y..input.bottom() {
+        put(
+            buf,
+            input.x,
+            y,
+            &" ".repeat(input.width as usize),
+            input_style,
+            input.width,
+        );
+    }
+    let text = m.field.as_ref().map(|f| f.text()).unwrap_or_default();
+    put(
+        buf,
+        input.x + 1,
+        input.y + 1,
+        if text.is_empty() { PLACEHOLDER } else { &text },
+        look.t
+            .style(if text.is_empty() { SECONDARY } else { PRIMARY }, PANEL),
+        input.width.saturating_sub(2),
+    );
+    hits.add(input, Target::ManagerInput);
+    if m.dropdown_interactive {
+        m.cursor.set(Some((
+            input.x + 1 + width(&text).min(input.width.saturating_sub(3) as usize) as u16,
+            input.y + 1,
+        )));
+    }
+    let footer = Rect::new(inner.x, r.bottom() - 2, inner.width, 1);
+    let voice = Rect::new(footer.x, footer.y, 13.min(footer.width), 1);
+    put(
+        buf,
+        voice.x,
+        voice.y,
+        if m.voice_enabled {
+            "Voice: on"
         } else {
-            ease(now.saturating_duration_since(card.shown).as_secs_f32() / CARD_ENTER.as_secs_f32())
-        };
-        if card.focused {
-            hits.add(area, Target::ManagerScrim);
-        }
-        draw_card(app, look, buf, area, area, y, card, enter, hits, true);
-    }
-    draw_orb(app, buf, area, anchor, ow, oh);
+            "Voice: off"
+        },
+        look.bold(PRIMARY),
+        voice.width,
+    );
+    hits.add(voice, Target::ManagerVoice);
+    let button = Rect::new(
+        footer.right().saturating_sub(20).max(voice.right()),
+        footer.y,
+        20.min(footer.width.saturating_sub(voice.width)),
+        1,
+    );
+    put(
+        buf,
+        button.x,
+        button.y,
+        "Open Manager session",
+        look.bold(PRIMARY),
+        button.width,
+    );
+    hits.add(button, Target::ManagerDebugSession);
 }
 
-/// The minimised call: a small orb in the bottom-right corner, its caption
-/// under it, then the hint and End. The app keeps its full strength and keys.
-fn draw_minimised(
-    app: &App,
-    look: &Look,
-    buf: &mut Buffer,
-    area: Rect,
-    composer: Rect,
-    now: Instant,
-    hits: &mut HitMap,
-) {
-    let m = &app.ui.manager;
-    let (ow, oh) = (orb::WIDTH, orb::HEIGHT);
-    let right = area.right().saturating_sub(2);
-    let bottom = if composer.height > 0 && composer.width > 0 {
-        composer.y
-    } else {
-        area.bottom().saturating_sub(1)
-    };
-    let end_y = bottom.saturating_sub(1);
-    let hint_y = end_y.saturating_sub(1);
-    if end_y < area.y || hint_y < area.y {
-        return;
-    }
-    draw_hint(look, buf, area, hint_y, &app.manager_hint(), true);
-    let mut orb_bottom = hint_y;
-    let target = app.orb_target(now);
-    if let Some((lines, fade)) = caption_lines(app, look, now, target) {
-        let caption = draw_caption_right(look, buf, area, right, hint_y, &lines, fade);
-        orb_bottom = caption.y;
-        // The caption is how a waiting card is opened from the corner.
-        if m.card.is_some() && caption.height > 0 {
-            hits.add(caption, Target::ManagerCard);
-        }
-    }
-    draw_end(look, buf, area, end_y, true, hits);
-    let anchor = Anchor {
-        x: right.saturating_sub(ow / 2),
-        bottom: orb_bottom,
-    };
-    let orb_rect = orb::bounds_sized(area, anchor, ow, oh);
-    draw_orb(app, buf, area, anchor, ow, oh);
-    if m.orb.presence > 0.5 && orb_rect.width > 0 && orb_rect.height > 0 {
-        hits.add(orb_rect, Target::ManagerOrb);
-    }
-}
-
-// ---- pills --------------------------------------------------------------------------------
-
-/// What the caption says right now and how faded it is, or nothing.
-fn caption_lines(
-    app: &App,
-    look: &Look,
-    now: Instant,
-    target: Option<OrbState>,
-) -> Option<(Vec<Line>, f32)> {
-    let m = &app.ui.manager;
-    if app.manager_reconnecting() {
-        return Some((vec![plain("Reconnecting", look.st(MUTED))], 1.0));
-    }
-    let mut lines: Vec<Line> = Vec::new();
-    let mut fade = 1.0;
-    if let Some(caption) = &m.caption {
-        let age = now.saturating_duration_since(caption.since);
-        let quiet = matches!(target, None | Some(OrbState::Idle)) && m.field.is_none();
-        if quiet && age > CAPTION_QUIET {
-            fade = 1.0 - ((age - CAPTION_QUIET).as_secs_f32() / CAPTION_FADE.as_secs_f32());
-        }
-        if app.theme.opts.reduced_motion || app.theme.mono() {
-            fade = 1.0;
-        }
-        if fade <= 0.0 {
-            return None;
-        }
-        if let Some(user) = &caption.user {
-            lines.push(plain(user, look.st(MUTED)));
-        }
-        if let Some(words) = &caption.manager {
-            lines.push(plain(words, look.st(PRIMARY)));
-            if let Some(error) = m
-                .error
-                .as_ref()
-                .filter(|e| &e.message == words && !e.fix.is_empty())
-            {
-                lines.push(plain(&error.fix, look.st(MUTED)));
-            }
-        }
-    }
-    if lines.is_empty() {
-        // A minimised call keeps a waiting card as its caption; the card itself
-        // is out of the way until the user opens it.
-        if m.minimised {
-            if let Some(line) = m
-                .card
-                .as_ref()
-                .and_then(|c| crate::manager::card_caption(&c.value))
-            {
-                lines.push(plain(&line, look.st(PRIMARY)));
-            }
-        }
-    }
-    if lines.is_empty() {
-        if let Some(word) = app.orb_word(now) {
-            lines.push(plain(word, look.st(MUTED)));
-        }
-    }
-    (!lines.is_empty()).then_some((lines, fade.clamp(0.0, 1.0)))
-}
-
-/// Wrap the caption to at most two lines of `w` cells: the Manager's sentence
-/// wins; the user's words drop out when both will not fit.
-fn fit_caption(lines: &[Line], w: usize, ell: &str) -> Vec<Line> {
-    let text_of = |line: &Line| -> (String, Style) {
-        (
-            line.iter().map(|s| s.content.as_ref()).collect(),
-            line.first().map(|s| s.style).unwrap_or_default(),
-        )
-    };
-    let wrap = |line: &Line| -> Vec<Line> {
-        let (text, style) = text_of(line);
-        wrap_spans(&[Span::styled(text, style)], w.max(1))
-    };
-    let clamp = |mut rows: Vec<Line>| -> Vec<Line> {
-        if rows.len() > 2 {
-            rows.truncate(2);
-            if let Some(last) = rows.last_mut() {
-                let (text, style) = text_of(last);
-                *last = plain(
-                    &format!("{}{ell}", truncate(&text, w.saturating_sub(1), "")),
-                    style,
-                );
-            }
-        }
-        rows
-    };
-    match lines {
-        [] => Vec::new(),
-        [only] => clamp(wrap(only)),
-        [user, rest @ ..] => {
-            let rest_rows: Vec<Line> = rest.iter().flat_map(wrap).collect();
-            if rest_rows.len() >= 2 {
-                clamp(rest_rows)
-            } else {
-                let (text, style) = text_of(user);
-                let mut out = vec![plain(&truncate(&text, w, ell), style)];
-                out.extend(rest_rows);
-                out
-            }
-        }
-    }
-}
-
-/// Clear `r` to the raised surface and remember the colours that were
-/// underneath. The text is drawn on a solid raised background; `finish` then
-/// turns that into the raised surface blended over what was there.
 fn fill(look: &Look, buf: &mut Buffer, r: Rect) -> Vec<Color> {
     let base = look.st(PRIMARY);
     let mut under = Vec::with_capacity(usize::from(r.width) * usize::from(r.height));
@@ -405,163 +343,6 @@ fn finish(look: &Look, buf: &mut Buffer, r: Rect, under: &[Color], opacity: f32)
 }
 
 /// Paint a pill of `lines` with its top at `top`, centred in `area`.
-fn paint_pill(look: &Look, buf: &mut Buffer, r: Rect, lines: &[Line], fade: f32, centre: bool) {
-    if r.height == 0 || r.width == 0 {
-        return;
-    }
-    let under = fill(look, buf, r);
-    for (i, line) in lines.iter().enumerate() {
-        let w = line_width(line) as u16;
-        let x = if centre {
-            r.x + r.width.saturating_sub(w) / 2
-        } else {
-            r.x + 2
-        };
-        put_line(buf, x, r.y + i as u16, line, r.width.saturating_sub(2));
-    }
-    finish(look, buf, r, &under, PANEL_OPACITY * fade);
-    if fade < 1.0 && look.blended() {
-        for y in r.y..r.bottom() {
-            for x in r.x..r.right() {
-                let cell = &mut buf[(x, y)];
-                cell.fg = blend(cell.bg, cell.fg, fade);
-            }
-        }
-    }
-}
-
-/// A centred caption under the orb. Returns the row after it.
-fn draw_caption_below(
-    look: &Look,
-    buf: &mut Buffer,
-    area: Rect,
-    top: u16,
-    lines: &[Line],
-    fade: f32,
-) -> u16 {
-    let limit = area.width.saturating_sub(8).clamp(10, 60) as usize;
-    let lines = fit_caption(lines, limit, look.ell());
-    let text_w = lines.iter().map(line_width).max().unwrap_or(0);
-    let rows = lines.len().max(1) as u16;
-    let w = (text_w as u16 + 4).clamp(14, area.width.saturating_sub(4).min(64));
-    let x = (area.x + area.width / 2).saturating_sub(w / 2).max(area.x);
-    let r = Rect::new(x, top, w, rows).intersection(area);
-    if r.height == 0 {
-        return top;
-    }
-    paint_pill(look, buf, r, &lines, fade, true);
-    r.bottom()
-}
-
-/// A caption in the minimised corner, right-aligned and sitting directly above
-/// `bottom`. Returns the (possibly unchanged) row the orb's bottom edge uses.
-fn draw_caption_right(
-    look: &Look,
-    buf: &mut Buffer,
-    area: Rect,
-    right: u16,
-    bottom: u16,
-    lines: &[Line],
-    fade: f32,
-) -> Rect {
-    let limit = (area.width / 3).clamp(16, 40) as usize;
-    let lines = fit_caption(lines, limit, look.ell());
-    let text_w = lines.iter().map(line_width).max().unwrap_or(0);
-    let rows = lines.len().max(1) as u16;
-    let w = (text_w as u16 + 4).clamp(14, area.width.saturating_sub(4).min(48));
-    let x = right.saturating_sub(w).max(area.x);
-    let y = bottom.saturating_sub(rows);
-    let r = Rect::new(x, y, w, rows).intersection(area);
-    if r.height == 0 {
-        return Rect::new(area.x, bottom, 0, 0);
-    }
-    paint_pill(look, buf, r, &lines, fade, false);
-    r
-}
-
-/// One quiet hint line, centred or right-aligned. It never moves a layout.
-fn draw_hint(look: &Look, buf: &mut Buffer, area: Rect, y: u16, text: &str, right: bool) {
-    if y >= area.bottom() || text.is_empty() {
-        return;
-    }
-    let room = area.width.saturating_sub(4) as usize;
-    let shown = truncate(text, room, look.ell());
-    let w = width(&shown) as u16;
-    let x = if right {
-        area.right().saturating_sub(2 + w).max(area.x)
-    } else {
-        area.x + area.width.saturating_sub(w) / 2
-    };
-    put(buf, x, y, &shown, look.st(MUTED), room as u16);
-}
-
-/// The explicit End under the orb. Returns the row after it.
-fn draw_end(
-    look: &Look,
-    buf: &mut Buffer,
-    area: Rect,
-    y: u16,
-    right: bool,
-    hits: &mut HitMap,
-) -> u16 {
-    if y >= area.bottom() {
-        return y;
-    }
-    let w = 7u16.min(area.width);
-    let x = if right {
-        area.right().saturating_sub(2 + w)
-    } else {
-        area.x + area.width.saturating_sub(w) / 2
-    };
-    let r = Rect::new(x, y, w, 1).intersection(area);
-    if r.width == 0 {
-        return y;
-    }
-    let under = fill(look, buf, r);
-    put(
-        buf,
-        r.x + 2,
-        r.y,
-        "End",
-        look.bold(PRIMARY),
-        w.saturating_sub(2),
-    );
-    finish(look, buf, r, &under, PANEL_OPACITY);
-    hits.add(r, Target::ManagerEnd);
-    r.bottom()
-}
-
-/// The typed field, directly under the focused orb. Returns its row.
-fn draw_field_at(app: &App, look: &Look, buf: &mut Buffer, area: Rect, y: u16) -> u16 {
-    let Some(field) = app.ui.manager.field.as_ref() else {
-        return y;
-    };
-    let w = (area.width / 2).clamp(20, 60).min(area.width);
-    let x = (area.x + area.width / 2).saturating_sub(w / 2).max(area.x);
-    let r = Rect::new(x, y, w, 1).intersection(area);
-    if r.height == 0 {
-        return y;
-    }
-    let under = fill(look, buf, r);
-    let text = field.text();
-    // A prompt mark, so the pill reads as somewhere to type.
-    let prompt = if look.t.opts.ascii { ">" } else { "\u{203a}" };
-    put(buf, r.x + 1, r.y, prompt, look.st(MUTED), 1);
-    let (left, inner) = (r.x + 3, r.width.saturating_sub(5) as usize);
-    if text.is_empty() {
-        put(buf, left, r.y, PLACEHOLDER, look.st(MUTED), inner as u16);
-        app.ui.manager.cursor.set(Some((left, r.y)));
-    } else {
-        // Long lines show their tail, where the typing is.
-        let shown = crate::text::truncate_start(&text.replace('\n', " "), inner, look.ell());
-        put(buf, left, r.y, &shown, look.st(PRIMARY), inner as u16);
-        let col = width(&shown).min(inner) as u16;
-        app.ui.manager.cursor.set(Some((left + col, r.y)));
-    }
-    finish(look, buf, r, &under, PANEL_OPACITY);
-    r.y
-}
-
 // ---- the card ---------------------------------------------------------------------------------
 
 /// A pickable row: its first line, how many lines, its number, and the cells it spans.
@@ -604,8 +385,10 @@ fn default_title(card: &Value) -> String {
     match card["type"].as_str().unwrap_or("") {
         "board" => card["project"]
             .as_str()
-            .map_or("Sessions".to_owned(), str::to_owned),
-        "sessions" => "Sessions".to_owned(),
+            .map_or("Sessions".to_owned(), |project| {
+                format!("Sessions in {project}")
+            }),
+        "sessions" => "Matching sessions".to_owned(),
         "approval" => "Approval".to_owned(),
         "question" => "Question".to_owned(),
         "diagram" => "Diagram".to_owned(),
@@ -1203,66 +986,4 @@ fn draw_orb(app: &App, buf: &mut Buffer, area: Rect, anchor: Anchor, width: u16,
             width: zone.width,
             height: zone.height,
         }));
-}
-
-/// The current model excerpt and latest tool, without a log or chat surface.
-fn draw_preview(app: &App, look: &Look, buf: &mut Buffer, area: Rect, mut y: u16) -> u16 {
-    let Some(preview) = &app.ui.manager.preview else {
-        return y;
-    };
-    let w = area.width.saturating_sub(4).min(76);
-    let x = area.x + area.width.saturating_sub(w) / 2;
-    let source = preview["source"].as_str().unwrap_or("Model");
-    let clipped = if preview["clipped"].as_bool() == Some(true) {
-        " · excerpt"
-    } else {
-        ""
-    };
-    let mut lines = vec![format!("Model context · {source}{clipped}")];
-    if let Some(rows) = preview["lines"].as_array() {
-        lines.extend(
-            rows.iter()
-                .take(3)
-                .filter_map(|v| v.as_str().map(str::to_owned)),
-        );
-    }
-    if let Some(tool) = preview.get("tool").filter(|v| v.is_object()) {
-        lines.push(format!(
-            "Tool · {} · {}",
-            tool["name"].as_str().unwrap_or("tool"),
-            tool["status"].as_str().unwrap_or("running")
-        ));
-        lines.push(format!(
-            "{}{}",
-            tool["arguments"].as_str().unwrap_or(""),
-            if tool["clipped"].as_bool() == Some(true) {
-                " …"
-            } else {
-                ""
-            }
-        ));
-    }
-    let available = area.bottom().saturating_sub(3).saturating_sub(y) as usize;
-    if lines.len() > available && available > 0 {
-        lines.truncate(available);
-        *lines.last_mut().unwrap() = "… more in Manager context".to_owned();
-    }
-    for line in lines {
-        if y >= area.bottom().saturating_sub(3) {
-            break;
-        }
-        for col in x..x + w {
-            buf[(col, y)].set_symbol(" ").set_style(look.st(MUTED));
-        }
-        put(
-            buf,
-            x,
-            y,
-            &truncate(&line, w as usize, "…"),
-            look.st(MUTED),
-            w,
-        );
-        y += 1;
-    }
-    y.saturating_add(1)
 }

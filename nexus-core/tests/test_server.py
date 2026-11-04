@@ -69,7 +69,7 @@ async def test_an_anonymous_server_answers_without_a_token(tmp_path, monkeypatch
 async def test_info_reports_the_api_contract_clients_check(setup):
     _, client, _, _ = setup
     info = (await client.get("/api/info")).json()
-    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 4}
+    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 5}
     assert set(info) >= {"version", "pid", "home", "url", "log", "retention", "retention_status",
                          "retry", "idempotency"}
     assert info["retention"]["wire_success_seconds"] == 3600
@@ -739,7 +739,7 @@ async def test_turn_summaries_shape_order_and_errors(setup):
         "finished": first["requests"][0]["attempts"][0]["finished"]}]
     [tool] = first["tools"]
     assert (tool["call_id"], tool["name"], tool["state"], tool["is_error"]) == ("c1", "read", "inserted", False)
-    assert "output" not in tool and "arguments" not in tool and "partial" not in first["requests"][0]
+    assert "output" not in tool and "arguments" not in tool and first["requests"][0]["partial"] is None
     assert (page["more_before"], page["more_after"], page["floor"]) == (False, False, None)
     assert page["usage"] == {"since": None, "models": {}}
 

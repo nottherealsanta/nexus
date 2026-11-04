@@ -74,6 +74,9 @@ function completionFor(text: string): Completion | null {
 }
 
 export function Composer() {
+  return <If when={viewed()?.kind !== "manager"} else={<View class="px-5 py-4"><Text class={T.meta}>Manager session · read-only debug view</Text></View>}>{() => <EditableComposer />}</If>;
+}
+function EditableComposer() {
   let ref: any;
   focusComposer.fn = () => { try { ref?.focus(); } catch {} };
   const h = signal(28);

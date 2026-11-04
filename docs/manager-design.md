@@ -476,6 +476,15 @@ does not wait for a click.
 whatever it speaks also reaches OpenAI. Show a one-time notice per provider on first use, re-shown when it changes,
 like old Nexus's `LiveConsent`. Run results through the existing redaction, and don't speak secrets.
 
+## Current client presentation (user revision, 2026-11-04)
+
+The latest user revision supersedes the central call-stage and inspector-only choices below: Manager now lives
+in the top bar, with a one-row glowing audio orb and a notification dropdown for cards, typed input and an
+Open Manager session button. Audio is independent of debug navigation and typing; Esc closes only the dropdown.
+The backend session opens as a native read-only debug view, following existing episode rollover. See
+[manager.md](manager.md#manager-in-the-clients) for current behavior. The following original stage specifications
+are historical where they conflict with that revision.
+
 ## 10. The experience in the clients
 
 Voice and vision are the primary way in and the primary way to understand. The Manager has no timeline and no

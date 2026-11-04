@@ -85,6 +85,12 @@ impl EchoGuard {
         }
     }
 
+    // Deliberately matches nexus01 rust/live/src/dsp.rs: speech above the
+    // barge-in threshold must reach the service even while playback is active.
+    fn allow_mic_at(&self, now_ms: u64, headphones: bool, mic_rms: f32) -> bool {
+        !self.holds_at(now_ms, headphones) || mic_rms > 0.12
+    }
+
     fn holds_at(&self, now_ms: u64, headphones: bool) -> bool {
         !headphones && now_ms < self.until_ms.load(Ordering::Relaxed)
     }
@@ -477,7 +483,11 @@ fn devices(
                 levels.mic.store(rms(&mono).to_bits(), Ordering::Relaxed);
                 // Without echo cancellation the microphone hears the speaker: with no headphones, hold it
                 // while speech is playing so the voice does not answer itself.
-                let hold = gate.holds_at(gate.start.elapsed().as_millis() as u64, headphones);
+                let hold = !gate.allow_mic_at(
+                    gate.start.elapsed().as_millis() as u64,
+                    headphones,
+                    rms(&mono),
+                );
                 if hold {
                     pending.clear();
                 } else {
@@ -503,6 +513,19 @@ fn devices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voice_barge_in_crosses_the_echo_guard_as_in_nexus01() {
+        let data: serde_json::Value = serde_json::from_str(include_str!(
+            "../../interface/scenarios/manager-barge-in.json"
+        ))
+        .unwrap();
+        let gate = EchoGuard::new();
+        gate.observe_at(data["speaker_rms"].as_f64().unwrap() as f32, 100);
+        assert!(gate.allow_mic_at(150, false, data["microphone_rms"].as_f64().unwrap() as f32));
+        assert!(!gate.allow_mic_at(150, false, data["echo_rms"].as_f64().unwrap() as f32));
+        assert!(gate.allow_mic_at(150, true, 0.02));
+    }
 
     #[test]
     fn playback_spans_packets_and_absorbs_jitter_before_resuming() {

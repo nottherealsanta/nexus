@@ -154,8 +154,8 @@ class Client:
         """Server-sent events as dicts; the first is `server.connected`.
 
         `server.connected` carries `generation`, `head` and `head_cursor`; every
-        later event carries `id` and `cursor` (except `bus.overflow`, which is
-        stream control). `cursor` is sent as `Last-Event-ID`.
+        later durable event carries `id` and `cursor`. Live-only deltas carry
+        `id: None` and no cursor; `bus.overflow` is stream control. `cursor` is sent as `Last-Event-ID`.
         """
         params = {"session": session_id} if session_id else {}
         headers = {"last-event-id": cursor} if cursor else {}

@@ -252,6 +252,13 @@ class ExportView:
         ).fetchall()
         return [row["id"] for row in rows]
 
+    def compaction(self, session_id: str) -> dict[str, Any] | None:
+        exists = self.db.execute("select 1 from sqlite_master where name = 'session_compaction'").fetchone()
+        if not exists:  # exporting a pre-upgrade database stays read-only
+            return None
+        row = self.db.execute("select * from session_compaction where session_id = ?", (session_id,)).fetchone()
+        return dict(row) if row else None
+
     def snapshot(self, session_id: str) -> tuple[dict[str, Any] | None, float | None]:
         row = self.db.execute(
             "select data, created from session_snapshot where session_id = ?", (session_id,)
@@ -562,6 +569,9 @@ def _markdown_session(view: ExportView, row: dict[str, Any], in_export: set[str]
     else:
         yield "- Snapshot: none stored\n"
     yield f"- Messages: {counts['messages']} · Events: {counts['events']}\n"
+    if compacted := view.compaction(sid):
+        yield (f"- Events compacted: {compacted['removed']} diagnostic events removed; "
+               "messages, snapshots and turn summaries are retained.\n")
     if running:
         yield ("- Status at the boundary: **running** — this is the durable partial state; the turn "
                "was not interrupted or waited for and later output is not included.\n")
@@ -660,6 +670,7 @@ def _json_session(view: ExportView, row: dict[str, Any], in_export: set[str]) ->
             "durable_partial": sid in view.running_sessions,
         },
         "counts": view.counts(sid),
+        "events_compacted": view.compaction(sid),
     }
     text = _dumps(header)
     yield text[:-1]  # reopen the object to stream messages and events

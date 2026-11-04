@@ -1,0 +1,10 @@
+{
+  "description": "Join mid-response: queued deltas merge with a checkpoint and PartDone replaces text exactly",
+  "checkpoint": {"request_id": "req_live", "seq": 2, "parts": [{"type": "reasoning", "summary": "Thinking", "done": true}, {"type": "text", "text": "Hello", "done": false}]},
+  "queued": [
+    {"type": "text_delta", "request_id": "req_live", "seq": 2, "part_index": 1, "text": "Hello"},
+    {"type": "text_delta", "request_id": "req_live", "seq": 3, "part_index": 1, "text": " world"}
+  ],
+  "final": {"type": "part_done", "request_id": "req_live", "seq": 4, "part_index": 1, "part": {"type": "text", "text": "Hello world!", "raw": {"exact": true}}},
+  "expected": {"text": "Hello world!", "reasoning": "Thinking"}
+}

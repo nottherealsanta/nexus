@@ -61,83 +61,32 @@ describe("manager keys and clicks", () => {
   const board = (scenarios as any).cards.find((c: any) => c.name === "board").card;
   const approval = (scenarios as any).cards.find((c: any) => c.name === "approval").card;
 
-  test("a focused call dims the app, the card has its footer, and esc ends the call", async () => {
+  test("cards appear in an undimmed dropdown and Escape closes only the dropdown", async () => {
     const app = await withCard(board);
     await app.waitFor("id:manager-card");
-    expect(app.shows("id:manager-dim")).toBe(true);
-    expect(shown(app)).toContain("1-6 open · space talk");
-    expect(shown(app)).toContain("dismiss");
+    expect(app.shows("id:manager-dim")).toBe(false);
+    expect(shown(app)).toContain("Open Manager session");
     await app.keyboard.press("escape");
-    await app.waitFor("id:manager-card", { state: "gone" });
-    await app.waitFor("id:manager-dim", { state: "gone" });
-    expect(app.shows("id:manager-orb")).toBe(false);
-    expect(app.shows("id:manager-end")).toBe(false);
+    await app.waitFor("id:manager-dropdown", { state: "gone" });
+    expect(app.shows("id:manager-orb")).toBe(true);
+    expect(manager(app).some(r=>r.url.endsWith("/api/manager/stop"))).toBe(false);
   });
 
-  test("the header Manager button opens the context above a focused call", async () => {
-    const app = await withCard(board);
-    await app.waitFor("id:manager-card");
-    expect(app.shows("id:manager-dim")).toBe(true);
-    await app.press("id:open-manager-context");
-    await app.waitFor("id:manager-context");
-    expect(shown(app)).toContain("Manager context");
-    await app.keyboard.press("escape");
-    await app.waitFor("id:manager-context", { state: "gone" });
-    expect(app.shows("id:manager-card")).toBe(true);
-  });
-
-  test("an unfocused card has no scrim and no footer, and its keys are no-ops", async () => {
-    const app = await withCard({ ...approval, focused: false });
-    await app.waitFor("id:manager-card");
-    expect(app.shows("id:manager-scrim")).toBe(false);
-    expect(shown(app)).not.toContain("dismiss");
-    await app.keyboard.press("escape");
-    await app.keyboard.press("1");
-    await app.keyboard.press("space");
-    expect(app.shows("id:manager-card")).toBe(false);
-    expect(app.shows("id:manager-field")).toBe(false);
-    expect(manager(app).filter((r) => r.method === "POST" && !r.url.endsWith("/api/manager/activity")).length).toBe(0);
-  });
-
-  test("a number picks the row: a session that is gone is said so and the card stays", async () => {
-    const app = await withCard(board);
-    await app.waitFor("id:manager-card");
-    await app.keyboard.press("2");
-    await app.waitFor("text:That session no longer exists.");
-    expect(app.shows("id:manager-card")).toBe(true);
-    await app.press("id:manager-row-1");
-    expect(shown(app)).toContain("That session no longer exists.");
-  });
-
-  test("typing a character opens the field with it; enter sends it as a typed line, esc ends the call and closes it", async () => {
-    const app = await withCard(approval);
-    await app.waitFor("id:manager-card");
-    await app.keyboard.press("y");
-    await app.waitFor("id:manager-field");
-    expect(app.value("id:manager-field")).toBe("y");
-    await app.keyboard.press("escape");
-    await app.waitFor("id:manager-field", { state: "gone" });
-    expect(app.shows("id:manager-card")).toBe(false);
-    expect(manager(app).some((r) => r.url.endsWith("/api/manager/say"))).toBe(false);
-  });
-
-  test("the header Manager button opens the read-only context modal", async () => {
-    const app = await open("./ComposerFixture.tsx", {
-      network: {
-        ...network,
-        "GET */api/manager/context": {
-          body: { title: "Manager context", document: "Episodes\n─────\ncurrent  ses_1\n\nRecent log\n──────────\nwhat's going on?\n" },
-        },
-      },
-      platform: "web", colorScheme: "dark", width: 1280, height: 800,
-    });
+  test("header toggles typed input without starting audio", async () => {
+    const app = await open("./ComposerFixture.tsx", { network, platform: "web", colorScheme: "dark", width: 1280, height: 800 });
     await app.waitFor("id:open-manager-context");
-    await app.press("id:open-manager-context");
-    await app.waitFor("id:manager-context");
-    expect(shown(app)).toContain("current  ses_1");
-    expect(shown(app)).toContain("Recent log");
-    await app.keyboard.press("escape");
-    await app.waitFor("id:manager-context", { state: "gone" });
+    await app.press("id:open-manager-context"); await app.waitFor("id:manager-field");
+    expect(shown(app)).toContain("Open Manager session");
+    expect(manager(app).some(r=>r.url.endsWith("/api/manager/start"))).toBe(false);
+    await app.keyboard.press("escape"); await app.waitFor("id:manager-dropdown",{state:"gone"});
+  });
+
+  test("input stays in the dropdown and a typed line is sent without opening voice", async () => {
+    const app = await withCard(approval); await app.waitFor("id:manager-field");
+    await app.type("id:manager-field", "y"); await app.keyboard.press("enter");
+    expect(manager(app).some(r=>r.url.endsWith("/api/manager/say"))).toBe(true);
+    expect(manager(app).some(r=>r.url.endsWith("/api/manager/live/start"))).toBe(false);
+    expect(app.shows("id:manager-field")).toBe(true);
   });
 
   test("esc and letters at rest belong to the app", async () => {
