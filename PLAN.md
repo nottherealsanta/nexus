@@ -151,6 +151,9 @@ Items are grouped by area. Each says what "done" means where it is not obvious.
 Fix these locally before new work: they are real regressions or stale tests, independent of CI (which is
 deferred).
 
+- [ ] **TUI: not started in a branch yet.** An agent began investigating the failing tests on 2026-11-04 and was
+  stopped before committing anything. CI's `tui` job stops at the first failing test binary (the markdown lib test),
+  so the shell and timeline failures are hidden there; run `cargo test --no-fail-fast` locally.
 - [ ] **TUI formatting:** `cargo fmt` in `nexus-tui` (`live.rs`, `manager.rs`, `dictation.rs`, `render.rs`,
   `tests/manager.rs`). This is CI's `lint` failure.
 - [ ] **TUI clippy (`-D warnings`):** unused `composer_inner` (`render.rs:703`); `if_same_then_else`
@@ -171,19 +174,22 @@ deferred).
   - `shell::session_rows_follow_d03_at_sidebar_widths_22_28_and_34` (`:3015`): row index 0 where 2 is expected.
   - `timeline::mouse_drag_selects_and_copies_timeline_text_without_activating_the_block` (`tests/timeline.rs:46`):
     a drag no longer emits `Effect::Copy("Hello")`. This one looks like a real regression in selection/copy.
-- [ ] **Core failing tests:**
-  - `test_manager_service.py::test_start_returns_a_call_and_status_restores_it_without_secrets` (line 39): `call`
-    now carries `live: None` (GPT-Live). Update the test, and `docs/api.md` if the field is not documented. This is
-    CI's `core` failure.
-  - `test_manager_live.py::test_two_real_peers_exchange_audio_in_process` (line 278): no audio samples arrive
-    through the in-process `aiortc` peers. Find out whether it is code, the Opus/aiortc environment or timing; if it
-    needs real codecs, mark it so it skips with a reason where they are missing.
-  - `test_eventlog.py::test_inspector_load_and_replay_have_independent_deduplication` fails only because the local
-    `node` crashes (environment); make the test skip with a reason when `node` cannot run.
+- [ ] **Core failing tests: fixed in PR #99 (`fix/ci-core`), not yet merged.** Both `core` jobs pass on the PR;
+  merge it with the TUI fix, since `ci-ok` stays red until then.
+  - `test_manager_service.py::test_start_returns_a_call_and_status_restores_it_without_secrets`: now expects
+    `live: None`; `docs/api.md` and `docs/manager.md` document `call.live`.
+  - `test_eventlog.py::test_inspector_load_and_replay_have_independent_deduplication`: skips with a reason when
+    `node` cannot run (the skip path itself is untested, since `node` works again).
+  - `test_manager_live.py::test_two_real_peers_exchange_audio_in_process`: passes on CI (macOS and Ubuntu) and 4/4
+    locally; the earlier failure was not reproduced, so it is unchanged.
+  - Seen once under load, passes alone: `test_server.py::test_code_nested_write_needs_no_approval_and_kernel_api`
+    (possible flake; watch it).
 - [ ] **NSH failing tests:** `i7.test.tsx` "Settings opens as a modal … Esc returns" (line 62) expects Settings to
   stay open after the first Esc; after the two-pane rebuild the first Esc leaves the Providers page. Decide the
   intended Esc behaviour (it should match the TUI: Esc steps back, then closes) and fix the test or the code. The
-  four files that cannot load `nexus/native` are in 8.2.
+  four files that cannot load `nexus/native` are in 8.2. WIP on branch `ci/nsh` (`9c5a127`, unverified): the
+  dictation module looks up `nexus/native` lazily, as `mermaid.ts` does; `npm run check` and the browser tests have
+  not been run on it, and the `MicrophoneModule` type it imports is not declared by `nexus/native` yet.
 - [ ] Then rerun the [health check](#health-check-2026-11-04) and update its table.
 
 ### 1. Release and installation
@@ -202,9 +208,15 @@ deferred).
 - [ ] **Update leftover `nexus10` wording** in `AGENTS.md` and `docs/development.md` where it names the branch
   rather than the pre-release home.
 
-#### Deferred: CI (user decision, 2026-11-04)
+#### CI (started 2026-11-04, paused)
 
-Not to be worked on for now. Recorded so nothing is lost:
+The user first deferred CI, then asked for it to be worked on, then paused it. State on 2026-11-04:
+
+- `main` (`89eb847`) fails `lint` (`cargo fmt` diffs in `dictation.rs`, `live.rs`, `manager.rs`, `render.rs`,
+  `tests/manager.rs`), `tui` (macOS and Ubuntu) and `core` (macOS and Ubuntu). `mermaid` passes.
+- PR #99 (`fix/ci-core`) fixes `core`; open, not merged.
+- Branch `ci/nsh` has one WIP commit (above); the CI job itself is still `if: false`.
+- Anyone running `cargo fmt` while editing the Manager files will also clear most of the `lint` failure.
 
 - `ci-ok` failed on the last five pushes to `main` (11-01 to 11-03): `lint` (TUI fmt), `core` (the Manager status
   test), `tui`. Item 0 fixes the causes locally.
