@@ -7,14 +7,14 @@ the milestone status; this page describes the code as it is.
 
 What is built in Core: the typed Manager (M2), the pipeline-voice server side (M3: `manager.speech` per sentence,
 `POST /api/voice/speak` with text, barge-in, activity) and attention with the section 9 guards finished and the
-privacy notice (M4). Not built: GPT-Live (M5), hands-free and the clients' stage, orb and audio. `ManagerService.wake()`
+privacy notice (M4). Not built: hands-free, iOS call audio and the real-device/real-service checks (below). `ManagerService.wake()`
 remains as a seam but nothing in Core uses it: attention needs no model.
 
 ```
 nexus/manager/
   service.py    one per daemon: the call, the holder, the turn worker, episodes, world and facts
   turn.py       TurnState (authority), RateLimiter, SentenceSplitter
-  context.py    snapshot, delta, the user's view, the recap, data blocks for session text
+  context.py    snapshot, delta, the user's view, the recap, data blocks for session text, the context modal text
   tools.py      the 16 tools and their catalog, with the authority checks
   stage.py      card validation (exactly the 10.7 shapes) and the one-card stage
   view.py       the holder's view, navigation handshake, back stack
@@ -40,8 +40,8 @@ They are excluded in `Store`, so a call site that forgets cannot leak one: `sess
 sessions unless asked (`kind="manager"`, `hidden=True`). A stream drops every event of a hidden session unless it
 is filtered to that episode's own id (`eventlog.Stream`), so no client's rail ever sees one. The events stay in the
 durable log: `GET /api/manager/episode` lists the episode ids, and `/api/session/{id}/event`, `/message` and the
-inspector open one by id ("the full log is in the inspector only", D5). `tests/test_manager_store.py` is the leak
-test.
+inspector open one by id. The clients' header button shows a bounded, read-only version of the current context in a
+debug modal (below); the full raw log stays in the inspector (D5). `tests/test_manager_store.py` is the leak test.
 
 `Session` gained `kind`, `topic` and `topic_seq`; `Project` gained `hidden`; `message` gained `origin`. An existing
 0.10 database gains the columns in place on open (schema version unchanged, like the payload-storage columns).
@@ -74,6 +74,45 @@ A turn: `say` queues the utterance and returns `202 {turn_id}`. The worker runs 
 `POST /api/manager/cancel` is barge-in: it mutes the turn's remaining speech and drops queued utterances, and
 interrupts the turn only if no tool has changed a session yet (`TurnState.acted`); otherwise the turn keeps going
 and the response says so.
+
+## Call mode in the clients
+
+Both clients draw the Manager as a call (docs/manager-design.md 10.1 and 10.6). **No call** is nothing at all. A
+**focused call** takes the stage: a large centred orb, the app behind dimmed to about 30%, the caption under the
+orb, one quiet hint line and an explicit **End** under that, and a card, if any, below them. **Esc ends the whole
+call** in every state, focused or minimised: it stops speech, cancels the Manager's turn, drops the recording and
+the typed field, clears the card and tears the call down. It never minimises and, while any call is open, it never
+reaches the session interrupt. **Minimise** is only the palette action `manager.minimise`: `/manager` starts a
+call that way (the quiet corner), and the palette can tuck a focused call away. A **minimised call** shows the orb,
+its caption (a proactive line, or a waiting card's one-line caption) and the hint/End. `alt+m` brings it back and
+talks.
+
+The hint line names the current state's keys and always how to end: `esc end` is in every state. The four actions
+stay separate: `alt+s` (NSH `cmd+shift+s`) stops speaking; `alt+c` (NSH `cmd+shift+c`) cancels the Manager's turn;
+`alt+shift+d` (NSH `cmd+alt+shift+d`) dismisses the card; Esc, End under the orb, `alt+shift+m` (NSH
+`cmd+alt+shift+space`), `/manager stop` or saying "that's all" ends the call. Ending never stops a session.
+`space` (when the call is focused) or `alt+m` talks; talking over the Manager is a barge-in. `enter` sends while
+listening or typing, digits pick a card row, and a click on a row opens it, outside a card dismisses it, the orb
+talking and End ending the call. A focused call takes every bare key (the app's global modifier shortcuts still work);
+a minimised call leaves the app's bare keys alone, except Esc, which ends the call. While the context modal is open
+it takes Esc first (see below).
+
+## The context modal (debugging)
+
+The header's **Manager** button opens a read-only, scrollable modal with the Manager's current hidden context. It is
+an inspector-style debug view, not a timeline or a chat: it does not add a Manager session to the rail and it is not
+a second place to talk to it. Core formats the same text for both clients (`GET /api/manager/context`):
+
+* **Episodes:** the current hidden episode (id, start, model, `continued_from`) and the earlier ones.
+* **Recap:** the recap carried into this episode, or that there is none.
+* **State snapshot and deltas:** each turn's `<nexus_state>` block (the first turn's full snapshot; later turns'
+  deltas), with the user view when it was sent.
+* **Recent log:** the stored messages, the Manager's sentences, reasoning summaries, tool calls and results,
+  newest last.
+
+It is bounded: the last 40 log entries and the last 12 state blocks are shown, each entry is cut at 1200 characters,
+and Core says how many were left out or cut. The full raw log stays in the inspector (`Manager session in the
+inspector`, or `/manager-session`). Esc closes the modal; if a call is open, a second Esc ends it.
 
 ## Episodes, recap, snapshot and delta (plan section 6)
 
@@ -317,7 +356,13 @@ answer, and returns `{call_id, audio}` (the audio format). The client then opens
 by another client): **binary frames are raw PCM16 little-endian mono at 24 kHz, 20 ms or any length, both ways**; text frames `mute`
 and `unmute` (client to Core) silence the microphone. A client that drops its socket does not end the call. Errors from
 `live/start` are 409: `live_mode_off`, `consent_required` (a separate notice for `codex`, `POST /api/manager/consent
-{accept, version, provider: "codex"}`), `live_busy`, `live_unsupported`, or a `live_*` code from the service.
+{accept, version, provider: "codex"}`), `live_busy`, `live_cancelled` (the call ended while the voice was
+starting), `live_unsupported`, or a `live_*` code from the service. Core does not hold the Manager lock while the
+voice opens (a WebRTC offer can take seconds), so `stop`/Esc still ends the call at once.
+
+While the voice is open, `GET /api/manager` includes `call.live: {style, peer, client_attached, pending, counts}`
+(the field is `null` otherwise): the wire route, the WebRTC peer state, whether the client's audio socket is attached,
+how many delegations are waiting for a Manager answer, and counters for audio and events from each side.
 
 - **Authority.** `session.delegation.created` carries no request. The Manager hears the *user's* `input_transcript` since the last hand-off as a
   `speech` utterance; the delegation's own text and everything the voice said are ignored. A delegation with no user
@@ -340,4 +385,4 @@ no `getUserMedia`), wired in `core/manager.ts`; the web host (`scripts/serve.mjs
 token. TUI: `nexus-tui/src/live.rs` (cpal in, rodio out, `tokio-tungstenite`). Both show a failed start as an error on the
 open call and keep the typed field. The talk shortcut only interrupts. iOS needs only the same mic and speaker loop over this
 socket (not built). Tested with fake transports and peers, plus two real `aiortc` peers exchanging audio through Opus
-in-process; never with a real call, real devices or real echo.
+in-process (that test skips where aiortc/PyAV lacks Opus); never with a real call, real devices or real echo.

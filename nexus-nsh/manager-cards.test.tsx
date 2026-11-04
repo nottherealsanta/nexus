@@ -16,6 +16,7 @@ const network = {
   "GET */api/model/last*": { body: { model: "scripted/m" } },
   "GET */api/model*": { body: { source: "t", models: [], model: "scripted/m" } },
   "GET */api/agent*": { body: { agents: [], problems: [] } },
+  "GET */api/manager/context": { body: { title: "Manager context", document: "Episodes\n─────\ncurrent  ses_1\n" } },
   "GET */api/skill*": { body: { skills: [], problems: [] } },
   "GET */api/mcp*": { body: { servers: [] } },
   "GET */api/session/ses_1/message*": { body: [] },
@@ -60,24 +61,40 @@ describe("manager keys and clicks", () => {
   const board = (scenarios as any).cards.find((c: any) => c.name === "board").card;
   const approval = (scenarios as any).cards.find((c: any) => c.name === "approval").card;
 
-  test("a focused card has a scrim and its footer; esc dismisses it", async () => {
+  test("a focused call dims the app, the card has its footer, and esc ends the call", async () => {
     const app = await withCard(board);
     await app.waitFor("id:manager-card");
-    expect(app.shows("id:manager-scrim")).toBe(true);
-    expect(shown(app)).toContain("1-6 open · space talk · esc close");
+    expect(app.shows("id:manager-dim")).toBe(true);
+    expect(shown(app)).toContain("1-6 open · space talk");
+    expect(shown(app)).toContain("dismiss");
     await app.keyboard.press("escape");
     await app.waitFor("id:manager-card", { state: "gone" });
+    await app.waitFor("id:manager-dim", { state: "gone" });
+    expect(app.shows("id:manager-orb")).toBe(false);
+    expect(app.shows("id:manager-end")).toBe(false);
   });
 
-  test("an unfocused card has no scrim, no footer and takes no keys", async () => {
+  test("the header Manager button opens the context above a focused call", async () => {
+    const app = await withCard(board);
+    await app.waitFor("id:manager-card");
+    expect(app.shows("id:manager-dim")).toBe(true);
+    await app.press("id:open-manager-context");
+    await app.waitFor("id:manager-context");
+    expect(shown(app)).toContain("Manager context");
+    await app.keyboard.press("escape");
+    await app.waitFor("id:manager-context", { state: "gone" });
+    expect(app.shows("id:manager-card")).toBe(true);
+  });
+
+  test("an unfocused card has no scrim and no footer, and its keys are no-ops", async () => {
     const app = await withCard({ ...approval, focused: false });
     await app.waitFor("id:manager-card");
     expect(app.shows("id:manager-scrim")).toBe(false);
-    expect(shown(app)).not.toContain("esc close");
+    expect(shown(app)).not.toContain("dismiss");
     await app.keyboard.press("escape");
     await app.keyboard.press("1");
     await app.keyboard.press("space");
-    expect(app.shows("id:manager-card")).toBe(true);
+    expect(app.shows("id:manager-card")).toBe(false);
     expect(app.shows("id:manager-field")).toBe(false);
     expect(manager(app).filter((r) => r.method === "POST" && !r.url.endsWith("/api/manager/activity")).length).toBe(0);
   });
@@ -92,7 +109,7 @@ describe("manager keys and clicks", () => {
     expect(shown(app)).toContain("That session no longer exists.");
   });
 
-  test("typing a character opens the field with it; enter sends it as a typed line, esc closes it", async () => {
+  test("typing a character opens the field with it; enter sends it as a typed line, esc ends the call and closes it", async () => {
     const app = await withCard(approval);
     await app.waitFor("id:manager-card");
     await app.keyboard.press("y");
@@ -100,8 +117,27 @@ describe("manager keys and clicks", () => {
     expect(app.value("id:manager-field")).toBe("y");
     await app.keyboard.press("escape");
     await app.waitFor("id:manager-field", { state: "gone" });
-    expect(app.shows("id:manager-card")).toBe(true);
+    expect(app.shows("id:manager-card")).toBe(false);
     expect(manager(app).some((r) => r.url.endsWith("/api/manager/say"))).toBe(false);
+  });
+
+  test("the header Manager button opens the read-only context modal", async () => {
+    const app = await open("./ComposerFixture.tsx", {
+      network: {
+        ...network,
+        "GET */api/manager/context": {
+          body: { title: "Manager context", document: "Episodes\n─────\ncurrent  ses_1\n\nRecent log\n──────────\nwhat's going on?\n" },
+        },
+      },
+      platform: "web", colorScheme: "dark", width: 1280, height: 800,
+    });
+    await app.waitFor("id:open-manager-context");
+    await app.press("id:open-manager-context");
+    await app.waitFor("id:manager-context");
+    expect(shown(app)).toContain("current  ses_1");
+    expect(shown(app)).toContain("Recent log");
+    await app.keyboard.press("escape");
+    await app.waitFor("id:manager-context", { state: "gone" });
   });
 
   test("esc and letters at rest belong to the app", async () => {

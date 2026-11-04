@@ -41,7 +41,8 @@ the project already open toggles its Sessions sidebar. On first
 selection it falls back to its newest unarchived root session or an empty new-session
 view. New-session composer text and images are kept separately per project, for the
 client process. The left sidebar (D03) lists the current project only (`ctrl+k` opens
-the switcher): `⌥ branch  ~/…/dir`
+the switcher). Its archive icon above the search shortcut includes archived sessions alongside active sessions when enabled.
+The list has `⌥ branch  ~/…/dir`
 sub-groups for linked worktrees, and two-line rows (mark slot, title, time;
 `⌥ branch`, `2 ↳`) ending with `+ New session`, whose label starts on the session titles' text edge; `Settings` is pinned at the bottom.
 Drag its inner edge to resize it (20–60 columns); dragging below 14 columns closes it.
@@ -748,8 +749,13 @@ The session context meter reads Core's context budget; `~` marks estimates.
 
 ## The Manager
 
-`alt+m` talks to the Manager (starts a call, opens the microphone, sends, or barges in); `alt+shift+m` or
-`/manager stop` ends it; `/manager <text>` sends a typed line. The orb, caption, typed field and card are
-painted over the finished frame (`src/orb.rs`, `src/stage.rs`; state in `src/manager.rs`) and the frame clock
-runs only while the orb is on screen. For `--dump-frame`, `NEXUS_TUI_MANAGER_PIN=state[:level]` (or `none`)
+The Manager uses call mode: `alt+m` or `space` talks (starts a call, opens the microphone, sends, or barges in);
+a focused call takes the stage as a large centred orb over a 30% scrim, with the caption, a state hint and End
+under it and a card below. `esc` ends the whole call in every state (speech, turn, recording, field and card
+included) and never reaches the session interrupt; the palette's `manager.minimise` tucks it into the corner, and
+`/manager` starts there. `alt+shift+m`, End or `/manager stop` also end it; `/manager <text>` sends a typed line.
+`alt+s` stops speaking, `alt+c` cancels the turn and `alt+shift+d` dismisses a card. The header's Manager button
+opens a read-only, scrollable modal with the hidden context Core formats (`GET /api/manager/context`); the
+inspector keeps the full raw log. The orb, caption, typed field and card are painted over the finished frame
+(`src/orb.rs`, `src/stage.rs`; state in `src/manager.rs`) and the frame clock runs only while the orb is moving. For `--dump-frame`, `NEXUS_TUI_MANAGER_PIN=state[:level]` (or `none`)
 holds the orb still and no audio device is touched; it is read nowhere else.

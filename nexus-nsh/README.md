@@ -204,7 +204,7 @@ nine shown as `*`. A project with
 no counts shows a muted rule below its initials instead. Hover or
 focus spells out all four counts with the project name;
 clicking restores the project's last selected session in this client, or its newest
-unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and Settings sits at the rail's foot while the sidebar is closed. The sidebar lists the current project's sessions only and ends in `+ New session`.
+unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and Settings sits at the rail's foot while the sidebar is closed. The sidebar lists the current project's sessions only and ends in `+ New session`. Its archive icon above the search shortcut includes archived sessions alongside active sessions when enabled.
 Projects also shows the selected
 project's `.mcp.json` and `.agents/mcp.json` servers. Enabled, valid entries start
 automatically with a new session, and the panel warns that their commands run then
@@ -524,17 +524,23 @@ estimate.
 
 ## The Manager (docs/manager-design.md 10)
 
-A voice agent above all sessions, drawn as three light layers over the app and present only when called: an orb
-at the bottom centre (anchored on the composer's top edge), a caption pill above it, a one-line typed field, and at
-most one card in a semi-transparent modal (scrim about 25%, panel about 80% with `backdropFilter` blur).
+A voice agent above all sessions, drawn as light layers over the app and present only when called. A focused call
+takes the stage: a large centred orb, the app behind it dimmed to 30%, the caption under the orb, one state hint
+and End under that, and at most one card below. Esc ends the whole call in every state (speech, turn, recording,
+field and card included) and never reaches the session interrupt; `manager.minimise` in the palette tucks it into
+the bottom-right corner, and `/manager` starts there. `alt+m`/Space talks, End or `cmd+alt+shift+space` also ends,
+`cmd+shift+s` stops speech, `cmd+shift+c` cancels the turn and `cmd+alt+shift+d` dismisses a card. The hint line
+always says `esc end`. The header's Manager button opens a read-only, scrollable debug modal with Core's formatted
+hidden context (`GET /api/manager/context`); the inspector keeps the full raw log.
 
 - `src/manager.ts`: pure logic (wording, orb priority, level smoothing, speech queue, `/manager` parsing, card helpers).
 - `src/core/manager.ts`: the controller (call, exchange, voice in through the composer's dictation, speech out through
   `speakText` in `src/speech.ts`, cards, `manager.navigate`, the engaged keys, the privacy notice). `manager-hooks.ts`
   is the seam to the store and sync.
-- `src/ui/manager/`: `stage.tsx` (layers), `orb.ts` (canvas drawing), `cards.tsx` (the seven cards), `settings.tsx`.
-- Idle is free: with no call nothing is mounted, no frame or timer runs, and no key is bound. Keys are taken only
-  while engaged (listening or a focused card); a field takes the printable keys itself.
+- `src/ui/manager/`: `stage.tsx` (layers), `orb.ts` (canvas drawing), `cards.tsx` (the seven cards), `context-modal.tsx` (the read-only debug modal), `settings.tsx`.
+- Idle is free: with no call nothing is mounted, no frame or timer runs, and no key is bound. A focused call takes
+  the keys; a minimised call leaves bare keys to the app except Esc, which ends the call (the manifest keeps Esc off
+  the session interrupt); a field takes the printable keys itself.
 - Mic level comes from `dictationLevel` (web `getUserMedia` or native `Microphone.level()`); playback level from a Web
   Audio analyser on the output. Where the platform has no analyser (possibly native), a soft synthetic envelope drives
   the speaking orb. Backdrop blur is a web, macOS and iOS feature; where it is not drawn the panel is the 80% surface.

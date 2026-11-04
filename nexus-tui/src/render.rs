@@ -335,6 +335,23 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         }
         // The Manager's orb, caption and card are painted over everything else.
         crate::stage::draw(a, buf, area, regions.composer, &mut hits);
+        // The focused call swallows the app's clicks, but the header's Manager
+        // button stays a global control: it is the one way into the debug modal.
+        if regions.manager.width > 0 && a.ui.manager.context.is_none() {
+            hits.add(regions.manager, Target::ManagerSession);
+        }
+        // The Manager's debug context is a modal above even the call stage.
+        if let Some(context) = &a.ui.manager.context {
+            draw_context_detail(
+                &cx,
+                buf,
+                area,
+                &context.title,
+                &context.text,
+                context.top,
+                &mut hits,
+            );
+        }
     }
     // The splash wipes into the first live frame: cells right of the curtain
     // still show the splash.
@@ -925,7 +942,7 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         draw_tab_icons(cx, buf, l, hits);
     }
 
-    // The Manager button, left of the right toggle: the Manager's own session in the inspector.
+    // The Manager button, left of the right toggle: the hidden context modal.
     if g.manager.width > 0 {
         let label = " Manager ";
         let live = cx.app.ui.manager.call.is_some();
@@ -2913,15 +2930,30 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     if r.height < 3 {
         return;
     }
-    // The search row opens the switcher; a blank row follows it.
-    let search = Rect::new(r.x, r.y, r.width, 1);
+    let toggle = Rect::new(r.right().saturating_sub(3).max(r.x), r.y, r.width.min(3), 1);
+    let toggle_style = if a.ui.show_archived {
+        cx.st(MULTI, SIDEBAR).add_modifier(Modifier::BOLD)
+    } else {
+        cx.st(MUTED, SIDEBAR)
+    };
+    let icon = if cx.t.opts.ascii { "A" } else { "▣" };
+    put(
+        buf,
+        toggle.x + toggle.width / 2,
+        toggle.y,
+        icon,
+        toggle_style,
+        1,
+    );
+    hits.add(toggle, Target::ArchivedFilter);
+    let search = Rect::new(r.x, r.y + 1, r.width, 1);
     let mut style = cx.st(MUTED, SIDEBAR);
     if cx.hovered(search) {
         style = style.patch(cx.st(PRIMARY, SIDEBAR));
         clear(buf, search, style);
     }
     let glyph = if cx.t.opts.ascii { "/" } else { "⌕" };
-    put(buf, r.x, r.y, glyph, style, 1);
+    put(buf, r.x + 1, search.y, glyph, style, 1);
     let key = a
         .manifest
         .command("session.switch")
@@ -2930,7 +2962,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     let kw = width(key) as u16;
     let kx = search.right().saturating_sub(kw + 1);
     // `Search sessions`, or `Search` when the key hint leaves no room for it.
-    let room = kx.saturating_sub(r.x + 3) as usize;
+    let room = kx.saturating_sub(r.x + 4) as usize;
     let label = if room >= 15 {
         "Search sessions"
     } else {
@@ -2938,15 +2970,15 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     };
     put(
         buf,
-        r.x + 2,
-        r.y,
+        r.x + 3,
+        search.y,
         &truncate(label, room, cx.ell()),
         style,
         room as u16,
     );
-    put(buf, kx, r.y, key, style, kw);
+    put(buf, kx, search.y, key, style, kw);
     hits.add(search, Target::RailSearch);
-    let list = Rect::new(r.x, r.y + 2, r.width, r.height.saturating_sub(2));
+    let list = Rect::new(r.x, r.y + 3, r.width, r.height.saturating_sub(3));
     if list.height == 0 {
         return;
     }
@@ -3009,14 +3041,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                 } else {
                     muted
                 };
-                put(
-                    buf,
-                    rr.x + 1,
-                    y,
-                    "+",
-                    style,
-                    1,
-                );
+                put(buf, rr.x + 1, y, "+", style, 1);
                 put(
                     buf,
                     rr.x + 3,

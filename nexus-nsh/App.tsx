@@ -9,6 +9,7 @@ import { RightRail, RightSidebar } from "./src/ui/right";
 import { Centre } from "./src/ui/centre";
 import { FilePanel } from "./src/ui/editor";
 import { ContextDetailModal } from "./src/ui/newsession";
+import { ManagerContextModal } from "./src/ui/manager/context-modal";
 import { ResourcesModal } from "./src/ui/resources";
 import { AlertDetail } from "./src/ui/alerts";
 import { UsageDialog } from "./src/ui/usage";
@@ -103,6 +104,7 @@ function App() {
         <AddProject />
         <Blocking />
         <ManagerStage />
+        <ManagerContextModal />
       </View>}>
         <ConnectScreen />
       </If>}>

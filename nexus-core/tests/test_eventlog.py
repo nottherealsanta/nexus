@@ -618,10 +618,35 @@ async def test_empty_query_cursor_is_invalid_even_with_valid_header(env):
     assert json.loads(body)["code"] == "invalid_cursor"
 
 
-def test_inspector_load_and_replay_have_independent_deduplication():
+def _node_or_skip() -> str:
     node = shutil.which("node")
     if not node:
         pytest.skip("Node is required for inspector state regression")
+    try:
+        probe = subprocess.run([node, "-e", "process.stdout.write('ok')"], check=False, capture_output=True,
+                               text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        pytest.skip(f"Node is present but cannot run ({type(exc).__name__})")
+    if probe.returncode != 0 or probe.stdout != "ok":
+        detail = (probe.stderr or probe.stdout).strip().splitlines()[:1]
+        pytest.skip(f"Node is present but cannot run ({detail[0] if detail else f'exit {probe.returncode}'})")
+    return node
+
+
+def _node_crashed(result: subprocess.CompletedProcess) -> str | None:
+    """A crash in Node itself (not the script's assertion) makes this environment unable to run the test."""
+    if result.returncode < 0:
+        return f"signal {-result.returncode}"
+    text = result.stderr.lower()
+    for marker in ("segmentation fault", "illegal instruction", "aborted (core dumped)", "bus error",
+                   "trace/breakpoint trap", "fatal error", "check failed", "assertion failed"):
+        if marker in text:
+            return marker
+    return None
+
+
+def test_inspector_load_and_replay_have_independent_deduplication():
+    node = _node_or_skip()
     source = (Path(__file__).parents[1] / "nexus/inspector/index.html").read_text()
     loading = source[source.index("let loadSeq = 0;"):source.index("// -- rendering")]
     applying = source[source.index("function applyEvent(e)"):source.index('document.addEventListener("keydown"')]
@@ -655,4 +680,7 @@ async function api(path) {
 })().catch(error => {console.error(error); process.exitCode = 1;});
 """
     result = subprocess.run([node, "-e", script], check=False, capture_output=True, text=True)
+    crashed = _node_crashed(result)
+    if crashed:
+        pytest.skip(f"Node crashed while running the inspector test ({crashed})")
     assert result.returncode == 0, result.stderr

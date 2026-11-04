@@ -631,21 +631,45 @@ to low opacity. Options to settle before building:
 | --- | --- | --- | --- |
 | Look | Orb centred and large; the app behind it at ~30% opacity (TUI: the existing `paint::scrim` dim; NSH: an opacity layer); caption under the orb; a card, if any, below the caption | Orb small at the bottom centre; app at full strength | Orb appears only while the key is held |
 | Who gets keys | The call, entirely; nothing reaches a session by accident | Shared with the app, as now | The app, except the talk key |
-| Esc | **Minimise**: the call keeps running, the orb shrinks to the corner, the app returns to full opacity and gets its keys back. Never ends the call, never interrupts a session | Must mean something per state (today's problem) | Not used |
+| Esc | **Minimise** in the first 2026-11-04 decision; **changed the same day: Esc ends the whole call** (stop speech, cancel the turn, drop the recording/field/card) and never interrupts a session | Must mean something per state (today's problem) | Not used |
 | End the call | An explicit **End** under the orb (click, `alt+shift+m`, or saying "that's all") | Same | Releasing the key ends the turn; the call is implicit |
 | Talk / interrupt | `space` (or `alt+m` from anywhere) talks; talking over the Manager stops its speech (barge-in) | `alt+m` | Hold `alt+m` |
 | Proactive lines | Arrive in the minimised orb as a caption; never take the stage | Same | Toast |
 
-- [x] Chosen: **A, call mode** (user, 2026-11-04).
-- [ ] For the chosen model, write the state table in `docs/manager-design.md` 10.1 and 10.6: states (no call,
+- [x] Chosen: **A, call mode** (user, 2026-11-04). Esc is **end the call**, not minimise (user, 2026-11-04; supersedes the first decision).
+- [x] For the chosen model, write the state table in `docs/manager-design.md` 10.1 and 10.6: states (no call,
   focused: listening / typing / thinking / speaking / card; minimised: idle / speaking / proactive; consent) and
   what Esc, `alt+m`, `alt+shift+m`, Space, Enter, digits and a click do in each. Keep four actions distinct: stop
   speaking, cancel the Manager's turn, dismiss the card, end the call.
-- [ ] Hard rule whatever the model: while a call is open, Esc never reaches the session interrupt.
-- [ ] One quiet hint line under the orb with the current state's keys, including how to end the call.
-- [ ] Build it in both clients together (TUI `manager.rs`, `stage.rs`, `orb.rs`; NSH `src/ui/manager/stage.tsx`,
+- [x] Hard rule whatever the model: while a call is open, Esc never reaches the session interrupt.
+- [x] One quiet hint line under the orb with the current state's keys, including how to end the call.
+- [x] Build it in both clients together (TUI `manager.rs`, `stage.rs`, `orb.rs`; NSH `src/ui/manager/stage.tsx`,
   `orb.ts`), with the manifest updated, `check_manifest.py` run, and tests in `tests/manager.rs` and
   `manager.test.tsx` for every state's Esc. Screenshots of focused and minimised calls in both clients.
+
+Landed (2026-11-04): call mode is in both clients. A focused call is a large centred orb over a 30% scrim, with
+the caption, hint and End under it and a card below. **Esc ends the whole call in every state, focused or
+minimised** (stop speech, cancel the turn, drop the recording and typed field, clear the card, tear the call down);
+it never minimises and never reaches the session interrupt. This supersedes the earlier same-day "Esc minimises"
+decision. Minimise remains only as the palette action `manager.minimise`; `/manager` opens a call quietly in the
+corner. The four actions are distinct (`alt+s` stop speaking, `alt+c` cancel the turn, `alt+shift+d` dismiss the
+card, Esc / End / `alt+shift+m` / "that's all" end the call). The hint line says `esc end` in every state.
+
+- [x] **Esc ends the call** in both clients, every state, with the state table, manifest escape rule, hints, docs and
+  tests updated; tests cover focused idle/listening/typing/thinking/speaking/card and minimised idle/speaking/card.
+- [x] **Hang fixes:** the TUI no longer joins a microphone capture thread on the UI thread (a stuck device open
+  froze keys and frames); Core releases the Manager lock while GPT-Live opens its WebRTC peer and signs the call,
+  so `stop`/Esc and status answer at once, and a start that loses its call returns `409 live_cancelled`. Regression
+  tests: `dictation.rs::retiring_a_stuck_capture_never_blocks_the_ui_thread`,
+  `test_manager_live.py::test_stopping_the_call_does_not_wait_for_a_slow_voice_start`.
+- [x] **Manager context modal:** the header Manager button opens a read-only, scrollable debug modal in both clients
+  with the hidden episodes and recap, each turn's state snapshot/delta and the recent log; Core formats it
+  (`GET /api/manager/context`), clipping is announced, and the inspector keeps the full log. It is not a timeline
+  or chat. Tests in `test_manager_context.py`, `tests/manager.rs` and `manager.test.tsx`.
+
+TUI `cargo test --test manager` and the NSH `manager.test.tsx` suite pass; `nsh check` and `check_manifest.py`
+pass. Screenshots of focused and minimised calls were captured for the first landing; the context modal screenshots
+are in the Manager screenshots set (see the summary in the change that added them).
 
 ##### Scrolling: the sent message goes to the top, and new content never yanks the reader
 
@@ -907,6 +931,45 @@ rename, confirm, usage, alerts, image preview, annotate, Manager stage, edge dra
 - [ ] Verify Cmd+arrow composer shortcuts in a terminal that forwards Super-modified keys.
 - [ ] Compare with old Nexus in a real terminal and review screenshots.
 
+#### 8.6 Project rail: user-defined order
+
+The user wants project tiles draggable in both TUI and NSH, with order persisted and synchronized. **Research
+(2026-11-04):** there is already a stable *derived* order: `App::rail_project_ids` in `nexus-tui/src/app.rs` and
+`railProjects` in `nexus-nsh/src/project-rail.ts` sort by project creation time then ID. The timestamps are stored,
+but no user-defined order was found in the project model (`nexus-core/nexus/store.py`). Other project lists use
+recently updated order, so changing that timestamp or the general project listing would have unrelated effects.
+The TUI immediately activates `Target::RailProject` on mouse-down; its drag handling is for sidebar resizing and
+selection, not project movement. NSH's rail uses a pressable `View`; its `PanResponder` is currently for resizing
+the sidebar, not the project tiles. Both clients derive collision-disambiguated rail initials in input order, so
+sorting those labels by the new display order would unexpectedly change labels when projects are moved.
+
+Proposed design (not implemented; scope choice below is still open):
+
+- [ ] **Core order and synchronization.** Persist a user-defined ordering of visible project IDs in Core, initially
+  equivalent to creation time then ID. Append new projects; remove deleted projects; never expose the Manager's
+  hidden project. Preserve existing project `created`/`updated` and revision semantics. Include the order in the
+  consistent `/api/snapshot` and publish a durable global event on changes, with reducers in both clients; ensure
+  snapshot watermark and event ordering cannot lose a move. Keep older snapshots/servers usable with the existing
+  creation-order fallback, and surface unsupported or failed mutations rather than pretending they succeeded.
+- [ ] **Move API.** Define and document an atomic, idempotency-keyed move by project ID and intended neighbor
+  (including an explicit end position), applied against Core's current order rather than replacing a stale whole
+  list. Specify validation, no-op/self moves, concurrent moves, deleted or hidden IDs, retries, and how clients
+  reconcile failures or a disconnected/reconnecting Core. Make ordering and event publication follow the existing
+  mutation/snapshot consistency guarantees; test restart and replay rather than assuming them.
+- [ ] **Shared interaction.** In both clients, drag a tile and display the insertion position; release commits,
+  while Escape or dropping outside the valid rail cancels. A click without a drag still selects/toggles the
+  project. Support moving to either end and through a scrollable/overflowing rail, without confusing the add or
+  Settings buttons for projects. Support touch in NSH without interfering with scrolling or accidental selection.
+  Add accessible **Move up** / **Move down** project-menu actions in both clients (including disabled boundary and
+  offline states), with shared manifest commands and keyboard access. Keep initials assigned in creation order,
+  independently of display order. Handle resize, project deletion and incoming reorder during an active drag.
+- [ ] **Verification and docs.** Add Core store/API/event tests for migration/default order, create/delete, hidden
+  projects, restart, snapshots, replay, concurrency, idempotency and failure handling; add shared scenarios and
+  interaction tests for both clients (click vs drag, cancel, boundaries, menus, scrolling and sync between clients).
+  Run Core tests, TUI tests, NSH web tests and manifest checks; capture and compare matching TUI/NSH screenshots,
+  including a drag target. Update both READMEs, `docs/api.md`, `docs/daemon.md`, and the porting ledger if old
+  Nexus behavior changes. Do not mark the work landed until it is verified.
+
 ### 9. Extensions, skills, MCP and hooks
 
 - [ ] Show agent and user-tool errors in client pickers and Settings; a visible changed-file notice for a running
@@ -1088,7 +1151,7 @@ format, so readers must handle both during the transition.
 
 | Decision | Answer |
 | --- | --- |
-| Manager interaction (8.0) | **Call mode (A):** orb centred, the app dimmed behind it, Esc minimises the call (never ends it, never interrupts a session), an explicit End ends it |
+| Manager interaction (8.0) | **Call mode (A):** orb centred, the app dimmed behind it. **Esc ends the whole call** (stop speech, cancel the turn, drop the recording/field/card; never minimises, never interrupts a session); an explicit End also ends it. This supersedes the same day's first "Esc minimises" answer |
 | Scroll pinning (8.0) | **Only a session's first message** goes to the top of the screen; later sends keep the normal behaviour, still without yanking a reader who scrolled up |
 | Pending rows (8.0) | **`S` / `Q`** in primary text, and NSH is aligned with the TUI's pending-row UI |
 | Event compaction (13.5) | **Yes:** a finished (idle or archived) session's events are deleted, announced by a `session.compacted` record; continuing the session later writes new events as usual. Losing the inspector's raw wire, step timings and the export's events section for compacted turns is accepted |
@@ -1110,6 +1173,7 @@ format, so readers must handle both during the transition.
 | Turn summaries: store `max_attempts` so a reloaded retry reads "n/max"? | Today reads "retry n in Ns" |
 | Fold the starting context after the first message (NSH Void open question 1)? | Leave it open |
 | Underline prose links because accent equals primary text (Void open question 3)? | Underline in prose |
+| Project order (8.6): rail only, or also the Projects list and project picker? | Rail only; leave their recent-order behavior unchanged until the user decides |
 
 ## Archived plans
 

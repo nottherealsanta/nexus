@@ -36,6 +36,18 @@ const network = {
 };
 
 describe("session switcher", () => {
+  test("Archived toggle includes archived sessions alongside active sessions", async () => {
+    const withArchived = { ...network, "GET */api/snapshot*": { body: { ...snapshot, sessions: [...snapshot.sessions, session("ses_old", "prj_1", "Archived task", 1, { archived: 1 })] } } };
+    const app = await open("./App.tsx", { network: withArchived, width: 1024, height: 768, platform: "web" });
+    await app.press("id:rail-project-prj_1");
+    await app.waitFor("id:session-ses_1");
+    expect(app.shows("id:session-ses_old")).toBe(false);
+    await app.press("id:chip-archived");
+    await app.waitFor("id:session-ses_old");
+    expect(app.shows("id:session-ses_1")).toBe(true);
+    await app.press("id:chip-archived");
+    expect(app.shows("id:session-ses_old")).toBe(false);
+  });
   test("pressing the open project in the rail toggles the sidebar", async () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
     await app.waitFor("id:rail-project-prj_1");

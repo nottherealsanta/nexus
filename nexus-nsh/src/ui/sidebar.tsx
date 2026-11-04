@@ -219,7 +219,7 @@ function rowSessions(): Session[] {
   m();
   const all = model.sessionsRecent().filter((s) => !s.parent_id);
   const p = currentProject();
-  return all.filter((s) => ((scopeAll() && (!railShown() || !!sessionQuery().trim())) || !p || s.project_id === p) && (archivedFilter() ? s.archived : !s.archived));
+  return all.filter((s) => ((scopeAll() && (!railShown() || !!sessionQuery().trim())) || !p || s.project_id === p) && (archivedFilter() || !s.archived));
 }
 function childCount(id: string) { let n = 0; for (const s of model.sessions.values()) if (s.parent_id === id) n++; return n; }
 export function attention(id: string): "waiting" | "error" | null {
@@ -258,10 +258,13 @@ export function SessionsTab() {
   return (
     <View class="flex-1 min-h-0">
       <View class={phone ? "gap-3 px-4 pt-4 pb-3" : "gap-2 py-2 pr-2"}>
+        <View class="flex-row justify-end">
+          <IconButton icon="archive" label="Archived" testID="chip-archived" selected={archivedFilter()} tint={archivedFilter() ? "tint-multi" : "tint-muted-foreground"} onPress={() => run("sessions.archived_filter")} />
+        </View>
         <View class={`relative w-full ${phone ? "h-11" : "h-8"}`}>
           <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`h-full w-full rounded-none pl-7 pr-2 ${TS.base} text-foreground placeholder:text-muted-foreground ${phone ? "bg-raised" : "bg-hover"}`} />
           {/* Painted after the input so its well does not cover the glyph. */}
-          <View class="absolute left-2 top-0 bottom-0 items-center justify-center" accessible={false}>
+          <View class="absolute left-[9px] top-0 bottom-0 items-center justify-center" accessible={false}>
             <Icon name="search" size={14} class="tint-muted-foreground" />
           </View>
           <If when={!!hint("session.switch") && !phone}>
@@ -279,14 +282,12 @@ export function SessionsTab() {
           <IconButton icon="plus" label="New session" testID="new-session" class={phone ? "bg-raised" : ""} onPress={() => { dismissSessionSearch(); if (phone) phonePage.set("conversation"); void run("session.new"); }} disabled={!availability(byId.get("session.new")!).ok} reason={availability(byId.get("session.new")!).ok ? hint("session.new") ?? undefined : availability(byId.get("session.new")!).reason} />
         </View>
         </If>
-        <View class="flex-row items-center gap-1">
-          <If when={!railShown()}>
+        <If when={!railShown()}>
+          <View class="flex-row items-center gap-1">
             <Chip label="Project" on={!scopeAll()} onPress={() => scopeAll.set(false)} />
             <Chip label="All projects" on={scopeAll()} onPress={() => scopeAll.set(true)} />
-          </If>
-          <View class="flex-1" />
-          <Chip label="Archived" on={archivedFilter()} onPress={() => run("sessions.archived_filter")} />
-        </View>
+          </View>
+        </If>
       </View>
       <If when={rowItems().length > 0} else={
         <If when={(m(), model.projects.size === 0)} else={<Empty title={sessionQuery().trim() ? "No matching sessions" : archivedFilter() ? "No archived sessions" : "No sessions yet"} body={archivedFilter() ? "Archive a session to find it here." : "Start one with the + button or the New session command."} />}>

@@ -132,10 +132,10 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/session/{id}/question` | | pending questions for that session (empty list when none) |
 | POST | `/api/session/{id}/question/{qid}` | `{answers: [{question_id, selected?, text?}, …]}` | 204; 400 invalid answer, 404 unknown question or session, 409 already resolved |
 | POST | `/api/client/view` | `{stream_id, client_id, project?, session?, panel?}` | the stored ephemeral view; 400 invalid id, 404 unknown project or session, 409 `stream_closed` or `client_mismatch` ([Client views](#client-views-ephemeral)) |
-| GET | `/api/manager` | | `{enabled, mode, model, consent, call: {call_id, holder, phase, error, card} or null}`: restores the Manager call after a reconnect ([The Manager](#the-manager)) |
+| GET | `/api/manager` | | `{enabled, mode, model, consent, live_consent, call: {call_id, holder, phase, error, card, live} or null}`: restores the Manager call after a reconnect; `call.live` is the GPT-Live diagnostics or `null` ([The Manager](#the-manager)) |
 | POST | `/api/manager/start` | `{stream_id, client_id}` | start the call on this client, or move it here: `{call_id, holder, mode, model}`; 409 `manager_disabled` or `stream_closed` |
 | POST | `/api/manager/stop` | `{stream_id}` | 204; ends the call, never stops a session |
-| POST | `/api/manager/live/start` | `{stream_id}` (holder; `[manager] mode = "live"`) | Core opens the GPT-Live call: `{call_id, audio}`; 409 `live_mode_off`, `consent_required`, `live_busy`, `live_unsupported`, `live_*` ([manager.md](manager.md#gpt-live-voice-m5-experimental-not-verified-against-the-real-service)) |
+| POST | `/api/manager/live/start` | `{stream_id}` (holder; `[manager] mode = "live"`) | Core opens the GPT-Live call: `{call_id, audio}`; 409 `live_mode_off`, `consent_required`, `live_busy`, `live_cancelled`, `live_unsupported`, `live_*` ([manager.md](manager.md#gpt-live-voice-m5-experimental-not-verified-against-the-real-service)) |
 | WS | `/api/manager/live/audio?stream_id=&token=` | binary PCM16 mono 24 kHz both ways; text `mute`/`unmute` | holder only; close codes 4401, 4403, 4404, 4409 |
 | POST | `/api/manager/say` | `{stream_id, text, source: "typed" or "speech"}` | 202 `{turn_id}`; the answer arrives as `manager.*` events |
 | POST | `/api/manager/cancel` | `{stream_id}` | `{cancelled, muted, dropped, reason?}`: barge-in |
@@ -143,6 +143,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | POST | `/api/manager/card/dismiss` | `{stream_id, card_id}` | 204; a stale card id changes nothing |
 | POST | `/api/manager/navigate/result` | `{stream_id, request_id, ok, reason?}` | 204; an unknown or late request id is ignored |
 | GET | `/api/manager/episode` | | the Manager's own past conversations, newest first, `[{id, created, updated, continued_from, model}]`; open one with the session routes or the inspector |
+| GET | `/api/manager/context` | | `{title, document, episode, episodes, clipped}`: the Manager's current hidden context as bounded, read-only text (episodes, recap, state snapshots and deltas, recent log) for the header's debug modal ([manager.md](manager.md#the-context-modal-debugging)) |
 | GET | `/api/manager/audit` | `?limit=&tool=` | what the Manager did on the user's words, newest first: `[{id, time, episode_id, turn_id, tool, target, heard, ok, result}]` |
 | GET | `/api/event` | `?session=` (that session and its descendants), `?cursor=<generation>:<id>` (or `Last-Event-ID`) | server-sent events (below) |
 | GET | `/api/info` (handshake) | | `api_version` is `{major, minor}`. A client sends nothing past `/api/info` when the major differs; a newer minor only adds fields, so older clients keep working and say what they lack |
@@ -987,6 +988,19 @@ accepted by `stop`, `say`, `cancel`, `activity`, `card/dismiss` and `navigate/re
 {"error", "code": "not_holder"}` with no identifier echoed. Starting from another client moves the call (new
 `call_id`); the previous holder sees a `manager.state` with a different `call_id` and shows "Moved to <holder>". The
 call ends when the holder's event stream closes. `409 manager_disabled` when `[manager] enabled` is false.
+
+`GET /api/manager/context` is the header's read-only debug view. It needs no call or holder and returns the same text
+for both clients: `document` has the hidden episodes (current and earlier), the recap the current episode started
+with, each turn's `<nexus_state>` block (snapshot or delta, with the user view when sent), and the recent log of
+messages, reasoning summaries, tool calls and results. It is bounded and says what it cut: the last 40 log entries
+and last 12 state blocks are shown, entries are cut at 1200 characters, and `clipped` carries
+`{entries, log, states}`. The full raw log stays in the inspector. This is not a Manager timeline or chat view.
+
+`GET /api/manager` also carries `call.live`, or `null` when GPT-Live is not running: `{style, peer,
+client_attached, pending, counts}`. `style` is the wire route (`codex`), `peer` the WebRTC connection state,
+`client_attached` whether an audio socket is open, `pending` the delegations waiting for a Manager answer, and
+`counts` the call's counters (`audio.from_client`, `audio.to_client`, `event.<EventName>` and
+`unknown.<wire type>`) so a silent call can be diagnosed without logs.
 
 **Events** (`data` shown):
 

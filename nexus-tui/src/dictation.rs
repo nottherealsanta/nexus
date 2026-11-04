@@ -369,6 +369,21 @@ impl CaptureHandle {
             let _ = thread.join();
         }
     }
+
+    /// Stop the capture without waiting for its thread. The UI thread must never
+    /// join it: the thread can be stuck opening the microphone or playing the
+    /// start cue, and joining would freeze every key and every frame. A reaper
+    /// thread joins it off the UI path so the handle and the device are released.
+    pub fn retire(mut self) {
+        let _ = self.control.send(Control::Cancel);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread::Builder::new()
+                .name("nexus-dictation-reaper".into())
+                .spawn(move || {
+                    let _ = thread.join();
+                });
+        }
+    }
 }
 
 impl Drop for CaptureHandle {
@@ -747,7 +762,9 @@ fn finish_capture(
     });
 }
 
-pub(crate) fn open_input(audio: std_mpsc::Sender<AudioMessage>) -> Result<(cpal::Stream, u32, usize), String> {
+pub(crate) fn open_input(
+    audio: std_mpsc::Sender<AudioMessage>,
+) -> Result<(cpal::Stream, u32, usize), String> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -932,6 +949,26 @@ mod tests {
         assert_eq!(
             cue_pcm("input").len(),
             2 * (CUE_RATE as f32 * 0.07) as usize
+        );
+    }
+
+    #[test]
+    fn retiring_a_stuck_capture_never_blocks_the_ui_thread() {
+        // A capture thread stuck opening the device (or waiting out a permission
+        // prompt) must not freeze the caller: retire hands the join to a reaper.
+        let (control, _controls) = std_mpsc::channel();
+        let thread = thread::spawn(|| thread::sleep(Duration::from_millis(500)));
+        let handle = CaptureHandle {
+            generation: 1,
+            control,
+            thread: Some(thread),
+        };
+        let started = std::time::Instant::now();
+        handle.retire();
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "retire waited {:?}",
+            started.elapsed()
         );
     }
 

@@ -10,7 +10,7 @@ import { managerHooks } from "./manager-hooks";
 import type { CoreEvent } from "./api";
 import {
   Card, CARD_COLLAPSE_MS, CAPTION_QUIET_MS, DevOrb, ManagerError, ORB_MS, OrbMode, PRINTABLE_KEYS, Phase, Row,
-  SpeechItem, SpeechQueue, WORDS, followLevel, moved, orbMode, parseCard, parseDevOrb, parseManagerSlash, printableOf, readingMs, rowCount, syntheticLevel,
+  SpeechItem, SpeechQueue, WORDS, followLevel, moved, orbMode, parseCard, parseDevOrb, parseManagerSlash, printableOf, readingMs, rowCount, spokenEnd, syntheticLevel,
 } from "../manager";
 import {
   config, connection, currentClientView, notificationSoundsOn, drawer, isNarrow, leftOpen, leftTab, live, loadFiles, model, phone, selectProject,
@@ -42,6 +42,10 @@ const cancelDictation = () => voiceIn.cancel();
 
 /** The call this client holds, or null. `holder` is the name Core gave it. */
 export const call = signal<{ id: string; holder: string } | null>(null);
+/** The call is open but out of the way: a small orb in the corner, and the app has its keys back. */
+export const minimised = signal(false);
+/** The header button's read-only view of the Manager's hidden context. */
+export const managerContext = signal<{ title: string; text: string } | null>(null);
 export const phase = signal<Phase>("idle");
 export const managerError = signal<ManagerError | null>(null);
 export const listening = signal(false);
@@ -76,14 +80,18 @@ export const hasStream = () => streamId !== null;
 // --- terms the keymap reads --------------------------------------------------------------------------------
 
 export const inCall = () => call() !== null;
-export const cardFocused = () => { const c = card(); return !!c && !cardCollapsed() && (c.focused || cardUnlocked()); };
+export const callFocused = () => call() !== null && !minimised();
+export const callMinimised = () => call() !== null && minimised();
+export const cardFocused = () => { const c = card(); return !minimised() && !!c && !cardCollapsed() && (c.focused || cardUnlocked()); };
 export const fieldOpen = () => fieldText() !== null;
 export const consentOpen = () => consent() !== null;
-export const engaged = () => listening() || cardFocused();
+export const engaged = () => callFocused() || consentOpen();
 
 export function managerTerm(name: string): boolean {
   switch (name) {
     case "manager.in_call": return inCall();
+    case "manager.focused": return callFocused();
+    case "manager.minimised": return callMinimised();
     case "manager.listening": return listening();
     case "manager.speaking": return speaking();
     case "manager.field": return fieldOpen();
@@ -216,6 +224,19 @@ export async function answerConsent(accept: boolean) {
   } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); waiter(false); }
 }
 
+/**
+ * The Manager's part of the Esc chain (docs/manager-design.md 10.6): the
+ * context modal closes, consent cancels, and an open call (focused or
+ * minimised) ends. It never minimises and never reaches the session interrupt.
+ * Shared with commands.ts.
+ */
+export function managerEscapeRule(): string | null {
+  if (managerContext()) { managerContext.set(null); return "manager_context"; }
+  if (consentOpen()) { void answerConsent(false); return "manager_consent"; }
+  if (inCall()) { void stopCall(); return "manager.stop"; }
+  return null;
+}
+
 async function start(): Promise<boolean> {
   if (!streamId) { toast("warning", "Core is not connected: the Manager is unavailable."); return false; }
   starting = true; held = [];
@@ -289,6 +310,8 @@ function endLocal() {
   skipSpeech();
   clearTimers();
   call.set(null);
+  minimised.set(false);
+  managerContext.set(null);
   phase.set("idle"); managerError.set(null);
   listening.set(false); speaking.set(false); transcribing.set(false);
   fieldText.set(null);
@@ -375,7 +398,7 @@ function showCard(next: Card | null) {
   }
 }
 
-/** Dismiss the card (esc, the scrim): it closes and Core is told, so the next turn's delta says so. */
+/** Dismiss the card (the shortcut or the scrim): it closes and Core is told, so the next turn's delta says so. */
 export function dismissCard() {
   const c = card();
   if (!c) return;
@@ -387,6 +410,7 @@ export function dismissCard() {
 /** The shortcut or a click on a collapsed or unfocused card: it takes focus (locally). */
 export function focusCard() {
   if (!card()) return;
+  minimised.set(false);
   cardUnlocked.set(true); cardCollapsed.set(false);
   if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; }
   begin({ orb: true });
@@ -501,6 +525,7 @@ async function openMic() {
     delivered = true;
     micOwned = false;
     listening.set(false);
+    if (spokenEnd(transcript)) { void stopCall(); return; }
     void say(transcript, "speech");
   });
 }
@@ -521,11 +546,19 @@ export async function sendListening() {
   if (!delivered) { transcribing.set(false); listening.set(false); }
 }
 
-/** Esc while listening: the recording is dropped and nothing is sent. The call stays open. */
+/** Drop the recording; nothing is sent. The call stays open. Esc ends the whole call. */
 export function cancelListening() {
   micOwned = false;
   if (dictationPhase() !== "idle") cancelDictation();
   listening.set(false); transcribing.set(false);
+}
+
+/** `manager.minimise`: out of the way, not ended. A recording and the field close. Esc ends the call. */
+export function minimise() {
+  if (!call() || consent()) return;
+  cancelListening();
+  closeField();
+  minimised.set(true);
 }
 
 // --- voice out -------------------------------------------------------------------------------------------------------
@@ -600,12 +633,20 @@ function skipSpeech() {
   void stopSpeaking().catch(() => {});
 }
 
-/** Esc while speaking: the speech stops; the turn's work goes on. Its later sentences are muted. */
+/** `manager.speech_stop`: the speech stops; the turn's work goes on. Its later sentences are muted. */
 export function stopSpeech() {
   for (const turn of currentTurns) mutedTurns.add(turn);
   skipSpeech();
 }
 const currentTurns = new Set<string>();
+
+/** `manager.turn_cancel`: stop the speech and ask Core to cancel the turn, distinct from ending the call. */
+export function cancelTurn() {
+  if (!call()) return;
+  if (gptLiveOpen()) interruptGptLive();
+  skipSpeech();
+  if (streamId) void request("POST", "/api/manager/cancel", { body: { stream_id: streamId } }).catch(() => {});
+}
 
 // --- activity: client truth for Core --------------------------------------------------------------------------------------
 
@@ -632,9 +673,11 @@ export async function talk() {
   const fresh = !call();
   if (fresh) {
     if (!(await start())) return;
-  } else if (card() && !cardFocused()) {
-    focusCard();
   }
+  // Talking brings a minimised call back to the stage. An unfocused or
+  // waiting card is opened first, as the shortcut always has.
+  minimised.set(false);
+  if (!fresh && card() && !cardFocused()) { focusCard(); return; }
   exchangeOwned = true;
   if (gptLiveOpen()) {
     // GPT-Live listens by itself: the shortcut only interrupts what it is saying.
@@ -666,6 +709,7 @@ async function sayWords(text: string, source: "typed" | "speech") {
   if (!words) return;
   if (!live()) { toast("warning", "Core is not connected: the Manager is unavailable."); return; }
   if (!call()) { if (!(await start())) return; }
+  minimised.set(false);
   exchangeOwned = true;
   skipSpeech();
   currentTurns.clear(); mutedTurns = new Set();
@@ -704,10 +748,31 @@ export async function openManagerSession() {
   }
 }
 
+/**
+ * `manager.context`: the header's Manager button. Opens a read-only modal with
+ * the current hidden context (episodes, recap, state snapshots and deltas, and
+ * the recent log). Core formats the text so both clients read the same words.
+ */
+export async function openManagerContext() {
+  if (!live()) { toast("warning", "Core is not connected: the Manager is unavailable."); return; }
+  try {
+    const body = await request<{ title?: string; document?: string }>("GET", "/api/manager/context");
+    managerContext.set({
+      title: body?.title || "Manager context",
+      text: body?.document || "The Manager has no context yet.",
+    });
+  } catch (e) {
+    toast("error", e instanceof ApiError ? e.message : "Could not read the Manager's context.");
+  }
+}
+
 /** `manager.start`: a call opens quietly, with nothing drawn and no mic; the orb comes with the shortcut. */
 export async function startQuietly() {
   if (!live()) { toast("warning", "Core is not connected: the Manager is unavailable."); return; }
-  if (!call()) await start();
+  if (!call()) {
+    await start();
+    if (call()) minimised.set(true);
+  }
 }
 
 /** `/manager`, `/manager stop`, `/manager <text>`. */
@@ -722,6 +787,7 @@ export async function managerSlash(arg: string) {
 
 export function openField(initial: string) {
   if (listening()) cancelListening();
+  minimised.set(false);
   begin({ orb: true });
   fieldText.set(initial);
 }
@@ -740,7 +806,7 @@ function bindEngagedKeys(): () => void {
   const bind = (key: string, fn: (keystroke: string) => void) => {
     try { offs.push(keymap.bind(key, (e: { keystroke: string }) => fn(e.keystroke), { when: "always" })); } catch { /* the platform keeps this keystroke */ }
   };
-  bind("space", () => { if (listening()) void sendListening(); else if (cardFocused()) void talk(); });
+  bind("space", () => { if (listening()) void sendListening(); else void talk(); });
   bind("enter", () => { if (listening()) void sendListening(); });
   for (const key of PRINTABLE_KEYS) {
     bind(key, (stroke) => {

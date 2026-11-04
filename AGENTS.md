@@ -23,8 +23,9 @@ for deliberate changes from old Nexus.
   Presenting context well is a core idea of Nexus. **Exception: the Manager**
   ([docs/manager.md](docs/manager.md)). Its own context (hidden episodes, the state
   snapshot and deltas it is given each turn) has no timeline; the user sees its
-  stage (orb, caption, one card) and the full log only in the inspector. The rule
-  still holds for every session the Manager touches: whatever it sends or answers
+  stage (orb, caption, one card), a read-only context modal for debugging, and
+  the full log in the inspector. The rule still holds for every session the
+  Manager touches: whatever it sends or answers
   shows there, labelled `via Manager`, and what a card shows is what the Manager
   asked to show. Do not add a Manager timeline or chat view.
 - Task tools (`nexus-core/nexus/tools/`) act on the workspace. Changes to Nexus state

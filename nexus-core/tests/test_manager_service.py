@@ -36,7 +36,9 @@ async def test_start_returns_a_call_and_status_restores_it_without_secrets(h):
     started = await h.start("tui")
     assert started["call_id"].startswith("call_") and started["holder"] == "tui"
     status = (await h.client.get("/api/manager")).json()
-    assert status["call"] == {"call_id": started["call_id"], "holder": "tui", "phase": "idle", "error": None, "card": None}
+    assert status["call"] == {
+        "call_id": started["call_id"], "holder": "tui", "phase": "idle", "error": None,
+        "card": None, "live": None}
     assert stream.stream_id not in str(status) and stream.stream_id not in str(h.events)
     assert [e["data"]["active"] for e in h.of("manager.state")] == [True]
 

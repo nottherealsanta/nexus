@@ -1495,6 +1495,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         return JSONResponse([{"id": s.id, "created": s.created, "updated": s.updated, "continued_from": s.continued_from,
                               "model": s.model} for s in runtime.manager.episodes()])
 
+    async def manager_context(request: Request) -> Response:
+        return JSONResponse(runtime.manager.context_view(), headers={"cache-control": "no-store"})
+
     async def manager_audit(request: Request) -> Response:
         try:
             limit = max(1, min(500, int(request.query_params.get("limit", "100"))))
@@ -1708,6 +1711,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/client/view", route(client_view), methods=["POST"]),
         Route("/api/manager", route(manager_status)),
         Route("/api/manager/episode", route(manager_episodes)),
+        Route("/api/manager/context", route(manager_context)),
         Route("/api/manager/audit", route(manager_audit)),
         Route("/api/manager/consent", route(manager_consent), methods=["POST"]),
         Route("/api/manager/start", route(manager_start), methods=["POST"]),

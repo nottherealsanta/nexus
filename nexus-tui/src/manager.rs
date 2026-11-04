@@ -139,6 +139,15 @@ pub struct Consent {
     say: Option<String>,
 }
 
+/// The header button's read-only view of the Manager's hidden context. It is
+/// painted above the stage, never a second timeline: the text comes from Core.
+#[derive(Debug, Clone)]
+pub struct ManagerContext {
+    pub title: String,
+    pub text: String,
+    pub top: usize,
+}
+
 /// A view the Manager moved the user away from, so "go back" can return.
 #[derive(Debug, Clone, PartialEq)]
 pub struct View {
@@ -174,8 +183,14 @@ pub struct ManagerUi {
     pub caption: Option<Caption>,
     pub field: Option<Composer>,
     pub card: Option<CardState>,
+    /// The call is open but out of the way: a small orb in the corner, and the
+    /// app has its keys back. `/manager` starts this way; the palette action
+    /// `manager.minimise` does it on demand. Esc always ends the call.
+    pub minimised: bool,
     /// The privacy notice waiting to be accepted before a call can start.
     pub consent: Option<Consent>,
+    /// The debugging modal opened by the header's Manager button.
+    pub context: Option<ManagerContext>,
     pub back: Vec<View>,
     reported: (bool, bool),
     pub orb: Orb,
@@ -221,7 +236,9 @@ impl Default for ManagerUi {
             caption: None,
             field: None,
             card: None,
+            minimised: false,
             consent: None,
+            context: None,
             back: Vec::new(),
             reported: (false, false),
             orb: Orb::default(),
@@ -236,10 +253,22 @@ impl Default for ManagerUi {
 }
 
 impl ManagerUi {
+    /// A call that takes the stage: large orb, dimmed app and the call's keys.
+    pub fn focused_call(&self) -> bool {
+        self.call.is_some() && !self.minimised
+    }
+
+    /// A call that is open but out of the way; the app keeps its keys.
+    pub fn minimised_call(&self) -> bool {
+        self.call.is_some() && self.minimised
+    }
+
     pub fn focused_card(&self) -> bool {
-        self.card
-            .as_ref()
-            .is_some_and(|c| c.focused && !c.collapsed)
+        !self.minimised
+            && self
+                .card
+                .as_ref()
+                .is_some_and(|c| c.focused && !c.collapsed)
     }
 
     pub fn listening(&self) -> bool {
@@ -350,38 +379,35 @@ impl App {
         let m = &self.ui.manager;
         match name {
             "manager.in_call" => m.call.is_some(),
+            "manager.focused" => m.focused_call(),
+            "manager.minimised" => m.minimised_call(),
             "manager.listening" => m.listening(),
             "manager.speaking" => m.speaking,
             "manager.field" => m.field.is_some(),
             "manager.card_focused" => m.focused_card(),
-            "manager.engaged" => m.listening() || m.focused_card(),
+            "manager.engaged" => m.focused_call() || m.consent.is_some(),
             _ => false,
         }
     }
 
-    /// Anything for the Manager's keys to act on besides its shortcuts.
-    fn manager_engaged_input(&self) -> bool {
-        let m = &self.ui.manager;
-        m.field.is_some() || m.listening() || m.focused_card() || m.speaking
-    }
-
-    /// A key before the app sees it. True when the Manager took it. At rest
-    /// only the Manager's own shortcuts are taken; every other key, `esc`
-    /// included, goes on to the app as if the Manager were not there.
+    /// A key before the app sees it. True when the Manager took it. With no
+    /// call only the Manager's own shortcuts are taken; every other key, `esc`
+    /// included, goes on to the app as if the Manager were not there. A focused
+    /// call takes every key but quit/suspend; a minimised call leaves bare keys
+    /// to the app except Esc, which ends the call. The manifest also keeps Esc
+    /// off the session interrupt while any call is open.
     pub fn manager_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
         if self.blocking().is_some() {
             return false;
         }
-        let shifted = ev.modifiers.contains(KeyModifiers::ALT)
-            && match ev.code {
-                KeyCode::Char('M') => true,
-                KeyCode::Char('m') => ev.modifiers.contains(KeyModifiers::SHIFT),
-                _ => false,
-            };
-        if shifted {
-            self.run_command("manager.stop");
-            return true;
-        }
+        let alt_shift = |letter: char| {
+            ev.modifiers.contains(KeyModifiers::ALT)
+                && match ev.code {
+                    KeyCode::Char(c) if c == letter.to_ascii_uppercase() => true,
+                    KeyCode::Char(c) if c == letter => ev.modifiers.contains(KeyModifiers::SHIFT),
+                    _ => false,
+                }
+        };
         if self.ui.manager.consent.is_some() {
             // The notice takes every key until it is accepted or cancelled.
             match name {
@@ -391,21 +417,64 @@ impl App {
             }
             return true;
         }
+        if self.ui.manager.context.is_some() {
+            // A read-only modal takes the keys; Esc closes it (a second Esc then
+            // ends the call). Global modifier shortcuts still work.
+            if ev
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
+            {
+                return false;
+            }
+            match name {
+                "esc" => self.ui.manager.context = None,
+                "up" => self.scroll_manager_context(-1),
+                "down" => self.scroll_manager_context(1),
+                "pageup" => self.scroll_manager_context(-10),
+                "pagedown" => self.scroll_manager_context(10),
+                "home" => self.set_manager_context_top(0),
+                "end" => self.set_manager_context_top(usize::MAX),
+                _ => {}
+            }
+            return true;
+        }
+        if alt_shift('m') {
+            self.run_command("manager.stop");
+            return true;
+        }
         if name == "alt+m" {
             self.run_command("manager.talk");
             return true;
         }
-        if !self.manager_engaged_input() {
+        if self.ui.manager.call.is_none() {
             return false;
         }
-        if name == "esc" {
-            self.escape();
+        // The four call actions stay distinct: silent speech, a cancelled turn,
+        // a dismissed card, and the call ending. Esc does none of them.
+        if name == "alt+s" {
+            self.run_command("manager.speech_stop");
             return true;
         }
+        if name == "alt+c" {
+            self.run_command("manager.turn_cancel");
+            return true;
+        }
+        if alt_shift('d') {
+            self.run_command("manager.card_dismiss");
+            return true;
+        }
+        // Esc is the call's End in every state, focused or minimised. It never
+        // minimises and never falls through to the session interrupt.
+        if name == "esc" {
+            self.end_call();
+            return true;
+        }
+        if self.ui.manager.minimised {
+            // Out of the way: the app has the keys. The manifest's interrupt
+            // rule excludes an open call, so Esc cannot stop a session.
+            return false;
+        }
         if self.ui.manager.field.is_some() {
-            if matches!(name, "ctrl+c" | "ctrl+q" | "ctrl+z") {
-                return false;
-            }
             if name == "enter" {
                 self.execute("manager.field_send");
             } else if let Some(field) = self.ui.manager.field.as_mut() {
@@ -413,26 +482,27 @@ impl App {
             }
             return true;
         }
-        if self.ui.manager.listening() {
-            match name {
-                "space" | "enter" => {
-                    self.execute("manager.send");
-                    return true;
-                }
-                _ => {
-                    if let Some(c) = crate::keys::printable(ev) {
-                        self.open_field(Some(c));
-                        return true;
-                    }
-                    return false;
-                }
+        // Global modifier shortcuts (palette, settings, leader) stay the app's,
+        // as they are in NSH. Bare keys remain the call's; Esc is handled above.
+        if ev
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
+        {
+            return false;
+        }
+        if name == "space" {
+            if self.ui.manager.listening() {
+                self.execute("manager.send");
+            } else {
+                self.run_command("manager.talk");
             }
+            return true;
+        }
+        if name == "enter" && self.ui.manager.listening() {
+            self.execute("manager.send");
+            return true;
         }
         if self.ui.manager.focused_card() {
-            if name == "space" {
-                self.execute("manager.card_mic");
-                return true;
-            }
             if let Some(c) = crate::keys::printable(ev) {
                 if let Some(n) = c.to_digit(10).filter(|n| *n >= 1) {
                     if self.card_max_n() > 0 {
@@ -443,8 +513,13 @@ impl App {
                 self.open_field(Some(c));
                 return true;
             }
+        } else if let Some(c) = crate::keys::printable(ev) {
+            self.open_field(Some(c));
+            return true;
         }
-        false
+        // A focused call takes everything else, so a keystroke never lands in a
+        // session behind it.
+        true
     }
 
     /// A mouse press on one of the Manager's own targets.
@@ -458,6 +533,7 @@ impl App {
         match target {
             Target::ManagerOrb => self.run_command("manager.talk"),
             Target::ManagerScrim => self.execute("manager.card_dismiss"),
+            Target::ManagerEnd => self.run_command("manager.stop"),
             Target::ManagerRow(n) => self.pick_row(n),
             Target::ManagerCard => self.focus_card(),
             _ => return false,
@@ -471,13 +547,16 @@ impl App {
         match id {
             "manager.talk" => self.talk(),
             "manager.start" => self.start_call(false),
+            "manager.context" => self.open_manager_context(),
             "manager.open_session" => self.open_manager_session(),
             "manager.stop" => self.stop_call(),
+            "manager.minimise" => self.minimise(),
             "manager.send" => self.send_recording(),
             "manager.field_send" => self.send_field(),
             "manager.card_mic" => self.open_mic(),
             "manager.listen_cancel" => self.cancel_listening(),
             "manager.speech_stop" => self.stop_speech(),
+            "manager.turn_cancel" => self.cancel_turn(),
             "manager.field_close" => self.close_field(),
             "manager.card_dismiss" => self.dismiss_card(),
             "manager.field_open" => self.open_field(None),
@@ -560,15 +639,54 @@ impl App {
             })));
     }
 
+    /// The header's Manager button: a read-only, scrollable view of the hidden
+    /// context, in the same detail modal the rest of the TUI uses.
+    fn open_manager_context(&mut self) {
+        if self.state.core.is_none() {
+            self.toast(Level::Info, "Not connected to Core");
+            return;
+        }
+        self.effects
+            .push(Effect::Sync(SyncCommand::Manager(ManagerCall {
+                tag: "context".into(),
+                method: "GET",
+                path: "/api/manager/context".into(),
+                body: None,
+                with_stream: false,
+            })));
+    }
+
+    fn scroll_manager_context(&mut self, delta: isize) {
+        let area = self.regions.area;
+        if let Some(context) = self.ui.manager.context.as_mut() {
+            let max = crate::render::context_detail_max(area, &context.text);
+            context.top = (context.top as isize + delta).clamp(0, max as isize) as usize;
+        }
+    }
+
+    fn set_manager_context_top(&mut self, top: usize) {
+        let area = self.regions.area;
+        if let Some(context) = self.ui.manager.context.as_mut() {
+            let max = crate::render::context_detail_max(area, &context.text);
+            context.top = top.min(max);
+        }
+    }
+
     fn talk(&mut self) {
         let now = self.clock;
         if self.ui.manager.call.is_none() {
             return self.start_call(true);
         }
+        // The typed field has the keys while it is open; Enter sends it.
+        if self.ui.manager.field.is_some() {
+            return;
+        }
+        // Talking brings a minimised call back to the stage.
+        self.ui.manager.minimised = false;
+        self.ui.manager.touch(now);
         if self.ui.manager.live_call {
             // The call listens by itself: the key only interrupts what the voice is saying.
             crate::live::interrupt();
-            self.ui.manager.touch(now);
             self.call_core("cancel", "/api/manager/cancel", json!({}));
             return;
         }
@@ -601,8 +719,23 @@ impl App {
         self.open_mic();
     }
 
+    /// `manager.minimise`: out of the way, not ended. A recording is dropped and
+    /// the typed field closes, so nothing of the call keeps the app's input.
+    fn minimise(&mut self) {
+        if self.ui.manager.call.is_none() || self.ui.manager.consent.is_some() {
+            return;
+        }
+        self.cancel_listening();
+        self.close_field();
+        let now = self.clock;
+        let m = &mut self.ui.manager;
+        m.minimised = true;
+        m.touch(now);
+    }
+
     fn start_call(&mut self, talk: bool) {
         if self.ui.manager.call.is_some() {
+            self.ui.manager.minimised = false;
             if talk {
                 self.open_mic();
             }
@@ -626,6 +759,21 @@ impl App {
         }
         self.call_core("stop", "/api/manager/stop", json!({}));
         self.clear_all();
+    }
+
+    /// Esc: cancel the whole call, not just hide it. Speech, the recording, the
+    /// typed field and the card go here, and Core stops the turn; `/manager/stop`
+    /// does the same server-side. It is never the session interrupt.
+    fn end_call(&mut self) {
+        if self.ui.manager.call.is_none() {
+            return;
+        }
+        let now = self.clock;
+        self.silence(now);
+        self.cancel_listening();
+        self.close_field();
+        self.ui.manager.card = None;
+        self.stop_call();
     }
 
     /// Drop everything the Manager had on screen and in flight. The orb is
@@ -666,6 +814,8 @@ impl App {
         m.caption = None;
         m.field = None;
         m.card = None;
+        m.minimised = false;
+        m.context = None;
         m.back.clear();
         m.reported = (false, false);
         m.thinking_since = None;
@@ -863,7 +1013,9 @@ impl App {
                     self.ui.manager.error = Some(Failure {
                         code: "live_failed".into(),
                         message,
-                        fix: "The call is still open for typing; start it again to retry the voice.".into(),
+                        fix:
+                            "The call is still open for typing; start it again to retry the voice."
+                                .into(),
                     });
                 }
             }
@@ -882,6 +1034,9 @@ impl App {
                                 Some("I didn't catch that.".to_owned()),
                             );
                             self.sync_activity();
+                        } else if ends_call(&text) {
+                            // "that's all" is the spoken End.
+                            self.stop_call();
                         } else {
                             self.say(text, "speech", now);
                         }
@@ -927,6 +1082,7 @@ impl App {
 
     fn say(&mut self, text: String, source: &str, now: Instant) {
         let m = &mut self.ui.manager;
+        m.minimised = false;
         m.set_caption(now, Some(text.clone()), None);
         m.awaiting = Some(now);
         m.muted_turn = None;
@@ -952,13 +1108,27 @@ impl App {
         self.sync_activity();
     }
 
-    /// `esc` while speaking: the speech stops, the turn's work goes on, and the
+    /// `manager.speech_stop`: the speech stops, the turn's work goes on, and the
     /// rest of this turn's sentences are only shown.
     fn stop_speech(&mut self) {
         let now = self.clock;
         let turn = self.ui.manager.last_turn.clone();
         self.silence(now);
         self.ui.manager.muted_turn = turn;
+    }
+
+    /// `alt+c`: stop the speech and ask Core to cancel the turn. It is not the
+    /// same action as stopping speech or ending the call.
+    fn cancel_turn(&mut self) {
+        if self.ui.manager.call.is_none() {
+            return;
+        }
+        let now = self.clock;
+        self.silence(now);
+        if self.ui.manager.live_call {
+            crate::live::interrupt();
+        }
+        self.call_core("cancel", "/api/manager/cancel", json!({}));
     }
 
     /// Start the next queued sentence if none is playing.
@@ -1014,6 +1184,7 @@ impl App {
         }
         let now = self.clock;
         let m = &mut self.ui.manager;
+        m.minimised = false;
         let mut field = Composer::new();
         if let Some(c) = first {
             field.insert_char(c);
@@ -1045,6 +1216,7 @@ impl App {
 
     fn focus_card(&mut self) {
         let now = self.clock;
+        self.ui.manager.minimised = false;
         if let Some(card) = self.ui.manager.card.as_mut() {
             card.focused = true;
             card.collapsed = false;
@@ -1396,6 +1568,9 @@ impl App {
                             id: body["call_id"].as_str().unwrap_or("").to_owned(),
                             holder: body["holder"].as_str().unwrap_or("").to_owned(),
                         });
+                        // `/manager` opens quietly in the corner; a talk or a
+                        // typed line takes the stage.
+                        self.ui.manager.minimised = !talk && say.is_none();
                         self.ui.manager.tts_ok = true;
                         for event in std::mem::take(&mut self.ui.manager.early) {
                             self.manager_event(&event);
@@ -1469,7 +1644,10 @@ impl App {
             }
             "episode" => {
                 let Ok(body) = result else {
-                    self.toast(Level::Error, "Could not read the Manager's session from Core");
+                    self.toast(
+                        Level::Error,
+                        "Could not read the Manager's session from Core",
+                    );
                     return;
                 };
                 // Newest first. The inspector takes the token and the session in its URL fragment.
@@ -1488,7 +1666,10 @@ impl App {
                 let Some(token) =
                     crate::discovery::read_info(std::path::Path::new(&info.home)).map(|d| d.token)
                 else {
-                    self.toast(Level::Info, "Could not read Core's token to open the inspector");
+                    self.toast(
+                        Level::Info,
+                        "Could not read Core's token to open the inspector",
+                    );
                     return;
                 };
                 // Level 3 (Requests) shows what the model is given: the state snapshot, the recap and each request.
@@ -1497,6 +1678,30 @@ impl App {
                     info.url.trim_end_matches('/')
                 );
                 self.effects.push(Effect::OpenUrl(url));
+            }
+            "context" => {
+                let Ok(body) = result else {
+                    self.toast(
+                        Level::Error,
+                        "Could not read the Manager's context from Core",
+                    );
+                    return;
+                };
+                let title = body["title"]
+                    .as_str()
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or("Manager context")
+                    .to_owned();
+                let text = body["document"]
+                    .as_str()
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or("The Manager has no context yet.")
+                    .to_owned();
+                self.ui.manager.context = Some(ManagerContext {
+                    title,
+                    text,
+                    top: 0,
+                });
             }
             "restore" => {
                 let Ok(body) = result else { return };
@@ -1577,7 +1782,9 @@ impl App {
         if m.field.is_some() || m.focused_card() {
             return Some(OrbState::Idle);
         }
-        None
+        // A call is open, so the stage is there even when the exchange is quiet:
+        // large while focused, small in the corner while minimised.
+        Some(OrbState::Idle)
     }
 
     /// The caption word for a state, where the orb cannot say it itself.
@@ -1590,6 +1797,67 @@ impl App {
             return None;
         }
         self.orb_target(now).and_then(OrbState::word)
+    }
+
+    /// One quiet hint line under the orb: the current state's keys, including
+    /// how to end the call. Wording is shared with NSH; only key labels differ.
+    pub fn manager_hint(&self) -> String {
+        let m = &self.ui.manager;
+        if m.consent.is_some() {
+            return "enter accept · esc cancel".to_owned();
+        }
+        if m.call.is_none() {
+            return String::new();
+        }
+        let key = |id: &str| {
+            self.manifest
+                .command(id)
+                .and_then(|c| c.tui_key())
+                .unwrap_or("")
+                .to_owned()
+        };
+        let talk = key("manager.talk");
+        let stop_speech = key("manager.speech_stop");
+        let cancel = key("manager.turn_cancel");
+        let dismiss = key("manager.card_dismiss");
+        let mut parts: Vec<String> = Vec::new();
+        if m.minimised {
+            parts.push(if m.card.is_some() {
+                format!("{talk} open")
+            } else {
+                format!("{talk} talk")
+            });
+            if m.speaking {
+                parts.push(format!("{stop_speech} stop"));
+            }
+            parts.push("esc end".to_owned());
+            return parts.join(" · ");
+        }
+        if m.field.is_some() {
+            return "enter send · esc end".to_owned();
+        }
+        if m.listening() {
+            return "space send · type to type · esc end".to_owned();
+        }
+        if m.focused_card() {
+            let max = self.card_max_n();
+            if max == 1 {
+                parts.push("1 open".to_owned());
+            } else if max > 1 {
+                parts.push(format!("1-{} open", max.min(9)));
+            }
+            parts.push("space talk".to_owned());
+            parts.push(format!("{dismiss} dismiss"));
+            parts.push("esc end".to_owned());
+            return parts.join(" · ");
+        }
+        if m.speaking {
+            return format!("space talk · {stop_speech} stop · esc end");
+        }
+        if m.phase != CallPhase::Idle {
+            return format!("space talk · {cancel} cancel · esc end");
+        }
+        "space talk · esc end".to_owned()
     }
 
     /// Is the connection down while a call is held?
@@ -1630,7 +1898,11 @@ impl App {
             }
             return;
         }
-        let live = if m.live_call { crate::live::levels() } else { None };
+        let live = if m.live_call {
+            crate::live::levels()
+        } else {
+            None
+        };
         let raw = match target {
             Some(OrbState::Listening) => live.as_ref().map_or(m.mic_level, |l| l.mic()),
             Some(OrbState::Speaking) => live
@@ -1754,6 +2026,31 @@ pub fn card_caption(card: &Value) -> Option<String> {
         )),
         _ => card["title"].as_str().map(str::to_owned),
     }
+}
+
+/// A spoken "that's all" ends the call, like the End button and the stop key.
+/// Only the words are matched; nothing else is sent.
+pub fn ends_call(text: &str) -> bool {
+    let words: String = text
+        .to_lowercase()
+        .replace(['\'', '\u{2019}'], "")
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    matches!(
+        words.as_str(),
+        "thats all"
+            | "that is all"
+            | "thats all for now"
+            | "that is all for now"
+            | "end the call"
+            | "hang up"
+            | "goodbye"
+            | "bye"
+    )
 }
 
 // ---- Settings › Manager ---------------------------------------------------------------------

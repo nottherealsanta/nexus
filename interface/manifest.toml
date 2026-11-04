@@ -36,11 +36,13 @@ terms = [
   "has_notifications", "text_edit.active", "view.settings",
   # Manager (docs/manager-design.md 10.1, 10.6). Only the Manager's own keys read these.
   "manager.in_call",       # a call is running (any client holds it)
+  "manager.focused",       # the call takes the stage: large orb, dimmed app, and its keys
+  "manager.minimised",     # the call is open but out of the way: small orb, app keys
   "manager.listening",     # the microphone is open in this call
   "manager.speaking",      # Manager speech is playing
   "manager.field",         # the one-line typed field is open above the orb
   "manager.card_focused",  # a focused card is up: it takes keys and has the scrim
-  "manager.engaged",       # listening, or a focused card is up
+  "manager.engaged",       # a focused call takes the keys, or the consent notice is open
 ]
 placements = [
   "palette", "row_menu", "header", "composer", "sidebar", "timeline",
@@ -77,34 +79,17 @@ contexts = [
 ]
 
 # Esc is evaluated top to bottom; the first rule whose `when` holds consumes the
-# key and the walk stops. The Manager's engaged states come first: they only hold
-# while the Manager is engaged (mic open, field open, focused card, speech), so at
-# rest Esc is unchanged. Then text editing always wins over interrupt, and
-# interrupt wins over back navigation, so a stray Esc in a child session
+# key and the walk stops. An open Manager call comes first: Esc ends the whole
+# call (speech, turn, recording, field, card). While a call is open Esc never
+# interrupts a session, so the interrupt rule excludes `manager.in_call`. Then
+# text editing always wins over interrupt,
+# and interrupt wins over back navigation, so a stray Esc in a child session
 # while the agent works stops the turn before it leaves the page.
 [[keymap.escape]]
-id = "manager_field"
-when = ["manager.field"]
-action = "manager.field_close"
-note = "Manager: the typed field closes and its text is dropped. The call goes on."
-
-[[keymap.escape]]
-id = "manager_listening"
-when = ["manager.listening"]
-action = "manager.listen_cancel"
-note = "Manager: cancels the recording in progress; the call stays open and nothing is sent."
-
-[[keymap.escape]]
-id = "manager_card"
-when = ["manager.card_focused"]
-action = "manager.card_dismiss"
-note = "Manager: a focused card closes. Unfocused cards take no keys, so they never reach this rule."
-
-[[keymap.escape]]
-id = "manager_speaking"
-when = ["manager.speaking", "!manager.card_focused"]
-action = "manager.speech_stop"
-note = "Manager: stops the speech only. The turn's work continues."
+id = "manager_call"
+when = ["manager.in_call"]
+action = "manager.stop"
+note = "A Manager call is open, focused or minimised: Esc ends the whole call. It stops the speech, cancels the Manager's turn, drops any recording and typed field, clears the card and tears the call down (POST /api/manager/stop). It never minimises and never reaches the session interrupt."
 
 [[keymap.escape]]
 id = "overlay"
@@ -138,9 +123,9 @@ note = "Toast or banner with focus dismisses (it stays in the notifications draw
 
 [[keymap.escape]]
 id = "interrupt"
-when = ["session.busy"]
+when = ["session.busy", "!manager.in_call"]
 action = "session.interrupt"
-note = "Interrupt the viewed session. Never also navigates back on the same press."
+note = "Interrupt the viewed session. Never also navigates back on the same press. While a Manager call is open, Esc never reaches this: it ends the call instead."
 
 [[keymap.escape]]
 id = "editor"
@@ -172,11 +157,11 @@ note = "Last resort: move focus to the composer. Never destructive."
 leading = "sidebar.left.toggle"
 centre = "title_breadcrumbs"
 trailing = "sidebar.right.toggle"
+manager_button = "manager.context"
 note = "Toggles stay available when their sidebar is closed. Same anchors in terminal, browser and desktop, allowing for native window chrome."
 title_click = "session.rename"
 breadcrumbs = "root title > child title; each crumb is a link; back via nav.back"
-extra = ["manager.open_session", "notifications.open"]
-manager_button = "manager.open_session"
+extra = ["manager.context", "manager.open_session", "notifications.open"]
 
 [navigation.left_sidebar]
 default_tab = "sessions"
@@ -1845,20 +1830,29 @@ note = "Inline rename, find bar, settings field, key capture. Not the composer: 
 
 # --- Manager -------------------------------------------------------------------
 # The voice agent above all sessions (docs/manager-design.md 10.1 to 10.7). Nothing here
-# is captured at rest except manager.talk, start and stop. The engaged keys apply
-# only while their `when` terms hold, through key contexts of their own, so they
-# never conflict with the app's keys. Esc is resolved by [[keymap.escape]] above.
+# is captured at rest except manager.talk, start, stop and the four call actions.
+# A focused call takes the stage and its keys; a minimised call leaves the app's
+# bare keys alone except Esc, which ends the call. Esc is resolved by
+# [[keymap.escape]] above.
 # Digits 1-9 pick a row of a focused card; any printable character opens the field
 # (manager.field_open). Both are client behaviour, so they carry no key here.
 
 [[command]]
+id = "manager.context"
+title = "Manager context"
+category = "manager"
+when = ["always"]
+placement = ["palette", "header"]
+note = "The header's Manager button. Opens a read-only, scrollable modal with the Manager's current hidden context: its episodes and recap, the state snapshot and deltas it was given each turn, and its recent log (messages, tool calls and results). It is an inspector-style debug view, not a timeline or chat (docs/manager.md). Clipping is announced. Available with or without a call."
+
+[[command]]
 id = "manager.open_session"
-title = "Manager session"
+title = "Manager session in the inspector"
 category = "manager"
 slash = "manager-session"
 when = ["always"]
-placement = ["palette", "header"]
-note = "The header's Manager button, left of the right-sidebar toggle. Opens the Manager's own (hidden) session, its current episode, in the inspector at the Requests level: the full context the model is given, with its log. The Manager has no timeline in the clients (docs/manager.md); this is the one place to read it. Needs Core; with no Manager episode yet it says so."
+placement = ["palette"]
+note = "Opens the Manager's own (hidden) session, its current episode, in the inspector at the Requests level: the full raw context the model is given, with its log. The Manager has no timeline in the clients (docs/manager.md); the header button shows the current context in a modal, and this opens the inspector for everything. Needs Core; with no Manager episode yet it says so."
 
 [[command]]
 id = "manager.talk"
@@ -1868,7 +1862,7 @@ keys = { tui = "alt+m", nsh = "cmd+shift+space" }
 key_context = "global"
 when = ["always"]
 placement = ["palette"]
-note = "Tap to toggle, in both clients (terminals do not report key release). No call: start one and open the mic. At rest in a call: open the mic. Listening: send. Thinking or speaking: stop speech, cancel the turn if safe, open the mic (barge-in). Clicking the orb does the same. An unfocused card is focused by this key."
+note = "Tap to toggle, in both clients (terminals do not report key release). No call: start one, focus it and open the mic. Focused call: listening sends; thinking, speaking or idle barge in (stop speech, cancel the turn if safe, open the mic). Minimised call: bring the orb back and do the same; with a card waiting it opens that card. Space does the same while the call is focused. Clicking the orb does the same, so talking over the Manager barges in."
 
 [[command]]
 id = "manager.start"
@@ -1877,7 +1871,7 @@ category = "manager"
 slash = "manager"
 when = ["always"]
 placement = ["palette"]
-note = "Starts the call, or moves it to this client (POST /api/manager/start). `/manager <text>` sends one typed line instead. With enabled = false, shows a toast that points at Settings, Manager. `/manager stop` is manager.stop."
+note = "Starts the call, or moves it to this client (POST /api/manager/start), minimised in the corner. `/manager <text>` sends one typed line instead and focuses the call. With enabled = false, shows a toast that points at Settings, Manager. `/manager stop` is manager.stop."
 
 [[command]]
 id = "manager.stop"
@@ -1889,7 +1883,16 @@ key_context = "global"
 when = ["manager.in_call"]
 unavailable_reason = "No Manager call is running."
 placement = ["palette"]
-note = "Typed as `/manager stop`. The composer reads a leading `stop` after /manager as this command (no space is allowed in a slash name, so `/manager-stop` is the registered form). Ends the call (POST /api/manager/stop). Never stops a session."
+note = "Typed as `/manager stop`. The composer reads a leading `stop` after /manager as this command (no space is allowed in a slash name, so `/manager-stop` is the registered form). Ends the call (POST /api/manager/stop). The End button under the orb does the same, and so does saying \"that's all\". Never stops a session, stops speech or dismisses a card as a side effect."
+
+[[command]]
+id = "manager.minimise"
+title = "Minimise the Manager call"
+category = "manager"
+when = ["manager.focused"]
+unavailable_reason = "No Manager call is focused."
+placement = ["palette"]
+note = "The call stays open: the orb shrinks to the bottom-right corner, the app returns to full strength and gets its keys back. A recording is dropped and the typed field closes; speech and the Manager's turn keep going. Esc is not this: Esc ends the whole call (manager.stop)."
 
 [[command]]
 id = "manager.send"
@@ -1906,23 +1909,32 @@ note = "Listening: enter sends. Space also sends (client), and so does manager.t
 id = "manager.listen_cancel"
 title = "Cancel listening"
 category = "manager"
-keys = { tui = "esc", nsh = "esc" }
-key_context = "escape_chain"
 when = ["manager.listening"]
 unavailable_reason = "The microphone is not open."
 placement = ["stage"]
-note = "Esc rule manager_listening. Drops the recording; nothing is sent. The call stays open."
+note = "Drops the recording; nothing is sent. The call stays open. Esc ends the whole call instead."
 
 [[command]]
 id = "manager.speech_stop"
 title = "Stop speaking"
 category = "manager"
-keys = { tui = "esc", nsh = "esc" }
-key_context = "escape_chain"
-when = ["manager.speaking", "!manager.card_focused"]
+keys = { tui = "alt+s", nsh = "cmd+shift+s" }
+key_context = "global"
+when = ["manager.in_call", "manager.speaking"]
 unavailable_reason = "The Manager is not speaking."
 placement = ["stage"]
-note = "Esc rule manager_speaking. Stops the speech only; the turn's work continues. With a focused card, Esc dismisses the card instead."
+note = "Stops the speech only; the Manager's turn keeps working and its later sentences are shown but not spoken. Distinct from cancelling the turn (manager.turn_cancel) and ending the call (manager.stop). Esc ends the whole call instead."
+
+[[command]]
+id = "manager.turn_cancel"
+title = "Cancel the Manager's turn"
+category = "manager"
+keys = { tui = "alt+c", nsh = "cmd+shift+c" }
+key_context = "global"
+when = ["manager.in_call"]
+unavailable_reason = "No Manager call is running."
+placement = ["stage"]
+note = "POST /api/manager/cancel: stops the current speech and cancels the Manager's turn only if no tool has changed a session yet; otherwise the turn keeps going and the response says so. Distinct from stop speaking, dismissing a card and ending the call. Talk (Space or manager.talk) barges in with the same cancel and then opens the mic."
 
 [[command]]
 id = "manager.field_open"
@@ -1948,12 +1960,10 @@ note = "Enter sends the typed line into the Manager's conversation."
 id = "manager.field_close"
 title = "Close typed line"
 category = "manager"
-keys = { tui = "esc", nsh = "esc" }
-key_context = "escape_chain"
 when = ["manager.field"]
 unavailable_reason = "The typed field is not open."
 placement = ["stage"]
-note = "Esc rule manager_field. Closes the field and drops its text. Nothing is sent."
+note = "Closes the field and drops its text. Nothing is sent. Esc ends the whole call instead."
 
 [[command]]
 id = "manager.card_pick"
@@ -1979,9 +1989,9 @@ note = "Space opens the mic while a focused card is up, so the user can answer i
 id = "manager.card_dismiss"
 title = "Dismiss card"
 category = "manager"
-keys = { tui = "esc", nsh = "esc" }
-key_context = "escape_chain"
+keys = { tui = "alt+shift+d", nsh = "cmd+alt+shift+d" }
+key_context = "global"
 when = ["manager.card_focused"]
 unavailable_reason = "No card is focused."
 placement = ["stage"]
-note = "Esc rule manager_card. Closes the card (POST /api/manager/card/dismiss); the next turn's delta says so. A click on the scrim does the same."
+note = "Closes the card (POST /api/manager/card/dismiss); the next turn's delta says so. A click outside the card does the same. Distinct from minimising the call (which keeps the card) and ending the call (which Esc does)."

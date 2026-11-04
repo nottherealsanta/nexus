@@ -285,10 +285,9 @@ impl Interactive {
                 Effect::Dictation(command) => match command {
                     nexus_tui::dictation::CaptureCommand::Start { generation } => {
                         if let Some(old) = self.capture.take() {
-                            old.send(nexus_tui::dictation::CaptureCommand::Cancel {
-                                generation: old.generation(),
-                            });
-                            old.join();
+                            // Never join on the UI thread: a capture thread can be
+                            // stuck opening the device or playing the start cue.
+                            old.retire();
                         }
                         self.capture = Some(nexus_tui::dictation::CaptureHandle::start(
                             generation,
@@ -461,7 +460,7 @@ impl Interactive {
                 .is_some_and(|handle| handle.generation() == generation)
         {
             if let Some(handle) = self.capture.take() {
-                handle.join();
+                handle.retire();
             }
         }
         let mut applied = self.settle()?;
@@ -471,10 +470,7 @@ impl Interactive {
 
     fn shutdown(&mut self) {
         if let Some(handle) = self.capture.take() {
-            handle.send(nexus_tui::dictation::CaptureCommand::Cancel {
-                generation: handle.generation(),
-            });
-            handle.join();
+            handle.retire();
         }
         if let Some(task) = self.loading_cue.take() {
             task.abort();

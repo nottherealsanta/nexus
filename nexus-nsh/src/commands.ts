@@ -23,7 +23,7 @@ import { speakAnswer, speechPlaying, stopSpeaking } from "./speech";
 import { cancelDictation, isDictationBusy, microphoneAvailable, startDictation, stopDictation } from "./dictation";
 import { appendTranscript } from "./dictation-logic";
 import { dictationPhase } from "./voice-state";
-import { answerConsent, consentOpen, cancelListening, closeField, dismissCard, managerSlash, managerTerm, openField, openManagerSession, sendListening, stopCall, startQuietly, stopSpeech, submitField, talk } from "./core/manager";
+import { cancelListening, cancelTurn, closeField, dismissCard, managerEscapeRule, managerSlash, managerTerm, minimise, openField, openManagerContext, openManagerSession, sendListening, startQuietly, stopCall, stopSpeech, submitField, talk } from "./core/manager";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
 
 export interface Cmd {
@@ -602,11 +602,14 @@ on("voice.dictate", dictateFromComposer, true);
 // The Manager (docs/manager-design.md 10.6). Everything else of it lives in core/manager.ts.
 on("manager.talk", () => talk(), true);
 on("manager.start", () => startQuietly(), true);
+on("manager.context", () => openManagerContext(), true);
 on("manager.open_session", () => openManagerSession(), true);
 on("manager.stop", () => stopCall());
+on("manager.minimise", () => minimise());
 on("manager.send", () => sendListening());
 on("manager.listen_cancel", () => cancelListening());
 on("manager.speech_stop", () => stopSpeech());
+on("manager.turn_cancel", () => cancelTurn());
 on("manager.field_open", () => openField(""));
 on("manager.field_send", () => submitField());
 on("manager.field_close", () => closeField());
@@ -835,12 +838,10 @@ const GLOBAL_CONTEXTS = new Set(["global"]);
 const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d+$/.test(k);
 /** Esc is not a per-command lookup: the manifest's ordered rules decide (interface/README.md "Esc precedence"). */
 export function escape() {
-  if (consentOpen()) { void answerConsent(false); return "manager_consent"; }
-  // The Manager's engaged states come first; at rest none of its terms holds and Esc is untouched.
-  for (const rule of manifest.keymap.escape as readonly { id: string; when: readonly string[]; action: string }[]) {
-    if (!rule.id.startsWith("manager_")) continue;
-    if (rule.when.every(term)) { void run(rule.action); return rule.id; }
-  }
+  // The Manager's context modal closes first, then a consent notice cancels or
+  // any open call (focused or minimised) ends.
+  const manager = managerEscapeRule();
+  if (manager) return manager;
   if (isDictationBusy()) { cancelDictation(); return "dictation"; }
   if (annotating()) { annotating.set(null); return "annotate"; }
   if (imagePreview()) { imagePreview.set(null); return "image_preview"; }

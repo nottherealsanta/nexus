@@ -15,9 +15,18 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::theme::{Theme, Tier};
 
-/// The cells the orb may cover: 14 wide, 4 high (14 by 8 half-block pixels).
-pub const WIDTH: u16 = 14;
-pub const HEIGHT: u16 = 4;
+/// The cells a minimised orb may cover: 10 wide, 3 high (10 by 6 half-block
+/// pixels). A focused call uses `focused_size` instead.
+pub const WIDTH: u16 = 10;
+pub const HEIGHT: u16 = 3;
+
+/// The cells a focused orb may cover: larger, centred in the stage. It scales
+/// with the terminal but stays wide rather than tall, as the glow does.
+pub fn focused_size(area: Rect) -> (u16, u16) {
+    let width = (area.width / 4).clamp(18, 34);
+    let height = (width / 4).clamp(5, 8);
+    (width, height)
+}
 
 /// Orb enter and exit, from the composer edge (scale and fade).
 const ENTER_SECS: f32 = 0.24;
@@ -97,7 +106,19 @@ impl Orb {
 
     /// Still moving toward `target`? (The frame clock runs only then.)
     pub fn moving(&self, target: Option<OrbState>) -> bool {
-        target.is_some() || self.visible()
+        match target {
+            // An idle orb is still once it has arrived: a call open in the
+            // background must not keep a frame clock awake.
+            Some(OrbState::Idle) => {
+                self.visible()
+                    && (self.to != OrbState::Idle
+                        || self.mix < 1.0
+                        || self.presence < 1.0
+                        || self.level > 0.01)
+            }
+            Some(_) => true,
+            None => self.visible(),
+        }
     }
 
     /// Freeze the orb at a state and level: `--dump-frame` and tests use this
@@ -215,6 +236,8 @@ struct Shape {
     deform: f32,
     t: f32,
     presence: f32,
+    width: f32,
+    height: f32,
 }
 
 impl Shape {
@@ -235,8 +258,8 @@ impl Shape {
         let window = |d: f32, half: f32| ease(((half - d.abs()) / (half * 0.45)).clamp(0.0, 1.0));
         let alpha = (body + halo * (1.0 - body))
             * self.presence
-            * window(dx, f32::from(WIDTH) / 2.0)
-            * window(dy + self.centre_y - f32::from(HEIGHT), f32::from(HEIGHT));
+            * window(dx, self.width / 2.0)
+            * window(dy + self.centre_y - self.height, self.height);
         (alpha.clamp(0.0, 1.0), core)
     }
 }
@@ -251,9 +274,14 @@ pub struct Anchor {
 
 /// The cells the orb may touch, clipped to `area`.
 pub fn bounds(area: Rect, at: Anchor) -> Rect {
-    let x = at.x.saturating_sub(WIDTH / 2);
-    let y = at.bottom.saturating_sub(HEIGHT);
-    Rect::new(x, y, WIDTH, HEIGHT).intersection(area)
+    bounds_sized(area, at, WIDTH, HEIGHT)
+}
+
+/// The cells an orb of `width` x `height` may touch, clipped to `area`.
+pub fn bounds_sized(area: Rect, at: Anchor, width: u16, height: u16) -> Rect {
+    let x = at.x.saturating_sub(width / 2);
+    let y = at.bottom.saturating_sub(height);
+    Rect::new(x, y, width, height).intersection(area)
 }
 
 /// The glyph for a state where the orb is not drawn as a picture.
@@ -270,17 +298,30 @@ pub fn glyph(state: OrbState, ascii: bool) -> &'static str {
 
 /// Paint the orb over `buf`. Call after every other layer.
 pub fn paint(buf: &mut Buffer, area: Rect, at: Anchor, orb: &Orb, theme: &Theme) {
+    paint_sized(buf, area, at, WIDTH, HEIGHT, orb, theme);
+}
+
+/// Paint an orb of `width` x `height` cells over `buf`.
+pub fn paint_sized(
+    buf: &mut Buffer,
+    area: Rect,
+    at: Anchor,
+    width: u16,
+    height: u16,
+    orb: &Orb,
+    theme: &Theme,
+) {
     if !orb.visible() {
         return;
     }
     let state = if orb.mix < 0.5 { orb.from } else { orb.to };
     let picture = theme.opts.tier == Tier::TrueColor && !theme.opts.ascii;
     if !picture {
-        paint_glyph(buf, area, at, orb, theme, state);
+        paint_glyph(buf, area, at, height, orb, theme, state);
         return;
     }
     let Some(base) = state_color(theme, orb) else {
-        paint_glyph(buf, area, at, orb, theme, state);
+        paint_glyph(buf, area, at, height, orb, theme, state);
         return;
     };
     let white = theme
@@ -302,7 +343,7 @@ pub fn paint(buf: &mut Buffer, area: Rect, at: Anchor, orb: &Orb, theme: &Theme)
         _ => (orb.level, 0.07 + 0.2 * orb.level),
     };
     let rise = ease(orb.presence);
-    let radius_max = 4.3;
+    let radius_max = f32::from(width) * 0.31;
     let scale = 0.35 + 0.65 * rise;
     let mut shape = Shape {
         centre_y: 0.0,
@@ -310,14 +351,16 @@ pub fn paint(buf: &mut Buffer, area: Rect, at: Anchor, orb: &Orb, theme: &Theme)
         deform,
         t: orb.t,
         presence: rise,
+        width: f32::from(width),
+        height: f32::from(height),
     };
-    let origin_x = f32::from(at.x) - f32::from(WIDTH) / 2.0;
-    let origin_y = f32::from(at.bottom) - f32::from(HEIGHT);
-    let cx = f32::from(WIDTH) / 2.0;
+    let origin_x = f32::from(at.x) - f32::from(width) / 2.0;
+    let origin_y = f32::from(at.bottom) - f32::from(height);
+    let cx = f32::from(width) / 2.0;
     // Rises from the composer edge as it arrives.
-    let cy = f32::from(HEIGHT) * 2.0 - shape.radius * 1.0 - 0.9 + (1.0 - rise) * 3.0;
+    let cy = f32::from(height) * 2.0 - shape.radius * 1.0 - 0.9 + (1.0 - rise) * 3.0;
     shape.centre_y = cy;
-    let zone = bounds(area, at);
+    let zone = bounds_sized(area, at, width, height);
     for y in zone.y..zone.bottom() {
         for x in zone.x..zone.right() {
             let sx = f32::from(x) - origin_x;
@@ -358,11 +401,12 @@ fn paint_glyph(
     buf: &mut Buffer,
     area: Rect,
     at: Anchor,
+    height: u16,
     orb: &Orb,
     theme: &Theme,
     state: OrbState,
 ) {
-    let y = at.bottom.saturating_sub(2);
+    let y = at.bottom.saturating_sub(height / 2 + 1);
     if !contains(area, at.x, y) {
         return;
     }

@@ -53,6 +53,8 @@ export const manifest = {
    "text_edit.active",
    "view.settings",
    "manager.in_call",
+   "manager.focused",
+   "manager.minimised",
    "manager.listening",
    "manager.speaking",
    "manager.field",
@@ -132,37 +134,12 @@ export const manifest = {
   ],
   "escape": [
    {
-    "id": "manager_field",
+    "id": "manager_call",
     "when": [
-     "manager.field"
+     "manager.in_call"
     ],
-    "action": "manager.field_close",
-    "note": "Manager: the typed field closes and its text is dropped. The call goes on."
-   },
-   {
-    "id": "manager_listening",
-    "when": [
-     "manager.listening"
-    ],
-    "action": "manager.listen_cancel",
-    "note": "Manager: cancels the recording in progress; the call stays open and nothing is sent."
-   },
-   {
-    "id": "manager_card",
-    "when": [
-     "manager.card_focused"
-    ],
-    "action": "manager.card_dismiss",
-    "note": "Manager: a focused card closes. Unfocused cards take no keys, so they never reach this rule."
-   },
-   {
-    "id": "manager_speaking",
-    "when": [
-     "manager.speaking",
-     "!manager.card_focused"
-    ],
-    "action": "manager.speech_stop",
-    "note": "Manager: stops the speech only. The turn's work continues."
+    "action": "manager.stop",
+    "note": "A Manager call is open, focused or minimised: Esc ends the whole call. It stops the speech, cancels the Manager's turn, drops any recording and typed field, clears the card and tears the call down (POST /api/manager/stop). It never minimises and never reaches the session interrupt."
    },
    {
     "id": "overlay",
@@ -208,10 +185,11 @@ export const manifest = {
    {
     "id": "interrupt",
     "when": [
-     "session.busy"
+     "session.busy",
+     "!manager.in_call"
     ],
     "action": "session.interrupt",
-    "note": "Interrupt the viewed session. Never also navigates back on the same press."
+    "note": "Interrupt the viewed session. Never also navigates back on the same press. While a Manager call is open, Esc never reaches this: it ends the call instead."
    },
    {
     "id": "editor",
@@ -252,14 +230,15 @@ export const manifest = {
    "leading": "sidebar.left.toggle",
    "centre": "title_breadcrumbs",
    "trailing": "sidebar.right.toggle",
+   "manager_button": "manager.context",
    "note": "Toggles stay available when their sidebar is closed. Same anchors in terminal, browser and desktop, allowing for native window chrome.",
    "title_click": "session.rename",
    "breadcrumbs": "root title > child title; each crumb is a link; back via nav.back",
    "extra": [
+    "manager.context",
     "manager.open_session",
     "notifications.open"
-   ],
-   "manager_button": "manager.open_session"
+   ]
   },
   "left_sidebar": {
    "default_tab": "sessions",
@@ -2828,10 +2807,9 @@ export const manifest = {
    "note": "Inline rename, find bar, settings field, key capture. Not the composer: Esc never clears composer text."
   },
   {
-   "id": "manager.open_session",
-   "title": "Manager session",
+   "id": "manager.context",
+   "title": "Manager context",
    "category": "manager",
-   "slash": "manager-session",
    "when": [
     "always"
    ],
@@ -2839,7 +2817,20 @@ export const manifest = {
     "palette",
     "header"
    ],
-   "note": "The header's Manager button, left of the right-sidebar toggle. Opens the Manager's own (hidden) session, its current episode, in the inspector at the Requests level: the full context the model is given, with its log. The Manager has no timeline in the clients (docs/manager.md); this is the one place to read it. Needs Core; with no Manager episode yet it says so."
+   "note": "The header's Manager button. Opens a read-only, scrollable modal with the Manager's current hidden context: its episodes and recap, the state snapshot and deltas it was given each turn, and its recent log (messages, tool calls and results). It is an inspector-style debug view, not a timeline or chat (docs/manager.md). Clipping is announced. Available with or without a call."
+  },
+  {
+   "id": "manager.open_session",
+   "title": "Manager session in the inspector",
+   "category": "manager",
+   "slash": "manager-session",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette"
+   ],
+   "note": "Opens the Manager's own (hidden) session, its current episode, in the inspector at the Requests level: the full raw context the model is given, with its log. The Manager has no timeline in the clients (docs/manager.md); the header button shows the current context in a modal, and this opens the inspector for everything. Needs Core; with no Manager episode yet it says so."
   },
   {
    "id": "manager.talk",
@@ -2856,7 +2847,7 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "note": "Tap to toggle, in both clients (terminals do not report key release). No call: start one and open the mic. At rest in a call: open the mic. Listening: send. Thinking or speaking: stop speech, cancel the turn if safe, open the mic (barge-in). Clicking the orb does the same. An unfocused card is focused by this key."
+   "note": "Tap to toggle, in both clients (terminals do not report key release). No call: start one, focus it and open the mic. Focused call: listening sends; thinking, speaking or idle barge in (stop speech, cancel the turn if safe, open the mic). Minimised call: bring the orb back and do the same; with a card waiting it opens that card. Space does the same while the call is focused. Clicking the orb does the same, so talking over the Manager barges in."
   },
   {
    "id": "manager.start",
@@ -2869,7 +2860,7 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "note": "Starts the call, or moves it to this client (POST /api/manager/start). `/manager <text>` sends one typed line instead. With enabled = false, shows a toast that points at Settings, Manager. `/manager stop` is manager.stop."
+   "note": "Starts the call, or moves it to this client (POST /api/manager/start), minimised in the corner. `/manager <text>` sends one typed line instead and focuses the call. With enabled = false, shows a toast that points at Settings, Manager. `/manager stop` is manager.stop."
   },
   {
    "id": "manager.stop",
@@ -2888,7 +2879,20 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "note": "Typed as `/manager stop`. The composer reads a leading `stop` after /manager as this command (no space is allowed in a slash name, so `/manager-stop` is the registered form). Ends the call (POST /api/manager/stop). Never stops a session."
+   "note": "Typed as `/manager stop`. The composer reads a leading `stop` after /manager as this command (no space is allowed in a slash name, so `/manager-stop` is the registered form). Ends the call (POST /api/manager/stop). The End button under the orb does the same, and so does saying \"that's all\". Never stops a session, stops speech or dismisses a card as a side effect."
+  },
+  {
+   "id": "manager.minimise",
+   "title": "Minimise the Manager call",
+   "category": "manager",
+   "when": [
+    "manager.focused"
+   ],
+   "unavailable_reason": "No Manager call is focused.",
+   "placement": [
+    "palette"
+   ],
+   "note": "The call stays open: the orb shrinks to the bottom-right corner, the app returns to full strength and gets its keys back. A recording is dropped and the typed field closes; speech and the Manager's turn keep going. Esc is not this: Esc ends the whole call (manager.stop)."
   },
   {
    "id": "manager.send",
@@ -2912,11 +2916,6 @@ export const manifest = {
    "id": "manager.listen_cancel",
    "title": "Cancel listening",
    "category": "manager",
-   "keys": {
-    "tui": "esc",
-    "nsh": "esc"
-   },
-   "key_context": "escape_chain",
    "when": [
     "manager.listening"
    ],
@@ -2924,26 +2923,44 @@ export const manifest = {
    "placement": [
     "stage"
    ],
-   "note": "Esc rule manager_listening. Drops the recording; nothing is sent. The call stays open."
+   "note": "Drops the recording; nothing is sent. The call stays open. Esc ends the whole call instead."
   },
   {
    "id": "manager.speech_stop",
    "title": "Stop speaking",
    "category": "manager",
    "keys": {
-    "tui": "esc",
-    "nsh": "esc"
+    "tui": "alt+s",
+    "nsh": "cmd+shift+s"
    },
-   "key_context": "escape_chain",
+   "key_context": "global",
    "when": [
-    "manager.speaking",
-    "!manager.card_focused"
+    "manager.in_call",
+    "manager.speaking"
    ],
    "unavailable_reason": "The Manager is not speaking.",
    "placement": [
     "stage"
    ],
-   "note": "Esc rule manager_speaking. Stops the speech only; the turn's work continues. With a focused card, Esc dismisses the card instead."
+   "note": "Stops the speech only; the Manager's turn keeps working and its later sentences are shown but not spoken. Distinct from cancelling the turn (manager.turn_cancel) and ending the call (manager.stop). Esc ends the whole call instead."
+  },
+  {
+   "id": "manager.turn_cancel",
+   "title": "Cancel the Manager's turn",
+   "category": "manager",
+   "keys": {
+    "tui": "alt+c",
+    "nsh": "cmd+shift+c"
+   },
+   "key_context": "global",
+   "when": [
+    "manager.in_call"
+   ],
+   "unavailable_reason": "No Manager call is running.",
+   "placement": [
+    "stage"
+   ],
+   "note": "POST /api/manager/cancel: stops the current speech and cancels the Manager's turn only if no tool has changed a session yet; otherwise the turn keeps going and the response says so. Distinct from stop speaking, dismissing a card and ending the call. Talk (Space or manager.talk) barges in with the same cancel and then opens the mic."
   },
   {
    "id": "manager.field_open",
@@ -2980,11 +2997,6 @@ export const manifest = {
    "id": "manager.field_close",
    "title": "Close typed line",
    "category": "manager",
-   "keys": {
-    "tui": "esc",
-    "nsh": "esc"
-   },
-   "key_context": "escape_chain",
    "when": [
     "manager.field"
    ],
@@ -2992,7 +3004,7 @@ export const manifest = {
    "placement": [
     "stage"
    ],
-   "note": "Esc rule manager_field. Closes the field and drops its text. Nothing is sent."
+   "note": "Closes the field and drops its text. Nothing is sent. Esc ends the whole call instead."
   },
   {
    "id": "manager.card_pick",
@@ -3030,10 +3042,10 @@ export const manifest = {
    "title": "Dismiss card",
    "category": "manager",
    "keys": {
-    "tui": "esc",
-    "nsh": "esc"
+    "tui": "alt+shift+d",
+    "nsh": "cmd+alt+shift+d"
    },
-   "key_context": "escape_chain",
+   "key_context": "global",
    "when": [
     "manager.card_focused"
    ],
@@ -3041,7 +3053,7 @@ export const manifest = {
    "placement": [
     "stage"
    ],
-   "note": "Esc rule manager_card. Closes the card (POST /api/manager/card/dismiss); the next turn's delta says so. A click on the scrim does the same."
+   "note": "Closes the card (POST /api/manager/card/dismiss); the next turn's delta says so. A click outside the card does the same. Distinct from minimising the call (which keeps the card) and ending the call (which Esc does)."
   }
  ]
 } as const;

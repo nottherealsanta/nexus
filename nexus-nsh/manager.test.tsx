@@ -2,15 +2,17 @@
 // queue, `/manager` parsing, cards and rows, and the controller's state machine against a stubbed Core.
 import { describe, expect, test } from "nsh/test";
 import {
-  SpeechQueue, WORDS, rowLine, summaryRepeats, titleAdds, boardColumns, cardRows, columnOf, followLevel, footerHints, liveRow, moved, orbMode, parseCard, parseDevOrb,
-  parseManagerSlash, printableOf, readingMs, rowCount, stateWord, syntheticLevel,
+  SpeechQueue, WORDS, managerHint, rowLine, spokenEnd, summaryRepeats, titleAdds, boardColumns, cardRows, columnOf, followLevel, footerHints, liveRow,
+  moved, orbMode, parseCard, parseDevOrb, parseManagerSlash, printableOf, readingMs, rowCount, stateWord, syntheticLevel,
 } from "./src/manager";
 import type { Card } from "./src/manager";
 import cards from "../interface/scenarios/manager-cards.json";
 import {
-  backStackSize, call, card, cardCollapsed, cardFocused, dismissCard, engaged, fieldText, focusCard, handleEvent, idleCost, inCall, listening, managerTerm,
-  answerConsent, consent, notice, phase, pickRow, say, setStreamForTest, speaking, stopCall, talk,
+  backStackSize, call, callFocused, callMinimised, cancelTurn, card, cardCollapsed, cardFocused, closeField, dismissCard, engaged, fieldText, focusCard,
+  handleEvent, idleCost, inCall, listening, managerContext, managerEscapeRule, managerTerm, minimise, answerConsent, consent, notice,
+  openManagerContext, phase, pickRow, say, setStreamForTest, speaking, stopCall, stopSpeech, talk, minimised,
 } from "./src/core/manager";
+import { manifest } from "./src/gen/manifest";
 import { connection, model } from "./src/store";
 
 type Sent = { method: string; path: string; body: any };
@@ -45,6 +47,7 @@ async function inACall() {
 }
 async function reset() {
   await stopCall();
+  managerContext.set(null);
   setStreamForTest(null);
 }
 
@@ -174,9 +177,10 @@ describe("cards", () => {
   });
 
   test("the footer names only the hints that apply, in order", () => {
-    expect(footerHints(board, { focused: true })).toBe("1-6 open · space talk · esc close");
-    expect(footerHints(all.find((c) => c.name === "note")!.card, { focused: true })).toBe("space talk · esc close");
-    expect(footerHints(all.find((c) => c.name === "question")!.card, { focused: true })).toBe("space talk · esc close");
+    expect(footerHints(board, { focused: true })).toBe("1-6 open · space talk · alt+shift+d dismiss");
+    expect(footerHints(board, { focused: true, dismiss: "⌥⇧⌘D" })).toBe("1-6 open · space talk · ⌥⇧⌘D dismiss");
+    expect(footerHints(all.find((c) => c.name === "note")!.card, { focused: true })).toBe("space talk · alt+shift+d dismiss");
+    expect(footerHints(all.find((c) => c.name === "question")!.card, { focused: true })).toBe("space talk · alt+shift+d dismiss");
     expect(footerHints(board, { focused: false })).toBe("");
   });
 
@@ -255,6 +259,10 @@ describe("the controller", () => {
 
   test("a focused card takes keys; an unfocused one takes none until it is focused locally", async () => {
     await inACall();
+    // A minimised call leaves the app's keys alone, so this checks the card's
+    // own engagement rather than the call taking every key.
+    minimise();
+    expect(callMinimised()).toBe(true);
     handleEvent(ev("manager.card", { card: { id: "c", type: "approval", focused: false, session_id: "s", handle: "h", approval_id: "a", summary: "run", detail: "ls", clipped: false } }));
     expect(card()?.type).toBe("approval");
     expect(cardFocused()).toBe(false);
@@ -265,7 +273,7 @@ describe("the controller", () => {
     expect(engaged()).toBe(true);
     handleEvent(ev("manager.card", { card: null }));
     expect(card()).toBe(null);
-    expect(engaged()).toBe(false);
+    expect(cardFocused()).toBe(false);
     expect(cardCollapsed()).toBe(false);
     await reset();
   });
@@ -482,5 +490,203 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
       browser.restore();
       await reset();
     }
+  });
+});
+
+describe("call mode: Esc ends the call in every state", () => {
+  /** A focused call in a known state, with no microphone and no field. */
+  async function focused() {
+    const sent = await inACall();
+    closeField();
+    minimised.set(false);
+    listening.set(false); speaking.set(false); phase.set("idle");
+    return sent;
+  }
+
+  const ended = (sent: Sent[]) => sent.some((s) => s.path === "/api/manager/stop");
+
+  test("no call: Esc is the app's, and nothing of the Manager runs", async () => {
+    await reset();
+    const rule = managerEscapeRule();
+    expect(rule).toBe(null);
+    expect(callFocused()).toBe(false);
+    expect(callMinimised()).toBe(false);
+  });
+
+  test("focused idle, listening, typing, thinking, speaking and card all end the whole call", async () => {
+    // Idle.
+    let sent = await focused();
+    expect(callFocused()).toBe(true);
+    sent.length = 0;
+    expect(managerEscapeRule()).toBe("manager.stop");
+    await settleAsync(0);
+    expect(inCall()).toBe(false);
+    expect(callMinimised()).toBe(false);
+    expect(ended(sent)).toBe(true);
+
+    // Listening: the recording and the call go.
+    await reset(); sent = await focused();
+    listening.set(true);
+    sent.length = 0;
+    expect(managerEscapeRule()).toBe("manager.stop");
+    await settleAsync(0);
+    expect(!listening() && !inCall()).toBe(true);
+    expect(ended(sent)).toBe(true);
+
+    // Typing: the field goes with the call.
+    await reset(); sent = await focused();
+    fieldText.set("hi");
+    sent.length = 0;
+    expect(managerEscapeRule()).toBe("manager.stop");
+    await settleAsync(0);
+    expect(fieldText() === null && !inCall()).toBe(true);
+
+    // Thinking: Core's stop ends the turn; there is no minimised call left.
+    await reset(); sent = await focused();
+    phase.set("thinking");
+    sent.length = 0;
+    expect(managerEscapeRule()).toBe("manager.stop");
+    await settleAsync(0);
+    expect(inCall()).toBe(false);
+    expect(ended(sent)).toBe(true);
+
+    // Speaking: ending the call stops it.
+    await reset(); sent = await focused();
+    speaking.set(true);
+    sent.length = 0;
+    expect(managerEscapeRule()).toBe("manager.stop");
+    await settleAsync(0);
+    expect(!speaking() && !inCall()).toBe(true);
+
+    // A focused card: it goes with the call.
+    await reset(); sent = await focused();
+    handleEvent(ev("manager.card", { card: { id: "c", type: "note", focused: true, markdown: "x" } }));
+    expect(cardFocused()).toBe(true);
+    sent.length = 0;
+    expect(managerEscapeRule()).toBe("manager.stop");
+    await settleAsync(0);
+    expect(!card() && !inCall()).toBe(true);
+    await reset();
+  });
+
+  test("a minimised call also ends on Esc, and never reaches the session interrupt", async () => {
+    let sent = await focused();
+    minimise();
+    expect(callMinimised()).toBe(true);
+    sent.length = 0;
+    expect(managerEscapeRule()).toBe("manager.stop");
+    await settleAsync(0);
+    expect(inCall()).toBe(false);
+    expect(ended(sent)).toBe(true);
+
+    // Minimised while speaking.
+    await reset(); sent = await focused();
+    speaking.set(true);
+    minimise();
+    sent.length = 0;
+    expect(managerEscapeRule()).toBe("manager.stop");
+    await settleAsync(0);
+    expect(!speaking() && !inCall()).toBe(true);
+    expect(ended(sent)).toBe(true);
+
+    // Minimised with a waiting card.
+    await reset(); sent = await focused();
+    handleEvent(ev("manager.card", { card: { id: "c", type: "note", focused: false, markdown: "x" } }));
+    minimise();
+    sent.length = 0;
+    expect(managerEscapeRule()).toBe("manager.stop");
+    await settleAsync(0);
+    expect(!card() && !inCall()).toBe(true);
+    expect(ended(sent)).toBe(true);
+    // The manifest's interrupt rule excludes an open call, so it can never fire
+    // while one is there; a second Esc now belongs to the app.
+    const interrupt = (manifest.keymap.escape as readonly { id: string; when: readonly string[] }[]).find((r) => r.id === "interrupt");
+    expect(interrupt?.when).toEqual(["session.busy", "!manager.in_call"]);
+    expect(managerEscapeRule()).toBe(null);
+    await reset();
+  });
+
+  test("consent: Esc cancels the notice and starts nothing", async () => {
+    await reset();
+    consent.set({ provider: "copilot", version: "v1", notice: "Your words go to the model." });
+    expect(managerEscapeRule()).toBe("manager_consent");
+    await settleAsync(0);
+    expect(consent()).toBe(null);
+    expect(inCall()).toBe(false);
+  });
+
+  test("the context modal is a layer above the call: Esc closes it first, then ends the call", async () => {
+    await focused();
+    core({ "GET /api/manager/context": () => ({ body: { title: "Manager context", document: "Episodes\n─────\ncurrent  ses_1\n" } }) });
+    await openManagerContext();
+    expect(managerContext()?.text).toContain("current  ses_1");
+    expect(managerEscapeRule()).toBe("manager_context");
+    expect(managerContext()).toBe(null);
+    expect(inCall()).toBe(true);
+    expect(managerEscapeRule()).toBe("manager.stop");
+    await settleAsync(0);
+    expect(inCall()).toBe(false);
+  });
+
+  test("talking from the minimised orb brings the call back", async () => {
+    await focused();
+    minimise();
+    expect(callMinimised()).toBe(true);
+    await talk();
+    expect(minimised()).toBe(false);
+    expect(inCall()).toBe(true);
+    await reset();
+  });
+});
+
+describe("call mode: the four actions and the close phrase", () => {
+  test("stop speaking, cancel the turn, dismiss the card and end the call are separate", async () => {
+    const sent = await inACall();
+    closeField();
+    speaking.set(true);
+    sent.length = 0;
+    stopSpeech();
+    expect(speaking()).toBe(false);
+    expect(inCall()).toBe(true);
+    expect(sent.some((s) => s.path === "/api/manager/cancel" || s.path === "/api/manager/stop")).toBe(false);
+    sent.length = 0;
+    cancelTurn();
+    await settleAsync();
+    expect(sent.some((s) => s.path === "/api/manager/cancel")).toBe(true);
+    expect(sent.some((s) => s.path === "/api/manager/stop")).toBe(false);
+    handleEvent(ev("manager.card", { card: { id: "c", type: "note", focused: true, markdown: "x" } }));
+    sent.length = 0;
+    dismissCard();
+    await settleAsync();
+    expect(sent.some((s) => s.path === "/api/manager/card/dismiss")).toBe(true);
+    expect(inCall()).toBe(true);
+    sent.length = 0;
+    await stopCall();
+    expect(inCall()).toBe(false);
+    expect(sent.some((s) => s.path === "/api/manager/stop")).toBe(true);
+    setStreamForTest(null);
+  });
+
+  test("'that's all' is the spoken End, and is never sent as words", () => {
+    expect(spokenEnd("that's all")).toBe(true);
+    expect(spokenEnd(" That’s all. ")).toBe(true);
+    expect(spokenEnd("that's all for now")).toBe(true);
+    expect(spokenEnd("end the call")).toBe(true);
+    expect(spokenEnd("that's all the files")).toBe(false);
+    expect(spokenEnd("open the second one")).toBe(false);
+  });
+
+  test("the hint names the state's keys and how to end, with the client's labels", () => {
+    const key = (id: string) => ({ "manager.talk": "talk-key", "manager.stop": "end-key", "manager.speech_stop": "stop-key", "manager.turn_cancel": "cancel-key", "manager.card_dismiss": "dismiss-key" })[id] ?? "";
+    const base = { minimised: false, field: false, listening: false, card: false, cardMax: 0, speaking: false, thinking: false };
+    expect(managerHint(base, key)).toBe("space talk · esc end");
+    expect(managerHint({ ...base, field: true }, key)).toBe("enter send · esc end");
+    expect(managerHint({ ...base, listening: true }, key)).toBe("space send · type to type · esc end");
+    expect(managerHint({ ...base, speaking: true }, key)).toBe("space talk · stop-key stop · esc end");
+    expect(managerHint({ ...base, thinking: true }, key)).toBe("space talk · cancel-key cancel · esc end");
+    expect(managerHint({ ...base, card: true, cardMax: 6 }, key)).toBe("1-6 open · space talk · dismiss-key dismiss · esc end");
+    expect(managerHint({ ...base, minimised: true }, key)).toBe("talk-key talk · esc end");
+    expect(managerHint({ ...base, minimised: true, card: true }, key)).toBe("talk-key open · esc end");
+    expect(managerHint({ ...base, consent: true }, key)).toBe("enter accept · esc cancel");
   });
 });

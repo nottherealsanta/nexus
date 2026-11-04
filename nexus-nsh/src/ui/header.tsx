@@ -232,8 +232,8 @@ export function Header() {
           <IconButton icon="bell" label="Notifications" testID="open-notifications" onPress={() => run("notifications.open")} reason={key("notifications.open") ?? undefined} />
           <If when={unread() > 0}><View class="absolute top-1 right-1 size-2 rounded-full bg-info" accessible={false} /></If>
         </View>
-        <Button onPress={() => void run("manager.open_session")} accessibilityLabel="Manager session" testID="open-manager-session"
-          tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{`Manager session: the full context the Manager is given${key("manager.open_session") ? ` (${key("manager.open_session")})` : ""}`}</Text>}
+        <Button onPress={() => void run("manager.context")} accessibilityLabel="Manager context" testID="open-manager-context"
+          tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{"Manager context: the hidden episodes, recap, state and log the Manager has now"}</Text>}
           class={`shrink-0 items-center justify-center rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "h-7"} ${call() ? "text-info" : "text-muted-foreground"} hover:bg-accent ${FOCUS}`}>
           <Text class={`${TS.base} font-medium`}>Manager</Text>
         </Button>

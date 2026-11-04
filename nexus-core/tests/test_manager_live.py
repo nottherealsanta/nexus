@@ -167,6 +167,40 @@ async def test_the_answer_comes_back_and_the_instructions_have_the_three_heading
     assert (await offer(h)).json()["code"] == "live_busy"
 
 
+async def test_stopping_the_call_does_not_wait_for_a_slow_voice_start(h):
+    """Opening a GPT-Live peer can take seconds. Ending the call must not queue behind it."""
+    h.open_stream()
+    await h.start()
+    gate = asyncio.Event()
+
+    class SlowTransport:
+        async def start(self, offer_sdp, session, *, on_event, on_closed):
+            await gate.wait()
+            return CallAnswer("rtc_slow", "v=0 answer")
+
+        async def send(self, message):
+            pass
+
+        async def close(self, reason="done"):
+            pass
+
+    h.manager.live_factory = SlowTransport
+    pending = asyncio.ensure_future(offer(h))
+    await until(lambda: h.manager._live_starting, what="the voice to start opening")
+    # While the voice opens, another start is refused and the call still ends.
+    busy = await asyncio.wait_for(offer(h), 1)
+    assert busy.status_code == 409 and busy.json()["code"] == "live_busy"
+    stopped = await asyncio.wait_for(
+        h.client.post("/api/manager/stop", json={"stream_id": h.stream.stream_id}), 1)
+    assert stopped.status_code == 204
+    assert h.manager.call is not None and not h.manager.call.active
+    assert h.manager.live is None and not h.manager._live_starting
+    gate.set()
+    response = await asyncio.wait_for(pending, 2)
+    assert response.status_code == 409
+    assert response.json()["code"] == "live_cancelled"
+
+
 async def test_a_delegation_runs_the_manager_on_the_users_words_and_answers_on_that_delegation(h):
     h.open_stream()
     await h.start()
@@ -253,7 +287,25 @@ async def test_the_audio_socket_is_holder_only_and_carries_pcm_both_ways(h):
         h.manager.live_voice("not-the-holder")
 
 
+def _missing_audio_codecs() -> str | None:
+    """Why the in-process Opus test cannot run here, or None when aiortc and its codec are usable."""
+    try:
+        import av
+        from aiortc import RTCPeerConnection  # noqa: F401 - import is the check
+    except ImportError as exc:
+        return f"aiortc/PyAV audio is not installed ({exc.name})"
+    try:
+        av.CodecContext.create("libopus", "w")
+        av.CodecContext.create("libopus", "r")
+    except Exception as exc:  # noqa: BLE001 - the local PyAV build lacks Opus
+        return f"the Opus codec is not available in this PyAV build ({type(exc).__name__})"
+    return None
+
+
 async def test_two_real_peers_exchange_audio_in_process():
+    missing = _missing_audio_codecs()
+    if missing:
+        pytest.skip(missing)
     from nexus.manager.live.media import FRAME_BYTES, AiortcPeer
 
     a, b = AiortcPeer(), AiortcPeer()
@@ -266,13 +318,16 @@ async def test_two_real_peers_exchange_audio_in_process():
         await b._pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type="offer"))
         await b._pc.setLocalDescription(await b._pc.createAnswer())
         await a.accept(b._pc.localDescription.sdp)
+        # Gathering can take seconds on CI. The sender's real-time track sends silence until audio is pushed, so
+        # wait for both ends to connect before pushing the tone rather than racing connection setup.
+        await until(lambda: a._pc.connectionState == "connected" and b._pc.connectionState == "connected",
+                    timeout=20, what="both aiortc peers to connect")
+        got.clear()  # ignore the silence the real-time sender sends while the connection is being set up
         tone = b"".join(((8000 * (1 if (i // 12) % 2 else -1))).to_bytes(2, "little", signed=True)
                         for i in range(FRAME_BYTES // 2))
         for _ in range(100):
             a.push(tone)
             await asyncio.sleep(0.02)
-            if sum(len(x) for x in got) > FRAME_BYTES * 10:
-                break
         heard = b"".join(got)
         samples = [int.from_bytes(heard[i:i + 2], "little", signed=True) for i in range(0, len(heard) - 1, 2)]
         assert samples and max(abs(x) for x in samples) > 1000  # real audio came through Opus, not silence

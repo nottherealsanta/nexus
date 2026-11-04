@@ -554,6 +554,7 @@ pub enum Target {
     SidebarEdge,
     /// Rail search (opens the session switcher).
     RailSearch,
+    ArchivedFilter,
     /// A row of the context entries modal.
     ContextEntry(usize),
     /// A project on the rail, by its place in creation order.
@@ -645,6 +646,8 @@ pub enum Target {
     ProviderDetailRow(usize),
     /// The Manager's orb: a click talks.
     ManagerOrb,
+    /// The Manager's End button: a click ends the call.
+    ManagerEnd,
     /// Outside a focused Manager card: a click dismisses it.
     ManagerScrim,
     /// An unfocused Manager card: a click focuses it.

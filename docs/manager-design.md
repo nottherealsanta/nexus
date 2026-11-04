@@ -484,60 +484,83 @@ chose to show, in a semi-transparent modal. Everything lands in the TUI and NSH 
 
 ### 10.1 Out of the way: orb, caption, modal
 
-**Revised by the user on 2026-11-03; this replaces the full-screen stage and the dock.** The Manager is mostly out
-of the way. There is no full-screen state and nothing shifts the layout. Three layers, each present only when it
-has something to do, are painted over the app:
+**Revised by the user on 2026-11-04: call mode (option A); Esc changed the same day (below).** The Manager is still
+painted over the app and never shifts the layout, but a call now has two sizes. A **focused call takes the stage**:
+the orb is large and centred, the app behind it is dimmed to about 30% (TUI `paint::scrim`; NSH an opacity layer),
+the caption sits directly under the orb, one quiet hint line and an explicit **End** sit under that, and a card, if
+any, is below them. **Esc ends the whole call** (stop speech, cancel the turn, drop the recording, field and card,
+tear the call down); it does not minimise and never reaches the session interrupt. A **minimised call** is the
+quiet form `/manager` opens in, or the palette action `manager.minimise` tucks a focused call into: it keeps the
+same three layers, small: the orb, its caption and the hint/End. There is no third, full-screen state.
 
 ```
- Not called: nothing at all          Called: listening, thinking, speaking
+ Not called: nothing at all          Focused call: the call takes the stage
 ┌───────────────────────────┐     ┌───────────────────────────┐
-│ the session               │     │ the session               │
-│                           │     │    ╭─────────────────╮    │
-│                           │     │    │ what needs me?  │    │
-│                           │     │    ╰─────────────────╯    │
-│                           │     │            ▄██▄           │
-│┌─────────────────────────┐│     │┌───────────▀██▀──────────┐│
-││ composer                ││     ││ composer                ││
-│└─────────────────────────┘│     │└─────────────────────────┘│
-└───────────────────────────┘     └───────────────────────────┘
+│ the session               │     │ ░░░ the app, dimmed ░░░░░ │
+│                           │     │ ░░░░░░░░ ████ ░░░░░░░░░░░ │
+│                           │     │ ░░░░░░░ ██████ ░░░░░░░░░░ │
+│                           │     │ ░░░ what needs me? ░░░░░░ │
+│                           │     │ ░ space talk · esc end ░░ │
+│┌─────────────────────────┐│     │ ░░░░░░░░ [ End ] ░░░░░░░░ │
+││ composer                ││     │ ░░░░░░░░░ card ░░░░░░░░░░ │
+│└─────────────────────────┘│     │┌─────────────────────────┐│
+└───────────────────────────┘     ││ composer                ││
+                                  └───────────────────────────┘
 
- Something to show: a semi-transparent modal; the orb stays on top, below it
+ Minimised: the call is still open, in the bottom-right corner
 ┌──────────────────────────────────────────┐
-│ ░░░░░░░░░░ the app, lightly dimmed ░░░░░ │
-│ ░░ ╭ Needs you ──┬ Running ──┬ Finished ╮│
-│ ░░ │1 auth-refact│3 docs-pass│5 flaky-te││
-│ ░░ │2 migration  │4 ios-build│          ││
-│ ░░ ╰──────────── esc · 1-5 · space ─────╯│
-│ ░░░░░░░ Two need you, three running ░░░░ │
-│ ░░░░░░░░░░░░░░░░░░ ◉ ░░░░░░░░░░░░░░░░░░░ │
-│ ░░░░░░░░░░░░░░░░ composer ░░░░░░░░░░░░░░ │
+│ the app at full strength, with its keys   │
+│                                           │
+│                          ╭ what needs me?╮│
+│                          ╰────── ████ ───╯│
+│                     esc end · alt+m talk  │
+│                                       End │
+│┌────────────────────────────────────────┐│
+││ composer                               ││
+│└────────────────────────────────────────┘│
 └──────────────────────────────────────────┘
 ```
 
-- **Orb: only when the user has called for the Manager** (user decision, 2026-11-03). There is no resting dot, and
-  an idle call shows nothing. The orb rises at the bottom centre, anchored on the top edge of the composer (or just
-  above the bottom edge of the window where a view has no composer), when the user presses the shortcut. It stays
-  through listening, thinking and speaking, and while a focused card is up, then fades out with the caption once
-  the exchange goes quiet. While visible it is hit-testable (click = talk); the rest of its box passes clicks
-  through.
-- **Caption:** a slim translucent pill directly above the orb, at most two lines, only the current exchange. It
-  fades 5 s after the exchange goes quiet.
-- **Modal:** a semi-transparent panel centred above the orb, over a light scrim, holding one card (10.4). NSH: an
-  about 80% opaque raised surface with backdrop blur, and a scrim of about 25%, far lighter than the normal modal
-  scrim. TUI: `paint::scrim` for the dim, and the panel's background is the raised surface blended about 80% over
-  the cell underneath, in true colour; the 256-colour, 16-colour and monochrome tiers fall back to a solid raised
-  surface. The session behind stays readable enough that the user never loses their place.
-- **Unprompted lines show no orb.** A proactive line (section 8) is spoken and shown as the caption alone.
+- **States.** No call is nothing at all. A focused call is one of *listening*, *typing* (the field), *thinking*,
+  *speaking*, *card* or *idle*; the orb is large and centred in every one of them. A minimised call is *idle*,
+  *speaking*, *proactive* (an unprompted line) or *card waiting*; the orb is small in the corner. *Consent* is
+  shown before a call can start, in the card style. Esc ends the call in every call state.
+- **Orb.** No call: nothing, no resting dot. Focused call: large and centred, always there while the call is open
+  (idle included, breathing slowly). Minimised call: small in the bottom-right corner, above the composer. It is
+  hit-testable (click = talk) in both sizes. Lower colour tiers and reduced motion use a static glyph/disc.
+- **Caption:** a slim translucent pill directly under the orb, at most two lines, only the current exchange. It
+  fades 5 s after the exchange goes quiet. A proactive line never opens the stage; in a minimised call it is the
+  caption under the small orb, and the orb does not grow. A card waiting in a minimised call is remembered by its
+  one-line caption (10.4).
+- **Hint and End:** one quiet hint line under the caption names the current state's keys and always how to end the
+  call (10.6). An explicit **End** sits under it. Neither is part of the app's layout.
+- **Modal:** a semi-transparent panel below the caption, holding one card (10.4), so the order is orb, caption,
+  hint/End, card. It is far lighter than a normal modal: NSH draws an about 80% opaque raised surface with
+  backdrop blur over a 25% scrim; the TUI uses `paint::scrim` for the dim and blends the raised surface about 80%
+  over the cell underneath in true colour, falling back to a solid raised surface on lower tiers. The session
+  behind stays readable enough that the user never loses their place. A minimised call hides the card and keeps
+  its one-line caption; talking (`alt+m`) opens it.
+- **Unprompted lines never take the stage.** A proactive line (section 8) is spoken and shown as a caption. At
+  rest it is the caption alone; in a minimised call it is the caption on the corner orb. It never enlarges the
+  call or focuses a card by itself.
 - **Rows:** one mark in the state's colour, then the number and handle; below, the `why` or else the state's words,
   then the title only if it says more than the handle. An empty column shows `—`. An approval hides a `summary` that only repeats its `detail`.
 - **Nothing is captured at rest.** Only a Manager shortcut acts at rest; all other keys, including `esc`, go to the
-  app as if the Manager were not there.
+  app as if the Manager were not there. With no call, a modal or dialog keeps Esc as usual.
+- **A focused call takes the bare keys; a minimised call does not.** While focused, every bare key is the call's;
+  the app's global modifier shortcuts (palette, settings, the leader) still work, as they do in NSH, so a plain
+  keystroke never lands in a session behind it. Esc ends the call. While minimised the app has its bare keys back,
+  but Esc still ends the call and never reaches the session interrupt: the manifest's interrupt rule excludes an
+  open call. The context modal, when open, takes Esc first.
 - **A focused and an unfocused card.** A card following a user utterance is focused: it takes keys and has the
   scrim. A proactive `approval` or `question` card (priority 1, section 8) is unfocused: no scrim, no key capture,
-  so it cannot steal typing or misfire on a keystroke; the app stays live, and the shortcut or a click focuses it.
-  An unfocused card that nobody engages collapses to its caption after 12 s; the item stays pending. No other card
-  appears without a user utterance, and a proactive line still never moves the screen.
-- **Ends** with `/manager stop`, the palette, or the stop shortcut. Ending never stops a session.
+  so it cannot steal typing or misfire on a keystroke; the shortcut or a click focuses it. In a focused call the
+  card is below the caption; in a minimised call it is hidden and remembered by its caption until `alt+m` opens
+  it. An unfocused card that nobody engages collapses to its caption after 12 s; the item stays pending. No other
+  card appears without a user utterance, and a proactive line still never moves the screen.
+- **Ends** with Esc, the End under the orb, `alt+shift+m` (NSH `cmd+alt+shift+space`), `/manager stop`, the palette,
+  or saying "that's all". Ending never stops a session. It is a different action from stop speaking, cancelling
+  the turn and dismissing a card (10.6).
 
 ### 10.2 The orb
 
@@ -549,19 +572,22 @@ sphere with a bright core and an alpha falloff into whatever is behind it, never
 | Listening (mic open) | Swells and ripples with the **microphone** level, in `manager.listening` | client |
 | Thinking | Slow breathing pulse, medium size, in `manager.thinking`; after about 1 s a soft cue | Core `phase` |
 | Speaking | Glows and ripples with the **playback** level, in `manager.speaking` | client |
-| Settling (exchange over) | Shrinks and fades out in `manager.idle`, then is gone | client |
-| Not called, or idle in a call | Not drawn | |
+| Settling (exchange over) | Shrinks and fades out in `manager.idle`; with no call left, it goes | client |
+| Idle in a call | Still: large while focused, small in the corner while minimised | client |
+| Not called | Not drawn | |
 | Muted, reconnecting, error | Still, with a word in the caption; an error says its fix. Drawn only while called; otherwise the caption alone | Core `error` |
 
 Priority when several hold: listening, speaking, thinking, settling. Levels use a fast attack (about 60 ms) and a slow
 release (about 240 ms), so it moves like a voice rather than a meter. State changes ease over about 200 ms.
 
 - **NSH:** `Canvas` driven by an animation frame: layered radial falloff, with two or three slowly drifting lobes
-  that deform the edge with level. 44 to 72 px, a 44 px hit target.
+  that deform the edge with level. 184 px while focused, 64 px minimised, with a 44 px hit target.
 - **TUI:** where the terminal has the kitty graphics protocol (Ghostty, the supported target), a real antialiased
   sprite with alpha, the same drawing as NSH, from a set transmitted once and then only placed, so animating costs
   almost no output. Otherwise half-block cells, each with a per-subpixel radial falloff blended into the existing
-  cell colours in true colour, so it has no hard edge and text under the fringe survives. Up to about 14x4 cells, painted over the buffer after every other layer. Lower colour tiers use a static glyph (`·`, `○`, `◉`).
+  cell colours in true colour, so it has no hard edge and text under the fringe survives. About 18-34 by 5-8 cells
+  while focused, 10x3 minimised, painted over the buffer after every other layer. Lower colour tiers use a static
+  glyph (`·`, `○`, `◉`).
 - **Idle is free.** The frame clock and animation frames run only while the orb is visible. Otherwise the
   Manager causes no wakeups or repaints at all, in both clients.
 - **Reduced motion and monochrome:** a static glyph or disc per state, and the state as a word in the caption. Both
@@ -569,12 +595,13 @@ release (about 240 ms), so it moves like a voice rather than a meter. State chan
 
 ### 10.3 Captions and typing
 
-Above the orb, one thing at a time and at most two lines: the Manager's current sentence as it is spoken, or, when
-it has none, the user's words as heard (dim). Only the **current exchange**; opening the mic clears it. A typed line shows the same way. Captions are always
+Under the orb, one thing at a time and at most two lines: the Manager's current sentence as it is spoken, or,
+when it has none, the user's words as heard (dim). Only the **current exchange**; opening the mic clears it. A typed line shows the same way. Captions are always
 on: they are how the user checks it heard right, and how a quiet room works.
 
-**Typed input:** while the mic is open or a focused card is up, typing any printable character turns the moment
-into a one-line field above the orb, with that character in it, discarding the recording. Enter sends, Esc closes.
+**Typed input:** while the call is focused, typing any printable character turns the moment into a one-line field
+under the orb, with that character in it, discarding the recording. Enter sends; Esc ends the whole call (the
+field goes with it).
 `/manager <text>` also sends a line. If voice is not ready the shortcut opens the field directly. In the TUI, these
 keys go to the field, not the session composer. Spoken and typed lines are one conversation (section 6).
 
@@ -648,21 +675,57 @@ only it receives `manager.navigate`.
 
 ### 10.6 Keys, starting, settings
 
-- **Shortcut (`manager.talk`):** `alt+m` in the TUI, `cmd+shift+space` in NSH. Clicking a visible orb does the same. No
-  call: start one and open the mic. Idle in a call: bring the orb back and open the mic. Listening: send. Thinking or speaking: stop speech,
-  cancel the turn if safe, open the mic (barge-in). A call opens quietly, with no modal; if anything is pending the
-  Manager says so in one line.
-- **Start and stop:** `/manager`, `/manager stop`, the palette, and `manager.stop`. With `enabled = false` starting
-  shows a toast that points at Settings, Manager.
+- **Shortcut (`manager.talk`):** `alt+m` in the TUI, `cmd+shift+space` in NSH. `space` does the same while the call
+  is focused. Clicking the orb does the same. No call: start one, focus it and open the mic. Focused: listening
+  sends; thinking, speaking or idle barge in (stop speech, cancel the turn if it is safe, open the mic). Minimised:
+  bring the call back and do the same; with a card waiting, open the card instead. A call opens quietly, with no
+  modal; if anything is pending the Manager says so in one line.
+- **Start and stop:** `/manager` starts quietly in the corner; `/manager <text>` sends one typed line and focuses
+  the call. Esc, `/manager stop`, the palette, `manager.stop`, the End under the orb, and saying "that's all" end it.
+  With `enabled = false` starting shows a toast that points at Settings, Manager. Ending never stops a session.
 - **Terminals do not report key release,** so tap to talk is a toggle in both clients for parity.
-- **Keys taken while engaged, and only then:**
+- **Esc ends the whole call (changed by the user, 2026-11-04).** This supersedes the earlier "Esc minimises"
+  decision of the same day. In every call state, focused or minimised, Esc stops speech, cancels the Manager's
+  turn, drops the recording and typed field, clears the card and tears the call down (`manager.stop`). It never
+  minimises and, while a call is open, never reaches the session interrupt. The context modal on top takes Esc
+  first (it closes, then the next Esc ends the call). Minimise is only the palette action
+  `manager.minimise`; `/manager` opens a call quietly in the corner. In a minimised call every other bare key goes
+  to the app.
+- **States and keys.** The hint line under the orb names the current state's keys, in this order and with the
+  client's labels; NSH uses its `cmd`-based labels. A printable character opens the typed field in any focused
+  state (digits pick a card row when a card is focused).
 
-| Engaged state | Keys |
-| --- | --- |
-| Listening | `space`, `enter` or the shortcut send; `esc` cancels; a printable character opens the field |
-| Speaking, no card | `esc` stops the speech (the turn's work continues) |
-| Field open | `enter` sends; `esc` closes |
-| Focused card | `1`-`9` pick a row; `space` opens the mic; `esc` dismisses; a printable character opens the field; click on the scrim dismisses |
+| State | Esc | `alt+m` / `space` | `alt+shift+m` | `enter` | `1`-`9` | click |
+| --- | --- | --- | --- | --- | --- | --- |
+| No call | app | start, focus, open the mic | — | app | app | app |
+| Context modal | close the modal; the call is untouched | — | — | — | — | outside: close |
+| Focused: listening | end the call: stop speech, cancel the turn, drop the recording and field, clear the card | send | end the call | send | type the digit | orb: send; End: end |
+| Focused: typing | end the call, field included | — (the field keeps focus) | end the call | send the line | type the digit | orb: —; End: end |
+| Focused: thinking | end the call; the turn is cancelled | barge in: stop speech, cancel the turn if safe, open the mic | end the call | — | type the digit | orb: barge in; End: end |
+| Focused: speaking | end the call; the speech stops | barge in: stop speech, cancel the turn if safe, open the mic | end the call | — | type the digit | orb: barge in; End: end |
+| Focused: card | end the call; the card goes | barge in / open the mic (answering the card) | end the call | — | pick the row | row: open; outside: dismiss; orb: talk; End: end |
+| Focused: idle | end the call | open the mic | end the call | — | type the digit | orb: talk; End: end |
+| Minimised: idle | end the call (never interrupt) | bring the call back, open the mic | end the call | app | app | orb: talk; End: end |
+| Minimised: speaking | end the call (never interrupt) | barge in: stop speech, cancel if safe, open the mic | end the call | app | app | orb: talk; End: end |
+| Minimised: proactive | end the call (never interrupt) | barge in / open the mic | end the call | app | app | orb: talk; End: end |
+| Minimised: card waiting | end the call (never interrupt) | open the card | end the call | app | app | caption or orb: open the card; End: end |
+| Consent | cancel, send nothing | — | — | accept | — | — |
+
+- **Four actions stay distinct.** None of these does another's job:
+
+| Action | How | Does |
+| --- | --- | --- |
+| Stop speaking | `alt+s` (NSH `cmd+shift+s`) | Silences the current sentence and mutes the rest of the turn. The turn keeps working. |
+| Cancel the Manager's turn | `alt+c` (NSH `cmd+shift+c`) | `POST /api/manager/cancel`: stops speech and cancels the turn only if no tool has changed a session yet; otherwise the turn keeps going and Core says so. Talking over the Manager (space / `alt+m`) does this and then opens the mic. |
+| Dismiss the card | `alt+shift+d` (NSH `cmd+alt+shift+d`), or a click outside it | `POST /api/manager/card/dismiss`. The call stays open; the next turn's delta says the card was dismissed. |
+| End the call | Esc, End under the orb, `alt+shift+m` (NSH `cmd+alt+shift+space`), `/manager stop`, or "that's all" | `POST /api/manager/stop`, then clears the stage (speech, turn, recording, field and card included). Never stops a session as a side effect. |
+
+- **The hint line.** One quiet line under the caption, always ending with how to end. Examples (TUI labels):
+  focused listening `space send · type to type · esc end`; focused thinking
+  `space talk · alt+c cancel · esc end`; focused speaking
+  `space talk · alt+s stop · esc end`; a card
+  `1-6 open · space talk · alt+shift+d dismiss · esc end`; minimised
+  `alt+m talk · esc end`. Every call state says `esc end`.
 
 - **Row pick:** opens the session through the normal navigation and closes the modal, so the user sees where they
   landed (Q6). A session that no longer exists says so in the caption.
@@ -694,6 +757,7 @@ hold. `stream_id` is a bearer capability and must never appear in an event.
 | `POST /api/manager/card/dismiss` | `{stream_id, card_id}` | The user closed the card; the Manager's next delta says so |
 | `POST /api/manager/navigate/result` | `{stream_id, request_id, ok, reason?}` | The client's answer; `navigate` only returns after it, or after a 5 s timeout |
 | `POST /api/voice/speak` | `{text}` (new form) | Streamed WAV of arbitrary Manager text; `{session_id}` keeps working. Holder only |
+| `GET /api/manager/context` | | `{title, document, episode, episodes, clipped}`: the hidden context as bounded text for the header's read-only modal (10.6) |
 
 Only the holder's `stream_id` is accepted for the routes that take one; anything else is 403 with no identifiers echoed.
 
@@ -732,7 +796,8 @@ from Core's own back stack, so a client without history can follow it. `manager.
 `urgent: false` until the attention queue exists; `manager.caption` is sent for a typed line when `say` is accepted
 (not for `source: "speech"`) and for errors. A session-scoped `manager.acted` event records each act in the target's
 timeline; approval and question replies carry `origin: "manager"` and `heard`. Extra read routes: `GET
-/api/manager/episode` (so the inspector can open a hidden episode) and `GET /api/manager/audit`. `show` and
+/api/manager/episode` (so the inspector can open a hidden episode), `GET /api/manager/context` (the header's
+read-only context modal) and `GET /api/manager/audit`. `show` and
 `navigate` accept `row` (a number on the card now on the stage) as well as a handle. Details: [docs/api.md](api.md#the-manager).
 
 **Config:**

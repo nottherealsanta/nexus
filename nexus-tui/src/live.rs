@@ -6,14 +6,14 @@
 //! microphone is muted while speech plays (`half_duplex`). Not verified against the real service or real devices.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, mpsc as std_mpsc};
+use std::sync::{mpsc as std_mpsc, Arc};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::dictation::{AudioMessage, Resampler, open_input};
+use crate::dictation::{open_input, AudioMessage, Resampler};
 
 pub const RATE: u32 = 24_000;
 /// What the user sees while a call has been lost: the reason, once.
@@ -121,11 +121,17 @@ pub fn is_open() -> bool {
 }
 
 pub fn levels() -> Option<Levels> {
-    CALL.lock().ok().and_then(|c| c.as_ref().map(|a| a.levels.clone()))
+    CALL.lock()
+        .ok()
+        .and_then(|c| c.as_ref().map(|a| a.levels.clone()))
 }
 
 pub fn interrupt() {
-    if let Some(audio) = CALL.lock().ok().and_then(|c| c.as_ref().map(|a| a.flush.clone())) {
+    if let Some(audio) = CALL
+        .lock()
+        .ok()
+        .and_then(|c| c.as_ref().map(|a| a.flush.clone()))
+    {
         audio.store(true, Ordering::SeqCst);
     }
 }
@@ -166,7 +172,9 @@ impl LiveAudio {
             let (stop, muted, flush, levels) =
                 (stop.clone(), muted.clone(), flush.clone(), levels.clone());
             std::thread::spawn(move || {
-                devices(stop, muted, flush, levels, headphones, mic_tx, speech_rx, ready_tx)
+                devices(
+                    stop, muted, flush, levels, headphones, mic_tx, speech_rx, ready_tx,
+                )
             });
         }
         match tokio::task::spawn_blocking(move || ready_rx.recv_timeout(Duration::from_secs(5)))
@@ -177,9 +185,22 @@ impl LiveAudio {
             _ => return Err("The audio devices did not open in time".into()),
         }
         let (lost_tx, lost) = mpsc::unbounded_channel();
-        let task = tokio::spawn(socket(ws, stop.clone(), muted.clone(), mic_rx, speech_tx, lost_tx));
+        let task = tokio::spawn(socket(
+            ws,
+            stop.clone(),
+            muted.clone(),
+            mic_rx,
+            speech_tx,
+            lost_tx,
+        ));
         Ok((
-            Self { stop, muted, flush, levels, task },
+            Self {
+                stop,
+                muted,
+                flush,
+                levels,
+                task,
+            },
             lost,
         ))
     }
@@ -207,7 +228,9 @@ impl Drop for LiveAudio {
 }
 
 async fn socket(
-    ws: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    ws: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
     stop: Arc<AtomicBool>,
     muted: Arc<AtomicBool>,
     mut mic: mpsc::UnboundedReceiver<Vec<u8>>,
@@ -283,7 +306,8 @@ fn devices(
         return;
     };
     let _ = ready.send(Ok(()));
-    let (Some(one), Some(rate24)) = (std::num::NonZero::new(1u16), std::num::NonZero::new(RATE)) else {
+    let (Some(one), Some(rate24)) = (std::num::NonZero::new(1u16), std::num::NonZero::new(RATE))
+    else {
         return;
     };
     let mut pending: Vec<f32> = Vec::new();
@@ -297,7 +321,9 @@ fn devices(
         }
         let mut speaking = false;
         while let Ok(samples) = speech_rx.try_recv() {
-            levels.speech.store(rms(&samples).to_bits(), Ordering::Relaxed);
+            levels
+                .speech
+                .store(rms(&samples).to_bits(), Ordering::Relaxed);
             speaking = true;
             player.append(rodio::buffer::SamplesBuffer::new(one, rate24, samples));
         }

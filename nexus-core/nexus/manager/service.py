@@ -124,6 +124,7 @@ class ManagerService:
         self._lock = asyncio.Lock()
         self._topic_hook_ready = False
         self.live: LiveVoice | None = None
+        self._live_starting = False  # a voice is being opened; `live` may already be set
         self.live_factory: Callable[[], Any] | None = None  # tests inject a fake transport
         self.peer_factory: Callable[[], Any] | None = None  # ... and a fake WebRTC peer
 
@@ -210,13 +211,15 @@ class ManagerService:
             raise Conflict("the event stream for this call is not connected; reconnect and start again",
                            code="stream_closed")
         self._require_consent(Conflict)
+        retired = None
         async with self._lock:
             call = self.call
             if call is not None and call.active and call.stream_id == stream_id:
                 call.client_id = client_id
                 return self._start_result(call)
             if call is not None and call.active:
-                await self._end(call, publish=True)  # the previous holder sees the new call_id and "Moved to ..."
+                # The previous holder sees the new call_id and "Moved to ...".
+                retired = self._retire(call, publish=True)
             call = Call(call_id=f"call_{secrets.token_hex(8)}", stream_id=stream_id, client_id=client_id,
                         started=self.clock())
             self.call = call
@@ -229,7 +232,12 @@ class ManagerService:
             self._publish_state(call)
             self.proactive_notes.clear()
             self.attention.start()  # opens with what is pending, if anything
-            return self._start_result(call)
+            result = self._start_result(call)
+        # A voice or worker from the previous holder must not keep the lock
+        # while it closes (a GPT-Live peer close can take seconds).
+        if retired is not None:
+            await self._teardown(retired)
+        return result
 
     def _require_consent(self, conflict: type[Exception]) -> None:
         settings = self.settings()
@@ -250,25 +258,45 @@ class ManagerService:
         """End the call. Never stops a session."""
         async with self._lock:
             call = self._holder(stream_id)
-            await self._end(call, publish=True)
+            retired = self._retire(call, publish=True)
+        await self._teardown(retired)
 
-    async def _end(self, call: Call, *, publish: bool) -> None:
+    def _retire(self, call: Call, *, publish: bool) -> tuple[Any, tuple[Any, tuple[str, Any] | None]]:
+        """Mark the call ended and take its live voice and worker for `_teardown`.
+
+        Everything here is synchronous: the awaits that can be slow (closing a
+        GPT-Live peer, stopping a runtime turn and its worker) run in
+        `_teardown` after the Manager lock is released, so another request can
+        never wait seconds behind a call ending.
+        """
         call.active = False
         call.phase = "idle"
-        await self._close_live()
         self.attention.stop()
         self.stage.card = None
         self.holder_view.reset()
+        voice, self.live = self.live, None
+        self._live_starting = False
         worker, self._worker = self._worker, None
         episode = self._episode_id()
+        interrupt = None
         if self.turn is not None and episode is not None:
             self.turn.cancelled = True
-            await self.runtime.interrupt(episode)
+            interrupt = (episode, self.turn)
+        if publish:
+            self._publish_state(call)
+        return voice, (worker, interrupt)
+
+    async def _teardown(self, retired: tuple[Any, tuple[Any, tuple[str, Any] | None]]) -> None:
+        voice, (worker, interrupt) = retired
+        if voice is not None:
+            await voice.close("done")
+        # A new call may have started on the same episode while the old voice or
+        # worker closed; only the turn this call stopped is interrupted.
+        if interrupt is not None and self.turn is interrupt[1]:
+            await self.runtime.interrupt(interrupt[0])
         if worker is not None and worker is not asyncio.current_task():
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
-        if publish:
-            self._publish_state(call)
 
     def on_stream_closed(self, stream_id: str) -> None:
         """The holder's event stream closed: the call ends (a session is never touched)."""
@@ -279,7 +307,11 @@ class ManagerService:
     async def _closed(self, call: Call) -> None:
         async with self._lock:
             if self.call is call and call.active:
-                await self._end(call, publish=True)
+                retired = self._retire(call, publish=True)
+            else:
+                retired = None
+        if retired is not None:
+            await self._teardown(retired)
 
     async def live_start(self, stream_id: str) -> dict[str, Any]:
         """GPT-Live: Core opens the call (its own WebRTC peer to OpenAI). The client then sends and gets PCM over the audio socket."""
@@ -294,16 +326,41 @@ class ManagerService:
                 raise Conflict("GPT-Live sends your voice and the Manager's words to OpenAI; acknowledge the privacy "
                                "notice first (POST /api/manager/consent with provider \"codex\")", code="consent_required",
                                payload={"consent": status})
-            if self.live is not None:
+            if self.live is not None or self._live_starting:
                 raise Conflict("a GPT-Live call is already open for this Manager call", code="live_busy")
             voice = LiveVoice(self, call, self.live_factory, self.peer_factory)
-            try:
-                await voice.open()
-            except LiveError as exc:
-                raise Conflict(exc.message, code=exc.code) from None
+            # Visible to stop, status and _retire while it opens: opening its own
+            # WebRTC peer and signing the signaling call can take seconds, and
+            # the Manager lock must not be held for any of it.
             self.live = voice
-            self._set_error(call, None)
-            return {"call_id": call.call_id, "audio": AUDIO_FORMAT}
+            self._live_starting = True
+        try:
+            await voice.open()
+        except LiveError as exc:
+            async with self._lock:
+                if self.live is voice:
+                    self.live = None
+                    self._live_starting = False
+            await voice.close("startup_failed")
+            raise Conflict(exc.message, code=exc.code) from None
+        except BaseException:
+            async with self._lock:
+                if self.live is voice:
+                    self.live = None
+                    self._live_starting = False
+            raise
+        async with self._lock:
+            if self.live is voice:
+                self._live_starting = False
+            if self.call is not call or not call.active or self.live is not voice:
+                ended = True
+            else:
+                ended = False
+                self._set_error(call, None)
+        if ended:
+            await voice.close("ended")
+            raise Conflict("the Manager call ended while the voice was starting", code="live_cancelled")
+        return {"call_id": call.call_id, "audio": AUDIO_FORMAT}
 
     def live_voice(self, stream_id: str) -> LiveVoice:
         """The open GPT-Live voice for the holder's stream, for the audio socket."""
@@ -325,11 +382,6 @@ class ManagerService:
         """The voice call ended by itself (lost, closed by the service): the Manager call goes on, with the error shown."""
         if self.live is voice:
             self.live = None
-
-    async def _close_live(self) -> None:
-        voice, self.live = self.live, None
-        if voice is not None:
-            await voice.close("done")
 
     def activity(self, stream_id: str, listening: bool, speaking: bool) -> None:
         call = self._holder(stream_id)
@@ -581,6 +633,10 @@ class ManagerService:
         """Every Manager episode, newest first. The only place hidden sessions are listed."""
         return self.store.sessions(kind="manager")
 
+    def context_view(self) -> dict[str, Any]:
+        """The Manager's current hidden context for the clients' read-only debug modal (docs/manager.md)."""
+        return ctx.debug_document(self.store, self.current_episode(), self.episodes())
+
     def _project(self) -> Project:
         path = home() / "manager"
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -792,5 +848,8 @@ class ManagerService:
 
     async def shutdown(self) -> None:
         if self.call is not None and self.call.active:
-            await self._end(self.call, publish=False)
+            async with self._lock:
+                retired = self._retire(self.call, publish=False) if self.call.active else None
+            if retired is not None:
+                await self._teardown(retired)
         await self.topics.drain()

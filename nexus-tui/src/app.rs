@@ -138,8 +138,11 @@ pub const WIRED: &[&str] = &[
     "session.open_continuation",
     "manager.talk",
     "manager.start",
+    "manager.context",
     "manager.open_session",
     "manager.stop",
+    "manager.minimise",
+    "manager.turn_cancel",
     "manager.send",
     "manager.field_send",
     "manager.card_mic",
@@ -11516,6 +11519,7 @@ impl App {
             Target::Swallow => {}
             // The Manager's own targets are taken by `manager_mouse` before a click gets here.
             Target::ManagerOrb
+            | Target::ManagerEnd
             | Target::ManagerScrim
             | Target::ManagerCard
             | Target::ManagerRow(_) => {}
@@ -11524,6 +11528,8 @@ impl App {
                     self.ui.provider_detail = None;
                 } else if self.annotation_mut().is_some() {
                     // A stray click must not throw the drawing away.
+                } else if self.ui.manager.context.is_some() {
+                    self.ui.manager.context = None;
                 } else if self.ui.overlay.is_some() {
                     self.close_overlay();
                 } else if self.ui.drawer.is_some() {
@@ -11570,7 +11576,7 @@ impl App {
             }
             Target::RemoveProject(id) => self.ask_remove_project_id(id),
             Target::Notifications => self.run_command("notifications.open"),
-            Target::ManagerSession => self.run_command("manager.open_session"),
+            Target::ManagerSession => self.run_command("manager.context"),
             Target::Tab(tab) => {
                 let id = match tab {
                     Tab::Sessions => "sidebar.tab.sessions",
@@ -11588,6 +11594,7 @@ impl App {
             Target::RailProject(i) => self.rail_activate(i),
             Target::SidebarEdge => self.ui.left_drag = true,
             Target::RailSearch => self.run_command("session.switch"),
+            Target::ArchivedFilter => self.run_command("sessions.archived_filter"),
             Target::SessionScope => self.run_command("sessions.scope_toggle"),
             Target::NewSession => self.run_command("session.new"),
             Target::AddProject => self.run_command("project.add"),

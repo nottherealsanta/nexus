@@ -27,6 +27,61 @@ export function holderName(holder: string): string {
 }
 export const moved = (holder: string) => `Moved to ${holderName(holder)}`;
 
+/** A spoken "that's all" ends the call, like the End button and the stop key. */
+export function spokenEnd(text: string): boolean {
+  const words = text
+    .toLowerCase()
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .join(" ");
+  return [
+    "thats all", "that is all", "thats all for now", "that is all for now",
+    "end the call", "hang up", "goodbye", "bye",
+  ].includes(words);
+}
+
+/**
+ * One quiet hint line under the orb: the current state's keys, including how to
+ * end the call. `key` resolves a command id to this client's key label.
+ */
+export interface HintState {
+  consent?: boolean;
+  minimised: boolean;
+  field: boolean;
+  listening: boolean;
+  card: boolean;
+  cardMax: number;
+  speaking: boolean;
+  thinking: boolean;
+}
+export function managerHint(s: HintState, key: (id: string) => string): string {
+  if (s.consent) return "enter accept · esc cancel";
+  const talk = key("manager.talk");
+  const stopSpeech = key("manager.speech_stop");
+  const cancel = key("manager.turn_cancel");
+  const dismiss = key("manager.card_dismiss");
+  const parts: string[] = [];
+  if (s.minimised) {
+    parts.push(s.card ? `${talk} open` : `${talk} talk`);
+    if (s.speaking) parts.push(`${stopSpeech} stop`);
+    parts.push("esc end");
+    return parts.join(" · ");
+  }
+  if (s.field) return "enter send · esc end";
+  if (s.listening) return "space send · type to type · esc end";
+  if (s.card) {
+    if (s.cardMax === 1) parts.push("1 open");
+    else if (s.cardMax > 1) parts.push(`1-${Math.min(9, s.cardMax)} open`);
+    parts.push("space talk", `${dismiss} dismiss`, "esc end");
+    return parts.join(" · ");
+  }
+  if (s.speaking) return `space talk · ${stopSpeech} stop · esc end`;
+  if (s.thinking) return `space talk · ${cancel} cancel · esc end`;
+  return "space talk · esc end";
+}
+
 const squash = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "");
 /** A title is worth showing only when it says more than the handle does. */
 export const titleAdds = (handle: string, title?: string) => !!title && squash(title) !== squash(handle);
@@ -44,6 +99,8 @@ export const more = (n: number) => `+${n} more`;
 
 /** The scrim over the app and the panel's opacity (the theme cannot hold alpha). */
 export const SCRIM_ALPHA = 0.25;
+/** A focused call dims the whole app to about 30%, like the TUI's call scrim. */
+export const CALL_SCRIM_ALPHA = 0.30;
 export const PANEL_ALPHA = 0.8;
 /** Orb entry and exit, caption fade, and the modal's rise. */
 export const ORB_MS = 240;
@@ -52,6 +109,9 @@ export const CARD_COLLAPSE_MS = 12000;
 /** Orb size: 44 to 72 px, with a 44 px hit target. */
 export const ORB_SIZE = 64;
 export const ORB_HIT = 44;
+/** The focused call's orb: large and centred. */
+export const ORB_LARGE = 184;
+export const ORB_LARGE_CANVAS = 260;
 /** Levels move like a voice: fast attack, slow release. */
 export const ATTACK_MS = 60;
 export const RELEASE_MS = 240;
@@ -182,13 +242,13 @@ export function boardColumns(card: Extract<Card, { type: "board" }>, live: (row:
 }
 
 /** Footer hints, muted, in this order and only those that apply. */
-export function footerHints(card: Card | null, opts: { focused: boolean }): string {
+export function footerHints(card: Card | null, opts: { focused: boolean; dismiss?: string }): string {
   if (!opts.focused) return "";
   const parts: string[] = [];
   const top = rowCount(card);
   if (top === 1) parts.push("1 open");
   else if (top > 1) parts.push(`1-${Math.min(9, top)} open`);
-  parts.push("space talk", "esc close");
+  parts.push("space talk", `${opts.dismiss ?? "alt+shift+d"} dismiss`);
   return parts.join(" · ");
 }
 

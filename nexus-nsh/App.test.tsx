@@ -170,7 +170,7 @@ describe("shell", () => {
     expect(app.shows("id:header")).toBe(true);
     expect(app.shows("id:toggle-left")).toBe(true);
     expect(app.shows("id:toggle-right")).toBe(true);
-    expect(app.shows("id:open-manager-session")).toBe(true);
+    expect(app.shows("id:open-manager-context")).toBe(true);
     expect(app.shows("id:open-settings")).toBe(true);
     // tabs: Sessions and Files, in manifest order; docked, they sit in the header's left slot
     const labels = (manifest.navigation.left_sidebar.tab as readonly { id: string }[]).map((t) => t.id);
