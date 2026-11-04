@@ -1,4 +1,4 @@
-"""The once-per-provider privacy notice (MANAGER_PLAN.md section 9, "Privacy"), like old Nexus's `LiveConsent`.
+"""The once-per-provider privacy notice (docs/manager-design.md section 9, "Privacy"), like old Nexus's `LiveConsent`.
 
 The Manager can read any session, so session text reaches the provider that runs it, and whatever the Manager
 speaks is generated from that text. The user acknowledges that once per provider. The acknowledgement is stored in

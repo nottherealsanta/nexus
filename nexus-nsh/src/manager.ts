@@ -1,4 +1,4 @@
-// The Manager's pure logic (MANAGER_PLAN.md 10.1 to 10.7): wording, card helpers, level smoothing,
+// The Manager's pure logic (docs/manager-design.md 10.1 to 10.7): wording, card helpers, level smoothing,
 // the orb's state priority, the speech queue and `/manager` parsing. No signals and no store here,
 // so tests and the controller (core/manager.ts) can both import it.
 

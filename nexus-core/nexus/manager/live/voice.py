@@ -1,4 +1,4 @@
-"""The GPT-Live voice: sound in and out is OpenAI's, every word of substance is the Manager's (MANAGER_PLAN.md section 5).
+"""The GPT-Live voice: sound in and out is OpenAI's, every word of substance is the Manager's (docs/manager-design.md section 5).
 
 One ``LiveVoice`` per Manager call in ``mode = "live"``. The client sends an SDP offer; the daemon signs and posts it
 with the Codex sign-in, opens the sideband and returns the answer, so the client never sees a token.

@@ -3,7 +3,7 @@
 Local commands (no daemon): `login`, `logout`, `status`, `models`, `serve`,
 `daemon start|stop|status`.
 
-`manager` is a typed chat with the Manager (MANAGER_PLAN.md; docs/manager.md): it holds the call like a client,
+`manager` is a typed chat with the Manager (docs/manager-design.md; docs/manager.md): it holds the call like a client,
 prints the Manager's sentences and cards, and answers navigation requests as a client with no screen.
 
 Daemon clients (they start the daemon if it is not running and talk to it over

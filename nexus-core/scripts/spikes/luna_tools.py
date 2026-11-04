@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""M0 spike (b): the real model through the real Manager loop and tools (MANAGER_PLAN.md section 16).
+"""M0 spike (b): the real model through the real Manager loop and tools (docs/manager-design.md section 16).
 
     cd nexus-core
     uv run python scripts/spikes/luna_tools.py --copy-auth-from ~/.nexus --yes

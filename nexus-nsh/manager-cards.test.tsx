@@ -1,4 +1,4 @@
-// The Manager's cards (MANAGER_PLAN.md 10.4): the shared scenarios in interface/scenarios/manager-cards.json,
+// The Manager's cards (docs/manager-design.md 10.4): the shared scenarios in interface/scenarios/manager-cards.json,
 // drawn by the real app. A card is shown through the dev preview setting (inert unless it is set), so no
 // Core or microphone is involved; then keys, clicks and the zero-idle-cost rule are checked on the same app.
 import { describe, expect, open, test } from "nsh/test";

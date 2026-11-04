@@ -1,6 +1,6 @@
 # TUI design language
 
-NSH follows the Void design in [VOID_DESIGN_PLAN.md](../VOID_DESIGN_PLAN.md) instead:
+NSH follows the Void design instead (archived plan: `git show e438b61:VOID_DESIGN_PLAN.md`; ledger row 2026-11-01):
 `nexus-nsh/theme-void.toml` overrides `theme.toml` for NSH only, and the NSH sections of
 these rules are historical. The rules below describe the TUI.
 

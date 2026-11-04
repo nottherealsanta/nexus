@@ -1,4 +1,4 @@
-"""Final-answer indexing (MANAGER_PLAN.md 7.1 item 1): each turn's last assistant text is searchable."""
+"""Final-answer indexing (docs/manager-design.md 7.1 item 1): each turn's last assistant text is searchable."""
 from __future__ import annotations
 
 import pytest

@@ -1,4 +1,4 @@
-// GPT-Live call audio (MANAGER_PLAN.md section 5): the client only captures the microphone and plays speech.
+// GPT-Live call audio (docs/manager-design.md section 5): the client only captures the microphone and plays speech.
 //
 // Core owns the call. It holds the WebRTC peer to OpenAI, the sideband, the credentials and the Manager; this module
 // talks to it over one WebSocket (`/api/manager/live/audio`) in raw PCM16 mono, 24 kHz, both ways. No client runs

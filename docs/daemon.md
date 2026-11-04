@@ -476,7 +476,7 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
 ## Turn summaries and the spend ledger
 
 `nexus/store.py` keeps what clients show about a turn in the state tables, so
-it never depends on the event log ([TURN_SUMMARY_PLAN.md](../TURN_SUMMARY_PLAN.md)):
+it never depends on the event log (archived plan: `git show e438b61:TURN_SUMMARY_PLAN.md`):
 
 | Table / column | Holds |
 | --- | --- |

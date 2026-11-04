@@ -1,21 +1,8 @@
 # Manager: a voice agent above all sessions
 
-Status (2026-11-03): **step 0 (Mermaid) and M1 (state, search, view) are done in Core, and M2, M3 and M4's Core are built
-(typed Manager, pipeline-voice server side, attention, privacy notice, red-team evals). Both clients now contain stage,
-orb, voice and `via Manager` work; these milestones still need their real-use and audio verification. M5's Core (GPT-Live voice over the Codex sign-in, fake-transport tests) is built; its clients and any real call are not.** Decisions are in [section 12](#12-decisions) and
-[section 14](#14-stage-and-view-decisions); only Q4 (opening Settings) is open. What exists, and how far it was
-verified, is in [section 16](#16-build-order-after-step-0) and [docs/manager.md](docs/manager.md): hidden Manager
-sessions excluded everywhere by default (leak test), the Manager service, tools (with the section 9 authority
-guards in code), context (episodes, recap, snapshot, delta, view), stage cards, navigation with a back stack,
-the routes and events of section 10.7, including the speech-synthesis text form of `/api/voice/speak`, `[manager]`
-config, `nexus manager` (typed chat), durable `origin = "manager"`, audit rows, and a scripted model
-(`mock/manager_demo`) with a runnable scripted Core for client tests and screenshots. Verified by offline tests
-(the full Core suite, including the retrieval eval and the authority, stage/view and honesty evals). **Not
-verified:** any real Luna run (model effort, spoken quality, latency) or real audio. The TUI Manager integration
-tests pass; the NSH Manager browser tests could not run here because no supported browser was found.
-TUI and NSH view reporting (`POST /api/client/view`) exist in both clients; their own tests were not run by the
-Core work. Facts about GPT-Live come from OpenAI's docs and a developer forum thread read on 2026-11-02 and have
-not been tested against the service.
+This is the Manager's design, moved here from `MANAGER_PLAN.md` on 2026-11-04 so that code comments citing its
+section numbers keep working. Milestone status and remaining work are in [PLAN.md](../PLAN.md#3-manager); what is
+built is in [manager.md](manager.md). Status notes in sections 11, 15 and 16 are a record as of 2026-11-03.
 
 **Naming.** "The Manager" is the model, its prompt, tools and context. A **voice** is a front end that turns
 sound into text and text into sound (pipeline, GPT-Live, typed, LFM3 later). The **stage** is what the user sees
@@ -420,7 +407,7 @@ silently lost; the plain half-life recency buried exact older matches under loos
 matching let "over" match "overflow" with full credit; a 3-day window hid equally good older matches (false
 confidence on "the bug"); a weak or wrong-project best match was offered as a confident choice; "search" was a stop
 word. The shipped behaviour (recency as a 0.85-floor tie-break, queries over all history, loose-prefix credit 0.35,
-a named project as a boost, a 0.55 confidence floor) is in [docs/manager.md](docs/manager.md) and the ledger.
+a named project as a boost, a 0.55 confidence floor) is in [docs/manager.md](manager.md) and the ledger.
 Branch matching reads only a real `Session.branch`, so it stays inert until Store provides one.
 
 **Measured (offline, `tests/test_manager_eval.py`; 50 seeded sessions, 100 phrasings).** Without topic lines:
@@ -746,7 +733,7 @@ from Core's own back stack, so a client without history can follow it. `manager.
 (not for `source: "speech"`) and for errors. A session-scoped `manager.acted` event records each act in the target's
 timeline; approval and question replies carry `origin: "manager"` and `heard`. Extra read routes: `GET
 /api/manager/episode` (so the inspector can open a hidden episode) and `GET /api/manager/audit`. `show` and
-`navigate` accept `row` (a number on the card now on the stage) as well as a handle. Details: [docs/api.md](docs/api.md#the-manager).
+`navigate` accept `row` (a number on the card now on the stage) as well as a handle. Details: [docs/api.md](api.md#the-manager).
 
 **Config:**
 

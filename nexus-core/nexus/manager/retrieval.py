@@ -1,6 +1,6 @@
 """Session retrieval for the Manager: ranking, fuzzy matching and spoken handles.
 
-This is the executable form of MANAGER_PLAN.md 7.1 and section 16's M1 ranking,
+This is the executable form of docs/manager-design.md 7.1 and section 16's M1 ranking,
 fuzzy pass and spoken-handle work. It deliberately builds on the data `Store`
 already has, without changing Store or its indexes:
 
@@ -80,7 +80,7 @@ LOOSE_PREFIX_RATIO = 0.6
 _HIGHLIGHT = re.compile(r"\[([^\]]+)\]")
 MAX_HANDLE_CHARS = 40
 
-# The unified state catalog from MANAGER_PLAN.md section 7.
+# The unified state catalog from docs/manager-design.md section 7.
 SESSION_STATES = (
     "needs_approval",
     "needs_answer",

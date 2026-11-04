@@ -1,4 +1,4 @@
-"""The Manager's system prompt (MANAGER_PLAN.md sections 1, 7, 9 and 10).
+"""The Manager's system prompt (docs/manager-design.md sections 1, 7, 9 and 10).
 
 It lives in code on purpose: no user, project, agent or skill file can extend or
 replace it, and no MCP server, hook or extension reaches the Manager's tools.

@@ -34,7 +34,7 @@ terms = [
   # connection and accounts
   "connection.lost", "connection.no_daemon", "provider.signed_in",
   "has_notifications", "text_edit.active", "view.settings",
-  # Manager (MANAGER_PLAN.md 10.1, 10.6). Only the Manager's own keys read these.
+  # Manager (docs/manager-design.md 10.1, 10.6). Only the Manager's own keys read these.
   "manager.in_call",       # a call is running (any client holds it)
   "manager.listening",     # the microphone is open in this call
   "manager.speaking",      # Manager speech is playing
@@ -528,7 +528,7 @@ scope = "core"
 clients = "both"
 default = "attention"
 options = ["off", "attention", "all"]
-note = "off: never. attention: approvals, questions and failures, spoken at a pause (MANAGER_PLAN.md section 8). all: also finished sessions. A proactive line never moves the screen. Core key [manager] proactive."
+note = "off: never. attention: approvals, questions and failures, spoken at a pause (docs/manager-design.md section 8). all: also finished sessions. A proactive line never moves the screen. Core key [manager] proactive."
 
 [[settings.section.row]]
 id = "manager.privacy"
@@ -1844,7 +1844,7 @@ placement = ["panel", "settings"]
 note = "Inline rename, find bar, settings field, key capture. Not the composer: Esc never clears composer text."
 
 # --- Manager -------------------------------------------------------------------
-# The voice agent above all sessions (MANAGER_PLAN.md 10.1 to 10.7). Nothing here
+# The voice agent above all sessions (docs/manager-design.md 10.1 to 10.7). Nothing here
 # is captured at rest except manager.talk, start and stop. The engaged keys apply
 # only while their `when` terms hold, through key contexts of their own, so they
 # never conflict with the app's keys. Esc is resolved by [[keymap.escape]] above.

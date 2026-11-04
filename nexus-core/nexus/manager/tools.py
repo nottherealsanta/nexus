@@ -1,4 +1,4 @@
-"""The Manager's tools (MANAGER_PLAN.md section 7), all control-plane, all in code.
+"""The Manager's tools (docs/manager-design.md section 7), all control-plane, all in code.
 
 Three groups:
 

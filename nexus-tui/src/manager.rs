@@ -1,4 +1,4 @@
-//! The Manager in the TUI (MANAGER_PLAN.md section 10): state and behaviour.
+//! The Manager in the TUI (docs/manager-design.md section 10): state and behaviour.
 //!
 //! The Manager is a voice agent above all sessions. Here it is three layers
 //! painted over the app and nothing more: an orb at the bottom centre, a

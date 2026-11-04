@@ -1,4 +1,4 @@
-"""Hidden Manager sessions never leak (MANAGER_PLAN.md section 5), and what the Manager stores survives a restart."""
+"""Hidden Manager sessions never leak (docs/manager-design.md section 5), and what the Manager stores survives a restart."""
 from __future__ import annotations
 
 import asyncio

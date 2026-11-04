@@ -1,4 +1,4 @@
-"""Attention: when the Manager speaks up unprompted (MANAGER_PLAN.md section 8, 10.1).
+"""Attention: when the Manager speaks up unprompted (docs/manager-design.md section 8, 10.1).
 
 A bus subscriber with **no model**. It watches the daemon's events while a call is running, keeps a ranked queue of
 things the user may want to know, and turns them into short deterministic lines:

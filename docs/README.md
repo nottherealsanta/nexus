@@ -1,6 +1,6 @@
 # Nexus 0.10 docs
 
-These pages describe the code as it is. [PLAN.md](../PLAN.md) lists remaining work and [porting-ledger.md](porting-ledger.md) records decisions; [AGENTS.md](../AGENTS.md) holds the working rules. Where a
+These pages describe the code as it is. [PLAN.md](../PLAN.md) lists what has landed and all remaining work and [porting-ledger.md](porting-ledger.md) records decisions; [AGENTS.md](../AGENTS.md) holds the working rules. Where a
 doc and the code disagree, the code wins: fix the doc.
 
 ## Index
@@ -23,6 +23,7 @@ doc and the code disagree, the code wins: fix the doc.
 | [agents.md](agents.md) | Agent files: frontmatter, where they load from, session snapshots and `AGENTS.md` |
 | [inspector.md](inspector.md) | The session inspector web page: four levels of detail down to raw events |
 | [manager.md](manager.md) | The Manager: a voice agent above all sessions; hidden episodes, tools, authority guards, retrieval, cards, navigation, the scripted model |
+| [manager-design.md](manager-design.md) | The Manager's design: voices, context, tools, attention, authority, the stage and cards, milestones (status in PLAN.md) |
 | [api.md](api.md) | The HTTP API every surface speaks, and its event stream |
 | [daemon.md](daemon.md) | The daemon, projects, sessions, turns, approvals, questions, crash recovery, session archiving, the CLI as a client |
 

@@ -1,6 +1,6 @@
-"""The Manager: control-plane agents above sessions (MANAGER_PLAN.md).
+"""The Manager: control-plane agents above sessions (docs/manager-design.md).
 
-This package starts with retrieval (MANAGER_PLAN.md 7.1 and M1's ranking,
+This package starts with retrieval (docs/manager-design.md 7.1 and M1's ranking,
 fuzzy pass and spoken handles).
 `retrieval.py` is self-contained and read-only around `Store`; the Manager
 service, turn loop, stage, voices and tools land in later milestones.

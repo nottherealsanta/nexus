@@ -1,4 +1,4 @@
-"""The once-per-provider privacy notice (MANAGER_PLAN.md section 9, "Privacy")."""
+"""The once-per-provider privacy notice (docs/manager-design.md section 9, "Privacy")."""
 from __future__ import annotations
 
 import pytest

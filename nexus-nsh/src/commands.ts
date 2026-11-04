@@ -599,7 +599,7 @@ function dictateFromComposer() {
 // requested runtime handler registered by its final ID so the mic button can invoke it
 // now and the shared manifest can expose it when that command lands.
 on("voice.dictate", dictateFromComposer, true);
-// The Manager (MANAGER_PLAN.md 10.6). Everything else of it lives in core/manager.ts.
+// The Manager (docs/manager-design.md 10.6). Everything else of it lives in core/manager.ts.
 on("manager.talk", () => talk(), true);
 on("manager.start", () => startQuietly(), true);
 on("manager.open_session", () => openManagerSession(), true);

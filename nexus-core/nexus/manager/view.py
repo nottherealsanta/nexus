@@ -1,4 +1,4 @@
-"""The holder's view, and moving it (MANAGER_PLAN.md 10.5).
+"""The holder's view, and moving it (docs/manager-design.md 10.5).
 
 Clients report where they are with ``POST /api/client/view`` (kept per event
 stream in ``server.ClientViews``). Only the call's holder counts: this module

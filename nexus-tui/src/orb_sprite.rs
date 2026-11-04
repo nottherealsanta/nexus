@@ -1,5 +1,5 @@
 //! The Manager's orb as a real picture, where the terminal has the kitty
-//! graphics protocol (MANAGER_PLAN.md 10.2).
+//! graphics protocol (docs/manager-design.md 10.2).
 //!
 //! The same drawing as NSH's `orb.ts` (halo, ripples, lit body, drifting
 //! lobes, bright core) rendered here with antialiasing and alpha into small RGBA

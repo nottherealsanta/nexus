@@ -67,7 +67,7 @@ del    = "#f27d8f"
 add_bg = "#1c2a1a"
 del_bg = "#2e1b20"
 
-# The Manager's orb (MANAGER_PLAN.md 10.2): one mark per state, drawn on the canvas.
+# The Manager's orb (docs/manager-design.md 10.2): one mark per state, drawn on the canvas.
 [dark.manager]
 listening = "#69b7d5"   # = agent.sky
 thinking  = "#a78bfa"   # = agent.violet

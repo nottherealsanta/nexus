@@ -1,4 +1,4 @@
-"""What the Manager is told each turn (MANAGER_PLAN.md section 6).
+"""What the Manager is told each turn (docs/manager-design.md section 6).
 
 Context is append-only inside an episode, so nothing already sent is rewritten:
 

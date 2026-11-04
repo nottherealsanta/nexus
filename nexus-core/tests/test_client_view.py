@@ -1,4 +1,4 @@
-"""`POST /api/client/view`: ephemeral per-stream views (MANAGER_PLAN.md 10.5, docs/api.md#client-views-ephemeral)."""
+"""`POST /api/client/view`: ephemeral per-stream views (docs/manager-design.md 10.5, docs/api.md#client-views-ephemeral)."""
 from __future__ import annotations
 
 import asyncio

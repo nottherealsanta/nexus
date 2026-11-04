@@ -1,4 +1,4 @@
-"""MANAGER_PLAN.md section 11, evals D: authority, honesty. The Manager acts only on the user's own words.
+"""docs/manager-design.md section 11, evals D: authority, honesty. The Manager acts only on the user's own words.
 
 The tools are driven directly with a hand-built turn, so each rule is checked in code with no model in the way,
 then a few end-to-end cases drive the scripted model through the HTTP API.

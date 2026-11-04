@@ -1,396 +1,1119 @@
-# Nexus 0.10: released (v0.10.0); what remains
+# Nexus plan
 
-Goal (done 2026-10-30): merge branch `nexus10` into `main` and publish 0.10.0. The development checkout is now `~/repos/nexus` (on `main`); old Nexus is `~/repos/nexus-old` (branch `nexus01`). Current behavior is in [docs/README.md](docs/README.md); historical porting decisions are in the [porting ledger](docs/porting-ledger.md). Old Nexus (`~/repos/nexus`, branch `nexus01`) is reference only.
+This is the one plan for Nexus 0.10.x: what has landed, and everything that is still to do. It replaces the
+separate plan files and `TODO.md` (see [Archived plans](#archived-plans)). Current behavior is described in
+[docs/README.md](docs/README.md); deliberate changes from old Nexus are in the
+[porting ledger](docs/porting-ledger.md). The Manager's design is in
+[docs/manager-design.md](docs/manager-design.md); its remaining work is tracked here.
 
-Preserve the visible, ordered context timeline, announce clipping, keep task tools separate from Nexus control, and do not rewrite context already sent to a provider. State is in `~/.nexus` after `nexus migrate`; never run it against the real home from a session.
+Rules that every item below must keep:
 
-## Released: v0.10.0 (2026-10-30)
+- Preserve the visible, ordered context timeline: everything the model receives is shown in order, the UI shows
+  nothing the model does not have, wire events are never dropped and clipping is announced. Do not rewrite context
+  already sent to a provider. The Manager's own context is the one exception (`docs/manager.md`).
+- Task tools act on the workspace; changes to Nexus state belong to the control plane.
+- Every UI change lands in the TUI and NSH in the same change
+  ([.agents/skills/nexus-ui-parity/SKILL.md](.agents/skills/nexus-ui-parity/SKILL.md)); a client difference
+  needs the user's approval and a ledger row.
+- The file explorer, file editor and Git page are for desktop and web only, never iOS or another mobile target.
+- State is in `~/.nexus` after `nexus migrate`. Never run it against the real home from an agent session; tests use
+  a scratch `$NEXUS10_HOME`.
 
-Nexus 0.10.0 is published: https://github.com/nottherealsanta/nexus/releases/tag/v0.10.0. `main` is Nexus 0.10 (old Nexus 0.7.2 is the second parent of the merge, branch `nexus01` and tag `v0.7.2`). The release has the TUI binary for macOS arm64 and x86_64 and Linux x86_64 and aarch64, the Core wheel and sdist, `install.sh` and `SHA256SUMS`. The README's one-line install was run against the real release on macOS arm64 (`nexus` reported `v0.10.0`).
+How to update this file: when an item lands, tick it and move its one-line record to [Landed](#landed); when a
+decision changes, update [Decisions still open](#decisions-still-open). Keep "not verified" honest: an item that
+was only reviewed statically, or only tested offline, says so.
 
-What the release does **not** have, by decision:
-- **No web client.** NSH is skipped in CI and in the release build (step 4), so `nexus web` needs a checkout. Re-enable `nsh` in `ci.yml` and `nsh-web` in `build-artifacts.yml` once the pinned build is fast and proven; the installer picks up `nexus-web.tar.gz` automatically when a release has one.
-- **No real-provider check** for OpenAI and Ollama, and no `nexus migrate` run on a copy of a real old home: both were left out of the release on purpose.
-- **No platform matrix** beyond macOS arm64 and Debian 13 x86_64 ([TODO.md](TODO.md)).
+## Status at a glance (2026-11-04)
 
-`release-as` was removed from `release-please-config.json` after the release, so the next release PR follows the commit messages (a `feat` bumps the minor version while the major is 0).
+| Area | State | Next |
+| --- | --- | --- |
+| Release 0.10.0 | Published 2026-10-30 | Release PR #98 (`release 0.11.0`) is open; see [1](#1-release-and-installation) |
+| **Tests and lint** | **Red locally:** 7 TUI and 3 Core tests fail, TUI fmt and clippy fail, 5 NSH browser tests fail | [0](#0-make-the-tests-green) first |
+| CI | Red on `main`, NSH not in CI. **Deferred by the user (2026-11-04): do not work on CI for now** | [Deferred](#deferred-ci-user-decision-2026-11-04) |
+| Turn summaries | Steps 0–6 and 8 done, 7 partly done | Real-daemon checks, docs, step 9 (live partial) — [5](#5-turn-summaries) |
+| TUI render performance | Phases 1–3 done, phase 4 partly | Only if a profile asks for it — [6](#6-tui-render-performance-and-launch-time) |
+| NSH Void design | Mostly complete; both passes done, since made square (radius 0) | Two open questions — [8.4](#84-nsh-void-design-leftovers) |
+| Polish | TUI modals, Manager call mode, scroll model, spinners, group fold, iOS app | [8.0](#80-polish-user-review-2026-11-04) |
+| Editor, explorer, Git page | Steps 0–1 done, step 2 in progress. The TUI app still edits in the plain `Composer` buffer; the vendored editor is used only by `examples/editor_demo.rs`. NSH's Files tab is one directory at a time; no Git tab in either client | Wire the vendored editor into the TUI — [4](#4-file-explorer-file-editor-and-git-page) |
+| Manager | Core for M1–M5 built and tested offline; clients' stage, cards, orb, voice and `via Manager` built | M0 spikes and every real-model / real-audio check — [3](#3-manager) |
+| Mermaid (Manager step 0) | Done in both clients | Real terminal image-protocol check, screenshots — [3.2](#32-mermaid-verification) |
+| Settings | One two-pane dialog in both clients | Real sign-ins, screenshots, browser coverage — [8.3](#83-settings) |
+| Providers | Codex, Copilot, Grok, OpenCode, Claude (Agent SDK) work | OpenAI and Ollama real calls; Anthropic Messages, Gemini — [10](#10-providers) |
+| Event storage | Every event is durable; full request bodies with base64 images grow quadratically; the running daemon predates wire expiry; the file never shrinks | Deploy, reclaim, ephemeral deltas, dedupe requests, compact finished sessions — [13](#13-event-storage-harden-finished-sessions-into-messages-and-flush-their-events) |
 
-The sections below are the record of the release steps and the backlog that remains.
+## Health check (2026-11-04)
 
-## Where things stand (2026-10-30)
+Run by subagents on HEAD `e438b61` with a scratch `$NEXUS10_HOME`; the working tree differed only in the plan
+merge (comments and docs). Repeat this table when the tree is green again.
 
-- **Manager attention guard (2026-11-03).** Coalesced notifications no longer mark requests counted only as "more" as presented. They remain queued for a later notification, and cannot be approved or answered on that basis before being presented.
-
-- **Manager credential redaction (2026-11-03).** Secret assignments with quoted keys, including JSON-style credentials, are masked before Manager speech and session-derived text reach their destinations. This remains a pattern-based safeguard, not a guarantee; real audio and the remaining Manager milestones are tracked in [MANAGER_PLAN.md](MANAGER_PLAN.md).
-
-- **Kernel and shell counts (2026-11-02).** The location strip shows a centred, highlighted count of the viewed session tree's live kernels and running background shells; a kernel is omitted at zero and shells appear only while one runs. Clicking the count opens a read-only modal listing every kernel and retained shell in the tree, with ownership, cells, variables, command, status, exit code and output size. Both clients refresh on `code.cell`, `kernel.deleted`, `bash.started` and `bash.finished`, while the tree is busy, and while the modal is open; `/api/kernel?summary=1` keeps the list compact.
-
-- **Project rail and session switcher (2026-11-03).** Pressing the project already open on either client's rail toggles the Sessions sidebar. The rail centres the project label between corner counts, dims inactive projects and leaves space below Settings. A border separates the rail and sidebar, the toggle is centred over the rail, and the search shortcut follows the sidebar's right edge. The TUI uses bracketed Sessions and Files tabs aligned to session titles; NSH retains icons by user request. The session switcher remains available by command and leads each row with the session's state glyph. A requested non-destructive project removal still needs Core support: the existing delete action permanently deletes sessions.
-
-- **Launch splash (2026-11-02).** Both clients open with the white `_/` logo and a 30-segment milestone bar (`daemon`, `workspace`, `providers`, `session`, `ready`), ported from old Nexus's splash. The bar follows startup, not the clock; the TUI paints the logo before terminal capability probes, keeps the ambient field, flash and curtain, and NSH fades into the first live frame. A failed start dismisses the splash so the error is readable.
-
-- **Kernels on archive (2026-11-02).** Manual and automatic archive release idle kernels owned by the root tree and publish the state-loss reason. A busy owned kernel refuses archive. Kernel variables are memory-only; unarchive starts fresh on next use while durable cell history remains.
-
-- **Code mode guidance (2026-11-02).** Built-in agents prefer code when available for multi-step inspection, concurrent calls and result processing; scouts grant code with only read-only nested tools. Direct reads remain required before edits, and existing snapshots stay frozen. A global or project agent file replaces the built-in prompt, so the live `~/.nexus/agents/build.md` override needs the same guidance; editing `builtin_agents/build.md` alone does not affect sessions that load it. The audit baseline and evaluation criteria are in [docs/agents.md](docs/agents.md#choosing-code-mode). Still to measure: comparable real-provider tasks for correctness, requests, tokens and elapsed time.
-
-- **Turn footer usage.** TUI and NSH show reasoning tokens and cache percentage directly in the footer without hover tooltips.
-
-- **Image markers.** TUI and NSH show inline image markers and bordered square previews, arranged side by side and wrapped as needed, without repeating generated attachment labels at the end of user messages.
-
-- **Step limit default (2026-11-03).** An agent without its own `steps` now gets 500 model calls per turn (`MAX_STEPS = 500`), not 50. A global `~/.nexus/agents/build.md` override with `steps: 500` had masked the old default; with it gone, sessions stopped at 50. Sessions whose snapshot has no explicit `steps` pick up the new default on their next turn.
-
-- **Collapsed text pastes (2026-11-03).** A paste of at least 500 characters, independent of line count, becomes one atomic `[Pasted ~N tokens]` marker in both composers; shorter multiline pastes stay inline. Large pastes have a composer preview with **Show** opening the existing full-text modal. Core stores the full text as a collapsed part, so the model reads it while the user message shows only a clickable marker chip. A failed send restores the collapsed draft.
-
-- **Shared UI polish (2026-11-03).** Each header and subagent strip in the TUI and NSH uses one fixed tab width: a session tab and New session share the header box, a viewed child's path forms parent tabs, a rail divides them from the root's other children, and the viewed child is the selected child tab. NSH modals and Settings are square like the TUI's, and NSH's app default is 16 px text with 24 px leading, with hierarchy from weight and colour. The composer's agent label is regular weight, and the mic and send buttons sit on the input's bottom edge with tighter padding. Both clients show a collapsed-paste preview with **Show**, and NSH arms the manifest's Ctrl+X leader for three seconds. No tests were run for this UI polish, per the user's request.
-
-- **Square surfaces and wider NSH rail (2026-11-03).** NSH's shared radius defaults are now 0 (`radius` and `radius-card`, generated from `scripts/gen.py`), so the current-project selection, session rows, search fields, cards, tables and modals are square like the TUI's cell grid. Inline code, prose table headers and surfaces, the file-find case toggle, the composer checkbox, the Manager caption and field, the jump-to-latest pill, the `+N more` pill and splash segments no longer carry bespoke radii; only circular status dots, spinners, image remove controls, the Manager orb and progress meters stay round. The project rail is 48 px in NSH, while the TUI keeps its five cells; the wider rail is a client-specific NSH change approved by the user. `+ New session` shares the session titles' text edge in both. Static review only; no tests, builds or screenshots, per the user's request.
-
-- **Sticky header isolation (2026-11-03).** The sticky user band is now scoped to its session in both clients. NSH keys its scroll offset and measured row heights by session, including the live stream and turns-gap rows; the TUI keeps one scroll per session and adopts it after a sync-driven selection, so the root's offset and follow flag cannot pin its band over a child. The TUI's composer mouse mapping also includes the collapsed-paste cards. Static code review only; no runtime validation, tests or builds were run.
-
-- **Reasoning effort memory.** Explicit root-session effort choices are remembered across new sessions and daemon restarts; choosing default clears the override while leaving subagents independent.
-
-- **Completion sound (2026-11-02).** The TUI and NSH now play a single note when a session tree finishes; the input-needed cue remains distinct.
-
-- **NSH web visual iteration.** The square composer and activity line share the timeline column; input actions sit beside the input, usage sits on the selector row, and Working is right-aligned beside the location. The `nexus-nsh-web-screenshots` skill documents seeded screenshot capture and a hot-reload loop using the existing visual harness.
-
-- **NSH closer to the TUI (2026-11-02).** After review of the Void design: centred, wider reading column; context counts beside their headers; running activity groups show the latest five at normal detail and fold when finished; one footer per turn; draggable file panel; plain diagnostic rows; one row-spacing rule; the queue inside the dock; calmer disconnect banner. See [docs/porting-ledger.md](docs/porting-ledger.md).
-- **UI parity rule (2026-11-02, user decision).** Every UI change, including layout, lands in the TUI and NSH in the same change; a client-specific difference needs the user's approval and a ledger row. The workflow and mock scenario recipes are in [.agents/skills/nexus-ui-parity/SKILL.md](.agents/skills/nexus-ui-parity/SKILL.md). Shared scenarios live in `interface/scenarios/`.
-- **Markdown in the file view (2026-11-02).** `.md` and `.markdown` files open as rendered prose in both clients; `p` in the TUI and Source in NSH switch to the numbered source, and find returns to it. The timeline's Markdown cache renders the preview, so a large file is laid out once per width and theme.
-- **TUI/NSH audit (2026-11-02), with the TUI as the reference.** Tool groups, the palette, child rows, the header's waiting state, the waiting-sessions banner, the always-visible project rail, the sidebar's `+ New session` and search hint, turn footer tokens, the composer's provider, the starting context, waiting cards and notices are aligned; `interface/scenarios/activity-group.json` checks both clients. NSH keeps its two-pane Settings by decision and shows every setting except the terminal-only ones. The Details sidebar starts closed in both.
-  NSH test files that import `src/` directly (`App`, `i8`, `editor`, `context-header`, `voice-settings`) cannot load `nexus/native` under `nsh test`, added with `nexus-nsh/native/`; fix that before relying on them. They were last checked with the microphone stubbed in a scratch copy.
-  Navigation, pickers and panel interactions are still to audit.
-- **NSH Void design (2026-11-01).** NSH web, desktop and iOS use the Void design in
-  [VOID_DESIGN_PLAN.md](VOID_DESIGN_PLAN.md): `nexus-nsh/theme-void.toml` overrides the shared palette
-  for NSH only, and the layout changes are listed in the porting ledger's 2026-11-01 row. The second
-  pass (2026-11-01) settled the grid and the shared kit: one 16 px text edge and right edge, filled
-  borderless boxes with one inset status rail, one segmented control, 48 px rails whose icons line up
-  with the header toggles, status glyphs only where they mean something, a left sidebar with one edge
-  and one-line rows, a compact starting-context ledger, a left-aligned turn footer, a deliberate
-  waiting card with drawn radio and checkbox marks, a dock with the other-sessions row and measured
-  selectors, a resizable file panel with soft wrap, a session panel with one baseline and no developer
-  notes, and the light-theme band token. The TUI's palette, layout and `interface/theme.toml` are
-  unchanged.
-- **Phone navigation (2026-11-01).** Native phones use Sessions and Settings
-  bottom tabs rather than the left sidebar drawer. Sessions retains project and
-  all-project scopes; conversations open as a separate page with a back control,
-  a compact composer and a larger dictation target. Subtle row dividers make the
-  phone's touch-sized session list easier to scan; row actions no longer overlap
-  titles, and relative activity times are visible. Desktop and TUI retain their
-  sidebar navigation (the phone-specific difference is in the porting ledger).
-- **Faster session opens on a phone (2026-11-02).** Core now gzips JSON
-  responses over 500 bytes when the client accepts it (the event stream stays
-  uncompressed). The iPhone's `NSURLSession` already asks for gzip and decodes
-  it; the 588 KB message page of a long session drops to about 171 KB, and the
-  initial snapshot from 92 KB to 13 KB. Session opens still fetch the newest
-  200 messages plus turns and the starting snapshot before painting, and a
-  cellular tailnet round trip is ~300 ms; a smaller first page on phones is
-  the next candidate if it still feels slow.
-- **NSH on macOS and iOS (2026-11-01).** The app packages for AppKit and UIKit
-  (`npm run macos`, `npm run ios` / `ios:catalyst` / `ios:device`;
-  `nsh package App.tsx --target macos|ios-simulator|ios`), with safe-area padding
-  in the header, composer and sidebar footer and touch-visible hover actions.
-  Native builds connect to Core directly by address (no token or pair code): a
-  Connect screen stores `http://<mac-ip>:4747` in NSH Storage, and Core serves
-  `/api/*` without a token when bound off loopback (`NEXUS_HOST` / `nexus serve
-  --host`). Loopback keeps today's token behavior. Packaged apps get
-  `NSAllowsArbitraryLoads` (plus iOS's `NSLocalNetworkUsageDescription`)
-  from `nexus-nsh/scripts/native-info.mjs`:
-  ATS blocks plain HTTP to a Tailscale `100.x` address even with the local-only
-  exception. A device `.ipa` must be packaged unsigned, patched, then signed.
-  Verified: the
-  packaged macOS app opens on the Connect screen, and `nsh test --target macos`
-  connects it to an address over HTTP; the layout was checked at 390×844 in the
-  web target and the connect flow headless as iOS. Not verified: a real iOS
-  simulator runtime (none installed here) and a signed device build. A signed
-  iPhone build was installed on 2026-11-02; it connects to Core but cannot use
-  the composer's mic because native NSH has no `getUserMedia` or Web Audio. The
-  mic button now focuses the composer and points to the iOS keyboard's
-  dictation; in-app capture stays web/TUI until the runtime gains audio input.
-- **STT startup on Apple silicon (2026-11-01).** The voice extra now keeps PyTorch
-  below 2.15 on macOS arm64, matching the Kestrel Metal extension; the previously
-  resolved 2.15 failed to load the cached model. Status identifies that mismatch,
-  and worker import errors retain their cause. A scratch environment with PyTorch
-  2.14.1 prepared the real cached model; microphone capture remains unverified.
-- **Idle auto-archive (2026-11-01).** The daemon archives a whole root session
-  tree after no session in it has had activity for
-  `[sessions] auto_archive_idle_seconds` (default 3,600; `0` disables). A sweep
-  runs at startup and about once a minute, uses the ordinary archive transition
-  (one `session.archived` event, idle owned kernels released, stored history preserved), skips trees with a
-  running turn, pending approval/question/input or a live background bash job,
-  and re-reads the config value every pass. Clients show archived trees through
-  their existing archived filters. Core tests: `tests/test_auto_archive.py`.
-- **Retention no longer stalls the clients (2026-11-01).** The TUI and NSH both
-  froze for a few hundred milliseconds once a minute. The cause was Core, not
-  either client: retention runs on the event loop and its migration step scanned
-  the whole measured suffix of a 1.9 M-event log to find no unmeasured row
-  (≈0.6 s live, ≈0.9 s on a cold copy). That step now returns at once when the
-  trigger-maintained `pending_events` counter is zero, and the wire-turn-link
-  backfill advances its cursor to the head when it finds nothing (one 1 s scan
-  per start instead of every pass). A second cause kept the log from shrinking
-  at all: two sessions whose background `bash` jobs died with an earlier daemon
-  restart stayed protected forever, because recovery only reported the loss in
-  its notice and never closed the `bash.started` pair; `log.floor` could not
-  move past them, so 1.9 M events / 517 MiB stayed retained. Startup recovery
-  now publishes the terminal `bash.finished` (`outcome: "lost"`) after the
-  notice, so those sessions retire and the prefix prunes. Coverage:
-  `tests/test_recovery.py::test_lost_jobs_are_closed_so_their_session_can_be_pruned`
-  plus the existing retention suite; docs: [docs/daemon.md](docs/daemon.md#durable-event-log).
-- **TUI render performance (phases 1–3 landed 2026-10-31).** The loop draws
-  only when the model changes, coalesces up to 64 queued sync messages within an
-  8 ms soft budget, and treats input, effects and due ticks as barriers. Raw
-  `wire_event`/`wire_response` rows still advance the reducer but skip the
-  frame. Rendered Markdown bodies, wrapped text and tool details are cached by
-  content, width and theme, with a bounded per-app cache; chrome-only frames
-  (typing, scrolling, idle ticks) reuse the last timeline. In a deterministic
-  replay, 902 events cost 16 frames instead of 902; a 200-message stream draw is
-  1.1–1.3 ms and a 1,000-message draw 5.2 ms (release), while chrome-only draws
-  are 0.36 ms and 0.54 ms. Cached timeline lines are shared as `Rc<TLine>` so
-  a cache hit no longer deep-clones spans (5,000-message replay RSS ~1.1 GB →
-  ~0.33 GB). Full viewport-only assembly is deferred: at 2,000 messages a
-  stream draw is ~15 ms and at 5,000 ~33 ms, so it is worthwhile only for a
-  history that large. A follow-up (2026-11-01) keys the animation frame and the
-  wall-clock second only when the built lines actually baked them in, so a turn
-  in another session no longer rebuilds the viewed timeline 8×/s, and memoizes
-  the new-session starting-context preview (one build per state, not per frame).
-  Details in [TUI_PERFORMANCE_PLAN.md](TUI_PERFORMANCE_PLAN.md).
-- TUI turn footer token counts use `M` for millions instead of thousands of `K`.
-- TUI live assistant text renders Markdown as it streams, including an unclosed fence; these transient frames skip the layout cache so a long reply does not evict finished rows.
-- TUI live thoughts show the last ten wrapped lines and announce earlier hidden lines; completed thoughts remain fully expandable.
-- TUI and NSH activity headings are counts, not verbs: `3 thoughts, 50 commands, 8 tools, 9 reads`, with `1 command` singular; a folded group no longer names an unknown tool.
-- **Ask questions page (2026-10-31).** The TUI waiting card pages through an `ask` request's 1-5 questions: Up/Down moves, Space ticks a multi-select option (violet `interactive.multi` rail and ticks), Enter locks the answer and advances, and `Alt+Left`/`Alt+Right` revisit pages (as do Left/Right in an empty composer). The last page is a review listing every question and answer with a `text.primary` (white) rail, where Enter sends the reply; each parallel ask keeps its own picks across Tab.
-- **Ask custom answers (2026-11-01, user request).** Every TUI question page now has a custom answer field inside the card, and the question wraps to two lines instead of one clipped line. Typing in it answers in the user's own words or adds context to a selection; `Alt+A` moves between the options and the field, `Alt+Left`/`Alt+Right` page, and Left/Right move the caret. Core always accepts free text for every question (`allow_free_text` is normalized to true for compatibility), and NSH shows the same field on every question.
-- Session status stays busy while a sub agent is running, including between parent turns.
-- **Notification sounds and session state (2026-10-31).** Both clients play a rising cue only when a root session and all its subagents have finished; a subagent finishing while the root or another descendant is running is silent. Any session needing input still plays the distinct higher cue. Settings › Notifications › Notification sounds is on by default and `NEXUS_COMPLETION_SOUNDS=off` disables both. The TUI session switcher and both Session panels show `running`, `needs input`, `failed`, `finished`, `archived` or `idle`. Not verified through a real audio device or in a browser.
-- Appearance offers system, light and dark only; the unavailable named-theme setting and development-step references in client notices were removed.
-- Web layout: session tabs start beside the left sidebar, and the timeline and new-session preview share one responsive reading column (24 px gutters narrow, 48/64/80 px at 820/1200/1600 px) with every card, assistant prose, activity and thought row on the same 16 px text edge; the new-session card no longer uses the old 760 px preview column, and fenced code has padded content. Long user messages preview six lines with an explicit expand control. Activity groups fold when finished in low and medium detail and show recent live activity in medium; list auto-follow is disabled to allow scrolling up.
-- Web appearance: starting-context section diamonds and inline instruction preview removed, agent name omitted from the system prompt row, text size unified, counts compacted and tools shown with gray indicators in three columns; the collapsed session rail is more compact and the docked left sidebar can be resized. `nexus dev web` starts NSH's hot-reloading web host behind the API proxy.
-- Web composer: tightened input spacing, aligned the agent label, removed selector chevrons and moved context usage to the location strip (including draft estimates).
-- Web and TUI collapsed sidebars now navigate projects, with creation-order initials and consonant/numeric collision handling, one-hour activity shading, activity tooltips and per-project session restoration.
-- Project tab strips are isolated in both clients: switching projects restores that project's open tabs and last viewed session or new-session screen, and closing a tab leaves other projects' tabs alone. New-session composer text and images are also project-scoped, including TUI recovery after a failed send. Tab state is client-local and lasts for the client process; browser end-to-end coverage remains to be added.
-- TUI rail search and new-session controls use three-row tiles with vertically centered icons, independent of the taller project tiles.
-- TUI project rail labels and the sidebar toggle share a centered first-character column; the first shown counter in each row shares that column and a second counter sits immediately to its right. A project tile is three rows: attention (purple) and finished/unread (blue) counts above the initials, the initials, then running (green) and idle (white) counts below, with `*` above nine and exact labeled counts on hover (no overflow legend); the row after it separates the tiles, so no blank row precedes a project (2026-11-01, user request; counter alignment 2026-11-02). Full-width selected/hover tiles have a thin white selected left border and white selected initials; the final edge column fades into the timeline. Counts exclude archived roots and avoid double-counting subagents.
-- **TUI/NSH parity (2026-11-01, user request).** NSH's collapsed project rail carries the TUI's four counters around each project's initials, attention and finished above and running and idle below, with the same order, colors, `*` overflow and labeled hover details. The NSH model picker now matches the TUI: a fuzzy search field, ↑↓ selection, Enter to choose, display names with the provider (and `current`) at the row's end, and the highlighted model's ref, context and efforts beneath the list; the same search and keyboard navigation apply to the agent and effort pickers. AGENTS.md now states that everything developed in one client is replicated in the other. The collapsed rail is 6 cells in the TUI and 42 px in NSH (2026-11-01, user request: narrower by two; superseded 2026-11-03: NSH is 48 px and the TUI is five cells). A running turn no longer shows a footer, and its live reasoning joins the active activity group; the sticky user header only pins bands whose height is measured, so a new message cannot make it jump or blink. The mock harness (`nexus-nsh/e2e/scripted_core.py`, `seed.mjs`) now seeds a full scenario: a multi-step turn with thoughts, tools, a patch, a failed read, a child session and an image; a live "think" turn; approval and question waits; a failed tool; and five projects with colliding rail initials. Both clients were opened against it and screenshot for comparison. Agent replies and user messages now use the body scale (14/22) instead of 15/24, so prose no longer stands out from the rest of the timeline.
-- **Drawing on composer images (2026-11-03, user request).** Clicking a composer thumbnail opens a drawing modal in both clients, and Done sends only the marked-up image, flattened by the shared `nexus-annotate` crate. In Ghostty the TUI places the picture and small stroke tiles with the kitty graphics protocol and switches the mouse to pixels (SGR 1016) while the modal is open. Measured on Ghostty 1.2.3: a 40x40 tile takes about 0.3 ms and a 3000x1500 image about 485 ms, so the picture is sent once and undo only deletes tiles. Checked in real Ghostty with injected SGR mouse bytes; a hand-drawn stroke with the real mouse remains to be confirmed. Marks are merged on Done, so reopening an image cannot undo earlier marks. NSH's flow test is `annotate-flow.test.tsx`.
-- **Attachment previews (2026-11-01, user request).** Both clients show composer and user-message images as the same small square thumbnails with the muted name above each, above the message text. Clicking one opens a full-size preview modal. The TUI timeline uses the composer's 6×3-cell thumbnail instead of a large preview, and its `[Image A]` markers are ordinary text rather than orange accent. The sticky user header starts at the first text row, so it never pins or draws an attachment label or image while scrolling a turn. The TUI composer's thumbnail strip replaces the old one-line attachment name list.
-- Web typography used Monaspace Neon throughout, reserving Monaspace Argon for inline and fenced code and diffs. Superseded 2026-11-01 by the Void design: Geist carries interface text and prose, and Monaspace Argon carries code, paths and tool arguments.
-- Draft TUI tool switches remain available when disabled and during context replanning.
-- **Project MCP is opt-out (core and docs done 2026-10-31).** Enabled, valid `<project>/.mcp.json` entries now start automatically with a new session; `enabled: false` is the opt-out, per-project connections and the enabled-global-name collision rule remain, and the approve/revoke API, fingerprints and `pending_approval` are gone. This is deliberate: the file is arbitrary code, so the docs warn that starting a session in an untrusted project runs it. Core tests cover automatic start, reload on the next session, disabled entries, isolation and collisions; the disabled-global `browser-use` draft case asserts the enabled project row wins and is connected. **Client cleanup is delegated:** remove the TUI/NSH project approval review and pending/approved state, and fix the new-session inventory merge so a global disabled row with the same name never overrides an enabled project row (the `browser-use` screenshot showed the global default beside "new session" even though the project entry was live).
-- **Project MCP also loads `.agents/mcp.json` (2026-11-03, user request).** Both `<project>/.mcp.json` and `<project>/.agents/mcp.json` are read, each strictly and independently; `.mcp.json` wins a duplicate name, and the ignored definition is reported as a warning in `GET /api/project/{id}/mcp` and in both clients' MCP details. Core tests cover the merge, precedence, an agents-only file, an isolated file error and reconciliation; the NSH project panel and TUI MCP detail tests cover the duplicate notice.
-- **Speech to text: pinned Parakeet Redux (2026-10-31).** The default STT model is `moondream/parakeet-redux` at revision `2bf128600aac4b16946f7ed8372e56117fe5e23b`, loaded as packed ternary weights by native Photon with exact `moondream==2.6.1` and `kestrel==0.9.1`; the worker fails closed on any other runtime version. STT runs in one isolated child process with an offline environment and a verified local pinned cache; size/mtime/ctime/inode signatures and SHA-256 checks guard the cache, and the Python network and telemetry shims are best effort, not an OS sandbox. Downloads happen only on explicit request, the worker stops after 600 s idle, and an explicitly old Bark config gets a migration error asking for the new default while its cached files are left alone. A cancellation or timeout kills the worker and the next request starts a fresh engine; native stdout writes are kept off the JSON protocol with a private file descriptor. The optional extra pulls the proprietary `kestrel-kernels` runtime; `nexus/voice/NOTICE` records the licenses. Unit/API/worker tests use a fake Photon and synthetic audio, including runtime-version, cache ctime/hash, cancel/timeout and native-stdout framing guards; no real download, real transcription, speed/RAM benchmark (opt-in `nexus/voice/benchmark.py`), or browser/device check has been run. Docs: [docs/voice.md](docs/voice.md).
-- **Retention: expirable wire bodies, stable envelopes (2026-10-31).** Wire request/response/event bodies are content-addressed, compressed when smaller, and deduplicated by SHA-256 in `event_body`. Event envelopes keep their durable id, type and cursor position; expiry stores a compact marker at rest (descriptive prose is synthesized on read) and sets `payload_state = "expired"` rather than deleting or renumbering the row or moving `floor`. Successful terminal turns expire their payload up to one hour after completion, failed or interrupted turns after 24 hours, and a soft 256 MiB wire budget expires the oldest eligible payloads first. Raw semantic deltas stay full for recovery until ordinary prefix retention. Messages, snapshots, turn/request/tool evidence and `session_usage` remain canonical. Maintenance wakes on terminal turns and pressure, defaults its periodic interval to and caps it at 60 s, runs up to four 2,000-row event batches per pass with a 50 ms yield, and rate-limits `log.retention` announcements to once per 60 s. Inventory uses trigger-maintained counters and resumable cursors instead of repeated count scans; protected sessions and replay pins are excluded in SQL before `LIMIT`, so they cannot starve later eligible payloads. Deferred partial indexes are built one per pass, but each still needs one initial table scan and can stall; that remains the honest cost. Exports are scoped to one session or its tree, `/api/info` exposes `retention_status`, and exports and the inspector show expired payloads. Existing databases gain the payload columns/tables additively with a resumable backfill. No live `~/.nexus` database was touched, no daemon restart or cleanup was run, and no `VACUUM` is automatic: `reclaim_space` is dry-run by default and physical reclamation after expiry is deferred. Coverage uses synthetic temporary databases and events; the full suite and targeted retention/recovery/event-log/export/store tests pass, Ruff and `git diff --check` are clean, and the TUI/NSH tests, pinned SDK source contracts and `uv lock --check` pass. Docs: [docs/stream-events.md](docs/stream-events.md#durable-event-identity) and [docs/daemon.md](docs/daemon.md#durable-event-log).
-- **Merged.** `main` is now Nexus 0.10 (`e2c6cd2`, pushed directly, no PR; branch protection is off). `nexus10` shared no history with `main`, so the merge used `-s ours` and keeps old Nexus 0.7.2 as the second parent: no force-push, and nothing was lost. Old Nexus is also branch `nexus01` (pushed, plus one backup commit of its uncommitted local work) and tag `v0.7.2`.
-- Release gate O1 to O4 are done. O5 (platform matrix) is deferred to [TODO.md](TODO.md); O6 (release-download install) is written and tested against a local release (step 3).
-- **CI** first ran on the merge push (run 41073305862). After fixes: `lint` and `core` pass on macOS and Ubuntu; the five stale `nexus-tui/tests/shell.rs` tests are updated and the TUI tests pass locally; the `nsh` job now builds a pinned `nsh` (step 4). The next push shows whether `ci-ok` is green. Release-please opened PR #97 "release 0.10.0"; do not merge it until CI is green. Stale PRs from old Nexus are still open and should be closed: #95 (release 0.8.0 for the old `nexus-harness` component) and #70 (an empty commit that triggered an old patch release); closing them was blocked by the permission classifier in the session, so close them by hand.
-- **`install.sh` on `main` changed meaning.** Old Nexus's installer was fetched with `curl .../main/install.sh | sh`; that URL now serves the from-checkout installer, so the old one-line install no longer works. Fix before announcing: either keep a compatible script at that path or point the docs at the release asset.
-- The Claude provider works in the real TUI (a Claude Haiku 5.5 turn, 2026-10-30). Open question, kept in [TODO.md](TODO.md): 14.7K input tokens for "hi there" against a ~3.9K starting-context estimate.
-
-### Linux check (Debian 13 x86_64, 2026-10-30, a scratch folder on the build box, since deleted)
-
-| Part | Result |
+| Check | Result |
 | --- | --- |
-| Core: `uv sync`, `ruff check`, `pytest` | clean; 767 passed, 11 skipped; `nexus doctor` runs |
-| TUI release build | builds, **only** with `pkg-config` and `libasound2-dev`; without them `alsa-sys` fails (`rodio` → `cpal`). This is the likely cause of the earlier Linux failures, and old Nexus's wheel build needed the same ALSA step |
-| TUI tests | 317 + 11 + 55 pass; 1 fails: `agent_and_model_chosen_before_a_session_exists_go_into_its_creation` (`left: None, right: Some("plan")`). It fails identically on macOS, so it is not a Linux problem |
-| NSH (`nsh check`, build) | **not run**: installing `nsh` on the box was not permitted |
-| `install.sh` | **not run** (it needs `nsh` through npm) |
-| aarch64 Linux, Alpine/musl, older glibc | **not run** |
+| Core `uv run ruff check nexus tests`, `uv lock --check` | Clean |
+| Core `uv run pytest -q` | **3 failed**, 1124 passed, 5 skipped (285 s); see 0 |
+| `nexus-mermaid` test, fmt, clippy `-D warnings` | Clean (31 + 1 tests) |
+| `nexus-annotate` test, fmt | Clean (7 tests) |
+| `check_manifest.py`, `check_theme.py` (and `--overlay nexus-nsh/theme-void.toml`) | Clean (141 commands, 576 contrast checks) |
+| TUI `cargo test --no-fail-fast` | **7 failed**, 729 passed, 7 ignored; see 0 |
+| TUI `cargo fmt --check` | **Fails**: `live.rs`, `manager.rs`, `dictation.rs`, `render.rs`, `tests/manager.rs` |
+| TUI `cargo clippy --all-targets -- -D warnings` | **Fails**: 9 errors; see 0 |
+| TUI release build | Builds; binary 19.4 MB (was 13 MB before Mermaid raster, annotate and editor crates) |
+| TUI replay bench (160×48, 200 messages, release) | First frame 16.3 ms; burst 16 frames, draw mean 4.35 ms; paced draw mean 4.09 / p95 8.71 ms; chrome-only mean 1.73 ms; RSS 32 MiB. Draws are ~3× the 10-31 figures (1.2 ms paced, 0.36 ms chrome): investigate, see 6 |
+| NSH `nsh check` | Clean (run without `npm run gen`) |
+| NSH `nsh test --target web` (Chrome for Testing) | 157 tests: 152 passed, **5 failed**; 4 files cannot load `nexus/native`; Manager tests run and pass |
+| GitHub `ci` on `main` | Last 5 runs failed: `lint` (TUI fmt), `core` (the Manager status test), `tui` |
 
-## Steps to merge and release
+Local machine problems found on the way (not repo bugs): Homebrew `node` failed to load `libuv.1.dylib` (fixed by
+the user, 2026-11-04); Homebrew Python 3.14.7 cannot import `sqlite3` (missing `libsqlite3.dylib`), so `uv run pytest` errors at collection
+with that interpreter (python.org 3.14.5 works); `~/.nsh/bin/nsh` is 0.2.0 while NSH needs the 0.3.0 source build at
+`09c1632`; the wasm test build needs `llvm-ar` (`rustup component add llvm-tools`, `AR_wasm32_unknown_unknown`),
+because Apple's `ar` produces a broken archive.
 
-### 1. Make the tree green and committed
-1. Commit the working tree in logical commits (the `migrate` work, the docs, the TUI/NSH changes). Use Conventional Commit titles; release-please reads them.
-2. Fix the failing TUI test above (also red on macOS). CI will be red until then.
-3. Run `nexus check` locally (Core, TUI, lints, manifest/theme checks, NSH checks).
-4. Fix the NSH mock event stream (it ends and puts the app in reconnecting state) and rerun the browser suite; the recorded run had 13 failures, so do not assume they are unrelated. `nsh test --target web` needs an explicit Playwright Chromium path on this machine. If the fix does not land, record the failing tests as known and keep the suite out of `ci-ok`.
+## Landed
 
-### 2. Platform matrix (O5): deferred
-Not required for 0.10.0 now. The matrix, the Linux requirements and the decisions are in [TODO.md](TODO.md). Decided already: musl is unsupported (`install.sh` rejects it with a clear message) and Linux aarch64 glibc is supported through the release build.
+The record of what is done, newest first. Details are in the docs and the ledger.
 
-### 3. Installation (O6): tested on macOS arm64 and Linux x86_64 with CI-built artifacts
-`install.sh` is POSIX `sh` and has two modes ([docs/development.md](docs/development.md#shortcuts)): from a checkout it builds from source as before (and builds the Claude SDK from source so no 223 MB CLI is installed); without one, or with `--release [tag]`, it downloads the Core wheel, the TUI binary for the platform and the web bundle if the release has one, verifies each against the release's `SHA256SUMS`, and installs. It rejects musl, unknown platforms and any checksum mismatch before installing anything, and a rerun is an upgrade. The old one-line URL (`.../raw/.../main/install.sh | sh`) now runs this script, so it works once a release exists.
+**Since the release (2026-10-31 to 2026-11-03)**
 
-Tested 2026-10-30 on macOS arm64 against a local `file://` release built from this tree (`NEXUS_RELEASE_BASE`): piped and file forms, `--release vX`, a tampered wheel, a platform with no build, no release, rerun, uninstall, `nexus doctor` after install. **Dry run of the release build, 2026-10-30:** `build-artifacts.yml` can now be started by hand (`gh workflow run build-artifacts.yml --ref main`, run 41081876124): all four TUI binaries (macOS arm64 and x86_64, Linux x86_64 and aarch64, the Linux ones on Ubuntu 22.04) and the Core wheel and sdist built. Assembled into a `file://` release with `SHA256SUMS`, the installer then worked from those exact files on macOS arm64 and on Debian 13 x86_64 (the build box, in a temp folder, since deleted): install, `nexus-tui` starts, `nexus doctor` runs, the Claude SDK installs at 560 KB. Finding: the Linux TUI links `libasound.so.2` at runtime; the installer now warns with the package to install when it is missing (checked with and without it). Not tested: a real GitHub release or tag, the macOS x86_64 and Linux aarch64 binaries running (they built and passed the `--help` smoke test on their runners), a Linux distribution older than Debian 13, and the web bundle (NSH is skipped, so none exists).
+- **Manager attention guard and credential redaction (11-03).** Coalesced notifications no longer mark requests
+  counted only as "more" as presented; quoted and JSON-style secret assignments are masked before Manager speech
+  and session-derived text leave Core (pattern-based, not a guarantee).
+- **Manager Core M1–M5 and client stage (11-03).** Hidden Manager sessions, 16 tools with the authority guards,
+  episodes/recap/snapshot/delta, stage cards, navigation with a back stack, every route and event of design 10.7,
+  `[manager]` config, `nexus manager`, durable `origin = "manager"`, attention, privacy notices, red-team evals,
+  GPT-Live Core over the Codex sign-in (`aiortc`, Core owns the WebRTC call). Clients: stage, orb, cards,
+  `manager.navigate` handling, `via Manager` labels, NSH `core/gptlive.ts` and TUI `live.rs` (stub-tested only).
+  TUI `tests/manager.rs` passes (13 tests).
+- **Mermaid in both clients via Ondine (11-03).** `nexus-mermaid` (text rows for pie/Gantt/timeline, Ondine SVG
+  behind bounded/safe options, shared resvg PNG with bundled Monaspace Argon); identical paths in TUI and NSH,
+  `◇ mermaid · copy source`, source fallback; theme insertion escaped; CI `mermaid` job.
+- **Settings as one two-pane dialog (11-03)** in TUI and NSH: search, section rail, provider detail modal with
+  link and code rows, Codex browser (PKCE loopback) and device sign-in, unavailable rows removed.
+- **Drawing on composer images (11-03).** Drawing modal in both clients, flattened by `nexus-annotate`; kitty
+  graphics and SGR 1016 pixel mouse in Ghostty.
+- **Collapsed text pastes (11-03).** ≥ 500 characters become one `[Pasted ~N tokens]` marker; Core stores the full
+  text as a collapsed part.
+- **Project MCP also loads `.agents/mcp.json` (11-03)**; `.mcp.json` wins a duplicate, which is reported.
+- **Step-limit default 500 (11-03)** (`MAX_STEPS`); per-model subagent effort; step-limit wrap-up; no
+  read-before-edit guard.
+- **UI polish (11-03):** fixed tab widths in header and subagent strip, square NSH surfaces (radius 0), 48 px NSH
+  rail (approved difference), sticky user band scoped per session, project rail toggling the Sessions sidebar.
+- **Kernel and shell counts (11-02)** in the location strip, with a read-only modal of kernels and shells.
+- **Launch splash (11-02)** in both clients, following startup milestones.
+- **Kernels released on archive (11-02)**; a busy owned kernel refuses archive.
+- **Code-mode guidance (11-02)** in built-in agents; scouts get code with read-only nested tools.
+- **Completion sound (11-02)**, distinct from the input-needed cue; reasoning-effort memory across sessions.
+- **NSH closer to the TUI (11-02)**, TUI/NSH audit with `interface/scenarios/activity-group.json`, Markdown
+  rendered in the file view, UI parity rule in `AGENTS.md`.
+- **Gzip JSON responses (11-02)** over 500 bytes (event stream excluded); faster phone session opens.
+- **Plan-limit usage for Claude (11-02)** through the CLI's `/usage`; every connected provider has a usage row.
+- **NSH Void design (11-01)**, first and second pass: Geist and Monaspace Argon, one text edge, filled boxes with
+  one status rail, compact starting-context ledger, waiting card with drawn marks, dock rework. NSH only;
+  `nexus-nsh/theme-void.toml`.
+- **NSH on macOS and iOS (11-01):** AppKit/UIKit packaging, direct connect by address, phone bottom-tab
+  navigation; a signed iPhone build connects (no in-app mic: native NSH has no audio input).
+- **Editor/Git steps 0–1 and step 2 in part (11-01/02):** NSH `Editor`/`DiffView`, vendored
+  `ratatui-code-editor` (13 languages, theme tokens, Home/End, page and word moves, forward delete, undo grouping),
+  NSH find bar, save-size fix (8 MiB envelope, 1 MiB content); files and diffs open in a centred modal in both
+  clients (supersedes the right-hand panel).
+- **Idle auto-archive (11-01)** after `[sessions] auto_archive_idle_seconds` (default 3,600).
+- **Retention no longer stalls clients (11-01)**; lost background jobs get a terminal `bash.finished`.
+- **Ask custom answers (11-01)** on every question in both clients; Core always accepts free text.
+- **STT on Apple silicon (11-01):** PyTorch below 2.15 on macOS arm64.
+- **TUI render performance phases 1–3 (10-31, follow-up 11-01).** Batching (902 events → 16 frames), layout cache,
+  chrome-only frames reuse the timeline, `Rc<TLine>` (5,000-message RSS 1.1 GB → 0.33 GB), animation and clock
+  keyed only when baked in.
+- **Expirable wire bodies (10-31)**, content-addressed and deduplicated; stable envelopes.
+- **Project MCP opt-out (10-31);** client approval UI removed.
+- **Speech to text: pinned Parakeet Redux (10-31)** in an isolated, offline worker.
+- **Ask questions paging, notification sounds, session state labels (10-31).**
 
-Still to do: decide whether `nexus update` should install, not only report; remove the `npm install -g nsh` requirement of the source path once the NSH pin is settled.
+**Release 0.10.0 (2026-10-30)**
 
-### 4. CI and CD (NSH skipped for now)
-**NSH is skipped in CI and in the release build for now** (`if: false` on the `nsh` job in `ci.yml` and the `nsh-web` job in `build-artifacts.yml`; `ci-ok` treats a skipped job as passing). The pinned-`nsh` setup action (`.github/actions/setup-nsh`) stays in the repo for when it is re-enabled; its first runs took over 17 minutes because `nsh`'s release profile is fat LTO (now turned off in CI) and nothing was cached. Consequence: a release has no `nexus-web.tar.gz` until NSH is back, and the `nsh` type check and web build run only on a developer's machine.
+- `nexus10` merged into `main` with `-s ours` (old Nexus 0.7.2 is the second parent; branch `nexus01`, tag
+  `v0.7.2`). Release has TUI binaries for macOS arm64/x86_64 and Linux x86_64/aarch64, the Core wheel and sdist,
+  `install.sh` and `SHA256SUMS`; the one-line install was run against the real release on macOS arm64.
+- CI and CD adapted from old Nexus (`ci.yml`, `build-artifacts.yml`, `release.yml`, `pr-title.yml`); `release-as`
+  removed afterwards. Stale PRs #95 and #70 are closed.
+- `install.sh` (POSIX `sh`): from-checkout build, or release download with checksum verification; rejects musl,
+  unknown platforms and checksum mismatches; warns about a missing `libasound.so.2` on Linux.
+- Linux check on Debian 13 x86_64: Core 767 passed; TUI builds with `pkg-config` and `libasound2-dev`.
+- Claude through the Agent SDK (provider `claude`, 17 tests, a real Haiku 5.5 tool turn); the SDK installs from
+  source (560 KB) instead of the 223 MB wheel; hidden title request disabled; worker in an empty directory.
+- Turn summaries steps 0–6 and 8 (2026-10-29): clients read `/api/session/{id}/turn` and `turn.summary`, not the
+  event log (open 240 → 75 ms, RSS 133 → 19 MB).
 
-Adapted from old Nexus (`~/repos/nexus-old/.github/workflows`): `ci.yml` (`changes`, `lint`, `core` on macOS and Ubuntu 24.04, `tui` on macOS and Ubuntu 22.04 with ALSA headers, `nsh`, and `ci-ok`, the one required check), `build-artifacts.yml` (TUI binaries for four platforms, the NSH web bundle, the Core wheel), `release.yml` (release-please, then attach artifacts, `install.sh` and `SHA256SUMS`; no PyPI publish), `pr-title.yml`.
+## TODO
 
-First runs on `main` (2026-10-30; `core` is green on both OSes after the fix, `lint` was always green), and what was done:
-1. `core`: one failure on both OSes, `test_claude.py`, because the runners have no Claude Code and my test assumed one. Fixed in the test (it names a stand-in CLI).
-2. `tui`: `agent_and_model_chosen_before_a_session_exists_go_into_its_creation` failed on both OSes (and before this work): the agent picker filters by `mode` and the fixture's agents had none. Fixed in the test (`"mode": "primary"`). That failure had hidden later test binaries; the second run (54c0c0b) shows **five failing tests in `nexus-tui/tests/shell.rs`, on macOS, Ubuntu and locally**: `composer_capitalises_the_agent_and_shows_price_tier_occupancy` (line 510), `composer_uses_latest_usage_and_catalog_window` (476), `file_actions_copy_mention_and_switch_the_root` (738), `session_rows_follow_d03_at_sidebar_widths_22_28_and_34` (2593) and `the_files_root_header_and_indent_guides_follow_d16` (3253). Their expectations predated intended UI changes: the composer row reads `model provider · effort`, and project and checkout names keep their original casing (`docs/development.md`). All five tests were updated to match (and the TUI README's row order), and `cargo test` passes in full. `cargo test --no-fail-fast` shows them all; every other binary passes (alerts, behaviour, mutations, sync, timeline, lib).
-3. `nsh`: `npm run check` fails with type errors (`numberOfLines`, `userSelect`, `objectFit`, `pointerEvents` unknown in style types) in `src/ui/timeline.tsx`, `usage.tsx` and others. Cause: the developer's `nsh` is a source build of 0.3.0 (`09c1632`, in `~/.nsh/source`); the published release v0.3.0 (`76fa8a7`, the latest) lacks those properties. Fix in place, not yet proven on a runner: `.github/actions/setup-nsh` builds `nsh` from the pinned commit (same layout as `nsh.dev/install.sh --source`, cached by commit) and both workflows use it. Replace the pin with a release once one has the properties. Note that nsh publishes prebuilt binaries only for macOS arm64 and Linux x86_64.
+Items are grouped by area. Each says what "done" means where it is not obvious.
 
-Before relying on them:
-1. Push the fixes and rerun `ci.yml` until `ci-ok` is green; the Ubuntu core and TUI jobs now have a baseline, the NSH job does not.
-2. Set the repository's required check to `ci-ok`, and confirm the `RELEASE_APP_ID` variable and `RELEASE_APP_PRIVATE_KEY` secret exist for the release-please app token (the old workflow used them).
-3. `nsh`: see item 3 above; `install.sh` still says `npm install -g nsh`, so make the from-checkout path use the same source and version.
-4. Release-please: `release-as: 0.10.0` is set so the first release is 0.10.0 whatever the commit history says; remove it afterwards. The manifest starts at `0.7.2` (old Nexus's last release); the changelog will include every commit since `v0.7.2` unless `bootstrap-sha` is set. Verify the `extra-files` updaters against a dry run, and bump the three versions (`0.10.0.dev0`, `0.10.0-dev.0`, `nsh.json` `0.10.0`) consistently.
-5. Dry-run the release with `workflow_dispatch` on a pre-release tag before the real one.
+### 0. Make the tests green
 
-### 5. Verification with real providers and clients (blocking)
-- Real OpenAI and Ollama calls. Codex and the device-flow providers (Copilot, Grok, OpenCode) are done.
-- **Claude through the Agent SDK is in scope for 0.10.0** (decided). See 5b below.
-- Real daemon with both clients: model memory (no default model), sign-in from each client's Providers page, the remaining turn-summary checks in [TURN_SUMMARY_PLAN.md](TURN_SUMMARY_PLAN.md), steer/queue ordering, and OSC 7501 in a supporting terminal.
-- A fresh-machine run of `nexus migrate` against a copy of a real old `~/.nexus` (never the real home from an agent session).
+Fix these locally before new work: they are real regressions or stale tests, independent of CI (which is
+deferred).
 
-### 5b. Claude Agent SDK (blocking)
+- [ ] **TUI formatting:** `cargo fmt` in `nexus-tui` (`live.rs`, `manager.rs`, `dictation.rs`, `render.rs`,
+  `tests/manager.rs`). This is CI's `lint` failure.
+- [ ] **TUI clippy (`-D warnings`):** unused `composer_inner` (`render.rs:703`); `if_same_then_else`
+  (`app.rs:10399`, `render.rs:7402`); `chunks_exact` with a constant size (`live.rs:68`, `speech.rs:155`); manual
+  `is_multiple_of` (`paint.rs:350`, `render.rs:6330`, `splash.rs:261`); `useless_format` (`stage.rs:636`); unused
+  import `SyncMsg`.
+- [ ] **TUI failing tests.** For each, decide whether the code or the test is wrong; do not just update
+  expectations:
+  - `markdown::tests::old_renderer_keeps_links_tables_and_fence_source_visible` (`src/markdown.rs:1131`): the old
+    renderer no longer shows table cells or the Mermaid fence source.
+  - `shell::dark_frames_use_the_theme_file_surfaces` (`tests/shell.rs:147`): surface is `#0b0b0b`, the test expects
+    `#141414`.
+  - `shell::a_viewed_subagent_keeps_the_root_tab_and_names_itself_below` (`:2764`): tab row reads
+    `Root task │ · Scout Child task` (fixed tab widths, 11-03).
+  - `shell::composer_rows_are_edge_input_blank_control_edge_strip_at_every_width` (`:2810`): at width 120 the idle
+    live row is no longer blank.
+  - `shell::project_rail_labels_activity_and_session_restoration` (`:4761`): rail label `T` where `N` is expected.
+  - `shell::session_rows_follow_d03_at_sidebar_widths_22_28_and_34` (`:3015`): row index 0 where 2 is expected.
+  - `timeline::mouse_drag_selects_and_copies_timeline_text_without_activating_the_block` (`tests/timeline.rs:46`):
+    a drag no longer emits `Effect::Copy("Hello")`. This one looks like a real regression in selection/copy.
+- [ ] **Core failing tests:**
+  - `test_manager_service.py::test_start_returns_a_call_and_status_restores_it_without_secrets` (line 39): `call`
+    now carries `live: None` (GPT-Live). Update the test, and `docs/api.md` if the field is not documented. This is
+    CI's `core` failure.
+  - `test_manager_live.py::test_two_real_peers_exchange_audio_in_process` (line 278): no audio samples arrive
+    through the in-process `aiortc` peers. Find out whether it is code, the Opus/aiortc environment or timing; if it
+    needs real codecs, mark it so it skips with a reason where they are missing.
+  - `test_eventlog.py::test_inspector_load_and_replay_have_independent_deduplication` fails only because the local
+    `node` crashes (environment); make the test skip with a reason when `node` cannot run.
+- [ ] **NSH failing tests:** `i7.test.tsx` "Settings opens as a modal … Esc returns" (line 62) expects Settings to
+  stay open after the first Esc; after the two-pane rebuild the first Esc leaves the Providers page. Decide the
+  intended Esc behaviour (it should match the TUI: Esc steps back, then closes) and fix the test or the code. The
+  four files that cannot load `nexus/native` are in 8.2.
+- [ ] Then rerun the [health check](#health-check-2026-11-04) and update its table.
 
-Landed 2026-10-30 (committed): provider `claude` in `nexus-core/nexus/llmhub/claude.py` and `_claude_worker.py`, sign-in in `auth/claude.py`, `claude-agent-sdk==0.2.162` in `pyproject.toml`, 17 tests in `tests/test_claude.py` (full suite: 795 passed), docs in `docs/llm-providers.md` and `docs/auth.md`, a ledger row. Design and limits are in [docs/llm-providers.md](docs/llm-providers.md#claude-agent-sdk). A real request through the provider with `claude-haiku-5-5` ran a tool turn and a final-answer turn correctly (both cost about $0.01). The SDK is used as a plain client; Nexus owns the loop.
+### 1. Release and installation
 
-Findings to act on:
-- Hidden context, found and measured (details in [docs/llm-providers.md](docs/llm-providers.md#claude-agent-sdk)): the CLI made a second hidden request per query to title the session, with the whole history in it. Fixed in the worker with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. It still adds, and cannot be told not to: two system lines, a `StructuredOutput` tool, the account's **email address** in the first user message, and an `# Environment` message (cwd, platform, shell, OS version, date). The worker now runs in an empty `$NEXUS10_HOME/claude-sdk`, which cut a real turn from 1,766 to 1,259 input tokens. These are listed in the wire request (`sdk_adds`) but not yet in the clients' starting-context view: decide whether to show them there, and whether sending the email is acceptable (it goes to Anthropic, the account's own provider). The 420 tokens of fixed overhead is unexplained.
-- The CLI logs `unrecognized_model` for `claude-haiku-5-5` but serves it. models.dev lists the model, so the catalog is fine; confirm the context window the clients show.
-- Size, resolved: Nexus does not bundle Claude Code. The user installs it; without it only the Claude provider errors ("Claude Code is not installed"). The SDK's platform wheels carry a 223 MB copy, so `pyproject.toml` sets `[tool.uv] no-binary-package = ["claude-agent-sdk"]` and the SDK installs from source (560 KB). `uv tool install` ignores that table: `install.sh` now passes `--no-binary-package claude-agent-sdk` on the from-checkout path (the release-download path must do the same), and CI/release `uv sync`/`uv build` need a build-capable runner. Check that the pin holds in `uv.lock`, in CI, and in a `uv tool install` of the built wheel.
+- [ ] **Release PR #98 (`release 0.11.0`).** Open since 10-30; review its changelog before merging. Confirm the
+  release has the four TUI binaries, the wheel and sdist, `install.sh` and `SHA256SUMS`, and run the installer from
+  the published release on macOS and Linux. (Its `tui` checks fail; see item 0. CI itself is deferred.)
+- [ ] **`nexus` opens the TUI on an installed system** (was TODO 2). Plain `nexus` and `nexus tui` exec
+  `nexus-tui` (`cli.py` `_launch_tui`, commit `8622de5`), but that commit is not in `v0.10.0`. After the next
+  release, check on a clean machine that `install.sh` then `nexus` opens the TUI with no extra step.
+- [ ] **Check the Claude SDK source-build pin** in `uv.lock` and in a `uv tool install` of the built wheel; the
+  release-download path of `install.sh` must pass `--no-binary-package claude-agent-sdk` as the from-checkout path
+  does.
+- [ ] **Remove `nexus-design-mockup/`** once NSH design parity is finished (8.2), and bump to the next `-dev`
+  version after the release.
+- [ ] **Update leftover `nexus10` wording** in `AGENTS.md` and `docs/development.md` where it names the branch
+  rather than the pre-release home.
 
-Remaining:
-1. Say in Settings/docs which Claude Code version is needed (2.1.248 or newer) and show "Claude Code is not installed" on the Providers page when `cli_path()` is empty. Hidden additions vary with the user's CLI version (about 175 more tokens on 2.1.314 than on 2.1.285), so record the CLI version in the wire request.
-2. Done 2026-10-30: a Claude Haiku 5.5 session ran in the real TUI (Providers page, connect, a buffered reply). Not re-checked in NSH.
-3. Show the limits in the timeline: a "buffered, no thinking" note for a Claude model and a clear failure for images (the error text exists; check how each client renders it).
-4. Done 2026-11-02: plan-limit usage through the CLI (`-p /usage`, a local command that makes no model request) in `provider_usage.py` and `/api/usage`, beside codex, copilot, opencode and grok. Every connected provider now has a row; those without a limit source say so.
-5. Interrupts: confirm cancelling a turn kills the worker's process group and the CLI child.
-6. Mark the provider `verified` after a multi-tool turn with a real model; add wire fixtures from that run.
+#### Deferred: CI (user decision, 2026-11-04)
 
-### 6. Merge
-1. `nexus01` (pushed) and the `v0.7.2` tag are the old line. Old Nexus users on PyPI keep `nexus-harness 0.7.2`; say so in the release notes and README, since `main` no longer contains that code.
-2. Merge with the `ours` strategy as above (no rebase: the histories are unrelated), push to `main` directly or through a PR, and wait for `ci-ok`. Do not squash the 116 commits. The push to `main` also starts `release.yml`, whose release-please job opens the 0.10.0 release PR (the app secrets are set); nothing is published until that PR is merged.
-3. Update `AGENTS.md`, `README`, `docs/development.md` and `docs/porting-ledger.md`: `nexus10` and `nexus01` references become `main`; old Nexus is `nexus01`.
-4. Merge the release-please PR; confirm the release has the binaries, the web bundle, the wheel, `install.sh` and `SHA256SUMS`; run the installer from the published release on macOS and Linux.
-5. Remove `nexus-design-mockup/`, drop `release-as` from the config, and bump to 0.10.1-dev.
+Not to be worked on for now. Recorded so nothing is lost:
 
-## Not blocking 0.10.0
+- `ci-ok` failed on the last five pushes to `main` (11-01 to 11-03): `lint` (TUI fmt), `core` (the Manager status
+  test), `tui`. Item 0 fixes the causes locally.
+- Confirm `ci-ok` is the required check in the repository settings.
+- Re-enable NSH: remove `if: false` from `nsh` in `ci.yml` (line 119) and `nsh-web` in `build-artifacts.yml` (line
+  27). `.github/actions/setup-nsh` builds `nsh` from the pinned `09c1632`, cached by commit; first runs took over 17
+  minutes. Replace the pin with a published `nsh` release once one has the style properties NSH uses
+  (`numberOfLines`, `userSelect`, `objectFit`, `pointerEvents`); nsh publishes binaries only for macOS arm64 and
+  Linux x86_64. Until then no release carries `nexus-web.tar.gz`, and nothing in CI checks NSH or the phone code.
+  Then remove `npm install -g nsh` from the from-checkout install path.
+- A non-blocking TUI replay-bench report in CI.
 
-Session retrospective (2026-11-03, 261 sessions): landed: no read-before-edit guard, step-limit wrap-up, per-model subagent effort. Still open from it:
-- Automatic compaction for long turns (a 499-step DeepSeek turn ran at 280-370k tokens per request; opencode's summary template is the reference).
-- Tiered fuzzy matching in `edit` (curly quotes, dashes, trailing whitespace, CRLF), as opencode does; a multi-edit input like pi's `edits[]`.
-- DeepSeek batches 5% of its messages and reads files through `bash sed -n`; consider a hint on plain `sed -n`/`cat` results and re-measure after the prompt change.
-- Soft nudge at about 80% of `steps`, and `scout`/`quick` default effort.
+#### 1.1 Platform matrix (O5, was TODO)
 
-Everything below ships in 0.10.x unless it turns out to affect the steps above.
+Each cell: install, `nexus doctor`, daemon start, TUI against the daemon, NSH web, a scripted turn and a Monty
+kernel run.
 
-### OSC 7501 program status
+| Platform | Status |
+| --- | --- |
+| macOS arm64 | Development machine; run the full list once from a clean `$NEXUS10_HOME` |
+| macOS x86_64 | Binary builds and passes `--help` on its runner; not run |
+| Linux x86_64 glibc | Core and TUI pass on Debian 13 (767 passed); installer tested from CI artifacts; NSH, a live daemon + TUI session and kernels remain |
+| Linux aarch64 glibc | Supported (built on `ubuntu-22.04-arm`); run the same checks as x86_64 |
+| Older glibc than Debian 13 | Release binaries build on Ubuntu 22.04 (glibc 2.35); not run |
+| Alpine/musl | Not supported: `install.sh` rejects it with a clear message |
 
-The TUI emits per-session OSC 7501 records; see [docs/development.md](docs/development.md#terminal-program-status). Verify the behavior in a supporting terminal, including reconnect, suspension and multiple simultaneous sessions.
+- [ ] Linux needs, in the installer's checks and `docs/development.md`: `pkg-config`, ALSA headers
+  (`libasound2-dev` / `alsa-lib-devel` / `alsa-lib-dev`), a C toolchain, `git`, `uv`, Rust, Node 22 and `nsh`.
+- [ ] Confirm the Monty kernel launcher's `/usr/bin/env` path on Linux.
 
-### Turn summaries
+#### 1.2 `nexus update`
 
-Follow [TURN_SUMMARY_PLAN.md](TURN_SUMMARY_PLAN.md) for the remaining real-daemon checks, documentation and step 9 (live partials and ephemeral deltas). Preserve durable `input.*` events and the ordering of delivered steers; a steer is not a new turn. The TUI benchmark is in [docs/turn-summary-benchmark.md](docs/turn-summary-benchmark.md).
+- [ ] Decide whether `nexus update` installs or only reports (see [Decisions](#decisions-still-open)), then build
+  it.
 
-### Settings
+### 2. Verification with real providers, daemons and devices
 
-Both clients now draw Settings as one two-pane dialog: a search field, the
-section rail on the left, and the selected section, provider list or agent
-detail on the right ([config.md](docs/config.md#settings-layout)). Each
-provider row opens a detail modal with one row per sign-in method; a sign-in
-link and code are separate actionable rows there, links open on Enter or a
-click, and codes copy. Tools has one permission choice naming the tools it
-governs and one tool grid. Sections and rows that could not work were removed
-rather than shipped disabled. Codex device sign-in now opens `/codex/device`,
-the page that accepts the code, instead of the API root. Codex's browser
-sign-in is back beside the device code: the daemon runs the PKCE loopback
-listener and publishes the URL, and the client opens it (2026-11-03).
+Nothing here needs new code unless a check fails. Each needs a scratch `$NEXUS10_HOME` or a copy of a real home.
 
-Remaining: sign in to a real device-flow and a real browser-flow provider from
-each client's Providers pane; NSH browser coverage for search, key entry, the
-link/code rows and the Agents edits once the mock stream is fixed (see Browser
-tests); PTY and NSH screenshots at 80×24 and 160×48. NSH opens prose links in the browser; the TUI
-timeline still needs OSC 8 hit regions. Agent cards show the file path but cannot open it:
-the built-in editor reads project files only, and global and built-in agents
-live elsewhere. Add real Settings panes for MCP servers, skills and hooks when
-those controls exist; they are deliberately absent now.
+- [ ] **Real OpenAI and Ollama calls.** Codex and the device-flow providers (Copilot, Grok, OpenCode) are done.
+- [ ] **`nexus migrate` on a copy of a real old `~/.nexus`**, on a fresh machine. Never the real home.
+- [ ] **Real daemon with both clients:**
+  - model memory with no default model: a draft with no model asks for one (Core's draft-context returns 400 "no
+    model selected", so the preview is empty until one is chosen; consider a provider-independent estimate); a
+    remembered model whose provider is signed out is shown, not replaced; a pre-change session with no model asks;
+  - sign-in from each client's Providers pane, one device-flow and one browser-flow provider;
+  - steer/queue ordering, and interrupt returning pending steers and queued messages to the composer oldest first;
+  - project tab isolation across projects (browser end-to-end coverage too);
+  - `wait: false` child sessions with a real provider.
+- [ ] **OSC 7501 program status** in a supporting terminal: reconnect, suspension and several sessions at once
+  ([docs/development.md](docs/development.md#terminal-program-status)).
+- [ ] **Audio:** completion and input-needed cues through a real audio device in the TUI and a browser;
+  dictation loading/start/stop cues and microphone behavior in both clients; STT microphone capture, a real
+  Parakeet download and transcription, and the opt-in `nexus/voice/benchmark.py` (speed, RAM).
+- [ ] **Static-only UI changes from 11-03 need a runtime pass:** sticky header isolation, square NSH surfaces and
+  the 48 px rail, the shared tab widths, collapsed-paste preview and NSH's Ctrl+X leader. Screenshots of both
+  clients at 80×24 / 160×48 and NSH at 390 / 1024 / 1440 px, dark and light.
+- [ ] **Drawing modal:** a hand-drawn stroke with the real mouse in Ghostty (injected SGR bytes are checked).
+- [ ] **iOS:** a real simulator runtime and a signed device build of the current app; a smaller first message page
+  on phones if session opens still feel slow over a cellular tailnet.
 
-### Steer, queue and prompt history
+### 3. Manager
 
-- An interrupt takes the queue back instead of leaving it held: pending steers and queued messages return to the composer oldest first, joined by newlines above the draft, and removing the last one clears the hold. Covered by the TUI behaviour test and NSH `interrupt.test.tsx`; a real-daemon check should still confirm the parts and their order end to end.
-- Add NSH browser coverage for Enter/Tab and the pending-input stack after fixing the mock stream (see Browser tests). The composer already steers and queues, and the timeline shows the TUI's `steer` / `queued` tags.
-- Add Ctrl+R history search in both clients; verify cross-client per-project recall after restarting both clients, including multiline drafts and images.
+Design: [docs/manager-design.md](docs/manager-design.md) (section numbers below refer to it). What is built:
+[docs/manager.md](docs/manager.md). **Nothing has run against a real model or real audio yet.** Decisions D1–D10
+and Q1–Q3, Q5–Q7 are settled; Q4 is open.
 
-### Extensions, skills, MCP and hooks
+#### 3.1 Milestones
 
-- Show agent and user-tool errors in client pickers and Settings; add a visible changed-file notice for a running tool, process memory limits and validation of project-only names in `[tools] disabled`. Exercise a user tool in a real session and run the reload stress test.
-- Add default-on settings for skills and exercise skills with a real model. Decide whether and how `allowed-tools` should be enforced without changing a cached prompt or granting permissions.
-- Add MCP resources and prompts and Settings screens for adding/editing servers; exercise browser-use (the pinned `uvx` package, `nexus-browser/`) in a real model session, including server failure; its screenshots and LLM-backed tools are unexercised. MCP output must remain bounded, fenced as untrusted and visible as received.
-- Remove the obsolete project MCP approval UI in both clients (review dialog, approve/revoke calls, pending/approved labels and the `mcp_approval` state) and make the new-session inventory prefer the project row over a same-named global row; this is a client change after the core opt-out model above.
-- Support editing hooks in Settings, render hook rows in both timelines, and fire `SessionEnd` on archive. Test `bash(...)` matchers on compound commands and `PostToolUse` after denied approval; verify a blocking hook with a real model.
+| # | Delivers | State | Done when |
+| --- | --- | --- | --- |
+| M0 | Spikes: (a) STT → Luna → TTS latency, (b) Luna through the loop with control-style tools, (c) stage mock-ups, (d) a real GPT-Live call over the Codex sign-in | Scripts written (`nexus-core/scripts/spikes/pipeline_latency.py`, `luna_tools.py`), **not run** | Findings and screenshots written into the design; effort setting and stage look agreed |
+| M1 | State, search and view | Core done | Both clients' own view-reporting tests (`POST /api/client/view`) run and pass |
+| M2 | Typed Manager on the stage | Core and clients implemented; TUI `tests/manager.rs` (18) and NSH `manager.test.tsx` / `manager-cards.test.tsx` pass (2026-11-04, Chrome for Testing) | A typed Manager runs a whole day of real use; the interaction model is reworked (8.0) |
+| M3 | Pipeline voice | Core done | Real microphone and speaker in the TUI and NSH: tap to talk, orb on real levels, thinking cue, playback, cancel; latency recorded (target under 1.5 s from end of speech to first audio) |
+| M4 | Attention and acting | Core done | The injection and mishearing suite passes; the approval/question flow works by voice end to end |
+| M5 | GPT-Live | Core done offline; NSH web and TUI stub-tested | iOS and native NSH mic/speaker loop; M0 spike (d) decides the route and the meaning of `speakable`/`commentary`; reconnect/pause polish; a 30-minute real call in each client surviving interruption, reconnect and a long delegation |
+| M6 | Hands-free and polish | Not started | VAD and barge-in, TUI echo cancellation, iOS check, settings, notices, optional API-key route for GPT-Live; a week of daily use, then consider `enabled = true` |
 
-### Providers
+Detail for each:
 
-- Verify real OpenAI and Ollama calls.
-- **J4 Anthropic:** add the Messages dialect using the Anthropic SDK as a plain client (Nexus owns the loop); preserve signed thinking blocks for lossless replay and handle cache-control breakpoints and tool-result media.
-- **J5 Gemini:** choose a dialect that preserves replayable reasoning.
-- **J6 Claude (Agent SDK) is now step 5b; Antigravity:** assess its fit with the one-timeline rule before porting. Use the Claude Agent SDK and the approach in https://github.com/NoeFabris/opencode-antigravity-auth rather than ZMX.
-- Each provider needs wire fixtures, provider/auth documentation and a verified real call. Group OpenAI-compatible providers where possible.
+- [ ] **M0 (a)** `pipeline_latency.py`: record a WAV, `/api/voice/transcribe`, a one-shot `copilot/gpt-6-luna`
+  call, `SpeechService.speak(text)`; log each stage at efforts `none`, `low`, `medium`; write results into
+  design section 5.
+- [ ] **M0 (b)** `luna_tools.py`: Luna through `nexus/loop.py` with stub `overview`, `find_sessions`, `show` and
+  `navigate` over a seeded scratch home; record tool choice accuracy, spoken phrasing, whether ids are read aloud.
+- [ ] **M0 (c)** stage mock-ups: orb, a `board` card and a `diagram` card from a fixture in both clients behind a
+  dev flag; screenshots side by side; agree the look.
+- [ ] **M0 (d)** a real GPT-Live call over the Codex sign-in with client delegation.
+- [ ] **M2 manifest check:** `manager.start` (`/manager`, palette, `alt+m` / `cmd+shift+space`, Q3 to confirm),
+  `manager.talk`, `manager.stop` and the engaged keys of 10.6; run `check_manifest.py`.
+- [ ] **Evals with real Luna** (section 11): retrieval (~50 sessions, ~100 phrasings including mangled STT;
+  top-1 and false confidence), authority, conversation across an episode seam, stage and view, honesty, and spoken
+  quality judged by hand. The scripted versions already run in the Core suite.
+- [ ] **Known authority boundary** to revisit: authority means "the user spoke"; ordinary acts are not tied to what
+  the user asked for (docs/manager.md section 9).
+- [ ] **Worktree instruction check** (risk table): after a Manager-started session's first turn, check its
+  directory and say if it did not move into the requested worktree.
 
-### Context and sessions
+#### 3.2 Mermaid verification
 
-- Session switching is slow (2026-10-30). Fixed: Core re-parsed the 6.4 MB models.dev cache on every context, draft-context and image-input call (~300 ms on the event loop each), and NSH's new-session view asked for the draft context on every model bump, so a streaming turn kept Core at 100% CPU. The NSH composer also re-read prompt history on every bump (thousands of requests per turn), and the `@` listing asked again while a request was in flight; both are fixed. Still open: after a long streamed turn, NSH's main thread stays busy for 5-7 s rendering it (present in the committed code too), so clicks in that window wait. Follow-up 2026-11-01: the timeline now computes settled rows once per structural revision (not five or six times per JSX access), keeps a separate coalesced stream revision for text/reasoning deltas so settled messages and tool details are not re-walked per token, and skips a draw for wire-only events. The remaining cost is the live Markdown row and browser layout, not a full-history rebuild. The TUI now caches the last 8 session views and keeps them current from the stream; select loads history in the background with no resync, and git/worktree reads no longer block a switch (`--bench`: a switch 260 → 10 ms, back to a cached view 0.8 ms to first frame). NSH caches session views the same way. Both clients now run context reads one at a time per session and coalesce the rest, and the TUI no longer reads git and worktrees inline at launch (first open ~115 → ~50 ms). Core still rebuilds the whole request body for each `GET …/context` (warm 5–12 ms for a 1.4 MB body, 30–130 ms on a session's first read) and sends all of it to clients that mostly show `used`/`window`; a Core-side cache was not added because its invalidation would have to track everything `agent.request()` reads, and a stale one would show context the model does not have. Next: a lighter context endpoint (budget only) if the cost shows up again.
-- Model memory (no default model) is in core, TUI and NSH; check it in a real daemon with both clients: a draft with no model asks for one (Core's draft-context request returns 400 "no model selected", so the starting-context preview is empty until one is chosen: consider a provider-independent estimate), a remembered model whose provider is signed out is shown and not replaced, and a session stored before the change that holds no model asks for one. The TUI test `agent_and_model_chosen_before_a_session_exists_go_into_its_creation` already failed before this change.
+- [ ] The TUI with a real kitty/sixel/iTerm2 image protocol and a narrow width (the `--dump-frame` half-block
+  fallback at 170×120 is the visual floor; the raster's 0.5× legibility floor is the cutoff to source).
+- [ ] Screenshots of the seeded `Mermaid diagrams` session in both clients, dark and light, wide and narrow.
+- [ ] Rerun NSH's `scenarios.test.tsx` and `mermaid.test.ts` after the lazy `nativeModule("nexus/native")`
+  change, and the TUI's `cargo test` after the direct-raster change.
+- [ ] Keep the Ondine pin (`b19aa90`) deliberate: an update reruns tests and screenshots; cold CI builds need
+  network for the git dependency.
 
-- Allow `/btw` during a running turn in both clients; add NSH browser coverage for opening the original session from a handoff.
-- Return per-section starting-context detail text from Core for session drafts.
-- Decide whether to persist session grants; expose grant listing and clearing in clients. Add a Settings section for provider limits and verify `/api/usage` with a real account.
-- Add editor find and syntax highlighting; test NSH save and stale-file paths in the browser harness. Make NSH tool-result images zoomable.
+### 4. File explorer, file editor and Git page
 
-### Editor and Git page
+TUI and NSH on desktop and web only. Agreed 2026-11-01; files and diffs now open in a **centred modal over the
+dimmed page** at every width (2026-11-02, supersedes the right-hand panel). Long lines wrap.
 
-File explorer, file editor and Git management for the TUI and NSH on desktop and web, not the iOS app. Agreed in [EDITOR_GIT_PLAN.md](EDITOR_GIT_PLAN.md). Step 0 (NSH `Editor`/`DiffView` and the vendored TUI crate) and Step 1 (the right-hand panel, manifest `[navigation.panel]`, waiting badge, composer coverage) are done. Next: Step 2, the two editors with TUI movement/undo/theme/find, the NSH find bar and the save-size fix.
+Decisions: the editor replaces the user's editor but stays small (highlighting, undo/redo, the
+`ratatui-code-editor` feature set; no tabs, language servers or Vim mode). Git scope is worktrees, changes and
+branches with actions; no merge, stash, rebase, conflict UI or hunk staging. The editor and Git page are silent to
+the model: no timeline notices and no new agent tools. No new auth.
 
-### Manager
+#### 4.1 Steps
 
-A voice and vision agent above all sessions, agreed in [MANAGER_PLAN.md](MANAGER_PLAN.md) (2026-11-03): pipeline voice first with tap to talk, Codex sign-in for GPT-Live later, `copilot/gpt-6-luna`, worktrees only when asked, a translucent stage with an orb, captions and cards, and the Manager seeing and moving the user's view of one client at a time. Only Q4 (may it open Settings) is open. **Core status (2026-11-03):** M1 (state, search, view) is done and M2's Core is built and tested offline: hidden Manager sessions, the 16 tools with the section 9 authority guards in code, episodes/recap/snapshot/delta, stage cards, navigation with a back stack, every route and event of plan 10.7 except the speech-synthesis form of `/api/voice/speak`, `[manager]` config, `nexus manager`, durable `origin = "manager"`, and a scripted model plus `nexus-core/scripts/scripted_manager_core.py` for client tests and screenshots ([docs/manager.md](docs/manager.md)). M3 and M4 Core are also built and tested offline (text `/api/voice/speak`, attention, unfocused cards, the finished section 9 guards, the per-provider privacy notice, redaction, red-team evals). Next: the clients' stage, orb, audio, cards, `manager.navigate` handling and `via Manager` labels; the M0 spike scripts in `nexus-core/scripts/spikes/` are written for you to run against real services. Nothing has run against a real model yet. Step 0 is wired in both clients: `nexus-mermaid` pins Ondine, wraps it with bounded/safe SVG rendering and a shared PNG raster, and the TUI and NSH draw the same text rows, PNG and source fallback with `◇ mermaid · copy source`. A real terminal image-protocol check remains (section 15), then M0 spikes.
+| # | Step | State | Done when |
+| --- | --- | --- | --- |
+| 0 | Prove the risky parts | Done 2026-11-01 | — |
+| 1 | Panel (now the modal), back/Esc, waiting badge, manifest `[navigation.panel]` | Done 2026-11-01; screenshots pending | Screenshots at narrow and wide in both clients |
+| 2 | Editors | In progress | Save, stale-file and reload tests pass in both clients, including the NSH browser paths |
+| 3 | Explorer actions and watcher | Not started | An agent's write shows in the tree without a refresh |
+| 4 | Git page, read-only | Not started | All sections match `git` output on a repo with worktrees and remotes |
+| 5 | Git actions | Not started | Each action tested on a temporary repo with a bare remote, with and without a running session; stage and unstage run with no popup |
+| 6 | iOS gate and finish | Not started | Tools absent in the iOS layout and present on macOS and web |
 
-### Worktrees
+**Step 2, remaining:**
 
-Port worktree review and integration as control commands: review against the base, merge by fast-forward or merge commit with confirmation, and remove the worktree and branch after merge. Add commands in both clients; agents get them only when granted. Consult old `nexus/agents/worktree_review.py`, `worktree_integrate.py`, `nexus/worktree_cleanup.py` and `tests/test_worktree_merge_permission.py`. Decide cleanup on archive/delete and how to leave a worktree.
+- [ ] Replace the TUI's `Composer` file buffer with the vendored editor. Checked 2026-11-04: `src/code_editor.rs`
+  (453 lines) is declared in `lib.rs` and used only by `examples/editor_demo.rs`; the app edits through `FileEdit`
+  (`ui.rs:273`, drawn by `draw_file_edit`, `render.rs:530`, keys in `file_edit_key`, `app.rs:7560`: Ctrl+S, Tab
+  inserts four spaces, Ctrl+Z/Ctrl+Y, arrows and pages) with no highlighting, folds or diff view. Map TUI keys to the crate's `apply(action)`; its crossterm 0.29
+  input feature stays off. Copy through OSC 52 and paste from bracketed paste (`arboard` removed).
+- [ ] TUI find and replace on `set_marks` (today `/` searches only the read-only view, `file_search_key`,
+  `app.rs:7783`; check what `ctrl+f` at `app.rs:8080` does while editing) with `editor.find` (`ctrl+f`): plain text and a case toggle, the same
+  layout as NSH's find bar (`cmd+f`, next/previous, count, Esc closes it before the modal).
+- [ ] Reading and editing become one mode in both clients: drop the separate read-only view and `editor.edit`. A
+  clean file reloads when it changes on disk; a modified one shows "changed on disk".
+- [ ] Check the web bundle serves `nsh-syntaxes.bin` (syntaxes load on first use; plain text until then).
+- [ ] Measure the TUI binary before and after each language beyond the starting 13 (Rust, Python, JavaScript,
+  TypeScript, Go, C, HTML, CSS, YAML, JSON, TOML, Shell, Markdown); anything else opens as plain text.
+- [ ] Tests: TUI unit tests for the vendored additions and key mapping, PTY screenshots at 80×24, 120×40 and 160×48,
+  `--bench` typing on a 1 MiB file; NSH save and stale-file paths in the browser harness.
 
-### Interface
+**Step 3, explorer and live updates:**
 
-- Dictation: verify both clients' loading, start and stop cues and microphone behavior
-  with a real model and audio device.
+- [ ] NSH's Files tab becomes the TUI's expanding tree, keeping expanded state. Checked 2026-11-04: `FilesTab`
+  (`sidebar.tsx:421`) lists one path with a Parent button and the same chevron on every folder.
+- [ ] Sidebar tabs: the manifest (`interface/manifest.toml:187–196`) lists only Sessions and Files, while NSH's
+  `leftTab` also has `projects`; the manifest already names `sidebar.git`, `focus.git_file` and `git.open_diff` with
+  no UI behind them. Make the manifest and both clients agree when the Git tab lands.
+- [ ] New file, new folder, rename and delete from the keyboard, the row menu and the palette. Delete asks first,
+  gives the item count for a folder, and is permanent.
+- [ ] Core: `POST /api/project/{id}/files?session=` with
+  `{action: "create_file" | "create_dir" | "rename" | "delete", path, to?}`, the same confinement and no-symlink
+  rules as `files.py`; publishes `files.changed`. Limits stay UTF-8 and 1 MiB; binary and oversized files say why
+  they cannot open.
+- [ ] Watcher: `uv add watchfiles`; runs while a client has Files or Git open, on a 60 s lease the client renews;
+  250 ms debounce; `files.changed` with `source: "disk"` and `git.changed` for `HEAD`, `index` and `refs`; skips
+  Git-ignored paths. If it cannot start (e.g. inotify limits), fall back to a 3 s status poll while the tab is open
+  and show that the view is polling.
 
-Agent pickers now filter the shared catalog by root/draft or child eligibility; verify
-child-session picker navigation in the NSH browser suite once its mock stream is fixed.
+**Step 4, Git page read-only.** A new left sidebar tab (Sessions, Files, **Git**, Projects), repo-wide, starting on
+the current session's worktree; the right sidebar's Git section stays as a summary and links here.
 
-#### TUI
+```text
+WORKTREES (3)
+● main        2 changes
+  feat-x      clean      ↳ "Auth" running
+BRANCHES
+  LOCAL   main ↑1  · feat-x (worktree) · old-spike
+  REMOTE  origin/main · origin/release
+CHANGES on main
+  STAGED    M server.py
+  UNSTAGED  ?? notes.md
+```
 
-- Verify Cmd+arrow composer shortcuts in a terminal that forwards Super-modified keys.
-- Add `path:line` and OSC 8 link hit regions; choose a syntax-highlighting library for the file view.
-- Fix split-diff continuation alignment (`nexus-tui/src/diff.rs`) and provide line numbers for edit/patch diffs where input lacks them.
-- Add PTY tests at 80×24 and 160×48 for anchor, follow and jump-to-latest; produce a fixed-fixture review gallery (`interface/review.md`).
-- Timeline mouse selection copies visible screen cells on release; consider selection across scrolling and copying underlying unwrapped text, and verify OSC 52 in real terminals.
-- Add failed child count, enabled/disabled tools and kernels to session info.
-- Check OSC 777 notifications in kitty (possibly OSC 99) and track focus; debounce completion requests if large workspaces make search slow.
-- Compare with old Nexus in a real terminal and review screenshots.
+| Section | Shows | Actions (step 5) |
+| --- | --- | --- |
+| Worktrees | Path, branch, dirty count, sessions using it | Create, remove |
+| Changes | Staged and unstaged with line counts; Enter opens the diff | Stage, unstage, discard, commit |
+| Branches | Local and remote, upstream, ahead/behind, last commit, which worktree has it | Switch, create, delete |
+| Remote | Upstream state in the section header | Fetch, pull, push |
 
-#### NSH and shared
+Read routes, project-scoped next to `files`:
 
-- Finish design parity for the new-session view, files, narrow layouts and states; improve sidebar search handling and live shimmer; sidebar rows show project or branch where available. User and assistant timeline prose now uses bundled Monaspace Argon; verify native rendering and visual parity. Pin NSH, build the macOS desktop bundle and complete files, Git and worktree UI; then remove `nexus-design-mockup/`.
-- Subagent navigation now follows the TUI: root tabs exclude children, a viewed child keeps its root's tab, and the subagent strip under the header goes back to the parent and selects the root's children with running, waiting, failed or completed state (`child-navigation-parity.test.tsx`). Remaining: complete the parent card with model/effort, elapsed time and completed token count; distinguish background completion from the start result. Parent cards already show status, agent, session name and background label, and their tool results can be expanded.
-- Mermaid in both clients is Manager step 0. `nexus-mermaid` contains the TUI's text rows, Ondine's pinned SVG compiler behind bounded/safe options, and a shared PNG raster using bundled Monaspace Argon; theme values are validated and escaped at every insertion point. NSH's native crate exposes `render`, `renderText` and `renderPng` on every target ([MANAGER_PLAN.md](MANAGER_PLAN.md#15-step-0-mermaid-in-nsh)). Both clients draw the text rows for pie/Gantt/timeline, the shared PNG otherwise, the source fallback, and `◇ mermaid · copy source`; the shared scenario passes in both. Remaining: check the TUI with a real kitty/sixel/iTerm2 terminal and a narrow width, compare the seeded Mermaid session screenshots, and rerun NSH's browser tests after its lazy native-module lookup; NSH's job is still disabled in CI.
-- Review both clients side by side in light and dark, establish large-session performance budgets and test keyboard-only paths. Decide focus-ring colour.
+| Route | Returns |
+| --- | --- |
+| `GET /api/project/{id}/git` | Worktrees with their live sessions, local and remote branches, remotes |
+| `GET /api/project/{id}/git/status?worktree=` | The shape of today's session `git` response |
+| `GET /api/project/{id}/git/file?worktree=&path=&side=head\|index` | That version's text for diffs (UTF-8, 1 MiB) |
+| `GET /api/project/{id}/git/live?worktree=` | Working and idle sessions, for the confirmation dialog |
 
-### Browser tests
+**Step 5, Git actions.** `POST /api/project/{id}/git/action` with `{action, worktree, confirmed_live, ...}`, one of
+`stage`, `unstage`, `discard`, `commit`, `switch`, `branch_create`, `branch_delete`, `fetch`, `pull`, `push`,
+`worktree_create`, `worktree_remove`.
 
-Fix the NSH mock event stream ending and forcing the app into reconnecting state; then rerun the full browser suite. The recorded run had 13 failures, including `handoff.test.tsx`, `App.test.tsx`, `i6.test.tsx` and `i8.test.tsx`; the record is inconsistent about the clean baseline, so do not assume all are unrelated. `nsh test --target web` needs an explicit Playwright Chromium path on this machine. Add steer numbering, new-session skills/MCP rows, usage modal and the other browser coverage listed above.
+- [ ] New `nexus-core/nexus/git_ops.py` using `worktrees._git` (it reports stderr; `files._git` drops it);
+  `worktrees.ENV` already sets `GIT_TERMINAL_PROMPT=0`. `worktree` must be a registered worktree of the project's
+  repo; one lock per repo, as `worktree_lock`. Timeouts 120 s, 300 s for network actions; clients show progress and
+  never give up first.
+- [ ] Add the route to the mutation matrix in `docs/api.md`: an external effect, so a crash leaves 409
+  `mutation_outcome_unknown` and it is never retried blindly. Control-plane only: no task or control tool reaches it.
+- [ ] Events `git.changed` and `files.changed` carry no `session_id`, so nothing enters a session's log or
+  timeline; confirm against `bus.py`.
+- [ ] Safe defaults: pull is `--ff-only` (a diverged branch shows Git's error); push never forces and says when it
+  will set an upstream; switch never stashes and shows Git's refusal, switching to a remote branch creates the
+  tracking branch; branch delete is `git branch -d`, local only, with a second warning before `-D`, and refuses a
+  branch checked out in a worktree; discard is `git restore` or deleting an untracked file, and says it cannot be
+  undone; commit has no amend, hooks run and their failures show; worktree remove keeps today's rules (never the
+  main checkout, a locked or dirty worktree, or one in use by a session); an in-progress merge or rebase started
+  elsewhere shows a banner and disables actions.
+- [ ] Confirmation: every action except stage, unstage and refresh opens one popup after the click (fetch
+  included), naming the action and target, focus on Cancel; commit asks after the message is written. The dialog
+  lists **working** sessions (an active turn, pending approval/question or running background job in this worktree
+  or a child of one; warning, danger button) and **idle** ones (non-archived, directory in this worktree), from a
+  fresh `git/live` read.
+- [ ] Race protection: the request carries `confirmed_live`; if another session started working, Core returns 409
+  `worktree_live` with the new list and the dialog reopens.
+- [ ] Credentials: fetch/pull/push run as Core with Core's environment; without an SSH agent they fail and show
+  Git's message. No credential UI.
+- [ ] Core tests on temporary repos with a bare remote, no network: path confinement, refused dirty worktree,
+  unmerged branch delete, `--ff-only` on a diverged branch, `worktree_live`.
 
-### Reliability and safety gaps
+**Step 6, iOS gate and finish:**
 
-- ~~Run Monty kernels in a scrubbed helper process before release.~~ Done: workers start through a launcher with an empty environment and working directory (`kernels.write_launcher`).
-- Monty follow-ups: an OS-level sandbox if wanted; checkpoint recovery, Linux (`/usr/bin/env` path), forced worker crashes and cold-start latency.
-- Decide how to supervise and report background bash jobs across daemon crashes; do not kill a process based only on a stored PID.
-- Consider durable pending directory moves and worktree-in-use checks for external processes; archive transitions currently appear only in the root log.
-- Decide whether archive needs bulk/project operations or timestamps; it must not implicitly delete worktrees.
-- Address export's long-lived SQLite read snapshot for very large sessions; consider general artifacts and export clipping.
-- Improve cross-provider conversion beyond text and tool calls; foreign reasoning is currently dropped. Copilot Responses encrypted reasoning replay is missing.
-- Determine whether sandboxing or restricted command execution is needed to enforce read-only agents beyond the file tools, including races with external writers.
-- Verify `wait: false` child sessions with a real provider.
-- Revisit Responses `instructions` if the Codex backend changes; it currently accepts it although the Codex CLI sends a developer message.
+- [ ] NSH `desktopTools = !(native && touch)` in `store.ts` (absent today; `store.ts:249–252` has only `native`,
+  `touch` and `phone`): hides Files and Git and makes `editor.*`, `files.*`
+  and `git.*` unavailable. This removes today's Files tab and read-only file view from iPhone and iPad. Check the
+  idiom Mac Catalyst reports (it should keep the tools). Core routes are not gated.
+- [ ] Docs: `docs/api.md`, `docs/tools.md` (the freshness guard sees user edits; agent tools unchanged),
+  `docs/daemon.md`, `docs/development.md` (vendored crate), `interface/manifest.toml`,
+  `interface/design-language.md`, `interface/capability-matrix.md`, `nexus-tui/NOTICE`, `nexus-nsh/README.md`.
+- [ ] Ledger rows: NSH has several carets, more languages and indentation folds, the TUI Tree-sitter folds; syntax
+  colours map to the same tokens but tokenise differently (syntect vs Tree-sitter); no Files or Git tab on iOS; Git
+  actions are silent to the model, so a mid-turn branch switch is caught by the re-read check but the model may
+  still believe it is on the old branch (an accepted exception to the one-timeline rule).
+
+Risks to keep in view: the vendored crate is young and upstream fixes are pulled by hand; the TUI binary grows from
+13 MB to about 22 MB with the starting languages; discard and file delete are permanent; Core off loopback serves
+without a token, so discard, delete and push join that surface (trusted networks only, by decision).
+
+### 5. Turn summaries
+
+Steps 0–6 and 8 are done; clients read `/api/session/{id}/turn` and `turn.summary` and never load the event log.
+Preserve durable `input.*` events and the ordering of delivered steers; a steer is not a new turn. Benchmark:
+[docs/turn-summary-benchmark.md](docs/turn-summary-benchmark.md).
+
+- [ ] **Real-daemon checks:** a real session (`nexus chat`) shows usage and model on every `turn_request` row, and
+  `curl` on a real session returns the documented `/turn` shape. The step 1 migration and backfill run once at the
+  next daemon start (0.4 s on a copy; usage for 578 of 587 requests).
+- [ ] **Step 7 remainder:** `docs/development.md` where it mentions event history; `interface/design-language.md`
+  for the floor row ("the turns above have no recorded details…").
+- [ ] **Step 9: live partial; stop saving deltas.** Not started.
+  - New `nexus/live.py` with `LivePartial` (`request_id`, `seq`, `parts`, `reasoning_seconds`): a text or reasoning
+    delta appends to the last open part of its kind or opens one; `tool_call` opens a part, `tool_args` appends raw
+    argument text to the open call with that id; `done` closes the oldest open part with its final encoding and
+    `"done": true`. It can absorb the current `ReasoningClock` in `runtime.py`.
+  - The runtime folds deltas and saves the partial at most once a second (`save_partial`) to a `partial` column on
+    `turn_request`; `/turn` serves `partial` on the running request; the saved message clears it; an interrupted
+    request keeps it and recovery's counts (`partial_summary`) match it, replacing `store.stream_summary`.
+  - `Bus.publish(..., durable=False)`: no `append_event`, `id = None`, delivered live only; the SSE writer, client
+    cursor parsing and `bus.overflow` (which reports the last durable id) must handle id-less events, and
+    `Last-Event-ID` never points at an ephemeral event.
+  - Delta fields gain `request_id`, `part` and `seq`. A joining or reconnecting client reads `/turn`, takes the
+    running request's `partial`, applies only deltas for that `request_id` with a greater `seq`, and starts a new
+    scratch for another request. TUI and NSH seed from `partial`.
+  - The partial is a diagnostic, never shown as an assistant message: streaming while it runs; after an
+    interruption, the recovery notice and the partial marked as not in context.
+  - Tests: folding (interleaved reasoning and text, two tool calls, `PartDone` replacing folded text); a client
+    opening mid-stream sees the text so far with nothing duplicated or missing across part start/end, retry and
+    message saved; a crash mid-stream leaves a partial at most a second old; no delta rows in `event`.
+  - Docs: `docs/stream-events.md`, `docs/api.md`, `docs/inspector.md` (streaming detail now from `wire_event`),
+    `docs/daemon.md`; the recovery notice text changes once `partial_summary` exists.
+  - Done when a second TUI opened during a long response shows the same text as the first, and the session's event
+    log holds no delta rows. If rewriting the growing JSON each second costs too much, store parts in their own rows
+    and append (as pi-durable's `PartialChanges`).
+- [ ] Old clients reconnecting mid-response will lose the deltas they missed (the message still arrives): note it
+  in the API changelog when step 9 lands.
+
+Out of scope: a windowed message transcript, server-side views with patches, changing wire-event retention.
+
+### 6. TUI render performance and launch time
+
+From `reports/tui-load-time-investigation.md` (2026-11-03), still open:
+
+- [ ] **Cold Core start scans the whole event log.** `open_bash_jobs()` (`store.py:2745`) selects `bash.started` /
+  `bash.finished` rows with no index led by `type`, so every daemon start scans all events (1.37 M then) and runs
+  `json_extract` on each: 1.9 s per cold start, 14.7 s with pending migrations. Add a partial index
+  `event_bash on event(type, session_id, id) where type in ('bash.started','bash.finished')` beside the other
+  deferred indexes, or keep open jobs in their own small table. Section 13 may remove the need.
+- [ ] **The terminal image probe costs up to 1 s on every launch** (`main.rs:526`,
+  `Picker::from_query_stdio()` waits for a reply some terminals never send). Skip it when the environment says it
+  will not answer, cache the result per terminal, or shorten the timeout.
+
+
+Phases 1–3 are done (see [Landed](#landed)); targets are met at 1,000 messages (5.2 ms paced draw). Remaining work
+waits for a profile or workload that needs it.
+
+- [ ] **Paint-time animation overlay.** A viewed, running turn still rebuilds the timeline every frame because the
+  spinner, shimmer and flash are baked into the lines. Record their cells and re-style them on a cache hit, if that
+  shows up in a profile.
+- [ ] **Viewport-only assembly (phase 4).** At 2,000 messages a stream draw is ~15 ms and at 5,000 ~33 ms. Use
+  indexed heights and build only visible blocks plus a margin, preserving total height, jump-to-block, sticky user
+  headers, folds, scroll anchors and selection/copy; width changes and newly loaded history invalidate heights.
+  Trigger: a reported 2,000+ message workload.
+- [ ] **Per-dependency invalidation.** Events from non-selected sessions still rebuild the viewed timeline
+  (correct but conservative); replace the single `timeline_revision` with explicit dependencies if profiling shows
+  it matters.
+- [ ] **Draw cost has grown.** The 2026-11-04 replay (200 messages, 160×48, release) measured paced draws at 4.09 ms
+  mean and chrome-only frames at 1.73 ms, against 1.13–1.17 ms and 0.36 ms on 10-31 (the timeline build 2.77 ms vs
+  1.46–1.58 ms). Re-run on an idle machine; if it holds, bisect the 11-01 to 11-03 UI commits (fixed tab widths,
+  rail, sticky header, Manager stage) and restore the budget. 
+- [ ] Keep a scratch-Core PTY run for end-to-end terminal behavior and input latency; the replay bench
+  (`nexus-tui --bench WxH --replay`) measures scheduling, layout and paint only.
+
+### 7. Agent loop, tools and context
+
+From the session retrospective (2026-11-03, 261 sessions):
+
+- [ ] **Automatic compaction for long turns.** A 499-step DeepSeek turn ran at 280–370K tokens per request;
+  opencode's summary template is the reference. It must stay visible on the timeline.
+- [ ] **Tiered fuzzy matching in `edit`** (curly quotes, dashes, trailing whitespace, CRLF), as opencode does, and
+  a multi-edit input like pi's `edits[]`.
+- [ ] **DeepSeek file reading:** it batches 5% of its messages and reads through `bash sed -n`; consider a hint on
+  plain `sed -n`/`cat` results and re-measure after the prompt change.
+- [ ] **Soft nudge at about 80% of `steps`**, and a default effort for `scout`/`quick`.
+- [ ] **Code mode:** measure comparable real-provider tasks for correctness, requests, tokens and elapsed time
+  ([docs/agents.md](docs/agents.md#choosing-code-mode)). The live `~/.nexus/agents/build.md` override needs the
+  same guidance as `builtin_agents/build.md`.
+
+Context and sessions:
+
+- [ ] **Explain the 14.7K vs ~3.9K token gap** (was TODO 1). A Claude Haiku 5.5 "hi there" turn read 14.7K input
+  (47% cached) against a `~3,965 tok` starting context. Check, cheapest first: restart the daemon (it predated the
+  empty working directory and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`) and repeat; capture Claude Code 2.1.314's
+  request with a local server ([docs/llm-providers.md](docs/llm-providers.md#claude-agent-sdk)); check whether
+  chars ÷ 4 undercounts the 15 tool schemas plus `StructuredOutput`; look for a user-level Claude Code setting or
+  memory loaded despite `setting_sources=[]`. Whatever it is, show it in the starting context or remove it.
+- [ ] **NSH after a long streamed turn** keeps its main thread busy 5–7 s rendering it, so clicks wait. Remaining
+  cost is the live Markdown row and browser layout.
+- [ ] **A lighter context endpoint** (budget only) if `GET …/context` cost shows up again; Core rebuilds the whole
+  request body per call (5–12 ms warm, 30–130 ms first read). No Core-side cache: a stale one would show context
+  the model does not have.
+- [ ] Return per-section starting-context detail text from Core for session drafts.
+- [ ] Allow `/btw` during a running turn in both clients; NSH browser coverage for opening the original session from
+  a handoff.
+- [ ] Decide whether to persist session grants; expose grant listing and clearing in the clients.
+- [ ] A Settings section for provider limits; verify `/api/usage` with a real account.
+
+### 8. Interface (TUI and NSH)
+
+#### 8.0 Polish (user review, 2026-11-04)
+
+The Void design is mostly complete. What the user called out next (2026-11-04): TUI modals, the Manager's
+interaction model, scrolling (the sent message at the top; NSH must stop yanking the reader), new spinners, the
+old Nexus tool-group fold, pending steer/queue rows, a general polish pass, and the iOS app.
+
+##### TUI modals
+
+The TUI mostly looks good, but Settings and the other modals need a design pass. Today every modal shares
+`modal()` (`render.rs:7605`: scrim, raised fill, bold title on row 1, `esc` at the right edge) and `modal_rect`
+(`paint.rs:74`: 2 cells from each edge, at most 70% of the height), but sizes and footers diverge:
+
+| Modal | Drawn by | Size | Footer |
+| --- | --- | --- | --- |
+| Settings | `draw_settings` (`render.rs:6984`) | 88×40 | Own; wording changes per pane (`esc close` / `esc back` / `esc cancel`) |
+| Provider detail | `draw_provider_detail` (`:7434`) | 66 × 10–22 | Own |
+| Palette, row menu | `draw_palette` (`:8118`), `draw_row_menu` (`:8044`) | 64×22, placed a quarter down; row menu anchored to its row | Own |
+| Kernels and shells | `draw_resources` (`:8700`) | 70% width, 52–100 | `hint_row` |
+| Help, Notifications | `draw_help` (`:9129`), `draw_notifications` (`:8389`) | 64×30 fixed | `hint_row` / own |
+| Alert detail, context detail | `:9051`, `:8672` | 60% width, 48–92 | `esc close` |
+| Context doc, context entries | `:8901`, `:8973` | 70% width, 48–100 | `scroll`/`move`, `esc close` |
+| Usage | `draw_usage` (`:7803`) | 64 × rows+6 | `r refresh, esc close` |
+| Learn checklist | `:7915` | 76 | Own, built dynamically |
+| Image preview, annotate | `:8456`, `:8484` | 85% width | `esc close` / own `esc cancel` |
+| Confirm dialog, inline edit | `draw_dialog` (`:9206`), `:296`/`:632` | computed / 60×8 | `←/→ choose, enter confirm, esc cancel` / `enter save, esc cancel` |
+
+- [ ] Define a small set of modal sizes (for example small 60, medium 72, large 88 or 70% of the width with one clamp)
+  and one height rule; put every modal on one of them.
+- [ ] One position rule (centred), or a documented reason for the palette sitting high.
+- [ ] One footer: every modal uses `hint_row` with the same order and wording. Pick one verb per meaning (`close`
+  leaves the modal, `back` goes up a level, `cancel` discards input) and drop the duplicate `esc` in the title when
+  the footer already says it, as NSH did.
+- [ ] Settings: review spacing, hierarchy and focus in both panes at 80×24 (where 88×40 does not fit) and 160×48;
+  the provider detail modal with its link and code rows; the tool grid.
+- [ ] Record the rules in `interface/design-language.md`, apply the same rules to NSH's modals, and take PTY and
+  NSH screenshots before and after.
+
+##### Manager interaction in the TUI (and NSH)
+
+It looks good, but the interaction model is wrong, starting with Esc. Today (`manager.rs`, `stage.rs`, the
+`[[keymap.escape]]` chain in `interface/manifest.toml:85`):
+
+- `alt+m` toggles: starts a call and opens the mic, sends while listening, barges in while busy, focuses an
+  unfocused card. `alt+shift+m` (or `/manager stop`) is the only way to end a call.
+- Esc is taken only while the Manager is "engaged" (`manager_engaged_input`): it closes the typed field (dropping
+  its text), drops a recording (the call stays open), dismisses a focused card, or stops speech (only when no card is
+  focused; with a focused card it dismisses the card instead).
+- While the Manager is thinking, running a tool, or idle in a call, Esc is not the Manager's: it falls through the
+  app chain and, if the viewed session is busy, **interrupts that session**. Pressing Esc to stop the Manager can
+  therefore stop the user's coding session.
+- No hint anywhere says that `alt+shift+m` ends the call; the only Esc hints are on cards (`esc close`) and the
+  consent notice.
+
+**Brainstorm (user, 2026-11-04): the call takes the stage.** The user's direction: pressing Esc to stop the
+Manager must not be confusing; perhaps the orb sits in the centre while a call is in focus and everything else drops
+to low opacity. Options to settle before building:
+
+| | A. Call mode (recommended starting point) | B. Ambient orb (today, refined) | C. Push to talk only |
+| --- | --- | --- | --- |
+| Look | Orb centred and large; the app behind it at ~30% opacity (TUI: the existing `paint::scrim` dim; NSH: an opacity layer); caption under the orb; a card, if any, below the caption | Orb small at the bottom centre; app at full strength | Orb appears only while the key is held |
+| Who gets keys | The call, entirely; nothing reaches a session by accident | Shared with the app, as now | The app, except the talk key |
+| Esc | **Minimise**: the call keeps running, the orb shrinks to the corner, the app returns to full opacity and gets its keys back. Never ends the call, never interrupts a session | Must mean something per state (today's problem) | Not used |
+| End the call | An explicit **End** under the orb (click, `alt+shift+m`, or saying "that's all") | Same | Releasing the key ends the turn; the call is implicit |
+| Talk / interrupt | `space` (or `alt+m` from anywhere) talks; talking over the Manager stops its speech (barge-in) | `alt+m` | Hold `alt+m` |
+| Proactive lines | Arrive in the minimised orb as a caption; never take the stage | Same | Toast |
+
+- [x] Chosen: **A, call mode** (user, 2026-11-04).
+- [ ] For the chosen model, write the state table in `docs/manager-design.md` 10.1 and 10.6: states (no call,
+  focused: listening / typing / thinking / speaking / card; minimised: idle / speaking / proactive; consent) and
+  what Esc, `alt+m`, `alt+shift+m`, Space, Enter, digits and a click do in each. Keep four actions distinct: stop
+  speaking, cancel the Manager's turn, dismiss the card, end the call.
+- [ ] Hard rule whatever the model: while a call is open, Esc never reaches the session interrupt.
+- [ ] One quiet hint line under the orb with the current state's keys, including how to end the call.
+- [ ] Build it in both clients together (TUI `manager.rs`, `stage.rs`, `orb.rs`; NSH `src/ui/manager/stage.tsx`,
+  `orb.ts`), with the manifest updated, `check_manifest.py` run, and tests in `tests/manager.rs` and
+  `manager.test.tsx` for every state's Esc. Screenshots of focused and minimised calls in both clients.
+
+##### Scrolling: the sent message goes to the top, and new content never yanks the reader
+
+Two user reports (2026-11-04), one model for both clients:
+
+1. **NSH keeps scrolling when a new message comes**: while the user reads further up, new content pulls the view
+   back down.
+2. **The message just sent should sit at the top of the screen** (TUI and NSH): after the user sends a message the
+   timeline scrolls so that message is the first thing in the viewport, and the reply streams in below it.
+
+The model:
+
+- **On a session's first send:** scroll so the new user band's top meets the viewport's top (below the header). Reserve space below
+  it (a spacer as tall as the viewport minus the band) so this works even when the reply is still empty; the spacer
+  shrinks as the reply grows and disappears once the reply fills the screen.
+- **While the reply streams:** the view stays where it is. It does not follow the bottom; text grows down out of
+  view, and the jump-to-latest pill shows "new below". Following resumes only when the user scrolls to the end, or
+  presses the pill (or End).
+- **When the user scrolls up:** never move them, whatever arrives (messages, tool rows, measured heights,
+  summaries, child cards). Row height changes above the viewport must keep the visible content anchored (scroll
+  anchoring by the first visible row), not shift it.
+- **Other sessions and session switches** never scroll the viewed timeline; a switch restores that session's last
+  position (NSH today forces the end on every switch).
+- Decided (user, 2026-11-04): **only a session's first message** is pinned to the top. Later sends follow the
+  normal rule: the view follows the reply only if the reader was at the end.
+
+Likely causes of report 1 in NSH (`nexus-nsh/src/ui/timeline.tsx`), from the 11-04 code read:
+
+- Follow heuristic (lines ~1463–1472): the reader counts as scrolled up only when `y < lastY - 0.5` **and**
+  `gap > lastGap + 0.5`; while content streams in, a slow upward scroll can fail that test and snap back to the end.
+  Follow resumes only within `END_SLOP` (24 px, line ~127) of the end, so a scroll that stops just short never
+  re-follows.
+- `keepEnd` runs on every `rows()` or `rowHeights()` change (line ~1454) through `setTimeout(toEnd, 0)` and
+  `scrollToEnd({animated: false})` (~1419–1425); rows measured late (`ROW_ESTIMATE = 72`) can fight the reader or
+  stop short of the end against a stale content height.
+- Session switch (~1430–1452) resets `following`, `lastY`, `lastGap` and `viewH` and forces the end; the scroll
+  offset is kept per session but not restored, so every session reopens at the end.
+- `scrollY` is per session (~115) but `viewH` is global (~116), so the sticky band and the jump pill's `newBelow`
+  (~1381) use stale geometry until the next scroll event.
+- The sticky band's geometry (~1118–1160) uses estimated heights for unmeasured rows, so the band can jump.
+- `scrollEventThrottle={64}` (~1476) delays follow transitions.
+
+- [ ] Implement the model in NSH: replace the `keepEnd` on every `rows()`/`rowHeights()` change with explicit
+  follow state; anchor on the first visible row when heights change; make `viewH` per session; restore the per-session
+  offset on a switch; pin on send with the spacer.
+- [ ] Implement the same model in the TUI (`sticky.rs`, `layout.rs` follow/anchor, the jump pill) and check its
+  current behaviour against it.
+- [ ] Tests in both clients: stream while scrolled up (the view must not move); stop just short of the end; send
+  a message (its band at the top, the reply below); a long reply growing past the viewport (no follow until the
+  end is reached); a session switch and back (position restored); late-measured rows above the viewport.
+
+##### Spinners: a 4-dot tab spinner and a juggling subagent spinner
+
+User request (2026-11-04): replace the fixed spinner with two livelier ones, each **four dots**, one for session
+tabs and one for subagents. Today both clients use one 8-frame ring from `interface/theme.toml`
+`[glyphs.spinner]` (`⣾ ⣽ ⣻ ⢿ ⡿ ⣟ ⣯ ⣷`, ASCII `| / - \`), read by `theme.rs:492` (TUI) and `kit.tsx`
+`Spinner` (NSH) at the TUI's 125 ms frame.
+
+Design, using the 8 outer dots of one Braille cell as a clockwise track (`0x01 0x08 0x10 0x20 0x80 0x40 0x04
+0x02`, i.e. `⠁ ⠈ ⠐ ⠠ ⢀ ⡀ ⠄ ⠂`):
+
+- **Tab spinner, "snake" (1 cell).** Four lit dots chase round the track: a head and three trailing dots, one step
+  per frame. Each full lap the snake changes shape at random (seeded per session, so tabs drift out of step): solid
+  (`⡇ ⠏ ⠛ ⠹ ⢸ ⣰ ⣤ ⣆`), a gap after the second dot (`⣃ ⡍ ⠞ ⠳ ⢩ ⣘ ⡴ ⢦`), or split into two pairs
+  (`⢣ ⣉ ⡜ ⠶ …`). It is always exactly four dots, so its weight never flickers; the shape change is what makes it
+  feel alive. Generated as `chr(0x2800 | mask)` from the track; frame interval 80–100 ms.
+- **Subagent spinner, "juggler" (2 cells = a 4×4 dot field).** Four balls on a cascade arc between the two cells:
+  each ball rises in one column, crosses at the top and falls in the other, offset a quarter period apart, so the
+  pattern reads as juggling rather than rotating. Frames are generated by a small script from the ball paths (no
+  collisions: two balls never share a dot) and tuned by eye in a preview; then checked into `theme.toml`.
+- **ASCII and mono:** the snake becomes a 4-character bounce (`[.   ]` → `[..  ]` → `[... ]` → `[....]` →
+  `[ ...]` …); the juggler becomes `o` characters on two rows only where two rows fit, else the same bounce.
+- **Reduced motion:** the static `running` status glyph, as today.
+
+- [ ] Write the generator (`interface/scripts/spinners.py` or `scripts/gen.py`) that emits the frame lists, and add
+  `[glyphs.spinner_tab]` and `[glyphs.spinner_agent]` (unicode, ascii) to `interface/theme.toml`, with the random
+  shape choice specified as data (variants plus a per-session seed) so both clients behave the same.
+- [ ] TUI: `theme.spinner(frame)` becomes two functions; the tab strip uses the snake (`render.rs:3176`, `:3679`),
+  the subagent strip and child cards use the juggler (`timeline.rs:3515`). Check the animation cache keys
+  (`Timeline.animated`) still hold.
+- [ ] NSH: `Spinner` in `kit.tsx` takes a `kind`; `header.tsx` tabs use the snake, child rows and the subagent strip
+  the juggler; regenerate `src/gen/theme.ts`.
+- [ ] A preview (TUI `--dump-frame` sequence, NSH story) for tuning; the user approves the look before it lands.
+
+##### Tool groups fold away when they finish (port from old Nexus)
+
+Old Nexus (`origin/nexus01`, `rust/tui/src/transcript/fold.rs`, `Cache::step_folds`; spec in its
+`docs/ratatui-parity.md` "Fold on completion"): when a folded group goes from running to finished, its visible tree
+rows leave **one per 80 ms frame from the bottom**, then the header **flashes** (accent → muted over six frames)
+and settles to `▸ <summary> · 4.6s`. While the fold runs the group is drawn from an overlay block
+(`Cache::fold_overlay`) and the frame clock keeps running (`Cache::folding()`). With animation off there is no fold.
+A group first seen finished (reload, reconnect) never folds; a group the user opened mid-fold shows its rows.
+Individual tool completions inside a still-running group never trigger it.
+
+Today both clients have only the header flash (TUI `group_flash`, `FLASH_FRAMES`, `timeline.rs:2597`; NSH
+`FLASH_MS = 600`, `timeline.tsx:82`, `:1192`): the running group's last five rows vanish at once.
+
+- [ ] TUI: add a fold state per group key (start frame, rows at start), draw the rows that remain this frame
+  above the header's final state, then run the existing flash; keep requesting frames while any fold is live; key
+  the timeline cache on it like `animated`. Respect reduced motion, reload/reconnect (no fold) and a user opening
+  the group mid-fold.
+- [ ] NSH: the same sequence, row by row at 80 ms (an opacity/height transition per row, removed from the bottom),
+  then the existing 600 ms flash; no animation with reduced motion.
+- [ ] A shared scenario (`interface/scenarios/`) with a group that finishes live, plus frame tests in TUI
+  `tests/frames.rs` and an NSH test using a fake clock. Ledger row: ported from old Nexus.
+
+##### Pending steer and queue rows: quiet marks, actions on hover
+
+User request (2026-11-04): the pending-input rows above the composer should not show an orange `S` / `Q`; the mark
+should be white (primary text), and hovering a row reveals clickable actions: edit, move up, move down, remove
+(and steer, for a queued item).
+
+Today:
+
+- **TUI** (`draw_composer`, `render.rs:5944`): one filled card; each row draws `S` or `Q` in `ACCENT` bold
+  (`render.rs:5997–6006`) two cells left of the text. Actions are keyboard-only on the selected row (`enter edit ·
+  backspace remove · s steer · shift+↑/↓ move`, `:6010`); no mouse targets on the rows (only `Target::Composer`).
+- **NSH** (`PendingInputs`, `composer.tsx:651–715`): rows say `steer` / `queued` in meta text, and already reveal
+  icon actions on hover (pencil, x, Steer, arrow-up, chevron-down; always shown on touch or narrow). The two
+  clients already differ.
+- Core already has every route: `PATCH /api/session/{id}/input/{iid}` (edit, promote to steer), `DELETE` (remove,
+  returns its parts), `POST …/{iid}/move {before}` (reorder).
+
+- [ ] Both clients: the mark is `S` / `Q` (decided) in primary text, not accent and not bold, and NSH's rows are
+  rebuilt to match the TUI's layout (one card, the mark two cells left of the text, the same hint); the selected or hovered row's text goes to primary.
+- [ ] TUI: hit targets per row (`Target::PendingRow(i)` and `Target::PendingAction(i, Edit|Up|Down|Remove|Steer)`),
+  drawn right-aligned in the card only while the row is hovered (`Cx::hovered`, as the sidebar's hovered-row `×`,
+  `ui.rs:541`) or selected; glyph buttons (`✎ ↑ ↓ ×`, ASCII `e ^ v x`) with the keyboard hint kept for the selected
+  row. Click runs the same action as the key.
+- [ ] NSH: same order and glyphs as the TUI (edit, up, down, remove, then Steer for a queued row); use `arrow-down`
+  rather than `chevron-down` so up and down match; disable up on the first row and down on the last.
+- [ ] Tests: TUI behaviour test clicking each action (`tests/behaviour.rs`), NSH browser test hovering a row and
+  clicking each action; the existing interrupt-returns-the-queue tests still pass.
+
+##### General polish, TUI and NSH
+
+The user wants a polish pass across both clients now that the Void design is mostly complete. Beyond the items
+above:
+
+- [ ] A side-by-side review of both clients against the shared scenarios (`interface/scenarios/`) in dark and light,
+  at TUI 80×24 / 120×40 / 160×48 and NSH 390 / 1024 / 1440 px; list every misalignment, inconsistent spacing,
+  wording or state and fix them in pairs.
+- [ ] Empty, loading, error and offline states on every surface (sessions, files, settings panes, pickers,
+  new-session view).
+- [ ] Keyboard-only paths and focus visibility in both; decide the focus-ring colour.
+- [ ] Motion: one set of durations (flash, fold, spinner, modal open) shared through `theme.toml`, all off with
+  reduced motion.
+- [ ] Copy pass: sentence case, one verb per meaning (close / back / cancel), no developer notes in the UI.
+
+##### iOS NSH polish
+
+The phone app needs a lot of polish (code audit; nothing has been checked on a device since 11-02). Phone screens:
+Connect, Sessions tab, Settings tab, the conversation page, and overlays (palette, pickers, switcher, new session,
+rename, confirm, usage, alerts, image preview, annotate, Manager stage, edge drawers). In order:
+
+- [ ] **Keyboard avoidance.** `keyboardFrame()` is used only by Connect (`connect.tsx:68`); the composer dock
+  (`composer.tsx:364`) pads only `safeArea().bottom`, so the keyboard can cover the composer; rename, new-session,
+  palette and search modals have the same gap. Add the keyboard height to the dock and anchor modals above it.
+- [ ] **Desktop affordances in modals.** `ModalTitle` draws an `esc` chip (`modal.tsx:37`), footers and the composer
+  show key hints (`composer.tsx:354`, `:536`), and there is no touch close button; modals use desktop padding
+  (`p-6`, `top-[12%]`, `max-h-[76%]`). On touch: a 44 px close button, no key hints, bottom sheets.
+- [ ] **Touch targets under 44 px:** composer selectors `h-7` (`composer.tsx:563`), working row, location strip and
+  chips (`:633`, `:781`, `:807`), attachment remove `size-8` (`:405`), new-session toggles (`newsession.tsx:193`,
+  `:216`), `project-mcp.tsx:23`, Settings rows and pills (`settings.tsx:497`, `:582`, `:600`), `Seg`
+  (`kit.tsx:161`), sidebar chips (`sidebar.tsx:320`), header tabs. Add one `hitMin()` helper keyed on `touch`, not
+  `isNarrow()`, so an iPad gets touch sizes too.
+- [ ] **Conversation header** shows only back, title and the panel button: add project/branch as a subtitle, an
+  overflow menu (rename, archive, context) and swipe back.
+- [ ] **Gestures:** long-press on session rows for the menu, swipe actions (archive, rename), pull to refresh on
+  Sessions.
+- [ ] **Settings on the phone** is the desktop two-pane dialog collapsed (`settings.tsx:518–580`): make it a
+  grouped list with drill-in rows and keyboard-aware scrolling.
+- [ ] **Connect flow** (`connect.tsx`, `App.tsx:73–79`): the copy asks for `NEXUS_HOST=0.0.0.0 nexus serve`, which a
+  phone user cannot act on; add a recent-Cores list, paste or QR, a clear "cannot reach (Local Network permission?)"
+  error, a spinner while booting (today a blank background), and an offline banner with Retry.
+- [ ] **Microphone:** no in-app capture on native (toast at `commands.ts:586`); check
+  `NSMicrophoneUsageDescription` in `scripts/native-info.mjs`; the Manager orb uses a hard-coded 84 px offset
+  (`manager/stage.tsx:59`) instead of the real tab bar height.
+- [ ] **Leaks from desktop:** hover states with no pressed state (add `active:` styles), shortcut text in the palette,
+  pickers and switcher, effort hidden on narrow with no phone alternative (`composer.tsx:468`).
+- [ ] **Layout:** horizontal safe-area insets for landscape, safe area inside drawers (`overlays.tsx:340`) and
+  modals, Dynamic Type / text scaling (fixed `text-[16px]`).
+- [ ] **iPad:** `touch` is true but `phone` is false, so it gets the desktop layout with hover affordances; decide
+  the iPad design.
+- [ ] **Docs:** `nexus-nsh/README.md` says session rows are 56 px (code: 72 px) and its Connect text omits the Local
+  Network permission.
+- [ ] **Tests:** Playwright tests at a 390 px viewport with `platform.idiom` stubbed to phone, once NSH is back in CI.
+  Then review on a real device with screenshots before and after.
+
+#### 8.1 Both clients
+
+- [ ] **Audit navigation, pickers and panel interactions** across the clients (the 11-02 audit covered tool
+  groups, palette, child rows, banners, rail, footer, composer, starting context, waiting cards and notices).
+- [ ] **Ctrl+R prompt history search** in both clients (in the TUI `ctrl+r` is bound to `app.reconnect`,
+  `app.rs:8162`, so pick the binding first; Up/Down recall exists in `composer.rs:69`); verify cross-client per-project recall after restarting
+  both, including multiline drafts and images.
+- [ ] **Subagent parent card:** model/effort, elapsed time and completed token count; distinguish background
+  completion from the start result.
+- [ ] **Non-destructive project removal** from the rail (requested 11-03). Needs Core support: the existing delete
+  action permanently deletes sessions.
+- [ ] **Background shells and archive** (was TODO 3). The count is shown in the location strip (11-02).
+  Auto-archive skips a tree with a live background job, but manual `archive_session` (`runtime.py`) does not
+  refuse one; make it refuse with a clear message, as it does for a busy kernel, and show why in both clients.
+- [ ] Review both clients side by side in light and dark; establish large-session performance budgets; test
+  keyboard-only paths; decide the focus-ring colour.
+- [ ] Agent cards show the file path but cannot open it (the editor reads project files only; global and built-in
+  agents live elsewhere).
+- [ ] Show the Claude limits in the timeline: a "buffered, no thinking" note for a Claude model and a clear image
+  failure (the error text exists; check how each client renders it).
+
+#### 8.2 NSH
+
+- [ ] **NSH tests that import `src/` directly** (`App`, `i8`, `context-header`, `voice-settings`; `editor` now
+  loads) cannot load `nexus/native` under `nsh test`, because `commands` reaches the statically imported microphone
+  module. Fix
+  that (lazy native lookup, as Mermaid now does) before relying on them.
+- [ ] **Browser suite:** fix the mock event stream ending and forcing the app into reconnecting state (confirmed
+  2026-11-04: many tests show "Disconnected from Core · reconnecting in 1 s" yet pass). The 2026-11-04 run: 157
+  tests, 152 passed, 5 failed (the four load failures above and `i7.test.tsx`, item 0); 6 min 09 s. `nsh test --target web` needs an explicit Playwright
+  Chromium path on this machine (`--browser <path>`). Then add coverage for: Enter/Tab steer and queue and the
+  pending-input stack, steer numbering, new-session skills/MCP rows, the usage modal, Settings search, key entry,
+  link/code rows and Agents edits, child-session picker navigation, project tab isolation.
+- [ ] **Design parity:** new-session view, files, narrow layouts and states; sidebar search handling and live
+  shimmer; sidebar rows show project or branch where available; verify Monaspace Argon prose rendering natively.
+  Then build the macOS desktop bundle and complete files, Git and worktree UI (section 4).
+- [ ] Make NSH tool-result images zoomable.
+- [ ] Native mic: in-app capture stays web/TUI until the NSH runtime gains audio input; the mic button points to
+  iOS keyboard dictation meanwhile.
+
+#### 8.3 Settings
+
+- [ ] Sign in to a real device-flow and a real browser-flow provider from each client's Providers pane.
+- [ ] NSH browser coverage (after the mock-stream fix) and PTY / NSH screenshots at 80×24 and 160×48.
+- [ ] State the required Claude Code version (2.1.248 or newer) and show "Claude Code is not installed" on the
+  Providers page when `cli_path()` is empty.
+- [ ] Real Settings panes for MCP servers, skills and hooks when those controls exist; they are deliberately absent.
+
+#### 8.4 NSH Void design leftovers
+
+- [ ] **Fold the starting context once a session has messages?** Default: leave it open and delete leftovers if
+  any reappear; the alternative is folding to `Context · 5 items · ~5.4K tokens` in place. See
+  [Decisions](#decisions-still-open).
+- [ ] **Accent equals primary text,** so links look like plain text. Default: underline links in prose.
+
+#### 8.5 TUI
+
+- [ ] `path:line` and OSC 8 link hit regions in the timeline (NSH already opens prose links). Checked 2026-11-04:
+  no OSC 8 output and no link `Target`; Markdown links render as plain text with the URL (`markdown.rs:947–965`); choose a
+  syntax-highlighting library for the file view (or reuse the vendored editor's Tree-sitter).
+- [ ] Split-diff continuation alignment (`nexus-tui/src/diff.rs`); line numbers for edit/patch diffs whose input
+  lacks them.
+- [ ] PTY tests at 80×24 and 160×48 for anchor, follow and jump-to-latest; a fixed-fixture review gallery
+  (`interface/review.md`).
+- [ ] Timeline mouse selection: selection across scrolling, copying the underlying unwrapped text, OSC 52 in real
+  terminals.
+- [ ] Session info: failed child count, enabled/disabled tools and kernels.
+- [ ] OSC 777 notifications in kitty (possibly OSC 99) and focus tracking; debounce completion requests if large
+  workspaces make search slow.
+- [ ] Verify Cmd+arrow composer shortcuts in a terminal that forwards Super-modified keys.
+- [ ] Compare with old Nexus in a real terminal and review screenshots.
+
+### 9. Extensions, skills, MCP and hooks
+
+- [ ] Show agent and user-tool errors in client pickers and Settings; a visible changed-file notice for a running
+  tool; process memory limits; validate project-only names in `[tools] disabled`. Exercise a user tool in a real
+  session and run the reload stress test.
+- [ ] Default-on settings for skills; exercise skills with a real model; decide whether and how `allowed-tools` is
+  enforced without changing a cached prompt or granting permissions.
+- [ ] MCP resources and prompts; Settings screens for adding/editing servers. Output stays bounded, fenced as
+  untrusted and visible as received.
+- [ ] Exercise browser-use (the pinned `uvx` package, `nexus-browser/`) in a real model session, including server
+  failure, screenshots and its LLM-backed tools.
+- [ ] Verify the new-session inventory prefers an enabled project MCP row over a same-named disabled global row
+  (the `browser-use` case).
+- [ ] Hooks: edit them in Settings, render hook rows in both timelines, fire `SessionEnd` on archive; test
+  `bash(...)` matchers on compound commands and `PostToolUse` after a denied approval; a blocking hook with a real
+  model.
+
+### 10. Providers
+
+- [ ] **Real OpenAI and Ollama calls** (also in section 2).
+- [ ] **Claude (Agent SDK) remaining:**
+  - record the Claude Code CLI version in the wire request (hidden additions vary: ~175 more tokens on 2.1.314 than
+    on 2.1.285);
+  - decide whether to show the SDK's hidden additions (`sdk_adds`: two system lines, `StructuredOutput`, the
+    account's email in the first user message, an `# Environment` message) in the clients' starting context, and
+    whether sending the email is acceptable; the 420 tokens of fixed overhead are unexplained;
+  - confirm the context window the clients show for `claude-haiku-5-5` (the CLI logs `unrecognized_model` but
+    serves it);
+  - confirm cancelling a turn kills the worker's process group and the CLI child;
+  - re-check in NSH; mark the provider `verified` after a multi-tool turn with a real model and add wire fixtures.
+- [ ] **J4 Anthropic Messages:** the Anthropic SDK as a plain client (Nexus owns the loop); preserve signed thinking
+  blocks for lossless replay; cache-control breakpoints and tool-result media.
+- [ ] **J5 Gemini:** a dialect that preserves replayable reasoning.
+- [ ] **Antigravity:** assess fit with the one-timeline rule before porting; use the Claude Agent SDK and the
+  approach in https://github.com/NoeFabris/opencode-antigravity-auth rather than ZMX.
+- [ ] Every provider needs wire fixtures, provider/auth docs and a verified real call; group OpenAI-compatible ones.
+- [ ] Cross-provider conversion beyond text and tool calls (foreign reasoning is dropped); Copilot Responses
+  encrypted reasoning replay.
+- [ ] Revisit Responses `instructions` if the Codex backend changes (it accepts it, though the Codex CLI sends a
+  developer message).
+
+### 11. Worktrees
+
+Separate from the Git page (section 4), and builds on it.
+
+- [ ] Port worktree review and integration as control commands: review against the base, merge by fast-forward or
+  merge commit with confirmation, remove the worktree and branch after merge. Commands in both clients; agents get
+  them only when granted. Reference: old `nexus/agents/worktree_review.py`, `worktree_integrate.py`,
+  `nexus/worktree_cleanup.py`, `tests/test_worktree_merge_permission.py` (in `~/repos/nexus-old`).
+- [ ] Decide cleanup on archive/delete (archive must never implicitly delete a worktree) and how to leave one.
+
+### 12. Reliability and safety
+
+- [ ] Monty: an OS-level sandbox if wanted; checkpoint recovery; forced worker crashes; cold-start latency; the
+  Linux `/usr/bin/env` path. (Workers already start through a launcher with an empty environment.)
+- [ ] Supervise and report background bash jobs across daemon crashes; never kill a process from a stored PID
+  alone.
+- [ ] Durable pending directory moves and worktree-in-use checks for external processes; archive transitions
+  appear only in the root log today.
+- [ ] Archive: bulk/project operations or timestamps, if needed.
+- [ ] Export holds a long SQLite read snapshot for very large sessions; consider general artifacts and export
+  clipping.
+- [ ] Whether read-only agents need sandboxing or restricted command execution beyond the file tools, including
+  races with external writers.
+- [ ] Retention: deferred partial indexes still cost one initial table scan each. Space reclamation and event
+  compaction are section 13.
+
+### 13. Event storage: harden finished sessions into messages and flush their events
+
+User request (2026-11-04): the event log has grown very large; old events should not be kept. Only active sessions
+need their events; everything else should be "hardened" into messages and full context, and the events flushed.
+
+**Findings (2026-11-04, measured on a read-only copy of `~/.nexus/nexus.db`):**
+
+- **The running daemon is old code.** It is the `uv tool` install built from the 10-30 wheel, running since 10-30.
+  None of the 10-31 retention work (expirable wire bodies, `event_body`, `payload_state`, `storage_metrics`) is
+  deployed, so only the old rule applies: prefix pruning after 14 days or 256 MiB. `log.floor` is 0: nothing has
+  ever been pruned.
+- **This machine's DB:** 177 MB plus a 7.7 MB WAL; 41,818 events, 200 messages, 5 sessions. (The 1.5 GB /
+  1.37 M-event DB in `reports/tui-load-time-investigation.md` is not on this disk; the mechanisms are the same.)
+- **Where the bytes are:** the `event` table is 165 MB of 177 MB; messages are 0.75 MB. By type:
+
+  | Type | Rows | MB | Note |
+  | --- | --- | --- | --- |
+  | `wire_request` | 101 | **140.9** | 1.46 MB average, 5.8 MB max |
+  | `wire_event` (raw SSE chunks) | 20,595 | 17.0 | |
+  | `tool_args_delta` | 18,690 | 1.5 | |
+  | `message.added` | 200 | 0.68 | |
+  | everything else | small | < 2 | `text_delta` 1,140 rows |
+
+  One session ("Explaining LLM Caching") holds 152.6 MB of it.
+- **Why `wire_request` is huge:** every request stores its full body, and each body carries the whole history,
+  including **base64 images from tool results** (5.07 of the largest 5.8 MB). Storage grows quadratically with
+  session length. All 101 bodies differ, so whole-body SHA dedup saves nothing; zlib only gets 141 → 95 MB. The same
+  images already live once in `~/.nexus/artifacts` (3.8 MB total).
+- **Why it is kept:** every `Bus.publish` is durable (a carry-over from old Nexus, which derived all state from
+  events), including token deltas and every SSE chunk; retention never triggered; and `auto_vacuum = 0`, so even
+  deleted rows would leave the file the same size. Nothing is protected from pruning here (all turns terminal, no
+  open waits or jobs).
+- **What the committed but undeployed code would do** (simulated on a copy): all wire payloads expire to markers,
+  but the file stays 178 MB (157 MB of free pages). With `VACUUM` and `auto_vacuum = incremental`: 15.7 MB.
+  Deleting every session event, then `VACUUM`: **2.1 MB**.
+
+**What actually needs events** (none of it needs old history for model context; messages, `session_snapshot`, the
+`turn*` tables and `session_usage` already are the hardened record):
+
+| Job | Needs history beyond active sessions? |
+| --- | --- |
+| Reconnect cursor / SSE `Last-Event-ID` | No: clients resync from `/api/snapshot`; a cursor below the floor gets 410 |
+| `message.added` outbox (exactly once) | No: only messages with `event_id IS NULL` after a crash |
+| Recovery of an interrupted turn (`stream_summary`, `wait_lifecycle`, bash jobs, `code.*`) | No: unfinished turns and sessions only |
+| Turn footers, stats, usage | No: from the `turn*` tables (section 5) |
+| Inspector Steps (status, TTFB, retries) | Yes today; mostly also in `turn_request` / `turn_attempt` / `turn_tool` |
+| Inspector Requests and Raw | Yes today; diagnostic only |
+| Inspector Questions card | Yes, unless moved to a table |
+| Export (events section) | Yes; expired markers are already supported |
+
+**Decided (user, 2026-11-04): compact finished sessions.** **Rules this touches.** The one-timeline rule holds (what the model had is messages plus snapshots, kept). Two
+written promises change and need the user's sign-off and a ledger row: `AGENTS.md` "wire events are never dropped"
+(becomes "dropped only when announced", with a compaction record), and the inspector's raw wire "for any past
+session" (becomes "for active and recent sessions").
+
+**Steps:**
+
+- [ ] **13.0 Deploy what is committed.** Reinstall the tool from the checkout and restart the daemon (the first start
+  runs the in-place migrations: 0.3 s on the copy). Done when `nexus doctor` no longer reports different code and
+  `/api/info` `retention_status` shows wire payloads expiring. Restarting also rotates the daemon token, which was
+  printed into a tool log during this investigation.
+- [ ] **13.1 Reclaim space automatically.** New databases get `pragma auto_vacuum = incremental` (it must be set
+  before the first table). `Retention.run_once` runs a bounded `incremental_vacuum(N)` whenever free pages exceed a
+  threshold (for example 8 MB). Files: `store.py` (`prepare_database`, `Store.__init__`, `reclaim_space`),
+  `retention.py`, `docs/daemon.md`. Tests: a new DB reports `auto_vacuum = 2`; after expiry and a pass the file
+  shrinks; the pass stays bounded. Existing databases convert in 13.6.
+- [ ] **13.2 Deltas are not stored** (section 5, step 9): `text_delta`, `reasoning_delta`, `tool_call_started` and
+  `tool_args_delta` go through `Bus.publish(..., durable=False)`; `LivePartial` and `turn_request.partial` replace
+  `stream_summary`. Here that removes 48% of rows. Both clients in the same change.
+- [ ] **13.3 Stop the quadratic `wire_request`.** Store each request body's `input[]` items content-addressed in
+  `event_body`, so a request is an envelope plus item SHAs (each history item is stored once per session), and
+  replace `data:` image URIs with artifact SHA references before storing. Optionally fold a request's `wire_event`
+  SSE chunks into one stored stream body instead of one row per chunk. Files: `payloads.py` (encode and
+  `event_data` reassembly), `store.append_event`, the wire emitters in `llmhub/`, `export.py`, the inspector read
+  path. Tests: a reassembled body is byte-identical to the original; N requests store about O(N) bytes, not O(N²);
+  export output unchanged; readers handle both formats. Done when the 141 MB session's wire storage is a few MB
+  while still retained.
+- [ ] **13.4 Move the remaining history readers onto state tables.** Question/permission asked/replied into a small
+  `wait` table (also serving the inspector's Questions card); background jobs into a `bash_job` table, replacing
+  `open_bash_jobs` / `unfinished_bash_jobs` (which also removes the cold-start full scan in section 6); `code_used`
+  becomes a session flag; inspector Steps reads the `turn*` tables (add `http_status` and `ttfb` columns if
+  missing); drop the legacy `turn_end` fallback after one release. Files: `store.py`, `recovery.py`,
+  `continuation.py`, `runtime.py`, `server.py`, `inspector/index.html`, `docs/inspector.md`. Done when
+  `grep "from event"` hits only replay, the outbox and maintenance, and the recovery suites pass with the `event`
+  table emptied for terminal sessions.
+- [ ] **13.5 Harden and flush finished sessions.** A session is compactable when it has no running turn, no pending
+  recovery, no open wait or job, no replay pin, no message without its `event_id`, and is archived or idle longer
+  than a configurable window (default 24 h, alongside `auto_archive_idle_seconds`). Retention deletes all its
+  events and writes one durable `session.compacted` record (the removed id range and counts); cursors that fall in
+  a compacted range get 410 and resync. Global events stay. This replaces prefix-only `prune_events`, which stalls
+  behind one protected session. A per-session "keep diagnostics" switch keeps raw wire for a session the user is
+  debugging. Files: `retention.py`, `store.py` (`compact_session`), `eventlog.py` (cursor check), `export.py` (an
+  "events compacted" section), the inspector ("earlier events compacted" notice), `docs/daemon.md`, `docs/api.md`,
+  `docs/stream-events.md`, `docs/inspector.md`, the ledger, `AGENTS.md`. Tests: a compacted session renders the same
+  in both clients from snapshot, messages and `/turn`; `/context` is unchanged; a cursor below the compaction gets
+  410; a protected session is never compacted; announcements are rate-limited. Done when the steady-state `event`
+  table holds only active and recent sessions.
+- [ ] **13.6 Migrate an existing large database.** An offline `nexus db compact`, dry-run by default, that requires
+  the daemon to be stopped: back up through the SQLite backup API (`nexus.db.bak-<date>`), run 13.1–13.5
+  maintenance to completion, `VACUUM INTO nexus.db.new` with `auto_vacuum = incremental`, run `integrity_check` and
+  compare the log generation and message, session, snapshot and turn counts, then swap atomically and keep the
+  backup. Needs free disk of roughly the backup plus the new file. Files: `cli.py`, `store.py`,
+  `docs/development.md`. Done when it is verified on a scratch copy of the real DB (expected here: 177 MB → 2–16 MB);
+  run against the real `~/.nexus` only with the user's approval.
+
+Risks: the inspector loses raw wire, deltas and step detail for compacted sessions; JSON exports of old sessions have
+no events section; old clients reconnecting mid-response lose missed deltas; per-session deletion makes cursor
+validity non-contiguous, so the floor and compaction semantics must be documented; 13.3 changes the stored wire
+format, so readers must handle both during the transition.
+
+## Decisions made (2026-11-04, user)
+
+| Decision | Answer |
+| --- | --- |
+| Manager interaction (8.0) | **Call mode (A):** orb centred, the app dimmed behind it, Esc minimises the call (never ends it, never interrupts a session), an explicit End ends it |
+| Scroll pinning (8.0) | **Only a session's first message** goes to the top of the screen; later sends keep the normal behaviour, still without yanking a reader who scrolled up |
+| Pending rows (8.0) | **`S` / `Q`** in primary text, and NSH is aligned with the TUI's pending-row UI |
+| Event compaction (13.5) | **Yes:** a finished (idle or archived) session's events are deleted, announced by a `session.compacted` record; continuing the session later writes new events as usual. Losing the inspector's raw wire, step timings and the export's events section for compacted turns is accepted |
+| CI | Deferred for now |
 
 ## Decisions still open
 
-- Whether the Anthropic Messages and Gemini providers also ship in 0.10.0 (the Agent SDK provider does).
-- Whether `nexus update` installs updates or only reports.
-- Whether a parent card can steer a child session.
-- Output caps (lines vs. bytes) and whether they are configurable.
+| Decision | Default or recommendation |
+| --- | --- |
+| Do the Anthropic Messages and Gemini providers ship in a 0.10.x release? | — |
+| Does `nexus update` install, or only report? | — |
+| Can a parent card steer a child session? | — |
+| Output caps: lines or bytes, and configurable? | — |
+| Manager Q4: can `navigate` open Settings? | Open Settings to a section to show it; never change a value or start a sign-in. Until decided, it cannot |
+| Show the Claude SDK's hidden additions in the starting context; is sending the account email acceptable? | — |
+| Persist session grants? | — |
+| Turn summaries: show "Thought for Ns" (`reasoning_seconds` is stored, not shown)? | Not shown today, by design |
+| Turn summaries: the footer with effort wraps at 140 columns: drop or shorten effort, or accept? | — |
+| Turn summaries: store `max_attempts` so a reloaded retry reads "n/max"? | Today reads "retry n in Ns" |
+| Fold the starting context after the first message (NSH Void open question 1)? | Leave it open |
+| Underline prose links because accent equals primary text (Void open question 3)? | Underline in prose |
+
+## Archived plans
+
+These plan files were merged into this one on 2026-11-04. Read the full text with `git show e438b61:<file>`; code
+comments and ledger rows that cite them by name refer to that version.
+
+| File | What it was | Where it went |
+| --- | --- | --- |
+| `TODO.md` | Post-release backlog: token gap, platform matrix, `nexus` launching the TUI, shell count | Sections 1, 7 and 8.1 |
+| `EDITOR_GIT_PLAN.md` | File explorer, editor and Git page | Section 4 (steps 2–6 kept in full) |
+| `TURN_SUMMARY_PLAN.md` | Turn summaries instead of loading event history | Section 5 (step 9 kept in full); design in `docs/daemon.md` |
+| `TUI_PERFORMANCE_PLAN.md` | TUI render performance, phases 1–4, with measurements | Section 6; results in `nexus-tui/README.md` |
+| `VOID_DESIGN_PLAN.md` | NSH Void design, second pass | Landed; leftovers in 8.4; ledger row 2026-11-01 |
+| `MANAGER_PLAN.md` | Manager design and milestones | Design moved to [docs/manager-design.md](docs/manager-design.md); milestones in section 3 |
+| `INTERFACE_PLAN.md`, `DESIGN_PLAN.md` | Earlier interface spec and design | Archived before: `git show fdb1860:INTERFACE_PLAN.md` |

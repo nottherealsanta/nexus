@@ -1,4 +1,4 @@
-//! The Manager's stage (MANAGER_PLAN.md 10.1, 10.3, 10.4): the caption, the
+//! The Manager's stage (docs/manager-design.md 10.1, 10.3, 10.4): the caption, the
 //! typed field, the card in its semi-transparent modal, and the orb on top.
 //! Everything is painted over the finished frame, so no layout moves.
 //!

@@ -1,4 +1,4 @@
-//! GPT-Live call audio (MANAGER_PLAN.md section 5): the TUI only captures the microphone and plays speech.
+//! GPT-Live call audio (docs/manager-design.md section 5): the TUI only captures the microphone and plays speech.
 //!
 //! Core owns the call (its WebRTC peer to OpenAI, the sideband, the credentials and the Manager). This module moves
 //! raw PCM16 mono 24 kHz over one WebSocket (`/api/manager/live/audio`): microphone frames up, speech frames down.

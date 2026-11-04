@@ -1,4 +1,4 @@
-"""One unified state for a session (MANAGER_PLAN.md section 7, M1).
+"""One unified state for a session (docs/manager-design.md section 7, M1).
 
 The clients and the Manager need one answer to "what does this session need?".
 Store has only archive state and durable turn rows; Runtime has the live facts
@@ -100,7 +100,7 @@ PRECEDENCE: tuple[str, ...] = (
     IDLE,
 )
 
-#: States the attention queue speaks at the next pause (MANAGER_PLAN.md section 8).
+#: States the attention queue speaks at the next pause (docs/manager-design.md section 8).
 ATTENTION_STATES = frozenset({NEEDS_APPROVAL, NEEDS_ANSWER, BLOCKED})
 
 #: Every value a :class:`SessionState` may carry.

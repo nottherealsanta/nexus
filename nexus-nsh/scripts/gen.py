@@ -91,7 +91,7 @@ def css(mode: str) -> dict[str, str]:
         "diff-add-bg": g("diff.add_bg"),
         "diff-del-bg": g("diff.del_bg"),
         **{f"agent-{slot}": color for slot, color in theme[mode]["agent"].items()},
-        # The Manager's orb states (MANAGER_PLAN.md 10.2): manager-listening, -thinking, -speaking, -idle
+        # The Manager's orb states (docs/manager-design.md 10.2): manager-listening, -thinking, -speaking, -idle
         **{f"manager-{state}": color for state, color in theme[mode]["manager"].items()},
     }
 

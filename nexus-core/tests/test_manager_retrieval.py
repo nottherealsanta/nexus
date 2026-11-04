@@ -1,4 +1,4 @@
-"""Retrieval behaviour (MANAGER_PLAN.md 7.1): windows, ties, fuzzy matching, handles, errors."""
+"""Retrieval behaviour (docs/manager-design.md 7.1): windows, ties, fuzzy matching, handles, errors."""
 from __future__ import annotations
 
 import pytest

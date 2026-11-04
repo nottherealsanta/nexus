@@ -1,4 +1,4 @@
-"""M4 red-team evals (MANAGER_PLAN.md section 11): authority, injection, mishearing, the conversation seam,
+"""M4 red-team evals (docs/manager-design.md section 11): authority, injection, mishearing, the conversation seam,
 correction and interruption during a tool call.
 
 Most cases use an *obedient attacker*: a scripted model that does whatever it is steered to, so only the code

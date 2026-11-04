@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""M0 spike (a): one real STT -> Luna -> TTS round trip and where the time goes (MANAGER_PLAN.md section 16).
+"""M0 spike (a): one real STT -> Luna -> TTS round trip and where the time goes (docs/manager-design.md section 16).
 
     cd nexus-core
     uv run python scripts/spikes/pipeline_latency.py --wav question.wav --copy-auth-from ~/.nexus --yes

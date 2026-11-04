@@ -522,7 +522,7 @@ estimate.
 - **Tool images (K8).** A tool row whose result has `media` stays folded and notes the image count; opening it shows the images
   (`/api/artifact/{id}`, same origin) under the output.
 
-## The Manager (MANAGER_PLAN.md 10)
+## The Manager (docs/manager-design.md 10)
 
 A voice agent above all sessions, drawn as three light layers over the app and present only when called: an orb
 at the bottom centre (anchored on the composer's top edge), a caption pill above it, a one-line typed field, and at

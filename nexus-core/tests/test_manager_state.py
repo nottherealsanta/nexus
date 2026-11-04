@@ -1,4 +1,4 @@
-"""The unified session state (MANAGER_PLAN.md section 7): one answer to "what does this session need?"."""
+"""The unified session state (docs/manager-design.md section 7): one answer to "what does this session need?"."""
 from __future__ import annotations
 
 import asyncio

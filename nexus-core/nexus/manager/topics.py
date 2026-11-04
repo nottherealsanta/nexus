@@ -1,4 +1,4 @@
-"""Topic lines: one sentence per session, written lazily (MANAGER_PLAN.md 7.1 item 2).
+"""Topic lines: one sentence per session, written lazily (docs/manager-design.md 7.1 item 2).
 
 A topic line catches paraphrase cheaply: "the one about the sidebar tooltip"
 matches a session whose title is "Fix rail hover" because its topic says so.

@@ -1,4 +1,4 @@
-//! The Manager's orb (MANAGER_PLAN.md 10.2): a soft luminous sphere drawn with
+//! The Manager's orb (docs/manager-design.md 10.2): a soft luminous sphere drawn with
 //! half-block cells. Every subpixel has its own radial falloff and is blended
 //! over the colours already in the buffer, so there is no hard edge and text
 //! under the fringe survives. Two or three slowly drifting lobes deform the
@@ -24,7 +24,7 @@ const ENTER_SECS: f32 = 0.24;
 const EXIT_SECS: f32 = 0.5;
 /// State changes ease over about 200 ms.
 const MIX_SECS: f32 = 0.2;
-/// Fast attack, slow release (MANAGER_PLAN.md 10.2).
+/// Fast attack, slow release (docs/manager-design.md 10.2).
 const ATTACK_SECS: f32 = 0.06;
 const RELEASE_SECS: f32 = 0.24;
 

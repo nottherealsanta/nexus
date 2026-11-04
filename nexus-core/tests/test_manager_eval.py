@@ -1,4 +1,4 @@
-"""The retrieval eval of MANAGER_PLAN.md section 11: ~50 seeded sessions, ~100 phrasings, offline.
+"""The retrieval eval of docs/manager-design.md section 11: ~50 seeded sessions, ~100 phrasings, offline.
 
 It measures what matters for acting on the user's behalf: how often the top result is right (top-1), how often
 the Manager would act on a *confident* wrong or unwarranted answer (false confidence), and whether a genuine

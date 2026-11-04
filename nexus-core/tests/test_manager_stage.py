@@ -1,6 +1,6 @@
-"""Cards (MANAGER_PLAN.md 10.4 and the frozen 10.7 shapes), the stage, navigation and the holder's view.
+"""Cards (docs/manager-design.md 10.4 and the frozen 10.7 shapes), the stage, navigation and the holder's view.
 
-Part one checks `stage.py` alone. Part two drives the scripted Manager for MANAGER_PLAN.md section 11's
+Part one checks `stage.py` alone. Part two drives the scripted Manager for docs/manager-design.md section 11's
 "stage and view" evals: a row number means the row the user saw, a move is announced only after the client
 confirms it, a proactive wake never moves the screen, "go back" returns to where the user was, and every
 card stays inside its bounds with the clipping stated.

@@ -1,4 +1,4 @@
-"""The Manager service: one per daemon, above every project (MANAGER_PLAN.md sections 5 to 7 and 10.7).
+"""The Manager service: one per daemon, above every project (docs/manager-design.md sections 5 to 7 and 10.7).
 
 The Manager *is* a hidden session (``Session.kind == "manager"``), one row per
 episode linked by ``continued_from``, so the loop, retries, provider auth, wire

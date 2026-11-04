@@ -1,4 +1,4 @@
-// The seven cards the Manager can show (MANAGER_PLAN.md 10.4): board, sessions, approval, question,
+// The seven cards the Manager can show (docs/manager-design.md 10.4): board, sessions, approval, question,
 // diagram, excerpt and note. A small catalog drawn natively; no free layout. Rows come from the live
 // store when the client has the session, from the payload otherwise. Each card has a narrow form.
 import { Scroll, Text, View, windowSize } from "nsh";

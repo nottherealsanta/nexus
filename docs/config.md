@@ -150,7 +150,7 @@ The Manager ([manager.md](manager.md)) is off until its soak passes.
 | `max_episode_tokens` | `24000` | a new episode once the current one passes this many tokens, 2000 to 200000 |
 | `proactive` | `"attention"` | `off`: never unprompted. `attention`: approvals, questions, failures and blocked sessions. `all`: also a coalesced "3 sessions finished" on a lull ([manager.md](manager.md#attention-unprompted-lines)) |
 | `proactive_interval_seconds` | `20` | at most one unprompted line per this many seconds, 1 to 600 |
-| `approvals` | `"spoken"` | `spoken`: a spoken yes is enough, within the guards of MANAGER_PLAN.md section 9 |
+| `approvals` | `"spoken"` | `spoken`: a spoken yes is enough, within the guards of manager-design.md section 9 |
 | `talk` | `"tap"` | tap to talk; hands-free comes later |
 
 There is no `stage` setting. The Manager's prompt and tool catalog are code and cannot be extended from a file.

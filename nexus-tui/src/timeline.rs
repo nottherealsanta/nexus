@@ -823,7 +823,7 @@ fn user_tags(message: &crate::api::Message) -> Vec<&'static str> {
         Some("queued") => vec!["queued"],
         _ => vec![],
     };
-    // A message the Manager sent on the user's words says so (MANAGER_PLAN.md 9).
+    // A message the Manager sent on the user's words says so (docs/manager-design.md 9).
     if message.origin.as_deref() == Some("manager") {
         tags.push("via Manager");
     }

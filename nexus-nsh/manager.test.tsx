@@ -1,4 +1,4 @@
-// The Manager's logic (MANAGER_PLAN.md 10.1 to 10.7): wording, the orb's priority and levels, the speech
+// The Manager's logic (docs/manager-design.md 10.1 to 10.7): wording, the orb's priority and levels, the speech
 // queue, `/manager` parsing, cards and rows, and the controller's state machine against a stubbed Core.
 import { describe, expect, test } from "nsh/test";
 import {

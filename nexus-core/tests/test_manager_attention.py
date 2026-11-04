@@ -1,4 +1,4 @@
-"""M4 Core: attention (MANAGER_PLAN.md section 8, 10.1). Deterministic lines, no model, no authority, no navigation."""
+"""M4 Core: attention (docs/manager-design.md section 8, 10.1). Deterministic lines, no model, no authority, no navigation."""
 from __future__ import annotations
 
 import asyncio

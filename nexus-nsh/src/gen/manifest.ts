@@ -650,7 +650,7 @@ export const manifest = {
        "attention",
        "all"
       ],
-      "note": "off: never. attention: approvals, questions and failures, spoken at a pause (MANAGER_PLAN.md section 8). all: also finished sessions. A proactive line never moves the screen. Core key [manager] proactive."
+      "note": "off: never. attention: approvals, questions and failures, spoken at a pause (docs/manager-design.md section 8). all: also finished sessions. A proactive line never moves the screen. Core key [manager] proactive."
      },
      {
       "id": "manager.privacy",

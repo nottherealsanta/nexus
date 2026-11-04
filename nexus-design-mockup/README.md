@@ -17,7 +17,7 @@ recommended option, the alternatives and today's TUI, add notes, then press
 | `before/` | Captures of the TUI as it is today (real binary, real Core) |
 | `reference/` | Old Nexus screenshots and main-branch mock-ups |
 | `options.json` | The chooser's content: decisions, options and their shots |
-| `stage/` | The NSH Void design on the stageshow kit, and the visual spec for [VOID_DESIGN_PLAN.md](../VOID_DESIGN_PLAN.md). `npm install && npm run build`, then open `dist/index.html` |
+| `stage/` | The NSH Void design on the stageshow kit, and the visual spec for the Void design (`git show e438b61:VOID_DESIGN_PLAN.md`). `npm install && npm run build`, then open `dist/index.html` |
 | `shoot.sh` | Renders everything: `./shoot.sh [all\|tui\|nsh\|gallery] [id-prefix]` |
 | `crop.sh` | Zooms into a region of a shot for review |
 

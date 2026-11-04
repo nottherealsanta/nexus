@@ -410,7 +410,7 @@ cards and waits from going stale. This is what keeps a 200-message draw near
 1 ms, a 1,000-message draw near 5 ms and chrome-only frames near 0.4–0.5 ms in
 the release build; `--bench ... --replay`
 measures it without a Core or PTY (results in
-[../TUI_PERFORMANCE_PLAN.md](../TUI_PERFORMANCE_PLAN.md)).
+`git show e438b61:TUI_PERFORMANCE_PLAN.md`; remaining work in [../PLAN.md](../PLAN.md)).
 
 Session rows in the left sidebar (D03) have two lines. Line 1 has a mark slot
 (waiting `◆`, error `✕`, running spinner, unread `●`, in that order of

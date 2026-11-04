@@ -43,5 +43,5 @@ Code and sign in with `claude auth login` first; Nexus does not ship it.
 ## Documentation
 
 [docs/README.md](docs/README.md) indexes the docs, which describe the current code: providers, auth, the agent loop, tools, the
-HTTP API and the clients. [PLAN.md](PLAN.md) lists what is left for 0.10.0 and [TODO.md](TODO.md) what comes after.
+HTTP API and the clients. [PLAN.md](PLAN.md) lists what has landed and everything still to do.
 Working on Nexus itself? Start with [AGENTS.md](AGENTS.md).

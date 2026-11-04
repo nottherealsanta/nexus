@@ -1,4 +1,4 @@
-// The Manager section of Settings (MANAGER_PLAN.md 10.6): on or off, mode, model, how much it speaks up,
+// The Manager section of Settings (docs/manager-design.md 10.6): on or off, mode, model, how much it speaks up,
 // and where words and sessions go. Core keys `[manager] enabled | mode | model | proactive`.
 import type { JSX } from "nsh";
 import { Text, View, effect, signal } from "nsh";

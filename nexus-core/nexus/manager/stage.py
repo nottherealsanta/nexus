@@ -1,4 +1,4 @@
-"""The stage: the one card the Manager is showing (MANAGER_PLAN.md 10.4 and 10.7).
+"""The stage: the one card the Manager is showing (docs/manager-design.md 10.4 and 10.7).
 
 A card is a typed payload that Core builds and validates and each client draws
 natively; there is no free HTML. The Manager's `show` tool names *what* to show

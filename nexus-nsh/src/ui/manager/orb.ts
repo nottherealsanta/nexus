@@ -1,4 +1,4 @@
-// The Manager's orb (MANAGER_PLAN.md 10.2): a soft luminous sphere with a bright core and an alpha
+// The Manager's orb (docs/manager-design.md 10.2): a soft luminous sphere with a bright core and an alpha
 // falloff into whatever is behind it, never a flat disc. Layered radial gradients, two or three slowly
 // drifting lobes that deform the edge with the level, and ripples that follow a voice. Pure drawing:
 // the caller gives it the time, the smoothed level, the state and the palette.

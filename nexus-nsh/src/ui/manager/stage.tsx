@@ -1,4 +1,4 @@
-// The Manager's stage (MANAGER_PLAN.md 10.1): an orb at the bottom centre, a caption above it, a one-line
+// The Manager's stage (docs/manager-design.md 10.1): an orb at the bottom centre, a caption above it, a one-line
 // typed field, and at most one card in a semi-transparent modal. Three layers, each present only when it has
 // something to do, painted over the app. Nothing here is mounted at rest: no nodes, no frames, no timers.
 //

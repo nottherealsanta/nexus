@@ -1,4 +1,4 @@
-// The Manager's controller (MANAGER_PLAN.md 10.1 to 10.7): the call, the exchange, voice in and out,
+// The Manager's controller (docs/manager-design.md 10.1 to 10.7): the call, the exchange, voice in and out,
 // cards, navigation and the engaged keys. The UI (ui/manager/*) only reads these signals.
 //
 // Idle is free: with no call and nothing on screen there are no timers, no animation frames and no
