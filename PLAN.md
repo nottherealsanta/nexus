@@ -70,6 +70,10 @@ because Apple's `ar` produces a broken archive.
 
 ## Landed
 
+- **GPT-Live sideband certificate trust (11-04).** A real diagnostic reached call creation but the sideband failed with `CERTIFICATE_VERIFY_FAILED` on the python.org interpreter. The WebSocket now uses HTTPX’s verified CA context, and Core publishes startup failures to both clients and status. All 16 Live tests and targeted Ruff checks pass; an unauthenticated TLS handshake succeeds. A new real call remains to be checked.
+
+- **Manager Live failure and orb (11-04).** Both clients preserve Live mode after audio fails, keep the real error and typed input, and never fall into Dictation. Focused stages leave 30% of the background visible. TUI now connects the existing smooth RGBA orb renderer on Kitty graphics terminals, with a centred cell fallback elsewhere. Validation: 28 TUI Manager tests and 11 orb tests pass; 43 NSH Manager browser tests pass in an isolated app without the native crate (the installed CLI cannot build the pinned native dependency). TUI stage/orb preview inspected; NSH screenshot blocked by that dependency. Full TUI suite retains 8 unrelated failures (Markdown, six shell cases, timeline selection). Real-service audio remains unverified.
+
 The record of what is done, newest first. Details are in the docs and the ledger.
 
 **Since the release (2026-10-31 to 2026-11-03)**

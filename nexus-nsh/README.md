@@ -547,3 +547,5 @@ hidden context (`GET /api/manager/context`); the inspector keeps the full raw lo
 - Dev only, inert unless set: client storage key `nexus.manager.dev` = `{"level":0.7,"voice":"simulate","say":"..."}`
   fixes the orb level and simulates mic and speech; `{"card":{...}}` shows a card with no call (screenshots, card tests).
 - Tests: `manager.test.tsx` (logic and controller), `manager-cards.test.tsx` (shared card scenarios, keys, clicks).
+
+Live Manager calls use their own audio connection and need no Dictation setup or `nexus voice init`. A failed Live connection keeps its error visible and the typed field available; end and restart the call to retry audio.

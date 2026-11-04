@@ -118,7 +118,8 @@ async def _default_connector(url: str, headers: Mapping[str, str]) -> WebSocketL
 
     try:
         return await connect(url, additional_headers=dict(headers), open_timeout=CONNECT_TIMEOUT_S,
-                             max_size=1_048_576, ping_interval=None, user_agent_header=None)
+                             max_size=1_048_576, ping_interval=None, user_agent_header=None,
+                             ssl=httpx.create_ssl_context())
     except InvalidStatus as exc:  # the body could echo a credential: keep the status only
         raise error_for_status(exc.response.status_code, sideband=True) from None
 

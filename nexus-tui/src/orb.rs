@@ -243,7 +243,7 @@ struct Shape {
 impl Shape {
     fn sample(&self, dx: f32, dy: f32) -> (f32, f32) {
         // A little wider than tall: the glow spreads along the composer's edge.
-        let r = (dx * 0.78).hypot(dy);
+        let r = dx.hypot(dy);
         let theta = dy.atan2(dx);
         // Three lobes at different speeds and sizes, so the edge never repeats.
         let lobes = 0.55 * (2.0 * theta + self.t * 0.9).sin()
@@ -343,7 +343,7 @@ pub fn paint_sized(
         _ => (orb.level, 0.07 + 0.2 * orb.level),
     };
     let rise = ease(orb.presence);
-    let radius_max = f32::from(width) * 0.31;
+    let radius_max = (f32::from(width) / 2.0).min(f32::from(height)) * 0.60;
     let scale = 0.35 + 0.65 * rise;
     let mut shape = Shape {
         centre_y: 0.0,
@@ -358,7 +358,7 @@ pub fn paint_sized(
     let origin_y = f32::from(at.bottom) - f32::from(height);
     let cx = f32::from(width) / 2.0;
     // Rises from the composer edge as it arrives.
-    let cy = f32::from(height) * 2.0 - shape.radius * 1.0 - 0.9 + (1.0 - rise) * 3.0;
+    let cy = f32::from(height) + (1.0 - rise) * 3.0;
     shape.centre_y = cy;
     let zone = bounds_sized(area, at, width, height);
     for y in zone.y..zone.bottom() {

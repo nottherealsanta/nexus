@@ -41,7 +41,7 @@ const cancelDictation = () => voiceIn.cancel();
 // --- state ---------------------------------------------------------------------------------------------
 
 /** The call this client holds, or null. `holder` is the name Core gave it. */
-export const call = signal<{ id: string; holder: string } | null>(null);
+export const call = signal<{ id: string; holder: string; mode?: string } | null>(null);
 /** The call is open but out of the way: a small orb in the corner, and the app has its keys back. */
 export const minimised = signal(false);
 /** The header button's read-only view of the Manager's hidden context. */
@@ -251,7 +251,7 @@ async function start(): Promise<boolean> {
       }
     } catch { /* Core answers start itself */ }
     const r = await request<{ call_id: string; holder: string; mode?: string }>("POST", "/api/manager/start", { body: { stream_id: streamId, client_id: viewReporter.clientId } });
-    call.set({ id: r.call_id, holder: r.holder ?? "" });
+    call.set({ id: r.call_id, holder: r.holder ?? "", mode: r.mode });
     lost = null;
     const buffered = held; held = [];
     starting = false;
@@ -312,7 +312,7 @@ function endLocal() {
   call.set(null);
   minimised.set(false);
   managerContext.set(null);
-  phase.set("idle"); managerError.set(null);
+  phase.set("idle"); managerError.set(null); notice.set("");
   listening.set(false); speaking.set(false); transcribing.set(false);
   fieldText.set(null);
   card.set(null); cardUnlocked.set(false); cardCollapsed.set(false);
@@ -679,7 +679,8 @@ export async function talk() {
   minimised.set(false);
   if (!fresh && card() && !cardFocused()) { focusCard(); return; }
   exchangeOwned = true;
-  if (gptLiveOpen()) {
+  if (call()?.mode === "live") {
+    if (!gptLiveOpen()) { openField(""); return; }
     // GPT-Live listens by itself: the shortcut only interrupts what it is saying.
     begin({ orb: true });
     interruptGptLive();

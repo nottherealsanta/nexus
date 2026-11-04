@@ -5,9 +5,9 @@
 //! No WebRTC and no Opus here, so there is no helper binary. There is no echo cancellation: use headphones, or the
 //! microphone is muted while speech plays (`half_duplex`). Not verified against the real service or real devices.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
@@ -52,6 +52,79 @@ fn rms(samples: &[f32]) -> f32 {
         return 0.0;
     }
     (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
+/// Half duplex follows audible samples consumed by the output device. A live
+/// WebRTC track sends silence continuously, so a nonempty player is not speech.
+#[derive(Clone)]
+struct EchoGuard {
+    start: Instant,
+    until_ms: Arc<AtomicU64>,
+}
+
+impl EchoGuard {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            until_ms: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn observe_at(&self, level: f32, now_ms: u64) {
+        if level > 0.003 {
+            self.until_ms
+                .store(now_ms.saturating_add(200), Ordering::Relaxed);
+        }
+    }
+
+    fn holds_at(&self, now_ms: u64, headphones: bool) -> bool {
+        !headphones && now_ms < self.until_ms.load(Ordering::Relaxed)
+    }
+}
+
+/// Meter the samples actually pulled by rodio, including silent frames.
+struct SpeechMeter<S> {
+    inner: S,
+    gate: EchoGuard,
+    levels: Levels,
+    sum: f32,
+    count: usize,
+}
+
+impl<S: rodio::Source> Iterator for SpeechMeter<S> {
+    type Item = rodio::Sample;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let sample = self.inner.next();
+        if let Some(value) = sample {
+            self.sum += value * value;
+            self.count += 1;
+            if self.count >= 240 {
+                let level = (self.sum / self.count as f32).sqrt();
+                self.levels.speech.store(level.to_bits(), Ordering::Relaxed);
+                self.gate
+                    .observe_at(level, self.gate.start.elapsed().as_millis() as u64);
+                self.sum = 0.0;
+                self.count = 0;
+            }
+        }
+        sample
+    }
+}
+
+impl<S: rodio::Source> rodio::Source for SpeechMeter<S> {
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        self.inner.channels()
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.inner.sample_rate()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
 }
 
 pub fn to_pcm16(samples: &[f32]) -> Vec<u8> {
@@ -293,13 +366,14 @@ fn devices(
             return;
         }
     };
-    let sink = match rodio::DeviceSinkBuilder::open_default_sink() {
+    let mut sink = match rodio::DeviceSinkBuilder::open_default_sink() {
         Ok(s) => s,
         Err(e) => {
             let _ = ready.send(Err(format!("No audio output: {e}")));
             return;
         }
     };
+    sink.log_on_drop(false);
     let mut player = rodio::Player::connect_new(sink.mixer());
     let Some(mut resampler) = Resampler::to_rate(rate, channels, RATE) else {
         let _ = ready.send(Err("The microphone reported no usable format".into()));
@@ -311,29 +385,26 @@ fn devices(
         return;
     };
     let mut pending: Vec<f32> = Vec::new();
-    let mut quiet_for = 0u32;
+    let gate = EchoGuard::new();
     while !stop.load(Ordering::SeqCst) {
         if flush.swap(false, Ordering::SeqCst) {
             player.stop();
             player = rodio::Player::connect_new(sink.mixer());
             while speech_rx.try_recv().is_ok() {}
             levels.speech.store(0f32.to_bits(), Ordering::Relaxed);
+            gate.until_ms.store(0, Ordering::Relaxed);
         }
-        let mut speaking = false;
         while let Ok(samples) = speech_rx.try_recv() {
-            levels
-                .speech
-                .store(rms(&samples).to_bits(), Ordering::Relaxed);
-            speaking = true;
-            player.append(rodio::buffer::SamplesBuffer::new(one, rate24, samples));
+            player.append(SpeechMeter {
+                inner: rodio::buffer::SamplesBuffer::new(one, rate24, samples),
+                gate: gate.clone(),
+                levels: levels.clone(),
+                sum: 0.0,
+                count: 0,
+            });
         }
-        if speaking {
-            quiet_for = 0;
-        } else if player.empty() {
-            quiet_for = quiet_for.saturating_add(1);
-            if quiet_for > 3 {
-                levels.speech.store(0f32.to_bits(), Ordering::Relaxed);
-            }
+        if player.empty() {
+            levels.speech.store(0f32.to_bits(), Ordering::Relaxed);
         }
         match audio_rx.recv_timeout(Duration::from_millis(10)) {
             Ok(AudioMessage::Samples(raw)) => {
@@ -341,7 +412,7 @@ fn devices(
                 levels.mic.store(rms(&mono).to_bits(), Ordering::Relaxed);
                 // Without echo cancellation the microphone hears the speaker: with no headphones, hold it
                 // while speech is playing so the voice does not answer itself.
-                let hold = !headphones && !player.empty();
+                let hold = gate.holds_at(gate.start.elapsed().as_millis() as u64, headphones);
                 if hold {
                     pending.clear();
                 } else {
@@ -367,6 +438,40 @@ fn devices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn continuous_silent_playback_does_not_block_the_microphone() {
+        let scenario: serde_json::Value = serde_json::from_str(include_str!(
+            "../../interface/scenarios/manager-live-silence.json"
+        ))
+        .unwrap();
+        let gate = EchoGuard::new();
+        let levels = Levels::default();
+        for _ in 0..scenario["silent_packets"].as_u64().unwrap() {
+            let source = rodio::buffer::SamplesBuffer::new(
+                std::num::NonZero::new(1).unwrap(),
+                std::num::NonZero::new(RATE).unwrap(),
+                vec![0.0; scenario["samples_per_packet"].as_u64().unwrap() as usize],
+            );
+            let meter = SpeechMeter {
+                inner: source,
+                gate: gate.clone(),
+                levels: levels.clone(),
+                sum: 0.0,
+                count: 0,
+            };
+            assert_eq!(meter.count(), 480);
+            assert!(!gate.holds_at(0, false));
+        }
+        assert_eq!(levels.speech(), 0.0);
+        // Audible playback holds the mic, including a short echo tail; silence
+        // cannot keep extending the hold. Headphones bypass the echo guard.
+        gate.observe_at(0.1, 100);
+        gate.observe_at(0.0, 250);
+        assert!(gate.holds_at(299, false));
+        assert!(!gate.holds_at(300, false));
+        assert!(!gate.holds_at(150, true));
+    }
 
     #[test]
     fn pcm_round_trips_within_one_step() {

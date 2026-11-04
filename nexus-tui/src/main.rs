@@ -219,7 +219,7 @@ struct Interactive {
 fn draw_terminal(terminal: &mut term::Term, app: &mut App) -> std::io::Result<()> {
     term::synchronized_update(&mut std::io::stdout(), || {
         terminal.draw(|f| render::render(f, app)).map(|_| ())?;
-        let graphics = app.annotate_live.borrow_mut().take();
+        let graphics = app.annotate_live.borrow_mut().take() + &app.orb_sprites.borrow_mut().take();
         if !graphics.is_empty() {
             use std::io::Write;
             let mut out = std::io::stdout();
@@ -249,6 +249,7 @@ impl Interactive {
                     nexus_tui::program_status::emit(self.program_status.release());
                     term::suspend(&mut self.terminal)?;
                     self.app.annotate_live.borrow_mut().forget();
+                    self.app.orb_sprites.borrow_mut().forget();
                     self.app
                         .set_size(self.terminal.size()?.width, self.terminal.size()?.height);
                     nexus_tui::program_status::emit(self.program_status.reconcile(&self.app.state));
@@ -267,6 +268,7 @@ impl Interactive {
                     nexus_tui::program_status::emit(self.program_status.release());
                     term::run_external(&mut self.terminal, &editor, &path)?;
                     self.app.annotate_live.borrow_mut().forget();
+                    self.app.orb_sprites.borrow_mut().forget();
                     self.app
                         .set_size(self.terminal.size()?.width, self.terminal.size()?.height);
                     nexus_tui::program_status::emit(self.program_status.reconcile(&self.app.state));
@@ -469,6 +471,8 @@ impl Interactive {
     }
 
     fn shutdown(&mut self) {
+        use std::io::Write;
+        let _ = std::io::stdout().write_all(self.app.orb_sprites.borrow_mut().shutdown().as_bytes());
         if let Some(handle) = self.capture.take() {
             handle.retire();
         }
@@ -526,6 +530,10 @@ async fn run(
             std::env::var("TERM_PROGRAM").ok().as_deref(),
             std::env::var("TMUX").ok().as_deref(),
         ) && picker.protocol_type() == ratatui_image::picker::ProtocolType::Kitty,
+        picker.font_size(),
+    );
+    app.orb_sprites.borrow_mut().configure(
+        picker.protocol_type() == ratatui_image::picker::ProtocolType::Kitty,
         picker.font_size(),
     );
     app.image_viewer.borrow_mut().set_picker(picker);

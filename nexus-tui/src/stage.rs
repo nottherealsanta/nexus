@@ -35,7 +35,7 @@ const MUTED: &str = "text.muted";
 pub const SCRIM_PERCENT: u8 = 25;
 /// A focused call dims the whole app to about 30%, so the call reads as the
 /// thing being used and the session behind never competes with it.
-pub const CALL_SCRIM_PERCENT: u8 = 30;
+pub const CALL_SCRIM_PERCENT: u8 = 70;
 /// How much of the raised surface shows over what is underneath.
 pub const PANEL_OPACITY: f32 = 0.8;
 
@@ -106,6 +106,9 @@ fn wrapped(text: &str, w: usize, style: Style) -> Vec<Line> {
 pub fn draw(app: &App, buf: &mut Buffer, area: Rect, composer: Rect, hits: &mut HitMap) {
     let m = &app.ui.manager;
     m.cursor.set(None);
+    if !m.orb.visible() || m.consent.is_some() || m.context.is_some() {
+        app.orb_sprites.borrow_mut().sync(None);
+    }
     if !m.live() {
         return;
     }
@@ -210,7 +213,7 @@ fn draw_focused(
         }
         draw_card(app, look, buf, area, area, y, card, enter, hits, true);
     }
-    orb::paint_sized(buf, area, anchor, ow, oh, &m.orb, look.t);
+    draw_orb(app, buf, area, anchor, ow, oh);
 }
 
 /// The minimised call: a small orb in the bottom-right corner, its caption
@@ -254,7 +257,7 @@ fn draw_minimised(
         bottom: orb_bottom,
     };
     let orb_rect = orb::bounds_sized(area, anchor, ow, oh);
-    orb::paint_sized(buf, area, anchor, ow, oh, &m.orb, look.t);
+    draw_orb(app, buf, area, anchor, ow, oh);
     if m.orb.presence > 0.5 && orb_rect.width > 0 && orb_rect.height > 0 {
         hits.add(orb_rect, Target::ManagerOrb);
     }
@@ -1160,4 +1163,41 @@ fn draw_card(
             }
         }
     }
+}
+
+/// Use the same smooth, alpha-blended sphere as NSH on graphics terminals.
+fn draw_orb(app: &App, buf: &mut Buffer, area: Rect, anchor: Anchor, width: u16, height: u16) {
+    let orb = &app.ui.manager.orb;
+    let zone = orb::bounds_sized(area, anchor, width, height);
+    let picture = app.orb_sprites.borrow().supported()
+        && app.theme.opts.tier == crate::theme::Tier::TrueColor
+        && !app.theme.opts.ascii;
+    if !picture || app.ui.manager.context.is_some() {
+        app.orb_sprites.borrow_mut().sync(None);
+        orb::paint_sized(buf, area, anchor, width, height, orb, &app.theme);
+        return;
+    }
+    if !orb.visible() || zone.width == 0 || zone.height == 0 {
+        app.orb_sprites.borrow_mut().sync(None);
+        return;
+    }
+    let rgb = |token| match app.theme.color(token) {
+        Some(Color::Rgb(r, g, b)) => [r, g, b],
+        _ => [180, 180, 180],
+    };
+    app.orb_sprites
+        .borrow_mut()
+        .sync(Some(&crate::orb_sprite::Request {
+            state: orb.to,
+            level: orb.level,
+            t: orb.t,
+            presence: orb.presence,
+            color: rgb(orb.to.token()),
+            white: rgb("text.primary"),
+            light: app.theme.opts.mode == crate::theme::Mode::Light,
+            col: zone.x,
+            row: zone.y,
+            width: zone.width,
+            height: zone.height,
+        }));
 }

@@ -17,7 +17,7 @@ use std::fmt::Write;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 
-use crate::orb::{OrbState, HEIGHT, WIDTH};
+use crate::orb::OrbState;
 
 /// Fixed image ids of the sprite set: `BASE` plus the sprite's index.
 pub const BASE: u32 = 0x6d00_0000;
@@ -41,6 +41,8 @@ pub struct Request {
     pub light: bool,
     pub col: u16,
     pub row: u16,
+    pub width: u16,
+    pub height: u16,
 }
 
 #[derive(Debug, Default)]
@@ -50,7 +52,7 @@ pub struct Sprites {
     queue: String,
     sent: HashSet<u32>,
     placed: Option<(u32, u16, u16)>,
-    palette: Option<([u8; 3], bool)>,
+    palette: Option<([u8; 3], [u8; 3], bool, u16, u16)>,
 }
 
 fn state_index(state: OrbState) -> u32 {
@@ -133,7 +135,7 @@ impl Sprites {
             }
             return;
         };
-        let palette = (req.color, req.light);
+        let palette = (req.color, req.white, req.light, req.width, req.height);
         if self.palette != Some(palette) {
             // A new theme: every sprite is the wrong colour.
             let old: Vec<u32> = self.sent.drain().collect();
@@ -151,9 +153,10 @@ impl Sprites {
         if self.placed == Some((id, req.col, req.row)) {
             return;
         }
+        let (width, height) = (req.width, req.height);
         let _ = write!(
             self.queue,
-            "\x1b7\x1b[{};{}H\x1b_Ga=p,i={id},p=1,c={WIDTH},r={HEIGHT},z=1,C=1,q=2\x1b\\\x1b8",
+            "\x1b7\x1b[{};{}H\x1b_Ga=p,i={id},p=1,c={width},r={height},z=1,C=1,q=2\x1b\\\x1b8",
             req.row + 1,
             req.col + 1
         );
@@ -181,8 +184,8 @@ impl Sprites {
 
     fn transmit(&mut self, id: u32, req: &Request, level: f32, t: f32, presence: f32) {
         let (w, h) = (
-            u32::from(WIDTH) * u32::from(self.font.0),
-            u32::from(HEIGHT) * u32::from(self.font.1),
+            u32::from(req.width) * u32::from(self.font.0),
+            u32::from(req.height) * u32::from(self.font.1),
         );
         let pixels = render(req, level, t, presence, w, h);
         let data = STANDARD.encode(&pixels);
@@ -276,9 +279,17 @@ pub fn render(req: &Request, level: f32, t: f32, presence: f32, w: u32, h: u32) 
     let x = w as f32 / 2.0;
     let y = size * 0.56 + (1.0 - p) * size * 0.2;
     let (lx, ly) = (x - r * 0.18, y - r * 0.22);
-    let drift = if req.state == OrbState::Thinking { 0.5 } else { 1.0 };
+    let drift = if req.state == OrbState::Thinking {
+        0.5
+    } else {
+        1.0
+    };
     let light = req.light;
-    let level = if req.state == OrbState::Idle { 0.0 } else { level };
+    let level = if req.state == OrbState::Idle {
+        0.0
+    } else {
+        level
+    };
     let edge = |d: f32, whole: f32| smooth((d.min(whole - d)) / (whole * 0.2));
 
     let mut out = vec![0u8; (w * h * 4) as usize];
@@ -287,7 +298,10 @@ pub fn render(req: &Request, level: f32, t: f32, presence: f32, w: u32, h: u32) 
             let mut acc = [0.0f32; 4];
             for sy in 0..2 {
                 for sx in 0..2 {
-                    let (fx, fy) = (pxl as f32 + 0.25 + 0.5 * sx as f32, py as f32 + 0.25 + 0.5 * sy as f32);
+                    let (fx, fy) = (
+                        pxl as f32 + 0.25 + 0.5 * sx as f32,
+                        py as f32 + 0.25 + 0.5 * sy as f32,
+                    );
                     let mut px = [0.0f32; 4];
                     let dist = |cx: f32, cy: f32| (fx - cx).hypot(fy - cy);
                     // 1. The halo.
@@ -303,7 +317,12 @@ pub fn render(req: &Request, level: f32, t: f32, presence: f32, w: u32, h: u32) 
                     ) {
                         over(&mut px, c, a, 1.0);
                     } else if dist(x, y) < r * 0.2 {
-                        over(&mut px, col, if light { 0.2 } else { 0.3 + 0.12 * level }, 1.0);
+                        over(
+                            &mut px,
+                            col,
+                            if light { 0.2 } else { 0.3 + 0.12 * level },
+                            1.0,
+                        );
                     }
                     // 2. Ripples that follow a voice.
                     if live {
@@ -416,6 +435,8 @@ mod tests {
             light: false,
             col,
             row: 20,
+            width: 14,
+            height: 4,
         }
     }
 
@@ -446,7 +467,7 @@ mod tests {
         assert!(first.contains("a=t,i="), "transmitted");
         assert!(first.contains("f=32,s=112,v=64"), "{}", &first[..60]);
         assert!(first.contains("a=p,"), "placed");
-        assert!(first.contains(&format!("c={WIDTH},r={HEIGHT},z=1,C=1")));
+        assert!(first.contains(&"c=14,r=4,z=1,C=1".to_string()));
         assert!(first.contains("\x1b[21;5H"), "at the box's cell");
         // The same frame again: no bytes at all.
         s.sync(Some(&request(OrbState::Listening, 0.5, 4)));
@@ -458,7 +479,11 @@ mod tests {
         let back = s.take();
         assert!(!back.contains("a=t,"), "{back:?}");
         assert!(back.contains("a=p,") && back.contains("a=d,d=i,"));
-        assert!(back.len() < 160, "a replace is a few dozen bytes: {}", back.len());
+        assert!(
+            back.len() < 160,
+            "a replace is a few dozen bytes: {}",
+            back.len()
+        );
     }
 
     #[test]

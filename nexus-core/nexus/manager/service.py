@@ -341,6 +341,9 @@ class ManagerService:
                 if self.live is voice:
                     self.live = None
                     self._live_starting = False
+                    if self.call is call and call.active:
+                        self._set_error(call, {"code": exc.code, "message": exc.message,
+                                               "fix": "The call is still open for typing; start it again to retry the voice."})
             await voice.close("startup_failed")
             raise Conflict(exc.message, code=exc.code) from None
         except BaseException:

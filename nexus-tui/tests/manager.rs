@@ -353,6 +353,9 @@ fn the_orb_clock_runs_only_while_the_orb_is_there() {
 #[test]
 fn live_mode_opens_the_call_audio_and_the_talk_key_only_interrupts() {
     let mut a = app();
+    a.ui.manager.silent = false;
+    a.manager_execute("manager.talk");
+    a.effects.clear();
     a.manager_reply(
         "start",
         Ok(json!({"call_id": "call_1", "holder": "TUI", "mode": "live"})),
@@ -363,10 +366,18 @@ fn live_mode_opens_the_call_audio_and_the_talk_key_only_interrupts() {
     assert_eq!(a.ui.manager.error.as_ref().unwrap().code, "live_failed");
     assert!(!a.ui.manager.listening());
     assert!(a.ui.manager.call.is_some());
+    assert!(!a.effects.iter().any(|e| matches!(
+        e,
+        Effect::Api(nexus_tui::actions::ApiCall::ManagerVoice { .. }) | Effect::Dictation(_)
+    )));
 }
 
 #[test]
 fn live_mode_failure_keeps_the_call_open_and_says_why() {
+    let scenario: Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/manager-live-failure.json"
+    ))
+    .unwrap();
     let mut a = app();
     a.manager_reply(
         "start",
@@ -377,13 +388,23 @@ fn live_mode_failure_keeps_the_call_open_and_says_why() {
         call: nexus_tui::actions::ApiCall::ManagerLive {
             stream_id: "s".into(),
         },
-        result: Err("GPT-Live is not available on this ChatGPT plan".into()),
+        result: Err(scenario["error"].as_str().unwrap().into()),
     });
     assert!(a.ui.manager.call.is_some());
     assert!(!a.ui.manager.live_call);
     let error = a.ui.manager.error.clone().unwrap();
     assert_eq!(error.code, "live_failed");
     assert!(error.message.contains("ChatGPT plan"));
+    a.ui.manager.silent = false;
+    a.effects.clear();
+    a.manager_execute("manager.talk");
+    assert!(a.ui.manager.field.is_some());
+    assert_eq!(a.ui.manager.error.as_ref().unwrap(), &error);
+    assert!(!a.ui.manager.listening());
+    assert!(!a.effects.iter().any(|e| matches!(
+        e,
+        Effect::Api(nexus_tui::actions::ApiCall::ManagerVoice { .. }) | Effect::Dictation(_)
+    )));
 }
 
 #[test]
@@ -817,4 +838,21 @@ fn the_minimised_caption_opens_a_waiting_card() {
         "opening the card brings the call back"
     );
     assert!(a.holds("manager.card_focused"));
+}
+
+#[test]
+fn graphics_orb_is_placed_by_the_stage_and_removed_on_end() {
+    let mut a = app();
+    start(&mut a);
+    a.ui.manager
+        .orb
+        .pin(nexus_tui::orb::OrbState::Listening, 0.6);
+    a.orb_sprites.borrow_mut().configure(true, (8, 16));
+    draw(&mut a, 120, 40);
+    let graphics = a.orb_sprites.borrow_mut().take();
+    assert!(graphics.contains("a=t,"));
+    assert!(graphics.contains("c=30,r=7,z=1,C=1"));
+    a.manager_execute("manager.stop");
+    draw(&mut a, 120, 40);
+    assert!(a.orb_sprites.borrow_mut().take().contains("a=d,d=i,"));
 }

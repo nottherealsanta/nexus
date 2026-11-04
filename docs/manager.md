@@ -386,3 +386,9 @@ token. TUI: `nexus-tui/src/live.rs` (cpal in, rodio out, `tokio-tungstenite`). B
 open call and keep the typed field. The talk shortcut only interrupts. iOS needs only the same mic and speaker loop over this
 socket (not built). Tested with fake transports and peers, plus two real `aiortc` peers exchanging audio through Opus
 in-process (that test skips where aiortc/PyAV lacks Opus); never with a real call, real devices or real echo.
+
+Live calls never use the Dictation setup path, including after a voice connection failure. The call keeps its Live error and accepts typed input; end it and start again to retry audio. `nexus voice init` installs the pipeline STT/TTS runtime only.
+
+The focused stage leaves 30% of the app visible. On Kitty graphics terminals the TUI draws the same smooth, alpha-blended orb as NSH using cached RGBA sprites; other terminals retain the cell/glyph fallback.
+
+GPT-Live sideband TLS uses HTTPX’s verified certificate context (the bundled CA roots, or `SSL_CERT_FILE` / `SSL_CERT_DIR` when set), matching the signaling request instead of relying on Python’s platform CA paths. Live startup failures are published as `manager.state.error` and restored in `GET /api/manager`, so clients retain the reason while typed input stays available. A successful audio startup clears the error.

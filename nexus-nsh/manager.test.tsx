@@ -7,10 +7,12 @@ import {
 } from "./src/manager";
 import type { Card } from "./src/manager";
 import cards from "../interface/scenarios/manager-cards.json";
+import liveFailure from "../interface/scenarios/manager-live-failure.json";
+import liveSilence from "../interface/scenarios/manager-live-silence.json";
 import {
   backStackSize, call, callFocused, callMinimised, cancelTurn, card, cardCollapsed, cardFocused, closeField, dismissCard, engaged, fieldText, focusCard,
   handleEvent, idleCost, inCall, listening, managerContext, managerEscapeRule, managerTerm, minimise, answerConsent, consent, notice,
-  openManagerContext, phase, pickRow, say, setStreamForTest, speaking, stopCall, stopSpeech, talk, minimised,
+  openManagerContext, phase, pickRow, say, setStreamForTest, speaking, stopCall, stopSpeech, talk, minimised, managerError,
 } from "./src/core/manager";
 import { manifest } from "./src/gen/manifest";
 import { connection, model } from "./src/store";
@@ -426,6 +428,7 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
   function stubBrowser() {
     const log: string[] = [];
     const sockets: any[] = [];
+    const worklets: any[] = [];
     const track = { stop: () => log.push("track") };
     const stream = { getTracks: () => [track] };
     const analyser = { fftSize: 1024, connect() {}, getFloatTimeDomainData: (into: Float32Array) => into.fill(0) };
@@ -441,13 +444,13 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
       createBuffer() { return { copyToChannel() {} }; } createBufferSource() { return { buffer: null, onended: null, connect() {}, start() {}, stop() {} }; }
       async resume() {} async close() { log.push("context"); }
     };
-    g.AudioWorkletNode = class { port = { onmessage: null as any }; connect() {} disconnect() {} };
+    g.AudioWorkletNode = class { port = { onmessage: null as any }; constructor() { worklets.push(this); } connect() {} disconnect() {} };
     g.WebSocket = class {
       binaryType = ""; readyState = 1; onopen: any = null; onclose: any = null; onerror: any = null; onmessage: any = null; sent: unknown[] = [];
       constructor(public url: string) { sockets.push(this); setTimeout(() => this.onopen?.(), 0); }
       send(d: unknown) { this.sent.push(d); } close() { log.push("socket"); }
     };
-    return { log, sockets, restore: () => Object.assign(g, saved) };
+    return { log, sockets, worklets, restore: () => Object.assign(g, saved) };
   }
 
   test("live mode starts Core's call, opens the audio socket for this stream, and hangs up with the call", async () => {
@@ -463,6 +466,12 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
       expect(sent.find((s) => s.path === "/api/manager/live/start")?.body).toEqual({ stream_id: "stream_t" });
       expect(browser.sockets[0].url).toContain("/api/manager/live/audio?stream_id=stream_t");
       expect(listening()).toBe(true);
+      const socket = browser.sockets[0];
+      for (let i = 0; i < liveSilence.silent_packets; i++) {
+        socket.onmessage({ data: new Int16Array(liveSilence.samples_per_packet).buffer });
+        browser.worklets[0].port.onmessage({ data: new Int16Array(liveSilence.samples_per_packet).fill(8000).buffer });
+      }
+      expect(socket.sent.filter((d: unknown) => d instanceof ArrayBuffer)).toHaveLength(liveSilence.silent_packets);
       await stopCall();
       for (const part of ["track", "socket", "context"]) expect(browser.log).toContain(part);
       expect(listening()).toBe(false);
@@ -478,7 +487,7 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
     try {
       core({
         "POST /api/manager/start": () => ({ body: { call_id: "call_1", holder: "nsh-web-test", mode: "live", model: "m" } }),
-        "POST /api/manager/live/start": () => ({ status: 409, body: { error: "GPT-Live is not available on this ChatGPT plan", code: "live_forbidden" } }),
+        "POST /api/manager/live/start": () => ({ status: 409, body: { error: liveFailure.error, code: liveFailure.code } }),
       });
       setStreamForTest("stream_t");
       connection.set({ kind: "live" });
@@ -486,6 +495,13 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
       expect(inCall()).toBe(true);
       expect(browser.sockets).toHaveLength(0);
       expect(listening()).toBe(false);
+      expect(fieldText()).toBe("");
+      expect(notice()).not.toBe(WORDS.noVoice);
+      expect(managerError()?.code).toBe("live_forbidden");
+      closeField();
+      await talk();
+      expect(fieldText()).toBe("");
+      expect(managerError()?.code).toBe("live_forbidden");
     } finally {
       browser.restore();
       await reset();

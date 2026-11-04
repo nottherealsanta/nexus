@@ -302,8 +302,9 @@ fn start_player(
 ) {
     let (tx, rx) = mpsc::channel::<Vec<f32>>();
     let handle = std::thread::spawn(move || {
-        let sink = rodio::DeviceSinkBuilder::open_default_sink()
+        let mut sink = rodio::DeviceSinkBuilder::open_default_sink()
             .map_err(|e| format!("No audio output: {e}"))?;
+        sink.log_on_drop(false);
         let player = rodio::Player::connect_new(sink.mixer());
         let (Some(channels), Some(rate)) = (NonZero::new(1u16), NonZero::new(rate)) else {
             return Err("bad audio format".to_owned());

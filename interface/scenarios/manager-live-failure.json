@@ -1,0 +1,10 @@
+{
+  "mode": "live",
+  "error": "GPT-Live is not available on this ChatGPT plan",
+  "code": "live_forbidden",
+  "expect": {
+    "typed": true,
+    "dictation": false,
+    "preserve_error": true
+  }
+}

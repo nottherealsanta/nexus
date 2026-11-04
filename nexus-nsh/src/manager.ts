@@ -100,7 +100,7 @@ export const more = (n: number) => `+${n} more`;
 /** The scrim over the app and the panel's opacity (the theme cannot hold alpha). */
 export const SCRIM_ALPHA = 0.25;
 /** A focused call dims the whole app to about 30%, like the TUI's call scrim. */
-export const CALL_SCRIM_ALPHA = 0.30;
+export const CALL_SCRIM_ALPHA = 0.70;
 export const PANEL_ALPHA = 0.8;
 /** Orb entry and exit, caption fade, and the modal's rise. */
 export const ORB_MS = 240;

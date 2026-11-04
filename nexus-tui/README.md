@@ -758,4 +758,6 @@ included) and never reaches the session interrupt; the palette's `manager.minimi
 opens a read-only, scrollable modal with the hidden context Core formats (`GET /api/manager/context`); the
 inspector keeps the full raw log. The orb, caption, typed field and card are painted over the finished frame
 (`src/orb.rs`, `src/stage.rs`; state in `src/manager.rs`) and the frame clock runs only while the orb is moving. For `--dump-frame`, `NEXUS_TUI_MANAGER_PIN=state[:level]` (or `none`)
-holds the orb still and no audio device is touched; it is read nowhere else.
+holds the orb still and no audio device is touched; it is read nowhere else. On Kitty graphics terminals the orb uses cached, smooth RGBA sprites (`src/orb_sprite.rs`); other terminals use the centred cell/glyph fallback.
+
+Live Manager calls use their own audio connection and need no Dictation setup or `nexus voice init`. A failed Live connection keeps its error visible and the typed field available; end and restart the call to retry audio.

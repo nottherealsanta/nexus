@@ -334,3 +334,48 @@ async def test_two_real_peers_exchange_audio_in_process():
     finally:
         await a.close()
         await b.close()
+
+
+async def test_sideband_uses_the_http_client_verified_certificate_context(monkeypatch):
+    import ssl
+
+    import httpx
+    from websockets.asyncio import client
+
+    from nexus.manager.live.transport import _default_connector
+
+    context = httpx.create_ssl_context()
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+    monkeypatch.setattr(httpx, "create_ssl_context", lambda: context)
+    received = {}
+    socket = object()
+
+    async def connect(url, **kwargs):
+        received.update(kwargs)
+        return socket
+
+    monkeypatch.setattr(client, "connect", connect)
+    assert await _default_connector("wss://example.test/call", {}) is socket
+    assert received["ssl"] is context
+
+
+async def test_startup_failure_is_published_and_restored_in_status(h):
+    from nexus.manager.live.protocol import LiveError
+
+    class FailingTransport(FakeTransport):
+        async def start(self, *args, **kwargs):
+            raise LiveError("live_sideband", "Could not verify the sideband certificate")
+
+    h.open_stream()
+    await h.start()
+    h.manager.live_factory = FailingTransport
+    response = await offer(h)
+    assert response.status_code == 409
+    status = (await h.client.get("/api/manager")).json()
+    assert status["call"]["live"] is None
+    assert status["call"]["error"]["code"] == "live_sideband"
+    assert "certificate" in status["call"]["error"]["message"]
+    assert h.manager.call.active
+    h.manager.live_factory = FakeTransport
+    assert (await offer(h)).status_code == 200
+    assert (await h.client.get("/api/manager")).json()["call"]["error"] is None

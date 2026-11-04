@@ -878,6 +878,7 @@ pub struct App {
     pub image_viewer: std::cell::RefCell<crate::images::Viewer>,
     /// The terminal's copy of the drawing modal's picture and strokes.
     pub annotate_live: std::cell::RefCell<crate::annotate::Live>,
+    pub orb_sprites: std::cell::RefCell<crate::orb_sprite::Sprites>,
     bindings: HashMap<(String, String), String>,
     shortcut_leader: Option<Instant>,
     /// Last kernel/shell refresh while a session tree was busy.
@@ -1082,6 +1083,7 @@ impl App {
             timeline_builds: std::cell::Cell::new(0),
             image_viewer: std::cell::RefCell::new(crate::images::Viewer::default()),
             annotate_live: std::cell::RefCell::new(crate::annotate::Live::default()),
+            orb_sprites: std::cell::RefCell::new(crate::orb_sprite::Sprites::default()),
             bindings,
             shortcut_leader: None,
             last_resources_at: None,

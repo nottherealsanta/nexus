@@ -79,6 +79,7 @@ pub enum Mic {
 pub struct Call {
     pub id: String,
     pub holder: String,
+    pub live: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -684,7 +685,11 @@ impl App {
         // Talking brings a minimised call back to the stage.
         self.ui.manager.minimised = false;
         self.ui.manager.touch(now);
-        if self.ui.manager.live_call {
+        if self.ui.manager.call.as_ref().is_some_and(|c| c.live) {
+            if !self.ui.manager.live_call {
+                self.open_field(None);
+                return;
+            }
             // The call listens by itself: the key only interrupts what the voice is saying.
             crate::live::interrupt();
             self.call_core("cancel", "/api/manager/cancel", json!({}));
@@ -827,6 +832,9 @@ impl App {
 
     fn open_mic(&mut self) {
         if self.ui.manager.call.is_none() {
+            return;
+        }
+        if self.ui.manager.call.as_ref().is_some_and(|c| c.live) {
             return;
         }
         if self.ui.dictation.phase != crate::dictation::Phase::Idle {
@@ -1567,6 +1575,7 @@ impl App {
                         self.ui.manager.call = Some(Call {
                             id: body["call_id"].as_str().unwrap_or("").to_owned(),
                             holder: body["holder"].as_str().unwrap_or("").to_owned(),
+                            live: body["mode"].as_str() == Some("live"),
                         });
                         // `/manager` opens quietly in the corner; a talk or a
                         // typed line takes the stage.
@@ -1582,7 +1591,7 @@ impl App {
                         if let Some(text) = say {
                             self.say(text, "typed", now);
                         }
-                        if self.ui.manager.live_call {
+                        if mode_live {
                             // GPT-Live listens by itself; the talk key only interrupts.
                         } else if talk {
                             self.open_mic();

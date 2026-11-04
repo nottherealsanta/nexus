@@ -1,0 +1,6 @@
+{
+  "silent_packets": 20,
+  "samples_per_packet": 480,
+  "sample_rate": 24000,
+  "microphone_allowed": true
+}
