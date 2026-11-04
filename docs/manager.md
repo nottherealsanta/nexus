@@ -56,7 +56,8 @@ it. Starting again from the same stream returns the same call. If the holder's e
 (`manager.state` with `active: false`). Ending a call never stops a session.
 
 Every event carries `call_id` (random, not secret) and never `stream_id`. The Manager's events are ordinary durable
-global events, so a reconnecting client resumes them from its cursor and `GET /api/manager` restores the state.
+global events, so a reconnecting client resumes them from its cursor and `GET /api/manager` restores the state. Its `call` is `{call_id, holder, phase, error, card, live}`; `live` is `null` outside a GPT-Live call, otherwise the call's progress
+`{style, peer, client_attached, pending, counts}` (what arrived from each side), so a silent call can be diagnosed without logs.
 Routes and event fields are in [api.md](api.md#the-manager).
 
 A turn: `say` queues the utterance and returns `202 {turn_id}`. The worker runs one turn at a time:

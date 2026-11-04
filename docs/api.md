@@ -132,7 +132,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/session/{id}/question` | | pending questions for that session (empty list when none) |
 | POST | `/api/session/{id}/question/{qid}` | `{answers: [{question_id, selected?, text?}, …]}` | 204; 400 invalid answer, 404 unknown question or session, 409 already resolved |
 | POST | `/api/client/view` | `{stream_id, client_id, project?, session?, panel?}` | the stored ephemeral view; 400 invalid id, 404 unknown project or session, 409 `stream_closed` or `client_mismatch` ([Client views](#client-views-ephemeral)) |
-| GET | `/api/manager` | | `{enabled, mode, model, consent, call: {call_id, holder, phase, error, card} or null}`: restores the Manager call after a reconnect ([The Manager](#the-manager)) |
+| GET | `/api/manager` | | `{enabled, mode, model, consent, call: {call_id, holder, phase, error, card, live} or null}`: restores the Manager call after a reconnect; `call.live` is `null` unless a GPT-Live call is open, then its progress `{style, peer, client_attached, pending, counts}` ([The Manager](#the-manager)) |
 | POST | `/api/manager/start` | `{stream_id, client_id}` | start the call on this client, or move it here: `{call_id, holder, mode, model}`; 409 `manager_disabled` or `stream_closed` |
 | POST | `/api/manager/stop` | `{stream_id}` | 204; ends the call, never stops a session |
 | POST | `/api/manager/live/start` | `{stream_id}` (holder; `[manager] mode = "live"`) | Core opens the GPT-Live call: `{call_id, audio}`; 409 `live_mode_off`, `consent_required`, `live_busy`, `live_unsupported`, `live_*` ([manager.md](manager.md#gpt-live-voice-m5-experimental-not-verified-against-the-real-service)) |
