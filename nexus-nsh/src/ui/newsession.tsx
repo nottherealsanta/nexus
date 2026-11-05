@@ -7,7 +7,7 @@ import { Button, TextView } from "nsh/base";
 import { Btn, FOCUS, Icon, PROSE, T, TS } from "./kit";
 import { run, toggleDraftInventory } from "../commands";
 import {
-  type ContextEntry, contextDetail, agentCatalog, currentProject, info, rememberedModel, draftPlanContext, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome,
+  type ContextEntry, contextDetail, agentCatalog, currentProject, info, pendingFirstPrompt, rememberedModel, draftPlanContext, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome,
 } from "../store";
 import { request } from "../core/transport";
 import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
@@ -481,6 +481,13 @@ export function NewSessionView() {
           <Scroll class="flex-1 min-h-0">
             <TimelineColumn class="items-center py-3" testID="new-session-column">
               <StartingContext sections={preview().sections} total={preview().total} estimated window={window()} onInventoryToggle={(kind, name, locked) => toggleDraftInventory(kind, name, locked)} />
+              <If when={pendingFirstPrompt()}>
+                {() => <View class="w-full px-4 py-3 gap-2" testID="first-prompt-sending">
+                  <Text class={T.sec}>You · Sending…</Text>
+                  <Text class={`${TS.body} text-foreground`}>{pendingFirstPrompt()!.text}</Text>
+                  <If when={pendingFirstPrompt()!.images > 0}><Text class={T.sec}>{`[${pendingFirstPrompt()!.images} image${pendingFirstPrompt()!.images === 1 ? "" : "s"}]`}</Text></If>
+                </View>}
+              </If>
             </TimelineColumn>
           </Scroll>
         )}

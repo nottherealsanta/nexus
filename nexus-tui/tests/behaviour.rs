@@ -2086,7 +2086,12 @@ fn agent_and_model_chosen_before_a_session_exists_go_into_its_creation() {
         Effect::Api(ApiCall::NewAndPrompt { fields, .. })
             if fields["agent"] == "plan" && fields["model"] == "codex/gpt-5"
     )));
-    assert_eq!(a.ui.draft, Default::default(), "the draft is spent");
+    assert_eq!(
+        a.ui.draft.agent.as_deref(),
+        Some("plan"),
+        "keep the header stable until Core confirms the message"
+    );
+    assert!(a.pending_first_prompt().is_some());
 }
 
 #[test]

@@ -1079,7 +1079,7 @@ after about a second of `manager.state.phase == "thinking"`.
 **Unprompted lines.** Attention ([manager.md](manager.md#attention-unprompted-lines)) emits `manager.speech` with
 `proactive: true`, a `turn_id` of the form `mp_<hex>` (never one a client sent), `seq` from 0 within the line, and
 `urgent: true` when it was slipped in between two sentences of a reply. A client shows it as the caption alone, with
-no orb and no scrim, unless the user had called the Manager. The only card it may raise is an `approval` or `question`
+no header indicator and no scrim, unless the user had called the Manager. The only card it may raise is an `approval` or `question`
 card with `focused: false`; it never sends `manager.navigate`.
 
 **Navigation.** After `manager.navigate` the client performs the move as if the user clicked, then sends

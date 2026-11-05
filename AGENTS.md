@@ -25,7 +25,7 @@ for deliberate changes from old Nexus.
   Presenting context well is a core idea of Nexus. **Exception: the Manager**
   ([docs/manager.md](docs/manager.md)). Its own context (hidden episodes, the state
   snapshot and deltas it is given each turn) has no timeline; the user sees its
-  header orb and notification dropdown (caption, card and typed input), an explicit read-only backend session
+  header indicator (braille waves) and notification dropdown (caption, card and typed input), an explicit read-only backend session
   view for debugging, and the full raw log in the inspector. The rule still holds for every session the
   Manager touches: whatever it sends or answers
   shows there, labelled `via Manager`, and what a card shows is what the Manager

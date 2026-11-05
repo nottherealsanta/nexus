@@ -20,7 +20,7 @@ pub const RATE: u32 = 24_000;
 /// What the user sees while a call has been lost: the reason, once.
 pub type Lost = mpsc::UnboundedReceiver<String>;
 
-/// Levels shared with the orb, 0 to 1. Cheap to clone and read from any thread.
+/// Levels shared with the Manager's indicator, 0 to 1. Cheap to clone and read from any thread.
 #[derive(Clone, Default)]
 pub struct Levels {
     pub speaking_until: Arc<std::sync::Mutex<Option<Instant>>>,

@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files]              New session      +                                                                                                 ⠶⠬ Stop ⠴⠦  □
+     │                                  i 2 other sessions waiting for input                                                                                          go
+ 2   │                              ▣
+  N  │ ⌕ Search sessions       ctrl+k
+   4 │                                     System prompt ~855
+     │  No sessions yet. Type in
+▏    │  the composer to start one.         AGENTS.md  unavailable or not read
+▏ S  │
+▏─── │                                     Tools [15] ~2.4K
+     │                                       ● read                      ● bash_output               ● web_search
+     │                                       ● grep                      ● bash_kill                 ● web_fetch
+  +  │                                       ● glob                      ● edit                      ● ask
+     │                                       ● ls                        ● patch                     ● code
+     │                                       ● bash                      ● write                     ● expose_workspace_tools
+     │
+     │                                     Skills [0]  none
+     │
+     │                                     MCP [1] (1 off)
+     │                                       ○ browser-use · disabled in configuration
+     │
+     │                                     total  ~917 tok · 0.5% of the window
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │                                      Message to start a new session
+     │
+     │                                      Build · Streamed markdown smoke test mock · default                                                                0 · 0%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   /private/tmp/nexus-shots.7t6wly/core/projects/storefront
+     │  Settings               ctrl+,    ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

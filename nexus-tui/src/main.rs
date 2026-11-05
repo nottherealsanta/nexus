@@ -219,7 +219,7 @@ struct Interactive {
 fn draw_terminal(terminal: &mut term::Term, app: &mut App) -> std::io::Result<()> {
     term::synchronized_update(&mut std::io::stdout(), || {
         terminal.draw(|f| render::render(f, app)).map(|_| ())?;
-        let graphics = app.annotate_live.borrow_mut().take() + &app.orb_sprites.borrow_mut().take();
+        let graphics = app.annotate_live.borrow_mut().take();
         if !graphics.is_empty() {
             use std::io::Write;
             let mut out = std::io::stdout();
@@ -249,7 +249,6 @@ impl Interactive {
                     nexus_tui::program_status::emit(self.program_status.release());
                     term::suspend(&mut self.terminal)?;
                     self.app.annotate_live.borrow_mut().forget();
-                    self.app.orb_sprites.borrow_mut().forget();
                     self.app
                         .set_size(self.terminal.size()?.width, self.terminal.size()?.height);
                     nexus_tui::program_status::emit(self.program_status.reconcile(&self.app.state));
@@ -268,7 +267,6 @@ impl Interactive {
                     nexus_tui::program_status::emit(self.program_status.release());
                     term::run_external(&mut self.terminal, &editor, &path)?;
                     self.app.annotate_live.borrow_mut().forget();
-                    self.app.orb_sprites.borrow_mut().forget();
                     self.app
                         .set_size(self.terminal.size()?.width, self.terminal.size()?.height);
                     nexus_tui::program_status::emit(self.program_status.reconcile(&self.app.state));
@@ -408,8 +406,8 @@ impl Interactive {
         Ok(applied)
     }
 
-    /// A frame of the Manager's orb (or its caption fading): move the clock on and draw.
-    fn apply_orb(&mut self, now: Instant) -> std::io::Result<Applied> {
+    /// A frame of the Manager's indicator (or its caption fading): move the clock on and draw.
+    fn apply_indicator(&mut self, now: Instant) -> std::io::Result<Applied> {
         self.app.manager_tick(now);
         let mut applied = self.settle()?;
         applied.dirty = true;
@@ -471,8 +469,6 @@ impl Interactive {
     }
 
     fn shutdown(&mut self) {
-        use std::io::Write;
-        let _ = std::io::stdout().write_all(self.app.orb_sprites.borrow_mut().shutdown().as_bytes());
         if let Some(handle) = self.capture.take() {
             handle.retire();
         }
@@ -490,8 +486,8 @@ enum Wake {
     Done(Option<Box<ActionDone>>),
     Capture(Option<nexus_tui::dictation::CaptureEvent>),
     Splash,
-    /// A frame of the Manager's orb; the clock runs only while something of it moves.
-    Orb,
+    /// A frame of the Manager's indicator; the clock runs only while something of it moves.
+    Indicator,
     Tick,
 }
 
@@ -530,10 +526,6 @@ async fn run(
             std::env::var("TERM_PROGRAM").ok().as_deref(),
             std::env::var("TMUX").ok().as_deref(),
         ) && picker.protocol_type() == ratatui_image::picker::ProtocolType::Kitty,
-        picker.font_size(),
-    );
-    app.orb_sprites.borrow_mut().configure(
-        picker.protocol_type() == ratatui_image::picker::ProtocolType::Kitty,
         picker.font_size(),
     );
     app.image_viewer.borrow_mut().set_picker(picker);
@@ -580,10 +572,10 @@ async fn run(
     // itself redraws on the slower tick.
     let mut splash_tick = tokio::time::interval(Duration::from_millis(16));
     splash_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // The Manager's orb needs about 30 frames a second, but only while it is on
+    // The Manager's indicator needs about 30 frames a second, but only while it is on
     // screen: at rest this branch is disabled and costs no wakeup.
-    let mut orb_tick = tokio::time::interval(Duration::from_millis(33));
-    orb_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut indicator_tick = tokio::time::interval(Duration::from_millis(33));
+    indicator_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // The first interval tick is ready immediately, as before. Tracking the
     // deadline lets a batch stop before taking more sync work when a tick is
     // due; the tick itself still runs at the next service opportunity.
@@ -605,7 +597,7 @@ async fn run(
             .ui
             .splash
             .animating(Instant::now(), inter.app.size.0);
-        let orb_animating = inter.app.manager_animating(Instant::now());
+        let indicator_animating = inter.app.manager_animating(Instant::now());
         // tokio's select! picks a ready branch at random, so a continuously
         // ready input channel cannot starve sync or the tick (or the reverse).
         // Ready input is also a batch barrier, so a long sync queue cannot
@@ -617,7 +609,7 @@ async fn run(
             res = done_rx.recv(), if done_open => Wake::Done(res.map(Box::new)),
             res = capture_rx.recv(), if capture_open => Wake::Capture(res),
             _ = splash_tick.tick(), if splash_animating => Wake::Splash,
-            _ = orb_tick.tick(), if orb_animating => Wake::Orb,
+            _ = indicator_tick.tick(), if indicator_animating => Wake::Indicator,
             _ = tick.tick() => Wake::Tick,
         };
         match wake {
@@ -688,8 +680,8 @@ async fn run(
             }
             Wake::Capture(None) => capture_open = false,
             Wake::Splash => dirty = true,
-            Wake::Orb => {
-                let applied = inter.apply_orb(Instant::now())?;
+            Wake::Indicator => {
+                let applied = inter.apply_indicator(Instant::now())?;
                 dirty |= applied.dirty;
             }
             Wake::Tick => {
@@ -784,11 +776,18 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
     }
     let mut app = App::new(AppState::new(), Theme::new(opts), (120, 36));
     // No audio device is touched in a captured frame: speech is shown as text,
-    // and `NEXUS_TUI_MANAGER_PIN=state[:level]` (or `none`) holds the orb still.
+    // and `NEXUS_TUI_MANAGER_PIN=state[:level]` (or `none`) holds the indicator still.
+    // `NEXUS_TUI_MANAGER_LIVE=1` fakes the live voice, and `NEXUS_TUI_MOUSE=x,y` puts
+    // the pointer there for a captured hover (the Stop label); both are frame-only.
     app.ui.manager.silent = true;
     app.ui.manager.pin = std::env::var("NEXUS_TUI_MANAGER_PIN")
         .ok()
         .and_then(|spec| nexus_tui::manager::parse_pin(&spec));
+    app.ui.manager.live_call = std::env::var("NEXUS_TUI_MANAGER_LIVE").is_ok();
+    app.mouse = std::env::var("NEXUS_TUI_MOUSE").ok().and_then(|spec| {
+        let (x, y) = spec.split_once(',')?;
+        Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+    });
     if !wait_live(&mut handle, &mut app, Duration::from_secs(30)).await {
         eprintln!(
             "nexus-tui: Core did not become live: {}",

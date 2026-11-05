@@ -2868,7 +2868,7 @@ export const manifest = {
     "header",
     "palette"
    ],
-   "note": "Toggle the borderless opaque Manager dropdown. The header orb replaces the label while visible. Voice defaults on: explicitly opening Manager starts audio immediately unless Voice was switched off. Esc closes the dropdown."
+   "note": "Toggle the borderless opaque Manager dropdown. While it or a call is open, a gray braille wave field replaces the header label. An open dropdown dims the rest of the screen. Voice defaults on: explicitly opening Manager starts audio immediately unless Voice was switched off. Esc closes the dropdown."
   },
   {
    "id": "manager.audio_toggle",
@@ -2881,7 +2881,7 @@ export const manifest = {
     "header",
     "palette"
    ],
-   "note": "The dropdown Voice toggle defaults on. Switching it on starts GPT-Live immediately; switching it off stops only audio. The header orb toggles the dropdown; debug session navigation remains independent."
+   "note": "The dropdown Voice toggle defaults on. Switching it on starts GPT-Live immediately; switching it off stops only audio. The header indicator toggles the dropdown, or stops the live voice while it is on (hover it to see Stop). Debug session navigation remains independent."
   },
   {
    "id": "manager.context",
@@ -2924,7 +2924,7 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "note": "Tap to toggle, in both clients (terminals do not report key release). No call: start one, focus it and open the mic. Focused call: listening sends; thinking, speaking or idle barge in (stop speech, cancel the turn if safe, open the mic). Minimised call: bring the orb back and do the same; with a card waiting it opens that card. Space does the same while the call is focused. Clicking the orb does the same, so talking over the Manager barges in."
+   "note": "Tap to toggle, in both clients (terminals do not report key release). No call: start one, focus it and open the mic. Focused call: listening sends; thinking, speaking or idle barge in (stop speech, cancel the turn if safe, open the mic). Minimised call: bring the call back and do the same; with a card waiting it opens that card. Space does the same while the call is focused. Clicking the header indicator does the same, so talking over the Manager barges in; with the live voice on it stops the voice instead."
   },
   {
    "id": "manager.start",
@@ -2956,7 +2956,7 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "note": "Typed as `/manager stop`. The composer reads a leading `stop` after /manager as this command (no space is allowed in a slash name, so `/manager-stop` is the registered form). Ends the call (POST /api/manager/stop). The End button under the orb does the same, and so does saying \"that's all\". Never stops a session, stops speech or dismisses a card as a side effect."
+   "note": "Typed as `/manager stop`. The composer reads a leading `stop` after /manager as this command (no space is allowed in a slash name, so `/manager-stop` is the registered form). Ends the call (POST /api/manager/stop). Saying \"that's all\" does the same. Never stops a session, stops speech or dismisses a card as a side effect."
   },
   {
    "id": "manager.minimise",
@@ -2969,7 +2969,7 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "note": "The call stays open: the orb shrinks to the bottom-right corner, the app returns to full strength and gets its keys back. A recording is dropped and the typed field closes; speech and the Manager's turn keep going. Esc is not this: Esc ends the whole call (manager.stop)."
+   "note": "The call stays open: the dropdown closes, the header keeps its braille indicator, the app returns to full strength and gets its keys back. A recording is dropped and the typed field closes; speech and the Manager's turn keep going. Esc is not this: Esc ends the whole call (manager.stop)."
   },
   {
    "id": "manager.send",
@@ -3050,7 +3050,7 @@ export const manifest = {
    "placement": [
     "stage"
    ],
-   "note": "Any printable character opens the one-line field above the orb with that character in it, and discards the recording. Keys go to the field, not the session composer. Spoken and typed lines are one conversation."
+   "note": "Any printable character opens the one-line field in the Manager panel with that character in it, and discards the recording. Keys go to the field, not the session composer. Spoken and typed lines are one conversation."
   },
   {
    "id": "manager.field_send",

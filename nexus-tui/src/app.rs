@@ -698,11 +698,21 @@ pub struct ProjectInventory {
     pub project_mcp_duplicates: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct PendingFirstPrompt {
+    pub text: String,
+    pub images: usize,
+    pub session: Option<String>,
+    pub history_loaded: bool,
+    pub choices: Draft,
+}
+
 pub struct Ui {
     /// Sessions opened as header tabs, in the order they were opened.
     pub tabs: Vec<String>,
     pub detail: crate::ui::Detail,
     pub draft: Draft,
+    pub first_prompts: HashMap<String, PendingFirstPrompt>,
     pub completion: CompletionState,
     pub focus: Focus,
     pub left_open: bool,
@@ -770,7 +780,7 @@ pub struct Ui {
     pub overlay: Option<Overlay>,
     pub dialog: Option<Dialog>,
     pub dictation: crate::dictation::DictationUi,
-    /// The Manager's orb, caption and card (`manager.rs`).
+    /// The Manager's indicator, caption and card (`manager.rs`).
     pub manager: crate::manager::ManagerUi,
     /// Last `/api/voice` response used by Settings and download confirmations.
     pub voice_status: Option<Value>,
@@ -880,7 +890,6 @@ pub struct App {
     pub image_viewer: std::cell::RefCell<crate::images::Viewer>,
     /// The terminal's copy of the drawing modal's picture and strokes.
     pub annotate_live: std::cell::RefCell<crate::annotate::Live>,
-    pub orb_sprites: std::cell::RefCell<crate::orb_sprite::Sprites>,
     bindings: HashMap<(String, String), String>,
     shortcut_leader: Option<Instant>,
     /// Last kernel/shell refresh while a session tree was busy.
@@ -975,6 +984,7 @@ impl App {
                 tabs: Vec::new(),
                 detail: crate::ui::Detail::default(),
                 draft: Draft::default(),
+                first_prompts: HashMap::new(),
                 focus: Focus::Composer,
                 left_open: true,
                 last_project_session: HashMap::new(),
@@ -1085,7 +1095,6 @@ impl App {
             timeline_builds: std::cell::Cell::new(0),
             image_viewer: std::cell::RefCell::new(crate::images::Viewer::default()),
             annotate_live: std::cell::RefCell::new(crate::annotate::Live::default()),
-            orb_sprites: std::cell::RefCell::new(crate::orb_sprite::Sprites::default()),
             bindings,
             shortcut_leader: None,
             last_resources_at: None,
@@ -1318,9 +1327,10 @@ impl App {
             let key = format!("skill:{name}");
             let label = name.to_owned();
             let available = skill["state"].as_str() == Some("on")
-                || (session.is_none() && skill["state"].as_str() == Some("off") && skill["locked"].as_bool() != Some(true));
-            let on = available
-                && !disabled.iter().any(|entry| entry == &key);
+                || (session.is_none()
+                    && skill["state"].as_str() == Some("off")
+                    && skill["locked"].as_bool() != Some(true));
+            let on = available && !disabled.iter().any(|entry| entry == &key);
             push(key, label, on, skill["locked"].as_bool().unwrap_or(false));
         }
 
@@ -3126,7 +3136,13 @@ impl App {
     }
 
     fn close_overlay(&mut self) {
-        if let Some(Overlay { kind: OverlayKind::ContextEntries { title, open, top, .. }, .. }) = self.ui.overlay.as_mut() {
+        if let Some(Overlay {
+            kind: OverlayKind::ContextEntries {
+                title, open, top, ..
+            },
+            ..
+        }) = self.ui.overlay.as_mut()
+        {
             if title == "Skills" && open.is_some() {
                 *open = None;
                 *top = 0;
@@ -5813,7 +5829,10 @@ impl App {
     }
 
     fn send(&mut self) {
-        if self.manager_debug_view() { self.toast(Level::Info, "Manager session · read-only debug view"); return; }
+        if self.manager_debug_view() {
+            self.toast(Level::Info, "Manager session · read-only debug view");
+            return;
+        }
         self.send_mode(None);
     }
 
@@ -5944,6 +5963,14 @@ impl App {
             }
             None => match self.current_project() {
                 Some(project) => {
+                    if self
+                        .ui
+                        .first_prompts
+                        .get(&project)
+                        .is_some_and(|p| p.session.is_none())
+                    {
+                        return;
+                    }
                     let draft = Box::new(self.composer_ref().clone());
                     let pastes = draft
                         .pastes()
@@ -5952,8 +5979,17 @@ impl App {
                         .collect();
                     self.composer().take();
                     let fields = self.ui.draft.fields();
-                    self.ui.draft = Draft::default();
                     let images = std::mem::take(&mut self.composer().images);
+                    self.ui.first_prompts.insert(
+                        project.clone(),
+                        PendingFirstPrompt {
+                            text: text.clone(),
+                            images: images.len(),
+                            session: None,
+                            history_loaded: false,
+                            choices: self.ui.draft.clone(),
+                        },
+                    );
                     self.api(ApiCall::NewAndPrompt {
                         images,
                         pastes,
@@ -5968,6 +6004,40 @@ impl App {
                     "No project yet: add one from the Projects tab, then it appears here.",
                 ),
             },
+        }
+    }
+
+    pub fn pending_first_prompt(&self) -> Option<&PendingFirstPrompt> {
+        let project = self.current_project()?;
+        let pending = self.ui.first_prompts.get(&project)?;
+        (pending.session.as_deref() == self.viewed_id() && !self.first_prompt_confirmed(pending))
+            .then_some(pending)
+    }
+
+    fn first_prompt_confirmed(&self, pending: &PendingFirstPrompt) -> bool {
+        self.messages().iter().any(|m| m.role == "user")
+            && (pending.history_loaded
+                || self
+                    .state
+                    .model
+                    .selected
+                    .as_ref()
+                    .is_some_and(|s| s.starting.is_some()))
+    }
+
+    fn finish_first_prompt(&mut self) {
+        let Some(project) = self.current_project() else {
+            return;
+        };
+        let Some(pending) = self.ui.first_prompts.get(&project) else {
+            return;
+        };
+        if pending.session.as_deref() != self.viewed_id() || !self.first_prompt_confirmed(pending) {
+            return;
+        }
+        let pending = self.ui.first_prompts.remove(&project).unwrap();
+        if self.ui.draft == pending.choices {
+            self.ui.draft = Draft::default();
         }
     }
 
@@ -6106,6 +6176,13 @@ impl App {
     }
 
     pub fn apply_sync(&mut self, msg: SyncMsg) {
+        if let SyncMsg::History(history) = &msg {
+            for pending in self.ui.first_prompts.values_mut() {
+                if pending.session.as_deref() == Some(history.session_id.as_str()) {
+                    pending.history_loaded = true;
+                }
+            }
+        }
         self.timeline_revision
             .set(self.timeline_revision.get().wrapping_add(1));
         if let SyncMsg::SkillMcp {
@@ -6487,6 +6564,7 @@ impl App {
         if self.state.resync_wanted.take().is_some() {
             self.effects.push(Effect::Sync(SyncCommand::Resync));
         }
+        self.finish_first_prompt();
     }
 
     pub fn apply_done(&mut self, done: ActionDone) {
@@ -6819,7 +6897,29 @@ impl App {
                 }
                 if let Some(id) = r.open {
                     // events for the new session may not have arrived yet
+                    if let ApiCall::NewAndPrompt {
+                        project,
+                        text,
+                        images,
+                        pastes,
+                        draft,
+                        ..
+                    } = &done.call
+                    {
+                        if let Some(pending) = self.ui.first_prompts.get_mut(project) {
+                            pending.session = Some(id.clone());
+                        }
+                        self.api(ApiCall::Prompt {
+                            session: id.clone(),
+                            text: text.clone(),
+                            images: images.clone(),
+                            pastes: pastes.clone(),
+                            mode: "send".into(),
+                            draft: draft.clone(),
+                        });
+                    }
                     self.open_session(&id);
+                    self.finish_first_prompt();
                 }
                 if let Some(id) = r.project {
                     // The success toast already says "Project added".
@@ -6830,6 +6930,17 @@ impl App {
                 }
             }
             Err(e) => {
+                self.ui
+                    .first_prompts
+                    .retain(|project, pending| match &done.call {
+                        ApiCall::NewAndPrompt {
+                            project: origin, ..
+                        } => project != origin,
+                        ApiCall::Prompt { session, .. } => {
+                            pending.session.as_ref() != Some(session)
+                        }
+                        _ => true,
+                    });
                 if let ApiCall::Answer { id, .. } = &done.call {
                     // The question still waits: keep the picks so the review can
                     // be revisited instead of asking everything again.
@@ -7334,13 +7445,17 @@ impl App {
     pub fn draft_values(&self, key: &str) -> Vec<Value> {
         self.draft_context()
             .or_else(|| {
-                if !matches!(key, "skills" | "mcp") { return None; }
+                if !matches!(key, "skills" | "mcp") {
+                    return None;
+                }
                 let (asked, data) = self.state.draft_context.as_ref()?;
                 let mut asked = asked.clone();
                 let mut now = self.draft_request()?;
                 asked.as_object_mut()?.remove("disabled_tools");
                 now.as_object_mut()?.remove("disabled_tools");
-                Self::same_draft_context(&asked, &now).then(|| data.as_ref().ok()).flatten()
+                Self::same_draft_context(&asked, &now)
+                    .then(|| data.as_ref().ok())
+                    .flatten()
             })
             .and_then(|d| d[key].as_array().cloned())
             .unwrap_or_default()
@@ -8416,20 +8531,37 @@ impl App {
                 ..
             })
         );
-        if let Some(Overlay { kind: OverlayKind::ContextEntries { title, cursor, open, .. }, .. }) = &self.ui.overlay {
+        if let Some(Overlay {
+            kind:
+                OverlayKind::ContextEntries {
+                    title,
+                    cursor,
+                    open,
+                    ..
+                },
+            ..
+        }) = &self.ui.overlay
+        {
             if title == "Skills" && open.is_none() {
                 let cursor = *cursor;
                 match name {
                     "space" => {
                         if let Some(item) = self.context_items_for("Skills").get(cursor) {
                             let index = item.index;
-                            if !item.locked { self.toggle_context_item(index); }
+                            if !item.locked {
+                                self.toggle_context_item(index);
+                            }
                         }
                         return true;
                     }
                     "left" | "right" | "tab" | "shift+tab" => {
                         let columns = self.context_items_for("Skills").len().div_ceil(2) as isize;
-                        self.overlay_move(match name { "left" => -columns, "right" => columns, "shift+tab" => -1, _ => 1 });
+                        self.overlay_move(match name {
+                            "left" => -columns,
+                            "right" => columns,
+                            "shift+tab" => -1,
+                            _ => 1,
+                        });
                         return true;
                     }
                     _ => {}
@@ -8615,7 +8747,9 @@ impl App {
                         let max = crate::render::context_doc_max(area, &self.theme, text);
                         *top = (*top as isize + delta).clamp(0, max as isize) as usize;
                     } else {
-                        *cursor = (*cursor as isize + delta).clamp(0, entries.len().saturating_sub(1) as isize) as usize;
+                        *cursor = (*cursor as isize + delta)
+                            .clamp(0, entries.len().saturating_sub(1) as isize)
+                            as usize;
                     }
                     return;
                 }
@@ -9085,10 +9219,25 @@ impl App {
         let Some(item) = self.context_items().get(index).cloned() else {
             return;
         };
-        let skill_index = self.context_items_for("Skills").iter().position(|item| item.index == index);
-        if let Some(Overlay { kind: OverlayKind::ContextEntries { title, cursor, open: None, .. }, .. }) = self.ui.overlay.as_mut() {
+        let skill_index = self
+            .context_items_for("Skills")
+            .iter()
+            .position(|item| item.index == index);
+        if let Some(Overlay {
+            kind:
+                OverlayKind::ContextEntries {
+                    title,
+                    cursor,
+                    open: None,
+                    ..
+                },
+            ..
+        }) = self.ui.overlay.as_mut()
+        {
             if title == "Skills" {
-                if let Some(index) = skill_index { *cursor = index; }
+                if let Some(index) = skill_index {
+                    *cursor = index;
+                }
             }
         }
         self.ui.context_cursor = index;
@@ -10164,9 +10313,7 @@ impl App {
             "mcp.full_definitions"
             | "mcp.max_listed_tools"
             | "context.handoff_percent"
-            | "context.usage_refresh_minutes" => {
-                self.settings_change_row(row, 1)
-            }
+            | "context.usage_refresh_minutes" => self.settings_change_row(row, 1),
             "context.title_models" => self.edit_title_models(),
             "manager.enabled" | "manager.mode" | "manager.proactive" => {
                 self.settings_change_row(row, 1)
@@ -11636,7 +11783,7 @@ impl App {
             | Target::ManagerVoice
             | Target::ManagerDebugSession
             | Target::ManagerDetails
-            | Target::ManagerOrb
+            | Target::ManagerIndicator
             | Target::ManagerEnd
             | Target::ManagerScrim
             | Target::ManagerCard

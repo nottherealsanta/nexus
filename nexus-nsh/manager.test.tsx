@@ -1,5 +1,5 @@
-// The Manager's logic (docs/manager-design.md 10.1 to 10.7): wording, the orb's priority and levels, the speech
-// queue, `/manager` parsing, cards and rows, and the controller's state machine against a stubbed Core.
+// The Manager's logic (docs/manager-design.md 10.1 to 10.7): wording, the indicator's priority and levels, the
+// speech queue, `/manager` parsing, cards and rows, and the controller's state machine against a stubbed Core.
 import { describe, expect, test } from "nsh/test";
 import {
   SpeechQueue, WORDS, managerHint, rowLine, spokenEnd, summaryRepeats, titleAdds, boardColumns, cardRows, columnOf, followLevel, footerHints, liveRow,
@@ -16,7 +16,9 @@ import {
   voiceEnabled, toggleManagerAudio, orbOn, dropdownOpen, dropdownInteractive, toggleManagerDropdown, closeManagerDropdown, audioRequested, submitField, openManagerSession, debugSessionId, backStackSize, call, callFocused, callMinimised, cancelTurn, card, cardCollapsed, cardFocused, closeField, dismissCard, engaged, fieldText, focusCard,
   handleEvent, idleCost, inCall, listening, managerContext, managerEscapeRule, managerTerm, minimise, answerConsent, consent, notice,
   openManagerContext, phase, pickRow, say, setStreamForTest, speaking, stopCall, stopSpeech, talk, minimised, managerError, modelPreview, managerDetailsText, detailsScroll, scrollDetails, connecting,
+  liveVoice, stopManagerVoice,
 } from "./src/core/manager";
+import { BRAILLE_WIDTH, brailleField, waveBrightness, waveSpeed } from "./src/ui/manager/braille";
 import { manifest } from "./src/gen/manifest";
 import { connection, model } from "./src/store";
 
@@ -73,7 +75,7 @@ describe("wording", () => {
   });
 });
 
-describe("the orb", () => {
+describe("the indicator", () => {
   test("listening beats speaking beats thinking beats settling; idle draws nothing", () => {
     const base = { listening: false, speaking: false, phase: "idle" as const, settling: false };
     expect(orbMode(base)).toBe(null);
@@ -89,6 +91,17 @@ describe("the orb", () => {
     const down = followLevel(1, 0, 60);
     expect(down > 0.75 && down < 0.8).toBe(true);
     expect(followLevel(0.5, 0.5, 16)).toBe(0.5);
+  });
+
+  test("the indicator is braille text: ten cells, a few dots lit, moving waves", () => {
+    const frame = brailleField(0, "listening", 0.5);
+    expect(Array.from(frame).length).toBe(BRAILLE_WIDTH);
+    const dots = Array.from(frame).map((c) => (c.codePointAt(0) ?? 0x2800) - 0x2800);
+    expect(dots.every((bits) => bits >= 0 && bits < 0x100)).toBe(true);
+    expect(dots.reduce((n, bits) => n + bits.toString(2).replaceAll("0", "").length, 0)).toBeGreaterThan(4);
+    expect(brailleField(1, "listening", 0.5)).not.toBe(frame);
+    expect(waveSpeed("speaking") > waveSpeed("settling")).toBe(true);
+    expect(waveBrightness("speaking") > waveBrightness("settling")).toBe(true);
   });
 
   test("the synthetic envelope stays soft and in range", () => {
@@ -221,6 +234,18 @@ describe("the controller", () => {
     expect(fieldText()).toBe(null);
     expect(idleCost().frame).toBe(false);
     expect(sent.some((s) => s.path === "/api/manager/stop")).toBe(true);
+  });
+
+  test("stopping the live voice from the indicator keeps the call and the typed field", async () => {
+    const sent = await inACall();
+    liveVoice.set(true);
+    await stopManagerVoice();
+    await settleAsync();
+    expect(sent.some((r) => r.path === "/api/manager/live/stop")).toBe(true);
+    expect(liveVoice()).toBe(false);
+    expect(voiceEnabled()).toBe(false);
+    expect(inCall()).toBe(true);
+    await reset();
   });
 
   test("a manager that is off shows the toast and starts nothing", async () => {

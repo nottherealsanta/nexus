@@ -1,39 +1,65 @@
-// Manager dropdown and one-row audio orb, anchored to the header in both clients.
-import { Canvas, Overlay, Scroll, Text, View, colorScheme, effect, keymap, windowSize } from "nsh";
+// Manager dropdown and the one-row braille indicator, anchored to the header in both clients.
+import { Overlay, Scroll, Text, View, effect, keymap, signal, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { FOCUS, T, TS } from "../kit";
 import { CardBody } from "./cards";
-import { drawOrb } from "./orb";
-import { managerColors } from "../../gen/theme";
+import { brailleField, waveBrightness } from "./braille";
 import { OrbMode, WORDS, cardCaption, cardTitle } from "../../manager";
 import {
   dropdownOpen, dropdownInteractive, closeManagerDropdown, voiceEnabled, audioRequested, callMinimised, card, consent, cardCollapsed,
-  detailsScroll, scrollDetails, fieldText, frame, inCall, listening, managerCaption, managerError, notice,
-  phase, reducedMotion, modelPreview, connecting, speaking, submitField, transcribing, userCaption, visual,
+  detailsScroll, scrollDetails, fieldText, inCall, listening, liveVoice, managerCaption, managerError, notice,
+  phase, reducedMotion, modelPreview, connecting, speaking, stopManagerVoice, submitField, transcribing, userCaption, visual,
 } from "../../core/manager";
 import { isNarrow, live } from "../../store";
 import { run } from "../../commands";
 const SHADOW = "0 18px 48px rgb(0 0 0 / 0.32)";
-const light = () => colorScheme() === "light";
-const palette = (): Record<OrbMode, string> => {
-  const c = managerColors[light() ? "light" : "dark"];
-  return { listening: c.listening, thinking: c.thinking, speaking: c.speaking, settling: c.idle };
-};
+/** Everything outside an open Manager panel recedes; the panel itself stays opaque. */
+const DIM = "bg-black/40";
+/** The privacy notice keeps the lighter card scrim the TUI uses (25%). */
+const CONSENT_DIM = "bg-black/25";
 
 /** Whether anything of the Manager is on screen: otherwise no node of it exists. */
 export const stageVisible = () => consent() !== null || dropdownOpen();
 
-export const managerHeaderOrbVisible = () => dropdownOpen() || inCall() || connecting();
-export function ManagerHeaderOrb() {
-  return <If when={managerHeaderOrbVisible()}>{() => <Button onPress={() => void run("manager.header")} testID="manager-orb" accessibilityLabel="Manager" class={FOCUS} style={{ width: 78, height: 18 }}>
-    <Canvas style={{ width: 78, height: 18 }} draw={(ctx, size) => {
-      frame(); const colors = palette();
-      const mode: OrbMode = connecting() ? "thinking" : listening() ? "listening" : speaking() ? "speaking" : phase() !== "idle" ? "thinking" : "settling";
-      ctx.save(); ctx.scale(1, size.height / size.width);
-      drawOrb(ctx, size.width, size.width, size.width * .28, { level: visual.level, presence: 1, t: Date.now() / 1000, mode: reducedMotion() ? mode : visual.mode, from: reducedMotion() ? mode : visual.from, blend: reducedMotion() ? 1 : visual.blend, still: false, light: light(), colors });
-      ctx.restore();
-    }} />
-  </Button>}</If>;
+export const managerHeaderIndicatorVisible = () => dropdownOpen() || inCall() || connecting();
+
+/** The header indicator's state, from the same signals as the call. */
+const waveMode = (): OrbMode => connecting() ? "thinking" : listening() ? "listening" : speaking() ? "speaking" : phase() !== "idle" || transcribing() ? "thinking" : "settling";
+/** A call left idle in the background is still; the dropdown being open means the user is looking. */
+const waveMoving = () => dropdownOpen() || connecting() || listening() || speaking() || phase() !== "idle" || transcribing();
+
+const waveFrame = signal(0);
+let waveTimer: ReturnType<typeof setInterval> | undefined;
+let waveHolders = 0;
+function holdWave() {
+  waveHolders++;
+  if (!waveTimer) {
+    const start = Date.now();
+    waveTimer = setInterval(() => waveFrame.set((Date.now() - start) / 1000), 33);
+  }
+  return () => {
+    waveHolders--;
+    if (waveHolders === 0 && waveTimer) { clearInterval(waveTimer); waveTimer = undefined; waveFrame.set(0); }
+  };
+}
+
+export function ManagerHeaderIndicator() {
+  const animated = () => !reducedMotion() && (waveMoving() || liveVoice());
+  const hovered = signal(false);
+  effect(() => { if (!animated()) return; return holdWave(); });
+  const stopping = () => liveVoice() && hovered();
+  return <If when={managerHeaderIndicatorVisible()}>{() => <View onMouseEnter={() => hovered.set(true)} onMouseLeave={() => hovered.set(false)}
+    style={{ width: 100, height: 20 }}>
+    <Button
+      onPress={() => { if (liveVoice()) void stopManagerVoice(); else void run("manager.header"); }}
+      testID="manager-indicator" accessibilityLabel={liveVoice() ? "Stop Manager voice" : "Manager"} class={`w-full h-full ${FOCUS}`}>
+      <If when={stopping()}>{() => <Text class={`${TS.base} font-medium text-foreground`} testID="manager-indicator-stop">Stop</Text>}</If>
+      <If when={!stopping()}>{() => <Text class="font-mono text-[13px] leading-[18px] text-muted-foreground" testID="manager-indicator-wave"
+        style={{ opacity: reducedMotion() ? 0.7 : waveBrightness(waveMode()), numberOfLines: 1 }}>
+        {brailleField(animated() ? waveFrame() : 0, waveMode(), visual.level)}
+      </Text>}</If>
+    </Button>
+  </View>}</If>;
 }
 
 export function ManagerStage() { return <If when={stageVisible()}>{() => <Layer />}</If>; }
@@ -67,6 +93,8 @@ function Layer() {
   });
   return <Overlay class="inset-0" style={{ pointerEvents: "box-none" }} testID="manager-stage">
     <If when={dropdownOpen()}>{() => <>
+      {/* The whole viewport recedes behind the panel; the panel is opaque above it. */}
+      <View class={`absolute inset-0 ${DIM}`} style={{ pointerEvents: "none" }} accessible={false} testID="manager-backdrop" />
       <View class="absolute left-0 right-0 bottom-0" style={{ top: isNarrow() ? 56 : 44 }} onPress={closeManagerDropdown} />
       <View class="absolute right-3 bg-popover p-4 gap-3" style={{ top: isNarrow() ? 56 : 44, width: Math.min(560, windowSize().width - 24), boxShadow: SHADOW }} testID="manager-dropdown">
         <Text class={T.section}>Manager</Text>
@@ -86,7 +114,10 @@ function Layer() {
         </View>
       </View>
     </>}</If>
-    <If when={consent() !== null}>{() => <View class="absolute inset-0 items-center justify-center"><ConsentPanel width={Math.min(560, windowSize().width - 24)} /></View>}</If>
+    <If when={consent() !== null}>{() => <>
+      <View class={`absolute inset-0 ${CONSENT_DIM}`} style={{ pointerEvents: "none" }} accessible={false} testID="manager-consent-backdrop" />
+      <View class="absolute inset-0 items-center justify-center"><ConsentPanel width={Math.min(560, windowSize().width - 24)} /></View>
+    </>}</If>
   </Overlay>;
 }
 

@@ -1,4 +1,4 @@
-//! Manager header orb and notification dropdown, painted over the finished frame.
+//! Manager header indicator and notification dropdown, painted over the finished frame.
 
 use std::time::Instant;
 
@@ -9,10 +9,10 @@ use ratatui::text::Span;
 use serde_json::Value;
 
 use crate::app::App;
+use crate::indicator::{self, blend, Anchor};
 use crate::layout::HitMap;
 use crate::manager::{RowKind, RowView, PLACEHOLDER};
 use crate::markdown::{self, wrap_spans};
-use crate::orb::{self, blend, Anchor};
 use crate::paint;
 use crate::text::{truncate, width};
 use crate::theme::{Theme, Tier};
@@ -26,9 +26,8 @@ const MUTED: &str = "text.muted";
 
 /// The scrim under a focused card is far lighter than a normal modal's.
 pub const SCRIM_PERCENT: u8 = 25;
-/// A focused call dims the whole app to about 30%, so the call reads as the
-/// thing being used and the session behind never competes with it.
-pub const CALL_SCRIM_PERCENT: u8 = 70;
+/// An open Manager dropdown dims everything outside it, so the panel owns the screen.
+pub const DROPDOWN_SCRIM_PERCENT: u8 = 40;
 /// How much of the raised surface shows over what is underneath.
 pub const PANEL_OPACITY: f32 = 0.8;
 
@@ -101,9 +100,6 @@ pub fn draw(
 ) {
     let m = &app.ui.manager;
     m.cursor.set(None);
-    if !m.orb.visible() || m.consent.is_some() || m.context.is_some() {
-        app.orb_sprites.borrow_mut().sync(None);
-    }
     if !m.live() {
         return;
     }
@@ -144,25 +140,29 @@ pub fn draw(
     // The header owns audio; the dropdown owns text, cards and debug navigation.
     let strip = Rect::new(header.x, header.y, header.width, 1).intersection(area);
     if strip.width > 0 {
-        hits.add(strip, Target::ManagerOrb);
-        draw_orb(
-            app,
-            buf,
-            area,
-            Anchor {
-                x: strip.x + strip.width / 2,
-                bottom: strip.bottom(),
-            },
-            strip.width,
-            1,
-        );
+        hits.add(strip, Target::ManagerIndicator);
+        draw_indicator(app, buf, area, strip);
+    }
+    if m.dropdown_open {
+        // Everything outside the panel recedes; the header indicator stays clickable.
+        paint::scrim_by(t, buf, area, DROPDOWN_SCRIM_PERCENT);
+    }
+    // A hovered indicator that can stop the live voice says so, over the scrim.
+    if strip.width > 0 && m.live_call && hovered(app, strip) {
+        draw_stop_label(buf, strip, t);
     }
     if m.dropdown_open {
         draw_dropdown(app, &look, buf, area, header, hits);
     }
 }
 
-/// Notification-style popover, anchored below the first row. No app scrim.
+fn hovered(app: &App, strip: Rect) -> bool {
+    app.mouse.is_some_and(|(x, y)| {
+        x >= strip.x && x < strip.right() && y >= strip.y && y < strip.bottom()
+    })
+}
+
+/// Notification-style popover, anchored below the first row, over the scrim.
 fn draw_dropdown(
     app: &App,
     look: &Look,
@@ -342,7 +342,6 @@ fn finish(look: &Look, buf: &mut Buffer, r: Rect, under: &[Color], opacity: f32)
     }
 }
 
-/// Paint a pill of `lines` with its top at `top`, centred in `area`.
 // ---- the card ---------------------------------------------------------------------------------
 
 /// A pickable row: its first line, how many lines, its number, and the cells it spans.
@@ -949,41 +948,35 @@ fn draw_card(
     }
 }
 
-/// Use the same smooth, alpha-blended sphere as NSH on graphics terminals.
-fn draw_orb(app: &App, buf: &mut Buffer, area: Rect, anchor: Anchor, width: u16, height: u16) {
-    let orb = &app.ui.manager.orb;
-    let zone = orb::bounds_sized(area, anchor, width, height);
-    let picture = app.orb_sprites.borrow().supported()
-        && app.theme.opts.tier == crate::theme::Tier::TrueColor
-        && !app.theme.opts.ascii;
-    if !picture || app.ui.manager.context.is_some() {
-        app.orb_sprites.borrow_mut().sync(None);
-        orb::paint_sized(buf, area, anchor, width, height, orb, &app.theme);
+/// The braille wave field in the header strip.
+fn draw_indicator(app: &App, buf: &mut Buffer, area: Rect, strip: Rect) {
+    indicator::paint_sized(
+        buf,
+        area,
+        Anchor {
+            x: strip.x + strip.width / 2,
+            bottom: strip.bottom(),
+        },
+        strip.width,
+        1,
+        &app.ui.manager.indicator,
+        &app.theme,
+    );
+}
+
+/// The live voice is on: hovering the indicator offers to stop the voice, not the call.
+fn draw_stop_label(buf: &mut Buffer, strip: Rect, theme: &Theme) {
+    let width = 6.min(strip.width);
+    if width < 4 {
         return;
     }
-    if !orb.visible() || zone.width == 0 || zone.height == 0 {
-        app.orb_sprites.borrow_mut().sync(None);
-        return;
+    let x = strip.x + (strip.width - width) / 2;
+    let style = theme.style(PRIMARY, RAISED);
+    for xx in x..x + width {
+        let cell = &mut buf[(xx, strip.y)];
+        cell.set_symbol(" ");
+        cell.set_style(style);
+        cell.modifier = Modifier::empty();
     }
-    let rgb = |token| match app.theme.color(token) {
-        Some(Color::Rgb(r, g, b)) => [r, g, b],
-        _ => [180, 180, 180],
-    };
-    app.orb_sprites
-        .borrow_mut()
-        .sync(Some(&crate::orb_sprite::Request {
-            state: orb.to,
-            level: orb.level,
-            t: orb.t,
-            presence: orb.presence,
-            color: orb::state_color(&app.theme, orb)
-                .map(|c| c.map(|v| v.round().clamp(0.0, 255.0) as u8))
-                .unwrap_or_else(|| rgb(orb.to.token())),
-            white: rgb("text.primary"),
-            light: app.theme.opts.mode == crate::theme::Mode::Light,
-            col: zone.x,
-            row: zone.y,
-            width: zone.width,
-            height: zone.height,
-        }));
+    put(buf, x + 1, strip.y, "Stop", style, width - 1);
 }

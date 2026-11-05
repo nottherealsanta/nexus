@@ -7,7 +7,7 @@ import { byId, closeTab, keyLabel, run, rightIsOpen, rightWidthHint, tabIds, wai
 import { attention as attentionGlyph, statusGlyphs } from "../gen/theme";
 import { centre, connection, coreUrl, drawer, isNarrow, leftOpen, m, model, native, railShown, touch, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
 import { agentColor } from "../agent-color";
-import { ManagerHeaderOrb, managerHeaderOrbVisible } from "./manager/stage";
+import { ManagerHeaderIndicator, managerHeaderIndicatorVisible } from "./manager/stage";
 import { call } from "../core/manager";
 import { coreEditing } from "./connect";
 import { currentAlerts } from "./alerts";
@@ -233,14 +233,14 @@ export function Header() {
           <IconButton icon="bell" label="Notifications" testID="open-notifications" onPress={() => run("notifications.open")} reason={key("notifications.open") ?? undefined} />
           <If when={unread() > 0}><View class="absolute top-1 right-1 size-2 rounded-full bg-info" accessible={false} /></If>
         </View>
-        <If when={!managerHeaderOrbVisible()}>
+        <If when={!managerHeaderIndicatorVisible()}>
         <Button onPress={() => void run("manager.header")}  accessibilityLabel="Manager" testID="open-manager-context"
           tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{"Manager: messages, cards and session"}</Text>}
           class={`shrink-0 items-center justify-center rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "h-7"} ${call() ? "text-info" : "text-muted-foreground"} hover:bg-accent ${FOCUS}`}>
           <Text class={`${TS.base} font-medium`}>Manager</Text>
         </Button>
         </If>
-        <ManagerHeaderOrb />
+        <ManagerHeaderIndicator />
         <IconButton icon="panel-right" label="Toggle right sidebar" testID="toggle-right" selected={isNarrow() ? drawer() === "right" : rightIsOpen(width())} onPress={() => { rightWidthHint.w = width(); void run("sidebar.right.toggle"); }} reason={key("sidebar.right.toggle") ?? undefined} />
       </View>
     </View>

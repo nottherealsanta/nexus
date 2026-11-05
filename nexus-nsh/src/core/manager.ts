@@ -49,6 +49,8 @@ export const dropdownOpen = signal(false);
 export const dropdownInteractive = signal(false);
 export const audioRequested = signal(false);
 export const voiceEnabled = signal(true);
+/** The GPT-Live voice is opening or open. Its indicator hover offers Stop; the call itself stays. */
+export const liveVoice = signal(false);
 export const debugSessionId = signal<string | null>(null);
 export function toggleManagerDropdown() {
   if (dropdownOpen()) { closeManagerDropdown(); return; }
@@ -62,11 +64,20 @@ export function closeManagerDropdown() {
   if (!call() && !connecting()) { orbOn.set(false); exchange.set(false); stopLoop(); }
 }
 export async function toggleManagerAudio() {
-  voiceEnabled.set(!voiceEnabled());
-  if (!voiceEnabled()) {
+  await setManagerAudio(!voiceEnabled());
+}
+/** The Voice toggle and the indicator's Stop share this one path. */
+export async function setManagerAudio(on: boolean) {
+  voiceEnabled.set(on);
+  if (!on) {
     audioRequested.set(false); hangUpLive(); skipSpeech(); cancelListening();
     if (call()) await request("POST", "/api/manager/live/stop", { body: { stream_id: streamId } }).catch(() => {});
   } else if (!audioRequested()) { await talk(); }
+}
+/** Stop the live voice from its header indicator: the control call and typed field stay. */
+export async function stopManagerVoice() {
+  if (!liveVoice()) return;
+  await setManagerAudio(false);
 }
 
 let debugRefreshAt = 0;
@@ -343,11 +354,13 @@ let liveTimer: ReturnType<typeof setInterval> | null = null;
  */
 async function openLive(callId: string) {
   begin({ orb: true });
+  liveVoice.set(true);
   try {
     await request("POST", "/api/manager/live/start", { body: { stream_id: streamId } });
-    if (call()?.id !== callId || !audioRequested()) return;
+    if (call()?.id !== callId || !audioRequested()) { hangUpLive(); return; }
     await startGptLive(streamId ?? "", (why) => { hangUpLive(); managerError.set({ code: "live_lost", message: why, fix: "Start the call again." }); });
   } catch (e) {
+    liveVoice.set(false);
     const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
     managerError.set({ code: e instanceof ApiError && e.code ? e.code : "live_failed", message, fix: "The call is still open for typing; start it again to retry the voice." });
     return;
@@ -366,6 +379,7 @@ async function openLive(callId: string) {
 
 function hangUpLive() {
   if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  liveVoice.set(false);
   stopGptLive();
   speaking.set(false); listening.set(false);
 }
@@ -943,6 +957,8 @@ export function installManager(voice?: VoiceIn) {
     dev = parseDevOrb(raw);
     // Dev only: a card shown without a call, for screenshots and the shared card tests.
     if (dev?.card) { call.set({ id: "preview", holder: "preview" }); showCard(parseCard(dev.card)); }
+    // Dev only: the live voice's header indicator and its Stop tooltip, for screenshots and tests.
+    if (dev?.live) { call.set({ id: "preview-live", holder: "preview" }); liveVoice.set(true); }
   }).catch(() => {});
   // Keys: bound only while engaged and no field is open.
   effect(() => {

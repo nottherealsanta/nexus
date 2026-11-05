@@ -1,129 +1,133 @@
 <template>
-  <link rel="stylesheet" href="assets/kit/kit.css" />
+  <link rel="stylesheet" href="assets/kit/kit.css">
   <style>
     #root { position: absolute; inset: 0; background: #000; overflow: hidden; }
-    #intro-glow { position:absolute; inset:0; background: radial-gradient(ellipse 52% 46% at 50% 50%, rgba(232,164,110,.10), rgba(0,0,0,0) 70%); }
+    #intro-glow { position:absolute; inset:0; background: radial-gradient(ellipse 52% 46% at 50% 50%, rgba(255,255,255,.10), rgba(0,0,0,0) 70%); }
+    #intro-field { position:absolute; left:-200px; top:-200px; width:2400px; height:1500px; font:400 46px/70px var(--mono); opacity:0;
+      -webkit-mask-image: radial-gradient(ellipse 55% 60% at 50% 50%, #000 0%, transparent 100%); mask-image: radial-gradient(ellipse 55% 60% at 50% 50%, #000 0%, transparent 100%); }
+    #intro-field i { color:#17171a; position:absolute; width:70px; height:70px; text-align:center; font-style:normal; }
     #intro-title { position:absolute; inset:0; }
     #intro-word { position:absolute; left:50%; top:50%; width:0; height:0; }
-    #intro-letters { position:absolute; left:-288px; top:-62px; width:576px; height:124px; font: 500 192px/124px var(--mono); transform: scale(.6); transform-origin: 50% 50%; }
-    .intro-ch { position:absolute; top:0; width:115.2px; text-align:center; color:#f4f4f5; opacity:0; text-shadow: 0 0 40px rgba(232,164,110,.55), 0 0 110px rgba(232,164,110,.28); }
-    #intro-cursor { position:absolute; top:6px; width:100px; height:112px; background: var(--accent); box-shadow: 0 0 36px rgba(232,164,110,.75), 0 0 120px rgba(232,164,110,.4); opacity:1; }
+    #intro-letters { position:absolute; left:-320px; top:-62px; width:640px; height:124px; font: 500 192px/124px var(--mono); transform: scale(.6); transform-origin: 50% 50%; }
+    .intro-ch { position:absolute; top:0; width:128px; text-align:center; color:#f4f4f5; opacity:0; }
+    #intro-cursor { position:absolute; top:-8px; width:92px; height:142px; background:#fff; opacity:1; }
     #intro-persp { position:absolute; inset:0; perspective: 2300px; perspective-origin: 50% 50%; }
     #intro-cam { position:absolute; inset:0; transform-origin: 960px 540px; }
     #intro-pan { position:absolute; left:0; top:0; width:2000px; height:1072px; transform-origin: 0 0; }
-    #intro-stage { position:absolute; inset:0; border-radius:16px; overflow:hidden; box-shadow: 0 0 0 1px rgba(255,255,255,.07), 0 0 120px rgba(232,164,110,.14), 0 60px 160px rgba(0,0,0,.9); background:#0b0b0b; }
+    #intro-stage { position:absolute; inset:0; border-radius:16px; overflow:hidden; box-shadow: 0 0 0 1px rgba(255,255,255,.07), 0 0 120px rgba(255,255,255,.14), 0 60px 160px rgba(0,0,0,.9); background:#0b0b0b; }
     #intro-reveal { position:absolute; inset:0; clip-path: inset(0 0 100% 0); }
     #intro-reveal img { position:absolute; left:0; top:0; width:2000px; height:1072px; visibility:hidden; }
-    #intro-scan { position:absolute; left:-40px; top:0; width:2080px; height:4px; background: var(--accent); box-shadow: 0 0 24px 6px rgba(232,164,110,.85), 0 0 90px 24px rgba(232,164,110,.45); opacity:0; }
-    #intro-trail { position:absolute; left:0; top:0; width:2000px; height:140px; background: linear-gradient(to top, rgba(232,164,110,.22), rgba(232,164,110,0)); opacity:0; }
-    #intro-lift { position:absolute; inset:0; background: radial-gradient(ellipse 70% 60% at 50% 55%, rgba(232,164,110,.34), rgba(232,164,110,0) 72%); mix-blend-mode: screen; opacity:0; }
+    #intro-scan { position:absolute; left:-40px; top:0; width:2080px; height:4px; background: #fff; box-shadow: 0 0 24px 6px rgba(255,255,255,.85), 0 0 90px 24px rgba(255,255,255,.45); opacity:0; }
+    #intro-trail { position:absolute; left:0; top:0; width:2000px; height:140px; background: linear-gradient(to top, rgba(255,255,255,.22), rgba(255,255,255,0)); opacity:0; }
+    #intro-lift { position:absolute; inset:0; background: radial-gradient(ellipse 70% 60% at 50% 55%, rgba(255,255,255,.34), rgba(255,255,255,0) 72%); mix-blend-mode: screen; opacity:0; }
     #intro-flash { position:absolute; inset:0; background:#fff; opacity:0; }
-    #intro-cap { position:absolute; left:0; right:0; top:892px; text-align:center; font: 600 100px/1 var(--sans); letter-spacing:-.035em; color:#f4f4f5; text-shadow: 0 0 60px rgba(232,164,110,.25); }
+    #intro-cap { position:absolute; left:0; right:0; top:892px; text-align:center; font: 600 100px/1 var(--sans); letter-spacing:-.035em; color:#f4f4f5; text-shadow: 0 0 60px rgba(255,255,255,.25); }
     #intro-cap-in { display:inline-block; opacity:0; }
     #intro-vig { position:absolute; inset:0; background: radial-gradient(ellipse 80% 80% at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,0,.65) 100%); pointer-events:none; }
   </style>
-  <div id="root" data-composition-id="intro" data-width="1920" data-height="1080">
-    <div id="intro-glow" class="clip" data-start="0" data-duration="4"></div>
-    <div id="intro-title" class="clip" data-start="0" data-duration="4">
-      <div id="intro-word">
-        <div id="intro-letters">
-          <div class="intro-ch" style="left:0px">n</div>
-          <div class="intro-ch" style="left:115.2px">e</div>
-          <div class="intro-ch" style="left:230.4px">x</div>
-          <div class="intro-ch" style="left:345.6px">u</div>
-          <div class="intro-ch" style="left:460.8px">s</div>
-          <div id="intro-cursor" style="left:7px"></div>
+  <div data-hf-id="hf-ypfn" id="root" data-composition-id="intro" data-width="1920" data-height="1080">
+    <div data-hf-id="hf-5nyc" id="intro-glow" class="clip" data-start="0" data-duration="4" data-hidden=""></div>
+    <div id="intro-field" class="clip" data-start="0" data-duration="4"></div>
+    <div data-hf-id="hf-caqj" id="intro-title" class="clip" data-start="0" data-duration="4">
+      <div style="filter: none" data-hf-id="hf-udqi" id="intro-word">
+        <div data-hf-id="hf-mtjp" id="intro-letters">
+          <div data-hf-id="hf-jdgj" class="intro-ch" style="left: 0px; filter: none">N</div>
+          <div data-hf-id="hf-0jxf" class="intro-ch" style="left:128px">E</div>
+          <div data-hf-id="hf-v5yu" class="intro-ch" style="left:256px">X</div>
+          <div data-hf-id="hf-4hvk" class="intro-ch" style="left:384px">U</div>
+          <div data-hf-id="hf-w1c8" class="intro-ch" style="left:512px">S</div>
+          <div data-hf-id="hf-5qlu" id="intro-cursor" style="left: 7px"></div>
         </div>
       </div>
     </div>
-    <div id="intro-tui" class="clip" data-start="4" data-duration="11.45">
-      <div id="intro-persp"><div id="intro-cam"><div id="intro-pan">
-        <div id="intro-stage">
-          <div id="intro-reveal">
-          <img id="intro-f0" src="assets/cap/tui/01-session-type-f01.png" alt="" />
-          <img id="intro-f1" src="assets/cap/tui/01-session-type-f02.png" alt="" />
-          <img id="intro-f2" src="assets/cap/tui/01-session-type-f03.png" alt="" />
-          <img id="intro-f3" src="assets/cap/tui/01-session-type-f04.png" alt="" />
-          <img id="intro-f4" src="assets/cap/tui/01-session-type-f05.png" alt="" />
-          <img id="intro-f5" src="assets/cap/tui/01-session-type-f06.png" alt="" />
-          <img id="intro-f6" src="assets/cap/tui/01-session-type-f07.png" alt="" />
-          <img id="intro-f7" src="assets/cap/tui/01-session-type-f08.png" alt="" />
-          <img id="intro-f8" src="assets/cap/tui/01-session-type-f09.png" alt="" />
-          <img id="intro-f9" src="assets/cap/tui/01-session-type-f10.png" alt="" />
-          <img id="intro-f10" src="assets/cap/tui/01-session-type-f11.png" alt="" />
-          <img id="intro-f11" src="assets/cap/tui/01-session-stream-f01.png" alt="" />
-          <img id="intro-f12" src="assets/cap/tui/01-session-stream-f02.png" alt="" />
-          <img id="intro-f13" src="assets/cap/tui/01-session-stream-f03.png" alt="" />
-          <img id="intro-f14" src="assets/cap/tui/01-session-stream-f04.png" alt="" />
-          <img id="intro-f15" src="assets/cap/tui/01-session-stream-f05.png" alt="" />
-          <img id="intro-f16" src="assets/cap/tui/01-session-stream-f06.png" alt="" />
-          <img id="intro-f17" src="assets/cap/tui/01-session-stream-f07.png" alt="" />
-          <img id="intro-f18" src="assets/cap/tui/01-session-stream-f08.png" alt="" />
-          <img id="intro-f19" src="assets/cap/tui/01-session-stream-f09.png" alt="" />
-          <img id="intro-f20" src="assets/cap/tui/01-session-stream-f10.png" alt="" />
-          <img id="intro-f21" src="assets/cap/tui/01-session-stream-f11.png" alt="" />
-          <img id="intro-f22" src="assets/cap/tui/01-session-stream-f12.png" alt="" />
-          <img id="intro-f23" src="assets/cap/tui/01-session-stream-f13.png" alt="" />
-          <img id="intro-f24" src="assets/cap/tui/01-session-stream-f14.png" alt="" />
-          <img id="intro-f25" src="assets/cap/tui/01-session-stream-f15.png" alt="" />
-          <img id="intro-f26" src="assets/cap/tui/01-session-stream-f16.png" alt="" />
-          <img id="intro-f27" src="assets/cap/tui/01-session-stream-f17.png" alt="" />
-          <img id="intro-f28" src="assets/cap/tui/01-session-stream-f18.png" alt="" />
-          <img id="intro-f29" src="assets/cap/tui/01-session-stream-f19.png" alt="" />
-          <img id="intro-f30" src="assets/cap/tui/01-session-stream-f20.png" alt="" />
-          <img id="intro-f31" src="assets/cap/tui/01-session-stream-f21.png" alt="" />
-          <img id="intro-f32" src="assets/cap/tui/01-session-stream-f22.png" alt="" />
-          <img id="intro-f33" src="assets/cap/tui/01-session-stream-f23.png" alt="" />
-          <img id="intro-f34" src="assets/cap/tui/01-session-stream-f24.png" alt="" />
-          <img id="intro-f35" src="assets/cap/tui/01-session-stream-f25.png" alt="" />
-          <img id="intro-f36" src="assets/cap/tui/01-session-stream-f26.png" alt="" />
-          <img id="intro-f37" src="assets/cap/tui/01-session-stream-f27.png" alt="" />
-          <img id="intro-f38" src="assets/cap/tui/01-session-stream-f28.png" alt="" />
-          <img id="intro-f39" src="assets/cap/tui/01-session-stream-f29.png" alt="" />
-          <img id="intro-f40" src="assets/cap/tui/01-session-stream-f30.png" alt="" />
-          <img id="intro-f41" src="assets/cap/tui/01-session-stream-f31.png" alt="" />
-          <img id="intro-f42" src="assets/cap/tui/01-session-stream-f32.png" alt="" />
-          <img id="intro-f43" src="assets/cap/tui/01-session-stream-f33.png" alt="" />
-          <img id="intro-f44" src="assets/cap/tui/01-session-stream-f34.png" alt="" />
-          <img id="intro-f45" src="assets/cap/tui/01-session-stream-f35.png" alt="" />
-          <img id="intro-f46" src="assets/cap/tui/01-session-stream-f36.png" alt="" />
-          <img id="intro-f47" src="assets/cap/tui/01-session-stream-f37.png" alt="" />
-          <img id="intro-f48" src="assets/cap/tui/01-session-stream-f38.png" alt="" />
-          <img id="intro-f49" src="assets/cap/tui/01-session-stream-f39.png" alt="" />
-          <img id="intro-f50" src="assets/cap/tui/01-session-stream-f40.png" alt="" />
-          <img id="intro-f51" src="assets/cap/tui/01-session-stream-f41.png" alt="" />
-          <img id="intro-f52" src="assets/cap/tui/01-session-stream-f42.png" alt="" />
-          <img id="intro-f53" src="assets/cap/tui/01-session-stream-f43.png" alt="" />
-          <img id="intro-f54" src="assets/cap/tui/01-session-stream-f44.png" alt="" />
-          <img id="intro-f55" src="assets/cap/tui/01-session-stream-f45.png" alt="" />
-          <img id="intro-f56" src="assets/cap/tui/01-session-stream-f46.png" alt="" />
-          <img id="intro-f57" src="assets/cap/tui/01-session-stream-f47.png" alt="" />
-          <img id="intro-f58" src="assets/cap/tui/01-session-stream-f48.png" alt="" />
-          <img id="intro-f59" src="assets/cap/tui/01-session-stream-f49.png" alt="" />
-          <img id="intro-f60" src="assets/cap/tui/01-session-stream-f50.png" alt="" />
-          <img id="intro-f61" src="assets/cap/tui/01-session-stream-f51.png" alt="" />
-          <img id="intro-f62" src="assets/cap/tui/01-session-stream-f52.png" alt="" />
-          <img id="intro-f63" src="assets/cap/tui/01-session-stream-f53.png" alt="" />
-          <img id="intro-f64" src="assets/cap/tui/01-session-stream-f54.png" alt="" />
-          <img id="intro-f65" src="assets/cap/tui/01-session-stream-f55.png" alt="" />
-          <img id="intro-f66" src="assets/cap/tui/01-session-stream-f56.png" alt="" />
-          <img id="intro-f67" src="assets/cap/tui/01-session-stream-f57.png" alt="" />
-          <img id="intro-f68" src="assets/cap/tui/01-session-stream-f58.png" alt="" />
-          <img id="intro-f69" src="assets/cap/tui/01-session-stream-f59.png" alt="" />
-          <img id="intro-f70" src="assets/cap/tui/01-session-stream-f60.png" alt="" />
-          <img id="intro-f71" src="assets/cap/tui/01-session-stream-f61.png" alt="" />
-          <img id="intro-f72" src="assets/cap/tui/01-session-stream-f62.png" alt="" />
-          <img id="intro-f73" src="assets/cap/tui/01-session-final.png" alt="" />
+    <div data-hf-id="hf-gmf2" id="intro-tui" class="clip" data-start="4" data-duration="11.45">
+      <div data-hf-id="hf-l0a6" id="intro-persp"><div data-hf-id="hf-bffv" id="intro-cam"><div data-hf-id="hf-i8qz" id="intro-pan">
+        <div data-hf-id="hf-d85w" id="intro-stage">
+          <div data-hf-id="hf-cgcl" id="intro-reveal">
+          <img data-hf-id="hf-8ln3" id="intro-f0" src="assets/cap/tui/01-session-type-f01.png" alt="">
+          <img data-hf-id="hf-sspf" id="intro-f1" src="assets/cap/tui/01-session-type-f02.png" alt="">
+          <img data-hf-id="hf-9rff" id="intro-f2" src="assets/cap/tui/01-session-type-f03.png" alt="">
+          <img data-hf-id="hf-vyyn" id="intro-f3" src="assets/cap/tui/01-session-type-f04.png" alt="">
+          <img data-hf-id="hf-wwaf" id="intro-f4" src="assets/cap/tui/01-session-type-f05.png" alt="">
+          <img data-hf-id="hf-qk03" id="intro-f5" src="assets/cap/tui/01-session-type-f06.png" alt="">
+          <img data-hf-id="hf-mna3" id="intro-f6" src="assets/cap/tui/01-session-type-f07.png" alt="">
+          <img data-hf-id="hf-anl3" id="intro-f7" src="assets/cap/tui/01-session-type-f08.png" alt="">
+          <img data-hf-id="hf-azy7" id="intro-f8" src="assets/cap/tui/01-session-type-f09.png" alt="">
+          <img data-hf-id="hf-otj2" id="intro-f9" src="assets/cap/tui/01-session-type-f10.png" alt="">
+          <img data-hf-id="hf-dhg1" id="intro-f10" src="assets/cap/tui/01-session-type-f11.png" alt="">
+          <img data-hf-id="hf-4715" id="intro-f11" src="assets/cap/tui/01-session-stream-f01.png" alt="">
+          <img data-hf-id="hf-etqj" id="intro-f12" src="assets/cap/tui/01-session-stream-f02.png" alt="">
+          <img data-hf-id="hf-226d" id="intro-f13" src="assets/cap/tui/01-session-stream-f03.png" alt="">
+          <img data-hf-id="hf-zi03" id="intro-f14" src="assets/cap/tui/01-session-stream-f04.png" alt="">
+          <img data-hf-id="hf-bhcx" id="intro-f15" src="assets/cap/tui/01-session-stream-f05.png" alt="">
+          <img data-hf-id="hf-kpdf" id="intro-f16" src="assets/cap/tui/01-session-stream-f06.png" alt="">
+          <img data-hf-id="hf-vov9" id="intro-f17" src="assets/cap/tui/01-session-stream-f07.png" alt="">
+          <img data-hf-id="hf-vl2j" id="intro-f18" src="assets/cap/tui/01-session-stream-f08.png" alt="">
+          <img data-hf-id="hf-q1jt" id="intro-f19" src="assets/cap/tui/01-session-stream-f09.png" alt="">
+          <img data-hf-id="hf-384f" id="intro-f20" src="assets/cap/tui/01-session-stream-f10.png" alt="">
+          <img data-hf-id="hf-bcd9" id="intro-f21" src="assets/cap/tui/01-session-stream-f11.png" alt="">
+          <img data-hf-id="hf-6sef" id="intro-f22" src="assets/cap/tui/01-session-stream-f12.png" alt="">
+          <img data-hf-id="hf-bps1" id="intro-f23" src="assets/cap/tui/01-session-stream-f13.png" alt="">
+          <img data-hf-id="hf-pmfr" id="intro-f24" src="assets/cap/tui/01-session-stream-f14.png" alt="">
+          <img data-hf-id="hf-w2bp" id="intro-f25" src="assets/cap/tui/01-session-stream-f15.png" alt="">
+          <img data-hf-id="hf-unrz" id="intro-f26" src="assets/cap/tui/01-session-stream-f16.png" alt="">
+          <img data-hf-id="hf-rxi9" id="intro-f27" src="assets/cap/tui/01-session-stream-f17.png" alt="">
+          <img data-hf-id="hf-7ssv" id="intro-f28" src="assets/cap/tui/01-session-stream-f18.png" alt="">
+          <img data-hf-id="hf-3mct" id="intro-f29" src="assets/cap/tui/01-session-stream-f19.png" alt="">
+          <img data-hf-id="hf-pdf3" id="intro-f30" src="assets/cap/tui/01-session-stream-f20.png" alt="">
+          <img data-hf-id="hf-f3np" id="intro-f31" src="assets/cap/tui/01-session-stream-f21.png" alt="">
+          <img data-hf-id="hf-lnfr" id="intro-f32" src="assets/cap/tui/01-session-stream-f22.png" alt="">
+          <img data-hf-id="hf-677t" id="intro-f33" src="assets/cap/tui/01-session-stream-f23.png" alt="">
+          <img data-hf-id="hf-mdcf" id="intro-f34" src="assets/cap/tui/01-session-stream-f24.png" alt="">
+          <img data-hf-id="hf-vjyd" id="intro-f35" src="assets/cap/tui/01-session-stream-f25.png" alt="">
+          <img data-hf-id="hf-a993" id="intro-f36" src="assets/cap/tui/01-session-stream-f26.png" alt="">
+          <img data-hf-id="hf-k84x" id="intro-f37" src="assets/cap/tui/01-session-stream-f27.png" alt="">
+          <img data-hf-id="hf-kqrj" id="intro-f38" src="assets/cap/tui/01-session-stream-f28.png" alt="">
+          <img data-hf-id="hf-s58l" id="intro-f39" src="assets/cap/tui/01-session-stream-f29.png" alt="">
+          <img data-hf-id="hf-lc0j" id="intro-f40" src="assets/cap/tui/01-session-stream-f30.png" alt="">
+          <img data-hf-id="hf-vsyh" id="intro-f41" src="assets/cap/tui/01-session-stream-f31.png" alt="">
+          <img data-hf-id="hf-u8lf" id="intro-f42" src="assets/cap/tui/01-session-stream-f32.png" alt="">
+          <img data-hf-id="hf-n7id" id="intro-f43" src="assets/cap/tui/01-session-stream-f33.png" alt="">
+          <img data-hf-id="hf-4vpv" id="intro-f44" src="assets/cap/tui/01-session-stream-f34.png" alt="">
+          <img data-hf-id="hf-fv5l" id="intro-f45" src="assets/cap/tui/01-session-stream-f35.png" alt="">
+          <img data-hf-id="hf-crs3" id="intro-f46" src="assets/cap/tui/01-session-stream-f36.png" alt="">
+          <img data-hf-id="hf-1k4t" id="intro-f47" src="assets/cap/tui/01-session-stream-f37.png" alt="">
+          <img data-hf-id="hf-0fzn" id="intro-f48" src="assets/cap/tui/01-session-stream-f38.png" alt="">
+          <img data-hf-id="hf-rca1" id="intro-f49" src="assets/cap/tui/01-session-stream-f39.png" alt="">
+          <img data-hf-id="hf-8sc3" id="intro-f50" src="assets/cap/tui/01-session-stream-f40.png" alt="">
+          <img data-hf-id="hf-q7rl" id="intro-f51" src="assets/cap/tui/01-session-stream-f41.png" alt="">
+          <img data-hf-id="hf-1k17" id="intro-f52" src="assets/cap/tui/01-session-stream-f42.png" alt="">
+          <img data-hf-id="hf-7a85" id="intro-f53" src="assets/cap/tui/01-session-stream-f43.png" alt="">
+          <img data-hf-id="hf-ci0b" id="intro-f54" src="assets/cap/tui/01-session-stream-f44.png" alt="">
+          <img data-hf-id="hf-0r2x" id="intro-f55" src="assets/cap/tui/01-session-stream-f45.png" alt="">
+          <img data-hf-id="hf-etcz" id="intro-f56" src="assets/cap/tui/01-session-stream-f46.png" alt="">
+          <img data-hf-id="hf-tvth" id="intro-f57" src="assets/cap/tui/01-session-stream-f47.png" alt="">
+          <img data-hf-id="hf-drcj" id="intro-f58" src="assets/cap/tui/01-session-stream-f48.png" alt="">
+          <img data-hf-id="hf-xkdt" id="intro-f59" src="assets/cap/tui/01-session-stream-f49.png" alt="">
+          <img data-hf-id="hf-b14v" id="intro-f60" src="assets/cap/tui/01-session-stream-f50.png" alt="">
+          <img data-hf-id="hf-knsd" id="intro-f61" src="assets/cap/tui/01-session-stream-f51.png" alt="">
+          <img data-hf-id="hf-1flr" id="intro-f62" src="assets/cap/tui/01-session-stream-f52.png" alt="">
+          <img data-hf-id="hf-m54p" id="intro-f63" src="assets/cap/tui/01-session-stream-f53.png" alt="">
+          <img data-hf-id="hf-dbdj" id="intro-f64" src="assets/cap/tui/01-session-stream-f54.png" alt="">
+          <img data-hf-id="hf-6r9x" id="intro-f65" src="assets/cap/tui/01-session-stream-f55.png" alt="">
+          <img data-hf-id="hf-3tdz" id="intro-f66" src="assets/cap/tui/01-session-stream-f56.png" alt="">
+          <img data-hf-id="hf-qlzd" id="intro-f67" src="assets/cap/tui/01-session-stream-f57.png" alt="">
+          <img data-hf-id="hf-vnin" id="intro-f68" src="assets/cap/tui/01-session-stream-f58.png" alt="">
+          <img data-hf-id="hf-abml" id="intro-f69" src="assets/cap/tui/01-session-stream-f59.png" alt="">
+          <img data-hf-id="hf-n367" id="intro-f70" src="assets/cap/tui/01-session-stream-f60.png" alt="">
+          <img data-hf-id="hf-umg5" id="intro-f71" src="assets/cap/tui/01-session-stream-f61.png" alt="">
+          <img data-hf-id="hf-0r0v" id="intro-f72" src="assets/cap/tui/01-session-stream-f62.png" alt="">
+          <img data-hf-id="hf-iekt" id="intro-f73" src="assets/cap/tui/01-session-final.png" alt="">
           </div>
-          <div id="intro-trail"></div>
-          <div id="intro-scan"></div>
+          <div data-hf-id="hf-14uy" id="intro-trail"></div>
+          <div data-hf-id="hf-jril" id="intro-scan"></div>
         </div>
       </div></div></div>
-      <div id="intro-lift"></div>
-      <div id="intro-vig"></div>
-      <div id="intro-flash"></div>
+      <div data-hf-id="hf-cish" id="intro-lift"></div>
+      <div data-hf-id="hf-8muw" id="intro-vig"></div>
+      <div data-hf-id="hf-5kmg" id="intro-flash"></div>
     </div>
-    <div id="intro-cap" class="clip" data-start="13.8" data-duration="1.2"><span id="intro-cap-in">One agentic loop.</span></div>
+    <div data-hf-id="hf-d4uw" id="intro-cap" class="clip" data-start="13.8" data-duration="1.2"><span data-hf-id="hf-ftju" id="intro-cap-in">One agentic loop.</span></div>
   </div>
   <script>
     (function () {
@@ -155,12 +159,29 @@
         else on = Math.floor((t - 2.9) / BEAT) % 2 === 0 ? 1 : 0;
         if (t < 4) {
           for (let i = 0; i < 5; i++) letters[i].style.opacity = i < n ? 1 : 0;
-          if (n !== nTyped) { cursor.style.left = (n * 115.2 + 7) + "px"; nTyped = n; }
+          if (n !== nTyped) { cursor.style.left = (n * 128 + 7) + "px"; nTyped = n; }
           cursor.style.opacity = on;
         }
       }
       function cam(fx, fy, s, cx, cy) { return { x: (cx === undefined ? 960 : cx) - fx * s, y: (cy === undefined ? 540 : cy) - fy * s, scale: s }; }
       const tl = gsap.timeline({ paused: true });
+      const field = document.getElementById("intro-field");
+      const rnd = (function (a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; })(7);
+      let fh = "";
+      for (let j = 0; j < 21; j++) for (let i = 0; i < 34; i++) {
+        if (rnd() < 0.3) continue; // some slashes are never shown
+        fh += `<i class="sl" style="left:${i * 70}px;top:${j * 70}px">╱</i>`;
+      }
+      field.innerHTML = fh;
+      tl.fromTo(field, { opacity: 0 }, { opacity: 1, duration: 1.0, ease: "power2.out" }, 0.2);
+      tl.fromTo(field, { opacity: 1 }, { opacity: 0, duration: 0.7, ease: "power2.in", immediateRender: false }, 3.3);
+      // random slashes light up from dark gray to light gray, then fall back
+      field.querySelectorAll(".sl").forEach((el) => {
+        if (rnd() < 0.4) return;
+        const t0 = 0.2 + rnd() * 3.2, up = 0.15 + rnd() * 0.25, hold = 0.2 + rnd() * 0.5, down = 0.3 + rnd() * 0.5;
+        tl.to(el, { color: "#3a3a40", duration: up, ease: "power1.out" }, t0);
+        tl.to(el, { color: "#17171a", duration: down, ease: "power1.in" }, t0 + up + hold);
+      });
       const proxy = { t: 0 };
       tl.to(proxy, { t: 15.45, duration: 15.45, ease: "none", onUpdate: () => draw(proxy.t) }, 0);
       // title: glow breath, blur out

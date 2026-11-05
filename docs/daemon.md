@@ -91,6 +91,12 @@ the latest GitHub release and never installs.
 - **Messages.** Append-only rows in session order, saved as each one is
   produced (user, assistant, tool). Parts keep their `raw` wire items, so a
   resumed session replays to its provider without loss.
+  Both clients show a new session's first submission immediately as `You · Sending…`
+  below the unchanged context preview while creation (including MCP startup) runs.
+  This pending UI is not inserted into canonical messages. The confirmed user
+  message and loaded starting history replace it together; failures restore the
+  draft. Clients open the created session and submit its prompt without waiting
+  for its history reads. Core's snapshot and MCP readiness guarantees are unchanged.
 - **Images.** A prompt may carry images (`POST …/prompt {text?, images?}`;
   [api.md](api.md#image-prompts)). `nexus/images.py` validates them before the
   turn is created: at most eight base64 PNG, JPEG, GIF or WebP data URLs whose

@@ -573,6 +573,8 @@ same three layers, small: the orb, its caption and the hint/End. There is no thi
 
 ### 10.2 The orb
 
+*Shipped as the header braille wave field (2026-11-05); see [manager.md](manager.md#manager-in-the-clients). This section keeps the original orb design.*
+
 One shape, a few states, driven by real audio levels measured in the client (section 5). The look: a soft luminous
 sphere with a bright core and an alpha falloff into whatever is behind it, never a flat disc or a spinner.
 

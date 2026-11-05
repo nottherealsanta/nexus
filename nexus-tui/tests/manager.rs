@@ -317,22 +317,41 @@ fn messages_the_manager_sent_say_via_manager() {
 }
 
 #[test]
-fn the_orb_clock_runs_only_while_the_orb_is_there() {
+fn the_indicator_clock_runs_while_the_dropdown_or_a_state_is_moving() {
     let mut o = opts(Mode::Dark, Tier::TrueColor);
     o.reduced_motion = false;
     let mut a = with_turn(o, (120, 40));
     a.ui.manager.silent = true;
     start(&mut a);
+    // The real dropdown path pins the field visible when it opens.
+    a.ui.manager
+        .indicator
+        .pin(nexus_tui::indicator::IndicatorState::Idle, 0.2);
     assert!(
-        !a.manager_animating(Instant::now()),
-        "an idle call shows nothing"
+        a.manager_animating(Instant::now()),
+        "an open dropdown shows moving idle waves"
     );
+    // A call left in the background is still: no frame clock for it.
+    a.manager_execute("manager.header");
+    let later = Instant::now() + Duration::from_secs(5);
+    for step in 0..12 {
+        a.manager_frame(later + Duration::from_millis(100 * step));
+    }
+    a.manager_tick(later + Duration::from_millis(1200));
+    assert!(!a.manager_animating(later + Duration::from_secs(2)));
     a.manager_execute("manager.talk");
     assert!(a.manager_animating(Instant::now()));
     a.manager_execute("manager.listen_cancel");
-    let later = Instant::now() + Duration::from_secs(30);
-    a.manager_frame(later);
-    assert!(!a.manager_animating(later + Duration::from_secs(30)));
+    assert!(
+        a.manager_animating(Instant::now()),
+        "the open dropdown keeps moving"
+    );
+    a.manager_execute("manager.stop");
+    let later = Instant::now() + Duration::from_secs(5);
+    for step in 0..12 {
+        a.manager_frame(later + Duration::from_millis(100 * step));
+    }
+    assert!(!a.manager_animating(later + Duration::from_secs(10)));
 }
 
 #[test]
@@ -528,7 +547,7 @@ fn palette_context_modal_closes_before_the_dropdown() {
     let g = a.regions.clone();
     assert_eq!(
         a.hits.at(g.manager.x + 2, g.manager.y),
-        Some(&nexus_tui::ui::Target::ManagerOrb)
+        Some(&nexus_tui::ui::Target::ManagerIndicator)
     );
     a.effects.clear();
     a.execute("manager.context");
@@ -567,7 +586,7 @@ fn palette_context_modal_closes_before_the_dropdown() {
 }
 
 #[test]
-fn talking_from_the_minimised_orb_brings_the_call_back() {
+fn talking_from_the_minimised_indicator_brings_the_call_back() {
     let mut a = app();
     start_quiet(&mut a);
     assert!(
@@ -674,21 +693,84 @@ fn the_minimised_caption_opens_a_waiting_card() {
     assert!(!a.manager_key(&key("x"), "x"));
 }
 
+fn braille(shown: &str) -> usize {
+    shown
+        .chars()
+        .filter(|c| ('\u{2800}'..='\u{28ff}').contains(c))
+        .count()
+}
+
 #[test]
-fn graphics_orb_is_placed_by_the_stage_and_removed_on_end() {
+fn the_header_indicator_is_a_braille_wave_field_and_goes_on_end() {
     let mut a = app();
     start(&mut a);
     a.ui.manager
-        .orb
-        .pin(nexus_tui::orb::OrbState::Listening, 0.6);
-    a.orb_sprites.borrow_mut().configure(true, (8, 16));
-    draw(&mut a, 120, 40);
-    let graphics = a.orb_sprites.borrow_mut().take();
-    assert!(graphics.contains("a=t,"));
-    assert!(graphics.contains("c=10,r=1,z=1,C=1"));
+        .indicator
+        .pin(nexus_tui::indicator::IndicatorState::Listening, 0.6);
+    let shown = text(&mut a);
+    assert!(braille(&shown) >= 8, "the header is braille text: {shown}");
+    let strip = a.hits.rect_of(&Target::ManagerIndicator).unwrap();
+    assert_eq!(strip.height, 1);
     a.manager_execute("manager.stop");
+    let later = Instant::now() + Duration::from_secs(5);
+    for step in 0..12 {
+        a.manager_frame(later + Duration::from_millis(100 * step));
+    }
+    let shown = text(&mut a);
+    assert_eq!(braille(&shown), 0, "the field is gone: {shown}");
+}
+
+#[test]
+fn hovering_the_live_voice_indicator_offers_stop_and_clicking_it_stops_the_voice() {
+    let mut a = app();
+    start(&mut a);
+    a.ui.manager.live_call = true;
+    a.ui.manager.voice_enabled = true;
     draw(&mut a, 120, 40);
-    assert!(a.orb_sprites.borrow_mut().take().contains("a=d,d=i,"));
+    let strip = a.hits.rect_of(&Target::ManagerIndicator).unwrap();
+    a.mouse = Some((strip.x + 2, strip.y));
+    let shown = text(&mut a);
+    assert!(shown.contains("Stop"), "{shown}");
+    a.mouse = Some((0, 30));
+    assert!(!text(&mut a).contains("Stop"), "only while hovered");
+
+    a.effects.clear();
+    click(&mut a, strip.x + 2, strip.y);
+    assert!(
+        manager_calls(&a)
+            .iter()
+            .any(|(path, _)| path == "/api/manager/live/stop"),
+        "the voice is stopped through the existing path"
+    );
+    assert!(!a.ui.manager.live_call && !a.ui.manager.voice_enabled);
+    assert!(a.ui.manager.call.is_some(), "the control call stays open");
+}
+
+#[test]
+fn an_open_manager_panel_dims_the_rest_of_the_screen() {
+    let f: Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/manager-dropdown.json"
+    ))
+    .unwrap();
+    assert_eq!(f["panel_dim"], true);
+    let mut a = app();
+    let (before, _) = draw(&mut a, 120, 40);
+    a.manager_execute("manager.header");
+    let (after, _) = draw(&mut a, 120, 40);
+    // The left column is nowhere near the dropdown: every cell there is dimmed.
+    let mut changed = 0;
+    for y in 2..38u16 {
+        for x in 0..40u16 {
+            let (a, b) = (&before[(x, y)], &after[(x, y)]);
+            if a.fg != b.fg || a.bg != b.bg || a.modifier != b.modifier {
+                changed += 1;
+            }
+        }
+    }
+    assert!(
+        changed > 100,
+        "the app behind the panel is dimmed: {changed}"
+    );
 }
 
 #[test]
@@ -714,16 +796,18 @@ fn the_focused_call_shows_the_latest_model_excerpt_and_real_tool() {
 }
 
 #[test]
-fn header_orb_and_connecting_show_before_the_start_reply() {
+fn header_indicator_and_connecting_show_before_the_start_reply() {
     let mut a = app();
     a.manager_execute("manager.header");
     a.manager_execute("manager.audio_toggle");
-    assert!(a.ui.manager.starting && a.ui.manager.orb.visible());
-    assert!(text(&mut a).contains("Connecting…"));
-    let orb = a.hits.rect_of(&Target::ManagerOrb).unwrap();
-    assert_eq!(orb.height, 1);
-    assert_eq!(orb.y, 0);
-    assert!(orb.width > 1);
+    assert!(a.ui.manager.starting && a.ui.manager.indicator.visible());
+    let shown = text(&mut a);
+    assert!(shown.contains("Connecting…"));
+    assert!(braille(&shown) > 0, "the header is braille text: {shown}");
+    let indicator = a.hits.rect_of(&Target::ManagerIndicator).unwrap();
+    assert_eq!(indicator.height, 1);
+    assert_eq!(indicator.y, 0);
+    assert!(indicator.width > 1);
     press(&mut a, &["esc"]);
     assert!(a.ui.manager.starting);
     a.manager_execute("manager.stop");
@@ -756,9 +840,16 @@ fn shared_dropdown_contract_keeps_text_audio_and_debug_separate() {
     assert!(shown.contains(f["placeholder"].as_str().unwrap()));
     assert!(shown.contains(f["debug_action"].as_str().unwrap()));
     assert_eq!(
-        a.hits.rect_of(&Target::ManagerOrb).unwrap().height,
-        f["orb_rows"].as_u64().unwrap() as u16
+        a.hits.rect_of(&Target::ManagerIndicator).unwrap().height,
+        f["indicator_rows"].as_u64().unwrap() as u16
     );
+    // The live voice turns the indicator into a Stop control.
+    a.ui.manager.live_call = true;
+    let strip = a.hits.rect_of(&Target::ManagerIndicator).unwrap();
+    a.mouse = Some((strip.x + 2, strip.y));
+    assert!(text(&mut a).contains(f["indicator_stop"].as_str().unwrap()));
+    a.ui.manager.live_call = false;
+    a.mouse = None;
     typing(&mut a, f["input"].as_str().unwrap());
     press(&mut a, &["enter"]);
     assert_eq!(

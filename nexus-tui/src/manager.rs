@@ -1,12 +1,12 @@
 //! The Manager in the TUI (docs/manager-design.md section 10): state and behaviour.
 //!
-//! The Manager is a voice agent above all sessions. Here it is three layers
-//! painted over the app and nothing more: an orb at the bottom centre, a
-//! caption above it and at most one card in a semi-transparent modal. This
-//! module is the model of those layers and every way into them: the `manager.*`
-//! events, the keys taken only while engaged, the voice flow (microphone,
-//! transcription, speech), navigation, and the calls to Core. Drawing is
-//! `orb.rs` (the orb) and `stage.rs` (caption, field and cards).
+//! The Manager is a voice agent above all sessions. Here it is two layers
+//! painted over the app and nothing more: a braille indicator in the header and
+//! a notification dropdown below it, holding the caption, typed field and at
+//! most one card. This module is the model of those layers and every way into
+//! them: the `manager.*` events, the keys taken only while engaged, the voice
+//! flow (microphone, transcription, speech), navigation, and the calls to Core.
+//! Drawing is `indicator.rs` (the header field) and `stage.rs` (the dropdown).
 //!
 //! At rest, with no call, nothing here runs: no key is taken but the Manager's
 //! own shortcuts, no tick does work and no frame is requested.
@@ -23,7 +23,7 @@ use crate::api::Event;
 use crate::app::{App, Effect, Sound};
 use crate::composer::Composer;
 use crate::dictation::{CaptureCommand, CaptureEvent};
-use crate::orb::{Orb, OrbState};
+use crate::indicator::{Indicator, IndicatorState};
 use crate::sync::{Command as SyncCommand, ManagerCall, ManagerError};
 use crate::ui::{Level, Target};
 
@@ -42,7 +42,7 @@ pub const CARD_ENTER: Duration = Duration::from_millis(220);
 const THINKING_CUE: Duration = Duration::from_secs(1);
 /// A `say` that Core has not answered with a phase change yet still reads as thinking.
 const AWAITING: Duration = Duration::from_secs(8);
-/// Speech RMS is small; the microphone's reading is scaled so a voice spans the orb's range.
+/// Speech RMS is small; the microphone's reading is scaled so a voice spans the indicator's range.
 const MIC_GAIN: f32 = 7.0;
 
 pub const VOICE_UNAVAILABLE: &str =
@@ -89,7 +89,7 @@ pub struct Failure {
     pub fix: String,
 }
 
-/// The words above the orb: what the user said (dim) and the Manager's current sentence.
+/// The words above the indicator: what the user said (dim) and the Manager's current sentence.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Caption {
     pub user: Option<String>,
@@ -114,7 +114,7 @@ struct Sentence {
     turn: String,
     seq: u64,
     text: String,
-    /// An unprompted line: caption and speech, never an orb.
+    /// An unprompted line: caption and speech, never an indicator.
     proactive: bool,
 }
 
@@ -194,7 +194,7 @@ pub struct ManagerUi {
     pub caption: Option<Caption>,
     pub field: Option<Composer>,
     pub card: Option<CardState>,
-    /// The call is open but out of the way: a small orb in the corner, and the
+    /// The call is open but out of the way: the header keeps its indicator and the
     /// app has its keys back. `/manager` starts this way; the palette action
     /// `manager.minimise` does it on demand. Esc always ends the call.
     pub minimised: bool,
@@ -205,14 +205,14 @@ pub struct ManagerUi {
     pub preview: Option<Value>,
     pub back: Vec<View>,
     reported: (bool, bool),
-    pub orb: Orb,
+    pub indicator: Indicator,
     /// No audio device is touched: speech is shown as text, the microphone is
     /// pretended. `--dump-frame` and tests set this.
     pub silent: bool,
-    /// Dev-only, `NEXUS_TUI_MANAGER_PIN` in `--dump-frame`: the orb is held at a
+    /// Dev-only, `NEXUS_TUI_MANAGER_PIN` in `--dump-frame`: the indicator is held at a
     /// state and level (`Some(Some(..))`) or held away (`Some(None)`). It is never
     /// read outside `--dump-frame`, so it ships inert.
-    pub pin: Option<Option<(OrbState, f32)>>,
+    pub pin: Option<Option<(IndicatorState, f32)>>,
     thinking_since: Option<Instant>,
     cued: bool,
     anim_until: Option<Instant>,
@@ -264,7 +264,7 @@ impl Default for ManagerUi {
             preview: None,
             back: Vec::new(),
             reported: (false, false),
-            orb: Orb::default(),
+            indicator: Indicator::default(),
             silent: false,
             pin: None,
             thinking_since: None,
@@ -276,7 +276,7 @@ impl Default for ManagerUi {
 }
 
 impl ManagerUi {
-    /// A call that takes the stage: large orb, dimmed app and the call's keys.
+    /// The dropdown owns the screen: it dims the app and takes the call's keys.
     pub fn focused_call(&self) -> bool {
         self.dropdown_open && self.dropdown_interactive
     }
@@ -306,10 +306,10 @@ impl ManagerUi {
             || self.caption.is_some()
             || self.card.is_some()
             || self.consent.is_some()
-            || self.orb.visible()
+            || self.indicator.visible()
     }
 
-    /// The exchange is still going on: the orb stays and the caption stays.
+    /// The exchange is still going on: the indicator stays and the caption stays.
     fn exchange(&self, now: Instant) -> bool {
         self.listening()
             || matches!(self.mic, Mic::Stopping | Mic::Transcribing)
@@ -550,20 +550,21 @@ impl App {
 
     /// A mouse press on one of the Manager's own targets.
     pub fn manager_mouse(&mut self, ev: &MouseEvent) -> bool {
-        if self.ui.manager.dropdown_open && self.ui.manager.context.is_none() {
-            if matches!(
+        if self.ui.manager.dropdown_open
+            && self.ui.manager.context.is_none()
+            && matches!(
                 ev.kind,
                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-            ) {
-                if self.hits.at(ev.column, ev.row) == Some(&Target::ManagerDetails) {
-                    self.manager_scroll_details(if ev.kind == MouseEventKind::ScrollUp {
-                        -3
-                    } else {
-                        3
-                    });
-                }
-                return true;
+            )
+        {
+            if self.hits.at(ev.column, ev.row) == Some(&Target::ManagerDetails) {
+                self.manager_scroll_details(if ev.kind == MouseEventKind::ScrollUp {
+                    -3
+                } else {
+                    3
+                });
             }
+            return true;
         }
         if !matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
             return false;
@@ -575,7 +576,7 @@ impl App {
             && !matches!(
                 target,
                 Target::ManagerSession
-                    | Target::ManagerOrb
+                    | Target::ManagerIndicator
                     | Target::ManagerVoice
                     | Target::ManagerDebugSession
                     | Target::ManagerInput
@@ -590,7 +591,10 @@ impl App {
             return true;
         }
         match target {
-            Target::ManagerOrb => self.run_command("manager.header"),
+            // With the live voice on the indicator is its own stop control; otherwise
+            // it opens and closes the dropdown, as it always has.
+            Target::ManagerIndicator if self.ui.manager.live_call => self.stop_manager_voice(),
+            Target::ManagerIndicator => self.run_command("manager.header"),
             Target::ManagerVoice => self.run_command("manager.audio_toggle"),
             Target::ManagerDebugSession => self.run_command("manager.open_session"),
             Target::ManagerInput => {
@@ -822,7 +826,7 @@ impl App {
             return;
         }
         m.starting = true;
-        m.orb.pin(OrbState::Thinking, 0.3);
+        m.indicator.pin(IndicatorState::Thinking, 0.3);
         m.minimised = !talk && m.say_after_start.is_none();
         m.start_epoch += 1;
         let epoch = m.start_epoch;
@@ -849,7 +853,7 @@ impl App {
         self.clear_all();
     }
 
-    /// Drop everything the Manager had on screen and in flight. The orb is
+    /// Drop everything the Manager had on screen and in flight. The indicator is
     /// left to ease out.
     fn clear_all(&mut self) {
         self.end_live();
@@ -1863,33 +1867,33 @@ impl App {
 
     // ---- time -----------------------------------------------------------------------------------
 
-    /// What the orb shows now, `None` when it should not be there.
-    pub fn orb_target(&self, now: Instant) -> Option<OrbState> {
+    /// What the indicator shows now, `None` when it should not be there.
+    pub fn indicator_target(&self, now: Instant) -> Option<IndicatorState> {
         let m = &self.ui.manager;
         if let Some(pin) = m.pin {
             return pin.map(|(state, _)| state);
         }
         if m.starting || (m.live_call && !crate::live::is_open()) {
-            return Some(OrbState::Thinking);
+            return Some(IndicatorState::Thinking);
         }
         if m.call.is_none() && m.dropdown_open {
-            return Some(OrbState::Idle);
+            return Some(IndicatorState::Idle);
         }
         m.call.as_ref()?;
         if m.live_call {
             let levels = crate::live::levels();
             if levels.as_ref().is_some_and(|l| l.speaking(now)) {
-                return Some(OrbState::Speaking);
+                return Some(IndicatorState::Speaking);
             }
             if levels.is_some() && m.phase == CallPhase::Idle {
-                return Some(OrbState::Listening);
+                return Some(IndicatorState::Listening);
             }
         }
         if m.listening() {
-            return Some(OrbState::Listening);
+            return Some(IndicatorState::Listening);
         }
         if m.speaking {
-            return Some(OrbState::Speaking);
+            return Some(IndicatorState::Speaking);
         }
         if m.phase != CallPhase::Idle
             || m.mic == Mic::Transcribing
@@ -1899,18 +1903,18 @@ impl App {
             || m.playing.as_ref().is_some_and(|p| !p.proactive)
             || m.queue.iter().any(|s| !s.proactive)
         {
-            return Some(OrbState::Thinking);
+            return Some(IndicatorState::Thinking);
         }
         if m.field.is_some() || m.focused_card() {
-            return Some(OrbState::Idle);
+            return Some(IndicatorState::Idle);
         }
         // A call is open, so the stage is there even when the exchange is quiet:
         // large while focused, small in the corner while minimised.
-        Some(OrbState::Idle)
+        Some(IndicatorState::Idle)
     }
 
-    /// The caption word for a state, where the orb cannot say it itself.
-    pub fn orb_word(&self, now: Instant) -> Option<&'static str> {
+    /// The caption word for a state, where the indicator cannot say it itself.
+    pub fn indicator_word(&self, now: Instant) -> Option<&'static str> {
         let plain = self.theme.opts.reduced_motion
             || self.theme.mono()
             || self.theme.opts.tier != crate::theme::Tier::TrueColor
@@ -1918,10 +1922,10 @@ impl App {
         if !plain {
             return None;
         }
-        self.orb_target(now).and_then(OrbState::word)
+        self.indicator_target(now).and_then(IndicatorState::word)
     }
 
-    /// One quiet hint line under the orb: the current state's keys, including
+    /// One quiet hint line under the indicator: the current state's keys, including
     /// how to end the call. Wording is shared with NSH; only key labels differ.
     pub fn manager_hint(&self) -> String {
         let m = &self.ui.manager;
@@ -1996,7 +2000,13 @@ impl App {
         if self.theme.opts.reduced_motion || m.pin.is_some() || !m.live() {
             return false;
         }
-        if m.orb.moving(self.orb_target(now)) {
+        let target = self.indicator_target(now);
+        // An idle call left in the background stays still (no frame clock); the
+        // dropdown being open means the user is looking, so even idle waves travel.
+        let idle_wave = m.dropdown_open
+            && matches!(target, Some(IndicatorState::Idle))
+            && m.indicator.visible();
+        if idle_wave || m.indicator.moving(target) {
             return true;
         }
         if m.anim_until.is_some_and(|until| now < until) {
@@ -2008,18 +2018,18 @@ impl App {
         })
     }
 
-    /// Advance the orb to `now`. Called by the renderer before it draws.
+    /// Advance the indicator to `now`. Called by the renderer before it draws.
     pub fn manager_frame(&mut self, now: Instant) {
         if !self.ui.manager.live() {
             return;
         }
-        let target = self.orb_target(now);
+        let target = self.indicator_target(now);
         let reduced = self.theme.opts.reduced_motion;
         let m = &mut self.ui.manager;
         if let Some(pin) = m.pin {
             match pin {
-                Some((state, level)) => m.orb.pin(state, level),
-                None => m.orb = Orb::default(),
+                Some((state, level)) => m.indicator.pin(state, level),
+                None => m.indicator = Indicator::default(),
             }
             return;
         }
@@ -2029,13 +2039,13 @@ impl App {
             None
         };
         let raw = match target {
-            Some(OrbState::Listening) => live.as_ref().map_or(m.mic_level, |l| l.mic()),
-            Some(OrbState::Speaking) => live
+            Some(IndicatorState::Listening) => live.as_ref().map_or(m.mic_level, |l| l.mic()),
+            Some(IndicatorState::Speaking) => live
                 .as_ref()
                 .map_or_else(|| m.playback.level(), |l| l.speech()),
             _ => 0.0,
         };
-        m.orb.advance(now, target, raw, reduced);
+        m.indicator.advance(now, target, raw, reduced);
     }
 
     /// The slow clock (and the frame clock while animating). True when something changed.
@@ -2058,7 +2068,7 @@ impl App {
                 changed = true;
             }
         }
-        // Playback has begun: the sentence is now the caption and the orb speaks.
+        // Playback has begun: the sentence is now the caption and the indicator speaks.
         if let Some(p) = self.ui.manager.playing.as_ref() {
             if p.audio && !p.shown && self.ui.manager.playback.started() {
                 let text = p.text.clone();
@@ -2125,7 +2135,7 @@ impl App {
                 }
             }
         }
-        if self.ui.manager.orb.visible() {
+        if self.ui.manager.indicator.visible() {
             changed = true;
         }
         self.sync_activity();
@@ -2220,7 +2230,7 @@ impl App {
         m.minimised = !m.dropdown_open;
         if m.dropdown_open {
             m.field.get_or_insert_with(Composer::new);
-            m.orb.pin(OrbState::Idle, 0.2);
+            m.indicator.pin(IndicatorState::Idle, 0.2);
         }
         m.touch(self.clock);
         if m.dropdown_open && m.voice_enabled && !m.audio_requested {
@@ -2229,8 +2239,13 @@ impl App {
     }
 
     fn toggle_manager_audio(&mut self) {
-        self.ui.manager.voice_enabled = !self.ui.manager.voice_enabled;
-        if self.ui.manager.voice_enabled {
+        self.set_manager_audio(!self.ui.manager.voice_enabled);
+    }
+
+    /// The Voice toggle and the indicator's **Stop** share this one path.
+    fn set_manager_audio(&mut self, on: bool) {
+        self.ui.manager.voice_enabled = on;
+        if on {
             if !self.ui.manager.audio_requested {
                 self.talk();
             }
@@ -2243,6 +2258,15 @@ impl App {
                 self.call_core("audio_stop", "/api/manager/live/stop", json!({}));
             }
         }
+    }
+
+    /// The header indicator while the live voice is on: stop the voice, keep the call,
+    /// its session and the typed field.
+    fn stop_manager_voice(&mut self) {
+        if !self.ui.manager.live_call {
+            return;
+        }
+        self.set_manager_audio(false);
     }
 
     pub fn manager_connecting(&self) -> bool {
@@ -2460,19 +2484,19 @@ impl App {
     }
 }
 
-/// `state[:level]` or `none`: how `--dump-frame` holds the orb for a screenshot.
+/// `state[:level]` or `none`: how `--dump-frame` holds the indicator for a screenshot.
 /// States are `listening`, `thinking`, `speaking` and `idle`; the level is 0 to 1.
-pub fn parse_pin(spec: &str) -> Option<Option<(OrbState, f32)>> {
+pub fn parse_pin(spec: &str) -> Option<Option<(IndicatorState, f32)>> {
     let spec = spec.trim();
     if spec == "none" {
         return Some(None);
     }
     let (name, level) = spec.split_once(':').unwrap_or((spec, "0.6"));
     let state = match name {
-        "listening" => OrbState::Listening,
-        "thinking" => OrbState::Thinking,
-        "speaking" => OrbState::Speaking,
-        "idle" => OrbState::Idle,
+        "listening" => IndicatorState::Listening,
+        "thinking" => IndicatorState::Thinking,
+        "speaking" => IndicatorState::Speaking,
+        "idle" => IndicatorState::Idle,
         _ => return None,
     };
     Some(Some((state, level.parse::<f32>().ok()?.clamp(0.0, 1.0))))

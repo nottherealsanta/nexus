@@ -6,6 +6,13 @@ reads Nexus state files, SQLite or provider credentials. The one file it owns in
 the Nexus home is its own preferences file, `tui.json` (see Preferences below). Old Nexus's client in
 `~/repos/nexus-old/rust/tui` is reference.
 
+A new session's first message appears immediately below its context preview as
+`You · Sending…`, without waiting for MCP startup. The chosen agent/model/tool
+settings remain visible until Core's message and starting history arrive, avoiding
+a default-header flash. Pending text is local submission state, not model context;
+failed creation restores the new-session draft, and failed submission after creation
+restores it in the created session. Creation opens the tab before prompt submission.
+
 **Status (PLAN.md Steps 12.3 and most of 12.4):** the keyboard-first shell is
 usable against a real Core: workspace header, both sidebars, session view, waiting
 card, composer, command palette, the settings modal and unified alerts, with an
@@ -765,8 +772,12 @@ The session context meter reads Core's context budget; `~` marks estimates.
 ## The Manager
 
 The header's **Manager** label toggles a borderless, fully opaque notification dropdown: caption, recent model-context lines,
-current tool/status, the Manager's card, **Tell the Manager…** input and **Open Manager session**. Its glowing
-orb replaces the label while visible, several cells wide and one row high; click it to toggle the dropdown.
+current tool/status, the Manager's card, **Tell the Manager…** input and **Open Manager session**. While it or a
+call is open, a one-row field of gray braille cells replaces the label: three slow sine waves travel across ten cells,
+lighting only a few dots. Idle, thinking, listening and speaking change the speed and brightness (all gray); reduced
+motion freezes the field and ASCII terminals get one state glyph. Click the field to toggle the dropdown; an open
+dropdown dims everything outside it. With the live voice on, hovering the field shows **Stop** and clicking it stops the
+voice (`/api/manager/live/stop`) while the control call, backend session and typed field stay.
 The dropdown's **Voice: on/off** toggle defaults on: opening Manager or switching Voice on starts Live immediately.
 Switching Voice off stops only audio. The input has a solid inset surface; debug navigation does not start audio. Enter sends text; with Voice off, the first typed request starts a control
 call with audio disabled. Esc/outside click closes the dropdown while audio continues. Automatic cards do not steal
@@ -775,10 +786,9 @@ ends the control call. The debug button reuses the current persistent Manager se
 it shows canonical context inside Nexus with its composer disabled. The palette's Manager context view and the raw
 inspector remain available. See [Manager](../docs/manager.md).
 
-Live uses its own audio connection and does not require Dictation setup. The header orb appears immediately with
-**Connecting…** in the dropdown. Playback has a 60 ms startup/recovery buffer and the speaking colour holds through
-350 ms pauses. The TUI uses compressed cached sprites on graphics terminals and a cell fallback elsewhere; NSH
-uses the same colours and motion on Canvas. Real audio quality and talk-over interruption still need listening checks.
+Live uses its own audio connection and does not require Dictation setup. The header indicator appears immediately with
+**Connecting…** in the dropdown. Playback has a 60 ms startup/recovery buffer and the speaking state holds through
+350 ms pauses. Both clients draw the same braille field; real audio quality and talk-over interruption still need listening checks.
 
 Working labels use the shared travelling shimmer: one pass every 1.5 seconds,
 with a brighter highlight over secondary text. Reduced motion keeps the label static.

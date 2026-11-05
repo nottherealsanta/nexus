@@ -194,6 +194,20 @@ export const renaming = signal(false);
 export const addProjectOpen = signal(false);
 /** Choices made before a session exists; consumed by its creation request. */
 export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string; disabled_tools?: string[] }>({});
+export const firstPrompts = signal<Record<string, { text: string; images: number; session?: string; choices: ReturnType<typeof sessionDraft> }>>({});
+export function pendingFirstPrompt() {
+  m();
+  const pending = firstPrompts()[currentProject() ?? ""];
+  return pending && pending.session === model.selected?.sessionId && !(model.selected?.loaded && model.selected.messages.some((m) => m.role === "user")) ? pending : null;
+}
+function finishFirstPrompt() {
+  const project = currentProject() ?? "";
+  const pending = firstPrompts()[project];
+  if (pending?.session && pending.session === model.selected?.sessionId && model.selected.loaded && model.selected.messages.some((m) => m.role === "user")) {
+    firstPrompts.update((all) => { const next = { ...all }; delete next[project]; return next; });
+    if (sessionDraft() === pending.choices) sessionDraft.set({});
+  }
+}
 export const draft = signal<Record<string, string>>({});
 /** Core's starting context (PLAN K4) for the draft in `key`; a newer draft ignores a late older answer. */
 export const draftContext = signal<{ key: string; planKey: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: any[]; mcp: any[]; session?: { effort: string | null } } } | null>(null);
@@ -592,7 +606,7 @@ const host: SyncHost = {
   },
   setInfo(i, c) { info.set(i); compat.set(c); splashReach(1); },
   addBanner(b) { banners.update((l) => [...l.filter((x) => x.kind !== b.kind), b]); },
-  changed() { bump(); reconcileSelection(); autoLoadOlder(); },
+  changed() { finishFirstPrompt(); bump(); reconcileSelection(); autoLoadOlder(); },
   streamed() { bumpStream(); },
   snapshotApplied() { splashReach(2); reconcileSelection(); void loadConfig().catch(() => {}); void loadResources(); },
   configChanged() { void loadConfig().catch(() => {}); },

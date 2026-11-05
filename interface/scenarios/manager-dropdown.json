@@ -4,9 +4,11 @@
   "placeholder": "Tell the Manager…",
   "debug_action": "Open Manager session",
   "start_audio": false,
-  "orb_rows": 1,
+  "indicator_rows": 1,
+  "indicator_stop": "Stop",
+  "panel_dim": true,
   "escape_keeps_audio": true,
   "voice_default": true,
   "border": false,
-  "orb_replaces_label": true
+  "indicator_replaces_label": true
 }

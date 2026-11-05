@@ -338,8 +338,8 @@ export const PRINTABLE_KEYS: string[] = [
 
 // --- dev-only fixed levels (inert unless a client pref names them) --------------------------------------------
 
-/** `nexus.manager.dev` in client storage: `{ "level": 0.7, "voice": "simulate", "cards": "unfocused" }`. Nothing writes it. */
-export interface DevOrb { level: number; simulate: boolean; say?: string; unfocused: boolean; card?: unknown }
+/** `nexus.manager.dev` in client storage: `{ "level": 0.7, "voice": "simulate", "live": true, "cards": "unfocused" }`. Nothing writes it. */
+export interface DevOrb { level: number; simulate: boolean; live: boolean; say?: string; unfocused: boolean; card?: unknown }
 export function parseDevOrb(raw: string | null | undefined): DevOrb | null {
   if (!raw) return null;
   try {
@@ -347,7 +347,7 @@ export function parseDevOrb(raw: string | null | undefined): DevOrb | null {
     if (!v || typeof v !== "object") return null;
     const level = typeof v.level === "number" ? Math.min(1, Math.max(0, v.level)) : v.card ? 0.5 : NaN;
     if (!Number.isFinite(level)) return null;
-    return { level, simulate: v.voice === "simulate", say: typeof v.say === "string" ? v.say : undefined, unfocused: v.cards === "unfocused", card: v.card };
+    return { level, simulate: v.voice === "simulate", live: v.live === true, say: typeof v.say === "string" ? v.say : undefined, unfocused: v.cards === "unfocused", card: v.card };
   } catch { return null; }
 }
 

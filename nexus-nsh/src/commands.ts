@@ -7,7 +7,7 @@ import { Clipboard, keymap, openUrl, platform } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
   editFile, fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
-  pendingInputs, contextDetail, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
+  firstPrompts, pendingInputs, contextDetail, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
 } from "./store";
@@ -210,25 +210,32 @@ export async function sendPrompt(rawText: string, images: import("./images").Dra
   const pastes = (pasteDrafts()[source] ?? []).filter((p) => raw.includes(p.marker));
   if (!raw && !images.length) return false;
   let createdId: string | null = null;
+  let startingProject: string | null = null;
   try {
     let ses = viewed();
     if (centre() === "new_session" || !ses) {
       const project = currentProject();
       if (!project) throw new ApiError(400, "Add or choose a project first.");
+      if (firstPrompts()[project] && !firstPrompts()[project].session) return false;
+      startingProject = project;
       const selected = sessionDraft();
       const fields: Record<string, unknown> = {};
       if (selected.agent) fields.agent = selected.agent;
       if (selected.model) fields.model = selected.model;
       if (selected.effort !== undefined) fields.effort = selected.effort;
       if (selected.disabled_tools !== undefined) fields.disabled_tools = selected.disabled_tools;
+      firstPrompts.update((all) => ({ ...all, [project]: { text: raw, images: images.length, choices: selected } }));
+      draft.update((d) => ({ ...d, [source]: "" }));
+      imageDrafts.update((d) => ({ ...d, [source]: (d[source] ?? []).filter((i) => !images.includes(i)) }));
+      pasteDrafts.update((d) => ({ ...d, [source]: (d[source] ?? []).filter((p) => !pastes.includes(p)) }));
       const created = await request<any>("POST", "/api/session", { body: { project, ...fields }, key: newKey() });
       createdId = created.id;
       // The POST reply is authoritative: keep the tab and its title from the start, instead of
       // falling back to "New session" until the session's event or detail read arrives.
       const previous = model.sessions.get(created.id);
       if (!previous || (created.revision ?? 0) >= previous.revision) model.sessions.set(created.id, normalizeSession(created));
-      sessionDraft.set({});
-      await selectSession(created.id);
+      firstPrompts.update((all) => ({ ...all, [project]: { ...all[project], session: created.id } }));
+      void selectSession(created.id);
       ses = created;
     }
     await request("POST", `/api/session/${ses!.id}/prompt`, {
@@ -237,11 +244,18 @@ export async function sendPrompt(rawText: string, images: import("./images").Dra
     });
     return true;
   } catch (e) {
+    if (startingProject) {
+      firstPrompts.update((all) => { const next = { ...all }; delete next[startingProject!]; return next; });
+      if (!createdId) {
+        draft.update((d) => ({ ...d, [source]: [raw, d[source] ?? ""].filter(Boolean).join("\n") }));
+        imageDrafts.update((d) => ({ ...d, [source]: [...images, ...(d[source] ?? [])] }));
+        pasteDrafts.update((d) => ({ ...d, [source]: [...pastes, ...(d[source] ?? [])] }));
+      }
+    }
     if (createdId) {
       const target = createdId;
       imageDrafts.update((d) => ({ ...d, [source]: (d[source] ?? []).filter((i) => !images.includes(i)), [target]: [...images, ...(d[target] ?? [])] }));
-      const pastes = pasteDrafts()[source] ?? [];
-      if (pastes.length) pasteDrafts.update((d) => ({ ...d, [source]: [], [target]: [...pastes, ...(d[target] ?? [])] }));
+      if (pastes.length) pasteDrafts.update((d) => ({ ...d, [target]: [...pastes, ...(d[target] ?? [])] }));
       draft.update((d) => ({ ...d, [source]: (d[source] ?? "").trim() === raw ? "" : d[source] ?? "", [target]: [raw, d[target] ?? ""].filter(Boolean).join("\n") }));
     }
     toast("error", e instanceof ApiError ? e.message : String(e));

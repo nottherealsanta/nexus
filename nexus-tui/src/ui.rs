@@ -645,8 +645,8 @@ pub enum Target {
     SettingsPageRow(usize),
     /// A row of a provider's detail modal.
     ProviderDetailRow(usize),
-    /// The Manager's orb: a click talks.
-    ManagerOrb,
+    /// The Manager's indicator: a click talks, or stops the live voice.
+    ManagerIndicator,
     ManagerVoice,
     /// The Manager's End button: a click ends the call.
     ManagerEnd,

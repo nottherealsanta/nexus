@@ -79,7 +79,7 @@ pub enum ApiCall {
         before: Option<String>,
         parts: Vec<Value>,
     },
-    /// Create a session in a project, then prompt it.
+    /// Create a session; the app opens it and dispatches Prompt when creation completes.
     NewAndPrompt {
         project: String,
         text: String,
@@ -668,12 +668,7 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             }
         }
         ApiCall::NewAndPrompt {
-            project,
-            text,
-            images,
-            pastes,
-            fields,
-            ..
+            project, fields, ..
         } => {
             let s = conflict(
                 api.create_session(project, fields.clone(), &key)
@@ -683,12 +678,6 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             .ok_or("no session returned")?;
             done.open = Some(s.id.clone());
             done.session = Some(s.clone());
-            let key2 = RequestId::new();
-            conflict(
-                api.prompt_images(&s.id, text, images, pastes, "send", &key2)
-                    .await
-                    .map_err(e)?,
-            )?;
         }
         ApiCall::Continue { session } => {
             conflict(api.continue_turn(session, &key).await.map_err(e)?)?;

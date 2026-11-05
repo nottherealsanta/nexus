@@ -28,7 +28,7 @@ pub fn stop_local() -> bool {
     }
 }
 
-/// What is being heard right now, for the Manager's orb: the RMS of the samples the
+/// What is being heard right now, for the Manager's indicator: the RMS of the samples the
 /// output device is pulling (not of the bytes received), and whether any sound has
 /// started. Cheap to clone and read from any thread.
 #[derive(Clone, Default)]

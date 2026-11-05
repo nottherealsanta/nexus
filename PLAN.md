@@ -35,7 +35,7 @@ was only reviewed statically, or only tested offline, says so.
 | NSH Void design | Mostly complete; both passes done, since made square (radius 0) | Two open questions — [8.4](#84-nsh-void-design-leftovers) |
 | Polish | Modal first pass, compact Settings navigation/focus and brighter Working shimmer done in both clients | Finish modal audit; scroll model, tab/subagent spinners, group fold, iOS — [8.0](#80-polish-user-review-2026-11-04) |
 | Editor, explorer, Git page | Steps 0–1 done, step 2 in progress. The TUI app still edits in the plain `Composer` buffer; the vendored editor is used only by `examples/editor_demo.rs`. NSH's Files tab is one directory at a time; no Git tab in either client | Wire the vendored editor into the TUI — [4](#4-file-explorer-file-editor-and-git-page) |
-| Manager | M1–M5 implemented; a real TUI GPT-Live conversation with delegated search/read tools worked (11-04). Audio/orb/context polish built; latest sound quality not yet listening-verified | Remaining spikes, real-model evals, native/iOS audio, long-call reliability and hands-free — [3](#3-manager) |
+| Manager | M1–M5 implemented; a real TUI GPT-Live conversation with delegated search/read tools worked (11-04). Audio/context polish built; the header indicator is a gray braille wave field with Stop-on-hover for Live and a dimmed app behind the panel (11-05); latest sound quality not yet listening-verified | Remaining spikes, real-model evals, native/iOS audio, long-call reliability and hands-free — [3](#3-manager) |
 | Mermaid (Manager step 0) | Done in both clients | Real terminal image-protocol check, screenshots — [3.2](#32-mermaid-verification) |
 | Settings | Compact two-pane dialog; gray selections, white active-pane bar, Left returns to headings; focused checks and screenshots done | Real sign-ins, provider/tool-grid review, native/full browser coverage — [8.3](#83-settings) |
 | Providers | Codex, Copilot, Grok, OpenCode, Claude (Agent SDK) work | OpenAI and Ollama real calls; Anthropic Messages, Gemini — [10](#10-providers) |
@@ -69,6 +69,10 @@ with that interpreter (python.org 3.14.5 works); `~/.nsh/bin/nsh` is 0.2.0 while
 because Apple's `ar` produces a broken archive.
 
 ## Landed
+
+- **Braille Manager indicator and panel focus (11-05).** Both clients replace the glowing header orb with a one-row, ten-cell gray braille field: three sine waves travel across it, lighting only a few dots, with idle/thinking/listening/speaking read through speed and brightness (reduced motion freezes it; ASCII keeps one state glyph). While GPT-Live is on, hovering the indicator shows **Stop** and clicking it reuses the existing `live/stop` path, leaving the control call, backend session and typed field open; in the TUI this is a real mouse-move hover. An open Manager panel now dims everything outside it (TUI 40% scrim over the buffer, NSH 40% viewport backdrop), and the consent notice gets the same NSH backdrop. Validation: TUI `--test manager` 35 pass and six indicator unit tests pass; NSH `manager.test.tsx` 49 pass and 18 isolated browser `manager-cards` pass (including hover/Stop and the backdrop); `check_manifest.py` and `check_theme.py` pass; Core `pytest` is 1169 passed, 1 skipped. Full TUI/NSH runs retain the documented shared-tree blockers: seven pre-existing TUI test failures, seven pre-existing TUI clippy errors, the existing NSH `Button.onFocus` type error and the pre-existing Core ruff error in `manager/context.py`. Screenshots in `reports/manager-braille/`: TUI idle/speaking/light fields, the hovered Stop label and the dimmed dropdown; NSH web wave and dimmed panel. The packaged web host does not read the `nexus.manager.dev` live flag (pre-existing), so NSH Stop is covered by the browser test rather than a screenshot.
+
+- **Immediate first submission and stable context header (11-05).** Both clients show the first message immediately as `You · Sending…` below the retained context preview, keep chosen draft settings until confirmed message/history, and restore failed sends to the correct draft. TUI opens creation results before dispatching the prompt; NSH no longer waits for history before posting. Shared scenario: five TUI first-send checks (including 80×24), 76 behavior checks, four isolated NSH first-send checks and five context-header checks pass. TUI/NSH screenshots compared in `reports/first-prompt/`; release built. Full TUI before concurrent Manager edits: 765 passed, seven documented unrelated failures, seven ignored. Final focused TUI verification uses a first-send-only snapshot because concurrent Manager-indicator edits temporarily block compilation. Normal NSH tests retain the native-module loader blocker; `nsh check` retains the existing skill-picker `Button.onFocus` type error. No real-home changes or provider calls.
 
 - **Incoming provider usage merge (11-04).** Preserved usage snapshots alongside storage, live partials, Manager and skill changes; resolved documentation conflicts and kept both usage dialogs centered in the shared large modal class. Validation: 104 focused Core tests, two TUI skill-picker tests, two TUI usage tests and shared manifest/theme checks pass. Server suite: 45 pass, one nested-code approval timing failure. Existing Manager Ruff error and NSH native `declarations` dependency mismatch remain; fresh screenshots were not captured during this merge.
 
@@ -1230,6 +1234,12 @@ format, so readers must handle both during the transition.
 | Pending rows (8.0) | **`S` / `Q`** in primary text, and NSH is aligned with the TUI's pending-row UI |
 | Event compaction (13.5) | **Yes:** a finished (idle or archived) session's events are deleted, announced by a `session.compacted` record; continuing the session later writes new events as usual. Losing the inspector's raw wire, step timings and the export's events section for compacted turns is accepted |
 | CI | Deferred for now |
+
+## Decisions made (2026-11-05, user)
+
+| Decision | Answer |
+| --- | --- |
+| Manager header indicator | **Gray braille wave field, not the orb.** Three travelling sine waves, a few dots lit, state read through speed and brightness. While the live voice is on, hover shows **Stop** and click stops the voice (the call, session and typed field stay). An open Manager panel dims everything outside it |
 
 ## Decisions still open
 

@@ -333,7 +333,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         } else if let Some((title, body)) = a.blocking() {
             draw_dialog(&cx, buf, area, &title, &body, None, &mut hits);
         }
-        // The Manager's orb, caption and card are painted over everything else.
+        // The Manager's indicator, caption and card are painted over everything else.
         crate::stage::draw(a, buf, area, regions.composer, regions.manager, &mut hits);
         // The Manager's debug context is a modal above even the call stage.
         if let Some(context) = &a.ui.manager.context {
@@ -946,7 +946,11 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     // The Manager button, left of the right toggle: the hidden context modal.
     if g.manager.width > 0 {
         let m = &cx.app.ui.manager;
-        let label = if m.dropdown_open || m.call.is_some() || m.starting || m.orb.visible() { "" } else { "Manager" };
+        let label = if m.dropdown_open || m.call.is_some() || m.starting || m.indicator.visible() {
+            ""
+        } else {
+            "Manager"
+        };
         let live = cx.app.ui.manager.call.is_some();
         let style = if live {
             cx.st("status.info", SIDEBAR)
@@ -2353,8 +2357,7 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut Hit
         );
         return;
     };
-    if Some(project.clone()) != cx.app.current_project() || session != &cx.app.files_session()
-    {
+    if Some(project.clone()) != cx.app.current_project() || session != &cx.app.files_session() {
         return;
     }
     let display = cx
@@ -4361,7 +4364,10 @@ fn draw_timeline(
     hits.add(r, Target::Timeline);
     let inner = Rect::new(r.x + 2, r.y, r.width - 4, r.height);
     let lines = &timeline.lines;
-    if a.viewed().is_none() || (lines.is_empty() && a.messages().is_empty()) {
+    if a.pending_first_prompt().is_some()
+        || a.viewed().is_none()
+        || (lines.is_empty() && a.messages().is_empty())
+    {
         let empty = empty_state(cx);
         let busy = matches!(
             a.state.connection,
@@ -4375,6 +4381,24 @@ fn draw_timeline(
         // An empty session whose starting context has not loaded shows the same preview.
         let preview = !busy && !a.state.model.projects.is_empty();
         if preview {
+            let pending = a.pending_first_prompt();
+            let mut sent = Vec::new();
+            if let Some(p) = pending {
+                sent.push("You · Sending…".to_owned());
+                sent.extend(text::wrap(&p.text, inner.width.saturating_sub(2) as usize));
+                if p.images > 0 {
+                    sent.push(format!(
+                        "[{} image{}]",
+                        p.images,
+                        if p.images == 1 { "" } else { "s" }
+                    ));
+                }
+            }
+            let reserved = if sent.is_empty() {
+                0
+            } else {
+                (sent.len() + 1).min(inner.height.saturating_sub(4) as usize) as u16
+            };
             // D10: the context is the view's content; no centred text.
             let total = draw_new_session_context(
                 cx,
@@ -4383,10 +4407,27 @@ fn draw_timeline(
                     inner.x,
                     inner.y + 1,
                     inner.width,
-                    inner.height.saturating_sub(1),
+                    inner.height.saturating_sub(1 + reserved),
                 ),
                 hits,
             );
+            if !sent.is_empty() {
+                let y = (inner.y + total as u16 + 4).min(inner.bottom().saturating_sub(reserved));
+                for (i, line) in sent
+                    .iter()
+                    .take(reserved.saturating_sub(1) as usize)
+                    .enumerate()
+                {
+                    put(
+                        buf,
+                        inner.x + 2,
+                        y + i as u16,
+                        line,
+                        cx.st(if i == 0 { SECONDARY } else { PRIMARY }, CANVAS),
+                        inner.width.saturating_sub(2),
+                    );
+                }
+            }
             if a.ui.focus == Focus::Timeline {
                 put(
                     buf,
@@ -5973,7 +6014,14 @@ fn draw_composer_images(
 
 fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     if cx.app.manager_debug_view() {
-        put(buf, r.x + 2, r.y + 1, "Manager session · read-only debug view", cx.st(SECONDARY, PANEL), r.width.saturating_sub(4));
+        put(
+            buf,
+            r.x + 2,
+            r.y + 1,
+            "Manager session · read-only debug view",
+            cx.st(SECONDARY, PANEL),
+            r.width.saturating_sub(4),
+        );
         return;
     }
     let inputs = cx.app.pending_inputs();
@@ -6927,7 +6975,10 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
                 list.join(", ")
             }
         }),
-        "context.usage_refresh_minutes" => a.state.config.as_ref()
+        "context.usage_refresh_minutes" => a
+            .state
+            .config
+            .as_ref()
             .and_then(|c| c["values"]["usage"]["refresh_minutes"].as_u64())
             .map(|value| value.to_string()),
         "context.handoff_percent" => a
@@ -7885,7 +7936,9 @@ fn draw_usage(
         ("━", "─")
     };
     let label_w = m.w.saturating_sub(34).clamp(8, 22);
-    let bar_w = (m.w as usize).saturating_sub(label_w as usize + 26).clamp(8, 24);
+    let bar_w = (m.w as usize)
+        .saturating_sub(label_w as usize + 26)
+        .clamp(8, 24);
     for (i, row) in rows.iter().take(m.body.height as usize).enumerate() {
         let y = m.body.y + i as u16;
         match row {
@@ -7978,7 +8031,10 @@ fn draw_usage(
         }
     }
     hint_row(cx, buf, &m, &[("r", "refresh"), ("esc", "close")]);
-    hits.add(Rect::new(m.x, m.hint_y, m.w.min(9), 1), Target::UsageRefresh);
+    hits.add(
+        Rect::new(m.x, m.hint_y, m.w.min(9), 1),
+        Target::UsageRefresh,
+    );
 }
 
 /// `/learn`'s candidate checklist. It uses the shared borderless modal and keeps
@@ -8944,10 +9000,20 @@ fn context_doc_rows(area: Rect, theme: &Theme, text: &str) -> (u16, Vec<Vec<Span
     let rows = crate::markdown::lines(text, &palette, inner.max(1))
         .into_iter()
         .flat_map(|row| {
-            let prefix_width: usize = row.prefix.iter().map(|span| text::width(&span.content)).sum();
+            let prefix_width: usize = row
+                .prefix
+                .iter()
+                .map(|span| text::width(&span.content))
+                .sum();
             crate::markdown::wrap_spans(&row.spans, inner.saturating_sub(prefix_width).max(1))
-                .into_iter().enumerate().map(move |(index, spans)| {
-                    let mut line = if index == 0 { row.prefix.clone() } else { vec![Span::raw(" ".repeat(prefix_width))] };
+                .into_iter()
+                .enumerate()
+                .map(move |(index, spans)| {
+                    let mut line = if index == 0 {
+                        row.prefix.clone()
+                    } else {
+                        vec![Span::raw(" ".repeat(prefix_width))]
+                    };
                     line.extend(spans);
                     line
                 })
@@ -8995,8 +9061,14 @@ fn draw_context_doc(
 
 #[allow(clippy::too_many_arguments)]
 fn draw_context_doc_hint(
-    cx: &Cx, buf: &mut Buffer, area: Rect, title: &str, text: &str,
-    top: usize, escape_hint: &str, hits: &mut HitMap,
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    title: &str,
+    text: &str,
+    top: usize,
+    escape_hint: &str,
+    hits: &mut HitMap,
 ) {
     let (wide, rows) = context_doc_rows(area, cx.t, text);
     let b = modal_box(area, wide, (rows.len() + 6).clamp(10, 40) as u16);
@@ -9075,7 +9147,16 @@ fn draw_context_entries(
     let (wide, inner) = context_entries_box(area);
     if title == "Skills" {
         if let Some(entry) = open.and_then(|index| entries.get(index)) {
-            draw_context_doc_hint(cx, buf, area, &entry.name, entry.full.as_deref().unwrap_or("Loading…"), top, "back to skills", hits);
+            draw_context_doc_hint(
+                cx,
+                buf,
+                area,
+                &entry.name,
+                entry.full.as_deref().unwrap_or("Loading…"),
+                top,
+                "back to skills",
+                hits,
+            );
         } else {
             draw_skill_picker(cx, buf, area, entries, cursor, hits);
         }
@@ -9174,24 +9255,40 @@ fn draw_skill_picker(
             continue;
         }
         let selected = index == cursor;
-        let role = if selected { "skill_card_focus" } else { "skill_card" };
+        let role = if selected {
+            "skill_card_focus"
+        } else {
+            "skill_card"
+        };
         let background = &cx.t.role(role).bg;
         clear(buf, Rect::new(x, y, width, 6), cx.t.role_style(role));
         put(
-            buf, x + 1, y + 1,
+            buf,
+            x + 1,
+            y + 1,
             &truncate(&entry.name, width.saturating_sub(2) as usize, cx.ell()),
-            cx.st(PRIMARY, background).add_modifier(
-                if selected { Modifier::BOLD | Modifier::UNDERLINED } else { Modifier::BOLD },
-            ),
+            cx.st(PRIMARY, background).add_modifier(if selected {
+                Modifier::BOLD | Modifier::UNDERLINED
+            } else {
+                Modifier::BOLD
+            }),
             width.saturating_sub(2),
         );
         hits.add(Rect::new(x, y + 1, width, 1), Target::ContextEntry(index));
-        let description = entry.description.split_whitespace().collect::<Vec<_>>().join(" ");
+        let description = entry
+            .description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         let lines = text::wrap(&description, width.saturating_sub(2).max(1) as usize);
         for (i, line) in lines.iter().take(2).enumerate() {
             put(
-                buf, x + 1, y + 2 + i as u16, line,
-                cx.st(SECONDARY, background), width.saturating_sub(2),
+                buf,
+                x + 1,
+                y + 2 + i as u16,
+                line,
+                cx.st(SECONDARY, background),
+                width.saturating_sub(2),
             );
         }
         if let Some(item) = items.get(index) {
@@ -9202,7 +9299,14 @@ fn draw_skill_picker(
             } else {
                 "○ Disabled"
             };
-            put(buf, x + 1, y + 4, label, cx.st(SECONDARY, background), width.saturating_sub(2));
+            put(
+                buf,
+                x + 1,
+                y + 4,
+                label,
+                cx.st(SECONDARY, background),
+                width.saturating_sub(2),
+            );
             if !item.locked {
                 hits.add(
                     Rect::new(x + 1, y + 4, width.saturating_sub(2), 1),
@@ -9212,8 +9316,15 @@ fn draw_skill_picker(
         }
     }
     hint_row(
-        cx, buf, &m,
-        &[(updown(cx), "move"), ("enter", "details"), ("space", "toggle"), ("esc", "close")],
+        cx,
+        buf,
+        &m,
+        &[
+            (updown(cx), "move"),
+            ("enter", "details"),
+            ("space", "toggle"),
+            ("esc", "close"),
+        ],
     );
 }
 

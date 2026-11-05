@@ -37,7 +37,9 @@ pub const EMPTY: &str = "No provider is connected. Connect one in Settings.";
 /// Reserve, pace marks and absolute reset times are left out; the bar and "resets in" say it.
 pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
     if usage.get("fetched").is_some_and(Value::is_null) {
-        return vec![Row::Note("No usage snapshot yet. Press r to refresh.".into())];
+        return vec![Row::Note(
+            "No usage snapshot yet. Press r to refresh.".into(),
+        )];
     }
     let mut out = Vec::new();
     for p in usage["providers"].as_array().into_iter().flatten() {
@@ -119,15 +121,37 @@ mod tests {
 
     #[test]
     fn hides_only_the_requested_provider_usage_rows_in_cached_snapshots() {
-        let usage: Value = serde_json::from_str(include_str!("../../interface/scenarios/provider-usage.json")).unwrap();
+        let usage: Value = serde_json::from_str(include_str!(
+            "../../interface/scenarios/provider-usage.json"
+        ))
+        .unwrap();
         let rows = rows(&usage, 1.0);
-        assert!(rows.iter().any(|r| matches!(r, Row::Window { label, .. } if label == "Premium requests (monthly)")));
-        assert!(rows.iter().any(|r| matches!(r, Row::Window { label, used: Some(10), .. } if label == "Chat (monthly)")));
-        assert!(!rows.iter().any(|r| matches!(r, Row::Window { used: Some(61 | 73), .. })));
-        for text in ["Prepaid credits: $2.50", "AI credits used this period: 10", "Chat: unlimited", "Completions: unlimited"] {
+        assert!(rows.iter().any(
+            |r| matches!(r, Row::Window { label, .. } if label == "Premium requests (monthly)")
+        ));
+        assert!(rows.iter().any(
+            |r| matches!(r, Row::Window { label, used: Some(10), .. } if label == "Chat (monthly)")
+        ));
+        assert!(!rows.iter().any(|r| matches!(
+            r,
+            Row::Window {
+                used: Some(61 | 73),
+                ..
+            }
+        )));
+        for text in [
+            "Prepaid credits: $2.50",
+            "AI credits used this period: 10",
+            "Chat: unlimited",
+            "Completions: unlimited",
+        ] {
             assert!(!rows.contains(&Row::Note(text.into())));
         }
-        for text in ["Other xAI note", "Other Copilot note", "Prepaid credits: $1.00"] {
+        for text in [
+            "Other xAI note",
+            "Other Copilot note",
+            "Prepaid credits: $1.00",
+        ] {
             assert!(rows.contains(&Row::Note(text.into())));
         }
     }

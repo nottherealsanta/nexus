@@ -3,6 +3,8 @@ captures/.work/
 captures/.work-tui/
 hf/node_modules/
 hf/.hyperframes/
+hf/.thumbnails/
+hf/.waveform-cache/
 hf/renders/
 tts/.venv/
 tts/vendor/

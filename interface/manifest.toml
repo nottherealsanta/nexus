@@ -36,11 +36,11 @@ terms = [
   "has_notifications", "text_edit.active", "view.settings",
   # Manager (docs/manager-design.md 10.1, 10.6). Only the Manager's own keys read these.
   "manager.in_call",       # a call is running (any client holds it)
-  "manager.focused",       # the call takes the stage: large orb, dimmed app, and its keys
-  "manager.minimised",     # the call is open but out of the way: small orb, app keys
+  "manager.focused",       # the Manager dropdown is open: it owns the keys and dims the app
+  "manager.minimised",     # the call is open but out of the way: header indicator, app keys
   "manager.listening",     # the microphone is open in this call
   "manager.speaking",      # Manager speech is playing
-  "manager.field",         # the one-line typed field is open above the orb
+  "manager.field",         # the one-line typed field is open in the Manager panel
   "manager.card_focused",  # a focused card is up: it takes keys and has the scrim
   "manager.engaged",       # a focused call takes the keys, or the consent notice is open
 ]
@@ -48,7 +48,7 @@ placements = [
   "palette", "row_menu", "header", "composer", "sidebar", "timeline",
   "tool_line", "card", "toast", "banner", "dialog", "drawer", "panel",
   "settings", "menu",
-  "stage",  # the Manager's orb, caption, typed field and card (10.1)
+  "stage",  # the Manager's header indicator, dropdown, caption, typed field and card (10.1)
 ]
 # `status`: absent = Core API ready. blocked_core = needs a Core increment
 # (PLAN.md Steps 11/11a/12a); deferred = deliberately not built yet.
@@ -1872,7 +1872,7 @@ title = "Manager"
 category = "manager"
 when = ["always"]
 placement = ["header", "palette"]
-note = "Toggle the borderless opaque Manager dropdown. The header orb replaces the label while visible. Voice defaults on: explicitly opening Manager starts audio immediately unless Voice was switched off. Esc closes the dropdown."
+note = "Toggle the borderless opaque Manager dropdown. While it or a call is open, a gray braille wave field replaces the header label. An open dropdown dims the rest of the screen. Voice defaults on: explicitly opening Manager starts audio immediately unless Voice was switched off. Esc closes the dropdown."
 
 [[command]]
 id = "manager.audio_toggle"
@@ -1880,7 +1880,7 @@ title = "Toggle Manager audio"
 category = "manager"
 when = ["always"]
 placement = ["header", "palette"]
-note = "The dropdown Voice toggle defaults on. Switching it on starts GPT-Live immediately; switching it off stops only audio. The header orb toggles the dropdown; debug session navigation remains independent."
+note = "The dropdown Voice toggle defaults on. Switching it on starts GPT-Live immediately; switching it off stops only audio. The header indicator toggles the dropdown, or stops the live voice while it is on (hover it to see Stop). Debug session navigation remains independent."
 
 [[command]]
 id = "manager.context"
@@ -1907,7 +1907,7 @@ keys = { tui = "alt+m", nsh = "cmd+shift+space" }
 key_context = "global"
 when = ["always"]
 placement = ["palette"]
-note = "Tap to toggle, in both clients (terminals do not report key release). No call: start one, focus it and open the mic. Focused call: listening sends; thinking, speaking or idle barge in (stop speech, cancel the turn if safe, open the mic). Minimised call: bring the orb back and do the same; with a card waiting it opens that card. Space does the same while the call is focused. Clicking the orb does the same, so talking over the Manager barges in."
+note = "Tap to toggle, in both clients (terminals do not report key release). No call: start one, focus it and open the mic. Focused call: listening sends; thinking, speaking or idle barge in (stop speech, cancel the turn if safe, open the mic). Minimised call: bring the call back and do the same; with a card waiting it opens that card. Space does the same while the call is focused. Clicking the header indicator does the same, so talking over the Manager barges in; with the live voice on it stops the voice instead."
 
 [[command]]
 id = "manager.start"
@@ -1928,7 +1928,7 @@ key_context = "global"
 when = ["manager.in_call"]
 unavailable_reason = "No Manager call is running."
 placement = ["palette"]
-note = "Typed as `/manager stop`. The composer reads a leading `stop` after /manager as this command (no space is allowed in a slash name, so `/manager-stop` is the registered form). Ends the call (POST /api/manager/stop). The End button under the orb does the same, and so does saying \"that's all\". Never stops a session, stops speech or dismisses a card as a side effect."
+note = "Typed as `/manager stop`. The composer reads a leading `stop` after /manager as this command (no space is allowed in a slash name, so `/manager-stop` is the registered form). Ends the call (POST /api/manager/stop). Saying \"that's all\" does the same. Never stops a session, stops speech or dismisses a card as a side effect."
 
 [[command]]
 id = "manager.minimise"
@@ -1937,7 +1937,7 @@ category = "manager"
 when = ["manager.focused"]
 unavailable_reason = "No Manager call is focused."
 placement = ["palette"]
-note = "The call stays open: the orb shrinks to the bottom-right corner, the app returns to full strength and gets its keys back. A recording is dropped and the typed field closes; speech and the Manager's turn keep going. Esc is not this: Esc ends the whole call (manager.stop)."
+note = "The call stays open: the dropdown closes, the header keeps its braille indicator, the app returns to full strength and gets its keys back. A recording is dropped and the typed field closes; speech and the Manager's turn keep going. Esc is not this: Esc ends the whole call (manager.stop)."
 
 [[command]]
 id = "manager.send"
@@ -1988,7 +1988,7 @@ category = "manager"
 when = ["manager.engaged"]
 unavailable_reason = "The Manager is not listening and no card is focused."
 placement = ["stage"]
-note = "Any printable character opens the one-line field above the orb with that character in it, and discards the recording. Keys go to the field, not the session composer. Spoken and typed lines are one conversation."
+note = "Any printable character opens the one-line field in the Manager panel with that character in it, and discards the recording. Keys go to the field, not the session composer. Spoken and typed lines are one conversation."
 
 [[command]]
 id = "manager.field_send"

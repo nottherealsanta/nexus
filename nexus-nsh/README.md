@@ -14,6 +14,13 @@ hand.
 
 The app itself is TSX (`App.tsx`, `src/`); `package.json` is tooling only.
 
+A new session's first message appears immediately below its context preview as
+`You · Sending…`. The chosen settings stay visible until Core's message and history
+arrive; there is no intermediate loading/default-header flash. This is local
+submission state, not model context. Failures restore the draft in the new-session
+view or, if creation succeeded, the created session. Prompt submission starts
+without waiting for the session-history read.
+
 On native phones, Sessions and Settings are bottom tabs. Sessions offers the
 project picker, project/all-project scope, search and archive filter; selecting a
 session opens the conversation full screen, with a back control to the list.
@@ -123,8 +130,8 @@ header is three slots that match the sidebars (the resizable left sidebar, the c
 sidebar is open). Below the band the 44 px right rail (Session, and Git with its changed-file
 count) opens the panel on demand and pushes the page; the panel starts closed. Controls, cards,
 the current-project selection, session rows, search fields, prose tables and modals are all
-square, like the TUI's cell grid; only circular status dots, spinners, image remove controls,
-the Manager orb and meters keep their shape. A box rule runs a hairline along a box's straight
+square, like the TUI's cell grid; only circular status dots, spinners, image remove controls
+and meters keep their shape. A box rule runs a hairline along a box's straight
 sides; a filled box needs no border. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). Drag the file panel's left edge to resize it from 360 px up to what leaves the timeline 480 px. The reading column is centred and at most 1160 px wide. The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
 Over the docked left sidebar its left slot holds the 32 px toggle and
 the Sessions and Files icons (they follow the sidebar's open state; narrow, they
@@ -540,8 +547,12 @@ estimate.
 ## The Manager
 
 The header's **Manager** label toggles a borderless, fully opaque notification dropdown: caption, recent model-context lines,
-current tool/status, the Manager's card, **Tell the Manager…** input and **Open Manager session**. Its glowing
-orb replaces the label while visible, several cells wide and one row high; click it to toggle the dropdown.
+current tool/status, the Manager's card, **Tell the Manager…** input and **Open Manager session**. While it or a
+call is open, a one-row field of gray braille cells replaces the label: three slow sine waves travel across ten cells,
+lighting only a few dots. Idle, thinking, listening and speaking change the speed and brightness (all gray); reduced
+motion freezes the field and ASCII terminals get one state glyph. Click the field to toggle the dropdown; an open
+dropdown dims everything outside it. With the live voice on, hovering the field shows **Stop** and clicking it stops the
+voice (`/api/manager/live/stop`) while the control call, backend session and typed field stay.
 The dropdown's **Voice: on/off** toggle defaults on: opening Manager or switching Voice on starts Live immediately.
 Switching Voice off stops only audio. The input has a solid inset surface; debug navigation does not start audio. Enter sends text; with Voice off, the first typed request starts a control
 call with audio disabled. Esc/outside click closes the dropdown while audio continues. Automatic cards do not steal
@@ -550,10 +561,9 @@ ends the control call. The debug button reuses the current persistent Manager se
 it shows canonical context inside Nexus with its composer disabled. The palette's Manager context view and the raw
 inspector remain available. See [Manager](../docs/manager.md).
 
-Live uses its own audio connection and does not require Dictation setup. The header orb appears immediately with
-**Connecting…** in the dropdown. Playback has a 60 ms startup/recovery buffer and the speaking colour holds through
-350 ms pauses. The TUI uses compressed cached sprites on graphics terminals and a cell fallback elsewhere; NSH
-uses the same colours and motion on Canvas. Real audio quality and talk-over interruption still need listening checks.
+Live uses its own audio connection and does not require Dictation setup. The header indicator appears immediately with
+**Connecting…** in the dropdown. Playback has a 60 ms startup/recovery buffer and the speaking state holds through
+350 ms pauses. Both clients draw the same braille field; real audio quality and talk-over interruption still need listening checks.
 
 Working labels use the shared travelling shimmer: one pass every 1.5 seconds,
 with a brighter highlight over secondary text. Reduced motion keeps the label static.

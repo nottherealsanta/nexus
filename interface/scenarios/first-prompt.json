@@ -1,0 +1,7 @@
+{
+  "text": "Make the first message instant",
+  "agent": "plan",
+  "model": "codex/gpt-5",
+  "expect": ["You · Sending…", "Make the first message instant", "System prompt", "Tools"],
+  "absent": ["Loading…", "No messages yet"]
+}

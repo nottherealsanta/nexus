@@ -3,6 +3,7 @@
 // Core or microphone is involved; then keys, clicks and the zero-idle-cost rule are checked on the same app.
 import { describe, expect, open, test } from "nsh/test";
 import scenarios from "../interface/scenarios/manager-cards.json";
+import dropdownScenario from "../interface/scenarios/manager-dropdown.json";
 
 const session = { id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Scenario", model: "", permission: "ask", created: 1, updated: 2, effort: null, agent: "build", parent_id: null, archived: 0, revision: 1, disabled_tools: "[]" };
 const connected = 'event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0,"stream_id":"stream_t"}\n\n';
@@ -61,15 +62,30 @@ describe("manager keys and clicks", () => {
   const board = (scenarios as any).cards.find((c: any) => c.name === "board").card;
   const approval = (scenarios as any).cards.find((c: any) => c.name === "approval").card;
 
-  test("cards appear in an undimmed dropdown and Escape closes only the dropdown", async () => {
+  test("cards appear over a dimmed app and Escape closes only the dropdown", async () => {
     const app = await withCard(board);
     await app.waitFor("id:manager-card");
-    expect(app.shows("id:manager-dim")).toBe(false);
+    expect(dropdownScenario.panel_dim).toBe(true);
+    expect(app.shows("id:manager-backdrop")).toBe(true);
     expect(shown(app)).toContain("Open Manager session");
     await app.keyboard.press("escape");
     await app.waitFor("id:manager-dropdown", { state: "gone" });
-    expect(app.shows("id:manager-orb")).toBe(true);
+    expect(app.shows("id:manager-backdrop")).toBe(false);
+    expect(app.shows("id:manager-indicator")).toBe(true);
     expect(manager(app).some(r=>r.url.endsWith("/api/manager/stop"))).toBe(false);
+  });
+
+  test("the live voice's indicator offers Stop on hover and stops the voice on click", async () => {
+    const app = await open("./ComposerFixture.tsx", { network, platform: "web", colorScheme: "dark", width: 1280, height: 800,
+      storage: { "nexus.manager.dev": JSON.stringify({ level: 0.5, live: true }) } });
+    await app.waitFor("id:manager-indicator");
+    await app.hover("id:manager-indicator");
+    await app.waitFor("id:manager-indicator-stop");
+    expect(shown(app)).toContain(dropdownScenario.indicator_stop);
+    await app.press("id:manager-indicator");
+    await app.wait(100);
+    expect(manager(app).some(r=>r.url.endsWith("/api/manager/live/stop"))).toBe(true);
+    expect(app.shows("id:manager-indicator")).toBe(true);
   });
 
   test("header toggles typed input without starting audio", async () => {
@@ -108,7 +124,7 @@ describe("manager keys and clicks", () => {
     const before = app.requests().length;
     await app.wait(2500);
     expect(app.count("id:manager-stage")).toBe(0);
-    expect(app.count("id:manager-orb")).toBe(0);
+    expect(app.count("id:manager-indicator")).toBe(0);
     expect(app.requests().slice(before).filter((r) => r.url.includes("/api/manager")).length).toBe(0);
   });
 });
