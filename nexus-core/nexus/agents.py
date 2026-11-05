@@ -175,6 +175,8 @@ def load(project_path: str | None = None) -> AgentSet:
     result = AgentSet()
     for source, directory in directories(project_path):
         if not directory.is_dir():
+            if source == "builtin":  # shipped with core: missing means the install moved or broke
+                result.problems.append({"path": str(directory), "error": "built-in agents folder is missing"})
             continue
         for path in sorted(directory.glob("*.md")):
             try:

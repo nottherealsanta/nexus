@@ -51,7 +51,19 @@ done
 [ -n "$MODE" ] || { [ -n "$ROOT" ] && MODE=source || MODE=release; }
 [ "$MODE" = release ] || [ -n "$ROOT" ] || die "--source needs a checkout: run ./install.sh from the repository"
 
+restart_daemon() {
+  # A running daemon keeps serving the code it started with (possibly from a moved or deleted install), so an update
+  # restarts it with the new `nexus`. A daemon that is not running is left stopped.
+  nexus_bin="$(uv tool dir --bin 2>/dev/null)/nexus"
+  [ -x "$nexus_bin" ] || return 0
+  "$nexus_bin" daemon status 2>/dev/null | grep -q '^running' || return 0
+  step "Restart the Core daemon"
+  "$nexus_bin" daemon stop >/dev/null 2>&1 || true
+  "$nexus_bin" daemon start || printf 'warning: the daemon did not restart; run `nexus daemon start`.\n' >&2
+}
+
 done_message() {
+  restart_daemon
   printf '\nInstalled. Run `nexus doctor` to check the install.\n'
   case ":$PATH:" in *":$BIN:"*) ;; *) printf 'Add %s to PATH.\n' "$BIN" ;; esac
 }
