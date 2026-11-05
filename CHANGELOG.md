@@ -15,6 +15,62 @@
 - Let users provide custom free-text answers to every `ask` question in the Core API, TUI, and NSH.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
+## [0.11.0](https://github.com/nottherealsanta/nexus/compare/v0.10.0...v0.11.0) (2026-11-05)
+
+
+### Features
+
+* add audio map and storyboard for promotional track; remove unused image assets ([99f7f97](https://github.com/nottherealsanta/nexus/commit/99f7f974cd303e79d45331a40b7828613299ff70))
+* add idle archiving and free-text ask answers ([2f84c9a](https://github.com/nottherealsanta/nexus/commit/2f84c9a08fbc904885ca98d7a25637bcbef6f5ec))
+* add provider usage snapshots ([76693c6](https://github.com/nottherealsanta/nexus/commit/76693c61fc3cc2d9b0f7806f5e9e1f151938adb1))
+* **core:** retain wire payloads with bounded expiry ([26704a2](https://github.com/nottherealsanta/nexus/commit/26704a263c4a5ab2f7f728daf656545f2c0a068b))
+* **editor:** add the file panel and vendored code editor ([39dd1e7](https://github.com/nottherealsanta/nexus/commit/39dd1e7bda47573b6542bed1f2f6919f6d8bd849))
+* improve context handling and align TUI and NSH ([151c94c](https://github.com/nottherealsanta/nexus/commit/151c94c9e502b0f2cbf36b817036f49443743bb1))
+* **nsh:** add macOS and iOS targets and connect to Core directly ([77431d2](https://github.com/nottherealsanta/nexus/commit/77431d268b89736e4231ed911072dba11f92df6e))
+* **nsh:** Add the Void palette overlay ([2f30aa7](https://github.com/nottherealsanta/nexus/commit/2f30aa7ed37f799f1a3bb05a73ba94f27ab9d060))
+* **nsh:** Adopt the Void chrome and layout ([51a9c47](https://github.com/nottherealsanta/nexus/commit/51a9c47a58eec10dbdd4b71fb773a1a04798640e))
+* **nsh:** Apply the Void design's second pass ([2de1037](https://github.com/nottherealsanta/nexus/commit/2de1037bf78c295f801be9f6f5b569b9b9502846))
+* **nsh:** Bring the timeline closer to the TUI ([c1d816a](https://github.com/nottherealsanta/nexus/commit/c1d816a9246faf212e0caf451ed54135559481c1))
+* **nsh:** Discover the local Core token on macOS ([5d74e03](https://github.com/nottherealsanta/nexus/commit/5d74e03cae32a1981257341d39520447bc64fe5d))
+* **nsh:** Drop the macOS Connect screen and Core button ([f9f0a88](https://github.com/nottherealsanta/nexus/commit/f9f0a886af0298474f001c556500375bbee1794a))
+* **nsh:** Give the composer dock a top edge ([c57d095](https://github.com/nottherealsanta/nexus/commit/c57d09527992fbcd522a9ebbdf2020f4a5513a01))
+* **nsh:** improve project navigation and session activity ([a437b45](https://github.com/nottherealsanta/nexus/commit/a437b455e22c704d2f46ad3a126a0533b016e745))
+* **nsh:** Keep the reading column on the left ([46daa18](https://github.com/nottherealsanta/nexus/commit/46daa180c2bb1bd53b8e0c5c476a6017a9d1bc8b))
+* **nsh:** Polish the timeline, composer and chrome ([d6b1f2c](https://github.com/nottherealsanta/nexus/commit/d6b1f2c35a40489656d45a06b1408d87c4a0efeb))
+* **nsh:** Use Geist for interface text and Monaspace Argon for code ([31326df](https://github.com/nottherealsanta/nexus/commit/31326df1782d66bbf709152e0b82d82e4d89b9a7))
+* plain nexus and nexus tui open the terminal client ([8622de5](https://github.com/nottherealsanta/nexus/commit/8622de5a4a2666987d3f63cd498cb23a6608717a))
+* project MCP opt-out and web timeline parity ([be9c568](https://github.com/nottherealsanta/nexus/commit/be9c568a26b0ce3b9d77a2022cbdb0e86c2f1f8d))
+* promo ([06167c1](https://github.com/nottherealsanta/nexus/commit/06167c12eb0a20c857befc959e752666eddd003e))
+* rebuild Settings as one two-pane dialog in TUI and NSH ([66b4564](https://github.com/nottherealsanta/nexus/commit/66b4564e25ebf55ad56749542bcbb5c578aaf572))
+* Reclaim queued input on interrupt ([101f62b](https://github.com/nottherealsanta/nexus/commit/101f62b267107f9649723d6eb3fea94e601e8a4c))
+* **tui:** Confirm before removing a pending input ([d49f812](https://github.com/nottherealsanta/nexus/commit/d49f812d8f83ebee022ee8c9fb251eb25727ff68))
+* **tui:** navigate projects from sidebar rail ([a701ead](https://github.com/nottherealsanta/nexus/commit/a701ead08a51b1e8931fae4afc08cb795223373f))
+* **ui:** improve native phone navigation and rails ([95798aa](https://github.com/nottherealsanta/nexus/commit/95798aa6ec2f9113407a892b615d29e6e4ac55dd))
+* **voice:** use offline Parakeet speech recognition ([90e853d](https://github.com/nottherealsanta/nexus/commit/90e853dadac28aba497e155093963d0be22e322e))
+
+
+### Bug fixes
+
+* Keep the user band's full-message control inside the band ([bf2b5e3](https://github.com/nottherealsanta/nexus/commit/bf2b5e380528872cc30e1e1f5c44a9d4d1058498))
+* **nsh:** Draw a chrome rule beside both sidebars and under the band ([8531f86](https://github.com/nottherealsanta/nexus/commit/8531f865fe90d53de3663255ff10eb0bd7c86be3))
+* **nsh:** Drop literal backticks from the Connect copy ([aa8ec81](https://github.com/nottherealsanta/nexus/commit/aa8ec8163072d3fd540e5454f97e8cbb44a424cd))
+* **nsh:** Let the editor panel take the right slot ([b5241a3](https://github.com/nottherealsanta/nexus/commit/b5241a3b11cbd8715e7068dd0659b133b204161b))
+* **nsh:** let the native client reach Core over plain HTTP on a tailnet ([762cd9d](https://github.com/nottherealsanta/nexus/commit/762cd9daff8bb16724e0024ac60d782f41bc9126))
+* **nsh:** Treat localhost and loopback as the same Core ([5a9ce8d](https://github.com/nottherealsanta/nexus/commit/5a9ce8d2e4496e351fad00ed36b60b79f435cc15))
+* **nsh:** use NSAllowsArbitraryLoads alone for native Core access ([4c5fc91](https://github.com/nottherealsanta/nexus/commit/4c5fc91bbca7bcab4bf86908f90cac4b4d4c61d7))
+* preserve Manager Live failures and render the TUI orb ([dc28cb0](https://github.com/nottherealsanta/nexus/commit/dc28cb0d18b3f24dfc32109320dd450beaa6c0ae))
+* **tui:** Borrow the focus style before editing the row ([70d57b4](https://github.com/nottherealsanta/nexus/commit/70d57b4de6fb43de3e68dd02bad03d01eed1e8f9))
+* **voice:** default to Parakeet Redux ([45ba0f3](https://github.com/nottherealsanta/nexus/commit/45ba0f3393bcdc856e4b477f5802ace609113838))
+
+
+### Performance
+
+* **core:** index turn requests by session time ([1ed244d](https://github.com/nottherealsanta/nexus/commit/1ed244d8dc9b10c1025b9593ab90fd5efb99fa82))
+* **tui:** coalesce frames and cache timeline layout ([948468a](https://github.com/nottherealsanta/nexus/commit/948468aa76cb88be0186b66edee8c55ef4452b65))
+* **tui:** optimize timeline rendering and interactions ([ccec95d](https://github.com/nottherealsanta/nexus/commit/ccec95d68c4e7c26266cf2fbaab108723e66b6a4))
+* **tui:** reuse the timeline for chrome-only frames ([7849b38](https://github.com/nottherealsanta/nexus/commit/7849b38ad3d35db8bc41774fc46eff229d602358))
+* **tui:** share cached timeline lines as Rc ([0d7979f](https://github.com/nottherealsanta/nexus/commit/0d7979f47acbdd1848251b9e13413aafbaefe0f8))
+
 ## [0.10.0](https://github.com/nottherealsanta/nexus/compare/v0.7.2...v0.10.0) (2026-10-30)
 
 Nexus 0.10 is a rebuild around a shared Core and an ordered, visible context timeline.

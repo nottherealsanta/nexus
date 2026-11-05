@@ -1,7 +1,7 @@
 {
   "name": "Nexus",
   "id": "dev.nexus10.nsh",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "build": 1,
   "icon": "../interface/brand/nexus-1024.png",
   "appearance": "system",
@@ -9,10 +9,15 @@
   "rust": "native",
   "capabilities": {
     "network": {
-      "hosts": ["*"]
+      "hosts": [
+        "*"
+      ]
     },
     "fs": {
-      "read": ["${homeDir}/.nexus", "${homeDir}/.nexus10"]
+      "read": [
+        "${homeDir}/.nexus",
+        "${homeDir}/.nexus10"
+      ]
     }
   }
 }
