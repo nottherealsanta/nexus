@@ -163,7 +163,8 @@ class LiveVoice:
                     peer.set_muted(False)
         finally:
             peer.on_audio = None
-            out.put_nowait(None)
+            with contextlib.suppress(asyncio.QueueFull):
+                out.put_nowait(None)  # the sender is cancelled next, so a full queue needs no sentinel
             sender.cancel()
             await asyncio.gather(sender, return_exceptions=True)
             if self._client is websocket:

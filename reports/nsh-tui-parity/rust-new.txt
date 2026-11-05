@@ -1,0 +1,48 @@
+  ◧      [Sessions] [Files]              New session      +                                                                                       Manager     □
+     │
+▏    │                              ▣
+▏ N  │ ⌕ Search sessions       ctrl+k      System prompt ~900
+▏  4 │
+     │   Refactor the loader       1m      AGENTS.md  unavailable or not read
+     │                            1 ↳
+  S  │                                     Tools [0]
+   1 │   Review the CJK width han… 1m
+     │                                     Skills [0]  loading
+     │
+  +  │   Release notes for 0.10    1m      MCP [0]  loading
+     │
+     │                                     total  ~900 tok
+     │   Fix flaky test in sync    1m
+     │
+     │
+     │ + New session
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │                                      Message to start a new session
+     │
+     │                                      Build · … · default                                                                                           0
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   /private/tmp/nexus-shared-layout.TImrMO/ws/nexus-demo
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

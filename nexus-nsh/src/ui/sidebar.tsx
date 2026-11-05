@@ -4,7 +4,7 @@ import { Button, ContextMenu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/ba
 import { Btn, Empty, Icon, IconButton, Status, AttentionMark, T, TS, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
 import { manifest } from "../gen/manifest";
 import { availability, byId, commands, keyLabel, newSession, run, toggleLeft } from "../commands";
-import { archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, phone, phonePage } from "../store";
+import { archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, phone, phonePage, width } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
 import { fileListing, loadFiles, openFile, showFile } from "../store";
@@ -12,11 +12,13 @@ import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
 import { ProjectMcpPanel } from "./project-mcp";
 import { projectActivity, projectCounts, projectLabels, railCount, railProjects } from "../project-rail";
+import { defaultLeftSidebarWidth } from "./geometry";
 
-const TAB_ICON: Record<string, IconName> = { sessions: "sessions", files: "files", projects: "projects" };
-export const leftSidebarWidth = signal(264);
+export const leftSidebarWidth = signal(272);
+const sidebarResized = signal(false);
+effect(() => { if (!sidebarResized()) leftSidebarWidth.set(defaultLeftSidebarWidth(width())); });
 /** The project rail's width. */
-export const RAIL_PX = 48;
+export const RAIL_PX = 40;
 const tabs = manifest.navigation.left_sidebar.tab as unknown as { id: "sessions" | "files" | "projects"; label: string; command: string; order: number }[];
 
 function hint(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
@@ -35,10 +37,9 @@ export function SidebarTabs(p: { labels?: boolean }) {
             selected={leftTab() === t().id} accessibilityLabel={t().label} testID={`tab-${t().id}`} disabled={false}
             onPress={() => { leftTab.set(t().id); if (t().id === "files") void loadFiles(); savePrefs(); }}
             tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{t().label}{hint(t().command) ? `  ${hint(t().command)}` : ""}</Text>}
-            class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) hover:bg-accent ${leftTab() === t().id ? "bg-selection" : ""} ${p.labels ? "px-2.5 min-h-11" : isNarrow() ? "size-11" : "size-8"} ${FOCUS}`}
+            class={`flex-row items-center justify-center rounded-(--radius) px-1 hover:bg-accent ${leftTab() === t().id ? "bg-background" : ""} ${isNarrow() ? "min-h-11" : "min-h-6"} ${FOCUS}`}
           >
-            <Icon name={TAB_ICON[t().id]} class={leftTab() === t().id ? "tint-foreground" : "tint-muted-foreground"} />
-            <If when={p.labels && leftTab() === t().id}><Text class={`${TS.base} text-foreground font-medium`}>{t().label}</Text></If>
+            <Text class={`${TS.base} ${leftTab() === t().id ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{`[${t().label}]`}</Text>
           </Tab>
         )}
       </Each>
@@ -50,7 +51,7 @@ export function LeftSidebar(p: { drawer?: boolean }) {
   let startWidth = 264;
   const resize = PanResponder.create({
     onStartShouldSetPanResponder: () => true,
-    onPanResponderGrant: () => { startWidth = leftSidebarWidth(); },
+    onPanResponderGrant: () => { sidebarResized.set(true); startWidth = leftSidebarWidth(); },
     onPanResponderMove: (_event, gesture) => { leftSidebarWidth.set(Math.max(180, Math.min(480, startWidth + gesture.dx))); },
   });
   return (
@@ -92,14 +93,11 @@ export function SessionRail() {
   const railTip = signal<string | null>(null);
   const railFocus = signal<string | null>(null);
   const tones = ["text-multi", "text-info", "text-success", "text-foreground"];
-  const CORNERS = [
-    { at: 0, kind: "attention", place: "top-0.5 left-2" }, { at: 1, kind: "finished", place: "top-0.5 right-2" },
-    { at: 2, kind: "running", place: "bottom-0.5 left-2" }, { at: 3, kind: "idle", place: "bottom-0.5 right-2" },
-  ];
+  const CORNERS = [{ at: 0, kind: "attention" }, { at: 1, kind: "finished" }, { at: 2, kind: "running" }, { at: 3, kind: "idle" }];
   return (
-    <View class="shrink-0 bg-sidebar border-r border-border items-center pt-2" style={{ width: RAIL_PX }} testID="session-rail" accessibilityLabel="Project rail">
+    <View class="shrink-0 bg-sidebar border-r border-border items-center pt-6" style={{ width: RAIL_PX }} testID="session-rail" accessibilityLabel="Project rail">
       <Scroll class="flex-1">
-        <View class="items-center gap-2 pb-2">
+        <View class="items-center gap-4 pb-2">
         <Each of={projects()} key={(p) => p.id}>
           {(p) => {
             return (
@@ -143,16 +141,16 @@ export function SessionRail() {
                   </View>
                 </Tooltip>}
                 style={{ width: RAIL_PX }}
-                class={`relative h-11 items-center justify-center rounded-none hover:bg-accent ${currentProject() === p().id ? "bg-selection" : ""} ${FOCUS}`}>
+                class={`items-center rounded-none hover:bg-accent ${currentProject() === p().id ? "bg-selection" : ""} ${FOCUS}`}>
+                <View class="w-full flex-row justify-between px-1">
+                  <Each of={CORNERS.slice(0, 2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
+                </View>
                 <Text class={`${TS.base} font-medium ${activity(p().id).active ? "text-foreground opacity-70" : "text-muted-foreground opacity-30"}`}>{labels().get(p().id)}</Text>
-                {/* One counter per corner: attention and unread on top, running and idle below. */}
-                <Each of={CORNERS} key={(c) => c.kind}>
-                  {(c) => <If when={counts(p().id)[c().at] > 0}>
-                    <Text testID={`rail-count-${p().id}-${c().kind}`} class={`absolute ${c().place} w-2 text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{railCount(counts(p().id)[c().at])}</Text>
-                  </If>}
-                </Each>
+                <View class="w-full flex-row justify-between px-1">
+                  <Each of={CORNERS.slice(2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
+                </View>
                 <If when={counts(p().id).every((n) => n === 0)}>
-                  <View testID={`rail-placeholder-${p().id}`} class="absolute bottom-1.5 w-3 h-px bg-border opacity-50" />
+                  <View testID={`rail-placeholder-${p().id}`} class="w-3 h-px bg-border opacity-50" />
                 </If>
               </View>
                 }
@@ -162,9 +160,9 @@ export function SessionRail() {
             );
           }}
         </Each>
+        <IconButton icon="plus" label="Add project" testID="rail-add-project" onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} />
         </View>
       </Scroll>
-      <IconButton icon="plus" label="Add project" testID="rail-add-project" onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} />
       <View class="w-full items-center pt-2" style={{ paddingBottom: safeArea().bottom + 16 }}>
         <If when={!leftOpen()}><IconButton icon="settings" label="Settings" testID="rail-settings" selected={centre() === "settings"} class={centre() === "settings" ? "bg-selection" : ""} onPress={() => run("app.settings")} reason={hint("app.settings") ?? undefined} /></If>
       </View>
@@ -261,14 +259,11 @@ export function SessionsTab() {
         <View class="flex-row justify-end">
           <IconButton icon="archive" label="Archived" testID="chip-archived" selected={archivedFilter()} tint={archivedFilter() ? "tint-multi" : "tint-muted-foreground"} onPress={() => run("sessions.archived_filter")} />
         </View>
-        <View class={`relative w-full ${phone ? "h-11" : "h-8"}`}>
-          <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`h-full w-full rounded-none pl-7 pr-2 ${TS.base} text-foreground placeholder:text-muted-foreground ${phone ? "bg-raised" : "bg-hover"}`} />
-          {/* Painted after the input so its well does not cover the glyph. */}
-          <View class="absolute left-[9px] top-0 bottom-0 items-center justify-center" accessible={false}>
-            <Icon name="search" size={14} class="tint-muted-foreground" />
-          </View>
+        <View class={`w-full flex-row items-center gap-2 px-2 ${phone ? "h-11 bg-raised" : "h-8 bg-hover"}`}>
+          <Icon name="search" size={14} class="tint-muted-foreground" />
+          <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`h-full flex-1 min-w-0 rounded-none px-0 ${TS.base} text-foreground placeholder:text-muted-foreground ${phone ? "bg-raised" : "bg-hover"}`} />
           <If when={!!hint("session.switch") && !phone}>
-            <View class="absolute right-2 top-0 bottom-0 items-center justify-center" style={{ pointerEvents: "none" }} accessible={false}>
+            <View class="shrink-0 items-center justify-center" style={{ pointerEvents: "none" }} accessible={false}>
               <Text class={T.meta} testID="session-search-key">{hint("session.switch")!}</Text>
             </View>
           </If>
@@ -330,7 +325,7 @@ function SessionRow(p: { s: () => Session }) {
   // Under a project heading the name is already above the row: show the branch, as the project scope does.
   const place = () => {
     const tree = worktreeForDirectory(s().directory, projectWorktrees()[s().project_id]);
-    return tree?.branch || (tree?.path && tree.main === false ? tree.path.replace(/\/$/, "").split("/").pop() : "") || "";
+    return tree?.branch ? `⌥ ${tree.branch}` : (tree?.path && tree.main === false ? tree.path.replace(/\/$/, "").split("/").pop() : "") || "";
   };
   const ref = () => ({ kind: "session" as const, id: s().id });
   const sel = () => model.selected?.sessionId === s().id && centre() === "session";

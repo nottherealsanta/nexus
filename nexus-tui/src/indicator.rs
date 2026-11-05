@@ -3,7 +3,8 @@
 //!
 //! The old orb's state machine is kept: presence, the measured level and the eased change from one
 //! state to the next. The drawing is now text. Idle, thinking, listening and speaking travel at
-//! different speeds and brightnesses, all in grays. ASCII terminals keep one glyph per state
+//! different speeds and brightnesses; listening is drawn in `manager.listening`, speaking in
+//! `manager.speaking`, the rest in gray. ASCII terminals keep one glyph per state
 //! (`·`, `○`, `◉`); reduced motion freezes the field at its first frame.
 
 use std::time::Instant;
@@ -65,7 +66,7 @@ impl IndicatorState {
         }
     }
 
-    /// How bright the dots are, 0 to 1. Every state stays gray.
+    /// How bright the dots are, 0 to 1.
     fn brightness(self) -> f32 {
         match self {
             IndicatorState::Idle => 0.55,
@@ -237,16 +238,32 @@ pub fn blend(bottom: Color, top: Color, alpha: f32) -> Color {
     }
 }
 
-/// The gray the waves are drawn in right now: `text.muted` at the state's brightness.
+/// The theme token a state draws its waves in: the speaker's colour while somebody talks,
+/// `text.muted` (gray) otherwise.
+fn state_token(state: IndicatorState) -> &'static str {
+    match state {
+        IndicatorState::Listening => "manager.listening",
+        IndicatorState::Speaking => "manager.speaking",
+        _ => "text.muted",
+    }
+}
+
+/// The colour the waves are drawn in right now: each state's token at the state's brightness over
+/// the canvas, eased from the previous state to the current one.
 fn wave_color(theme: &Theme, indicator: &Indicator) -> Option<[f32; 3]> {
-    let muted = theme.color("text.muted").and_then(rgb)?;
     let canvas = theme
         .color("surface.canvas")
         .and_then(rgb)
         .unwrap_or([11.0; 3]);
-    let k = indicator.from.brightness() * (1.0 - ease(indicator.mix))
-        + indicator.to.brightness() * ease(indicator.mix);
-    Some(mix(canvas, muted, k))
+    let of = |state: IndicatorState| -> Option<[f32; 3]> {
+        let c = theme.color(state_token(state)).and_then(rgb)?;
+        Some(mix(canvas, c, state.brightness()))
+    };
+    Some(mix(
+        of(indicator.from)?,
+        of(indicator.to)?,
+        ease(indicator.mix),
+    ))
 }
 
 /// Where the indicator sits: `x` is its centre column, `bottom` the row just
@@ -284,7 +301,12 @@ pub fn glyph(state: IndicatorState, ascii: bool) -> &'static str {
 /// The braille cell for dot columns `index * 2` and `index * 2 + 1` at time `t`.
 pub fn braille_cell(t: f32, state: IndicatorState, level: f32, index: usize) -> char {
     let time = t * state.speed();
-    let amp = 0.78 + 0.22 * level.clamp(0.0, 1.0);
+    let level = level.clamp(0.0, 1.0);
+    // The speaker's waves follow the measured voice: silence is a flat line, loud is tall.
+    let amp = match state {
+        IndicatorState::Listening | IndicatorState::Speaking => 0.12 + 0.88 * level,
+        _ => 0.78,
+    };
     let mut bits = 0u8;
     for (row, dots) in BITS.iter().enumerate() {
         for (col, bit) in dots.iter().enumerate() {
@@ -339,15 +361,9 @@ pub fn paint_sized(
         .min(zone.bottom().saturating_sub(1));
     let base = wave_color(theme, indicator);
     // Indexed and mono tiers cannot blend a brightness; they still draw the field,
-    // in the state's gray token, with idle dimmed.
+    // in the state's role token (the speaker's colour, gray otherwise), with idle dimmed.
     let flat = theme
-        .fg(
-            if matches!(state, IndicatorState::Listening | IndicatorState::Speaking) {
-                "text.secondary"
-            } else {
-                "text.muted"
-            },
-        )
+        .fg(state_token(state))
         .add_modifier(if matches!(state, IndicatorState::Idle) {
             Modifier::DIM
         } else {
@@ -385,7 +401,7 @@ fn paint_glyph(
     if !contains(area, at.x, y) {
         return;
     }
-    let style = theme.fg("text.muted");
+    let style = theme.fg(state_token(state));
     let cell = &mut buf[(at.x, y)];
     cell.set_symbol(glyph(state, theme.opts.ascii));
     let bg = cell.bg;
@@ -561,5 +577,80 @@ mod tests {
         );
         assert!(painted(&buf).is_empty());
         assert!(buf.content.iter().any(|c| c.symbol() == "o"));
+    }
+
+    fn first_fg(theme: &Theme, state: IndicatorState) -> Color {
+        let area = Rect::new(0, 0, 40, 3);
+        let mut buf = Buffer::empty(area);
+        for cell in buf.content.iter_mut() {
+            cell.set_style(Style::default().bg(Color::Rgb(11, 11, 11)));
+        }
+        let mut indicator = Indicator::default();
+        indicator.pin(state, 0.5);
+        paint(&mut buf, area, Anchor { x: 20, bottom: 1 }, &indicator, theme);
+        buf[(16, 0)].fg
+    }
+
+    #[test]
+    fn the_speaker_sets_the_wave_colour() {
+        let theme = Theme::new(Options::default());
+        let idle = first_fg(&theme, IndicatorState::Idle);
+        let thinking = first_fg(&theme, IndicatorState::Thinking);
+        let listening = first_fg(&theme, IndicatorState::Listening);
+        let speaking = first_fg(&theme, IndicatorState::Speaking);
+        assert_ne!(listening, speaking);
+        assert_ne!(listening, idle);
+        assert_ne!(speaking, idle);
+        assert_ne!(listening, thinking);
+        assert_ne!(speaking, thinking);
+        assert_eq!(
+            speaking,
+            color(theme.color("manager.speaking").and_then(rgb).unwrap()),
+            "speaking is the full role colour"
+        );
+    }
+
+    #[test]
+    fn a_state_change_blends_the_colour() {
+        let theme = Theme::new(Options::default());
+        let mut indicator = Indicator::default();
+        indicator.pin(IndicatorState::Thinking, 0.0);
+        indicator.to = IndicatorState::Listening;
+        indicator.mix = 0.5;
+        let half = wave_color(&theme, &indicator).unwrap();
+        indicator.mix = 0.0;
+        let start = wave_color(&theme, &indicator).unwrap();
+        indicator.mix = 1.0;
+        let end = wave_color(&theme, &indicator).unwrap();
+        assert_ne!(half, start);
+        assert_ne!(half, end);
+    }
+
+    #[test]
+    fn the_speakers_height_follows_the_level() {
+        let field = |state, level| -> String {
+            (0..WIDTH as usize)
+                .map(|i| braille_cell(3.1, state, level, i))
+                .collect()
+        };
+        for state in [IndicatorState::Listening, IndicatorState::Speaking] {
+            assert_ne!(field(state, 0.0), field(state, 1.0));
+        }
+        // Silence is nearly flat: at most two dot rows are touched per column.
+        let quiet = field(IndicatorState::Listening, 0.0);
+        let rows: u32 = quiet
+            .chars()
+            .map(|c| (c as u32 - 0x2800).count_ones())
+            .sum();
+        let loud: u32 = field(IndicatorState::Listening, 1.0)
+            .chars()
+            .map(|c| (c as u32 - 0x2800).count_ones())
+            .sum();
+        assert!(rows <= loud + 6, "quiet {rows} loud {loud}");
+        // Thinking ignores the level.
+        assert_eq!(
+            field(IndicatorState::Thinking, 0.0),
+            field(IndicatorState::Thinking, 1.0)
+        );
     }
 }

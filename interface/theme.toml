@@ -524,3 +524,19 @@ separator  = { unicode = "·", ascii = "-" }
 breadcrumb = { unicode = "›", ascii = ">" }
 arrow      = { unicode = "→", ascii = "->" }
 close      = { unicode = "×", ascii = "x" }
+card_bottom = { unicode = "▀", ascii = "-" }
+
+[glyphs.control]
+settings = { unicode = "⚙", ascii = "*" }
+plus = { unicode = "+", ascii = "+" }
+more = { unicode = "…", ascii = "..." }
+up = { unicode = "↑", ascii = "^" }
+back = { unicode = "←", ascii = "<" }
+stop = { unicode = "■", ascii = "#" }
+play = { unicode = "▸", ascii = ">" }
+branch = { unicode = "⑂", ascii = "Y" }
+info = { unicode = "i", ascii = "i" }
+archive = { unicode = "↓", ascii = "v" }
+trash = { unicode = "×", ascii = "x" }
+copy = { unicode = "⧉", ascii = "=" }
+mic = { unicode = "♪", ascii = "m" }

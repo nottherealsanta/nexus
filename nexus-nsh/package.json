@@ -12,6 +12,7 @@
     "serve": "node scripts/serve.mjs",
     "macos": "npm run gen && nsh package App.tsx --target macos && node scripts/native-info.mjs .nsh/out/Nexus.app --launch-macos",
     "macos:open": "npm run gen && nsh run App.tsx --target macos",
+    "tui": "npm run gen && nsh run App.tsx --target tui",
     "ios": "npm run gen && nsh package App.tsx --target ios-simulator && node scripts/native-info.mjs .nsh/out/Nexus.app --launch-ios",
     "ios:catalyst": "npm run gen && nsh run App.tsx --target catalyst",
     "ios:device": "npm run gen && nsh package App.tsx --target ios && node scripts/native-info.mjs .nsh/out/Nexus.app",

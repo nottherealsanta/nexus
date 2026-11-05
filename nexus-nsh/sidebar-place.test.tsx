@@ -18,7 +18,7 @@ const network = {
 describe("session sidebar location", () => {
   test("shows the branch, with the project left to the rail", async () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
-    await app.waitFor("text:feature/sidebar");
+    await app.waitFor("text:⌥ feature/sidebar");
     expect(app.shows("id:session-place-ses_1")).toBe(true);
     expect(app.shows("id:session-group")).toBe(false);
     expect(app.texts().includes("demo")).toBe(false);

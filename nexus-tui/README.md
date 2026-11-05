@@ -6,6 +6,12 @@ reads Nexus state files, SQLite or provider credentials. The one file it owns in
 the Nexus home is its own preferences file, `tui.json` (see Preferences below). Old Nexus's client in
 `~/repos/nexus-old/rust/tui` is reference.
 
+This client is also the visual reference for `nexus nsh tui`, which runs the shared
+NSH TSX app rather than this Rust implementation. NSH now uses the shared Unicode
+sidebar/fold/tool glyphs, a monospace interface and compact full-width reading
+gutters on terminal, web and native targets. This does not change the Rust client's
+existing layout or controls.
+
 A new session's first message appears immediately below its context preview as
 `You · Sending…`, without waiting for MCP startup. The chosen agent/model/tool
 settings remain visible until Core's message and starting history arrive, avoiding
@@ -773,9 +779,10 @@ The session context meter reads Core's context budget; `~` marks estimates.
 
 The header's **Manager** label toggles a borderless, fully opaque notification dropdown: caption, recent model-context lines,
 current tool/status, the Manager's card, **Tell the Manager…** input and **Open Manager session**. While it or a
-call is open, a one-row field of gray braille cells replaces the label: three slow sine waves travel across ten cells,
-lighting only a few dots. Idle, thinking, listening and speaking change the speed and brightness (all gray); reduced
-motion freezes the field and ASCII terminals get one state glyph. Click the field to toggle the dropdown; an open
+call is open, a one-row field of braille cells replaces the label: three slow sine waves travel across ten cells,
+lighting only a few dots. Idle, thinking, listening and speaking change the speed and brightness; idle and thinking are gray, listening is
+drawn in `manager.listening` and speaking in `manager.speaking`, and their height follows the measured voice level.
+Reduced motion freezes the field (still in the speaker colour) and ASCII terminals get one state glyph. Click the field to toggle the dropdown; an open
 dropdown dims everything outside it. With the live voice on, hovering the field shows **Stop** and clicking it stops the
 voice (`/api/manager/live/stop`) while the control call, backend session and typed field stay.
 The dropdown's **Voice: on/off** toggle defaults on: opening Manager or switching Voice on starts Live immediately.
@@ -787,7 +794,7 @@ it shows canonical context inside Nexus with its composer disabled. The palette'
 inspector remain available. See [Manager](../docs/manager.md).
 
 Live uses its own audio connection and does not require Dictation setup. The header indicator appears immediately with
-**Connecting…** in the dropdown. Playback has a 60 ms startup/recovery buffer and the speaking state holds through
+**Connecting…** in the dropdown. Playback uses an adaptive jitter buffer (120 ms, growing by 60 ms per mid-speech underrun up to 300 ms for that call) and the speaking state holds through
 350 ms pauses. Both clients draw the same braille field; real audio quality and talk-over interruption still need listening checks.
 
 Working labels use the shared travelling shimmer: one pass every 1.5 seconds,

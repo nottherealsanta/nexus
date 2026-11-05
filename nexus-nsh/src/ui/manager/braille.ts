@@ -1,7 +1,9 @@
 // The Manager's header indicator in NSH: the same braille wave field as the TUI (`nexus-tui/src/indicator.rs`).
 // Ten cells of braille text, a few dots lit, travelled by three slow sine waves. Idle, thinking, listening and
-// speaking differ in speed and brightness; every state stays gray. Pure drawing: the caller gives it the time.
+// speaking differ in speed and brightness; listening is drawn in `manager.listening`, speaking in `manager.speaking`, the
+// rest in gray (`waveColor`). Pure drawing: the caller gives it the time.
 import type { OrbMode } from "../../manager";
+import { diagramPalettes, managerColors } from "../../gen/theme";
 
 export const BRAILLE_WIDTH = 10;
 
@@ -25,7 +27,9 @@ export const waveBrightness = (mode: OrbMode): number =>
 /** The braille cell for dot columns `index * 2` and `index * 2 + 1` at time `t`. */
 export function brailleCell(t: number, mode: OrbMode, level: number, index: number): string {
   const time = t * waveSpeed(mode);
-  const amp = 0.78 + 0.22 * Math.max(0, Math.min(1, level));
+  const lv = Math.max(0, Math.min(1, level));
+  // The speaker's waves follow the measured voice: silence is a flat line, loud is tall.
+  const amp = mode === "listening" || mode === "speaking" ? 0.12 + 0.88 * lv : 0.78;
   let bits = 0;
   for (let col = 0; col < 2; col++) {
     const dx = index * 2 + col;
@@ -47,4 +51,29 @@ export function brailleField(t: number, mode: OrbMode, level: number, width = BR
   let out = "";
   for (let i = 0; i < width; i++) out += brailleCell(t, mode, level, i);
   return out;
+}
+
+type Rgb = [number, number, number];
+const rgb = (hex: string): Rgb => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as Rgb;
+const lerp = (a: Rgb, b: Rgb, k: number): Rgb => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+const ease = (x: number) => { const c = Math.max(0, Math.min(1, x)); return c * c * (3 - 2 * c); };
+
+/** The colour a mode draws its waves in: the speaker's role colour while somebody talks, `text.muted` otherwise. */
+export function waveRole(mode: OrbMode, scheme: "light" | "dark"): string {
+  return mode === "listening" ? managerColors[scheme].listening : mode === "speaking" ? managerColors[scheme].speaking : diagramPalettes[scheme].muted;
+}
+
+/**
+ * The colour (`#rrggbb`) the waves are drawn in while easing from `from` to `mode` (`blend` 0 to 1); the dot brightness
+ * stays an opacity, so this is the role colour itself.
+ */
+export function waveColor(from: OrbMode, mode: OrbMode, blend: number, scheme: "light" | "dark"): string {
+  const c = lerp(rgb(waveRole(from, scheme)), rgb(waveRole(mode, scheme)), ease(blend));
+  return "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+}
+
+/** The dot opacity while easing from `from` to `mode`. */
+export function waveOpacity(from: OrbMode, mode: OrbMode, blend: number): number {
+  const k = ease(blend);
+  return waveBrightness(from) * (1 - k) + waveBrightness(mode) * k;
 }

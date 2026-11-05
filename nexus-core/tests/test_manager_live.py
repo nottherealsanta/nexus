@@ -287,6 +287,40 @@ async def test_the_audio_socket_is_holder_only_and_carries_pcm_both_ways(h):
         h.manager.live_voice("not-the-holder")
 
 
+async def test_a_full_audio_queue_does_not_break_detaching_the_client(h):
+    h.open_stream()
+    await h.start()
+    await offer(h)
+    voice = h.manager.live
+    peer = FakePeer.instances[-1]
+
+    class Socket:
+        def __init__(self):
+            self.inbox: asyncio.Queue = asyncio.Queue()
+            self.release = asyncio.Event()
+
+        async def receive(self):
+            return await self.inbox.get()
+
+        async def send_bytes(self, data):
+            await self.release.wait()  # a stuck client: the outgoing queue fills up
+
+        async def close(self, code=1000):
+            pass
+
+    socket = Socket()
+    task = asyncio.ensure_future(voice.attach_client(socket))
+    await until(lambda: peer.on_audio is not None, what="the socket to attach")
+    for _ in range(300):
+        peer.on_audio(b"\x01\x02" * 480)
+    await asyncio.sleep(0.05)  # the sender takes one item and sticks in send_bytes
+    for _ in range(200):
+        peer.on_audio(b"\x01\x02" * 480)  # refill: the queue is now full
+    await socket.inbox.put({"type": "websocket.disconnect"})
+    await asyncio.wait_for(task, 2)
+    assert peer.on_audio is None
+
+
 def _missing_audio_codecs() -> str | None:
     """Why the in-process Opus test cannot run here, or None when aiortc and its codec are usable."""
     try:

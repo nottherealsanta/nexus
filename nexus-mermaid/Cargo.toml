@@ -31,7 +31,7 @@ svg = [
 raster = ["svg", "dep:resvg", "dep:png"]
 
 [dependencies]
-unicode-width = "=0.2.0"
+unicode-width = "0.2"
 ondine = { package = "compiler", git = "https://github.com/wevm/ondine", rev = "b19aa90e2c76ce8e0d3b718d61c05c70e2b23a3d", default-features = false, optional = true }
 resvg = { version = "=0.46.0", default-features = false, features = ["text"], optional = true }
 png = { version = "=0.17.16", optional = true }

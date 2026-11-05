@@ -1,6 +1,6 @@
 import { agentColor } from "../agent-color";
-import { List, Scroll, computed, effect, signal, Text, untracked, View } from "nsh";
-import { Image } from "nsh";
+import { List, Scroll, computed, effect, platform, signal, Text, untracked, View } from "nsh";
+import { Canvas, Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
 import { FOCUS, Icon, IconButton, PROSE, Shimmer, Status, StatusRail, T, TS } from "./kit";
@@ -955,13 +955,13 @@ function CodeFence(p: { block: TextViewCodeBlock }) {
  */
 export function MermaidFence(p: { block: TextViewCodeBlock; /** Scale the picture down to fit this height (the Manager's diagram card). */ maxHeight?: number; centered?: boolean }) {
   const measured = signal(0);
-  const columns = () => Math.max(8, Math.floor((measured() || 640) / 7.75));
+  const columns = () => Math.max(8, Math.floor((measured() || 640) / (platform.idiom === "terminal" ? 8 : 7.75)));
   return (
     <View class={`w-full my-1 ${p.centered ? "items-center" : ""}`} testID="mermaid-fence"
       onLayout={(b: any) => measured.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
       {() => {
         const rows = mermaidText(p.block.code, columns());
-        const picture = rows ? null : mermaidImage(p.block.code, columns());
+        const picture = rows ? null : mermaidImage(p.block.code, columns(), p.maxHeight);
         if (!rows && !picture) return <CodeFence block={p.block} />;
         return (
           <View class={p.centered ? "items-center" : "w-full"}>
@@ -976,7 +976,21 @@ export function MermaidFence(p: { block: TextViewCodeBlock; /** Scale the pictur
                   ))}
                 </View>
               )
-              : (
+              : picture?.cells ? (
+                <Canvas testID="mermaid-diagram" accessibilityLabel="Mermaid diagram" style={{ width: picture.width, height: picture.height }} draw={(cx) => {
+                  picture.cells!.forEach((row, y) => {
+                    let x = 0;
+                    row.runs.forEach((run) => {
+                      const width = run.text.length * 8;
+                      cx.fillStyle = run.foreground;
+                      cx.fillRect(x, y * 16, width, 8);
+                      cx.fillStyle = run.background;
+                      cx.fillRect(x, y * 16 + 8, width, 8);
+                      x += width;
+                    });
+                  });
+                }} />
+              ) : (
                 <Image src={picture!.url} style={fitPicture(picture!, p.maxHeight)}
                   accessibilityLabel="Mermaid diagram" testID="mermaid-diagram" />
               )}

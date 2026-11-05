@@ -1,7 +1,7 @@
 // The shared Mermaid presentation: the same text rows and PNG the TUI draws.
 // The native module owns compilation and rasterization; this file only caches
 // the results and resolves the palette for the current appearance.
-import { colorScheme, nativeModule } from "nsh";
+import { colorScheme, nativeModule, platform } from "nsh";
 import type { MermaidModule } from "nexus/native";
 import { diagramPalettes } from "./gen/theme";
 import { closedFenceSources, toneClass } from "./mermaid-logic";
@@ -19,7 +19,8 @@ function mermaid(): MermaidModule {
 
 export type MermaidTextRun = { text: string; tone: string };
 export type MermaidTextRow = { runs: MermaidTextRun[] };
-export type MermaidImage = { url: string; width: number; height: number };
+export type MermaidTerminalRow = { runs: { text: string; foreground: string; background: string }[] };
+export type MermaidImage = { url: string; width: number; height: number; cells?: MermaidTerminalRow[] };
 
 const CACHE_LIMIT = 64;
 const textCache = new Map<string, MermaidTextRow[] | null>();
@@ -45,9 +46,11 @@ export function mermaidText(source: string, columns: number): MermaidTextRow[] |
 }
 
 /** The shared PNG, at the width the measured column has. */
-export function mermaidImage(source: string, columns: number): MermaidImage | null {
+export function mermaidImage(source: string, columns: number, maxHeight?: number): MermaidImage | null {
   const mode = colorScheme() === "light" ? "light" : "dark";
-  const key = `${mode}:${columns}:${source}`;
+  const maxRows = Math.min(80, Math.max(1, Math.floor((maxHeight ?? 1280) / 16)));
+  const terminal = platform.idiom === "terminal";
+  const key = `${terminal}:${maxRows}:${mode}:${columns}:${source}`;
   if (imageCache.has(key)) return imageCache.get(key)!;
   let image: MermaidImage | null = null;
   try {
@@ -68,6 +71,11 @@ export function mermaidImage(source: string, columns: number): MermaidImage | nu
       titleWeight: palette.title_weight,
       series: palette.series,
     };
+    if (terminal) {
+      const cells = mermaid().renderTerminal(source, columns, maxRows, theme);
+      image = { url: "", cells, width: Math.max(0, ...cells.map((row) => row.runs.reduce((n, run) => n + run.text.length, 0))) * 8, height: cells.length * 16 };
+      return remember(imageCache, key, image);
+    }
     const raster = mermaid().renderPng(source, columns * 10, columns * 40, theme);
     if (raster && raster.png?.length) {
       // The raster is laid out for 10x20 cells; the client sets text at 12.5px

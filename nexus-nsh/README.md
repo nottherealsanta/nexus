@@ -14,6 +14,43 @@ hand.
 
 The app itself is TSX (`App.tsx`, `src/`); `package.json` is tooling only.
 
+The Rust TUI is the visual reference for the shared NSH app. All NSH targets use
+Monaspace Argon for interface text and prose, Unicode text icons instead of SVG
+controls, and a full-width reading column with fixed 8 px outer and inner gutters.
+Sidebar, fold and tool icons come from the same glyph tables as the Rust client;
+button labels remain accessible names and tooltips, not visible fallback text.
+The session search icon, field and shortcut are laid out side by side, without
+absolute overlays. Phone touch targets and mobile navigation remain unchanged.
+Narrow desktop/web headers show one flexible title instead of a fixed-width tab
+strip and add button, matching the Rust TUI's narrow header. Session switching and
+creation remain available through the sidebar and shortcuts.
+
+## Terminal backend
+
+`nexus nsh tui` starts Core and runs this same TSX app with upstream NSH's terminal
+backend, including hot reload. This is an experimental alternative to the dedicated
+Rust client (`nexus tui`), not a replacement. Keyboard and mouse rendering come from
+NSH's character-grid backend; no separate terminal UI is maintained here. Flags pass
+through, for example `nexus nsh tui --fps` or `--points-per-cell 8x16`.
+`npm run tui -- --fps` runs the backend directly when Core is already running.
+
+The native crate pins NSH revision `3789a451f6d4935a3b13890fb1020a427d20a8ee`.
+Use a matching source CLI (the older 0.3.0 CLI does not have `--target tui`):
+
+```sh
+git -C ~/.nsh/source fetch origin
+git -C ~/.nsh/source checkout --detach 3789a451f6d4935a3b13890fb1020a427d20a8ee
+cargo build --manifest-path ~/.nsh/source/Cargo.toml -p nsh-cli --release
+```
+
+These commands assume the upstream source installer has already created
+`~/.nsh/source` and linked `nsh` to its release binary. Otherwise follow
+[upstream's source installation instructions](https://github.com/longbridge/nsh#quick-start).
+The first run builds a terminal host with Nexus's native services. Diagnostics go
+to `.nsh/tui.log`. On macOS, local Core discovery uses the same `~/.nexus/daemon.json`
+path as the native window; custom `NEXUS10_HOME` discovery is not supported by the
+native TSX transport yet.
+
 A new session's first message appears immediately below its context preview as
 `You · Sending…`. The chosen settings stay visible until Core's message and history
 arrive; there is no intermediate loading/default-header flash. This is local
@@ -74,9 +111,9 @@ Clipping is announced and the control restores the whole output. In the context 
 
 The app sets a 16 px default with 24 px leading; the shared kit's title, body and
 code roles use that size, and hierarchy comes from weight and colour rather than
-size (some timeline chrome still sets a smaller size explicitly). Geist carries
-interface text and prose; inline code, fenced code, paths and tool arguments use
-Monaspace Argon. NSH imports the bundled Geist and Argon faces so the packaged
+size (some timeline chrome still sets a smaller size explicitly). Monaspace Argon
+carries interface text, prose, inline code, fenced code, paths and tool arguments.
+NSH imports the bundled faces so the packaged
 app registers them before rendering. Child cards label background calls,
 distinguish failed and running status, and allow the full tool result to be
 expanded without navigating away from the parent session.
@@ -132,7 +169,7 @@ count) opens the panel on demand and pushes the page; the panel starts closed. C
 the current-project selection, session rows, search fields, prose tables and modals are all
 square, like the TUI's cell grid; only circular status dots, spinners, image remove controls
 and meters keep their shape. A box rule runs a hairline along a box's straight
-sides; a filled box needs no border. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). Drag the file panel's left edge to resize it from 360 px up to what leaves the timeline 480 px. The reading column is centred and at most 1160 px wide. The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
+sides; a filled box needs no border. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). Drag the file panel's left edge to resize it from 360 px up to what leaves the timeline 480 px. The reading column fills the available centre width. The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
 Over the docked left sidebar its left slot holds the 32 px toggle and
 the Sessions and Files icons (they follow the sidebar's open state; narrow, they
 are in the drawer with labels). The session tabs and the subagent strip use one
@@ -146,10 +183,9 @@ a subagent strip shows the path above the viewed child as parent tabs (the last
 is the back control), a divider rail, then the root's other sessions as equal
 tabs with their state glyph and agent, with the viewed child selected. The run status sits at the
 centre's right edge; the bell and right toggle are at the far right. The context timeline
-uses the full available centre width with responsive horizontal padding (24 px narrow,
-48 px from 820 px, 64 px from 1200 px and 80 px from 1600 px). Every card shares the
-column's left edge, and assistant prose plus activity and thought rows start at the
-cards' 16 px text inset (activity rows keep a 4 px hover pad inside their 12 px indent).
+uses the full available centre width with fixed 8 px horizontal padding at every
+viewport. Every card shares the column's left edge, and assistant prose plus
+activity and thought rows start at the cards' 8 px text inset.
 The waiting card sits in the timeline's reading column, and the docked composer's content
 uses the same 16 px inset, so a draft's first character lines up with the first character of
 the user message above it.
@@ -548,9 +584,10 @@ estimate.
 
 The header's **Manager** label toggles a borderless, fully opaque notification dropdown: caption, recent model-context lines,
 current tool/status, the Manager's card, **Tell the Manager…** input and **Open Manager session**. While it or a
-call is open, a one-row field of gray braille cells replaces the label: three slow sine waves travel across ten cells,
-lighting only a few dots. Idle, thinking, listening and speaking change the speed and brightness (all gray); reduced
-motion freezes the field and ASCII terminals get one state glyph. Click the field to toggle the dropdown; an open
+call is open, a one-row field of braille cells replaces the label: three slow sine waves travel across ten cells,
+lighting only a few dots. Idle, thinking, listening and speaking change the speed and brightness; idle and thinking are gray, listening is
+drawn in `manager.listening` and speaking in `manager.speaking`, and their height follows the measured voice level.
+Reduced motion freezes the field (still in the speaker colour) and ASCII terminals get one state glyph. Click the field to toggle the dropdown; an open
 dropdown dims everything outside it. With the live voice on, hovering the field shows **Stop** and clicking it stops the
 voice (`/api/manager/live/stop`) while the control call, backend session and typed field stay.
 The dropdown's **Voice: on/off** toggle defaults on: opening Manager or switching Voice on starts Live immediately.
@@ -562,7 +599,7 @@ it shows canonical context inside Nexus with its composer disabled. The palette'
 inspector remain available. See [Manager](../docs/manager.md).
 
 Live uses its own audio connection and does not require Dictation setup. The header indicator appears immediately with
-**Connecting…** in the dropdown. Playback has a 60 ms startup/recovery buffer and the speaking state holds through
+**Connecting…** in the dropdown. Playback uses an adaptive jitter buffer (120 ms, growing by 60 ms per mid-speech underrun up to 300 ms for that call) and the speaking state holds through
 350 ms pauses. Both clients draw the same braille field; real audio quality and talk-over interruption still need listening checks.
 
 Working labels use the shared travelling shimmer: one pass every 1.5 seconds,

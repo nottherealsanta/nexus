@@ -14,6 +14,7 @@ import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import { sessionInventoryRows } from "../skills-mcp";
 import type { InventoryKind, InventoryRow, McpEntry, SkillEntry } from "../skills-mcp";
 import { TimelineColumn } from "./reading-column";
+import { contextGrid } from "./geometry";
 import "../../fonts/MonaspaceArgon-Regular.otf";
 import "../../fonts/MonaspaceArgon-Medium.otf";
 import "../../fonts/MonaspaceArgon-Bold.otf";
@@ -188,7 +189,6 @@ export function inColumns<T>(items: T[], most: number): T[][] {
 }
 
 /** One cell's nominal width; long names ellipsize inside it. */
-const CELL_PX = 196;
 const HEAD = TS.base;
 
 /** A switch cell, as the TUI draws it: the marker switches and the name opens its information. */
@@ -213,10 +213,11 @@ function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: 
   const s = p.s;
   const offNote = /\boff$/.test(s.meta);
   // Tools take up to four columns and skills and servers two, as many as fit.
-  const fit = (most: number) => Math.max(1, Math.min(most, Math.floor((p.width - 32) / (CELL_PX + 16))));
+  const names = () => s.body.kind === "grid" ? s.body.items.map((item) => item.name) : s.body.kind === "inventory" ? s.body.items.map((item) => [item.name, item.meta, item.tools == null ? "" : `${item.tools} tools`, item.locked ? "new session" : ""].filter(Boolean).join(" · ")) : [];
+  const grid = (most: number) => contextGrid(names(), p.width, most);
   const shownMeta = !offNote && !!s.meta && s.tokens === undefined;
   return (
-    <View class="py-1 gap-0.5" testID={`ctx-${s.key}`}>
+    <View testID={`ctx-${s.key}`}>
       <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`}
         tooltip={p.estimated && s.tokens !== undefined ? <Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{ESTIMATED}</Text> : undefined}
         class={`self-stretch flex-row items-center gap-1.5 min-h-6 rounded-(--radius) px-1 -mx-1 hover:bg-accent ${FOCUS}`}>
@@ -227,10 +228,10 @@ function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: 
         <If when={shownMeta}><Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`shrink min-w-0 ml-1 ${HEAD} text-muted-foreground`}>{s.meta}</Text></If>
       </Button>
       <If when={s.body.kind === "grid"}>
-        <View class="flex-row gap-x-4 pl-1" testID={`ctx-${s.key}-grid`}>
-          <Each of={inColumns((s.body as { items: { name: string; on: boolean }[] }).items, fit(4))} key={(_, i) => `${i}`}>
+        <View class="flex-row pl-1" testID={`ctx-${s.key}-grid`}>
+          <Each of={inColumns((s.body as { items: { name: string; on: boolean }[] }).items, grid(4).columns)} key={(_, i) => `${i}`}>
             {(column) => (
-              <View class="flex-1 min-w-0">
+              <View class="min-w-0 shrink-0" style={{ width: grid(4).cell }}>
                 <Each of={column()} key={(c) => c.name}>
                   {(c) => <Cell name={c().name} on={c().on} label={`${c().name} ${c().on ? "on" : "off"}`} testID={`ctx-chip-${c().name}`}
                     onToggle={() => p.onInventoryToggle?.("tool", c().name, false)} onInfo={() => p.onItem(c().name)} />}
@@ -241,10 +242,10 @@ function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: 
         </View>
       </If>
       <If when={s.body.kind === "inventory" && !(s.key === "skills" && (s.count ?? 0) > 12)}>
-        <View class="flex-row gap-x-4 pl-1" testID={`ctx-${s.key}-inventory`}>
-          <Each of={inColumns((s.body as { items: InventoryRow[] }).items, fit(2))} key={(_, i) => `${i}`}>
+        <View class="flex-row pl-1" testID={`ctx-${s.key}-inventory`}>
+          <Each of={inColumns((s.body as { items: InventoryRow[] }).items, grid(2).columns)} key={(_, i) => `${i}`}>
             {(column) => (
-              <View class="flex-1 min-w-0">
+              <View class="min-w-0 shrink-0" style={{ width: grid(2).cell }}>
                 <Each of={column()} key={(item) => item.name}>
                   {(item) => <Cell name={item().name} on={item().on} locked={item().locked} error={item().error}
                     status={[item().meta, item().tools === null || item().tools === undefined ? "" : `${item().tools} tools`, item().locked ? "new session" : ""].filter(Boolean).join(" · ")}
@@ -383,15 +384,14 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
     }
   });
     return (
-    <View class="w-full bg-card px-4 py-3" testID="context-sections"
+    <View class="w-full bg-card px-4 py-6 gap-4" testID="context-sections"
       onLayout={(b: any) => cardWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
       <If when={!!p.reconstructed}><Text class={`${TS.base} text-warning`}>reconstructed</Text></If>
       <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => {
         const open = (name?: string) => detail.set({ ...s(), focus: name, skillRows: s().key === "skills" && s().body.kind === "inventory" ? { rows: (s().body as { items: InventoryRow[] }).items, toggle: p.onInventoryToggle } : undefined });
         return <Section s={s()} estimated={p.estimated} width={cardWidth()} onOpen={() => open()} onItem={open} onInventoryToggle={p.onInventoryToggle} />;
       }}</Each>
-      <View class="h-px bg-border mt-2" />
-      <View class="flex-row items-center gap-2 pt-2" testID="context-total">
+      <View class="flex-row items-center gap-2" testID="context-total">
         <Text class={`${HEAD} font-semibold text-foreground-secondary`}>total</Text>
         <Text class={`${HEAD} text-foreground-secondary tabular-nums`}>{`${p.estimated ? "~" : ""}${thousands(p.total)} tok`}</Text>
         <If when={!!pct()}><Text class={`${HEAD} text-muted-foreground`}>{`· ${pct()} of the window`}</Text></If>
@@ -403,7 +403,7 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
 /** The starting context in the timeline and before a session starts: one card, one width. */
 export function StartingContext(p: { sections: CtxSection[]; total: number; estimated: boolean; window?: number; reconstructed?: boolean; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
   return (
-    <View class="w-full my-3" testID="context-section">
+    <View class="w-full my-4" testID="context-section">
       <ContextSections
         sections={p.sections} total={p.total} estimated={p.estimated} window={p.window} reconstructed={p.reconstructed}
         onInventoryToggle={p.onInventoryToggle}

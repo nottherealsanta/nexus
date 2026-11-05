@@ -5,7 +5,7 @@ import { Header } from "./src/ui/header";
 import { LeftSidebar, SessionRail, SessionsTab } from "./src/ui/sidebar";
 import { SettingsView } from "./src/ui/settings";
 import { Icon, IconButton, FOCUS, T, TS } from "./src/ui/kit";
-import { RightRail, RightSidebar } from "./src/ui/right";
+import { RightSidebar } from "./src/ui/right";
 import { Centre } from "./src/ui/centre";
 import { FilePanel } from "./src/ui/editor";
 import { ContextDetailModal } from "./src/ui/newsession";
@@ -83,7 +83,6 @@ function App() {
             <If when={leftPersistent()}><LeftSidebar /></If>
             <Centre />
             <If when={rightPersistent()}><RightSidebar /></If>
-            <If when={!isNarrow()}><RightRail /></If>
           </View>
           <Drawers />
         </View>
