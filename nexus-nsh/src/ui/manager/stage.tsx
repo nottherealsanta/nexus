@@ -1,9 +1,9 @@
 // Manager dropdown and the one-row braille indicator, anchored to the header in both clients.
-import { Overlay, Scroll, Text, View, effect, keymap, signal, windowSize } from "nsh";
+import { Overlay, Scroll, Text, View, colorScheme, effect, keymap, signal, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { FOCUS, T, TS } from "../kit";
 import { CardBody } from "./cards";
-import { brailleField, waveBrightness } from "./braille";
+import { brailleField, waveColor, waveOpacity } from "./braille";
 import { OrbMode, WORDS, cardCaption, cardTitle } from "../../manager";
 import {
   dropdownOpen, dropdownInteractive, closeManagerDropdown, voiceEnabled, audioRequested, callMinimised, card, consent, cardCollapsed,
@@ -48,15 +48,26 @@ export function ManagerHeaderIndicator() {
   const hovered = signal(false);
   effect(() => { if (!animated()) return; return holdWave(); });
   const stopping = () => liveVoice() && hovered();
+  // Read on every waveFrame tick (and whenever the call's signals change): `visual` is plain data the call's frame loop
+  // updates, so the colour blend and the measured level are current at each 33 ms render. Without the loop (reduced
+  // motion, or before it starts) the mode comes straight from the signals and the field is still.
+  const wave = () => {
+    animated() && waveFrame();
+    const scheme = colorScheme() === "light" ? "light" : "dark";
+    const mode = waveMode();
+    const eased = animated() && visual.running;
+    const from = eased ? visual.from : mode, blend = eased ? visual.blend : 1, to = eased ? visual.mode : mode;
+    return { mode: to, level: eased ? visual.level : 0.5, color: waveColor(from, to, blend, scheme), opacity: reducedMotion() ? 0.7 : waveOpacity(from, to, blend) };
+  };
   return <If when={managerHeaderIndicatorVisible()}>{() => <View onMouseEnter={() => hovered.set(true)} onMouseLeave={() => hovered.set(false)}
     style={{ width: 100, height: 20 }}>
     <Button
       onPress={() => { if (liveVoice()) void stopManagerVoice(); else void run("manager.header"); }}
       testID="manager-indicator" accessibilityLabel={liveVoice() ? "Stop Manager voice" : "Manager"} class={`w-full h-full ${FOCUS}`}>
       <If when={stopping()}>{() => <Text class={`${TS.base} font-medium text-foreground`} testID="manager-indicator-stop">Stop</Text>}</If>
-      <If when={!stopping()}>{() => <Text class="font-mono text-[13px] leading-[18px] text-muted-foreground" testID="manager-indicator-wave"
-        style={{ opacity: reducedMotion() ? 0.7 : waveBrightness(waveMode()), numberOfLines: 1 }}>
-        {brailleField(animated() ? waveFrame() : 0, waveMode(), visual.level)}
+      <If when={!stopping()}>{() => <Text class="font-mono text-[13px] leading-[18px]" testID="manager-indicator-wave"
+        style={{ color: wave().color, opacity: wave().opacity, numberOfLines: 1 }}>
+        {brailleField(animated() ? waveFrame() : 0, wave().mode, wave().level)}
       </Text>}</If>
     </Button>
   </View>}</If>;

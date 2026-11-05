@@ -145,35 +145,97 @@ impl<S: rodio::Source> rodio::Source for SpeechMeter<S> {
     }
 }
 
+/// Start cushion, growth step and ceiling for the jitter buffer, in milliseconds.
+const CUSHION_START_MS: usize = 120;
+const CUSHION_STEP_MS: usize = 60;
+const CUSHION_MAX_MS: usize = 300;
+/// A dry-out followed by more audio within this long is a mid-speech underrun (jitter), not the end of an utterance.
+const UNDERRUN_WINDOW: Duration = Duration::from_millis(1500);
+/// Fade length (5 ms at 24 kHz) applied when playback (re)starts and when it runs dry, to avoid clicks.
+const FADE_SAMPLES: usize = RATE as usize * 5 / 1000;
+
 /// One continuous source keeps the output resampler alive across network packets.
-/// Collect 60 ms before starting (or recovering from an underrun).
-#[derive(Default)]
+/// Adaptive jitter buffer: collects `cushion` (120 ms at the start of a call) before starting or recovering.
+/// Rule: when the buffer runs dry and more audio arrives within 1.5 s, that was jitter, so the cushion grows by
+/// 60 ms up to 300 ms for the rest of the call. A longer silence is a normal end of utterance and does not grow it.
+/// `clear` (barge-in) drops the audio but keeps the learned cushion; a new call builds a new buffer.
 struct AudioBuffer {
     samples: std::collections::VecDeque<f32>,
     started: bool,
+    cushion: usize,
+    dry_at: Option<Instant>,
+    fade_in: usize,
+    fade_out: usize,
+    last: f32,
+}
+impl Default for AudioBuffer {
+    fn default() -> Self {
+        Self {
+            samples: Default::default(),
+            started: false,
+            cushion: RATE as usize * CUSHION_START_MS / 1000,
+            dry_at: None,
+            fade_in: 0,
+            fade_out: 0,
+            last: 0.0,
+        }
+    }
 }
 impl AudioBuffer {
     fn push(&mut self, samples: Vec<f32>) {
+        self.push_at(samples, Instant::now());
+    }
+    fn push_at(&mut self, samples: Vec<f32>, now: Instant) {
+        if let Some(dry) = self.dry_at.take() {
+            if now.saturating_duration_since(dry) <= UNDERRUN_WINDOW {
+                let max = RATE as usize * CUSHION_MAX_MS / 1000;
+                self.cushion = (self.cushion + RATE as usize * CUSHION_STEP_MS / 1000).min(max);
+            }
+        }
         self.samples.extend(samples);
     }
     fn next_sample(&mut self) -> f32 {
+        self.next_sample_at(Instant::now())
+    }
+    fn next_sample_at(&mut self, now: Instant) -> f32 {
         if !self.started {
-            if self.samples.len() < RATE as usize * 60 / 1000 {
-                return 0.0;
+            if self.samples.len() < self.cushion {
+                return self.tail();
             }
             self.started = true;
+            self.fade_out = 0;
+            self.fade_in = 0;
         }
         match self.samples.pop_front() {
-            Some(sample) => sample,
+            Some(sample) => {
+                self.last = sample;
+                if self.fade_in < FADE_SAMPLES {
+                    self.fade_in += 1;
+                    return sample * self.fade_in as f32 / FADE_SAMPLES as f32;
+                }
+                sample
+            }
             None => {
                 self.started = false;
-                0.0
+                self.dry_at = Some(now);
+                self.fade_out = FADE_SAMPLES;
+                self.tail()
             }
         }
+    }
+    /// The last played sample ramped to zero, so an underrun does not cut with a click.
+    fn tail(&mut self) -> f32 {
+        if self.fade_out == 0 {
+            return 0.0;
+        }
+        self.fade_out -= 1;
+        self.last * self.fade_out as f32 / FADE_SAMPLES as f32
     }
     fn clear(&mut self) {
         self.samples.clear();
         self.started = false;
+        self.dry_at = None;
+        self.fade_out = 0;
     }
 }
 
@@ -527,26 +589,92 @@ mod tests {
         assert!(gate.allow_mic_at(150, true, 0.02));
     }
 
+    fn drain(buffer: &mut AudioBuffer, n: usize, now: Instant) -> Vec<f32> {
+        (0..n).map(|_| buffer.next_sample_at(now)).collect()
+    }
+
     #[test]
-    fn playback_spans_packets_and_absorbs_jitter_before_resuming() {
+    fn playback_waits_for_120_ms_then_spans_packets() {
+        let now = Instant::now();
         let mut buffer = AudioBuffer::default();
-        buffer.push(vec![0.25; 480]);
-        assert_eq!(buffer.next_sample(), 0.0); // wait for the 60 ms cushion
-        assert_eq!(buffer.samples.len(), 480); // no audio discarded
-        buffer.push(vec![0.5; 960]);
-        for _ in 0..480 {
-            assert_eq!(buffer.next_sample(), 0.25);
+        buffer.push_at(vec![0.5; 2880 - 480], now);
+        assert_eq!(buffer.next_sample_at(now), 0.0); // 100 ms is not enough
+        assert_eq!(buffer.samples.len(), 2400); // no audio discarded
+        buffer.push_at(vec![0.5; 480 + 960], now);
+        let out = drain(&mut buffer, 3840, now);
+        assert!(out[0] > 0.0 && out[0] < 0.01); // fades in
+        assert_eq!(out[FADE_SAMPLES], 0.5);
+        assert_eq!(out[3839], 0.5);
+    }
+
+    #[test]
+    fn fade_in_ramps_over_5_ms_on_every_start() {
+        let now = Instant::now();
+        let mut buffer = AudioBuffer::default();
+        buffer.push_at(vec![1.0; 2880], now);
+        let out = drain(&mut buffer, FADE_SAMPLES + 1, now);
+        assert_eq!(FADE_SAMPLES, 120);
+        assert!((out[0] - 1.0 / 120.0).abs() < 1e-6);
+        assert!(out.windows(2).take(119).all(|w| w[1] > w[0]));
+        assert_eq!(out[119], 1.0);
+        assert_eq!(out[120], 1.0);
+    }
+
+    #[test]
+    fn underrun_fades_out_instead_of_cutting() {
+        let now = Instant::now();
+        let mut buffer = AudioBuffer::default();
+        buffer.push_at(vec![0.5; 2880], now);
+        let out = drain(&mut buffer, 2880 + FADE_SAMPLES + 5, now);
+        assert_eq!(out[2879], 0.5);
+        assert!(out[2880] < 0.5 && out[2880] > 0.45); // ramps down from the last sample
+        assert!(out[2880..].windows(2).take(FADE_SAMPLES - 1).all(|w| w[1] < w[0]));
+        assert_eq!(out[2880 + FADE_SAMPLES], 0.0);
+    }
+
+    #[test]
+    fn cushion_caps_at_300_ms() {
+        let now = Instant::now();
+        let mut buffer = AudioBuffer::default();
+        for _ in 0..10 {
+            buffer.push_at(vec![0.5; buffer.cushion], now);
+            let n = buffer.samples.len() + 1;
+            drain(&mut buffer, n, now); // run dry
+            buffer.push_at(vec![], now); // more audio soon after: jitter
         }
-        for _ in 0..960 {
-            assert_eq!(buffer.next_sample(), 0.5);
-        }
-        assert_eq!(buffer.next_sample(), 0.0); // underrun resets buffering
-        buffer.push(vec![0.75; 480]);
-        assert_eq!(buffer.next_sample(), 0.0);
-        buffer.push(vec![1.0; 960]);
-        assert_eq!(buffer.next_sample(), 0.75);
+        assert_eq!(buffer.cushion, 7200);
+    }
+
+    #[test]
+    fn cushion_grows_by_60_ms_per_underrun_and_not_after_a_long_silence() {
+        let t0 = Instant::now();
+        let mut buffer = AudioBuffer::default();
+        assert_eq!(buffer.cushion, 2880);
+        buffer.push_at(vec![0.5; 2880], t0);
+        drain(&mut buffer, 2881, t0); // runs dry
+        buffer.push_at(vec![0.5; 1], t0 + Duration::from_millis(100));
+        assert_eq!(buffer.cushion, 2880 + 1440);
+        // run dry again, but the next utterance starts 3 s later: end of speech, no growth
+        buffer.push_at(vec![0.5; buffer.cushion], t0 + Duration::from_millis(100));
+        let n = buffer.samples.len() + 1;
+        drain(&mut buffer, n, t0 + Duration::from_millis(100));
+        buffer.push_at(vec![0.5; 1], t0 + Duration::from_secs(4));
+        assert_eq!(buffer.cushion, 2880 + 1440);
+    }
+
+    #[test]
+    fn clear_keeps_the_learned_cushion() {
+        let now = Instant::now();
+        let mut buffer = AudioBuffer::default();
+        buffer.push_at(vec![0.5; 2880], now);
+        drain(&mut buffer, 2881, now);
+        buffer.push_at(vec![0.5; 4320], now);
+        assert_eq!(buffer.cushion, 4320);
         buffer.clear();
-        assert_eq!(buffer.next_sample(), 0.0);
+        assert_eq!(buffer.cushion, 4320);
+        assert!(buffer.samples.is_empty());
+        assert_eq!(buffer.next_sample_at(now), 0.0);
+        assert_eq!(AudioBuffer::default().cushion, 2880); // a new call starts at 120 ms
     }
 
     #[test]

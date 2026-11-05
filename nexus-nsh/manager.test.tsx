@@ -18,7 +18,7 @@ import {
   openManagerContext, phase, pickRow, say, setStreamForTest, speaking, stopCall, stopSpeech, talk, minimised, managerError, modelPreview, managerDetailsText, detailsScroll, scrollDetails, connecting,
   liveVoice, stopManagerVoice,
 } from "./src/core/manager";
-import { BRAILLE_WIDTH, brailleField, waveBrightness, waveSpeed } from "./src/ui/manager/braille";
+import { BRAILLE_WIDTH, brailleCell, brailleField, waveBrightness, waveColor, waveSpeed } from "./src/ui/manager/braille";
 import { manifest } from "./src/gen/manifest";
 import { connection, model } from "./src/store";
 
@@ -102,6 +102,24 @@ describe("the indicator", () => {
     expect(brailleField(1, "listening", 0.5)).not.toBe(frame);
     expect(waveSpeed("speaking") > waveSpeed("settling")).toBe(true);
     expect(waveBrightness("speaking") > waveBrightness("settling")).toBe(true);
+  });
+
+  test("the speaker sets the wave colour and the voice level sets the height", () => {
+    for (const scheme of ["dark", "light"] as const) {
+      const l = waveColor("listening", "listening", 1, scheme), sp = waveColor("speaking", "speaking", 1, scheme);
+      const idle = waveColor("settling", "settling", 1, scheme), th = waveColor("thinking", "thinking", 1, scheme);
+      expect(l).not.toBe(sp);
+      expect(l).not.toBe(idle);
+      expect(sp).not.toBe(idle);
+      expect(th).toBe(idle);
+      const half = waveColor("thinking", "listening", 0.5, scheme);
+      expect(half).not.toBe(th);
+      expect(half).not.toBe(l);
+    }
+    const field = (mode: "listening" | "speaking" | "thinking", level: number) => Array.from({ length: BRAILLE_WIDTH }, (_, i) => brailleCell(3.1, mode, level, i)).join("");
+    expect(field("listening", 0)).not.toBe(field("listening", 1));
+    expect(field("speaking", 0)).not.toBe(field("speaking", 1));
+    expect(field("thinking", 0)).toBe(field("thinking", 1));
   });
 
   test("the synthetic envelope stays soft and in range", () => {

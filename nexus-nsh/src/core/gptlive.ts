@@ -67,7 +67,7 @@ interface Call {
   outLevel: AnalyserLike;
   samples: { in: Float32Array; out: Float32Array };
   sources: Set<SourceLike>;
-  nextStart: number;
+  jitter: Jitter;
   muted: boolean;
 }
 let call: Call | null = null;
@@ -91,21 +91,46 @@ export function gptLiveLevels(): { local: number; remote: number } {
   return call ? { local: call.muted ? 0 : rms(call.inLevel, call.samples.in), remote: rms(call.outLevel, call.samples.out) } : { local: 0, remote: 0 };
 }
 
+export const CUSHION_START = 0.12, CUSHION_STEP = 0.06, CUSHION_MAX = 0.3, UNDERRUN_WINDOW = 1.5, FADE_SAMPLES = RATE * 0.005;
+
+/**
+ * Adaptive jitter schedule for contiguous packets. A packet arriving while the playhead is ahead of `currentTime`
+ * is chained on; one arriving after it ran dry restarts `cushion` seconds ahead (120 ms at the start of a call) and
+ * fades in over 5 ms. Rule: if the playhead ran dry mid-call and more audio arrives within 1.5 s, that was jitter, so
+ * the cushion grows by 60 ms up to 300 ms for the rest of the call. A longer silence is a normal end of utterance.
+ * `reset` (barge-in) forgets the playhead but keeps the learned cushion; a new call builds a new schedule.
+ */
+export class Jitter {
+  cushion = CUSHION_START;
+  nextStart = 0;
+  schedule(now: number, duration: number): { at: number; fadeIn: boolean } {
+    let at = this.nextStart, fadeIn = false;
+    if (this.nextStart <= now) {
+      if (this.nextStart > 0 && now - this.nextStart <= UNDERRUN_WINDOW) this.cushion = Math.min(CUSHION_MAX, this.cushion + CUSHION_STEP);
+      at = now + this.cushion;
+      fadeIn = true;
+    }
+    this.nextStart = at + duration;
+    return { at, fadeIn };
+  }
+  reset() { this.nextStart = 0; }
+}
+
 function play(c: Call, data: ArrayBuffer) {
   const pcm = new Int16Array(data, 0, Math.floor(data.byteLength / 2));
   if (!pcm.length) return;
   const floats = new Float32Array(pcm.length);
   for (let i = 0; i < pcm.length; i++) floats[i] = pcm[i] / 32768;
+  const { at, fadeIn } = c.jitter.schedule(c.context.currentTime, floats.length / RATE);
+  if (fadeIn) for (let i = 0; i < Math.min(FADE_SAMPLES, floats.length); i++) floats[i] *= (i + 1) / FADE_SAMPLES;
   const buffer = c.context.createBuffer(1, floats.length, RATE);
   buffer.copyToChannel(floats, 0);
   const source = c.context.createBufferSource();
   source.buffer = buffer;
   source.connect(c.outLevel);
-  const at = c.nextStart <= c.context.currentTime ? c.context.currentTime + 0.06 : c.nextStart;
   source.onended = () => c.sources.delete(source);
   c.sources.add(source);
   source.start(at);
-  c.nextStart = at + floats.length / RATE;
 }
 
 /**
@@ -147,7 +172,7 @@ export async function startGptLive(streamId: string, onLost: (why: string) => vo
       ws.onerror = () => reject(new Error("Could not open the call's audio connection to Core."));
       ws.onclose = (ev) => reject(new Error(ev.code === 4403 || ev.code === 4404 ? "The voice call is not open on Core." : "Core refused the call's audio connection."));
     });
-    const next: Call = { socket: ws, stream, context, capture, inLevel, outLevel, sources: new Set(), nextStart: 0, muted: false,
+    const next: Call = { socket: ws, stream, context, capture, inLevel, outLevel, sources: new Set(), jitter: new Jitter(), muted: false,
       samples: { in: new Float32Array(inLevel.fftSize), out: new Float32Array(outLevel.fftSize) } };
     call = next;
     capture.port!.onmessage = (m) => { if (!next.muted && ws.readyState === 1 && m.data instanceof ArrayBuffer) ws.send(m.data); };
@@ -175,7 +200,7 @@ export function interruptGptLive() {
   if (!call) return;
   for (const source of call.sources) { source.onended = null; try { source.stop(); } catch {} }
   call.sources.clear();
-  call.nextStart = 0;
+  call.jitter.reset();
 }
 
 /** Hang up this client's side. Idempotent; Core ends its half when the Manager call stops. */
