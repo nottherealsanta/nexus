@@ -1,7 +1,9 @@
 // Regression coverage for the shared timeline reading column: the new-session
 // starting context and the started session use the same column, card and inset.
 import { describe, expect, open, test } from "nsh/test";
-import { ACTIVITY_CHEVRON, CARD_INSET, READING_MAX, TEXT_INDENT, TEXT_INSET, timelineColumnClass, timelineColumnPx } from "./src/ui/reading-column";
+import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TEXT_INSET, timelineColumnClass, timelineColumnPx } from "./src/ui/reading-column";
+import { iconGlyphs } from "./src/ui/kit";
+import { sidebarGlyphs, verbGlyphs, structure } from "./src/gen/theme";
 
 const project = { id: "prj_1", path: "/work/demo", name: "demo", created: 1, updated: 2, revision: 1 };
 const session = {
@@ -42,30 +44,26 @@ function network(sessions: unknown[], snapshot: unknown | null) {
 }
 
 describe("timeline reading column", () => {
-  test("horizontal insets grow with the window and keep a narrow screen readable", () => {
-    expect(timelineColumnClass(390)).toBe("px-6");
-    expect(timelineColumnClass(819)).toBe("px-6");
-    expect(timelineColumnClass(820)).toBe("px-12");
-    expect(timelineColumnClass(1024)).toBe("px-12");
-    expect(timelineColumnClass(1200)).toBe("px-16");
-    expect(timelineColumnClass(1599)).toBe("px-16");
-    expect(timelineColumnClass(1600)).toBe("px-20");
-    // The old fixed 40 px gutter is gone at every desktop width.
-    expect(timelineColumnPx(390)).toBe(24);
-    expect(timelineColumnPx(1024)).toBe(48);
-    expect(timelineColumnPx(1280)).toBe(64);
-    expect(timelineColumnPx(1600)).toBe(80);
+  test("fixed compact gutters leave the available width to the conversation", () => {
+    for (const width of [390, 640, 819, 820, 1024, 1200, 1599, 1600, 1920]) {
+      expect(timelineColumnClass(width)).toBe("px-2");
+      expect(timelineColumnPx(width)).toBe(8);
+    }
   });
 
-  test("the column is 1160 px wide at most, which leaves 1000 px of text at the widest inset, and is centred", () => {
-    expect(READING_MAX).toBe(1160);
-    expect(READING_MAX - 2 * timelineColumnPx(1920)).toBe(1000);
+  test("controls and tool verbs use the Rust TUI's shared text glyphs", () => {
+    expect(iconGlyphs["panel-left"]).toBe(sidebarGlyphs.left_open.unicode);
+    expect(iconGlyphs.sessions).toBe(sidebarGlyphs.tab_sessions.unicode);
+    expect(iconGlyphs.read).toBe(verbGlyphs.read.unicode);
+    expect(iconGlyphs.shell).toBe(verbGlyphs.shell.unicode);
+    expect(iconGlyphs.x).toBe(structure.close.unicode);
+    for (const glyph of Object.values(iconGlyphs)) expect(glyph.length > 0).toBe(true);
   });
 
   test("cards, prose and activity rows share one text edge", () => {
-    expect(CARD_INSET).toBe("px-4");
-    expect(TEXT_INDENT).toBe("pl-4");
-    expect(TEXT_INSET).toBe("px-4");
+    expect(CARD_INSET).toBe("px-2");
+    expect(TEXT_INDENT).toBe("pl-2");
+    expect(TEXT_INSET).toBe("px-2");
     expect(ACTIVITY_CHEVRON).toBe("w-4 shrink-0 -ml-[3px]");
   });
 
@@ -76,6 +74,9 @@ describe("timeline reading column", () => {
     expect(app.shows("id:context-sections")).toBe(true);
     expect(app.shows("id:new-session")).toBe(true);
     expect(app.shows("id:new-session-column")).toBe(true);
+    expect(app.texts().includes(iconGlyphs["panel-left"])).toBe(true);
+    expect(app.texts().includes(iconGlyphs["arrow-up"])).toBe(true);
+    expect(app.texts().includes("Send message")).toBe(false);
   });
 
   test("the started-session context uses the same column and card as the draft", async () => {
@@ -86,5 +87,12 @@ describe("timeline reading column", () => {
     expect(app.shows("id:context-sections")).toBe(true);
     expect(app.count("id:timeline-row")).toBe(1);
     expect(app.shows("id:new-session-column")).toBe(false);
+  });
+
+  test("a narrow header keeps a title instead of squeezing fixed-width tabs", async () => {
+    const app = await open("./App.tsx", { network: network([], null), width: 640, height: 384, platform: "web" });
+    await app.waitFor("id:narrow-workspace-title");
+    expect(app.shows("id:new-session-tab-add")).toBe(false);
+    expect(app.shows("id:send")).toBe(true);
   });
 });

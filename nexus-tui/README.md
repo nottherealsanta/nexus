@@ -6,6 +6,12 @@ reads Nexus state files, SQLite or provider credentials. The one file it owns in
 the Nexus home is its own preferences file, `tui.json` (see Preferences below). Old Nexus's client in
 `~/repos/nexus-old/rust/tui` is reference.
 
+This client is also the visual reference for `nexus nsh tui`, which runs the shared
+NSH TSX app rather than this Rust implementation. NSH now uses the shared Unicode
+sidebar/fold/tool glyphs, a monospace interface and compact full-width reading
+gutters on terminal, web and native targets. This does not change the Rust client's
+existing layout or controls.
+
 A new session's first message appears immediately below its context preview as
 `You · Sending…`, without waiting for MCP startup. The chosen agent/model/tool
 settings remain visible until Core's message and starting history arrive, avoiding

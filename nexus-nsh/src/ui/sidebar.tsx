@@ -261,14 +261,11 @@ export function SessionsTab() {
         <View class="flex-row justify-end">
           <IconButton icon="archive" label="Archived" testID="chip-archived" selected={archivedFilter()} tint={archivedFilter() ? "tint-multi" : "tint-muted-foreground"} onPress={() => run("sessions.archived_filter")} />
         </View>
-        <View class={`relative w-full ${phone ? "h-11" : "h-8"}`}>
-          <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`h-full w-full rounded-none pl-7 pr-2 ${TS.base} text-foreground placeholder:text-muted-foreground ${phone ? "bg-raised" : "bg-hover"}`} />
-          {/* Painted after the input so its well does not cover the glyph. */}
-          <View class="absolute left-[9px] top-0 bottom-0 items-center justify-center" accessible={false}>
-            <Icon name="search" size={14} class="tint-muted-foreground" />
-          </View>
+        <View class={`w-full flex-row items-center gap-2 px-2 ${phone ? "h-11 bg-raised" : "h-8 bg-hover"}`}>
+          <Icon name="search" size={14} class="tint-muted-foreground" />
+          <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`h-full flex-1 min-w-0 rounded-none px-0 ${TS.base} text-foreground placeholder:text-muted-foreground ${phone ? "bg-raised" : "bg-hover"}`} />
           <If when={!!hint("session.switch") && !phone}>
-            <View class="absolute right-2 top-0 bottom-0 items-center justify-center" style={{ pointerEvents: "none" }} accessible={false}>
+            <View class="shrink-0 items-center justify-center" style={{ pointerEvents: "none" }} accessible={false}>
               <Text class={T.meta} testID="session-search-key">{hint("session.switch")!}</Text>
             </View>
           </If>

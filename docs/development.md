@@ -24,9 +24,18 @@ over the shared file by `nexus-nsh/scripts/gen.py`; check it with
 `python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml`. The TUI reads only the
 shared file.
 
+NSH uses Unicode text icons on every target, including web and iOS, so the terminal
+backend does not need image support for its controls. `src/ui/kit.tsx` maps icon names
+to generated glyph tables from `interface/theme.toml`; its interface font is
+Monaspace Argon and its reading column uses fixed compact gutters like the Rust TUI.
+
 The TUI and `nexus-mermaid` need Rust 1.97 or newer: the client enables the shared crate's
 `raster` feature and Ondine's compiler requires 1.97. NSH's native crate uses the same features on
 every target, including web. The `nexus-mermaid` default feature set alone still builds on 1.85.
+
+The shared Mermaid crate accepts `unicode-width` 0.2 patch releases: the dedicated
+Ratatui client retains its 0.2.0 lock, while NSH 0.4 requires 0.2.2 or newer.
+An exact shared 0.2.0 pin prevents the NSH native host from resolving dependencies.
 
 Inside `nexus-core/` (a uv project: `pyproject.toml`, `uv.lock`, `.python-version`):
 
@@ -163,6 +172,7 @@ Then, from any directory:
 | `nexus web` | Build the web app if needed, start Core, serve it on 4820 and open it (`--no-open`, `--port N`) |
 | `nexus dev web` | Start Core and the hot-reloading NSH web app, then open it through the API proxy; Ctrl-C stops both web servers (not Core). Use `--no-open`, `--port N` for the proxy, and `--dev-port N` for NSH (defaults 4820 and 8790). NSH's development host may also be reachable on the local network. |
 | `nexus macos` | Run the NSH app in a macOS (AppKit) window with hot reload (`nsh run App.tsx --target macos`; flags pass through). It needs the address of a Core on the network — see [the NSH README](../nexus-nsh/README.md#platform-notes) |
+| `nexus nsh tui` | Start Core and run the existing NSH TSX app in the terminal with upstream's TUI backend (`nsh run App.tsx --target tui`; flags pass through, e.g. `--fps` or `--points-per-cell 8x16`). Requires the updated NSH source CLI; see [the NSH README](../nexus-nsh/README.md#terminal-backend). `nexus tui` still runs the dedicated Rust client. |
 | `nexus ios` | Run the same app in an iOS simulator (`nsh run App.tsx --target ios`), or in an iPhone-sized Mac Catalyst window (`--target catalyst`) when no iOS runtime is installed. `npm run ios` in `nexus-nsh/` packages, patches and launches the simulator app instead. A physical iPhone needs signing: see [Install on an iPhone](../nexus-nsh/README.md#install-on-an-iphone) |
 | `nexus restart` | Stop and start the Core daemon |
 | `nexus stop` | Stop the Core daemon |

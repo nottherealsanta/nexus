@@ -125,7 +125,7 @@ def diagram(mode: str) -> dict[str, object]:
 # surfaces are square, matching the TUI's cell grid; only circular indicators keep their shape.
 RADIUS = {"radius": "0", "radius-card": "0"}
 FONTS = {
-    "font-sans": "Geist, ui-sans-serif, system-ui, sans-serif",
+    "font-sans": "Monaspace Argon, ui-monospace, monospace",
     "font-mono": "Monaspace Argon, ui-monospace, monospace",
     "font-code": "Monaspace Argon, ui-monospace, monospace",
 }
@@ -146,6 +146,9 @@ out += "export const statusGlyphs = " + json.dumps(theme["glyphs"]["status"], in
 out += "export const structure = " + json.dumps(theme["glyphs"]["structure"], indent=2) + " as const;\n"
 out += "export const attention = " + json.dumps(theme["glyphs"]["attention"], indent=2) + " as const;\n"
 out += "export const fold = " + json.dumps(theme["glyphs"]["fold"], indent=2) + " as const;\n"
+out += "export const sidebarGlyphs = " + json.dumps(theme["glyphs"]["sidebar"], indent=2) + " as const;\n"
+out += "export const verbGlyphs = " + json.dumps(theme["glyphs"]["verb"], indent=2) + " as const;\n"
+out += "export const controlGlyphs = " + json.dumps(theme["glyphs"]["control"], indent=2) + " as const;\n"
 out += "export const spinner = " + json.dumps(theme["glyphs"]["spinner"]["unicode"]) + ";\n"
 out += "export const managerColors = " + json.dumps({"light": theme["light"]["manager"], "dark": theme["dark"]["manager"]}) + " as const;\n"
 out += "export const shimmerMotion = " + json.dumps(theme["motion"]["shimmer"]) + " as const;\n"

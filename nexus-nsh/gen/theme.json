@@ -1,7 +1,7 @@
 {
   "cssVars": {
     "theme": {
-      "font-sans": "Geist, ui-sans-serif, system-ui, sans-serif",
+      "font-sans": "Monaspace Argon, ui-monospace, monospace",
       "font-mono": "Monaspace Argon, ui-monospace, monospace",
       "font-code": "Monaspace Argon, ui-monospace, monospace",
       "radius": "0",

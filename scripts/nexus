@@ -9,6 +9,7 @@
 #   nexus web [flags]         serve the NSH web app and open it
 #   nexus dev web [flags]     run the hot-reloading web app and open it
 #   nexus macos [flags]       run the NSH app in a macOS window
+#   nexus nsh tui [flags]     run the NSH app in the terminal (upstream TUI backend)
 #   nexus ios [flags]         run the NSH app in an iOS simulator (Mac Catalyst when none is installed)
 #   nexus restart             restart the Core daemon
 #   nexus stop                stop the Core daemon
@@ -144,6 +145,15 @@ native() {
   ensure_nsh
   local target="$1"; shift
   (cd "$NSH" && npm run gen && nsh run App.tsx --target "$target" "$@")
+}
+
+nsh_tui() {
+  ensure_home
+  ensure_uv
+  ensure_nsh
+  nsh run --help | grep -q -- '--points-per-cell' || die "nsh needs an update with TUI support (see nexus-nsh/README.md)"
+  core daemon start >/dev/null
+  (cd "$NSH" && python3 scripts/gen.py && nsh run App.tsx --target tui "$@")
 }
 
 web() {
@@ -324,6 +334,7 @@ case "${1:-}" in
   once)                shift; tui --once "$@" ;;
   build|b)             shift; build_all "$@" ;;
   web|w)               shift; web "$@" ;;
+  nsh)                 shift; [ "${1:-}" = tui ] || die "usage: nexus nsh tui [flags]"; shift; nsh_tui "$@" ;;
   macos)               shift; native macos "$@" ;;
   ios)                 shift
     if command -v xcrun >/dev/null 2>&1 && xcrun simctl list runtimes 2>/dev/null | grep -qi "iOS"; then

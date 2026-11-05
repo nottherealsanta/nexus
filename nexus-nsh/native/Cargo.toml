@@ -9,7 +9,7 @@ publish = false
 crate-type = ["rlib"]
 
 [dependencies]
-nsh-core = { git = "https://github.com/longbridge/nsh", rev = "09c16321c09c938ffcc2c5703ed18befb8c0338c" }
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "3789a451f6d4935a3b13890fb1020a427d20a8ee" }
 
 # Every target uses the same compiler and PNG rasterizer. Native has no text
 # engine in its SVG backend; the web client uses the same PNG so both clients

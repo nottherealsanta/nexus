@@ -75,6 +75,7 @@ function WorkspaceTabs() {
   const current = () => centre();
   return (
     <View class="flex-1 min-w-0 flex-row items-center gap-1" accessibilityLabel="Session tabs" testID="workspace-tabs">
+      <If when={!isNarrow()} else={<Text testID="narrow-workspace-title" style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`flex-1 min-w-0 ${TS.base} font-medium text-foreground`}>{current() === "settings" ? "Settings" : current() === "new_session" ? "New session" : viewed()?.title || "New session"}</Text>}>
       <Scroll horizontal scrollbar={false} class="flex-1 min-w-0">
         <View class="flex-row items-center gap-1">
         <Each of={ids()} key={(id) => id}>{(id) => <SessionTab id={id()} />}</Each>
@@ -88,6 +89,7 @@ function WorkspaceTabs() {
         </Button>
         </View>
       </Scroll>
+      </If>
     </View>
   );
 }
@@ -205,7 +207,6 @@ export function Header() {
       <View class="flex-1 min-w-0 h-full flex-row items-center px-2">
         <View class="flex-1 min-w-0 flex-row items-center gap-2">
           <WorkspaceTabs />
-          <View class="flex-1" />
           <View class="flex-row items-center gap-2 shrink-0">
             <If when={conn().kind === "live" && !!viewed() && (m(), waitItems().length > 0)}>
               <View class="flex-row items-center gap-1 pr-1" testID="header-waiting">

@@ -199,6 +199,124 @@ export const fold = {
     "ascii": ">"
   }
 } as const;
+export const sidebarGlyphs = {
+  "left_open": {
+    "unicode": "\u25e7",
+    "ascii": "[|"
+  },
+  "left_closed": {
+    "unicode": "\u25a1",
+    "ascii": "[ "
+  },
+  "right_open": {
+    "unicode": "\u25e8",
+    "ascii": "|]"
+  },
+  "right_closed": {
+    "unicode": "\u25a1",
+    "ascii": " ]"
+  },
+  "tab_sessions": {
+    "unicode": "\u2261",
+    "ascii": "S"
+  },
+  "tab_files": {
+    "unicode": "\u25a4",
+    "ascii": "F"
+  },
+  "tab_projects": {
+    "unicode": "\u25eb",
+    "ascii": "P"
+  }
+} as const;
+export const verbGlyphs = {
+  "read": {
+    "unicode": "\u2192",
+    "ascii": ">"
+  },
+  "edit": {
+    "unicode": "\u2190",
+    "ascii": "<"
+  },
+  "shell": {
+    "unicode": "$",
+    "ascii": "$"
+  },
+  "search": {
+    "unicode": "*",
+    "ascii": "*"
+  },
+  "code": {
+    "unicode": "\u03bb",
+    "ascii": "L"
+  },
+  "ask": {
+    "unicode": "?",
+    "ascii": "?"
+  },
+  "session": {
+    "unicode": "\u21b3",
+    "ascii": "^"
+  },
+  "web": {
+    "unicode": "\u2197",
+    "ascii": "^"
+  }
+} as const;
+export const controlGlyphs = {
+  "settings": {
+    "unicode": "\u2699",
+    "ascii": "*"
+  },
+  "plus": {
+    "unicode": "+",
+    "ascii": "+"
+  },
+  "more": {
+    "unicode": "\u2026",
+    "ascii": "..."
+  },
+  "up": {
+    "unicode": "\u2191",
+    "ascii": "^"
+  },
+  "back": {
+    "unicode": "\u2190",
+    "ascii": "<"
+  },
+  "stop": {
+    "unicode": "\u25a0",
+    "ascii": "#"
+  },
+  "play": {
+    "unicode": "\u25b8",
+    "ascii": ">"
+  },
+  "branch": {
+    "unicode": "\u2442",
+    "ascii": "Y"
+  },
+  "info": {
+    "unicode": "i",
+    "ascii": "i"
+  },
+  "archive": {
+    "unicode": "\u2193",
+    "ascii": "v"
+  },
+  "trash": {
+    "unicode": "\u00d7",
+    "ascii": "x"
+  },
+  "copy": {
+    "unicode": "\u29c9",
+    "ascii": "="
+  },
+  "mic": {
+    "unicode": "\u266a",
+    "ascii": "m"
+  }
+} as const;
 export const spinner = ["\u28fe", "\u28fd", "\u28fb", "\u28bf", "\u287f", "\u28df", "\u28ef", "\u28f7"];
 export const managerColors = {"light": {"listening": "#23687f", "thinking": "#6743ae", "speaking": "#0b0b0c", "idle": "#83838a"}, "dark": {"listening": "#69b7d5", "thinking": "#a78bfa", "speaking": "#f4f4f5", "idle": "#6e6e76"}} as const;
 export const shimmerMotion = {"cycle_frames": 12, "frame_ms": 125, "reach": 3.0, "crest": 0.5} as const;

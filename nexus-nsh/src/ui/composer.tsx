@@ -416,7 +416,7 @@ function EditableComposer() {
           </If>
           <If when={pasting()}><Text class={T.meta}>Preparing image…</Text></If>
           <DictationStatus />
-          <View class="w-full bg-card px-4 pt-3 pb-1" testID="composer-surface">
+          <View class="w-full bg-card px-2 pt-2 pb-1" testID="composer-surface">
           <View class="w-full flex-row items-end gap-3" testID="composer-input-row">
           <Input
             onPaste={(e) => {
