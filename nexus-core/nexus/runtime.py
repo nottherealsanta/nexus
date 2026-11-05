@@ -1065,7 +1065,11 @@ class Runtime:
         if not agent:
             # `build` unless the user's agent files make it child-only; then the first agent allowed here.
             fitting = [a.name for a in found.allowed(child=parent is not None)]
-            agent = agent_files.DEFAULT_AGENT if agent_files.DEFAULT_AGENT in fitting else (fitting or [""])[0]
+            if not fitting:
+                where = "a sub agent" if parent is not None else "a root session"
+                detail = "; ".join(f"{p['path']}: {p['error']}" for p in found.problems)
+                raise ValueError(f"no agent can run as {where}" + (f" ({detail})" if detail else ""))
+            agent = agent_files.DEFAULT_AGENT if agent_files.DEFAULT_AGENT in fitting else fitting[0]
         spec = found.get(agent, child=parent is not None)  # the agent's mode must fit
         if parent is None and not model and not spec.model:
             # A root session stores its model now, so a later agent switch keeps it. An agent's own model stays the agent's
