@@ -90,8 +90,18 @@ release_url() { # file
   if [ -n "$TAG" ]; then printf '%s/download/%s/%s' "$BASE" "$TAG" "$1"; else printf '%s/latest/download/%s' "$BASE" "$1"; fi
 }
 
-fetch() { # file, into WORK
-  curl -fsSL "$(release_url "$1")" -o "$WORK/$1" || die "could not download $1 from $(release_url "$1")"
+fetch() { # file, into WORK, [failure message]
+  # GitHub's asset edge answers 504 under load. curl retries those transient codes on its own; the
+  # outer loop covers the rest (a reset mid-transfer, a connection refused), so one bad minute does
+  # not sink an install.
+  attempts=0
+  while :; do
+    attempts=$((attempts + 1))
+    curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 2 "$(release_url "$1")" -o "$WORK/$1" && return 0
+    [ "$attempts" -lt 3 ] || die "${2:-could not download $1 from $(release_url "$1") after 3 attempts}"
+    printf 'install: download of %s failed; retrying (%d/3)\n' "$1" "$((attempts + 1))" >&2
+    sleep 3
+  done
 }
 
 verify() { # file
@@ -115,8 +125,7 @@ install_release() {
   WORK="$(mktemp -d)"
   trap 'rm -rf "$WORK"' EXIT INT TERM
   step "Release ${TAG:-latest}"
-  curl -fsSL "$(release_url SHA256SUMS)" -o "$WORK/SHA256SUMS" ||
-    die "no release found at $(release_url SHA256SUMS); from a checkout, run ./install.sh --source"
+  fetch SHA256SUMS "no release found at $(release_url SHA256SUMS); from a checkout, run ./install.sh --source"
   listed "$tui" || die "this release has no build for $os $(uname -m) ($tui)"
   wheel="$(awk '{ n = $2; sub(/^\*/, "", n); if (n ~ /^nexus10-.*\.whl$/) print n }' "$WORK/SHA256SUMS" | head -n 1)"
   [ -n "$wheel" ] || die "this release has no Core wheel"

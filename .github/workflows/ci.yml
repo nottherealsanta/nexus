@@ -54,6 +54,7 @@ jobs:
         with: {enable-cache: true, cache-dependency-glob: nexus-core/uv.lock}
       - run: uv run --project nexus-core --locked ruff check nexus-core/nexus nexus-core/tests
       - run: sh -n install.sh   # the installer is POSIX sh: it is piped from curl into `sh`
+      - run: sh scripts/test-install.sh   # release download, checksums and retries, offline
       - run: python3 interface/check_manifest.py
       - run: python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml
       - run: cargo fmt --check --manifest-path nexus-tui/Cargo.toml

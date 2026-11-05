@@ -268,6 +268,8 @@ check_all() {
   (cd "$ANNOTATE" && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check)
   printf '› Shared interface checks\n'
   (cd "$ROOT" && python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml && python3 interface/check_manifest.py)
+  printf '› Installer\n'
+  (cd "$ROOT" && sh scripts/test-install.sh)
   printf '› NSH checks\n'
   (cd "$NSH" && npm run check && npm run test:host)
 }
@@ -283,6 +285,8 @@ test_all() {
   (cd "$MERMAID" && cargo test --all-features)
   printf '› Shared annotation tests\n'
   (cd "$ANNOTATE" && cargo test)
+  printf '› Installer\n'
+  (cd "$ROOT" && sh scripts/test-install.sh)
 }
 
 fmt_all() {
