@@ -969,7 +969,7 @@ describe("session info totals", () => {
     });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
-    await app.press("id:rail-session");
+    await app.press("id:toggle-right");
     await app.waitFor("id:right-sidebar");
     await app.waitFor("text:61.0K");
     const shown = app.texts().join("\n");
@@ -984,7 +984,7 @@ describe("session info totals", () => {
     const app = await open("./App.tsx", { network: selectedSessionNetwork(), width: 1440, height: 900, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
-    await app.press("id:rail-session");
+    await app.press("id:toggle-right");
     await app.waitFor("text:not reported");
     const shown = app.texts().join("\n");
     expect(shown.includes("Tokens") && shown.includes("not reported")).toBe(true);
@@ -1009,7 +1009,7 @@ describe("turn summaries", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:timeline-older");
     await app.waitFor("text:reply 4");
-    await app.press("id:rail-session");
+    await app.press("id:toggle-right");
     await app.waitFor("text:1 request reported no usage (unknown, not zero)");
     const shown = app.texts().join("\n");
     expect(shown.includes("Turns above have no details")).toBe(true);

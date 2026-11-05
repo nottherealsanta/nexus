@@ -61,7 +61,7 @@ describe("sessions sidebar (I6)", () => {
     expect(app.shows("id:session-group")).toBe(false);
     expect(app.shows("id:new-session-row")).toBe(true);
     await app.waitFor("id:session-place-ses_1");
-    await app.waitFor("text:trunk");
+    await app.waitFor("text:⌥ trunk");
     expect(app.texts().includes("orchestrate")).toBe(false);
     expect(app.texts().includes("1 ↳")).toBe(true);
     expect(app.shows("id:session-ses_2")).toBe(false); // children live under their parent
@@ -101,6 +101,7 @@ describe("sessions sidebar (I6)", () => {
   test("the hover ⋯ button opens the same row menu as a right click", async () => {
     const app = await open("./App.tsx", { network: network([session("ses_1", "Refactor loader")]), width: 1440, height: 900, platform: "web" });
     await app.waitFor("id:session-ses_1");
+    await app.hover("id:session-ses_1");
     expect(app.shows("id:row-menu-ses_1")).toBe(true);
     await app.press("id:row-menu-ses_1");
     await app.waitFor("id:row-action-session.rename");
@@ -113,7 +114,7 @@ describe("right sidebar (I6)", () => {
     const app = await open("./App.tsx", { network: network([session("ses_1", "Refactor loader")]), width: 1440, height: 900, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
-    await app.press("id:rail-session");
+    await app.press("id:toggle-right");
     await app.waitFor("id:right-sidebar");
     await app.waitFor("id:right-section-session-info");
     expect(app.texts().includes("Context")).toBe(true);
@@ -130,7 +131,7 @@ describe("right sidebar (I6)", () => {
     const app = await open("./App.tsx", { network: network([session("ses_1", "Refactor loader")], { "GET */api/session/ses_1/git": { body: git } }), width: 1440, height: 900, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
-    await app.press("id:rail-session");
+    await app.press("id:toggle-right");
     await app.waitFor("id:git-group-staged");
     expect(app.count("id:git-row")).toBe(3);
     for (const t of ["⌥ main", "↑1", "Staged", "Unstaged", "Untracked", "src/staged.py", "+3", "−1"]) expect(app.texts().includes(t)).toBe(true);

@@ -4,6 +4,7 @@ import { describe, expect, open, test } from "nsh/test";
 import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TEXT_INSET, timelineColumnClass, timelineColumnPx } from "./src/ui/reading-column";
 import { iconGlyphs } from "./src/ui/kit";
 import { sidebarGlyphs, verbGlyphs, structure } from "./src/gen/theme";
+import { contextGrid, defaultLeftSidebarWidth, rightSidebarWidth, workspaceTabCells } from "./src/ui/geometry";
 
 const project = { id: "prj_1", path: "/work/demo", name: "demo", created: 1, updated: 2, revision: 1 };
 const session = {
@@ -44,11 +45,32 @@ function network(sessions: unknown[], snapshot: unknown | null) {
 }
 
 describe("timeline reading column", () => {
+  test("context columns follow the longest name instead of stretching to fill the page", () => {
+    const names = ["read", "bash", "edit", "write"];
+    expect(contextGrid(names, 800, 4).columns).toBe(4);
+    expect(contextGrid(names, 120, 4).columns).toBe(1);
+    expect(contextGrid(names, 800, 4).cell < 200).toBe(true);
+    expect(contextGrid(["a very long server name"], 120, 2).cell <= 88).toBe(true);
+  });
+
+  test("workspace tabs share the longest title's width, with room for status and close", () => {
+    expect(workspaceTabCells([{ title: "New session", session: false }], 160)).toBe(16);
+    expect(workspaceTabCells([{ title: "A", session: true }, { title: "New session", session: false }], 160)).toBe(16);
+    expect(workspaceTabCells([{ title: "x".repeat(60), session: true }], 20)).toBe(15);
+  });
+
   test("fixed compact gutters leave the available width to the conversation", () => {
     for (const width of [390, 640, 819, 820, 1024, 1200, 1599, 1600, 1920]) {
-      expect(timelineColumnClass(width)).toBe("px-2");
-      expect(timelineColumnPx(width)).toBe(8);
+      expect(timelineColumnClass(width)).toBe("px-6");
+      expect(timelineColumnPx(width)).toBe(24);
     }
+  });
+
+  test("sidebar defaults match the Rust TUI's 28/30 and 34/36 cell widths", () => {
+    expect(defaultLeftSidebarWidth(960)).toBe(28 * 8);
+    expect(defaultLeftSidebarWidth(1280)).toBe(34 * 8);
+    expect(rightSidebarWidth(960)).toBe(30 * 8);
+    expect(rightSidebarWidth(1280)).toBe(36 * 8);
   });
 
   test("controls and tool verbs use the Rust TUI's shared text glyphs", () => {
@@ -77,6 +99,11 @@ describe("timeline reading column", () => {
     expect(app.texts().includes(iconGlyphs["panel-left"])).toBe(true);
     expect(app.texts().includes(iconGlyphs["arrow-up"])).toBe(true);
     expect(app.texts().includes("Send message")).toBe(false);
+    expect(app.texts().includes("[Sessions]")).toBe(true);
+    expect(app.texts().includes("[Files]")).toBe(true);
+    expect(app.shows("id:right-rail")).toBe(false);
+    expect(app.shows("id:composer-bottom-edge")).toBe(true);
+    expect(app.shows("id:activity-bar")).toBe(true);
   });
 
   test("the started-session context uses the same column and card as the draft", async () => {

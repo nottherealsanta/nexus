@@ -172,7 +172,7 @@ export const unread = signal(0);
 // --- view state ---------------------------------------------------------------------------
 export const leftOpen = signal(true);
 /** The project rail stays beside the sidebar, open or closed, wherever the window has room for it. */
-export const railShown = () => !phone && width() >= 500;
+export const railShown = () => !phone && width() >= 560;
 export const rightOpen = signal<boolean | null>(null); // null = default by width
 export const leftTab = signal<"sessions" | "files" | "projects">("sessions");
 export const centre = signal<CentreView>("session");
@@ -341,7 +341,7 @@ export async function loadCoreUrl(): Promise<void> {
 }
 
 export const width = () => windowSize().width;
-export const NARROW = 820;
+export const NARROW = 800;
 export const isNarrow = computed(() => windowSize().width < NARROW);
 /** At or above this width an open file or diff panel sits beside the timeline; below it, it slides over the body. */
 

@@ -71,6 +71,83 @@ pub struct Raster {
     pub css_height: f64,
 }
 
+/// The two RGB pixels drawn by one terminal half-block cell.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerminalCell {
+    pub upper: [u8; 3],
+    pub lower: [u8; 3],
+}
+
+/// Downsamples the shared raster to bounded terminal cells, compositing alpha
+/// over the caller's canvas. Each cell represents a 10 by 20 CSS-pixel area.
+pub fn terminal_cells(
+    raster: &Raster,
+    columns: u32,
+    rows: u32,
+    background: [u8; 3],
+) -> Result<Vec<Vec<TerminalCell>>, RasterError> {
+    if columns == 0 || columns > 160 || rows == 0 || rows > 80 {
+        return Err(RasterError::TooLarge("terminal cell budget"));
+    }
+    if raster.png.len() > MAX_PNG_BYTES || raster.width == 0 || raster.height == 0 {
+        return Err(RasterError::TooLarge("PNG byte budget"));
+    }
+    let decoder = png::Decoder::new(std::io::Cursor::new(&raster.png));
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| RasterError::Draw(e.to_string()))?;
+    let info = reader.info();
+    if info.width > MAX_SIDE
+        || info.height > MAX_SIDE
+        || u64::from(info.width) * u64::from(info.height) > u64::from(MAX_PIXELS)
+        || info.color_type != png::ColorType::Rgba
+        || info.bit_depth != png::BitDepth::Eight
+    {
+        return Err(RasterError::TooLarge("RGBA pixel budget"));
+    }
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut pixels)
+        .map_err(|e| RasterError::Draw(e.to_string()))?;
+    let cols = ((raster.css_width / 10.0).ceil() as u32).clamp(1, columns);
+    let height = ((raster.css_height / 20.0).ceil() as u32).clamp(1, rows);
+    let sample = |x: u32, y: u32| {
+        let x0 = (u64::from(x) * u64::from(info.width) / u64::from(cols)) as u32;
+        let x1 = ((u64::from(x + 1) * u64::from(info.width) / u64::from(cols)) as u32)
+            .max(x0 + 1)
+            .min(info.width);
+        let y0 = (u64::from(y) * u64::from(info.height) / u64::from(height * 2)) as u32;
+        let y1 = ((u64::from(y + 1) * u64::from(info.height) / u64::from(height * 2)) as u32)
+            .max(y0 + 1)
+            .min(info.height);
+        let mut rgb = [0u64; 3];
+        let mut count = 0u64;
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let at = ((py * info.width + px) * 4) as usize;
+                let alpha = u64::from(pixels[at + 3]);
+                for c in 0..3 {
+                    rgb[c] += (u64::from(pixels[at + c]) * alpha
+                        + u64::from(background[c]) * (255 - alpha))
+                        / 255;
+                }
+                count += 1;
+            }
+        }
+        std::array::from_fn(|c| (rgb[c] / count.max(1)) as u8)
+    };
+    Ok((0..height)
+        .map(|y| {
+            (0..cols)
+                .map(|x| TerminalCell {
+                    upper: sample(x, y * 2),
+                    lower: sample(x, y * 2 + 1),
+                })
+                .collect()
+        })
+        .collect())
+}
+
 /// Why a diagram did not become a PNG.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RasterError {
@@ -107,6 +184,69 @@ impl fmt::Display for RasterError {
 }
 
 impl std::error::Error for RasterError {}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::*;
+
+    fn raster(pixels: &[u8]) -> Raster {
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 1, 2);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(pixels)
+                .unwrap();
+        }
+        Raster {
+            png,
+            width: 1,
+            height: 2,
+            css_width: 10.0,
+            css_height: 20.0,
+        }
+    }
+
+    #[test]
+    fn cells_keep_both_pixel_halves_and_composite_transparency() {
+        let raster = raster(&[255, 0, 0, 255, 0, 255, 0, 0]);
+        let cells = terminal_cells(&raster, 80, 40, [11, 12, 13]).unwrap();
+        assert_eq!(
+            cells,
+            vec![vec![TerminalCell {
+                upper: [255, 0, 0],
+                lower: [11, 12, 13]
+            }]]
+        );
+    }
+
+    #[test]
+    fn cells_respect_the_output_budget() {
+        let mut raster = raster(&[255; 8]);
+        raster.css_width = 1000.0;
+        raster.css_height = 1000.0;
+        let cells = terminal_cells(&raster, 2, 3, [0; 3]).unwrap();
+        assert_eq!(cells.len(), 3);
+        assert!(cells.iter().all(|row| row.len() == 2));
+        assert!(cells
+            .iter()
+            .flatten()
+            .all(|cell| cell.upper == [255; 3] && cell.lower == [255; 3]));
+    }
+
+    #[test]
+    fn cells_refuse_invalid_budgets_and_images() {
+        let mut raster = raster(&[255; 8]);
+        for (columns, rows) in [(0, 1), (1, 0), (161, 1), (1, 81)] {
+            assert!(terminal_cells(&raster, columns, rows, [0; 3]).is_err());
+        }
+        raster.png = vec![0];
+        assert!(terminal_cells(&raster, 1, 1, [0; 3]).is_err());
+    }
+}
 
 impl From<SvgError> for RasterError {
     fn from(error: SvgError) -> Self {

@@ -50,10 +50,11 @@ export const iconGlyphs: Record<IconName, string> = {
   mic: controlGlyphs.mic.unicode, diamond: statusGlyphs.waiting.unicode,
 };
 
-export function Icon(p: { name: IconName; size?: number; class?: string }) {
+export function Icon(p: { name: IconName; size?: number; class?: string; selected?: boolean }) {
   const size = p.size ?? 16;
+  const glyph = () => p.selected === false && p.name === "panel-left" ? sidebarGlyphs.left_closed.unicode : p.selected === false && p.name === "panel-right" ? sidebarGlyphs.right_closed.unicode : iconGlyphs[p.name];
   return <View class="shrink-0 items-center justify-center" style={{ width: size, height: size }} accessible={false}>
-    <Text class={`font-mono text-center ${TS.base} ${(p.class ?? "tint-foreground-secondary").replaceAll("tint-", "text-")}`} accessible={false}>{iconGlyphs[p.name]}</Text>
+    <Text class={`font-mono text-center ${TS.base} ${(p.class ?? "tint-foreground-secondary").replaceAll("tint-", "text-")}`} accessible={false}>{glyph()}</Text>
   </View>;
 }
 
@@ -64,7 +65,7 @@ export function IconButton(p: { icon: IconName; label: string; onPress?: () => v
       tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{p.reason ? `${p.label}: ${p.reason}` : p.label}</Text>}
       class={`items-center justify-center rounded-(--radius) hover:bg-accent disabled:opacity-50 ${isNarrow() ? "size-11" : "size-8"} ${FOCUS} ${p.class ?? ""}`}
     >
-      <Icon name={p.icon} class={p.tint ?? "tint-foreground-secondary"} />
+      <Icon name={p.icon} selected={p.selected} class={p.tint ?? "tint-foreground-secondary"} />
     </Button>
   );
 }

@@ -6136,7 +6136,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     );
     clear(buf, panel, base);
     hits.add(panel, Target::Composer);
-    card_edge(cx, buf, panel, panel.bottom() - 1, "\u{2580}");
+    card_edge(cx, buf, panel, panel.bottom() - 1, cx.t.structure("card_bottom"));
     let inner = composer_inner_with(full_r, comp.images.len(), pastes.len());
     let input_height = inner.height as usize;
     let cy = r.bottom() - 3;

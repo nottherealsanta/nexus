@@ -524,6 +524,7 @@ separator  = { unicode = "·", ascii = "-" }
 breadcrumb = { unicode = "›", ascii = ">" }
 arrow      = { unicode = "→", ascii = "->" }
 close      = { unicode = "×", ascii = "x" }
+card_bottom = { unicode = "▀", ascii = "-" }
 
 [glyphs.control]
 settings = { unicode = "⚙", ascii = "*" }

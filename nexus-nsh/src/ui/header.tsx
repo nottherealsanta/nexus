@@ -1,4 +1,4 @@
-import { Scroll, Text, View, platform, safeArea } from "nsh";
+import { Scroll, Text, View, platform, safeArea, signal } from "nsh";
 import { titleBar } from "nsh/desktop";
 import { Button } from "nsh/base";
 import { Icon, IconButton, Spinner, Status, FOCUS, TONE, TS } from "./kit";
@@ -11,6 +11,7 @@ import { ManagerHeaderIndicator, managerHeaderIndicatorVisible } from "./manager
 import { call } from "../core/manager";
 import { coreEditing } from "./connect";
 import { currentAlerts } from "./alerts";
+import { rightSidebarWidth, textCellPoints, workspaceTabCells } from "./geometry";
 
 function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
 
@@ -19,7 +20,14 @@ function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null
  * the subagent strip and a child there. A fixed width keeps the strip still as titles and states
  * change, and a long title ellipsises inside its tab instead of widening it.
  */
-const tabWidth = () => isNarrow() ? "w-[176px]" : "w-[208px]";
+const tabRoom = signal(0);
+const tabWidth = () => {
+  m();
+  const titles = tabIds().map((id) => ({ title: model.sessions.get(id)?.title || "Untitled", session: true }));
+  if (centre() === "new_session" || !viewed()) titles.push({ title: "New session", session: false });
+  const unit = textCellPoints();
+  return workspaceTabCells(titles, tabRoom() / unit || 160) * unit;
+};
 const tabHeight = () => isNarrow() ? "h-10" : "h-7";
 const tabBox = () => `shrink-0 flex-row items-center rounded-(--radius) ${tabHeight()}`;
 
@@ -40,8 +48,7 @@ function SessionTab(p: { id: string }) {
     if (session()?.status === "busy") return { glyph: statusGlyphs.running.unicode, tone: TONE[statusGlyphs.running.token], label: "running", spin: true };
     if (model.failedSessions.has(p.id)) return { glyph: statusGlyphs.error.unicode, tone: TONE[statusGlyphs.error.token], label: "failed", spin: false };
     if (model.unreadSessions.has(p.id)) return { glyph: attentionGlyph.unread.unicode, tone: TONE[attentionGlyph.unread.token], label: "unread", spin: false };
-    // An idle tab shows no glyph; the label still says it is idle.
-    return { glyph: "", tone: "text-muted-foreground", label: "idle", spin: false };
+    return { glyph: "·", tone: "text-muted-foreground", label: "idle", spin: false };
   };
   const activate = () => {
     if (onViewedSession()) void run("session.rename");
@@ -49,7 +56,7 @@ function SessionTab(p: { id: string }) {
   };
   return (
     <View
-      class={`group/tab min-w-0 overflow-hidden ${tabBox()} ${tabWidth()} ${active() ? "bg-selection" : "hover:bg-accent"}`}
+      style={{ width: tabWidth() }} class={`group/tab min-w-0 overflow-hidden ${tabBox()} ${active() ? "bg-background" : "hover:bg-accent"}`}
     >
       <Button
         onPress={activate} selected={active()} accessibilityLabel={`${onViewedSession() ? "Rename" : "Open"} ${title()}, ${status().label}`}
@@ -62,7 +69,7 @@ function SessionTab(p: { id: string }) {
         </If>
         <Text testID={`tab-title-${p.id}`} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base} ${active() ? "font-medium text-foreground" : "text-muted-foreground"}`}>{title()}</Text>
       </Button>
-      <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`shrink-0 items-center justify-center rounded-r-(--radius) ${isNarrow() ? "h-10 px-2.5" : "h-7 px-1.5"} text-muted-foreground hover:text-foreground ${active() || touch ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100 focus:opacity-100"} ${FOCUS}`}>
+      <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`shrink-0 items-center justify-center rounded-r-(--radius) ${isNarrow() ? "h-10 px-2.5" : "h-7 px-1.5"} text-muted-foreground hover:text-foreground ${FOCUS}`}>
         <Icon name="x" size={14} class="tint-muted-foreground" />
       </Button>
     </View>
@@ -74,13 +81,13 @@ function WorkspaceTabs() {
   const ids = () => { m(); return tabIds(); };
   const current = () => centre();
   return (
-    <View class="flex-1 min-w-0 flex-row items-center gap-1" accessibilityLabel="Session tabs" testID="workspace-tabs">
+    <View class="flex-1 min-w-0 flex-row items-center gap-1" accessibilityLabel="Session tabs" testID="workspace-tabs" onLayout={(b: any) => tabRoom.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
       <If when={!isNarrow()} else={<Text testID="narrow-workspace-title" style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`flex-1 min-w-0 ${TS.base} font-medium text-foreground`}>{current() === "settings" ? "Settings" : current() === "new_session" ? "New session" : viewed()?.title || "New session"}</Text>}>
       <Scroll horizontal scrollbar={false} class="flex-1 min-w-0">
         <View class="flex-row items-center gap-1">
         <Each of={ids()} key={(id) => id}>{(id) => <SessionTab id={id()} />}</Each>
         <If when={current() === "new_session" || (current() === "session" && !viewed())}>
-          <Button selected onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab" class={`${tabBox()} ${tabWidth()} bg-selection px-2.5 ${FOCUS}`}>
+          <Button selected onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab" style={{ width: tabWidth() }} class={`${tabBox()} bg-background px-2.5 ${FOCUS}`}>
             <Text style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base} font-medium text-foreground`}>New session</Text>
           </Button>
         </If>
@@ -143,7 +150,7 @@ export function SubagentStrip() {
                     onPress={() => void selectSession(ancestor().id)}
                     testID={isParent() ? "subagent-back" : isRoot() ? "subagent-root" : `subagent-crumb-${ancestor().id}`}
                     accessibilityLabel={isParent() ? `Back to ${ancestor().title || "parent session"}` : `Open ${isRoot() ? "root" : "ancestor"} session ${ancestor().title || "Untitled"}`}
-                    class={`${tabBox()} ${tabWidth()} gap-1.5 px-2.5 text-muted-foreground hover:bg-accent hover:text-foreground ${FOCUS}`}
+                    style={{ width: tabWidth() }} class={`${tabBox()} gap-1.5 px-2.5 text-muted-foreground hover:bg-accent hover:text-foreground ${FOCUS}`}
                   >
                     <Text testID={isRoot() ? "subagent-root-title" : undefined} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base}`}>{ancestor().title || "Untitled"}</Text>
                   </Button>
@@ -160,7 +167,7 @@ export function SubagentStrip() {
                     onPress={() => void selectSession(child().id)} selected={open()}
                     testID={`subagent-${child().id}`}
                     accessibilityLabel={`${capitalize(child().agent)} ${child().title || "Untitled"}, ${state().label}${open() ? ", open" : ""}`}
-                    class={`${tabBox()} ${tabWidth()} gap-1.5 px-2.5 ${open() ? "bg-accent" : "hover:bg-accent"} ${FOCUS}`}
+                    style={{ width: tabWidth() }} class={`${tabBox()} gap-1.5 px-2.5 ${open() ? "bg-background" : "hover:bg-accent"} ${FOCUS}`}
                   >
                     <If when={state().spin} else={<Text class={`shrink-0 ${TS.base} ${state().tone}`} accessibilityLabel={state().label}>{state().glyph}</Text>}>
                       <Spinner class={`shrink-0 ${TS.base} ${state().tone}`} label={state().label} />
@@ -223,17 +230,18 @@ export function Header() {
           </View>
         </View>
       </View>
-      <View class={`flex-row items-center justify-end gap-1 shrink-0 px-2 ${rightDocked() ? "w-[300px]" : ""}`}>
+      <View class="flex-row items-center justify-end gap-1 shrink-0 px-2" style={rightDocked() ? { width: rightSidebarWidth(width()) } : {}}>
         <If when={native && platform.os !== "macos"}>
           <Button onPress={() => coreEditing.set(true)} accessibilityLabel={`Core connection, ${coreUrl() ?? ""}`} testID="core-connect"
             class={`shrink-0 items-center justify-center rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "h-7"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
             <Text class={`${TS.base} font-medium`}>Core</Text>
           </Button>
         </If>
-        <View>
-          <IconButton icon="bell" label="Notifications" testID="open-notifications" onPress={() => run("notifications.open")} reason={key("notifications.open") ?? undefined} />
-          <If when={unread() > 0}><View class="absolute top-1 right-1 size-2 rounded-full bg-info" accessible={false} /></If>
-        </View>
+        <If when={unread() > 0}>
+          <Button onPress={() => run("notifications.open")} accessibilityLabel={`Notifications, ${unread()} unread`} testID="open-notifications" class={`shrink-0 px-2 justify-center ${isNarrow() ? "min-h-11" : "h-7"} hover:bg-accent ${FOCUS}`}>
+            <Text class={`${TS.base} text-info`}>{`${attentionGlyph.unread.unicode} ${unread()}`}</Text>
+          </Button>
+        </If>
         <If when={!managerHeaderIndicatorVisible()}>
         <Button onPress={() => void run("manager.header")}  accessibilityLabel="Manager" testID="open-manager-context"
           tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{"Manager: messages, cards and session"}</Text>}

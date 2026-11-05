@@ -1,10 +1,11 @@
 import type { JSX } from "nsh";
-import { Scroll, Text, View, signal } from "nsh";
+import { Scroll, Text, View } from "nsh";
 import { Button } from "nsh/base";
-import { Icon, IconButton, Status, T, relTime, midTruncate, shortPath } from "./kit";
+import { Icon, Status, T, relTime, midTruncate, shortPath } from "./kit";
 import { manifest } from "../gen/manifest";
-import { rightIsOpen, run } from "../commands";
+import { run } from "../commands";
 import { contextBudget, gitStatus, info, m, model, modelCatalog, userHome, viewed, width } from "../store";
+import { rightSidebarWidth } from "./geometry";
 import { agentColor } from "../agent-color";
 import type { SelectedView } from "../core/reduce";
 import { latestUsage, ledgerTotals, unknownRequests } from "../core/turns";
@@ -108,7 +109,6 @@ function ContextBar(p: { used: number; window: number }) {
     </View>
   );
 }
-
 type Change = { path: string; status?: string; staged?: boolean; unstaged?: boolean; added?: number; removed?: number };
 const LETTER_TONE: Record<string, string> = { M: "text-warning", A: "text-success", "?": "text-success", D: "text-error", R: "text-info" };
 function GitGroup(p: { title: string; rows: Change[]; letter: (c: Change) => string }) {
@@ -156,16 +156,11 @@ function GitRows(p: { data: () => any }) {
   );
 }
 
-/** Which section the panel is showing; the rail marks that one. */
-export const rightSection = signal<"session" | "git">("session");
-const gitOffset = signal(0);
-let sidebarScroll: any;
-
 export function RightSidebar(p: { drawer?: boolean }) {
   const s = () => viewed();
   return (
-    <View class={`bg-sidebar ${p.drawer ? "flex-1" : "w-[300px] border-l border-border"}`} testID="right-sidebar" accessibilityLabel="Right sidebar">
-      <Scroll ref={(n: any) => (sidebarScroll = n)} class="flex-1">
+    <View style={p.drawer ? {} : { width: rightSidebarWidth(width()) }} class={`bg-sidebar ${p.drawer ? "flex-1" : "shrink-0 border-l border-border"}`} testID="right-sidebar" accessibilityLabel="Right sidebar">
+      <Scroll class="flex-1">
         <Section title={sections[0].label}>
           <If when={s()} else={<Text class={T.sec}>Select a session to see its details.</Text>}>
             {() => {
@@ -239,7 +234,7 @@ export function RightSidebar(p: { drawer?: boolean }) {
           </If>
         </Section>
         <View class="mx-4 h-px bg-border" />
-        <Section title={sections[1].label} onLayout={(b: any) => gitOffset.set((b.bounds?.y ?? b.y ?? 0) + 20)}>
+        <Section title={sections[1].label}>
           <If when={s()} else={<Text class={T.sec}>Select a session to see Git status.</Text>}>
             <If when={gitStatus()} else={<Text class={T.sec}>Loading Git status…</Text>}>
               <If when={gitStatus()?.error}>
@@ -250,29 +245,6 @@ export function RightSidebar(p: { drawer?: boolean }) {
           </If>
         </Section>
       </Scroll>
-    </View>
-  );
-}
-
-/** The icon rail: always beside the page on desktop and web; its icons open the panel, which pushes the page. */
-export function RightRail() {
-  const open = () => rightIsOpen(width());
-  const changes = () => Number(gitStatus()?.data?.changes?.length ?? 0);
-  // Git opens the panel and scrolls to its section; the other icon shows the session facts.
-  const show = (section: "session" | "git") => {
-    rightSection.set(section);
-    if (!open()) void run("sidebar.right.toggle");
-    if (section === "git") setTimeout(() => { try { sidebarScroll?.scrollTo({ y: gitOffset(), animated: true }); } catch {} }, 140);
-  };
-  return (
-    <View class="w-12 shrink-0 bg-sidebar border-l border-border items-center pt-2 gap-1" testID="right-rail">
-      <IconButton icon="info" label="Session" selected={open() && rightSection() === "session"} testID="rail-session" onPress={() => show("session")}
-        class={open() && rightSection() === "session" ? "bg-selection" : ""} />
-      <IconButton icon="branch" label="Git" selected={open() && rightSection() === "git"} testID="rail-git" onPress={() => show("git")}
-        class={open() && rightSection() === "git" ? "bg-selection" : ""} />
-      <If when={changes() > 0}>
-        <Text class={T.meta} testID="rail-git-count">{changes() > 99 ? "99+" : String(changes())}</Text>
-      </If>
     </View>
   );
 }

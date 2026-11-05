@@ -1,4 +1,4 @@
-import { Image, Scroll, Text, View, effect, keymap, safeArea, signal, untracked, windowSize } from "nsh";
+import { Image, Scroll, Text, View, effect, keymap, platform, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Shimmer, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
@@ -7,7 +7,7 @@ import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
   agentCatalog, contextBudget, contextDetail, draftContext, draftContextKey, draftPlanContext, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
-  projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast, annotating,
+  phone, projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast, annotating,
   loadResources, resourceCounts, resourcesOpen,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
@@ -18,6 +18,7 @@ import { groupRequests, latestUsage, sumUsage, turnsIn } from "../core/turns";
 import type { ToolDetailLine } from "./timeline";
 import { DiffView, diffItems } from "./diff";
 import { TEXT_INSET, TimelineColumn } from "./reading-column";
+import { structure } from "../gen/theme";
 
 import { imageDrafts, readImage } from "../images";
 import { isBigPaste, makePaste, normalisePaste, pasteDrafts, pasteLabel, prunePastes } from "../pastes";
@@ -416,7 +417,8 @@ function EditableComposer() {
           </If>
           <If when={pasting()}><Text class={T.meta}>Preparing image…</Text></If>
           <DictationStatus />
-          <View class="w-full bg-card px-2 pt-2 pb-1" testID="composer-surface">
+          <View class="w-full bg-card px-4 pb-1" testID="composer-surface">
+          <View class="h-6" testID="composer-top-padding" />
           <View class="w-full flex-row items-end gap-3" testID="composer-input-row">
           <Input
             onPaste={(e) => {
@@ -426,7 +428,7 @@ function EditableComposer() {
             }}
             pasteBehavior="report"
             ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
-            placeholder={reason() ?? (centre() === "new_session" ? "Message to start a new session" : "Type a message…")}
+            placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : "Type a message…")}
             readonly={!live() || !!ses()?.archived}
             submitBehavior="submit" onSubmit={() => {
               if (dictationPhase() === "recording") { void stopDictation(); return; }
@@ -462,13 +464,13 @@ function EditableComposer() {
               <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={canSend() ? "bg-primary hover:bg-primary" : "bg-raised"} tint={canSend() ? "tint-on-accent" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
             </View>
           </View>
-          <View class="h-2" />
+          <View class="h-4" />
           <View class="flex-row items-center gap-1 min-w-0 min-h-8">
             <View class="flex-1 min-w-0 flex-row items-center gap-1">
               <Selector command="agent.change" label={agentName()} labelClass={agentColor(agent())} testID="composer-agent" alignStart />
               <Text class={T.meta}>·</Text>
               <Selector command="model.change" label={modelParts().name} sub={dockWidth() < 560 || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
-              <If when={!isNarrow()}>
+              <If when={!phone}>
                 <Text class={T.meta}>·</Text>
                 <Selector command="model.effort" label={effort()} testID="composer-effort" fixed />
               </If>
@@ -480,6 +482,7 @@ function EditableComposer() {
           </View>
           </View>
         </View>
+        <Text accessible={false} style={{ numberOfLines: 1 }} class="w-full font-mono leading-6 text-card" testID="composer-bottom-edge">{structure.card_bottom.unicode.repeat(Math.max(1, Math.min(4096, Math.floor(dockWidth() / (platform.idiom === "terminal" ? 8 : 9.6)))))}</Text>
         <LocationStrip working={working()} />
         <ActivityBar busy={busy()} fraction={usage()?.pct == null ? 0 : meterPct() / 100} slot={agentSlot(agent())} />
     </TimelineColumn>
@@ -589,6 +592,7 @@ const AGENT_TONE: Record<string, string> = {
  */
 function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
   const phase = signal(0.5);
+  const trackWidth = signal(0);
   const reduced = () => !!config()?.values?.ui?.reduced_motion;
   effect(() => {
     if (!p.busy || reduced()) { phase.set(0.5); return; }
@@ -601,7 +605,8 @@ function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
   const tone = () => (p.fraction >= 0.95 ? "bg-error" : "bg-warning");
   // The 1 px track is always laid out, so the dock does not move when the line appears.
   return <View class="w-full">
-      <View class={`relative w-full h-px ${p.busy || full() ? "bg-border-strong" : ""}`} testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`}>
+      <View class="relative w-full" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`} onLayout={(b: any) => trackWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
+        <Text accessible={false} style={{ numberOfLines: 1 }} class="w-full font-mono leading-6 text-border">{structure.rule.unicode.repeat(Math.max(1, Math.min(4096, Math.floor(trackWidth() / (platform.idiom === "terminal" ? 8 : 9.6)))))}</Text>
         <If when={p.busy}>
           <View class={`absolute -top-px h-0.5 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
         </If>
@@ -745,8 +750,9 @@ function LocationStrip(p: { working: boolean }) {
     if (!w) return isNarrow() ? 24 : 54;
     const c = resourceCounts();
     const chip = c.kernels || c.shells ? 120 : 0;
-    const reserved = 16 + (branch() ? 104 : 0) + (p.working ? 190 : 0) + chip + 32;
-    return Math.max(12, Math.floor((w - reserved) / 7.2));
+    const unit = platform.idiom === "terminal" ? 8 : 9.6;
+    const reserved = 16 + (branch() ? (Array.from(branch()!).length + 3) * unit : 0) + (p.working ? 190 : 0) + chip + (linked() ? 16 : 0);
+    return Math.max(12, Math.floor((w - reserved) / unit));
   };
   // A kernel appears while a code cell runs, and a shell finishes between turns:
   // refresh while the tree is busy or this list is open.
@@ -811,9 +817,7 @@ function LocationStrip(p: { working: boolean }) {
             <Text style={{ numberOfLines: 1 }} class="text-xs leading-4 font-semibold text-primary tabular-nums">{chipLabel()}</Text>
           </Button>
         </If>
-        <View class="flex-1 min-w-0 flex-row items-center justify-end">
-          <If when={p.working}><WorkingRow /></If>
-        </View>
+        <If when={p.working}><View class="shrink-0 min-w-0 flex-row items-center justify-end"><WorkingRow /></View></If>
       </View>
     </If>
   );

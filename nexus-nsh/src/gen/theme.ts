@@ -167,6 +167,10 @@ export const structure = {
   "close": {
     "unicode": "\u00d7",
     "ascii": "x"
+  },
+  "card_bottom": {
+    "unicode": "\u2580",
+    "ascii": "-"
   }
 } as const;
 export const attention = {
@@ -318,8 +322,8 @@ export const controlGlyphs = {
   }
 } as const;
 export const spinner = ["\u28fe", "\u28fd", "\u28fb", "\u28bf", "\u287f", "\u28df", "\u28ef", "\u28f7"];
-export const managerColors = {"light": {"listening": "#23687f", "thinking": "#6743ae", "speaking": "#0b0b0c", "idle": "#83838a"}, "dark": {"listening": "#69b7d5", "thinking": "#a78bfa", "speaking": "#f4f4f5", "idle": "#6e6e76"}} as const;
+export const managerColors = {"light": {"listening": "#23687f", "thinking": "#6743ae", "speaking": "#a84e16", "idle": "#7f868d"}, "dark": {"listening": "#69b7d5", "thinking": "#a78bfa", "speaking": "#e8a46e", "idle": "#6f757c"}} as const;
 export const shimmerMotion = {"cycle_frames": 12, "frame_ms": 125, "reach": 3.0, "crest": 0.5} as const;
-export const shimmerColors = {"dark": {"base": "#a7a7ae", "peak": "#ffffff"}, "light": {"base": "#4b4b50", "peak": "#111111"}} as const;
+export const shimmerColors = {"dark": {"base": "#a4a9ae", "peak": "#ffffff"}, "light": {"base": "#4f555b", "peak": "#111111"}} as const;
 export const annotationInks = ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff"];
-export const diagramPalettes = {"light": {"background": "#fbfbfa", "foreground": "#0b0b0c", "muted": "#5f5f65", "line": "#cfcfcb", "border": "#cfcfcb", "surface": "#efefed", "surface_alt": "#ffffff", "accent": "#0b0b0c", "critical": "#c42b3d", "font": "Monaspace Argon", "stroke": "2", "radius": "0", "title_weight": "700", "series": ["#905200", "#2459ac", "#6743ae", "#396a30", "#126d5d", "#9a405a", "#23687f", "#735d0c"]}, "dark": {"background": "#000000", "foreground": "#f4f4f5", "muted": "#85858d", "line": "#2e2e33", "border": "#2e2e33", "surface": "#0e0e10", "surface_alt": "#161618", "accent": "#f4f4f5", "critical": "#f2707f", "font": "Monaspace Argon", "stroke": "2", "radius": "0", "title_weight": "700", "series": ["#d18a38", "#5c9cf5", "#a78bfa", "#86b97a", "#55b9a5", "#dc8295", "#69b7d5", "#c9a94a"]}};
+export const diagramPalettes = {"light": {"background": "#f7f7f5", "foreground": "#1f2124", "muted": "#5c636a", "line": "#c2c3c0", "border": "#c2c3c0", "surface": "#efefec", "surface_alt": "#ffffff", "accent": "#a84e16", "critical": "#c0283f", "font": "Monaspace Argon", "stroke": "2", "radius": "0", "title_weight": "700", "series": ["#905200", "#2459ac", "#6743ae", "#396a30", "#126d5d", "#9a405a", "#23687f", "#735d0c"]}, "dark": {"background": "#0B0B0B", "foreground": "#e6e7e8", "muted": "#868c93", "line": "#4a4a50", "border": "#4a4a50", "surface": "#1e1e1e", "surface_alt": "#242424", "accent": "#e8a46e", "critical": "#f27d8f", "font": "Monaspace Argon", "stroke": "2", "radius": "0", "title_weight": "700", "series": ["#d18a38", "#5c9cf5", "#a78bfa", "#86b97a", "#55b9a5", "#dc8295", "#69b7d5", "#c9a94a"]}};
