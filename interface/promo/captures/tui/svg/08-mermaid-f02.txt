@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              · How a turn flows ×    +                                                                                Manager     □
+     │                                  i 2 other sessions waiting for input                                                                                go
+▏2   │                              ▣    │  Draw how a turn flows through Nexus.                                                               #1 · 12:53 AM
+▏ N  │ ⌕ Search sessions       ctrl+k    │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 62 lines of this turn above
+▏  * │                                                  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │   How a turn flows          3m               ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │   ⌥ main
+  S  │                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   1 │   Release build             3m                ▄▄▄▄▄▄▄▄▄▄▄▀▄▄▄▄▄▄▄▄▄▄▄
+     │   ⌥ main                                          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+     │                                               ▀▄▄▄▄▀▀▀▀▀▀▀▀▀▀▀▀▀▀▄▄▄▀
+  +  │   Map the whole package     3m                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │   ⌥ main                                       ▄▄▄▄▀▀▀       ▀▀▀▀▄▄▄
+     │                                              ▄▀▀▀▀    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+     │ ◆ Run the loader tests      3m                         ▀▀▀▀▄▄▀ ▄▄▀▀▀ ▀▀▀▀▀▀▀▀▀▀▀
+     │   ⌥ main                                                  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                                                 ▄▄▄▄▄▄
+     │ ◆ Pick a cache strategy     3m                        ▀         ▀▀▀▀▀▀        ▄
+     │   ⌥ main                                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │
+     │   Plan the cache with sub … 3m                                    ▄▄
+     │   ⌥ main                   3 ↳                                 ▄▄▄▄▄▄▄▄▄
+     │                                                            ▄▄▄▄▄       ▄▄▄▄
+     │   Cache the manifest        5m                           ▄▄▄▄ ▄▄▄▄▄▄▄▄▄▄ ▀▄▄▄▄
+     │   ⌥ main                                                 ▀▀▀▀▄▀▀▀▀▀▀▀▀▀▀ ▀▀▀▀
+     │                                                             ▀▀▀▀▄    ▄▀▀▀▀
+     │   Refactor the loader       8m                               ▄▄ ▀▀▀▀▀▀▀
+     │   ⌥ main                   1 ↳                   ▄▄▄▄▄▄ ▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                                ▄▄▄▄▄                ▄▄▄▄
+     │   Review the CJK width han… 8m                ▀▀▀▀▀▀                ▀▀▀▀
+     │   ⌥ main                                        ▄▄                   ▄▄
+     │                                      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+     │   Release notes for 0.10    8m           ▄▄▄▄▄▄▄▄▄▄▄▄           ▄▄▄▄▄▄▄▄▄▄▄▄▄     the timeline in order, so what you see is exactly what the model
+     │   ⌥ main                              ▄▄▄▀▀▀▀▀▀▀▀▀▀▀▀▄▄▄        ▀▀▀▀▀▄▄ ▄▀▀▀
+     │                                      ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀         ▀▀▀▀▀▀▀▀
+     │   Fix flaky test in sync    8m                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀     GPT-6.1 Terra · 0 tools · 22i · 0o · 0r · 414%c · 14s · 12:53 AM
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            8m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                                  22 · 0.0%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

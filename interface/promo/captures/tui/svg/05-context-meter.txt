@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              · Map the whole package ×    +                                                                           Manager     □
+     │                                  i 2 other sessions waiting for input                                                                                go
+▏2   │                              ▣
+▏ N  │ ⌕ Search sessions       ctrl+k
+▏  * │                                     System prompt ~873
+     │   How a turn flows          1m
+     │   ⌥ main                            AGENTS.md  not found · /Users/santosh.rajan/repos/nexus/interface/promo/captures/.work-tui/fakeho…
+  S  │
+   1 │   Release build             1m      Tools [16] ~2.8K
+     │   ⌥ main                              ● read                      ● bash_kill                 ● ask
+     │                                       ● grep                      ● edit                      ● code
+  +  │   Map the whole package     1m        ● glob                      ● patch                     ● skill
+     │   ⌥ main                              ● ls                        ● write                     ● expose_workspace_tools
+     │                                       ● bash                      ● web_search
+     │ ◆ Run the loader tests      1m        ● bash_output               ● web_fetch
+     │   ⌥ main
+     │                                     Skills [8]
+     │ ◆ Pick a cache strategy     1m        ● api-docs          ● release-notes
+     │   ⌥ main                              ● code-review       ● tidy-imports
+     │                                       ● migrate-schema    ● triage-ci
+     │   Plan the cache with sub … 1m        ● profile-python    ● write-tests
+     │   ⌥ main                   3 ↳
+     │                                     MCP [0]  none
+     │   Cache the manifest        3m
+     │   ⌥ main                            total  ~3,668 tok · 1.8% of the window
+     │
+     │   Refactor the loader       6m
+     │   ⌥ main                   1 ↳    │
+     │                                   │  Read the whole package and keep it in context.                                                     #1 · 12:53 AM
+     │   Review the CJK width han… 6m    │
+     │   ⌥ main
+     │                                      I read the whole  nexus-core  package and the test suite. The manifest loader is the only module that parses on
+     │   Release notes for 0.10    6m       every request; everything else is cached at start-up. Here is the full map of modules and their call graph,
+     │   ⌥ main                             which I'll keep in context for the refactor.
+     │
+     │   Fix flaky test in sync    6m                                                       GPT-6.1 Terra · 0 tools · 168Ki · 0o · 0r · 1%c · 10s · 12:53 AM
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            6m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                             168.4K · 84.2%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

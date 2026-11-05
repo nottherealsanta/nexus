@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              · Cache the manifest ×    +                                                                              Manager     □
+     │                                  i 2 other sessions waiting for input                                                                                go
+▏2   │                              ▣    │  The loader re-reads the manifest on every call. Can you cache it?                                  #1 · 12:50 AM
+▏ N  │ ⌕ Search sessions       ctrl+k    │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 3 lines of this turn above
+▏  * │                                      ▾ Working
+     │   How a turn flows          1m       ├─ ◆ Read  nexus-core/nexus/loader.py                                                                    waiting
+     │   ⌥ main                             ╰─ $ Shell  git grep -n parse_manifest
+  S  │
+   1 │   Release build             1m        parse_manifest  runs on every  Loader.load  call, so each request re-reads and re-parses the file. I'll cache
+     │   ⌥ main                             the parsed manifest and key it on the file's modification time, so an edit on disk still shows up.
+     │
+  +  │   Map the whole package     1m
+     │   ⌥ main                               Command palette
+     │
+     │ ◆ Run the loader tests      1m         ⌕ type to filter commands
+     │   ⌥ main                               ────────────────────────────────────────────────────────────────────
+     │                                        SESSION
+     │ ◆ Pick a cache strategy     1m        ▌  New session                                                 ctrl+n
+     │   ⌥ main                                 Switch session                                              ctrl+k
+     │                                          Close tab                                                    alt+x
+     │   Plan the cache with sub … 2m           Next tab                                                     alt+]
+     │   ⌥ main                   3 ↳           Previous tab                                                 alt+[
+     │                                          Rename session
+     │   Cache the manifest        3m           Archive session                                                     ds.
+     │   ⌥ main                                 Delete session
+     │                                          Export session
+     │   Refactor the loader       7m           Hand off to a new session
+     │   ⌥ main                   1 ↳           Change session directory
+     │                                          Kernels and shells
+     │   Review the CJK width han… 7m           Speak the latest answer
+     │   ⌥ main
+     │                                        ↑↓ move · enter run · esc close                             1 of 138
+     │   Release notes for 0.10    7m
+     │   ⌥ main                             Run  uv run pytest tests/test_loader.py -q  to check it.
+     │
+     │   Fix flaky test in sync    7m                                                       GPT-6.1 Terra · 2 tools · 524i · 0o · 0r · 49%c · 36s · 12:51 AM
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            7m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                                 495 · 0.2%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

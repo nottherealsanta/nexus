@@ -1,0 +1,10 @@
+# Scratch homes, build output and caches for the promo pipeline.
+captures/.work/
+captures/.work-tui/
+hf/node_modules/
+hf/.hyperframes/
+hf/renders/
+tts/.venv/
+tts/vendor/
+tts/__pycache__/
+analysis/.venv/

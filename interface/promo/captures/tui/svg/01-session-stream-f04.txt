@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              ⣯ Cache the manifest ×    +                                                                              Manager     □
+     │
+▏    │                              ▣      System prompt ~858
+▏ N  │ ⌕ Search sessions       ctrl+k
+▏1 * │                                     AGENTS.md ~20
+     │ ⣯ Cache the manifest       now
+     │   ⌥ main                            Tools [16] ~2.8K
+  S  │                                       ● read                      ● bash_kill                 ● ask
+   1 │   Pick a cache strategy     2m        ● grep                      ● edit                      ● code
+     │   ⌥ main                              ● glob                      ● patch                     ● skill
+     │                                       ● ls                        ● write                     ● expose_workspace_tools
+  +  │   Map the whole package     2m        ● bash                      ● web_search
+     │   ⌥ main                              ● bash_output               ● web_fetch
+     │
+     │   Run the loader tests      2m      Skills [8]
+     │   ⌥ main                              ● api-docs          ● release-notes
+     │                                       ● code-review       ● tidy-imports
+     │   Release build             2m        ● migrate-schema    ● triage-ci
+     │   ⌥ main                              ● profile-python    ● write-tests
+     │
+     │   Plan the cache with sub … 2m      MCP [0]  none
+     │   ⌥ main
+     │                                     total  ~3,653 tok · 1.8% of the window
+     │   How a turn flows          2m
+     │   ⌥ main
+     │                                   │
+     │   Refactor the loader       2m    │  The loader re-reads the manifest on every call. Can you cache it?                                  #1 · 12:50 AM
+     │   ⌥ main                   1 ↳    │
+     │
+     │   Review the CJK width han… 2m       ▾ Thought
+     │   ⌥ main                               │ The loader parses the manifest on every load. Find the call sites before deciding where a cache belongs.
+     │
+     │   Release notes for 0.10    2m       Let me look at how the loader reads
+     │   ⌥ main
+     │
+     │   Fix flaky test in sync    2m
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            2m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                                ~962 · 0.5%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main                                                                           Working · 4.4s
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

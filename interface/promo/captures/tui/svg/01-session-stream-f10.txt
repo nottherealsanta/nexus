@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              ⣟ Cache the manifest ×    +                                                                              Manager     □
+     │                                   │  The loader re-reads the manifest on every call. Can you cache it?                                  #1 · 12:50 AM
+▏    │                              ▣    │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 3 lines of this turn above
+▏ N  │ ⌕ Search sessions       ctrl+k       ▾ Working
+▏1 * │                                      ├─ → Read  nexus-core/nexus/loader.py  26 lines
+     │ ⣟ Cache the manifest       now       ╰─ $ Shell  git grep -n parse_manifest
+     │   ⌥ main
+  S  │                                       parse_manifest  runs on every  Loader.load  call, so each request re-reads and re-parses the file. I'll cache
+   1 │   Pick a cache strategy     3m       the parsed manifest and key it on the file's modification time, so an edit on disk still shows up.
+     │   ⌥ main
+     │                                        ╭─ python
+  +  │   Map the whole package     3m         │ def _cached(self, path):
+     │   ⌥ main                               │     key = Path(path).stat().st_mtime_ns
+     │                                        │     if self._key != key:
+     │   Run the loader tests      3m         │         self._data = parse_manifest(path)
+     │   ⌥ main                               │         self._key = key
+     │                                        │     return self._data
+     │   Release build             3m         ╰─
+     │   ⌥ main
+     │                                      What changes:
+     │   Plan the cache with sub … 3m
+     │   ⌥ main                             •  Loader.load  now calls  self._cached(self.path)  instead of parsing.
+     │                                      • A new test,  test_cache_hit_skips_parse , counts parses across two loads.
+     │   How a turn flows          3m       • No new dependency; the cache lives on the instance.
+     │   ⌥ main
+     │                                      ┌─────────────┬─────────────┬───────────┐
+     │   Refactor the loader       3m       │ call site   │ per request │ after     │
+     │   ⌥ main                   1 ↳       ├─────────────┼─────────────┼───────────┤
+     │                                      │ Loader.load │ yes         │ cached    │
+     │   Review the CJK width han… 3m       │ cli.check   │ once        │ unchanged │
+     │   ⌥ main                             └─────────────┴─────────────┴───────────┘
+     │
+     │   Release notes for 0.10    3m       Run `uv run pytest test
+     │   ⌥ main
+     │
+     │   Fix flaky test in sync    3m
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            3m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                               ~1.5K · 0.7%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main                                                                            Working · 34s
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

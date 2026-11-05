@@ -1,0 +1,13 @@
+/* Shared look for every scene. Fonts + Nexus tokens (interface/theme.toml, nexus-nsh/theme-void.toml). */
+@font-face { font-family: 'Geist'; src: url('../fonts/Geist-Regular.ttf'); font-weight: 400; }
+@font-face { font-family: 'Geist'; src: url('../fonts/Geist-Medium.ttf'); font-weight: 500; }
+@font-face { font-family: 'Geist'; src: url('../fonts/Geist-SemiBold.ttf'); font-weight: 600; }
+@font-face { font-family: 'Geist'; src: url('../fonts/Geist-Bold.ttf'); font-weight: 700; }
+@font-face { font-family: 'Monaspace Argon'; src: url('../fonts/MonaspaceArgon-Regular.otf'); font-weight: 400; }
+@font-face { font-family: 'Monaspace Argon'; src: url('../fonts/MonaspaceArgon-Medium.otf'); font-weight: 500; }
+@font-face { font-family: 'Monaspace Argon'; src: url('../fonts/MonaspaceArgon-Bold.otf'); font-weight: 700; }
+:root {
+  --sans: 'Geist', system-ui, sans-serif; --mono: 'Monaspace Argon', ui-monospace, monospace;
+  --accent: #e8a46e; --canvas: #0B0B0B; --void: #000; --ink: #f4f4f5; --ink2: #a7a7ae; --ink3: #85858d; --faint: #6e6e76;
+  --orchestrate: #d18a38; --build: #5c9cf5; --quick: #86b97a; --scout: #55b9a5; --plan: #a78bfa; --sky: #69b7d5;
+}

@@ -1,0 +1,2510 @@
+[
+ {
+  "file": "01-session-120x36.png",
+  "slug": "01-session-120x36",
+  "what": "Finished session at 120x36",
+  "cols": 120,
+  "rows": 36,
+  "source": "ghostty",
+  "px": [
+   2400,
+   1434
+  ]
+ },
+ {
+  "file": "01-session-final-top.png",
+  "slug": "01-session-final-top",
+  "what": "Finished session scrolled up: user band and thought",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-final.png",
+  "slug": "01-session-final",
+  "what": "Finished session: answer, code fence, table, turn footer, composer with context meter",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f01.png",
+  "slug": "01-session-stream-f01",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f02.png",
+  "slug": "01-session-stream-f02",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f03.png",
+  "slug": "01-session-stream-f03",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f04.png",
+  "slug": "01-session-stream-f04",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f05.png",
+  "slug": "01-session-stream-f05",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f06.png",
+  "slug": "01-session-stream-f06",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f07.png",
+  "slug": "01-session-stream-f07",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f08.png",
+  "slug": "01-session-stream-f08",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f09.png",
+  "slug": "01-session-stream-f09",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f10.png",
+  "slug": "01-session-stream-f10",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f11.png",
+  "slug": "01-session-stream-f11",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f12.png",
+  "slug": "01-session-stream-f12",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f13.png",
+  "slug": "01-session-stream-f13",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f14.png",
+  "slug": "01-session-stream-f14",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f15.png",
+  "slug": "01-session-stream-f15",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f16.png",
+  "slug": "01-session-stream-f16",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f17.png",
+  "slug": "01-session-stream-f17",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f18.png",
+  "slug": "01-session-stream-f18",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f19.png",
+  "slug": "01-session-stream-f19",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f20.png",
+  "slug": "01-session-stream-f20",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f21.png",
+  "slug": "01-session-stream-f21",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f22.png",
+  "slug": "01-session-stream-f22",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f23.png",
+  "slug": "01-session-stream-f23",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f24.png",
+  "slug": "01-session-stream-f24",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f25.png",
+  "slug": "01-session-stream-f25",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f26.png",
+  "slug": "01-session-stream-f26",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f27.png",
+  "slug": "01-session-stream-f27",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f28.png",
+  "slug": "01-session-stream-f28",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f29.png",
+  "slug": "01-session-stream-f29",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f30.png",
+  "slug": "01-session-stream-f30",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f31.png",
+  "slug": "01-session-stream-f31",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f32.png",
+  "slug": "01-session-stream-f32",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f33.png",
+  "slug": "01-session-stream-f33",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f34.png",
+  "slug": "01-session-stream-f34",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f35.png",
+  "slug": "01-session-stream-f35",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f36.png",
+  "slug": "01-session-stream-f36",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f37.png",
+  "slug": "01-session-stream-f37",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f38.png",
+  "slug": "01-session-stream-f38",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f39.png",
+  "slug": "01-session-stream-f39",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f40.png",
+  "slug": "01-session-stream-f40",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f41.png",
+  "slug": "01-session-stream-f41",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f42.png",
+  "slug": "01-session-stream-f42",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f43.png",
+  "slug": "01-session-stream-f43",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f44.png",
+  "slug": "01-session-stream-f44",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f45.png",
+  "slug": "01-session-stream-f45",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f46.png",
+  "slug": "01-session-stream-f46",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f47.png",
+  "slug": "01-session-stream-f47",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f48.png",
+  "slug": "01-session-stream-f48",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f49.png",
+  "slug": "01-session-stream-f49",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f50.png",
+  "slug": "01-session-stream-f50",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f51.png",
+  "slug": "01-session-stream-f51",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f52.png",
+  "slug": "01-session-stream-f52",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f53.png",
+  "slug": "01-session-stream-f53",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f54.png",
+  "slug": "01-session-stream-f54",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f55.png",
+  "slug": "01-session-stream-f55",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f56.png",
+  "slug": "01-session-stream-f56",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f57.png",
+  "slug": "01-session-stream-f57",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f58.png",
+  "slug": "01-session-stream-f58",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f59.png",
+  "slug": "01-session-stream-f59",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f60.png",
+  "slug": "01-session-stream-f60",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f61.png",
+  "slug": "01-session-stream-f61",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-stream-f62.png",
+  "slug": "01-session-stream-f62",
+  "what": "promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-type-f01.png",
+  "slug": "01-session-type-f01",
+  "what": "Typing the prompt into the composer, step by step",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-type-f02.png",
+  "slug": "01-session-type-f02",
+  "what": "Typing the prompt into the composer, step by step",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-type-f03.png",
+  "slug": "01-session-type-f03",
+  "what": "Typing the prompt into the composer, step by step",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-type-f04.png",
+  "slug": "01-session-type-f04",
+  "what": "Typing the prompt into the composer, step by step",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-type-f05.png",
+  "slug": "01-session-type-f05",
+  "what": "Typing the prompt into the composer, step by step",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-type-f06.png",
+  "slug": "01-session-type-f06",
+  "what": "Typing the prompt into the composer, step by step",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-type-f07.png",
+  "slug": "01-session-type-f07",
+  "what": "Typing the prompt into the composer, step by step",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-type-f08.png",
+  "slug": "01-session-type-f08",
+  "what": "Typing the prompt into the composer, step by step",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-type-f09.png",
+  "slug": "01-session-type-f09",
+  "what": "Typing the prompt into the composer, step by step",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-type-f10.png",
+  "slug": "01-session-type-f10",
+  "what": "Typing the prompt into the composer, step by step",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "01-session-type-f11.png",
+  "slug": "01-session-type-f11",
+  "what": "Typing the prompt into the composer, step by step",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "02-model-picker-f01.png",
+  "slug": "02-model-picker-f01",
+  "what": "Model picker (/model), unfiltered",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "02-model-picker-f02.png",
+  "slug": "02-model-picker-f02",
+  "what": "Model picker paged down (codex, grok)",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "02-model-picker-f03.png",
+  "slug": "02-model-picker-f03",
+  "what": "Model picker filtered \"cl\" (copilot, opencode)",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "02-model-picker-f04.png",
+  "slug": "02-model-picker-f04",
+  "what": "Model picker filtered \"grok\" (grok, copilot, opencode)",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-done.png",
+  "slug": "03-subagents-done",
+  "what": "Orchestrate session with 3 finished sub agents and summary, 3 child marker in sidebar",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f01.png",
+  "slug": "03-subagents-f01",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f02.png",
+  "slug": "03-subagents-f02",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f03.png",
+  "slug": "03-subagents-f03",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f04.png",
+  "slug": "03-subagents-f04",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f05.png",
+  "slug": "03-subagents-f05",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f06.png",
+  "slug": "03-subagents-f06",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f07.png",
+  "slug": "03-subagents-f07",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f08.png",
+  "slug": "03-subagents-f08",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f09.png",
+  "slug": "03-subagents-f09",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f10.png",
+  "slug": "03-subagents-f10",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f11.png",
+  "slug": "03-subagents-f11",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f12.png",
+  "slug": "03-subagents-f12",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f13.png",
+  "slug": "03-subagents-f13",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f14.png",
+  "slug": "03-subagents-f14",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f15.png",
+  "slug": "03-subagents-f15",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f16.png",
+  "slug": "03-subagents-f16",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f17.png",
+  "slug": "03-subagents-f17",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f18.png",
+  "slug": "03-subagents-f18",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f19.png",
+  "slug": "03-subagents-f19",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f20.png",
+  "slug": "03-subagents-f20",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f21.png",
+  "slug": "03-subagents-f21",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f22.png",
+  "slug": "03-subagents-f22",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f23.png",
+  "slug": "03-subagents-f23",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f24.png",
+  "slug": "03-subagents-f24",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f25.png",
+  "slug": "03-subagents-f25",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f26.png",
+  "slug": "03-subagents-f26",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f27.png",
+  "slug": "03-subagents-f27",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f28.png",
+  "slug": "03-subagents-f28",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f29.png",
+  "slug": "03-subagents-f29",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f30.png",
+  "slug": "03-subagents-f30",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f31.png",
+  "slug": "03-subagents-f31",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "03-subagents-f32.png",
+  "slug": "03-subagents-f32",
+  "what": "Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "04-approval-f01.png",
+  "slug": "04-approval-f01",
+  "what": "Live bash approval card waiting",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "04-approval-f02-focused.png",
+  "slug": "04-approval-f02-focused",
+  "what": "Approval card focused (alt+w) with y/a/n/d choices",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "04-approval-f03-allowed.png",
+  "slug": "04-approval-f03-allowed",
+  "what": "After allowing: tool runs and turn finishes",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "05-context-meter.png",
+  "slug": "05-context-meter",
+  "what": "Composer context meter at 84% after a large-context turn",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "06-dictation-recording.png",
+  "svg": "06-dictation-recording.svg",
+  "slug": "06-dictation-recording",
+  "what": "Voice dictation recording strip with waveform and live partial (test fixture)",
+  "cols": 120,
+  "rows": 36,
+  "source": "svg"
+ },
+ {
+  "file": "07-sidebar-worktrees.png",
+  "slug": "07-sidebar-worktrees",
+  "what": "Sidebar with linked worktree groups (feature/manifest-cache, fix/cjk-width)",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "08-mermaid.png",
+  "svg": "08-mermaid.svg",
+  "slug": "08-mermaid",
+  "what": "Inline Mermaid flowchart, half-block raster (dump-frame)",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "09-background-done.png",
+  "slug": "09-background-done",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f01.png",
+  "slug": "09-background-f01",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f02.png",
+  "slug": "09-background-f02",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f03.png",
+  "slug": "09-background-f03",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f04.png",
+  "slug": "09-background-f04",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f05.png",
+  "slug": "09-background-f05",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f06.png",
+  "slug": "09-background-f06",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f07.png",
+  "slug": "09-background-f07",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f08.png",
+  "slug": "09-background-f08",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f09.png",
+  "slug": "09-background-f09",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f10.png",
+  "slug": "09-background-f10",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f11.png",
+  "slug": "09-background-f11",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f12.png",
+  "slug": "09-background-f12",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f13.png",
+  "slug": "09-background-f13",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f14.png",
+  "slug": "09-background-f14",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f15.png",
+  "slug": "09-background-f15",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f16.png",
+  "slug": "09-background-f16",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f17.png",
+  "slug": "09-background-f17",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f18.png",
+  "slug": "09-background-f18",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f19.png",
+  "slug": "09-background-f19",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f20.png",
+  "slug": "09-background-f20",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f21.png",
+  "slug": "09-background-f21",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f22.png",
+  "slug": "09-background-f22",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f23.png",
+  "slug": "09-background-f23",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f24.png",
+  "slug": "09-background-f24",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f25.png",
+  "slug": "09-background-f25",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f26.png",
+  "slug": "09-background-f26",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f27.png",
+  "slug": "09-background-f27",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f28.png",
+  "slug": "09-background-f28",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f29.png",
+  "slug": "09-background-f29",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f30.png",
+  "slug": "09-background-f30",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f31.png",
+  "slug": "09-background-f31",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f32.png",
+  "slug": "09-background-f32",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f33.png",
+  "slug": "09-background-f33",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f34.png",
+  "slug": "09-background-f34",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f35.png",
+  "slug": "09-background-f35",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f36.png",
+  "slug": "09-background-f36",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f37.png",
+  "slug": "09-background-f37",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f38.png",
+  "slug": "09-background-f38",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f39.png",
+  "slug": "09-background-f39",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "09-background-f40.png",
+  "slug": "09-background-f40",
+  "what": "Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "10-skills-detail.png",
+  "svg": "10-skills-detail.svg",
+  "slug": "10-skills-detail",
+  "what": "Skill detail view (test fixture)",
+  "cols": 170,
+  "rows": 50,
+  "source": "svg"
+ },
+ {
+  "file": "10-skills-inline.png",
+  "svg": "10-skills-inline.svg",
+  "slug": "10-skills-inline",
+  "what": "Skills listed inline in starting context (test fixture)",
+  "cols": 170,
+  "rows": 50,
+  "source": "svg"
+ },
+ {
+  "file": "10-skills-picker.png",
+  "svg": "10-skills-picker.svg",
+  "slug": "10-skills-picker",
+  "what": "Skills card picker (test fixture)",
+  "cols": 170,
+  "rows": 50,
+  "source": "svg"
+ },
+ {
+  "file": "11-command-palette-120x36.png",
+  "slug": "11-command-palette-120x36",
+  "what": "Command palette (ctrl+p)",
+  "cols": 120,
+  "rows": 36,
+  "source": "ghostty",
+  "px": [
+   2400,
+   1434
+  ]
+ },
+ {
+  "file": "11-command-palette-filter.png",
+  "slug": "11-command-palette-filter",
+  "what": "Command palette filtered \"worktree\"",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "11-command-palette.png",
+  "slug": "11-command-palette",
+  "what": "Command palette (ctrl+p)",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "12-settings-context.png",
+  "slug": "12-settings-context",
+  "what": "Settings: a later section",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "12-settings-providers.png",
+  "slug": "12-settings-providers",
+  "what": "Settings: Providers",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "12-settings.png",
+  "slug": "12-settings",
+  "what": "Settings: Appearance",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "13-files-git-b.png",
+  "slug": "13-files-git-b",
+  "what": "Files tab with Git status letters",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "13-files-git.png",
+  "slug": "13-files-git",
+  "what": "Files tab with Git status letters",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "14-detail-high-refactor.png",
+  "slug": "14-detail-high-refactor",
+  "what": "Detail high on seeded session at 200x50 (Mermaid image area blank: real TUI/Ghostty behaviour)",
+  "cols": 200,
+  "rows": 50,
+  "source": "ghostty",
+  "px": [
+   3008,
+   1490
+  ]
+ },
+ {
+  "file": "14-detail-high-split-diff.png",
+  "slug": "14-detail-high-split-diff",
+  "what": "Detail high: split diff of edit + write at 200x50",
+  "cols": 200,
+  "rows": 50,
+  "source": "ghostty",
+  "px": [
+   3008,
+   1490
+  ]
+ },
+ {
+  "file": "15-manager-approval.png",
+  "svg": "15-manager-approval.svg",
+  "slug": "15-manager-approval",
+  "what": "Manager dropdown with approval card",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "15-manager-board.png",
+  "svg": "15-manager-board.svg",
+  "slug": "15-manager-board",
+  "what": "Manager dropdown with board card (manager_demo)",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "15-manager-diagram.png",
+  "svg": "15-manager-diagram.svg",
+  "slug": "15-manager-diagram",
+  "what": "Manager dropdown with diagram card",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "15-manager-idle.png",
+  "svg": "15-manager-idle.svg",
+  "slug": "15-manager-idle",
+  "what": "Manager header, idle (dump-frame, silent)",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "16-empty-start.png",
+  "slug": "16-empty-start",
+  "what": "Empty home start screen (no projects)",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "16-new-session-120x36.png",
+  "slug": "16-new-session-120x36",
+  "what": "New-session start screen with starting context",
+  "cols": 120,
+  "rows": 36,
+  "source": "ghostty",
+  "px": [
+   2400,
+   1434
+  ]
+ },
+ {
+  "file": "16-new-session.png",
+  "slug": "16-new-session",
+  "what": "New-session start screen with starting context",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "17-question-f01.png",
+  "slug": "17-question-f01",
+  "what": "Ask-tool question card waiting",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "17-question-f02-focused.png",
+  "slug": "17-question-f02-focused",
+  "what": "Question card focused",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "17-question-f03-select.png",
+  "slug": "17-question-f03-select",
+  "what": "Question option moved",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "17-question-f04-answered.png",
+  "slug": "17-question-f04-answered",
+  "what": "Question answered, turn continues",
+  "cols": 160,
+  "rows": 44,
+  "source": "ghostty",
+  "px": [
+   3044,
+   1632
+  ]
+ },
+ {
+  "file": "svg/01-session-120x36.png",
+  "svg": "svg/01-session-120x36.svg",
+  "slug": "01-session-120x36",
+  "what": "Fallback (dump-frame SVG): Finished session at 120x36",
+  "cols": 120,
+  "rows": 36,
+  "source": "svg"
+ },
+ {
+  "file": "svg/01-session-stream-f01.png",
+  "svg": "svg/01-session-stream-f01.svg",
+  "slug": "01-session-stream-f01",
+  "what": "Fallback (dump-frame SVG): promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/01-session-stream-f02.png",
+  "svg": "svg/01-session-stream-f02.svg",
+  "slug": "01-session-stream-f02",
+  "what": "Fallback (dump-frame SVG): promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/01-session-stream-f03.png",
+  "svg": "svg/01-session-stream-f03.svg",
+  "slug": "01-session-stream-f03",
+  "what": "Fallback (dump-frame SVG): promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/01-session-stream-f04.png",
+  "svg": "svg/01-session-stream-f04.svg",
+  "slug": "01-session-stream-f04",
+  "what": "Fallback (dump-frame SVG): promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/01-session-stream-f05.png",
+  "svg": "svg/01-session-stream-f05.svg",
+  "slug": "01-session-stream-f05",
+  "what": "Fallback (dump-frame SVG): promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/01-session-stream-f06.png",
+  "svg": "svg/01-session-stream-f06.svg",
+  "slug": "01-session-stream-f06",
+  "what": "Fallback (dump-frame SVG): promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/01-session-stream-f07.png",
+  "svg": "svg/01-session-stream-f07.svg",
+  "slug": "01-session-stream-f07",
+  "what": "Fallback (dump-frame SVG): promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/01-session-stream-f08.png",
+  "svg": "svg/01-session-stream-f08.svg",
+  "slug": "01-session-stream-f08",
+  "what": "Fallback (dump-frame SVG): promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/01-session-stream-f09.png",
+  "svg": "svg/01-session-stream-f09.svg",
+  "slug": "01-session-stream-f09",
+  "what": "Fallback (dump-frame SVG): promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/01-session-stream-f10.png",
+  "svg": "svg/01-session-stream-f10.svg",
+  "slug": "01-session-stream-f10",
+  "what": "Fallback (dump-frame SVG): promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/01-session-stream-f11.png",
+  "svg": "svg/01-session-stream-f11.svg",
+  "slug": "01-session-stream-f11",
+  "what": "Fallback (dump-frame SVG): promo_stream turn streaming live: thought, tool rows (Read/Shell), answer with code fence and table, turn footer",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/02-model-picker-f01.png",
+  "svg": "svg/02-model-picker-f01.svg",
+  "slug": "02-model-picker-f01",
+  "what": "Fallback (dump-frame SVG): Model picker (/model), unfiltered",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/02-model-picker-f02.png",
+  "svg": "svg/02-model-picker-f02.svg",
+  "slug": "02-model-picker-f02",
+  "what": "Fallback (dump-frame SVG): Model picker paged down (codex, grok)",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/02-model-picker-f03.png",
+  "svg": "svg/02-model-picker-f03.svg",
+  "slug": "02-model-picker-f03",
+  "what": "Fallback (dump-frame SVG): Model picker filtered \"cl\" (copilot, opencode)",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/02-model-picker-f04.png",
+  "svg": "svg/02-model-picker-f04.svg",
+  "slug": "02-model-picker-f04",
+  "what": "Fallback (dump-frame SVG): Model picker filtered \"grok\" (grok, copilot, opencode)",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/03-subagents-120x36.png",
+  "svg": "svg/03-subagents-120x36.svg",
+  "slug": "03-subagents-120x36",
+  "what": "Fallback (dump-frame SVG): Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 120,
+  "rows": 36,
+  "source": "svg"
+ },
+ {
+  "file": "svg/03-subagents-f01.png",
+  "svg": "svg/03-subagents-f01.svg",
+  "slug": "03-subagents-f01",
+  "what": "Fallback (dump-frame SVG): Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/03-subagents-f02.png",
+  "svg": "svg/03-subagents-f02.svg",
+  "slug": "03-subagents-f02",
+  "what": "Fallback (dump-frame SVG): Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/03-subagents-f03.png",
+  "svg": "svg/03-subagents-f03.svg",
+  "slug": "03-subagents-f03",
+  "what": "Fallback (dump-frame SVG): Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/03-subagents-f04.png",
+  "svg": "svg/03-subagents-f04.svg",
+  "slug": "03-subagents-f04",
+  "what": "Fallback (dump-frame SVG): Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/03-subagents-f05.png",
+  "svg": "svg/03-subagents-f05.svg",
+  "slug": "03-subagents-f05",
+  "what": "Fallback (dump-frame SVG): Three sub agents (scout, scout, quick) launched and running, sidebar child count",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/04-approval.png",
+  "svg": "svg/04-approval.svg",
+  "slug": "04-approval",
+  "what": "Fallback (dump-frame SVG): 04-approval",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/05-context-meter.png",
+  "svg": "svg/05-context-meter.svg",
+  "slug": "05-context-meter",
+  "what": "Fallback (dump-frame SVG): Composer context meter at 84% after a large-context turn",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/08-mermaid-f02.png",
+  "svg": "svg/08-mermaid-f02.svg",
+  "slug": "08-mermaid-f02",
+  "what": "Fallback (dump-frame SVG): Inline Mermaid flowchart, half-block raster (dump-frame)",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/09-background-f01.png",
+  "svg": "svg/09-background-f01.svg",
+  "slug": "09-background-f01",
+  "what": "Fallback (dump-frame SVG): Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/09-background-f02.png",
+  "svg": "svg/09-background-f02.svg",
+  "slug": "09-background-f02",
+  "what": "Fallback (dump-frame SVG): Background shell job, done notice, follow-up reply",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/11-command-palette.png",
+  "svg": "svg/11-command-palette.svg",
+  "slug": "11-command-palette",
+  "what": "Fallback (dump-frame SVG): Command palette (ctrl+p)",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/12-settings.png",
+  "svg": "svg/12-settings.svg",
+  "slug": "12-settings",
+  "what": "Fallback (dump-frame SVG): Settings: Appearance",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/13-files-git.png",
+  "svg": "svg/13-files-git.svg",
+  "slug": "13-files-git",
+  "what": "Fallback (dump-frame SVG): Files tab with Git status letters",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/14-detail-high-split-diff.png",
+  "svg": "svg/14-detail-high-split-diff.svg",
+  "slug": "14-detail-high-split-diff",
+  "what": "Fallback (dump-frame SVG): Detail high: split diff of edit + write at 200x50",
+  "cols": 200,
+  "rows": 50,
+  "source": "svg"
+ },
+ {
+  "file": "svg/16-empty-start.png",
+  "svg": "svg/16-empty-start.svg",
+  "slug": "16-empty-start",
+  "what": "Fallback (dump-frame SVG): Empty home start screen (no projects)",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/16-new-session-120x36.png",
+  "svg": "svg/16-new-session-120x36.svg",
+  "slug": "16-new-session-120x36",
+  "what": "Fallback (dump-frame SVG): New-session start screen with starting context",
+  "cols": 120,
+  "rows": 36,
+  "source": "svg"
+ },
+ {
+  "file": "svg/16-new-session.png",
+  "svg": "svg/16-new-session.svg",
+  "slug": "16-new-session",
+  "what": "Fallback (dump-frame SVG): New-session start screen with starting context",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ },
+ {
+  "file": "svg/17-question.png",
+  "svg": "svg/17-question.svg",
+  "slug": "17-question",
+  "what": "Fallback (dump-frame SVG): 17-question",
+  "cols": 160,
+  "rows": 44,
+  "source": "svg"
+ }
+]

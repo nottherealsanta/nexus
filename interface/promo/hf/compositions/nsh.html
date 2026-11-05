@@ -1,0 +1,181 @@
+<template>
+  <link rel="stylesheet" href="assets/kit/kit.css" />
+  <style>
+    #root { position: absolute; inset: 0; background: #000; overflow: hidden; font-family: var(--sans); color: #fff; }
+    #root * { box-sizing: border-box; }
+    #nsh-stage { position: absolute; inset: 0; perspective: 2300px; perspective-origin: 50% 42%; }
+    #nsh-cam { position: absolute; inset: 0; transform-style: preserve-3d; }
+    #nsh-floor { position: absolute; left: 50%; top: 50%; width: 3200px; height: 3200px; margin: -1600px 0 0 -1600px;
+      background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.34), rgba(255,255,255,0.12) 22%, rgba(255,255,255,0) 46%); }
+    #nsh-grid { position: absolute; left: 50%; top: 50%; width: 3200px; height: 3200px; margin: -1600px 0 0 -1600px;
+      background-image: linear-gradient(rgba(255,255,255,0.10) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.10) 1px, transparent 1px);
+      background-size: 100px 100px; -webkit-mask-image: radial-gradient(circle at 50% 50%, #000, transparent 42%); mask-image: radial-gradient(circle at 50% 50%, #000, transparent 42%); }
+    .nsh-dev { position: absolute; left: 50%; top: 50%; transform-style: preserve-3d; }
+    .nsh-devin { position: relative; width: 100%; height: 100%; -webkit-box-reflect: below 10px linear-gradient(to bottom, transparent 58%, rgba(255,255,255,0.20)); }
+    .nsh-win { position: absolute; inset: 0; border-radius: 14px; overflow: hidden; background: #000;
+      border: 1px solid rgba(255,255,255,0.16); box-shadow: 0 0 0 1px rgba(0,0,0,0.9), 0 30px 120px rgba(255,255,255,0.07), 0 40px 90px rgba(0,0,0,0.9); }
+    .nsh-bar { position: absolute; left: 0; right: 0; top: 0; background: #141416; border-bottom: 1px solid rgba(255,255,255,0.09); display: flex; align-items: center; }
+    .nsh-tl { display: flex; gap: 9px; margin-left: 16px; }
+    .nsh-tl i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+    .nsh-tl i:nth-child(1) { background: #ff5f57; } .nsh-tl i:nth-child(2) { background: #febc2e; } .nsh-tl i:nth-child(3) { background: #28c840; }
+    .nsh-url { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); height: 26px; min-width: 250px; padding: 0 16px; border-radius: 13px;
+      background: #0a0a0b; border: 1px solid rgba(255,255,255,0.10); color: #a7a7ae; font: 500 13.5px/26px var(--sans); text-align: center; letter-spacing: 0.01em; }
+    .nsh-title { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #8a8a92; font: 500 13.5px var(--sans); }
+    .nsh-scr { position: absolute; left: 0; right: 0; bottom: 0; overflow: hidden; background: #000; }
+    .nsh-scr img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; opacity: 0; display: block; }
+    .nsh-phone { position: absolute; inset: 0; border-radius: 58px; background: #050505; border: 2px solid #3a3a3e;
+      box-shadow: inset 0 0 0 5px #0d0d0e, 0 0 0 1px #000, 0 30px 120px rgba(255,255,255,0.08), 0 40px 90px rgba(0,0,0,0.9); }
+    .nsh-phone .nsh-scr { left: 11px; right: 11px; top: 11px; bottom: 11px; border-radius: 47px; }
+    .nsh-isl { position: absolute; left: 50%; top: 20px; width: 88px; height: 26px; margin-left: -44px; border-radius: 13px; background: #000; z-index: 3; }
+    .nsh-btn { position: absolute; width: 4px; background: #2a2a2d; border-radius: 2px; }
+    .nsh-cu { position: absolute; left: 140px; top: 16px; width: 1640px; height: 880px; overflow: hidden; border-radius: 16px; background: #000;
+      border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 0 140px rgba(255,255,255,0.06); }
+    .nsh-cam2 { position: absolute; left: 0; top: 0; width: 1640px; height: 1025px; transform-origin: 0 0; }
+    .nsh-cam2 img { width: 1640px; height: 1025px; display: block; }
+    .nsh-pal { position: absolute; left: 50%; top: 50%; width: 1500px; height: 511px; margin: -270px 0 0 -750px; border-radius: 22px; overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.18); box-shadow: 0 0 200px rgba(255,255,255,0.12), 0 50px 120px rgba(0,0,0,0.9);
+      background-image: url(assets/cap/nsh/07-palette.png); background-size: 4000px 2500px; background-position: -1249px -551px; }
+    .nsh-scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 260px; background: linear-gradient(to top, rgba(0,0,0,0.92), rgba(0,0,0,0)); }
+    .nsh-cap { position: absolute; left: 0; right: 0; bottom: 56px; text-align: center; font-weight: 600; letter-spacing: -0.035em; color: #fff; white-space: nowrap;
+      text-shadow: 0 4px 40px rgba(0,0,0,0.9); }
+    .nsh-cap span { display: inline-block; }
+    #nsh-flash { position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, #fff, rgba(255,255,255,0.55) 24%, rgba(255,255,255,0) 62%); opacity: 0; }
+    .nsh-ring { position: absolute; left: 50%; top: 50%; width: 400px; height: 400px; margin: -200px 0 0 -200px; border-radius: 50%; border: 6px solid #fff; opacity: 0;
+      box-shadow: 0 0 80px rgba(255,255,255,0.6), inset 0 0 80px rgba(255,255,255,0.3); }
+    .nsh-core { position: absolute; left: 50%; top: 50%; width: 60px; height: 60px; margin: -30px 0 0 -30px; border-radius: 50%; background: #fff; box-shadow: 0 0 120px 60px rgba(255,255,255,0.9); opacity: 0; }
+    .nsh-streak { position: absolute; left: 50%; top: 50%; height: 3px; width: 220px; transform-origin: 0 50%; background: linear-gradient(90deg, rgba(255,255,255,0), #fff); opacity: 0; }
+    .nsh-fx { position: absolute; inset: 0; pointer-events: none; }
+  </style>
+  <div id="root" data-composition-id="nsh" data-width="1920" data-height="1080">
+
+    <!-- Phase 1: three clients in 3D -->
+    <div id="nsh-p1" class="clip" data-start="0" data-duration="7.8" data-track-index="1">
+      <div id="nsh-stage"><div id="nsh-cam"></div></div>
+    </div>
+    <div id="nsh-fxl" class="clip nsh-fx" data-start="0" data-duration="1.6" data-track-index="5"></div>
+
+    <!-- Phase 2: close-ups (hard cuts) -->
+    <div id="nsh-s1" class="clip" data-start="7.8" data-duration="0.975" data-track-index="2"><div class="nsh-cu"><div class="nsh-cam2"><img src="assets/cap/nsh/04-files-tree.png"></div></div></div>
+    <div id="nsh-s2" class="clip" data-start="8.775" data-duration="0.975" data-track-index="2"><div class="nsh-cu"><div class="nsh-cam2"><img src="assets/cap/nsh/04-files-editor.png"></div></div></div>
+    <div id="nsh-s3" class="clip" data-start="9.75" data-duration="0.975" data-track-index="2"><div class="nsh-cu"><div class="nsh-cam2"><img src="assets/cap/nsh/05-diff-review.png"></div></div></div>
+    <div id="nsh-s4" class="clip" data-start="10.725" data-duration="0.975" data-track-index="2"><div class="nsh-cu"><div class="nsh-cam2"><img src="assets/cap/nsh/05-git-panel.png"></div></div></div>
+    <div id="nsh-s5" class="clip" data-start="11.7" data-duration="1.95" data-track-index="2"><div class="nsh-cu"><div class="nsh-cam2"><img src="assets/cap/nsh/06-tool-expanded.png"></div></div></div>
+    <div id="nsh-s6" class="clip" data-start="13.65" data-duration="1.95" data-track-index="2"><div id="nsh-palw" style="position:absolute;inset:0"><div class="nsh-pal"></div></div></div>
+
+    <div id="nsh-scrim" class="clip nsh-scrim" data-start="7.8" data-duration="7.8" data-track-index="3"></div>
+
+    <!-- Captions -->
+    <div id="nsh-c1" class="clip nsh-cap" data-start="0.8" data-duration="3.0" data-track-index="4" style="font-size:150px"><span>NSH.</span></div>
+    <div id="nsh-c2" class="clip nsh-cap" data-start="3.9" data-duration="3.8" data-track-index="4" style="font-size:96px"><span>Web, macOS and iPhone.</span></div>
+    <div id="nsh-c3" class="clip nsh-cap" data-start="7.9" data-duration="3.7" data-track-index="4" style="font-size:84px"><span>TUI and NSH are peers.</span></div>
+    <div id="nsh-c4" class="clip nsh-cap" data-start="11.8" data-duration="3.7" data-track-index="4" style="font-size:84px"><span>Every feature, both places.</span></div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    const cam = document.getElementById("nsh-cam");
+    const mulberry32 = (a) => () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const rnd = mulberry32(48);
+    const P = "assets/cap/nsh/";
+    const mk = (html) => { const d = document.createElement("div"); d.innerHTML = html.trim(); return d.firstChild; };
+
+    // ---- floor ----
+    const floor = mk('<div id="nsh-floor"></div>'), grid = mk('<div id="nsh-grid"></div>');
+    [floor, grid].forEach((f) => { cam.appendChild(f); });
+    gsap.set([floor, grid], { rotationX: 90, y: 372, z: -40, transformOrigin: "50% 50%" });
+
+    // ---- devices ----
+    const mkDev = (id, w, h, inner) => { const d = mk('<div class="nsh-dev" id="' + id + '" style="width:' + w + 'px;height:' + h + 'px;margin:' + (-h / 2) + 'px 0 0 ' + (-w / 2) + 'px"><div class="nsh-devin">' + inner + '</div></div>'); cam.appendChild(d); return d; };
+    const TL = '<div class="nsh-tl"><i></i><i></i><i></i></div>';
+    const webW = 760, webBar = 46, webH = Math.round(webW / 1.6) + webBar;
+    const macW = 1000, macBar = 36, macH = Math.round(macW / 1.6) + macBar;
+    const phW = 318, phH = Math.round((phW - 22) / (1170 / 2532)) + 22;
+    const web = mkDev("nsh-web", webW, webH, '<div class="nsh-win"><div class="nsh-bar" style="height:' + webBar + 'px">' + TL + '<div class="nsh-url">localhost:7777</div></div><div class="nsh-scr" id="nsh-webscr" style="top:' + webBar + 'px"></div></div>');
+    const mac = mkDev("nsh-mac", macW, macH, '<div class="nsh-win" style="border-radius:12px"><div class="nsh-bar" style="height:' + macBar + 'px;background:#101011">' + TL + '<div class="nsh-title">Nexus</div></div><div class="nsh-scr" id="nsh-macscr" style="top:' + macBar + 'px"></div></div>');
+    const ph = mkDev("nsh-ph", phW, phH, '<div class="nsh-phone"><div class="nsh-isl"></div><div class="nsh-scr" id="nsh-phscr"></div></div><div class="nsh-btn" style="left:-4px;top:150px;height:54px"></div><div class="nsh-btn" style="left:-4px;top:222px;height:54px"></div><div class="nsh-btn" style="right:-4px;top:190px;height:86px"></div>');
+
+    // ---- screens: the same Auth refactor session, stepped in sync ----
+    const addImg = (scr, src, id) => { const im = document.createElement("img"); im.src = src; im.id = id; scr.appendChild(im); return im; };
+    const ids = []; for (let i = 0; i <= 46; i += 2) ids.push(String(i).padStart(2, "0"));
+    const tOf = (n) => (n === 0 ? 0 : 1.0 + (n - 1) * 0.115);
+    const seq = (scrId, tag, finalSrc, finalT) => {
+      const scr = document.getElementById(scrId);
+      const imgs = ids.map((s) => addImg(scr, P + "lo/01-timeline-stream-f" + s + ".png", "nsh-" + tag + "-f" + s));
+      const fin = addImg(scr, P + "lo/" + finalSrc + ".png", "nsh-" + tag + "-fin");
+      const all = imgs.concat([fin]);
+      const times = ids.map((s) => tOf(parseInt(s, 10))).concat([finalT]);
+      all.forEach((im, k) => {
+        tl.set(im, { opacity: 1 }, times[k]);
+        if (k + 1 < all.length) tl.set(im, { opacity: 0 }, times[k + 1]);
+      });
+    };
+    seq("nsh-webscr", "w", "02-session-layout-mermaid", 6.5);
+    seq("nsh-macscr", "m", "02-session-layout", 6.35);
+    {
+      const scr = document.getElementById("nsh-phscr");
+      const a = addImg(scr, P + "03-phone-session.png", "nsh-ph-a"), b = addImg(scr, P + "03-phone-session-mermaid.png", "nsh-ph-b");
+      tl.set(a, { opacity: 1 }, 0).set(a, { opacity: 0 }, 5.0).set(b, { opacity: 1 }, 5.0);
+    }
+
+    // ---- 3D choreography ----
+    const rest = {
+      web: { x: -520, y: -70, z: -300, ry: 14 },
+      mac: { x: 30, y: -10, z: 0, ry: 0 },
+      ph: { x: 700, y: 10, z: 30, ry: -14 },
+    };
+    const devs = { web, mac, ph };
+    Object.keys(devs).forEach((k, i) => {
+      const r = rest[k];
+      tl.fromTo(devs[k], { x: 0, y: 0, z: -400, scale: 0.02, rotationY: r.ry + 70, rotationZ: -24 + i * 22, opacity: 0 },
+        { x: r.x, y: r.y, z: r.z, scale: 1, rotationY: r.ry, rotationZ: 0, opacity: 1, duration: 1.0 + i * 0.05, ease: "expo.out" }, 0.0 + i * 0.03);
+      // slow float
+      tl.to(devs[k], { y: r.y - 14, duration: 3.6, ease: "sine.inOut" }, 1.2 + i * 0.2).to(devs[k], { y: r.y + 4, duration: 3.0, ease: "sine.inOut" }, 4.8 + i * 0.2);
+    });
+    // camera orbit
+    tl.fromTo(cam, { rotationY: 7, rotationX: 3, z: 30, y: -20, transformOrigin: "50% 50%" }, { rotationY: -5, rotationX: 1, z: 110, y: -40, duration: 7.8, ease: "sine.inOut" }, 0);
+    tl.fromTo([floor, grid], { opacity: 0 }, { opacity: 1, duration: 1.2, ease: "power2.out" }, 0.3);
+
+    // ---- burst ----
+    const fx = document.getElementById("nsh-fxl");
+    fx.innerHTML = '<div class="nsh-core" id="nsh-core"></div><div id="nsh-flash"></div><div class="nsh-ring" id="nsh-r1"></div><div class="nsh-ring" id="nsh-r2" style="border-width:2px"></div>';
+    for (let i = 0; i < 44; i++) {
+      const wrap = mk('<div style="position:absolute;left:50%;top:50%;width:0;height:0"><div class="nsh-streak" id="nsh-st' + i + '" style="left:0;top:0"></div></div>'); fx.appendChild(wrap);
+      const s = wrap.firstChild;
+      const a = rnd() * 360, d = 600 + rnd() * 1200, w = 120 + rnd() * 300, dur = 0.7 + rnd() * 0.3;
+      gsap.set(wrap, { rotation: a });
+      tl.fromTo(s, { x: 40, width: w }, { x: d, duration: dur, ease: "expo.out" }, 0);
+      tl.fromTo(s, { opacity: 0 }, { opacity: 0.95, duration: 0.05, ease: "none" }, 0).to(s, { opacity: 0, duration: 0.5, ease: "power1.in", overwrite: "auto" }, 0.1);
+    }
+    tl.fromTo("#nsh-core", { scale: 0.6, opacity: 1 }, { scale: 9, opacity: 0, duration: 0.45, ease: "power3.out" }, 0);
+    tl.fromTo("#nsh-flash", { opacity: 1 }, { opacity: 0, duration: 0.42, ease: "power2.out" }, 0.04);
+    tl.fromTo("#nsh-r1", { scale: 0.1, opacity: 1 }, { scale: 8.5, opacity: 0, duration: 1.0, ease: "expo.out" }, 0);
+    tl.fromTo("#nsh-r2", { scale: 0.1, opacity: 0.8 }, { scale: 6.5, opacity: 0, duration: 1.2, ease: "expo.out" }, 0.1);
+
+    // ---- close-ups: camera glide (cx,cy = content point as fraction; tx,ty = where it lands on the frame) ----
+    const W = 1640, H = 1025, CH = 880;
+    const glide = (id, c, a, b, dur) => {
+      const el = document.querySelector("#" + id + " .nsh-cam2");
+      const st = (s) => ({ scale: s, x: c.tx * W - c.cx * W * s, y: c.ty * CH - c.cy * H * s });
+      tl.fromTo(el, Object.assign({ transformOrigin: "0 0" }, st(a)), Object.assign({ transformOrigin: "0 0", duration: dur, ease: "power1.out" }, st(b)), parseFloat(document.getElementById(id).dataset.start));
+    };
+    glide("nsh-s1", { cx: 0.26, cy: 0.24, tx: 0.46, ty: 0.42 }, 1.45, 1.8, 0.975);
+    glide("nsh-s2", { cx: 0.46, cy: 0.33, tx: 0.52, ty: 0.42 }, 1.3, 1.62, 0.975);
+    glide("nsh-s3", { cx: 0.6, cy: 0.3, tx: 0.52, ty: 0.42 }, 1.45, 1.75, 0.975);
+    glide("nsh-s4", { cx: 0.86, cy: 0.64, tx: 0.7, ty: 0.42 }, 1.3, 1.5, 0.975);
+    glide("nsh-s5", { cx: 0.58, cy: 0.45, tx: 0.5, ty: 0.46 }, 1.35, 1.6, 1.95);
+
+    // palette: pops in, slow push
+    tl.fromTo(".nsh-pal", { scale: 0.88, opacity: 0, y: 30 }, { scale: 1, opacity: 1, y: 0, duration: 0.5, ease: "expo.out" }, 13.65);
+    tl.fromTo(".nsh-pal", { scale: 1 }, { scale: 1.1, duration: 1.45, ease: "sine.inOut", immediateRender: false }, 14.15);
+
+    // ---- captions ----
+    const cap = (id, at, dur) => {
+      const sp = "#" + id + " span";
+      tl.fromTo(sp, { y: 40, opacity: 0, filter: "blur(14px)" }, { y: 0, opacity: 1, filter: "blur(0px)", duration: 0.6, ease: "expo.out" }, at);
+      tl.to(sp, { opacity: 0, y: -14, duration: 0.25, ease: "power2.in" }, at + dur - 0.3);
+    };
+    cap("nsh-c1", 0.8, 3.0); cap("nsh-c2", 3.9, 3.8); cap("nsh-c3", 7.9, 3.7); cap("nsh-c4", 11.8, 3.7);
+    tl.fromTo("#nsh-scrim", { opacity: 0 }, { opacity: 1, duration: 0.2 }, 7.8);
+
+    window.__timelines["nsh"] = tl;
+  </script>
+</template>

@@ -1,0 +1,191 @@
+<template>
+  <link rel="stylesheet" href="assets/kit/kit.css" />
+  <style>
+    #root { position: absolute; inset: 0; background: #000; overflow: hidden; }
+    #manager-rot { position: absolute; inset: 0; transform: scale(1.03); }
+    #manager-cam { position: absolute; left: 0; top: 0; width: 2000px; height: 1250px; transform-origin: 0 0; will-change: transform; }
+    #manager-cam img { position: absolute; left: 0; top: 0; width: 2000px; height: 1250px; opacity: 0; display: block; }
+    #manager-halo { position: absolute; left: 1795px; top: -23px; width: 200px; height: 100px; color: #69b7d5; mix-blend-mode: screen; pointer-events: none; }
+    #manager-halo i { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(closest-side, currentColor, transparent); opacity: .75; }
+    #manager-halo b { position: absolute; left: 50px; top: 15px; width: 100px; height: 70px; border-radius: 50%; border: 1px solid currentColor; opacity: .5; filter: blur(1.5px); }
+    .manager-ring { position: absolute; border-radius: 6px; box-shadow: 0 0 0 1px rgba(255,255,255,.85), 0 0 22px 2px rgba(255,255,255,.28); opacity: 0; pointer-events: none; }
+    #manager-hl { position: absolute; left: 553px; top: 799px; width: 832px; height: 36px; border-radius: 6px; background: rgba(105,183,213,.14); box-shadow: 0 0 0 1px rgba(105,183,213,.9), 0 0 30px 4px rgba(105,183,213,.35); opacity: 0; transform-origin: 0 50%; pointer-events: none; }
+    #manager-veil { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0) 0, rgba(0,0,0,0) 170px, #000 270px); pointer-events: none; }
+    #manager-scrim { position:absolute; left:0; top:0; bottom:0; width:1000px; background: linear-gradient(90deg, rgba(0,0,0,.92) 0, rgba(0,0,0,.82) 55%, rgba(0,0,0,0)); opacity:0; pointer-events:none; }
+    #manager-vig { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 55%, rgba(0,0,0,.55) 100%); pointer-events: none; }
+    .manager-title { position: absolute; left: 110px; font: 600 104px/1.02 var(--sans); letter-spacing: -0.035em; color: var(--ink); opacity: 0; text-shadow: 0 6px 40px rgba(0,0,0,.8); }
+    .manager-title span { color: var(--ink2); }
+    #manager-t1 { top: 410px; }
+    #manager-t2 { top: 400px; font-size: 84px; }
+    #manager-exp { position: absolute; left: 1290px; top: 205px; width: 220px; text-align: center; font: 500 15px var(--mono); letter-spacing: .24em; color: var(--ink3); opacity: 0; }
+    #manager-exp em { font-style: normal; border: 1px solid rgba(255,255,255,.18); border-radius: 99px; padding: 6px 14px; background: rgba(255,255,255,.04); }
+    #manager-caps { position: absolute; left: 0; right: 0; bottom: 64px; height: 190px; display: flex; align-items: flex-end; justify-content: center; pointer-events: none; }
+    .manager-cap { position: absolute; bottom: 0; max-width: 1480px; padding: 20px 36px 24px; border-radius: 22px; background: rgba(6,6,8,.72); border: 1px solid rgba(255,255,255,.08); box-shadow: 0 20px 60px rgba(0,0,0,.6); backdrop-filter: blur(14px); text-align: center; opacity: 0; }
+    .manager-who { font: 500 15px var(--mono); letter-spacing: .26em; text-transform: uppercase; margin-bottom: 10px; color: var(--ink3); }
+    .manager-cap.you .manager-who { color: var(--sky); }
+    .manager-cap.mgr .manager-who { color: #fff; }
+    .manager-txt { font: 500 34px/1.28 var(--sans); letter-spacing: -0.012em; color: var(--ink); }
+    .manager-w { display: inline-block; opacity: .22; white-space: pre; }
+    #manager-flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+    #manager-black { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; }
+  </style>
+  <div id="root" data-composition-id="manager" data-width="1920" data-height="1080">
+    <div id="manager-rot">
+      <div id="manager-cam">
+        <img id="manager-i-drop" src="assets/cap/nsh/13-manager-dropdown.png" />
+        <img id="manager-i-typed" src="assets/cap/nsh/13-manager-board-f00.png" />
+        <img id="manager-i-load" src="assets/cap/nsh/13-manager-board-f01.png" />
+        <img id="manager-i-board" src="assets/cap/nsh/13-manager-board-f05.png" />
+        <img id="manager-i-appr" src="assets/cap/nsh/13-manager-approval-f05.png" />
+        <img id="manager-i-apptyped" src="assets/cap/nsh/13-manager-approve-f00.png" />
+        <img id="manager-i-done" src="assets/cap/nsh/13-manager-approve-f10.png" />
+        <img id="manager-i-via" src="assets/cap/nsh/13-manager-via-label.png" />
+        <div id="manager-halo"><i></i><b></b></div>
+        <div id="manager-ring1" class="manager-ring" style="left:1296px;top:372px;width:205px;height:70px"></div>
+        <div id="manager-ring2" class="manager-ring" style="left:1306px;top:376px;width:660px;height:58px"></div>
+        <div id="manager-ring3" class="manager-ring" style="left:1298px;top:118px;width:668px;height:68px"></div>
+        <div id="manager-hl"></div>
+      </div>
+    </div>
+    <div id="manager-veil"></div>
+    <div id="manager-vig"></div>
+    <div id="manager-scrim"></div>
+    <div id="manager-t1" class="manager-title">Meet the<br>Manager.</div>
+    <div id="manager-t2" class="manager-title">A voice above<br><span>every session.</span></div>
+    <div id="manager-exp"><em>EXPERIMENTAL</em></div>
+    <div id="manager-caps"></div>
+    <div id="manager-flash"></div>
+    <div id="manager-black"></div>
+  </div>
+  <script>
+    // Dialogue (times are local to this scene; voice audio is placed in index.html).
+    const LINES = [{who:"You", at:0.8, dur:1.55, text:"Hey Manager, what needs me?"},{who:"Manager", at:3.0, dur:5.29, text:"One session needs you. Staging migration wants to run the migration script on staging."},{who:"You", at:9.2, dur:0.7, text:"Approve it."},{who:"Manager", at:10.8, dur:3.04, text:"Approved. The migration is running on staging."}];
+
+    // ---- build captions once (static ids) ----
+    const capHost = document.getElementById("manager-caps");
+    LINES.forEach((L, i) => {
+      const d = document.createElement("div");
+      d.id = "manager-cap-" + i;
+      d.className = "manager-cap " + (L.who === "You" ? "you" : "mgr");
+      const who = document.createElement("div"); who.className = "manager-who"; who.textContent = L.who;
+      const tx = document.createElement("div"); tx.className = "manager-txt";
+      L.text.split(" ").forEach((w, k, arr) => {
+        const s = document.createElement("span"); s.className = "manager-w"; s.id = "manager-w-" + i + "-" + k;
+        s.textContent = w + (k < arr.length - 1 ? " " : ""); tx.appendChild(s);
+      });
+      d.appendChild(who); d.appendChild(tx); capHost.appendChild(d);
+    });
+
+    const tl = gsap.timeline({ paused: true });
+    // camera: place image point (fx,fy) at screen (sx,sy) with scale s
+    const V = (fx, fy, s, sx, sy) => ({ x: sx - fx * s, y: sy - fy * s, scale: s });
+    const CAM = "#manager-cam";
+    gsap.set(CAM, { transformOrigin: "0 0" });
+    const move = (a, b, t, d, ease) => tl.fromTo(CAM, a, Object.assign({ duration: d, ease: ease || "power2.inOut", immediateRender: false }, b), t);
+
+    const vA0 = V(1895, 27, 2.4, 1400, 100), vA1 = V(1895, 27, 2.6, 1400, 100);
+    const vB0 = V(1635, 270, 1.75, 960, 520), vB1 = V(1635, 270, 1.85, 960, 520);
+    const vC0 = V(1400, 410, 2.4, 800, 430), vC1 = V(1400, 410, 2.6, 800, 430);
+    const vG0 = V(1635, 530, 1.5, 1320, 520), vG1 = V(1635, 530, 1.55, 1320, 520);
+    const vD0 = V(1635, 440, 1.9, 960, 480), vD1 = V(1635, 440, 2.0, 960, 480);
+    const vF0 = V(1635, 360, 1.45, 960, 450), vF1 = V(1635, 360, 1.55, 960, 450);
+    const vE0 = V(1000, 600, 1.3, 960, 540), vE1 = V(960, 815, 2.0, 960, 480), vE2 = V(960, 815, 2.1, 960, 480);
+
+    gsap.set(CAM, vA0);
+    move(vA0, vA1, 0, 0.9, "sine.inOut");
+    move(vA1, vB0, 0.8, 1.0, "power3.inOut");
+    move(vB0, vB1, 1.8, 0.8, "none");
+    move(vB1, vC0, 2.6, 0.9, "power3.inOut");
+    move(vC0, vC1, 3.5, 2.8, "none");
+    move(vC1, vG0, 6.3, 0.9, "power3.inOut");
+    move(vG0, vG1, 7.2, 1.2, "none");
+    move(vG1, vD0, 8.3, 0.7, "power3.inOut");
+    move(vD0, vD1, 9.0, 0.6, "none");
+    move(vD1, vF0, 9.6, 0.7, "power3.out");
+    move(vF0, vF1, 10.3, 0.7, "none");
+    tl.set(CAM, vE0, 11.0);
+    move(vE0, vE1, 11.0, 1.8, "power3.out");
+    move(vE1, vE2, 12.8, 2.4, "none");
+
+    // slight 3D drift
+    gsap.set("#manager-rot", { transformPerspective: 2400 });
+    tl.fromTo("#manager-rot", { rotationY: -1.6, rotationX: 0.7 }, { rotationY: 1.6, rotationX: -0.5, duration: 15.6, ease: "sine.inOut" }, 0);
+
+    // ---- capture frames ----
+    const IMGS = ["drop", "typed", "load", "board", "appr", "apptyped", "done", "via"];
+    const SEQ = [[0, "drop"], [1.3, "typed"], [2.5, "load"], [3.0, "board"], [8.4, "appr"], [9.2, "apptyped"], [9.6, "done"], [11.0, "via"]];
+    IMGS.forEach(n => gsap.set("#manager-i-" + n, { opacity: 0 }));
+    gsap.set("#manager-i-drop", { opacity: 1 });
+    SEQ.forEach(([t, n], k) => {
+      if (k === 0) return;
+      tl.set("#manager-i-" + n, { opacity: 1 }, t);
+      tl.set("#manager-i-" + SEQ[k - 1][1], { opacity: 0 }, t + 0.001);
+    });
+
+    // veil hides the open dropdown while we are on the header orb
+    tl.fromTo("#manager-veil", { opacity: 1 }, { opacity: 0, duration: 0.7, ease: "power2.inOut" }, 0.85);
+
+    // ---- titles ----
+    tl.fromTo("#manager-t1", { opacity: 0, y: 18, filter: "blur(10px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.5, ease: "power3.out" }, 0.2);
+    tl.to("#manager-t1", { opacity: 0, duration: 0.3, ease: "power2.in" }, 0.85);
+    tl.fromTo("#manager-scrim", { opacity: 0 }, { opacity: 1, duration: 0.6 }, 6.4);
+    tl.to("#manager-scrim", { opacity: 0, duration: 0.5 }, 8.1);
+    tl.fromTo("#manager-t2", { opacity: 0, y: 18, filter: "blur(10px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.6, ease: "power3.out" }, 6.5);
+    tl.to("#manager-t2", { opacity: 0, duration: 0.4, ease: "power2.in" }, 8.1);
+    tl.fromTo("#manager-exp", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 0.3);
+    tl.to("#manager-exp", { opacity: 0, duration: 0.3 }, 0.85);
+
+    // ---- highlight rings ----
+    tl.fromTo("#manager-ring1", { opacity: 0, scale: 1.12 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power3.out" }, 3.7);
+    tl.to("#manager-ring1", { opacity: 0, duration: 0.4 }, 6.3);
+    tl.fromTo("#manager-ring2", { opacity: 0, scale: 1.04 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power3.out" }, 8.7);
+    tl.to("#manager-ring2", { opacity: 0, duration: 0.2 }, 9.55);
+    tl.fromTo("#manager-ring3", { opacity: 0, scale: 1.04 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power3.out" }, 10.0);
+    tl.to("#manager-ring3", { opacity: 0, duration: 0.3 }, 10.9);
+    tl.fromTo("#manager-hl", { opacity: 0, scaleX: 0 }, { opacity: 1, scaleX: 1, duration: 0.7, ease: "power3.out" }, 11.7);
+    tl.to("#manager-hl", { boxShadow: "0 0 0 1px rgba(105,183,213,1), 0 0 44px 8px rgba(105,183,213,.5)", duration: 0.9, yoyo: true, repeat: 3, ease: "sine.inOut" }, 12.4);
+
+    // approve flash
+    tl.fromTo("#manager-flash", { opacity: 0 }, { opacity: 0.38, duration: 0.07, ease: "power1.out" }, 9.6);
+    tl.to("#manager-flash", { opacity: 0, duration: 0.5, ease: "power2.out" }, 9.67);
+
+    // ---- orb halo: sky = user speaks, violet = thinking, white = Manager speaks ----
+    const SKY = "#69b7d5", VIO = "#a78bfa", WHT = "#ffffff";
+    const H = "#manager-halo", HI = "#manager-halo i", HB = "#manager-halo b";
+    gsap.set(H, { color: SKY });
+    tl.fromTo(HI, { scale: 0.7, opacity: 0.0 }, { scale: 1, opacity: 0.75, duration: 0.4, ease: "power2.out" }, 0);
+    const pulse = (t, d, amp, per) => {
+      const reps = Math.max(1, Math.floor(d / per)) * 2 - 1;
+      tl.fromTo(HB, { scale: 0.8, opacity: 0.55 }, { scale: 1 + amp, opacity: 0.12, duration: per / 2, yoyo: true, repeat: reps, ease: "sine.inOut" }, t);
+    };
+    let lastEnd = 0.4;
+    LINES.forEach((L, i) => {
+      const col = L.who === "You" ? SKY : WHT;
+      if (L.at > lastEnd + 0.05 && i > 0) tl.to(H, { color: VIO, duration: 0.25 }, lastEnd);
+      tl.to(H, { color: col, duration: 0.2 }, L.at);
+      tl.to(HI, { scale: 1.25, duration: 0.2, yoyo: true, repeat: 1, ease: "sine.inOut" }, L.at);
+      pulse(L.at, L.dur, L.who === "You" ? 0.5 : 0.8, 0.5);
+      lastEnd = L.at + L.dur;
+    });
+    // thinking pulse before first Manager reply and settle at the end
+    tl.to(H, { color: SKY, duration: 0.4 }, lastEnd + 0.1);
+    tl.to(HI, { opacity: 0.3, duration: 0.8 }, lastEnd + 0.1);
+    tl.to(HB, { opacity: 0, duration: 0.5 }, lastEnd + 0.1);
+
+    // ---- captions: word reveals across each dur ----
+    LINES.forEach((L, i) => {
+      const id = "#manager-cap-" + i;
+      const words = L.text.split(" ");
+      const n = words.length;
+      tl.fromTo(id, { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.25, ease: "power2.out" }, Math.max(0, L.at - 0.2));
+      words.forEach((w, k) => {
+        tl.fromTo("#manager-w-" + i + "-" + k, { opacity: 0.22, y: 6 }, { opacity: 1, y: 0, duration: 0.18, ease: "power2.out" }, L.at + (k / n) * L.dur * 0.92);
+      });
+      tl.to(id, { opacity: 0, y: -8, duration: 0.3, ease: "power2.in" }, L.at + L.dur + (i === LINES.length - 1 ? 0.8 : 0.45));
+    });
+
+    tl.fromTo("#manager-black", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power1.in" }, 15.2);
+
+    window.__timelines["manager"] = tl;
+  </script>
+</template>

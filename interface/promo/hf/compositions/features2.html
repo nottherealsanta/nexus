@@ -1,0 +1,217 @@
+<template>
+  <link rel="stylesheet" href="assets/kit/kit.css" />
+  <style>
+#root{position:absolute;inset:0;background:#050505;overflow:hidden;font-family:var(--sans)}
+.shot{position:absolute;inset:0;overflow:hidden;perspective:2200px;background:radial-gradient(ellipse at 50% 45%,#15110d 0%,#070707 62%,#030303 100%)}
+.tilt{position:absolute;inset:0}
+.cam{position:absolute;left:0;top:0;will-change:transform}
+.cap{position:absolute;left:0;top:0;overflow:hidden;border-radius:14px;background:#0B0B0B;box-shadow:0 0 0 1px rgba(255,255,255,.07),0 40px 120px rgba(0,0,0,.8),0 0 140px rgba(232,164,110,.12)}
+.cap img.base{position:absolute;left:0;top:0;width:1900px;display:block}
+.cap .ghost{position:absolute;left:0;top:0;width:1900px;opacity:0;mix-blend-mode:screen;background-size:100% 100%}
+.gr{filter:url(#features2-fr)} .gc{filter:url(#features2-fc)}
+.ring{position:absolute;border:2px solid #e8a46e;opacity:0;pointer-events:none}
+.mask{position:absolute;background:#202020}
+.vig{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 50%,transparent 55%,rgba(0,0,0,.55) 100%);pointer-events:none}
+.pane{position:absolute;left:488px;top:46px;width:1387px;height:784px;overflow:hidden;background:#0B0B0B}
+.strip{position:absolute;left:-488px;top:-46px;width:1900px;height:1530px}
+.seg{position:absolute;left:0;width:1900px;overflow:hidden}
+.seg .si{position:absolute;left:0;top:0;width:1900px;background-size:100% 100%}
+.band{position:absolute;left:0;top:0;width:100px;height:100px;transform-origin:0 0;background:linear-gradient(90deg,rgba(232,164,110,.20),rgba(232,164,110,.05));box-shadow:0 0 40px rgba(232,164,110,.28),inset 0 0 30px rgba(232,164,110,.10);border-radius:4px;opacity:0;mix-blend-mode:screen}
+.capwrap{position:absolute;inset:0;pointer-events:none}
+.capwrap .scrim{position:absolute;left:0;right:0;bottom:0;height:380px;background:linear-gradient(to top,rgba(0,0,0,.94),rgba(0,0,0,.6) 55%,rgba(0,0,0,0))}
+.capt{position:absolute;left:0;right:0;bottom:92px;text-align:center;color:#f4f4f5;font:600 80px/1.05 var(--sans);letter-spacing:-0.03em;text-shadow:0 4px 40px rgba(0,0,0,.8)}
+.lbs{position:absolute;left:0;right:0;bottom:0;height:520px;background:linear-gradient(to top,rgba(0,0,0,.95),rgba(0,0,0,.55) 55%,rgba(0,0,0,0))}
+.lblwrap{position:absolute;left:70px;bottom:36px;height:250px;width:1500px}
+.lbl{position:absolute;left:0;bottom:0;font:700 232px/1 var(--sans);letter-spacing:-0.055em;color:#fff;white-space:nowrap}
+.lbl.lr{color:#ff2a55;mix-blend-mode:screen}.lbl.lc{color:#22e6ff;mix-blend-mode:screen}
+.lbl.lm{text-shadow:0 0 60px rgba(232,164,110,.45)}
+.idx{position:absolute;right:70px;bottom:70px;font:500 30px var(--mono);color:#e8a46e;letter-spacing:.06em}.idx span{color:#85858d}
+.flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
+.squash,.squash .tilt{position:absolute;inset:0}
+.edge{position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 0 0 rgba(232,164,110,0)}
+.streak{position:absolute;left:60px;width:1800px;top:536px;height:8px;border-radius:4px;opacity:0;background:linear-gradient(90deg,rgba(232,164,110,0),#ffd9a8 25%,#fff 50%,#ffd9a8 75%,rgba(232,164,110,0));box-shadow:0 0 40px 10px rgba(255,190,130,.8)}
+.point{position:absolute;left:810px;top:390px;width:300px;height:300px;border-radius:50%;opacity:0;background:radial-gradient(circle,#fff 0%,#fff 9%,#ffe6c8 18%,rgba(255,196,140,.65) 36%,rgba(232,164,110,.18) 56%,rgba(232,164,110,0) 72%)}
+</style>
+  <div id="root" data-composition-id="features2" data-width="1920" data-height="1080">
+<svg width="0" height="0" style="position:absolute"><filter id="features2-fr" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter><filter id="features2-fc" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter></svg>
+<div id="features2-s1" class="clip shot" data-start="0" data-duration="3.9"><div class="tilt" id="features2-s1-tilt"><div class="cam" id="features2-s1-cam"><div class="cap" style="width:1900px;height:1019px"><img class="base" src="assets/cap/tui/01-session-final.png" /><div class="pane"><div class="strip" id="features2-strip"><div class="seg" style="top:0;height:830px"><div class="si" style="height:1019px;background-image:url(assets/cap/tui/01-session-final-top.png)"></div></div><div class="seg" style="top:830px;height:700px"><div class="si" style="top:-224px;height:1019px;background-image:url(assets/cap/tui/01-session-final.png)"></div></div><div class="band" id="features2-band"></div></div></div></div></div></div><div class="vig"></div></div>
+<div id="features2-s2a" class="clip shot" data-start="3.9" data-duration="1.95"><div class="tilt" id="features2-s2a-tilt"><div class="cam" id="features2-s2a-cam"><div class="cap" style="width:1900px;height:1019px"><img class="base" src="assets/cap/tui/01-session-final.png" /><div class="ring" id="features2-s2a-r1" style="left:1086px;top:803px;width:772px;height:34px;border-radius:8px"></div><div class="ring" id="features2-s2a-r2" style="left:1604px;top:914px;width:246px;height:36px;border-radius:8px"></div></div></div></div><div class="vig"></div></div>
+<div id="features2-s2b" class="clip shot" data-start="5.85" data-duration="1.95"><div class="tilt" id="features2-s2b-tilt"><div class="cam" id="features2-s2b-cam"><div class="cap" style="width:1900px;height:1019px"><img class="base" src="assets/cap/tui/05-context-meter.png" /><div class="ring" id="features2-s2b-r1" style="left:1086px;top:758px;width:772px;height:34px;border-radius:8px"></div><div class="ring" id="features2-s2b-r2" style="left:1604px;top:914px;width:246px;height:36px;border-radius:8px"></div></div></div></div><div class="vig"></div></div>
+<div id="features2-s3" class="clip shot" data-start="7.8" data-duration="3.9"><div class="tilt" id="features2-s3-tilt"><div class="cam" id="features2-s3-cam"><div class="cap" style="width:1900px;height:1148px"><img class="base" src="assets/cap/tui/06-dictation-recording.png" /><div class="ring" id="features2-s3-r1" style="left:560px;top:1084px;width:34px;height:34px;border-radius:17px"></div><div class="ring" id="features2-s3-r2" style="left:553px;top:948px;width:840px;height:188px;border-radius:6px"></div></div></div></div><div class="vig"></div></div>
+<div id="features2-m0" class="clip shot" data-start="11.7" data-duration="0.975"><div class="tilt" id="features2-m0-tilt"><div class="cam" id="features2-m0-cam"><div class="cap" style="width:1900px;height:1019px"><img class="base" src="assets/cap/tui/07-sidebar-worktrees.png" /><div class="ghost gr" id="features2-m0-gr" style="height:1019px;background-image:url(assets/cap/tui/07-sidebar-worktrees.png)"></div><div class="ghost gc" id="features2-m0-gc" style="height:1019px;background-image:url(assets/cap/tui/07-sidebar-worktrees.png)"></div><div class="ring" id="features2-m0-ring0" style="left:92px;top:918px;width:350px;height:52px;border-radius:8px"></div></div></div></div><div class="scrim lbs"></div><div class="lblwrap" id="features2-m0-lw"><div class="lbl lr">Worktrees</div><div class="lbl lc">Worktrees</div><div class="lbl lm" id="features2-m0-lm">Worktrees</div></div><div class="idx">01<span> / 08</span></div><div class="flash" id="features2-m0-fl"></div></div>
+<div id="features2-m1" class="clip shot" data-start="12.675" data-duration="0.975"><div class="tilt" id="features2-m1-tilt"><div class="cam" id="features2-m1-cam"><div class="cap" style="width:1900px;height:1019px"><img class="base" src="assets/cap/tui/09-background-f20.png" /><div class="ghost gr" id="features2-m1-gr" style="height:1019px;background-image:url(assets/cap/tui/09-background-f20.png)"></div><div class="ghost gc" id="features2-m1-gc" style="height:1019px;background-image:url(assets/cap/tui/09-background-f20.png)"></div><div class="mask" style="left:780px;top:919px;width:60px;height:26px"></div><div class="ring" id="features2-m1-ring0" style="left:520px;top:626px;width:1340px;height:30px;border-radius:8px"></div><img class="base" id="features2-m1-img2" src="assets/cap/tui/09-background-done.png" style="opacity:0" /><div class="ring" id="features2-m1-ring2" style="left:520px;top:716px;width:1110px;height:30px;border-radius:8px"></div></div></div></div><div class="scrim lbs"></div><div class="lblwrap" id="features2-m1-lw"><div class="lbl lr">Background</div><div class="lbl lc">Background</div><div class="lbl lm" id="features2-m1-lm">Background</div></div><div class="idx">02<span> / 08</span></div><div class="flash" id="features2-m1-fl"></div></div>
+<div id="features2-m2" class="clip shot" data-start="13.65" data-duration="0.975"><div class="tilt" id="features2-m2-tilt"><div class="cam" id="features2-m2-cam"><div class="cap" style="width:1900px;height:880px"><img class="base" src="assets/cap/tui/08-mermaid.png" /><div class="ghost gr" id="features2-m2-gr" style="height:880px;background-image:url(assets/cap/tui/08-mermaid.png)"></div><div class="ghost gc" id="features2-m2-gc" style="height:880px;background-image:url(assets/cap/tui/08-mermaid.png)"></div><div class="mask" style="left:780px;top:1016px;width:60px;height:26px"></div></div></div></div><div class="scrim lbs"></div><div class="lblwrap" id="features2-m2-lw"><div class="lbl lr">Mermaid</div><div class="lbl lc">Mermaid</div><div class="lbl lm" id="features2-m2-lm">Mermaid</div></div><div class="idx">03<span> / 08</span></div><div class="flash" id="features2-m2-fl"></div></div>
+<div id="features2-m3" class="clip shot" data-start="14.625" data-duration="0.975"><div class="tilt" id="features2-m3-tilt"><div class="cam" id="features2-m3-cam"><div class="cap" style="width:1900px;height:1197px"><img class="base" src="assets/cap/tui/10-skills-picker.png" /><div class="ghost gr" id="features2-m3-gr" style="height:1197px;background-image:url(assets/cap/tui/10-skills-picker.png)"></div><div class="ghost gc" id="features2-m3-gc" style="height:1197px;background-image:url(assets/cap/tui/10-skills-picker.png)"></div><div class="mask" style="left:470px;top:112px;width:420px;height:36px"></div><div class="ring" id="features2-m3-ring0" style="left:480px;top:238px;width:458px;height:146px;border-radius:8px"></div></div></div></div><div class="scrim lbs"></div><div class="lblwrap" id="features2-m3-lw"><div class="lbl lr">Skills</div><div class="lbl lc">Skills</div><div class="lbl lm" id="features2-m3-lm">Skills</div></div><div class="idx">04<span> / 08</span></div><div class="flash" id="features2-m3-fl"></div></div>
+<div id="features2-m4" class="clip shot" data-start="15.6" data-duration="0.975"><div class="tilt" id="features2-m4-tilt"><div class="cam" id="features2-m4-cam"><div class="cap" style="width:1900px;height:1019px"><img class="base" src="assets/cap/tui/13-files-git.png" /><div class="ghost gr" id="features2-m4-gr" style="height:1019px;background-image:url(assets/cap/tui/13-files-git.png)"></div><div class="ghost gc" id="features2-m4-gc" style="height:1019px;background-image:url(assets/cap/tui/13-files-git.png)"></div><div class="ring" id="features2-m4-ring0" style="left:72px;top:45px;width:380px;height:118px;border-radius:8px"></div></div></div></div><div class="scrim lbs"></div><div class="lblwrap" id="features2-m4-lw"><div class="lbl lr">Files</div><div class="lbl lc">Files</div><div class="lbl lm" id="features2-m4-lm">Files</div></div><div class="idx">05<span> / 08</span></div><div class="flash" id="features2-m4-fl"></div></div>
+<div id="features2-m5" class="clip shot" data-start="16.575" data-duration="0.975"><div class="tilt" id="features2-m5-tilt"><div class="cam" id="features2-m5-cam"><div class="cap" style="width:1900px;height:941px"><img class="base" src="assets/cap/tui/14-detail-high-split-diff.png" /><div class="ghost gr" id="features2-m5-gr" style="height:941px;background-image:url(assets/cap/tui/14-detail-high-split-diff.png)"></div><div class="ghost gc" id="features2-m5-gc" style="height:941px;background-image:url(assets/cap/tui/14-detail-high-split-diff.png)"></div></div></div></div><div class="scrim lbs"></div><div class="lblwrap" id="features2-m5-lw"><div class="lbl lr">Diff</div><div class="lbl lc">Diff</div><div class="lbl lm" id="features2-m5-lm">Diff</div></div><div class="idx">06<span> / 08</span></div><div class="flash" id="features2-m5-fl"></div></div>
+<div id="features2-m6" class="clip shot" data-start="17.55" data-duration="0.975"><div class="tilt" id="features2-m6-tilt"><div class="cam" id="features2-m6-cam"><div class="cap" style="width:1900px;height:1019px"><img class="base" src="assets/cap/tui/11-command-palette.png" /><div class="ghost gr" id="features2-m6-gr" style="height:1019px;background-image:url(assets/cap/tui/11-command-palette.png)"></div><div class="ghost gc" id="features2-m6-gc" style="height:1019px;background-image:url(assets/cap/tui/11-command-palette.png)"></div></div></div></div><div class="scrim lbs"></div><div class="lblwrap" id="features2-m6-lw"><div class="lbl lr">Palette</div><div class="lbl lc">Palette</div><div class="lbl lm" id="features2-m6-lm">Palette</div></div><div class="idx">07<span> / 08</span></div><div class="flash" id="features2-m6-fl"></div></div>
+<div id="features2-m7" class="clip shot" data-start="18.525" data-duration="0.925"><div class="tilt" id="features2-m7-tilt"><div class="cam" id="features2-m7-cam"><div class="cap" style="width:1900px;height:1019px"><img class="base" src="assets/cap/tui/17-question-f01.png" /><div class="ghost gr" id="features2-m7-gr" style="height:1019px;background-image:url(assets/cap/tui/17-question-f01.png)"></div><div class="ghost gc" id="features2-m7-gc" style="height:1019px;background-image:url(assets/cap/tui/17-question-f01.png)"></div><div class="mask" style="left:780px;top:919px;width:60px;height:26px"></div><div class="ring" id="features2-m7-ring0" style="left:488px;top:540px;width:1386px;height:292px;border-radius:8px"></div></div></div></div><div class="scrim lbs"></div><div class="lblwrap" id="features2-m7-lw"><div class="lbl lr">Questions</div><div class="lbl lc">Questions</div><div class="lbl lm" id="features2-m7-lm">Questions</div></div><div class="idx">08<span> / 08</span></div><div class="flash" id="features2-m7-fl"></div></div>
+<div id="features2-v" class="clip shot" data-start="19.45" data-duration="1.7"><div class="squash" id="features2-vq"><div class="tilt"><div class="cam" id="features2-vcam"><div class="cap" style="width:1900px;height:1019px"><img class="base" src="assets/cap/tui/01-session-final.png" /></div><div class="vfx" id="features2-vdim"></div></div></div></div><div class="edge" id="features2-edge"></div><div class="streak" id="features2-streak"></div><div class="point" id="features2-point"></div></div>
+<div id="features2-c1" class="clip capwrap" data-start="0" data-duration="3.9"><div class="scrim"></div><div class="capt" id="features2-c1-t">What the model sees is what you see.</div></div>
+<div id="features2-c2" class="clip capwrap" data-start="3.9" data-duration="3.9"><div class="scrim"></div><div class="capt" id="features2-c2-t">Every token. Every cent. Live.</div></div>
+<div id="features2-c3" class="clip capwrap" data-start="7.8" data-duration="3.9"><div class="scrim"></div><div class="capt" id="features2-c3-t">Local speech-to-text &amp; text-to-speech.</div></div>
+  </div>
+  <script>
+const tl = gsap.timeline({ paused: true });
+const A=(c)=>({x:c[3]-c[0]*c[2],y:c[4]-c[1]*c[2],scale:c[2],transformOrigin:'0 0'});
+const seg=(id,a,b,t,d,ease,first)=>{ tl.fromTo('#features2-'+id+'-cam',A(a),Object.assign(A(b),{duration:d,ease:ease||'power2.inOut',immediateRender:!!first}),t); };
+const tilt=(id,fr,to,t,d,ease)=>{ tl.fromTo('#features2-'+id+'-tilt',Object.assign({transformOrigin:'50% 50%'},fr),Object.assign({transformOrigin:'50% 50%',duration:d,ease:ease||'sine.inOut'},to),t); };
+const cap=(id,t)=>{ tl.fromTo('#features2-'+id+'-t',{opacity:0,y:30,filter:'blur(10px)'},{opacity:1,y:0,filter:'blur(0px)',duration:0.45,ease:'expo.out'},t+0.08); };
+const ring=(id,t,n)=>{ const s='#features2-'+id;
+  tl.fromTo(s,{opacity:0,scale:1.2},{opacity:1,scale:1,duration:0.26,ease:'expo.out'},t);
+  tl.fromTo(s,{boxShadow:'0 0 0px 0px rgba(232,164,110,0), inset 0 0 0px rgba(232,164,110,0)'},{boxShadow:'0 0 36px 8px rgba(232,164,110,.8), inset 0 0 22px rgba(232,164,110,.35)',duration:0.35,ease:'power2.out',repeat:n||0,yoyo:true},t);
+};
+cap('c1',0);cap('c2',3.9);cap('c3',7.8);
+
+// phrase 1: ordered timeline, band sweeps row groups on the beat
+seg('s1',[1150,430,1.0,960,455],[1180,470,1.16,960,455],0,3.9,'sine.inOut',true);
+tilt('s1',{rotationY:6,rotationX:3},{rotationY:-3,rotationX:0},0,3.9);
+const items=[[46,562,500,1860],[585,655,500,1860],[668,792,500,1860],[806,858,500,1860],[878,1050,540,1010],[1074,1192,500,1860],[1220,1342,520,1010],[1408,1440,1085,1860]];
+const sc=[0,150,300,380,520,606,606,606];
+const bs=(it)=>({x:it[2],y:it[0],scaleX:(it[3]-it[2])/100,scaleY:(it[1]-it[0])/100,transformOrigin:'0 0'});
+items.forEach((it,i)=>{ const t=i*0.4875;
+  if(i===0){ tl.fromTo('#features2-band',Object.assign({opacity:0},bs(it)),{opacity:1,duration:0.3,ease:'power2.out',immediateRender:true},0.05); }
+  else { const p=items[i-1];
+    tl.fromTo('#features2-band',bs(p),Object.assign({duration:0.34,ease:'expo.out',immediateRender:false},bs(it)),t);
+    tl.fromTo('#features2-strip',{y:-sc[i-1]},{y:-sc[i],duration:0.5,ease:'sine.inOut',immediateRender:false},t-0.06); }
+});
+
+// phrase 2: punch into footer then composer meter
+seg('s2a',[1000,760,1.1,960,455],[1470,819,1.85,960,455],3.9,0.5,'expo.out',true);
+seg('s2a',[1470,819,1.85,960,455],[1470,819,2.0,960,455],4.4,0.55,'sine.inOut');
+seg('s2a',[1470,819,2.0,960,455],[1700,931,2.5,960,455],4.95,0.45,'power3.inOut');
+seg('s2a',[1700,931,2.5,960,455],[1700,931,2.7,960,455],5.4,0.45,'sine.inOut');
+ring('s2a-r1',4.3,1); ring('s2a-r2',5.2,1);
+tilt('s2a',{rotationY:-5,rotationX:2},{rotationY:2,rotationX:0},3.9,1.95);
+seg('s2b',[1000,740,1.1,960,455],[1470,774,1.85,960,455],5.85,0.5,'expo.out',true);
+seg('s2b',[1470,774,1.85,960,455],[1470,774,2.0,960,455],6.35,0.45,'sine.inOut');
+seg('s2b',[1470,774,2.0,960,455],[1700,931,2.4,960,455],6.8,0.45,'power3.inOut');
+seg('s2b',[1700,931,2.4,960,455],[1700,931,2.6,960,455],7.25,0.55,'sine.inOut');
+ring('s2b-r1',6.25,1); ring('s2b-r2',7.1,1);
+tilt('s2b',{rotationY:5,rotationX:2},{rotationY:-2,rotationX:0},5.85,1.95);
+
+// phrase 3: dictation recording
+seg('s3',[960,640,0.95,960,540],[970,960,1.5,960,470],7.8,1.1,'power3.inOut',true);
+seg('s3',[970,960,1.5,960,470],[900,1040,2.2,960,440],8.9,1.5,'power3.inOut');
+seg('s3',[900,1040,2.2,960,440],[900,1040,2.5,960,440],10.4,1.3,'sine.inOut');
+tilt('s3',{rotationY:-6,rotationX:4},{rotationY:3,rotationX:-1},7.8,3.9);
+ring('s3-r1',8.7,6); ring('s3-r2',9.0,0);
+
+// vacuum
+seg('v',[950,509,1.0,960,540],[950,509,1.08,960,540],19.45,0.95,'power1.in',true);
+tl.fromTo('#features2-edge',{boxShadow:'inset 0 0 0px 0px rgba(232,164,110,0)'},{boxShadow:'inset 0 0 140px 24px rgba(232,164,110,.55)',duration:0.6,ease:'power2.out',immediateRender:true},19.45);
+tl.fromTo('#features2-edge',{boxShadow:'inset 0 0 140px 24px rgba(232,164,110,.55)'},{boxShadow:'inset 0 0 240px 50px rgba(255,190,130,.8)',duration:0.75,ease:'power2.in',immediateRender:false},20.05);
+tl.fromTo('#features2-vq',{scaleY:1,scaleX:1,filter:'brightness(1)',transformOrigin:'960px 540px'},{scaleY:0.006,filter:'brightness(2.6)',duration:0.42,ease:'expo.in',transformOrigin:'960px 540px',immediateRender:true},20.3);
+tl.fromTo('#features2-vq',{scaleX:1},{scaleX:0.01,duration:0.3,ease:'power3.in',immediateRender:false,transformOrigin:'960px 540px'},20.72);
+tl.fromTo('#features2-streak',{opacity:0,scaleX:0.2},{opacity:1,scaleX:1,duration:0.12,ease:'power2.out',immediateRender:true},20.66);
+tl.fromTo('#features2-streak',{scaleX:1},{scaleX:0.03,duration:0.34,ease:'power3.in',immediateRender:false},20.78);
+tl.fromTo('#features2-point',{opacity:0,scale:0.2},{opacity:1,scale:1,duration:0.26,ease:'expo.out',immediateRender:true},20.84);
+tl.fromTo('#features2-point',{scale:1},{scale:1.5,duration:0.3,ease:'power2.in',immediateRender:false},20.84+0.26);
+
+
+// card 0 Worktrees
+seg('m0',[330, 880, 1.222, 760, 560],[330, 880, 1.3, 760, 560],11.7,0.17,'expo.out',true);
+seg('m0',[330, 880, 1.3, 760, 560],[330, 900, 1.62, 760, 590],11.87,0.805,'power1.out');
+tilt('m0',{rotationZ:1.20,rotationY:-3},{rotationZ:0,rotationY:2,duration:0.4,ease:'expo.out'},11.7,0.975);
+tl.fromTo('#features2-m0-fl',{opacity:0.42},{opacity:0,duration:0.14,ease:'power2.out',immediateRender:true},11.7);
+tl.fromTo('#features2-m0-gr',{x:14,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},11.7);
+tl.fromTo('#features2-m0-gc',{x:-14,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},11.7);
+tl.fromTo('#features2-m0-lw',{x:-170,scale:1.3,opacity:0},{x:0,scale:1,opacity:1,duration:0.17,ease:'expo.out',immediateRender:true},11.719999999999999);
+tl.fromTo('#features2-m0-lw .lr',{x:22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},11.719999999999999);
+tl.fromTo('#features2-m0-lw .lc',{x:-22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},11.719999999999999);
+
+ring('m0-ring0',11.9);
+
+// card 1 Background
+seg('m1',[1180, 660, 1.159, 960, 470],[1180, 660, 1.25, 960, 470],12.675,0.17,'expo.out',true);
+seg('m1',[1180, 660, 1.25, 960, 470],[1180, 690, 1.48, 960, 470],12.845,0.805,'power1.out');
+tilt('m1',{rotationZ:-1.40,rotationY:3},{rotationZ:0,rotationY:-2,duration:0.4,ease:'expo.out'},12.675,0.975);
+tl.fromTo('#features2-m1-fl',{opacity:0.45},{opacity:0,duration:0.14,ease:'power2.out',immediateRender:true},12.675);
+tl.fromTo('#features2-m1-gr',{x:16,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},12.675);
+tl.fromTo('#features2-m1-gc',{x:-16,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},12.675);
+tl.fromTo('#features2-m1-lw',{x:-180,scale:1.3,opacity:0},{x:0,scale:1,opacity:1,duration:0.17,ease:'expo.out',immediateRender:true},12.695);
+tl.fromTo('#features2-m1-lw .lr',{x:22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},12.695);
+tl.fromTo('#features2-m1-lw .lc',{x:-22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},12.695);
+
+ring('m1-ring0',12.875);
+tl.fromTo('#features2-m1-img2',{opacity:0},{opacity:1,duration:0.01,immediateRender:true},13.1625);
+tl.fromTo('#features2-m1-fl',{opacity:0.5},{opacity:0,duration:0.14,immediateRender:false},13.1625);
+ring('m1-ring2',13.225);
+tl.fromTo('#features2-m1-ring0',{opacity:1},{opacity:0,duration:0.01,immediateRender:false},13.1625);
+
+// card 2 Mermaid
+seg('m2',[790, 500, 0.932, 960, 500],[790, 500, 1.02, 960, 500],13.65,0.17,'expo.out',true);
+seg('m2',[790, 500, 1.02, 960, 500],[790, 500, 1.25, 960, 500],13.82,0.805,'power1.out');
+tilt('m2',{rotationZ:1.60,rotationY:-3},{rotationZ:0,rotationY:2,duration:0.4,ease:'expo.out'},13.65,0.975);
+tl.fromTo('#features2-m2-fl',{opacity:0.48},{opacity:0,duration:0.14,ease:'power2.out',immediateRender:true},13.65);
+tl.fromTo('#features2-m2-gr',{x:18,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},13.65);
+tl.fromTo('#features2-m2-gc',{x:-18,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},13.65);
+tl.fromTo('#features2-m2-lw',{x:-190,scale:1.3,opacity:0},{x:0,scale:1,opacity:1,duration:0.17,ease:'expo.out',immediateRender:true},13.67);
+tl.fromTo('#features2-m2-lw .lr',{x:22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},13.67);
+tl.fromTo('#features2-m2-lw .lc',{x:-22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},13.67);
+
+
+// card 3 Skills
+seg('m3',[950, 560, 0.883, 960, 470],[950, 560, 0.98, 960, 470],14.625,0.17,'expo.out',true);
+seg('m3',[950, 560, 0.98, 960, 470],[950, 560, 1.22, 960, 470],14.795,0.805,'power1.out');
+tilt('m3',{rotationZ:-1.80,rotationY:3},{rotationZ:0,rotationY:-2,duration:0.4,ease:'expo.out'},14.625,0.975);
+tl.fromTo('#features2-m3-fl',{opacity:0.51},{opacity:0,duration:0.14,ease:'power2.out',immediateRender:true},14.625);
+tl.fromTo('#features2-m3-gr',{x:20,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},14.625);
+tl.fromTo('#features2-m3-gc',{x:-20,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},14.625);
+tl.fromTo('#features2-m3-lw',{x:-200,scale:1.3,opacity:0},{x:0,scale:1,opacity:1,duration:0.17,ease:'expo.out',immediateRender:true},14.645);
+tl.fromTo('#features2-m3-lw .lr',{x:22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},14.645);
+tl.fromTo('#features2-m3-lw .lc',{x:-22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},14.645);
+
+ring('m3-ring0',14.825);
+
+// card 4 Files
+seg('m4',[300, 150, 1.776, 640, 430],[300, 150, 2.0, 640, 430],15.6,0.17,'expo.out',true);
+seg('m4',[300, 150, 2.0, 640, 430],[300, 150, 2.5, 640, 430],15.77,0.805,'power1.out');
+tilt('m4',{rotationZ:2.00,rotationY:-3},{rotationZ:0,rotationY:2,duration:0.4,ease:'expo.out'},15.6,0.975);
+tl.fromTo('#features2-m4-fl',{opacity:0.54},{opacity:0,duration:0.14,ease:'power2.out',immediateRender:true},15.6);
+tl.fromTo('#features2-m4-gr',{x:22,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},15.6);
+tl.fromTo('#features2-m4-gc',{x:-22,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},15.6);
+tl.fromTo('#features2-m4-lw',{x:-210,scale:1.3,opacity:0},{x:0,scale:1,opacity:1,duration:0.17,ease:'expo.out',immediateRender:true},15.62);
+tl.fromTo('#features2-m4-lw .lr',{x:22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},15.62);
+tl.fromTo('#features2-m4-lw .lc',{x:-22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},15.62);
+
+ring('m4-ring0',15.8);
+
+// card 5 Diff
+seg('m5',[1140, 540, 0.963, 960, 470],[1140, 540, 1.1, 960, 470],16.575,0.17,'expo.out',true);
+seg('m5',[1140, 540, 1.1, 960, 470],[1140, 540, 1.38, 960, 470],16.745,0.805,'power1.out');
+tilt('m5',{rotationZ:-2.20,rotationY:3},{rotationZ:0,rotationY:-2,duration:0.4,ease:'expo.out'},16.575,0.975);
+tl.fromTo('#features2-m5-fl',{opacity:0.57},{opacity:0,duration:0.14,ease:'power2.out',immediateRender:true},16.575);
+tl.fromTo('#features2-m5-gr',{x:24,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},16.575);
+tl.fromTo('#features2-m5-gc',{x:-24,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},16.575);
+tl.fromTo('#features2-m5-lw',{x:-220,scale:1.3,opacity:0},{x:0,scale:1,opacity:1,duration:0.17,ease:'expo.out',immediateRender:true},16.595);
+tl.fromTo('#features2-m5-lw .lr',{x:22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},16.595);
+tl.fromTo('#features2-m5-lw .lc',{x:-22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},16.595);
+
+
+// card 6 Palette
+seg('m6',[950, 500, 0.965, 960, 470],[950, 500, 1.12, 960, 470],17.55,0.17,'expo.out',true);
+seg('m6',[950, 500, 1.12, 960, 470],[950, 500, 1.48, 960, 470],17.720000000000002,0.805,'power1.out');
+tilt('m6',{rotationZ:2.40,rotationY:-3},{rotationZ:0,rotationY:2,duration:0.4,ease:'expo.out'},17.55,0.975);
+tl.fromTo('#features2-m6-fl',{opacity:0.60},{opacity:0,duration:0.14,ease:'power2.out',immediateRender:true},17.55);
+tl.fromTo('#features2-m6-gr',{x:26,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},17.55);
+tl.fromTo('#features2-m6-gc',{x:-26,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},17.55);
+tl.fromTo('#features2-m6-lw',{x:-230,scale:1.3,opacity:0},{x:0,scale:1,opacity:1,duration:0.17,ease:'expo.out',immediateRender:true},17.57);
+tl.fromTo('#features2-m6-lw .lr',{x:22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},17.57);
+tl.fromTo('#features2-m6-lw .lc',{x:-22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},17.57);
+
+
+// card 7 Questions
+seg('m7',[1180, 640, 1.002, 960, 480],[1180, 640, 1.18, 960, 480],18.525,0.17,'expo.out',true);
+seg('m7',[1180, 640, 1.18, 960, 480],[1180, 640, 1.5, 960, 480],18.695,0.755,'power1.out');
+tilt('m7',{rotationZ:-2.60,rotationY:3},{rotationZ:0,rotationY:-2,duration:0.4,ease:'expo.out'},18.525,0.925);
+tl.fromTo('#features2-m7-fl',{opacity:0.63},{opacity:0,duration:0.14,ease:'power2.out',immediateRender:true},18.525);
+tl.fromTo('#features2-m7-gr',{x:28,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},18.525);
+tl.fromTo('#features2-m7-gc',{x:-28,opacity:0.85},{x:0,opacity:0,duration:0.26,ease:'power3.out',immediateRender:true},18.525);
+tl.fromTo('#features2-m7-lw',{x:-240,scale:1.3,opacity:0},{x:0,scale:1,opacity:1,duration:0.17,ease:'expo.out',immediateRender:true},18.544999999999998);
+tl.fromTo('#features2-m7-lw .lr',{x:22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},18.544999999999998);
+tl.fromTo('#features2-m7-lw .lc',{x:-22,opacity:0.9},{x:0,opacity:0,duration:0.3,ease:'power3.out',immediateRender:true},18.544999999999998);
+
+ring('m7-ring0',18.725);
+window.__timelines["features2"] = tl;</script>
+</template>

@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              New session      +                                                                                       Manager     □
+     │                                  i 2 other sessions waiting for input                                                                                go
+▏2   │                              ▣
+▏ N  │ ⌕ Search sessions       ctrl+k
+▏  * │                                     System prompt ~920
+     │   How a turn flows          1m
+     │                                     AGENTS.md ~20
+  S  │
+   1 │   Release build             1m      Tools [0]
+     │
+     │                                     Skills [0]  loading
+  +  │   Map the whole package     1m
+     │                                     MCP [0]  loading
+     │
+     │ ◆ Run the loader tests      1m      total  ~920 tok
+     │
+     │
+     │ ◆ Pick a cache strategy     1m
+     │
+     │
+     │   Plan the cache with sub … 2m
+     │                            3 ↳
+     │
+     │   Cache the manifest        4m
+     │
+     │
+     │   CJK width fix             7m
+     │
+     │
+     │   Manifest cache            7m
+     │
+     │
+     │   Refactor the loader       7m
+     │                            1 ↳
+     │
+     │   Review the CJK width han… 7m
+     │
+     │
+     │   Release notes for 0.10    7m       Message to start a new session
+     │
+     │                                      Build · … · default                                                                                           0
+     │   Fix flaky test in sync    7m    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

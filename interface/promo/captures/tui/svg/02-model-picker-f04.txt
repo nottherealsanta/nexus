@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              · Cache the manifest ×    +                                                                              Manager     □
+     │                                  i 2 other sessions waiting for input                                                                                go
+▏2   │                              ▣    │  The loader re-reads the manifest on every call. Can you cache it?                                  #1 · 12:50 AM
+▏ N  │ ⌕ Search sessions       ctrl+k    │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 16 lines of this turn above
+▏  * │                                      │ [exit code 0]
+     │   How a turn flows          2m       │ nexus-core/nexus/loader.py:6:def parse_manifest(path):
+     │   ⌥ main                             ╰ nexus-core/nexus/loader.py:20:            self._data = parse_manifest(path)
+  S  │
+   1 │   Release build             2m        parse_manifest  runs on every  Loader.load  call, so each request re-reads and re-parses the file. I'll cache
+     │   ⌥ main                             the parsed manifest and key it on the file's modification time, so an edit on disk still shows up.
+     │
+  +  │   Map the whole package     2m
+     │   ⌥ main                               Change model
+     │
+     │ ◆ Run the loader tests      2m         ⌕ grok
+     │   ⌥ main                               ────────────────────────────────────────────────────────────────────
+     │                                       ▌  Grok 4.7                                                      grok
+     │ ◆ Pick a cache strategy     2m           Grok 4.6                                                      grok
+     │   ⌥ main                                 Grok 4.5                                                      grok
+     │                                          Grok 4.3                                                      grok
+     │   Plan the cache with sub … 3m           Grok Build 0.1                                                grok
+     │   ⌥ main                   3 ↳           Grok 4.7                                                   copilot
+     │                                          Grok 4.6                                                   copilot
+     │   Cache the manifest        5m           Grok 4.5                                                   copilot  ds.
+     │   ⌥ main                                 Grok 4.7                                                  opencode
+     │                                          Grok 4.20 (Reasoning)                                         grok
+     │   Refactor the loader       8m           Grok 4.20 (Non-Reasoning)                                     grok
+     │   ⌥ main                   1 ↳
+     │
+     │   Review the CJK width han… 8m
+     │   ⌥ main
+     │                                        m info · ↑↓ move · enter run · esc close                     1 of 11
+     │   Release notes for 0.10    8m
+     │   ⌥ main                             Run  uv run pytest tests/test_loader.py -q  to check it.
+     │
+     │   Fix flaky test in sync    8m                                                       GPT-6.1 Terra · 2 tools · 524i · 0o · 0r · 49%c · 36s · 12:51 AM
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            8m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                                 495 · 0.2%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

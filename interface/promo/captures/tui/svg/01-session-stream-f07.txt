@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              ⣷ Cache the manifest ×    +                                                                              Manager     □
+     │                                       ● api-docs          ● release-notes
+▏    │                              ▣        ● code-review       ● tidy-imports
+▏ N  │ ⌕ Search sessions       ctrl+k        ● migrate-schema    ● triage-ci
+▏1 * │                                       ● profile-python    ● write-tests
+     │ ⣷ Cache the manifest       now
+     │   ⌥ main                            MCP [0]  none
+  S  │
+   1 │   Pick a cache strategy     2m      total  ~3,653 tok · 1.8% of the window
+     │   ⌥ main
+     │
+  +  │   Map the whole package     2m    │
+     │   ⌥ main                          │  The loader re-reads the manifest on every call. Can you cache it?                                  #1 · 12:50 AM
+     │                                   │
+     │   Run the loader tests      2m
+     │   ⌥ main                             ▸ Thought · The loader parses the manifest on every load. Find the call sites before deciding where a cache bel…
+     │
+     │   Release build             2m       Let me look at how the loader reads the manifest.
+     │   ⌥ main
+     │                                      ▾ Working
+     │   Plan the cache with sub … 2m       ├─ → Read  nexus-core/nexus/loader.py  26 lines
+     │   ⌥ main                             ╰─ $ Shell  git grep -n parse_manifest
+     │
+     │   How a turn flows          2m        parse_manifest  runs on every  Loader.load  call, so each request re-reads and re-parses the file. I'll cache
+     │   ⌥ main                             the parsed manifest and key it on the file's modification time, so an edit on disk still shows up.
+     │
+     │   Refactor the loader       2m         ╭─ python
+     │   ⌥ main                   1 ↳         │ def _cached(self, path):
+     │                                        │     key = Path(path).stat().st_mtime_ns
+     │   Review the CJK width han… 2m         │     if self._key != key:
+     │   ⌥ main                               │         self._data = parse_manifest(path)
+     │                                        │         self._k
+     │   Release notes for 0.10    2m         ╰─
+     │   ⌥ main
+     │
+     │   Fix flaky test in sync    2m
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            2m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                               ~1.5K · 0.7%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main                                                                            Working · 19s
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              · Plan the cache with sub age… ×    +                                                                    Manager     □
+     │                                       ● ls                        ● write                     ● session
+▏    │                              ▣        ● bash                      ● web_search                ● expose_workspace_tools
+▏ N  │ ⌕ Search sessions       ctrl+k        ● bash_output               ● web_fetch                 ● message_session
+▏  * │
+     │   Plan the cache with sub… now      Skills [8]
+     │   ⌥ main                   3 ↳        ● api-docs          ● release-notes
+  S  │                                       ● code-review       ● tidy-imports
+   1 │   Cache the manifest        1m        ● migrate-schema    ● triage-ci
+     │   ⌥ main                              ● profile-python    ● write-tests
+     │
+  +  │   Pick a cache strategy     4m      MCP [0]  none
+     │   ⌥ main
+     │                                     total  ~3,910 tok · 2.0% of the window
+     │   Map the whole package     4m
+     │   ⌥ main
+     │                                   │
+     │   Run the loader tests      4m    │  Plan the manifest cache. Use sub agents to map the call sites, the tests and the docs in           #1 · 12:52 AM
+     │   ⌥ main                          │  parallel.
+     │                                   │
+     │   Release build             4m
+     │   ⌥ main                             I'll split this up: two scouts read the code and tests while a quick agent checks the docs.
+     │
+     │   How a turn flows          4m       ⣿ Scout Map every call site of parse_manifest and say w…
+     │   ⌥ main                               7.7s
+     │
+     │   Refactor the loader       4m       ⣿ Scout Read the loader tests and list what they cover.
+     │   ⌥ main                   1 ↳         7.7s
+     │
+     │   Review the CJK width han… 4m       ⣿ Quick Check README.md mentions how the manifest is lo…
+     │   ⌥ main                               7.7s
+     │
+     │   Release notes for 0.10    4m       All three reports are in.  Loader.load  is the only per-request call site, the tests cover a single load, and
+     │   ⌥ main                             the README does not mention caching. Next step: add the mtime cache and a test that counts parses.
+     │
+     │   Fix flaky test in sync    4m                                                       GPT-6.1 Terra · 3 tools · 701i · 0o · 0r · 15%c · 35s · 12:53 AM
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            4m
+     │   ⌥ feature/manifest-cache           Orchestrate · GPT-6.1 Terra mock · default                                                           664 · 0.3%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

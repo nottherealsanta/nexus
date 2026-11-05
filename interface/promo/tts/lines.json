@@ -1,0 +1,32 @@
+[
+ {
+  "id": "vo_question",
+  "voice": "narrator",
+  "text": "What does a software creation interface from the future look like?"
+ },
+ {
+  "id": "vo_answer",
+  "voice": "narrator",
+  "text": "This is Nexus."
+ },
+ {
+  "id": "mgr_user1",
+  "voice": "user",
+  "text": "Hey Manager, what needs me?"
+ },
+ {
+  "id": "mgr_reply1",
+  "voice": "assistant",
+  "text": "One session needs you. Staging migration wants to run the migration script on staging."
+ },
+ {
+  "id": "mgr_user2",
+  "voice": "user",
+  "text": "Approve it."
+ },
+ {
+  "id": "mgr_reply2",
+  "voice": "assistant",
+  "text": "Approved. The migration is running on staging."
+ }
+]

@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        · Plan the cache with sub age… ×    +                                  Manager     □
+     │                            i 2 other sessions waiting for input                                              go
+▏2   │                        ▣
+▏ N  │ ⌕ Search sessions ctrl+k      total  ~3,910 tok · 2.0% of the window
+▏  * │
+     │   How a turn flows    3m
+     │   ⌥ main                    │
+  S  │                             │  Plan the manifest cache. Use sub agents to map the call sites,   #1 · 12:52 AM
+   1 │   Release build       3m    │  the tests and the docs in parallel.
+     │   ⌥ main                    │
+     │
+  +  │   Map the whole pack… 3m       I'll split this up: two scouts read the code and tests while a quick agent
+     │   ⌥ main                       checks the docs.
+     │
+     │ ◆ Run the loader tes… 3m       ⣿ Scout Map every call site of parse_manifest and say w…
+     │   ⌥ main                         7.7s
+     │
+     │ ◆ Pick a cache strat… 3m       ⣿ Scout Read the loader tests and list what they cover.
+     │   ⌥ main                         7.7s
+     │
+     │   Plan the cache wit… 3m       ⣿ Quick Check README.md mentions how the manifest is lo…
+     │   ⌥ main             3 ↳         7.7s
+     │
+     │   Cache the manifest  5m       All three reports are in.  Loader.load  is the only per-request call site, the
+     │   ⌥ main                       tests cover a single load, and the README does not mention caching. Next step:
+     │                                add the mtime cache and a test that counts parses.
+     │   Refactor the loader 8m
+     │   ⌥ main             1 ↳                     GPT-6.1 Terra · 3 tools · 701i · 0o · 0r · 15%c · 35s · 12:53 AM
+     │
+     │   Review the CJK wid… 8m
+     │   ⌥ main                       Type a message…
+     │
+     │   Release notes for … 8m       Orchestrate · GPT-6.1 Terra mock · default                         664 · 0.3%
+     │   ⌥ main                    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             ~/code/nexus-demo  ⌥ main
+     │  Settings         ctrl+,    ───────────────────────────────────────────────────────────────────────────────────

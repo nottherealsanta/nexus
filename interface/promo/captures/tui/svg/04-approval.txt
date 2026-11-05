@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              ⢿ Run the loader tests ×    +                                                    ◆ waiting for you       Manager     □
+     │                                  i 1 other session waiting for input                                                                                 go
+▏2   │                              ▣        ● api-docs          ● release-notes
+▏ N  │ ⌕ Search sessions       ctrl+k        ● code-review       ● tidy-imports
+▏  * │                                       ● migrate-schema    ● triage-ci
+     │   How a turn flows          1m        ● profile-python    ● write-tests
+     │   ⌥ main
+  S  │                                     MCP [0]  none
+   1 │   Release build             1m
+     │   ⌥ main                            total  ~3,668 tok · 1.8% of the window
+     │
+  +  │   Map the whole package     1m
+     │   ⌥ main                          │
+     │                                   │  Run the loader tests.                                                                              #1 · 12:53 AM
+     │ ◆ Run the loader tests      1m    │
+     │   ⌥ main
+     │                                      Running the loader tests before I touch anything.
+     │ ◆ Pick a cache strategy     1m
+     │   ⌥ main                             ▾ Working
+     │                                      ╰─ ◆ Shell  uv run pytest tests/test_loader.py -q                                                        waiting
+     │   Plan the cache with sub … 1m
+     │   ⌥ main                   3 ↳
+     │
+     │   Cache the manifest        3m    ┃
+     │   ⌥ main                          ┃  ◆ Allow bash?
+     │                                   ┃  waiting on you · 0:01
+     │   Refactor the loader       6m    ┃
+     │   ⌥ main                   1 ↳    ┃  command  uv run pytest tests/test_loader.py -q
+     │                                   ┃
+     │   Review the CJK width han… 6m    ┃▸  y  Allow once
+     │   ⌥ main                          ┃   a  Allow for session
+     │                                   ┃   n  Deny
+     │   Release notes for 0.10    6m    ┃   d  Deny with a note
+     │   ⌥ main                          ┃
+     │                                   ┃  alt+w answer
+     │   Fix flaky test in sync    6m    ┃
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            6m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                                  18 · 0.0%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main                                                                         Working · 1m 04s
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

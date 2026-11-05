@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              · Release build ×    +                                                                                   Manager     □
+     │                                  i 2 other sessions waiting for input                                                                                go
+▏2   │                              ▣        ● read                      ● bash_kill                 ● ask
+▏ N  │ ⌕ Search sessions       ctrl+k        ● grep                      ● edit                      ● code
+▏  * │                                       ● glob                      ● patch                     ● skill
+     │   How a turn flows         now        ● ls                        ● write                     ● expose_workspace_tools
+     │   ⌥ main                              ● bash                      ● web_search
+  S  │                                       ● bash_output               ● web_fetch
+   1 │   Release build            now
+     │   ⌥ main                            Skills [8]
+     │                                       ● api-docs          ● release-notes
+  +  │   Map the whole package    now        ● code-review       ● tidy-imports
+     │   ⌥ main                              ● migrate-schema    ● triage-ci
+     │                                       ● profile-python    ● write-tests
+     │ ◆ Run the loader tests     now
+     │   ⌥ main                            MCP [0]  none
+     │
+     │ ◆ Pick a cache strategy    now      total  ~3,668 tok · 1.8% of the window
+     │   ⌥ main
+     │
+     │   Plan the cache with sub … 1m    │
+     │   ⌥ main                   3 ↳    │  Run the release build in the background.                                                           #1 · 12:53 AM
+     │                                   │
+     │   Cache the manifest        2m
+     │   ⌥ main                             Starting the release build in the background.
+     │
+     │   Refactor the loader       5m       ▾ Working
+     │   ⌥ main                   1 ↳       ╰─ ◆ Shell  sleep 6; printf 'built 42 targets in 6.1s\n'                                                 waiting
+     │
+     │   Review the CJK width han… 5m       The build is running in the background. I'll pick up the result when it finishes.
+     │   ⌥ main
+     │                                      ▸ → Background Shell Done: "sleep 6; printf 'built 42 targets in 6.1s\\n'" · show full output
+     │   Release notes for 0.10    6m
+     │   ⌥ main                             The background build finished: 42 targets in 6.1 s, no warnings.
+     │
+     │   Fix flaky test in sync    6m                                                        GPT-6.1 Terra · 1 tool · 534i · 0o · 0r · 11%c · 11s · 12:53 AM
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            5m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                                 308 · 0.2%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Nexus 0.10</title>
+    <script src="assets/vendor/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: #000; }
+      #bg { position: absolute; inset: 0; background: #000; }
+    </style>
+  </head>
+  <body>
+    <!-- Nexus 0.10 promo. Music map and storyboard: ../plan.md. Times are seconds on the master timeline. -->
+    <div id="root" data-composition-id="main" data-start="0" data-duration="103" data-width="1920" data-height="1080" data-fps="60">
+      <div id="bg" class="clip" data-start="0" data-duration="103" data-track-index="0"></div>
+
+      <div id="intro" data-composition-id="intro" data-composition-src="compositions/intro.html" data-start="0" data-duration="15.45" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="features1" data-composition-id="features1" data-composition-src="compositions/features1.html" data-start="15.45" data-duration="11.7" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="features2" data-composition-id="features2" data-composition-src="compositions/features2.html" data-start="27.15" data-duration="21.15" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="nsh" data-composition-id="nsh" data-composition-src="compositions/nsh.html" data-start="48.3" data-duration="15.6" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="manager" data-composition-id="manager" data-composition-src="compositions/manager.html" data-start="63.9" data-duration="15.6" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="outro" data-composition-id="outro" data-composition-src="compositions/outro.html" data-start="79.5" data-duration="23.5" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+
+      <!-- Music: ducked -9 dB under the Manager dialogue (64.4–78.6), faded out at the end. -->
+      <audio id="music" class="clip" src="assets/music.mp3" data-start="0" data-duration="103" data-track-index="10" data-volume="1"
+        data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":1},{"t":64.1,"v":1},{"t":64.4,"v":0.355},{"t":78.6,"v":0.355},{"t":79.1,"v":1},{"t":98.5,"v":1},{"t":102.8,"v":0}]}]}'></audio>
+
+      <!-- Voice (local Ming-3.0-tts, ../tts). Starts must match the caption times in compositions/manager.html and outro.html. -->
+      <audio id="vo-mgr-user1" class="clip" src="assets/vo/mgr_user1.wav" data-start="64.7" data-duration="1.55" data-track-index="11" data-volume="1"></audio>
+      <audio id="vo-mgr-reply1" class="clip" src="assets/vo/mgr_reply1.wav" data-start="66.9" data-duration="5.29" data-track-index="11" data-volume="1"></audio>
+      <audio id="vo-mgr-user2" class="clip" src="assets/vo/mgr_user2.wav" data-start="73.1" data-duration="0.7" data-track-index="11" data-volume="1"></audio>
+      <audio id="vo-mgr-reply2" class="clip" src="assets/vo/mgr_reply2.wav" data-start="74.7" data-duration="3.04" data-track-index="11" data-volume="1"></audio>
+      <audio id="vo-question" class="clip" src="assets/vo/vo_question.wav" data-start="81.2" data-duration="3.58" data-track-index="11" data-volume="1"></audio>
+      <audio id="vo-answer" class="clip" src="assets/vo/vo_answer.wav" data-start="89.9" data-duration="1.33" data-track-index="11" data-volume="1"></audio>
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>

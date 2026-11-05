@@ -1,0 +1,23 @@
+{
+  "mgr_reply1": {
+    "take": 2,
+    "duration": 5.28,
+    "peak": 0.42,
+    "asr": "One session needs you. Staging migration wants to run the migration script on staging.",
+    "match": 1.0
+  },
+  "mgr_user2": {
+    "take": 3,
+    "duration": 0.69,
+    "peak": 0.26,
+    "asr": "approve it.",
+    "match": 1.0
+  },
+  "mgr_reply2": {
+    "take": 3,
+    "duration": 3.04,
+    "peak": 0.4,
+    "asr": "Approved, the migration is running on staging.",
+    "match": 1.0
+  }
+}

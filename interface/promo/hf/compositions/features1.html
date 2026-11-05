@@ -1,0 +1,141 @@
+<template>
+  <link rel="stylesheet" href="assets/kit/kit.css" />
+  <style>
+    #root { position:absolute; inset:0; background:#000; overflow:hidden; }
+    .layer { position:absolute; inset:0; background:#050505; overflow:hidden; }
+    .persp { position:absolute; inset:0; perspective:2600px; perspective-origin:50% 50%; }
+    .cam { position:absolute; inset:0; transform-origin:960px 540px; }
+    .pan { position:absolute; left:0; top:0; width:2000px; height:1072px; transform-origin:0 0; }
+    .stage { position:absolute; inset:0; border-radius:16px; overflow:hidden; background:#0b0b0b; box-shadow:0 0 0 1px rgba(255,255,255,.07), 0 0 140px rgba(232,164,110,.12), 0 50px 150px rgba(0,0,0,.9); }
+    .stage img { position:absolute; left:0; top:0; width:2000px; height:1072px; visibility:hidden; }
+    .scrim { position:absolute; left:0; right:0; top:0; height:380px; background:linear-gradient(to bottom, rgba(0,0,0,.96) 0%, rgba(0,0,0,.9) 55%, rgba(0,0,0,0) 100%); pointer-events:none; }
+    .cap { position:absolute; left:96px; top:50px; font:600 104px/1 var(--sans); letter-spacing:-.035em; color:#f4f4f5; white-space:nowrap; text-shadow:0 0 50px rgba(0,0,0,.8); }
+    .cap span { display:inline-block; opacity:0; }
+    .cap .acc { color:var(--accent); }
+    #features1-b-cap span { position:absolute; left:0; top:0; }
+    .tick { position:absolute; left:100px; top:178px; font:500 30px/1 var(--mono); color:#f4f4f5; white-space:nowrap; }
+    .tick .pv { display:inline-block; margin-right:30px; opacity:.2; }
+    .tick .pv.on { opacity:1; }
+    .tick .pv.now { color:var(--accent); text-shadow:0 0 24px rgba(232,164,110,.7); }
+    .chips { font:500 34px/1 var(--sans); top:186px; }
+    .chip { display:inline-block; margin-right:18px; padding:12px 26px; border-radius:999px; border:1.5px solid rgba(255,255,255,.18); background:rgba(255,255,255,.05); opacity:0; transform:translateY(10px); }
+    .chip.on { opacity:1; transform:none; border-color:rgba(232,164,110,.7); color:var(--accent); }
+    .beats { position:absolute; right:96px; top:84px; width:312px; display:flex; gap:10px; }
+    .beats i { flex:1; height:4px; border-radius:2px; background:rgba(255,255,255,.16); }
+    .beats i.on { background:var(--accent); box-shadow:0 0 14px rgba(232,164,110,.7); }
+    .flash { position:absolute; inset:0; background:radial-gradient(ellipse at 50% 55%, rgba(232,164,110,.5), rgba(232,164,110,.12) 60%, rgba(0,0,0,0)); opacity:0; mix-blend-mode:screen; pointer-events:none; }
+  </style>
+  <div id="root" data-composition-id="features1" data-width="1920" data-height="1080">
+    <div id="features1-a" class="clip layer" data-start="0.0" data-duration="3.9">
+      <div class="persp"><div class="cam" id="features1-a-cam"><div class="pan" id="features1-a-pan">
+        <div class="stage">
+            <img id="features1-a-f0" src="assets/cap/tui/02-model-picker-f01.png" alt="" />
+            <img id="features1-a-f1" src="assets/cap/tui/02-model-picker-f02.png" alt="" />
+            <img id="features1-a-f2" src="assets/cap/tui/02-model-picker-f03.png" alt="" />
+            <img id="features1-a-f3" src="assets/cap/tui/02-model-picker-f04.png" alt="" />
+        </div>
+      </div></div></div>
+      <div class="scrim"></div>
+      <div class="cap" id="features1-a-cap"><span id="features1-a-c1">Any model.</span> <span id="features1-a-c2" class="acc">Nine providers.</span></div>
+      <div class="tick" id="features1-a-tick"><span class="pv" id="features1-a-p0">codex</span><span class="pv" id="features1-a-p1">claude</span><span class="pv" id="features1-a-p2">copilot</span><span class="pv" id="features1-a-p3">grok</span><span class="pv" id="features1-a-p4">opencode</span><span class="pv" id="features1-a-p5">openai</span><span class="pv" id="features1-a-p6">groq</span><span class="pv" id="features1-a-p7">nvidia</span><span class="pv" id="features1-a-p8">ollama</span></div>
+      <div class="beats"><i id="features1-a-b0"></i><i id="features1-a-b1"></i><i id="features1-a-b2"></i><i id="features1-a-b3"></i><i id="features1-a-b4"></i><i id="features1-a-b5"></i><i id="features1-a-b6"></i><i id="features1-a-b7"></i></div>
+      <div class="flash" id="features1-a-flash"></div>
+    </div>
+    <div id="features1-b" class="clip layer" data-start="3.9" data-duration="3.9">
+      <div class="persp"><div class="cam" id="features1-b-cam"><div class="pan" id="features1-b-pan">
+        <div class="stage">
+            <img id="features1-b-f0" src="assets/cap/tui/03-subagents-f04.png" alt="" />
+            <img id="features1-b-f1" src="assets/cap/tui/03-subagents-f08.png" alt="" />
+            <img id="features1-b-f2" src="assets/cap/tui/03-subagents-f12.png" alt="" />
+            <img id="features1-b-f3" src="assets/cap/tui/03-subagents-f17.png" alt="" />
+            <img id="features1-b-f4" src="assets/cap/tui/03-subagents-f21.png" alt="" />
+            <img id="features1-b-f5" src="assets/cap/tui/03-subagents-f32.png" alt="" />
+            <img id="features1-b-f6" src="assets/cap/tui/03-subagents-done.png" alt="" />
+        </div>
+      </div></div></div>
+      <div class="scrim"></div>
+      <div class="cap" id="features1-b-cap"><span id="features1-b-c1">Parallel sub-agents.</span><span id="features1-b-c2" class="acc">Agents are Markdown.</span></div>
+      
+      <div class="beats"><i id="features1-b-b0"></i><i id="features1-b-b1"></i><i id="features1-b-b2"></i><i id="features1-b-b3"></i><i id="features1-b-b4"></i><i id="features1-b-b5"></i><i id="features1-b-b6"></i><i id="features1-b-b7"></i></div>
+      <div class="flash" id="features1-b-flash"></div>
+    </div>
+    <div id="features1-c" class="clip layer" data-start="7.8" data-duration="3.9">
+      <div class="persp"><div class="cam" id="features1-c-cam"><div class="pan" id="features1-c-pan">
+        <div class="stage">
+            <img id="features1-c-f0" src="assets/cap/tui/04-approval-f01.png" alt="" />
+            <img id="features1-c-f1" src="assets/cap/tui/04-approval-f02-focused.png" alt="" />
+            <img id="features1-c-f2" src="assets/cap/tui/04-approval-f03-allowed.png" alt="" />
+        </div>
+      </div></div></div>
+      <div class="scrim"></div>
+      <div class="cap" id="features1-c-cap"><span id="features1-c-c1">Real approvals.</span></div>
+      <div class="tick chips" id="features1-c-tick"><span class="chip" id="features1-c-p0">Allow once</span><span class="chip" id="features1-c-p1">Allow for session</span><span class="chip" id="features1-c-p2">Deny with a note</span></div>
+      <div class="beats"><i id="features1-c-b0"></i><i id="features1-c-b1"></i><i id="features1-c-b2"></i><i id="features1-c-b3"></i><i id="features1-c-b4"></i><i id="features1-c-b5"></i><i id="features1-c-b6"></i><i id="features1-c-b7"></i></div>
+      <div class="flash" id="features1-c-flash"></div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const PLAN = {"a": {"start": 0.0, "plan": [[0, 1000, 540, 1.0, 600], [0, 1000, 522, 1.45, 640], [1, 1000, 522, 1.45, 640], [1, 1100, 540, 1.7, 640], [2, 1000, 420, 1.6, 640], [2, 1050, 560, 1.45, 640], [3, 1050, 430, 1.6, 640], [3, 1000, 540, 1.3, 640]], "n": 4}, "b": {"start": 3.9, "plan": [[0, 1000, 540, 1.0, 600], [1, 900, 745, 1.55, 640], [2, 900, 740, 1.6, 640], [3, 900, 735, 1.6, 640], [4, 900, 720, 1.65, 640], [5, 330, 200, 1.7, 540], [5, 900, 660, 1.65, 640], [6, 900, 665, 1.55, 640]], "n": 7}, "c": {"start": 7.8, "plan": [[0, 1000, 540, 0.95, 590], [0, 1250, 720, 1.3, 650], [0, 1250, 640, 1.3, 650], [1, 850, 740, 1.7, 640], [1, 720, 755, 1.7, 640], [2, 1450, 95, 1.7, 500], [2, 900, 790, 1.5, 640], [2, 1000, 540, 0.95, 590]], "n": 3}};
+      const BEAT = 0.4875;
+      const PROV_N = 9;
+      const state = {};
+      function cam(fx, fy, s, cy) { return { x: 960 - fx * s, y: cy - fy * s, scale: s }; }
+      function beatOf(L, t) { const b = Math.floor((t - L.start + 1e-6) / BEAT); return Math.max(0, Math.min(7, b)); }
+      const imgs = {};
+      for (const id in PLAN) { imgs[id] = []; for (let k = 0; k < PLAN[id].n; k++) imgs[id].push(document.getElementById("features1-" + id + "-f" + k)); state[id] = { f: -1, b: -2 }; }
+      function draw(t) {
+        for (const id in PLAN) {
+          const L = PLAN[id];
+          if (t < L.start - 1e-6 || t >= L.start + 3.9 + 1e-6) continue;
+          const b = beatOf(L, t), st = state[id];
+          if (st.b === b) continue;
+          st.b = b;
+          const f = L.plan[b][0];
+          if (st.f !== f) { if (st.f >= 0) imgs[id][st.f].style.visibility = "hidden"; imgs[id][f].style.visibility = "visible"; st.f = f; }
+          for (let k = 0; k < 8; k++) document.getElementById("features1-" + id + "-b" + k).classList.toggle("on", k <= b);
+          if (id === "a") for (let k = 0; k < PROV_N; k++) {
+            const el = document.getElementById("features1-a-p" + k);
+            const lit = k <= Math.min(b, 7) || (b === 7 && k === 8);
+            el.classList.toggle("on", lit);
+            el.classList.toggle("now", k === b || (b === 7 && k >= 7));
+          }
+          if (id === "c") for (let k = 0; k < 3; k++) document.getElementById("features1-c-p" + k).classList.toggle("on", b >= k + 3);
+        }
+      }
+      const tl = gsap.timeline({ paused: true });
+      const proxy = { t: 0 };
+      tl.to(proxy, { t: 11.7, duration: 11.7, ease: "none", onUpdate: () => draw(proxy.t) }, 0);
+      // camera: punch on every beat (expo.out from the previous pose, or a pulse when the pose repeats)
+      for (const id in PLAN) {
+        const L = PLAN[id];
+        const pan = "#features1-" + id + "-pan";
+        L.plan.forEach((p, k) => {
+          const tb = L.start + k * BEAT;
+          const to = cam(p[1], p[2], p[3], p[4]);
+          let from;
+          if (k === 0) from = cam(p[1], p[2], p[3] * 1.12, p[4]);
+          else {
+            const q = L.plan[k - 1];
+            const same = q[1] === p[1] && q[2] === p[2] && q[3] === p[3] && q[4] === p[4];
+            from = same ? cam(p[1], p[2], p[3] * 1.06, p[4]) : cam(q[1], q[2], q[3] * 1.0, q[4]);
+          }
+          tl.fromTo(pan, from, { ...to, duration: 0.42, ease: "expo.out", immediateRender: false }, tb);
+          tl.fromTo("#features1-" + id + "-flash", { opacity: k === 7 ? 0.0 : 0.16 }, { opacity: 0, duration: 0.3, ease: "power2.out", immediateRender: false }, tb);
+        });
+        tl.fromTo("#features1-" + id + "-cam", { rotationX: 5, rotationY: 7 }, { rotationX: 2, rotationY: -4, duration: 3.9, ease: "sine.inOut", immediateRender: false }, L.start);
+      }
+      // allow flash (green) on beat 5 of the approval layer
+      tl.fromTo("#features1-c-flash", { opacity: 0.3, background: "radial-gradient(ellipse at 50% 40%, rgba(134,185,122,.65), rgba(134,185,122,.15) 60%, rgba(0,0,0,0))" }, { opacity: 0, duration: 0.5, ease: "power2.out", immediateRender: false }, 7.8 + 5 * BEAT);
+      // captions
+      function capIn(sel, at) { tl.fromTo(sel, { opacity: 0, y: 30, filter: "blur(14px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.45, ease: "expo.out", immediateRender: false }, at); }
+      function capOut(sel, at) { tl.to(sel, { opacity: 0, y: -18, filter: "blur(8px)", duration: 0.2, ease: "power2.in" }, at); }
+      capIn("#features1-a-c1", 0); capIn("#features1-a-c2", 4 * BEAT);
+      capIn("#features1-b-c1", 3.9); capOut("#features1-b-c1", 3.9 + 4 * BEAT - 0.2); capIn("#features1-b-c2", 3.9 + 4 * BEAT);
+      capIn("#features1-c-c1", 7.8);
+      tl.fromTo(".chip.on, .chip", { y: 10 }, { y: 0, duration: 0.3, ease: "expo.out", immediateRender: false }, 7.8 + 3 * BEAT);
+      draw(0);
+      window.__timelines["features1"] = tl;
+    })();
+  </script>
+</template>

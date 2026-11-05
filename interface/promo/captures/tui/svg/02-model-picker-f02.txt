@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              · Cache the manifest ×    +                                                                              Manager     □
+     │                                  i 2 other sessions waiting for input                                                                                go
+▏2   │                              ▣    │  The loader re-reads the manifest on every call. Can you cache it?                                  #1 · 12:50 AM
+▏ N  │ ⌕ Search sessions       ctrl+k    │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 16 lines of this turn above
+▏  * │                                      │ [exit code 0]
+     │   How a turn flows          2m       │ nexus-core/nexus/loader.py:6:def parse_manifest(path):
+     │   ⌥ main                             ╰ nexus-core/nexus/loader.py:20:            self._data = parse_manifest(path)
+  S  │
+   1 │   Release build             2m        parse_manifest  runs on every  Loader.load  call, so each request re-reads and re-parses the file. I'll cache
+     │   ⌥ main                             the parsed manifest and key it on the file's modification time, so an edit on disk still shows up.
+     │
+  +  │   Map the whole package     2m
+     │   ⌥ main                               Change model
+     │
+     │ ◆ Run the loader tests      2m         ⌕ type to filter models
+     │   ⌥ main                               ────────────────────────────────────────────────────────────────────
+     │                                          GPT-5.2 Pro                                                  codex
+     │ ◆ Pick a cache strategy     2m           GPT-5.2                                                      codex
+     │   ⌥ main                                 GPT-5.1                                                      codex
+     │                                          GPT-5 Pro                                                    codex
+     │   Plan the cache with sub … 3m           GPT-5 Nano                                                   codex
+     │   ⌥ main                   3 ↳           GPT-5 Mini                                                   codex
+     │                                          GPT-5                                                        codex
+     │   Cache the manifest        4m           Grok 4.7                                                      grok  ds.
+     │   ⌥ main                                 Grok 4.6                                                      grok
+     │                                          Grok 4.5                                                      grok
+     │   Refactor the loader       8m           Grok 4.3                                                      grok
+     │   ⌥ main                   1 ↳           Grok Build 0.1                                                grok
+     │                                          Grok 4.20 (Reasoning)                                         grok
+     │   Review the CJK width han… 8m        ▌  Grok 4.20 (Non-Reasoning)                                     grok
+     │   ⌥ main
+     │                                        m info · ↑↓ move · enter run · esc close                   33 of 147
+     │   Release notes for 0.10    8m
+     │   ⌥ main                             Run  uv run pytest tests/test_loader.py -q  to check it.
+     │
+     │   Fix flaky test in sync    8m                                                       GPT-6.1 Terra · 2 tools · 524i · 0o · 0r · 49%c · 36s · 12:51 AM
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            8m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                                 495 · 0.2%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

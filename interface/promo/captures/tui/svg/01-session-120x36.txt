@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        · Cache the manifest ×    +                                            Manager     □
+     │                            i 2 other sessions waiting for input                                              go
+▏2   │                        ▣    │  The loader re-reads the manifest on every call. Can you cache    #1 · 12:50 AM
+▏ N  │ ⌕ Search sessions ctrl+k    │  it?
+▏  * │                             │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 25 lines of this turn above
+     │   How a turn flows    2m         │     key = Path(path).stat().st_mtime_ns
+     │   ⌥ main                         │     if self._key != key:
+  S  │                                  │         self._data = parse_manifest(path)
+   1 │   Release build       3m         │         self._key = key
+     │   ⌥ main                         │     return self._data
+     │                                  ╰─
+  +  │   Map the whole pack… 3m
+     │   ⌥ main                       What changes:
+     │
+     │ ◆ Run the loader tes… 3m       •  Loader.load  now calls  self._cached(self.path)  instead of parsing.
+     │   ⌥ main                       • A new test,  test_cache_hit_skips_parse , counts parses across two loads.
+     │                                • No new dependency; the cache lives on the instance.
+     │ ◆ Pick a cache strat… 3m
+     │   ⌥ main                       ┌─────────────┬─────────────┬───────────┐
+     │                                │ call site   │ per request │ after     │
+     │   Plan the cache wit… 3m       ├─────────────┼─────────────┼───────────┤
+     │   ⌥ main             3 ↳       │ Loader.load │ yes         │ cached    │
+     │                                │ cli.check   │ once        │ unchanged │
+     │   Cache the manifest  5m       └─────────────┴─────────────┴───────────┘
+     │   ⌥ main
+     │                                Run  uv run pytest tests/test_loader.py -q  to check it.
+     │   Refactor the loader 8m
+     │   ⌥ main             1 ↳                     GPT-6.1 Terra · 2 tools · 524i · 0o · 0r · 49%c · 36s · 12:51 AM
+     │
+     │   Review the CJK wid… 8m
+     │   ⌥ main                       Type a message…
+     │
+     │   Release notes for … 8m       Build · GPT-6.1 Terra mock · default                               495 · 0.2%
+     │   ⌥ main                    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             ~/code/nexus-demo  ⌥ main
+     │  Settings         ctrl+,    ───────────────────────────────────────────────────────────────────────────────────

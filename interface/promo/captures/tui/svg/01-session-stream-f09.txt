@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              ⣟ Cache the manifest ×    +                                                                              Manager     □
+     │
+▏    │                              ▣    │
+▏ N  │ ⌕ Search sessions       ctrl+k    │  The loader re-reads the manifest on every call. Can you cache it?                                  #1 · 12:50 AM
+▏1 * │                                   │
+     │ ⣟ Cache the manifest       now
+     │   ⌥ main                             ▸ Thought · The loader parses the manifest on every load. Find the call sites before deciding where a cache bel…
+  S  │
+   1 │   Pick a cache strategy     3m       Let me look at how the loader reads the manifest.
+     │   ⌥ main
+     │                                      ▾ Working
+  +  │   Map the whole package     3m       ├─ → Read  nexus-core/nexus/loader.py  26 lines
+     │   ⌥ main                             ╰─ $ Shell  git grep -n parse_manifest
+     │
+     │   Run the loader tests      3m        parse_manifest  runs on every  Loader.load  call, so each request re-reads and re-parses the file. I'll cache
+     │   ⌥ main                             the parsed manifest and key it on the file's modification time, so an edit on disk still shows up.
+     │
+     │   Release build             3m         ╭─ python
+     │   ⌥ main                               │ def _cached(self, path):
+     │                                        │     key = Path(path).stat().st_mtime_ns
+     │   Plan the cache with sub … 3m         │     if self._key != key:
+     │   ⌥ main                               │         self._data = parse_manifest(path)
+     │                                        │         self._key = key
+     │   How a turn flows          3m         │     return self._data
+     │   ⌥ main                               ╰─
+     │
+     │   Refactor the loader       3m       What changes:
+     │   ⌥ main                   1 ↳
+     │                                      •  Loader.load  now calls  self._cached(self.path)  instead of parsing.
+     │   Review the CJK width han… 3m       • A new test,  test_cache_hit_skips_parse , counts parses across two loads.
+     │   ⌥ main                             • No new dependency; the cache lives on the instance.
+     │
+     │   Release notes for 0.10    3m       | call sit
+     │   ⌥ main
+     │
+     │   Fix flaky test in sync    3m
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            3m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                               ~1.5K · 0.7%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main                                                                            Working · 29s
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

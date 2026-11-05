@@ -1,0 +1,20 @@
+{
+  "name": "nexus-promo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "npx hyperframes preview",
+    "check": "npx hyperframes check",
+    "render": "npx hyperframes render --fps 60 --quality delivery -o renders/nexus-promo.mp4"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "gsap": "3.13.0",
+    "hyperframes": "0.8.185"
+  },
+  "private": true
+}

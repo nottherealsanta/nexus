@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              New session      +                                                                                       Manager     □
+     │
+     │                              ▣
+  +  │ ⌕ Search sessions       ctrl+k
+     │
+     │  No project yet. Add one
+     │  with the + on the project
+     │  rail.
+     │
+     │
+     │
+     │
+     │
+     │                                                                                          _/      _/
+     │                                                                                         _/_/    _/
+     │                                                                                        _/  _/  _/
+     │                                                                                       _/    _/_/
+     │                                                                                      _/      _/
+     │
+     │                                                                                      No projects yet
+     │
+     │                                                                           alt+3 add a project · ctrl+p commands
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │                                      Message to start a new session
+     │
+     │                                      Build · … · default                                                                                           0
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

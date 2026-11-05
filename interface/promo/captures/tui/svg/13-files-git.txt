@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              · Cache the manifest ×    +                                                                              Manager     □
+     │                                  i 2 other sessions waiting for input                                                                                go
+▏2   │ ▾ nexus-demo            ⌥ main    │  The loader re-reads the manifest on every call. Can you cache it?                                  #1 · 12:50 AM
+▏ N  │▌▸ .agents                         │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 3 lines of this turn above
+▏  * │ ▸ nexus-core                         ▾ Working
+     │   AGENTS.md                  ?       ├─ ◆ Read  nexus-core/nexus/loader.py                                                                    waiting
+     │   README.md                          ╰─ $ Shell  git grep -n parse_manifest
+  S  │
+   1 │                                       parse_manifest  runs on every  Loader.load  call, so each request re-reads and re-parses the file. I'll cache
+     │                                      the parsed manifest and key it on the file's modification time, so an edit on disk still shows up.
+     │
+  +  │                                        ╭─ python
+     │                                        │ def _cached(self, path):
+     │                                        │     key = Path(path).stat().st_mtime_ns
+     │                                        │     if self._key != key:
+     │                                        │         self._data = parse_manifest(path)
+     │                                        │         self._key = key
+     │                                        │     return self._data
+     │                                        ╰─
+     │
+     │                                      What changes:
+     │
+     │                                      •  Loader.load  now calls  self._cached(self.path)  instead of parsing.
+     │                                      • A new test,  test_cache_hit_skips_parse , counts parses across two loads.
+     │                                      • No new dependency; the cache lives on the instance.
+     │
+     │                                      ┌─────────────┬─────────────┬───────────┐
+     │                                      │ call site   │ per request │ after     │
+     │                                      ├─────────────┼─────────────┼───────────┤
+     │                                      │ Loader.load │ yes         │ cached    │
+     │                                      │ cli.check   │ once        │ unchanged │
+     │                                      └─────────────┴─────────────┴───────────┘
+     │
+     │                                      Run  uv run pytest tests/test_loader.py -q  to check it.
+     │
+     │                                                                                      GPT-6.1 Terra · 2 tools · 524i · 0o · 0r · 49%c · 36s · 12:51 AM
+     │
+     │
+     │                                      Type a message…
+     │
+     │                                      Build · GPT-6.1 Terra mock · default                                                                 495 · 0.2%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

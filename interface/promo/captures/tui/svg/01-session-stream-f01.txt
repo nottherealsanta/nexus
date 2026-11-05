@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              · Cache the manifest ×    +                                                                              Manager     □
+     │
+▏    │                              ▣
+▏ N  │ ⌕ Search sessions       ctrl+k      System prompt ~858
+▏  * │
+     │   Cache the manifest       now      AGENTS.md ~20
+     │   ⌥ main
+  S  │                                     Tools [16] ~2.8K
+   1 │   Pick a cache strategy     2m        ● read                      ● bash_kill                 ● ask
+     │   ⌥ main                              ● grep                      ● edit                      ● code
+     │                                       ● glob                      ● patch                     ● skill
+  +  │   Map the whole package     2m        ● ls                        ● write                     ● expose_workspace_tools
+     │   ⌥ main                              ● bash                      ● web_search
+     │                                       ● bash_output               ● web_fetch
+     │   Run the loader tests      2m
+     │   ⌥ main                            Skills [8]
+     │                                       ● api-docs          ● release-notes
+     │   Release build             2m        ● code-review       ● tidy-imports
+     │   ⌥ main                              ● migrate-schema    ● triage-ci
+     │                                       ● profile-python    ● write-tests
+     │   Plan the cache with sub … 2m
+     │   ⌥ main                            MCP [0]  none
+     │
+     │   How a turn flows          2m      total  ~3,653 tok · 1.8% of the window
+     │   ⌥ main
+     │
+     │   Refactor the loader       2m
+     │   ⌥ main                   1 ↳
+     │
+     │   Review the CJK width han… 2m
+     │   ⌥ main
+     │
+     │   Release notes for 0.10    2m
+     │   ⌥ main
+     │
+     │   Fix flaky test in sync    2m
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            The loader re-reads th
+     │   Manifest cache            2m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                                ~926 · 0.5%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

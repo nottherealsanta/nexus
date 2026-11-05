@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              · Cache the manifest ×    Settings                  +                                                    Manager     □
+     │                                  i 2 other sessions waiting for input                                                                                go
+▏2   │                              ▣  ▌ │  The loader re-reads the manifest on every call. Can you cache it?                                  #1 · 12:50 AM
+▏ N  │ ⌕ Search sessions       ctrl+k    │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 3 lines of this turn above
+▏  * │                                      ▾ Working
+     │   How a turn flows          1m       ├─ ◆ Read  nexus-core/nexus/loader.py                                                                    waiting
+     │   ⌥ main                             ╰─ $ Shell  git grep -n parse_manifest
+  S  │
+   1 │   Release build             1  Settings                                                                              re-parses the file. I'll cache
+     │   ⌥ main                                                                                                             sk still shows up.
+     │                                ⌕ Filter settings…
+  +  │   Map the whole package     1  ────────────────────────────────────────────────────────────────────────────────────
+     │   ⌥ main                       ▌ Appearance          │   Theme                                                 dark
+     │                                  Providers           │   Monochrome mode                                        off
+     │ ◆ Run the loader tests      1    Agents              │   Animations                                              on
+     │   ⌥ main                         Tools               │   Sidebar                                               full
+     │                                  MCP                 │   Timeline detail                                     medium
+     │ ◆ Pick a cache strategy     1    Context             │   Details sidebar                                        off
+     │   ⌥ main                         Voice and speech    │   Sessions shown                                this project
+     │                                  Manager             │   Archived sessions                                   hidden
+     │   Plan the cache with sub … 2    Keybindings         │
+     │   ⌥ main                   3     Notifications       │
+     │                                  About               │
+     │   Cache the manifest        4                        │
+     │   ⌥ main                                             │
+     │                                                      │
+     │   Refactor the loader       7                        │
+     │   ⌥ main                   1                         │
+     │                                                      │
+     │   Review the CJK width han… 7                        │
+     │   ⌥ main                                             │
+     │                                                      │
+     │   Release notes for 0.10    7                        │
+     │   ⌥ main                                             │
+     │
+     │   Fix flaky test in sync    7  ↑↓ section · enter open · esc close                                      11 sections   0o · 0r · 49%c · 36s · 12:51 AM
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            7m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                                 495 · 0.2%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

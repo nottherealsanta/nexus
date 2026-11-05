@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files]              · Small loader change ×    +                                                                                                                 ● 1 Manager     □
+     │                                                                                                                                                             ▌ i Detail                        ×
+▏    │                              ▣                                                                                                                              ▌   high
+▏ N  │ ⌕ Search sessions       ctrl+k      System prompt ~858
+▏  * │
+     │   Small loader change      now      AGENTS.md ~20
+     │   ⌥ main
+  S  │                                     Tools [16] ~2.8K
+   1 │   Pick a cache strategy     2m        ● read                      ● bash_kill                 ● ask
+     │   ⌥ main                              ● grep                      ● edit                      ● code
+     │                                       ● glob                      ● patch                     ● skill
+  +  │   Run the loader tests      2m        ● ls                        ● write                     ● expose_workspace_tools
+     │   ⌥ main                              ● bash                      ● web_search
+     │                                       ● bash_output               ● web_fetch
+     │   How a turn flows          6m
+     │   ⌥ main                            Skills [8]
+     │                                       ● api-docs          ● release-notes
+     │   Release build             6m        ● code-review       ● tidy-imports
+     │   ⌥ main                              ● migrate-schema    ● triage-ci
+     │                                       ● profile-python    ● write-tests
+     │   Map the whole package     6m
+     │   ⌥ main                            MCP [0]  none
+     │
+     │   Plan the cache with sub … 7m      total  ~3,653 tok · 1.8% of the window
+     │   ⌥ main                   3 ↳
+     │
+     │   Cache the manifest        8m
+     │   ⌥ main
+     │
+     │   Refactor the loader      12m
+     │   ⌥ main                   1 ↳
+     │
+     │   Review the CJK width ha… 12m
+     │   ⌥ main
+     │
+     │   Release notes for 0.10   12m
+     │   ⌥ main
+     │
+     │   Fix flaky test in sync   12m
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache
+     │   Manifest cache           12m
+     │   ⌥ feature/manifest-cache
+     │                                      Type a message…
+     │  ⌥ fix/cjk-width   ~/…/n…o-cjk
+     │   CJK width fix            12m       Build · GPT-6.1 Terra mock · default                                                                                                        ~925 · 0.5%
+     │   ⌥ fix/cjk-width                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

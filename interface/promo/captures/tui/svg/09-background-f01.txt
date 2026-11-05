@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files]              ⣻ Release build ×    +                                                                                   Manager     □
+     │                                  i 2 other sessions waiting for input                                                                                go
+▏2   │                              ▣      AGENTS.md  not found · /Users/santosh.rajan/repos/nexus/interface/promo/captures/.work-tui/fakeho…
+▏ N  │ ⌕ Search sessions       ctrl+k
+▏3 8 │                                     Tools [16] ~2.8K
+     │ ◆ Run the loader tests     now        ● read                      ● bash_kill                 ● ask
+     │   ⌥ main                              ● grep                      ● edit                      ● code
+  S  │                                       ● glob                      ● patch                     ● skill
+   1 │ ⣻ Release build            now        ● ls                        ● write                     ● expose_workspace_tools
+     │   ⌥ main                              ● bash                      ● web_search
+     │                                       ● bash_output               ● web_fetch
+  +  │ ◆ Pick a cache strategy    now
+     │   ⌥ main                            Skills [8]
+     │                                       ● api-docs          ● release-notes
+     │ ⣻ Map the whole package    now        ● code-review       ● tidy-imports
+     │   ⌥ main                              ● migrate-schema    ● triage-ci
+     │                                       ● profile-python    ● write-tests
+     │ ⣻ How a turn flows         now
+     │   ⌥ main                            MCP [0]  none
+     │
+     │   Plan the cache with sub… now      total  ~3,668 tok · 1.8% of the window
+     │   ⌥ main                   3 ↳
+     │
+     │   Cache the manifest        2m    │
+     │   ⌥ main                          │  Run the release build in the background.                                                           #1 · 12:53 AM
+     │                                   │
+     │   Refactor the loader       5m
+     │   ⌥ main                   1 ↳       Starting the release build in the background.
+     │
+     │   Review the CJK width han… 5m       ▾ Working
+     │   ⌥ main                             ╰─ ◆ Shell  sleep 6; printf 'built 42 targets in 6.1s\n'                                                 waiting
+     │
+     │   Release notes for 0.10    5m       The build is running in the background. I'll pick up the result when it finishes.
+     │   ⌥ main
+     │
+     │   Fix flaky test in sync    5m
+     │   ⌥ main
+     │
+     │  ⌥ feature/manifest-cache            Type a message…
+     │   Manifest cache            5m
+     │   ⌥ feature/manifest-cache           Build · GPT-6.1 Terra mock · default                                                               ~1.2K · 0.6%
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   ~/code/nexus-demo  ⌥ main                              1 shell                                      Working · 5.0s
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
