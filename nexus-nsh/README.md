@@ -53,9 +53,9 @@ creation remain available through the sidebar and shortcuts.
 
 ## Workspace terminals
 
-Desktop and web expose Core-owned terminal resources through **Terminal**. The xterm.js screen is embedded in a WebView; it is not part of the session or model context. Closing the panel detaches, while **Close** terminates a resource. Control is explicit, and a reconnect requires taking control again. A discarded-history notice means replay is lossy. Output cannot write the clipboard: select text and use **Copy**.
+Desktop and web expose Core-owned terminals in a bottom dock toggled by **<n> shell** in the activity strip; the separate **kernel** indicator has no count. Tabs show each terminal's name and status; **+** creates one and **×** closes it. The xterm.js screen is embedded in a WebView and is not part of the session or model context. Closing the dock detaches; closing a tab terminates its terminal, with confirmation if running. Opening a terminal attempts to take control; a read-only terminal offers **Take control**. A discarded-history notice means replay is lossy. Output cannot write the clipboard: select text and use **Copy**.
 
-Keyboard routing assumes the focused WebView receives keys after NSH's keymap has been overridden with pass-through bindings. The web renderer uses a sandboxed iframe; the macOS host has a native key monitor that consumes matching shortcuts before dispatch, so simply ignoring shortcut callbacks is not sufficient. Ctrl+] moves focus to the list. Browser and OS reserved shortcuts remain platform-owned. Native focus and input routing require a real macOS verification.
+Keyboard routing assumes the focused WebView receives keys after NSH's keymap has been overridden with pass-through bindings. The web renderer uses a sandboxed iframe; the macOS host has a native key monitor that consumes matching shortcuts before dispatch, so simply ignoring shortcut callbacks is not sufficient. Ctrl+] moves focus to the tabs. Browser and OS reserved shortcuts remain platform-owned. Native focus and input routing require a real macOS verification.
 
 ## Terminal backend
 

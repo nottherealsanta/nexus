@@ -26,6 +26,7 @@ const network = {
   "GET */api/mcp*": { body: { servers: [] } },
   "GET */api/kernel*": { body: kernels },
   "GET */api/bash*": { body: jobs },
+  "GET */api/terminal*": { body: [] },
   "GET */api/session/ses_1/message*": { body: [{ id: "m1", session_id: "ses_1", seq: 1, role: "user", parts: [{ type: "text", text: "hello" }], created: 1 }] },
   "GET */api/session/ses_1/snapshot": { body: null },
   "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
@@ -34,7 +35,7 @@ const network = {
 };
 
 describe("kernels and shells", () => {
-  test("the location strip counts live kernels and running shells, and opens their details", async () => {
+  test("the location strip separates kernel and terminal dock indicators", async () => {
     const app = await open("./App.tsx", { network, width: 1280, height: 900, platform: "web" });
     await app.waitFor("id:session-ses_1");
     await app.press("id:session-ses_1");
@@ -42,8 +43,9 @@ describe("kernels and shells", () => {
     const strip = app.shows("id:location-resources");
     expect(strip).toBe(true);
     const shown = app.texts().join("\n");
-    expect(shown).toContain("1 kernel · 1 shell");
-    expect(shown.includes("1 kernel · 2 shells")).toBe(false);
+    expect(shown).toContain("kernel");
+    expect(shown).toContain("0 shell");
+    expect(shown.includes("1 kernel")).toBe(false);
     await app.press("id:location-resources");
     await app.waitFor("id:resources");
     await app.waitFor("id:resource-kernel-krn_1");
