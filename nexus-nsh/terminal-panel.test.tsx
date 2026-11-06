@@ -12,6 +12,7 @@ describe("terminal panel", () => {
     expect(text).toContain("/work/demo");
     expect(text).toContain("running · No controller");
     expect(text).toContain("Take control");
+    expect(text).toContain("Enter open  c take control  r release  Esc close");
     await app.press("Close");
     await app.waitFor("Close running terminal?");
     expect(app.texts().join("\n")).toContain("Close terminal");

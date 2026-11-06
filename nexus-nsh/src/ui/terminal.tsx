@@ -81,7 +81,8 @@ export function TerminalPanel() {
     class={isNarrow() ? "absolute inset-0 bg-background" : "absolute left-0 right-0 top-[5%] bottom-[5%] mx-auto border border-border bg-background overflow-hidden"}>
     <View class="flex-1 min-h-0" testID="terminal-panel">
       <View class="flex-row items-center gap-2 px-3 min-h-11 border-b border-border bg-sidebar">
-        <Text class={`flex-1 ${T.title}`}>Terminal</Text>
+        <Text class={T.title}>Terminal</Text>
+        <Text class={`flex-1 ${T.meta}`}>{terminalFocused() ? "Ctrl+] list" : "Enter open  c take control  r release  Esc close"}</Text>
         <Btn label="New" onPress={() => void create()} testID="terminal-new" />
         <Btn label="Close panel" onPress={close} testID="terminal-panel-close" />
       </View>
