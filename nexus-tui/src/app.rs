@@ -101,6 +101,7 @@ pub const WIRED: &[&str] = &[
     "overlay.close",
     "nav.drawer.close",
     "nav.back",
+    "sidebar.step_back",
     "sidebar.left.toggle",
     "sidebar.right.toggle",
     "sidebar.tab.sessions",
@@ -2860,6 +2861,11 @@ impl App {
             "composer.empty" => {
                 self.composer_ref().is_empty() && self.composer_ref().images.is_empty()
             }
+            "sidebar.projects_focus" => {
+                self.ui.focus == Focus::Sidebar
+                    && self.ui.tab == Tab::Projects
+                    && self.ui.overlay.is_none()
+            }
             "has_queued" => !self.pending_inputs().is_empty(),
             "timeline.scrolled_up" => !self.ui.scroll.follow,
             "timeline.has_older" => self
@@ -5310,7 +5316,7 @@ impl App {
             }
         }
         if !inactive.is_empty() {
-            rows.push(OverviewRow::Group("INACTIVE"));
+            rows.push(OverviewRow::Group("Inactive"));
             for id in inactive {
                 self.overview_project_rows(&mut rows, o, &id);
             }
@@ -5727,6 +5733,7 @@ impl App {
                     };
                 }
             }
+            "sidebar.step_back" => self.set_tab(Tab::Sessions),
             "nav.back" => {
                 if let Some(p) = self.viewed().and_then(|s| s.parent_id.clone()) {
                     self.open_session(&p);

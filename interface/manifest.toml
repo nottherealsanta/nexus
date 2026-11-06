@@ -18,6 +18,8 @@ terms = [
   # project rail (saved order and three-tier status)
   "project.current", "project.passive", "project.inactive",
   "project.can_move_up", "project.can_move_down",
+  # keyboard flow from an empty composer (PLAN 15.4): the sidebar's Projects list holds the keys
+  "sidebar.projects_focus",
   # session state (the session shown in the centre column)
   "session.idle", "session.busy", "session.interrupted",
   "session.archived", "session.child", "session.in_worktree",
@@ -106,6 +108,12 @@ id = "text_edit"
 when = ["text_edit.active"]
 action = "text_edit.cancel"
 note = "Inline rename, settings field, find bar, key capture: cancel the edit and keep focus. Composer text is NOT cleared by Esc."
+
+[[keymap.escape]]
+id = "sidebar_back"
+when = ["sidebar.projects_focus"]
+action = "sidebar.step_back"
+note = "The sidebar's project list steps back to the session list (Right does the same); the projects overview, when open, closes first with the overlay rule."
 
 [[keymap.escape]]
 id = "drawer"
@@ -876,6 +884,17 @@ unavailable_reason = "No drawer is open."
 placement = ["drawer"]
 
 [[command]]
+id = "sidebar.step_back"
+title = "Step back out of the sidebar"
+category = "navigation"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["sidebar.projects_focus"]
+unavailable_reason = "The project list does not have the keys."
+placement = ["sidebar"]
+note = "Keyboard flow from an empty composer: Left opens the session sidebar, Left again focuses the project list (Up/Down select), Left again opens the projects overview. Esc or Right steps back out in reverse. With text in the composer Left moves the cursor as usual, so the flow carries no key of its own."
+
+[[command]]
 id = "overlay.close"
 title = "Close menu, palette or popup"
 category = "navigation"
@@ -1640,7 +1659,7 @@ title = "Projects overview"
 category = "project"
 when = ["always"]
 placement = ["palette"]
-note = "Saved order, active sessions and archived sessions per project; inactive projects are restored here with r."
+note = "Left from the project list opens it. Saved order, each project's active sessions as a tree with their state, a per-project archived toggle (collapsed), passive projects dimmed, inactive projects grouped last under Inactive and restored with r. Esc or Right closes it."
 
 [[command]]
 id = "project.remove"

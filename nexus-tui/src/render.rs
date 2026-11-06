@@ -8235,7 +8235,8 @@ fn draw_projects_overview(
                 let expanded = o.archived.contains(id);
                 line.push(Span::styled(
                     format!(
-                        "  {branch} {} {count} archived",
+                        "  {} {} {count} archived",
+                        if expanded { branch } else { last },
                         if expanded { open } else { closed }
                     ),
                     muted,
