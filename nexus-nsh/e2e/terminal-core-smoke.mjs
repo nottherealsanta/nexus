@@ -13,6 +13,13 @@ try {
   await stream;
   await page.getByRole("button", {name:"Take control"}).click({timeout:10000});
   await page.getByRole("button", {name:"Release control"}).waitFor();
+  await page.getByRole("button", {name:"Rename", exact:true}).click();
+  await page.getByLabel("Terminal name").locator("input").fill("Terminal smoke");
+  await page.getByRole("button", {name:"Rename", exact:true}).last().click();
+  await page.getByText("Terminal smoke", {exact:true}).waitFor();
+  await page.getByRole("button", {name:"Release control"}).click();
+  await page.getByRole("button", {name:"Take control"}).click();
+  await page.getByRole("button", {name:"Release control"}).waitFor();
   let screen;
   for (let i = 0; i < 100 && !screen; i++) {
     for (const frame of page.frames()) if (await frame.locator(".xterm-helper-textarea").count()) screen = frame;
