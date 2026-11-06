@@ -587,6 +587,9 @@ pub enum Target {
     ArchivedFilter,
     /// A row of the context entries modal.
     ContextEntry(usize),
+    /// An inspector row (by record id) and a session-tree entry (by session id).
+    InspectorRow(String),
+    InspectorSession(String),
     /// A project on the rail, by its place in creation order.
     RailProject(usize),
     SessionScope,

@@ -25,7 +25,7 @@ import { appendTranscript } from "./dictation-logic";
 import { dictationPhase } from "./voice-state";
 import { toggleManagerDropdown, toggleManagerAudio, cancelListening, cancelTurn, closeField, dismissCard, managerEscapeRule, managerSlash, managerTerm, minimise, openField, openManagerContext, openManagerSession, sendListening, scrollDetails, startQuietly, stopCall, stopSpeech, submitField, talk } from "./core/manager";
 import { refreshSearchService, searchStartReason, startSearchService } from "./search-service";
-import { closeInspector, inspectSession, inspector } from "./inspector";
+import { closeInspector, inspectSession, inspector, inspectorCommand } from "./inspector";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
 
 export interface Cmd {
@@ -531,6 +531,8 @@ on("palette.open", () => paletteOpen.set(true));
 on("app.settings", openSettings);
 on("app.help_keys", () => contextDetail.set({ title: "Keyboard shortcuts", detail: shortcutText() }));
 on("app.open_inspector", () => inspectSession());
+// The inspector's own keys (key_context "inspector") act on the open modal only.
+for (const c of commands) if (c.id.startsWith("inspector.")) on(c.id, () => { if (inspector()) inspectorCommand(c.id); });
 on("app.reconnect", () => sync.retryNow());
 on("app.start_daemon", async () => { try { await fetch(`${apiBase()}/__nexus/start`, { method: "POST" }); } catch {} sync.retryNow(); });
 on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });

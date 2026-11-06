@@ -1,0 +1,12 @@
+Installed 110 packages in 305ms
+tabs before: [('A570', 'http://127.0.0.1:8765/index.html', ''), ('8AF7', 'http://127.0.0.1:8765/index.html', 'Fixture'), ('09B5', 'http://127.0.0.1:8765/index.html', 'Fixture'), ('0D85', 'about:blank', 'Starting agent 0ec0...')]
+tools: 16
+our tab: A570
+> browser_switch_tab{'tab_id': 'A570'}: 'Switched to tab A570: http://127.0.0.1:8765/index.html'
+> browser_scroll{'direction': 'down'}: 'Scrolled down'
+> browser_get_state{}: '{\n  "url": "http://127.0.0.1:8765/index.html",\n  "title": "Fixture",\n  "tabs": [\n    {\n      "url": "about:blank",\n      "title": ""\n    },\n    {\n      "url": "http://127.0.0.1:8765/index.html",\n      "title": "Fixture"\n    },\n    {\n      "url": "http://127.0.0.1:8765/index.html",\n      "title": "Fi'
+{   "url": "http://127.0.0.1:8765/index.html",   "title": "Fixture",   "tabs": [     {       "url": "about:blank",       "title": ""     },     {     
+tabs after: [('A570', 'http://127.0.0.1:8765/index.html', 'y=500'), ('8AF7', 'http://127.0.0.1:8765/index.html', 'Fixture'), ('09B5', 'http://127.0.0.1:8765/index.html', 'Fixture'), ('0D85', 'about:blank', 'Starting agent 0ec0...')]
+http://127.0.0.1:8765/index.html scrollY= 0
+http://127.0.0.1:8765/index.html scrollY= 500
+http://127.0.0.1:8765/index.html scrollY= 0

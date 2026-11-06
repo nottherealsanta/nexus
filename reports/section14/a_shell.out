@@ -1,0 +1,20 @@
+===== while in vim  alt-enter seen: True alt-leave seen: False
+ |   1 line 001 héllo 世界 ünï ✓
+ |   2 line 002 héllo 世界 ünï ✓
+ |   3 line 003 héllo 世界 ünï ✓
+ |   4 hello 世line 004 héllo 世界 ünï ✓
+ |   5 line 005 héllo 世界 ünï ✓
+ |   6 line 006 héllo 世界 ünï ✓
+ |   7 line 007 héllo 世界 ünï ✓
+ |   8 line 008 héllo 世界 ünï ✓
+===== after :q! (main screen should show MARKER again then after-vim)  alt-enter seen: True alt-leave seen: True
+ |   4 hello 世line 004 héllo 世界 ünï ✓
+ |   5 line 005 héllo 世界 ünï ✓
+ |   6 line 006 héllo 世界 ünï ✓
+ |   7 line 007 héllo 世界 ünï ✓
+ |   8 line 008 héllo 世界 ünï ✓
+ |   9 line 009 héllo 世界 ünï ✓
+ |  10 line 010 héllo 世界 ünï ✓
+ |  11 line 011 héllo 世界 ünï ✓
+MARKER restored by pyte: False
+mode 1049 tracked by pyte: False

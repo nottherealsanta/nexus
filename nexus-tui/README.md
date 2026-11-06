@@ -12,14 +12,25 @@ sidebar/fold/tool glyphs, a monospace interface and compact full-width reading
 gutters on terminal, web and native targets. This does not change the Rust client's
 existing layout or controls.
 
-**Open inspector** now opens the native inspector modal, shared with NSH,
-instead of a browser. Views: `1` Timing (Gantt with parallel descendants), `2`
-Conversation, `3` Steps, `4` Requests, `5` Raw. The header shows the selected
-session's lifetime input/cached/uncached tokens and cache-hit percentage;
-unreported usage and cache writes say unknown. `r` refreshes the snapshot,
-`n`/`p` page older/newer, `+`/`-` zoom, `h`/`l` pan, `j`/`k` select a timing
-lane, Enter toggles its retained JSON, `c` copies, arrows/Page Up/Page Down
-scroll, Esc closes without changing the session or draft.
+**Open inspector** opens the native inspector modal (Inspector API v2), shared with NSH,
+instead of a browser. Views: `1` Timing (one shared-axis Gantt, lanes grouped by
+session, a fixed ruler), `2` Conversation, `3` Steps, `4` Requests, `5` Raw, `6`
+Questions. Lists show each record's `summary`; Enter expands the exact `detail`
+JSON and `e` loads the full record when it was clipped. Rows and session-tree entries are clickable (click a row to select and expand it). `n`/`p` page to older/newer
+records by cursor (never page numbers); `[`/`]` inspect another session of the
+tree without leaving the chat; `/` searches, `f`/`s` cycle the kind/status filter,
+`t` filters event types, `x` clears. `w` pauses live updates, `r` refreshes. The
+state line says `Live`, `Paused` or `Disconnected` (disconnected data says it is
+not current). While open the modal polls `/inspect/head` every 2 s and refetches
+only when the head or generation moved; nothing runs while it is closed. Selection,
+expanded rows, zoom/pan, filters and the cursor stack are kept per session and view
+across refreshes and view switches. `+`/`-` zoom, `h`/`l` pan, `z` fits the selected
+operation (again: the whole range), `c` copies the row (or the view), `i` shows the
+cache notes. The cache panel labels the session lifetime and the displayed page
+separately, with coverage ("n of m requests reported usage"), the hit-rate
+denominator and a per-model breakdown; cache writes say unknown. `omitted` and
+notes (what was left out and why) show below it. Esc closes without changing the
+session or draft. All keys are the `inspector.*` commands in `interface/manifest.toml`.
 See [the inspector guide](../docs/inspector.md).
 
 A new session's first message appears immediately below its context preview as

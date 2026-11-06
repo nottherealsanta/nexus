@@ -7342,16 +7342,13 @@ impl App {
             }
             return;
         }
-        if let ApiCall::Inspector { generation, .. } = &done.call {
-            if let Some(OverlayKind::Inspector(i)) = self.ui.overlay.as_mut().map(|o| &mut o.kind) {
-                if i.generation == *generation {
-                    i.loading = false;
-                    match done.result {
-                        Ok(r) => i.data = r.inspection.unwrap_or_default(),
-                        Err(e) => i.error = e,
-                    }
-                }
-            }
+        if matches!(
+            &done.call,
+            ApiCall::Inspector { .. }
+                | ApiCall::InspectorHead { .. }
+                | ApiCall::InspectorRecord { .. }
+        ) {
+            self.inspector_done(done);
             return;
         }
         if matches!(&done.call, ApiCall::Usage | ApiCall::RefreshUsage) {
@@ -8187,6 +8184,7 @@ impl App {
             self.last_resources_at = Some(now);
             self.effects.push(Effect::Sync(SyncCommand::Resources));
         }
+        self.inspector_poll(now);
         if !self.theme.opts.reduced_motion {
             changed |= self.ui.dictation.settle_tick();
         }
@@ -9167,10 +9165,15 @@ impl App {
         if matches!(
             self.ui.overlay.as_ref().map(|o| &o.kind),
             Some(OverlayKind::Inspector(_))
-        ) && name != "esc"
-        {
-            self.inspector_key(name);
-            return true;
+        ) {
+            if name == "esc" {
+                if self.inspector_escape() {
+                    return true;
+                }
+            } else {
+                self.inspector_key(ev, name);
+                return true;
+            }
         }
         if matches!(
             self.ui.overlay.as_ref().map(|o| &o.kind),
@@ -9402,11 +9405,14 @@ impl App {
             }
             Some(
                 OverlayKind::Help { top }
-                | OverlayKind::Inspector(crate::inspector::Inspector { top, .. })
                 | OverlayKind::AlertDetail { top, .. }
                 | OverlayKind::Resources { top },
             ) => {
                 *top = (*top as isize + delta).max(0) as usize;
+            }
+            Some(OverlayKind::Inspector(i)) => {
+                let page = i.page_mut();
+                page.top = (page.top as isize + delta).max(0) as usize;
             }
             Some(OverlayKind::ContextDetail { text, top, .. }) => {
                 let max = crate::render::context_detail_max(area, text);
@@ -10122,95 +10128,274 @@ impl App {
         self.refresh_inspector();
     }
 
-    fn refresh_inspector(&mut self) {
-        let Some(OverlayKind::Inspector(i)) = self.ui.overlay.as_mut().map(|o| &mut o.kind) else {
+    fn inspector_mut(&mut self) -> Option<&mut crate::inspector::Inspector> {
+        match self.ui.overlay.as_mut().map(|o| &mut o.kind) {
+            Some(OverlayKind::Inspector(i)) => Some(i),
+            _ => None,
+        }
+    }
+
+    /// Fetch the current page. Any response older than this request is ignored.
+    pub fn refresh_inspector(&mut self) {
+        let Some(i) = self.inspector_mut() else {
             return;
         };
-        i.generation = crate::inspector::generation();
-        i.loading = true;
-        i.error.clear();
+        let generation = i.begin();
         let call = ApiCall::Inspector {
             session: i.session.clone(),
-            view: i.view,
-            page: i.page,
+            query: i.query(),
+            generation,
+        };
+        self.api(call);
+    }
+
+    fn inspector_act(&mut self, act: crate::inspector::Act) {
+        use crate::inspector::Act;
+        match act {
+            Act::None => {}
+            Act::Fetch => self.refresh_inspector(),
+            Act::Copy(text) => self.effects.push(Effect::Copy(text)),
+            Act::Record { kind, id, row } => {
+                let Some(i) = self.inspector_mut() else {
+                    return;
+                };
+                let call = ApiCall::InspectorRecord {
+                    session: i.session.clone(),
+                    target: i.target.clone(),
+                    view: i.view,
+                    kind,
+                    id,
+                    row,
+                };
+                self.api(call);
+            }
+        }
+    }
+
+    /// Keep the selected row inside the overlay's window.
+    fn inspector_follow(&mut self) {
+        let (width, height) =
+            crate::render::inspector_metrics(Rect::new(0, 0, self.size.0, self.size.1));
+        let Some(i) = self.inspector_mut() else {
+            return;
+        };
+        let parts = i.parts(width, 0.0);
+        let height = height.saturating_sub(parts.fixed.len()).max(3);
+        if let Some(line) = parts.cursor {
+            let page = i.page_mut();
+            if line < page.top {
+                page.top = line;
+            } else if line >= page.top + height {
+                page.top = line + 1 - height;
+            }
+        }
+    }
+
+    /// While open, ask Core for the head every few seconds; refetch only when it moved.
+    fn inspector_poll(&mut self, now: Instant) {
+        let Some(i) = self.inspector_mut() else {
+            return;
+        };
+        if !i.should_poll(now) {
+            return;
+        }
+        i.polled = Some(now);
+        i.head_inflight = true;
+        let call = ApiCall::InspectorHead {
+            session: i.session.clone(),
+            target: i.target.clone(),
             generation: i.generation,
         };
         self.api(call);
     }
 
-    fn inspector_key(&mut self, name: &str) {
-        let Some(OverlayKind::Inspector(i)) = self.ui.overlay.as_mut().map(|o| &mut o.kind) else {
+    fn inspector_done(&mut self, done: ActionDone) {
+        let clock = self.clock;
+        let Some(i) = self.inspector_mut() else {
             return;
         };
-        let mut refresh = false;
-        match name {
-            "1" | "2" | "3" | "4" | "5" => {
-                i.view = name.parse::<usize>().unwrap() - 1;
-                i.page = 0;
-                i.top = 0;
-                i.data = Value::Null;
-                i.cursor = 0;
-                i.details = false;
-                i.zoom = 1;
-                i.pan = 0;
-                refresh = true;
+        let mut refetch = false;
+        match (&done.call, done.result) {
+            (ApiCall::Inspector { generation, .. }, result) => {
+                if i.generation != *generation {
+                    return; // stale: navigation, filter, view change or a newer refresh won
+                }
+                i.loading = false;
+                match result {
+                    Ok(r) => {
+                        let data = r.inspection.unwrap_or_default();
+                        i.connected = true;
+                        i.error.clear();
+                        i.newer = false;
+                        i.polled = Some(clock);
+                        let gone = data["tree"].as_array().is_some_and(|t| {
+                            !t.is_empty() && !t.iter().any(|n| n["id"].as_str() == Some(&i.target))
+                        });
+                        i.set_data(data, now_secs());
+                        if gone && i.target != i.session {
+                            i.target = i.session.clone();
+                            refetch = true;
+                        }
+                    }
+                    Err(e) => {
+                        i.error = e;
+                        i.connected = false;
+                    }
+                }
             }
-            "r" => refresh = true,
-            "i" => i.info = !i.info,
-            "n" if i.data["more"] == true => {
-                i.page += 1;
-                i.top = 0;
-                i.cursor = 0;
-                i.details = false;
-                i.zoom = 1;
-                i.pan = 0;
-                refresh = true;
+            (ApiCall::InspectorHead { generation, .. }, result) => {
+                i.head_inflight = false;
+                if i.generation != *generation {
+                    return;
+                }
+                match result {
+                    Ok(r) => refetch = i.on_head(&r.inspection.unwrap_or_default()),
+                    Err(_) => i.connected = false,
+                }
             }
-            "p" if i.page > 0 => {
-                i.page -= 1;
-                i.top = 0;
-                i.cursor = 0;
-                i.details = false;
-                i.zoom = 1;
-                i.pan = 0;
-                refresh = true;
-            }
-            "c" => {
-                let text = if i.details && i.view == 0 {
-                    i.data["lanes"][i.cursor]["detail"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_owned()
-                } else if i.view == 0 {
-                    serde_json::to_string_pretty(&i.data).unwrap_or_default()
-                } else {
-                    i.data["text"].as_str().unwrap_or("").to_owned()
-                };
-                self.effects.push(Effect::Copy(text));
-            }
-            "+" | "=" => i.zoom = (i.zoom * 2).min(64),
-            "-" => i.zoom = (i.zoom / 2).max(1),
-            "h" => i.pan = i.pan.saturating_sub(1),
-            "l" => i.pan = (i.pan + 1).min(10),
-            "j" => {
-                i.cursor = (i.cursor + 1).min(
-                    i.data["lanes"]
-                        .as_array()
-                        .map_or(0, |l| l.len().saturating_sub(1)),
-                )
-            }
-            "k" => i.cursor = i.cursor.saturating_sub(1),
-            "enter" => i.details = !i.details,
-            "up" => i.top = i.top.saturating_sub(1),
-            "down" => i.top += 1,
-            "pageup" => i.top = i.top.saturating_sub(8),
-            "pagedown" => i.top += 8,
-            "home" => i.top = 0,
+            (
+                ApiCall::InspectorRecord {
+                    target, view, row, ..
+                },
+                result,
+            ) => match result {
+                Ok(r) => i.accept_record(target, *view, row, &r.inspection.unwrap_or_default()),
+                Err(e) => {
+                    i.loading_full = None;
+                    i.error = format!("Full record failed to load: {e}");
+                }
+            },
             _ => {}
         }
-        if refresh {
+        if refetch {
             self.refresh_inspector();
         }
+        self.inspector_follow();
+    }
+
+    /// Esc cancels an open filter field first, then closes the inspector.
+    fn inspector_escape(&mut self) -> bool {
+        match self.inspector_mut() {
+            Some(i) if i.edit.is_some() => {
+                i.edit = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn inspector_key(&mut self, ev: &KeyEvent, name: &str) {
+        use crate::inspector::Act;
+        let Some(i) = self.inspector_mut() else {
+            return;
+        };
+        if let Some((_, buffer)) = i.edit.as_mut() {
+            match name {
+                "enter" => {
+                    let act = i.finish_edit();
+                    self.inspector_act(act);
+                }
+                "backspace" => {
+                    buffer.pop();
+                }
+                _ => {
+                    if let Some(c) = keys::printable(ev) {
+                        buffer.push(c);
+                    }
+                }
+            }
+            return;
+        }
+        if let Some(cmd) = self.lookup("inspector", name) {
+            return self.inspector_command(&cmd);
+        }
+        let Some(i) = self.inspector_mut() else {
+            return;
+        };
+        match name {
+            "+" => i.zoom(true),
+            "up" => i.page_mut().top = i.page().top.saturating_sub(1),
+            "down" => i.page_mut().top += 1,
+            "pageup" => i.page_mut().top = i.page().top.saturating_sub(8),
+            "pagedown" => i.page_mut().top += 8,
+            "home" => i.page_mut().top = 0,
+            _ => {}
+        }
+        let _ = Act::None;
+    }
+
+    /// Run one `inspector.*` manifest command.
+    pub fn inspector_command(&mut self, id: &str) {
+        use crate::inspector::{Act, Field};
+        let Some(i) = self.inspector_mut() else {
+            return;
+        };
+        let act = match id {
+            "inspector.view_timing" => i.set_view(0),
+            "inspector.view_conversation" => i.set_view(1),
+            "inspector.view_steps" => i.set_view(2),
+            "inspector.view_requests" => i.set_view(3),
+            "inspector.view_raw" => i.set_view(4),
+            "inspector.view_questions" => i.set_view(5),
+            "inspector.refresh" => Act::Fetch,
+            "inspector.live_toggle" => i.toggle_live(),
+            "inspector.session_next" => i.step_session(1),
+            "inspector.session_prev" => i.step_session(-1),
+            "inspector.search" => {
+                i.begin_edit(Field::Q);
+                Act::None
+            }
+            "inspector.filter_kind" => i.cycle("kind"),
+            "inspector.filter_status" => i.cycle("status"),
+            "inspector.filter_type" => {
+                i.begin_edit(Field::Type);
+                Act::None
+            }
+            "inspector.filter_clear" => i.clear_filters(),
+            "inspector.select_next" => {
+                i.select(1);
+                Act::None
+            }
+            "inspector.select_prev" => {
+                i.select(-1);
+                Act::None
+            }
+            "inspector.expand" => {
+                i.expand();
+                Act::None
+            }
+            "inspector.load_full" => i.load_full(),
+            "inspector.older" => i.older(),
+            "inspector.newer" => i.newer_page(),
+            "inspector.copy" => Act::Copy(i.copy_text()),
+            "inspector.cache_info" => {
+                i.info = !i.info;
+                Act::None
+            }
+            "inspector.zoom_in" => {
+                i.zoom(true);
+                Act::None
+            }
+            "inspector.zoom_out" => {
+                i.zoom(false);
+                Act::None
+            }
+            "inspector.pan_left" => {
+                i.pan(false);
+                Act::None
+            }
+            "inspector.pan_right" => {
+                i.pan(true);
+                Act::None
+            }
+            "inspector.fit" => {
+                i.fit();
+                Act::None
+            }
+            _ => Act::None,
+        };
+        self.inspector_act(act);
+        self.inspector_follow();
     }
 
     fn timeline_key(&mut self, name: &str) {
@@ -13039,6 +13224,18 @@ impl App {
             Target::ContextPreview { title, text } => {
                 self.open_context_section(&title, None, Some(text));
             }
+            Target::InspectorRow(id) => {
+                if let Some(i) = self.inspector_mut() {
+                    i.pick(&id);
+                }
+                self.inspector_follow();
+            }
+            Target::InspectorSession(id) => {
+                let act = self.inspector_mut().map(|i| i.set_target(id));
+                if let Some(act) = act {
+                    self.inspector_act(act);
+                }
+            }
             Target::ContextEntry(index) => self.context_entry_toggle(index),
             Target::ContextToggle(index) => self.toggle_context_item(index),
             Target::ContextInfo(index) => {
@@ -13599,7 +13796,9 @@ impl ActionDone {
             ApiCall::OlderMessages { .. } => "Older messages failed to load",
             ApiCall::SwitchCost { .. } => "",
             ApiCall::Usage | ApiCall::RefreshUsage => "Provider usage failed to load",
-            ApiCall::Inspector { .. } => "Inspector failed to load",
+            ApiCall::Inspector { .. }
+            | ApiCall::InspectorHead { .. }
+            | ApiCall::InspectorRecord { .. } => "Inspector failed to load",
             ApiCall::SaveFile { .. } => "Save failed",
             ApiCall::Shell { .. } => "Shell command failed",
         }

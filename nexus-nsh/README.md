@@ -14,13 +14,20 @@ hand.
 
 The app itself is TSX (`App.tsx`, `src/`); `package.json` is tooling only.
 
-**Open inspector** now stays inside NSH, using the same authenticated transport
-as the session. Its Timing, Conversation, Steps, Requests and Raw views match
-the Rust TUI. The Timing Gantt chart includes parallel child sessions, model
-calls, tools and attempts, with selectable details, zoom/pan, copy, refresh and
-older/newer pages. The cache header shows lifetime input/cached/uncached tokens
-and hit percentage for the selected session; missing reports and cache writes
-say unknown. These are refreshable snapshots, not a second timeline.
+**Open inspector** stays inside NSH, using the same authenticated transport as the
+session (Inspector API v2), and does the same as the Rust TUI with buttons, inputs and the
+same keys. Six views: Timing (one shared-axis Gantt, lanes grouped by session, a fixed ruler,
+zoom/pan/Fit, first-byte markers only where recorded, "end unknown" spans), Conversation,
+Steps, Requests, Raw and Questions. Rows show Core's `summary`; pressing one expands its exact
+`detail` JSON, and "Load full record" fetches `/inspect/record` when it was clipped. Older/Newer
+use cursors; the Sessions chips (or `[`/`]`) inspect another session of the tree; the search box,
+Kind/Status buttons and event-type box are filters sent to Core. A state line shows Live, Paused
+or Disconnected (offline data says "not current"); the modal polls `/inspect/head` every 2 s
+while open and refetches only on change, and Pause live/Refresh are always there. Selection,
+expansion, scroll, zoom and filters are kept per session and view. The cache panel labels the
+session lifetime and the displayed page separately, with coverage, the hit-rate denominator,
+per-model rows and unknown writes; `omitted` and notes are listed. Keys are the `inspector.*`
+commands in `interface/manifest.toml` (the same bare keys as the TUI). The Sessions tree is a wrapping one-line list like the TUI's, and `j`/`k` keep the selected row in view.
 See [the inspector guide](../docs/inspector.md).
 
 The Rust TUI is the visual reference for the shared NSH app. All NSH targets use

@@ -275,11 +275,27 @@ pub enum ApiCall {
     Usage,
     /// Refresh the stored provider usage snapshot.
     RefreshUsage,
+    /// One page of the native inspector (`GET …/inspect`, API v2). `query` carries
+    /// view, limit, before, session and the filters; `generation` orders responses.
     Inspector {
         session: String,
-        view: usize,
-        page: usize,
+        query: Vec<(String, String)>,
         generation: u64,
+    },
+    /// The cheap change check (`GET …/inspect/head`).
+    InspectorHead {
+        session: String,
+        target: String,
+        generation: u64,
+    },
+    /// One full record whose detail the page clipped (`GET …/inspect/record`).
+    InspectorRecord {
+        session: String,
+        target: String,
+        view: usize,
+        kind: String,
+        id: String,
+        row: String,
     },
     /// Would switching to `model` or `agent` lose the prompt cache? (`GET …/switch-cost`)
     SwitchCost {
@@ -393,6 +409,8 @@ impl ApiCall {
             | ApiCall::SwitchCost { .. }
             | ApiCall::Usage
             | ApiCall::Inspector { .. }
+            | ApiCall::InspectorHead { .. }
+            | ApiCall::InspectorRecord { .. }
             | ApiCall::RefreshUsage => "",
             ApiCall::SaveFile { .. } => "Saved",
         }
@@ -567,20 +585,43 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         ApiCall::Usage => {
             done.usage = Some(api.http.get("/api/usage", &[]).await.map_err(e)?);
         }
-        ApiCall::Inspector {
-            session,
-            view,
-            page,
-            ..
-        } => {
+        ApiCall::Inspector { session, query, .. } => {
             done.inspection = Some(
                 api.http
                     .get(
                         &format!("/api/session/{session}/inspect"),
-                        &[
-                            ("view", crate::inspector::VIEWS[*view].to_owned()),
-                            ("page", page.to_string()),
-                        ],
+                        &query
+                            .iter()
+                            .map(|(k, v)| (k.as_str(), v.clone()))
+                            .collect::<Vec<_>>(),
+                    )
+                    .await
+                    .map_err(e)?,
+            );
+        }
+        ApiCall::InspectorHead {
+            session, target, ..
+        } => {
+            let query = if target == session {
+                vec![]
+            } else {
+                vec![("session", target.clone())]
+            };
+            done.inspection = Some(
+                api.http
+                    .get(&format!("/api/session/{session}/inspect/head"), &query)
+                    .await
+                    .map_err(e)?,
+            );
+        }
+        ApiCall::InspectorRecord {
+            session, kind, id, ..
+        } => {
+            done.inspection = Some(
+                api.http
+                    .get(
+                        &format!("/api/session/{session}/inspect/record"),
+                        &[("kind", kind.clone()), ("id", id.clone())],
                     )
                     .await
                     .map_err(e)?,

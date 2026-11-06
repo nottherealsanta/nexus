@@ -1,0 +1,14 @@
+alternate_screen=true cursor=(23, 0) title="" bracketed_paste=false
+|  1 line 001 héllo 世 界  ünï ✓
+|  2 line 002 héllo 世 界  ünï ✓
+|  3 line 003 héllo 世 界  ünï ✓
+|  4 hello 世 line 004 héllo 世 界  ünï ✓
+|  5 line 005 héllo 世 界  ünï ✓
+|  6 line 006 héllo 世 界  ünï ✓
+|  7 line 007 héllo 世 界  ünï ✓
+|  8 line 008 héllo 世 界  ünï ✓
+|  9 line 009 héllo 世 界  ünï ✓
+| 10 line 010 héllo 世 界  ünï ✓
+| 11 line 011 héllo 世 界  ünï ✓
+| 12 line 012 héllo 世 界  ünï ✓
+cells with explicit fg colour: 48

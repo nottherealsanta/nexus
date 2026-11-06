@@ -1,0 +1,35 @@
+raw bytes: 3656 alt-screen enter: True leave: True
+1-byte chunks == whole: True | 7-byte == whole: True
+--- final alt screen (pyte) ---
+line 171 héllo 世界 ünï ✓
+line 172 héllo 世界 ünï ✓
+line 173 héllo 世界 ünï ✓
+line 174 héllo 世界 ünï ✓
+line 175 héllo 世界 ünï ✓
+line 176 héllo 世界 ünï ✓
+line 177 héllo 世界 ünï ✓
+line 178 héllo 世界 ünï ✓
+line 179 héllo 世界 ünï ✓
+line 180 héllo 世界 ünï ✓
+line 181 héllo 世界 ünï ✓
+line 182 héllo 世界 ünï ✓
+line 183 héllo 世界 ünï ✓
+line 184 héllo 世界 ünï ✓
+line 185 héllo 世界 ünï ✓
+line 186 héllo 世界 ünï ✓
+line 187 héllo 世界 ünï ✓
+line 188 héllo 世界 ünï ✓
+line 189 héllo 世界 ünï ✓
+line 190 héllo 世界 ünï ✓
+line 191 héllo 世界 ünï ✓
+line 192 héllo 世界 ünï ✓
+line 193 héllo 世界 ünï ✓
+line 194 héllo 世界 ünï ✓
+line 195 héllo 世界 ünï ✓
+line 196 héllo 世界 ünï ✓
+line 197 héllo 世界 ünï ✓
+line 198 héllo 世界 ünï ✓
+line 199 héllo 世界 ünï ✓
+
+cursor 29 0
+wide char check row0: 'line 171 héllo 世界 ünï ✓                 '

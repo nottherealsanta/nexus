@@ -1,0 +1,15 @@
+idle (static page): 1 frames in 2.0s
+scroll (mouseWheel dy=600): 2 frames in 1.2s
+  scrollY = 600 title = y=600
+click input: 3 frames in 0.6s
+typing 'Nexus é世': 6 frames in 0.9s
+  input.value = 'Nexus é世'
+click button: 2 frames in 0.6s
+  #out = 'hello Nexus é世'  clicks = 1
+click link: 3 frames in 1.0s
+  url = http://127.0.0.1:8765/page2.html  title = Page2
+total frames 18, bytes mean 11754 max 13278, 'deviceWidth' 1024
+frame metadata keys: ['deviceHeight', 'deviceWidth', 'monotonicTimestamp', 'offsetTop', 'pageScaleFactor', 'scrollOffsetX', 'scrollOffsetY', 'timestamp']
+captureScreenshot jpeg q40: 11046 B
+captureScreenshot jpeg q70: 13485 B
+captureScreenshot png: 19794 B

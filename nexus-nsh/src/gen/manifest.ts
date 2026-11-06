@@ -136,6 +136,7 @@ export const manifest = {
    "manager.field",
    "manager.card",
    "manager.focused",
+   "inspector",
    "escape_chain"
   ],
   "escape": [
@@ -3269,6 +3270,482 @@ export const manifest = {
     "stage"
    ],
    "note": "Closes the card (POST /api/manager/card/dismiss); the next turn's delta says so. A click outside the card does the same. Distinct from minimising the call (which keeps the card) and ending the call (which Esc does)."
+  },
+  {
+   "id": "inspector.view_timing",
+   "title": "Inspector: Timing",
+   "category": "inspect",
+   "keys": {
+    "tui": "1",
+    "nsh": "1"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.view_conversation",
+   "title": "Inspector: Conversation",
+   "category": "inspect",
+   "keys": {
+    "tui": "2",
+    "nsh": "2"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.view_steps",
+   "title": "Inspector: Steps",
+   "category": "inspect",
+   "keys": {
+    "tui": "3",
+    "nsh": "3"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.view_requests",
+   "title": "Inspector: Requests",
+   "category": "inspect",
+   "keys": {
+    "tui": "4",
+    "nsh": "4"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.view_raw",
+   "title": "Inspector: Raw",
+   "category": "inspect",
+   "keys": {
+    "tui": "5",
+    "nsh": "5"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.view_questions",
+   "title": "Inspector: Questions",
+   "category": "inspect",
+   "keys": {
+    "tui": "6",
+    "nsh": "6"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.refresh",
+   "title": "Inspector: Refresh",
+   "category": "inspect",
+   "keys": {
+    "tui": "r",
+    "nsh": "r"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.live_toggle",
+   "title": "Inspector: Pause or resume live updates",
+   "category": "inspect",
+   "keys": {
+    "tui": "w",
+    "nsh": "w"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.session_next",
+   "title": "Inspector: Next session in the tree",
+   "category": "inspect",
+   "keys": {
+    "tui": "]",
+    "nsh": "]"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.session_prev",
+   "title": "Inspector: Previous session in the tree",
+   "category": "inspect",
+   "keys": {
+    "tui": "[",
+    "nsh": "["
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.search",
+   "title": "Inspector: Search",
+   "category": "inspect",
+   "keys": {
+    "tui": "/",
+    "nsh": "/"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.filter_kind",
+   "title": "Inspector: Filter by kind",
+   "category": "inspect",
+   "keys": {
+    "tui": "f",
+    "nsh": "f"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.filter_status",
+   "title": "Inspector: Filter by status",
+   "category": "inspect",
+   "keys": {
+    "tui": "s",
+    "nsh": "s"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.filter_type",
+   "title": "Inspector: Filter by event type",
+   "category": "inspect",
+   "keys": {
+    "tui": "t",
+    "nsh": "t"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.filter_clear",
+   "title": "Inspector: Clear filters",
+   "category": "inspect",
+   "keys": {
+    "tui": "x",
+    "nsh": "x"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.select_next",
+   "title": "Inspector: Select next row",
+   "category": "inspect",
+   "keys": {
+    "tui": "j",
+    "nsh": "j"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.select_prev",
+   "title": "Inspector: Select previous row",
+   "category": "inspect",
+   "keys": {
+    "tui": "k",
+    "nsh": "k"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.expand",
+   "title": "Inspector: Expand or collapse the row",
+   "category": "inspect",
+   "keys": {
+    "tui": "enter",
+    "nsh": "enter"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.load_full",
+   "title": "Inspector: Load the full record",
+   "category": "inspect",
+   "keys": {
+    "tui": "e",
+    "nsh": "e"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.older",
+   "title": "Inspector: Older records",
+   "category": "inspect",
+   "keys": {
+    "tui": "n",
+    "nsh": "n"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.newer",
+   "title": "Inspector: Newer records",
+   "category": "inspect",
+   "keys": {
+    "tui": "p",
+    "nsh": "p"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.copy",
+   "title": "Inspector: Copy the row or view",
+   "category": "inspect",
+   "keys": {
+    "tui": "c",
+    "nsh": "c"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.cache_info",
+   "title": "Inspector: Cache info",
+   "category": "inspect",
+   "keys": {
+    "tui": "i",
+    "nsh": "i"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.zoom_in",
+   "title": "Inspector: Zoom in",
+   "category": "inspect",
+   "keys": {
+    "tui": "=",
+    "nsh": "="
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.zoom_out",
+   "title": "Inspector: Zoom out",
+   "category": "inspect",
+   "keys": {
+    "tui": "-",
+    "nsh": "-"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.pan_left",
+   "title": "Inspector: Pan earlier",
+   "category": "inspect",
+   "keys": {
+    "tui": "h",
+    "nsh": "h"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.pan_right",
+   "title": "Inspector: Pan later",
+   "category": "inspect",
+   "keys": {
+    "tui": "l",
+    "nsh": "l"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
+  },
+  {
+   "id": "inspector.fit",
+   "title": "Inspector: Fit the selected operation or the whole range",
+   "category": "inspect",
+   "keys": {
+    "tui": "z",
+    "nsh": "z"
+   },
+   "key_context": "inspector",
+   "when": [
+    "overlay.open"
+   ],
+   "unavailable_reason": "Open the inspector first.",
+   "placement": [
+    "dialog"
+   ]
   }
  ]
 } as const;

@@ -1,16 +1,820 @@
 {
+ "session_id": "ses_inspector",
+ "now": 112,
+ "timing": {
+  "version": 2,
   "session_id": "ses_inspector",
+  "session": "ses_inspector",
   "view": "Timing",
-  "page": 0,
+  "limit": 50,
+  "before": null,
+  "next_before": "WyJ0IiwxMDAsInR1cm5fMSJd",
   "more": true,
   "generated": 110,
-  "cache": {"input": 1000, "cached": 750, "uncached": 250, "hit_percent": 75, "write": null, "models": {}},
-  "notes": ["Cache: selected session's lifetime provider reports; not a prediction of the next cache hit.", "Cache writes: unknown (not retained separately)."],
-  "text": "Retained request details",
+  "head": 412,
+  "session_head": 380,
+  "log_head": 9120,
+  "generation": "g_ab12",
+  "floor": 0,
+  "filters": {},
+  "tree": [
+   {
+    "id": "ses_inspector",
+    "title": "Review",
+    "parent": null,
+    "depth": 0,
+    "status": "idle",
+    "agent": "build",
+    "model": "scripted/m"
+   },
+   {
+    "id": "ses_child",
+    "title": "Scout",
+    "parent": "ses_inspector",
+    "depth": 1,
+    "status": "running",
+    "agent": "explore",
+    "model": "scripted/m"
+   }
+  ],
+  "cache": {
+   "scope": "session lifetime",
+   "input": 12000,
+   "cached": 8400,
+   "uncached": 3600,
+   "hit_percent": 70.0,
+   "denominator": "input tokens reported by provider",
+   "coverage": {
+    "requests_with_usage": 11,
+    "requests_total": 12,
+    "complete": false
+   },
+   "models": {
+    "scripted/m": {
+     "requests": 11,
+     "input": 12000,
+     "cached": 8400,
+     "output": 800,
+     "reasoning": 100,
+     "uncached": 3600,
+     "hit_percent": 70.0
+    }
+   },
+   "write": null,
+   "write_known": false
+  },
+  "cache_range": {
+   "scope": "displayed page",
+   "input": 1000,
+   "cached": 750,
+   "uncached": 250,
+   "hit_percent": 75.0,
+   "denominator": "input tokens reported by provider",
+   "coverage": {
+    "requests_with_usage": 1,
+    "requests_total": 1,
+    "complete": true
+   },
+   "models": {
+    "scripted/m": {
+     "requests": 1,
+     "input": 1000,
+     "cached": 750,
+     "output": 20,
+     "reasoning": 5,
+     "uncached": 250,
+     "hit_percent": 75.0
+    }
+   }
+  },
+  "notes": [
+   "Read-only diagnostics \u00b7 newest page first \u00b7 cursor paging is stable under new writes",
+   "Cache: lifetime provider reports of the selected session; not a prediction of the next cache hit.",
+   "Cache writes: unknown (providers fold them into input and the store does not retain them)."
+  ],
+  "omitted": [],
+  "text": "Select a timing lane for its retained execution details.",
+  "records": [],
   "lanes": [
-    {"id": "root-turn", "session_id": "ses_inspector", "session": "Review", "kind": "turn", "label": "turn", "start": 100, "end": 110, "running": false, "status": "completed", "detail": "Root turn details"},
-    {"id": "root-model", "session_id": "ses_inspector", "session": "Review", "kind": "model", "label": "scripted/m", "start": 100, "end": 102, "running": false, "status": "completed", "detail": "Model request: 1000 input, 750 cached"},
-    {"id": "root-tool", "session_id": "ses_inspector", "session": "Review", "kind": "tool", "label": "bash", "start": 102, "end": 108, "running": false, "status": "error", "detail": "Tool failure details"},
-    {"id": "child-model", "session_id": "ses_child", "session": "Scout", "kind": "model", "label": "scripted/m", "start": 103, "end": 109, "running": true, "status": "started", "detail": "Parallel child request details"}
+   {
+    "id": "ses_inspector:turn:turn_1",
+    "session": "Review",
+    "session_id": "ses_inspector",
+    "kind": "turn",
+    "label": "turn",
+    "turn_id": "turn_1",
+    "start": 100,
+    "end": 110,
+    "running": false,
+    "end_unknown": false,
+    "status": "completed",
+    "ref": {
+     "kind": "turn",
+     "id": "turn_1"
+    },
+    "summary": "turn turn completed",
+    "detail": "Root turn details",
+    "detail_bytes": 17,
+    "detail_truncated": false
+   },
+   {
+    "id": "ses_inspector:model:req_1",
+    "session": "Review",
+    "session_id": "ses_inspector",
+    "kind": "model",
+    "label": "scripted/m",
+    "turn_id": "turn_1",
+    "start": 100,
+    "end": 102,
+    "running": false,
+    "end_unknown": false,
+    "status": "completed",
+    "ref": {
+     "kind": "request",
+     "id": "req_1"
+    },
+    "summary": "model scripted/m completed",
+    "detail": "Model request: 1000 input, 750 cached",
+    "detail_bytes": 37,
+    "detail_truncated": false,
+    "ttfb": 0.4
+   },
+   {
+    "id": "ses_inspector:tool:call_1",
+    "session": "Review",
+    "session_id": "ses_inspector",
+    "kind": "tool",
+    "label": "bash",
+    "turn_id": "turn_1",
+    "start": 102,
+    "end": 108,
+    "running": false,
+    "end_unknown": false,
+    "status": "error",
+    "ref": {
+     "kind": "tool",
+     "id": "call_1"
+    },
+    "summary": "tool bash error",
+    "detail": "Tool failure details",
+    "detail_bytes": 20,
+    "detail_truncated": false
+   },
+   {
+    "id": "ses_child:model:req_2",
+    "session": "Scout",
+    "session_id": "ses_child",
+    "kind": "model",
+    "label": "scripted/m",
+    "turn_id": "turn_2",
+    "start": 103,
+    "end": 109,
+    "running": true,
+    "end_unknown": false,
+    "status": "started",
+    "ref": {
+     "kind": "request",
+     "id": "req_1"
+    },
+    "summary": "model scripted/m started",
+    "detail": "Parallel child request details",
+    "detail_bytes": 30,
+    "detail_truncated": false
+   },
+   {
+    "id": "ses_child:tool:call_2",
+    "session": "Scout",
+    "session_id": "ses_child",
+    "kind": "tool",
+    "label": "read",
+    "turn_id": "turn_2",
+    "start": 104,
+    "end": 104,
+    "running": false,
+    "end_unknown": true,
+    "status": "interrupted",
+    "ref": {
+     "kind": "tool",
+     "id": "call_1"
+    },
+    "summary": "tool read interrupted",
+    "detail": "Interrupted tool, no end recorded",
+    "detail_bytes": 33,
+    "detail_truncated": false
+   }
   ]
+ },
+ "steps": {
+  "version": 2,
+  "session_id": "ses_inspector",
+  "session": "ses_inspector",
+  "view": "Steps",
+  "limit": 50,
+  "before": null,
+  "next_before": null,
+  "more": false,
+  "generated": 110,
+  "head": 412,
+  "session_head": 380,
+  "log_head": 9120,
+  "generation": "g_ab12",
+  "floor": 0,
+  "filters": {},
+  "tree": [
+   {
+    "id": "ses_inspector",
+    "title": "Review",
+    "parent": null,
+    "depth": 0,
+    "status": "idle",
+    "agent": "build",
+    "model": "scripted/m"
+   },
+   {
+    "id": "ses_child",
+    "title": "Scout",
+    "parent": "ses_inspector",
+    "depth": 1,
+    "status": "running",
+    "agent": "explore",
+    "model": "scripted/m"
+   }
+  ],
+  "cache": {
+   "scope": "session lifetime",
+   "input": 12000,
+   "cached": 8400,
+   "uncached": 3600,
+   "hit_percent": 70.0,
+   "denominator": "input tokens reported by provider",
+   "coverage": {
+    "requests_with_usage": 11,
+    "requests_total": 12,
+    "complete": false
+   },
+   "models": {
+    "scripted/m": {
+     "requests": 11,
+     "input": 12000,
+     "cached": 8400,
+     "output": 800,
+     "reasoning": 100,
+     "uncached": 3600,
+     "hit_percent": 70.0
+    }
+   },
+   "write": null,
+   "write_known": false
+  },
+  "cache_range": {
+   "scope": "displayed page",
+   "input": 1000,
+   "cached": 750,
+   "uncached": 250,
+   "hit_percent": 75.0,
+   "denominator": "input tokens reported by provider",
+   "coverage": {
+    "requests_with_usage": 1,
+    "requests_total": 1,
+    "complete": true
+   },
+   "models": {
+    "scripted/m": {
+     "requests": 1,
+     "input": 1000,
+     "cached": 750,
+     "output": 20,
+     "reasoning": 5,
+     "uncached": 250,
+     "hit_percent": 75.0
+    }
+   }
+  },
+  "notes": [
+   "Read-only diagnostics \u00b7 newest page first \u00b7 cursor paging is stable under new writes",
+   "Cache: lifetime provider reports of the selected session; not a prediction of the next cache hit.",
+   "Cache writes: unknown (providers fold them into input and the store does not retain them)."
+  ],
+  "omitted": [],
+  "text": "turn",
+  "records": [
+   {
+    "kind": "turn",
+    "id": "turn_1",
+    "session_id": "ses_inspector",
+    "turn_id": "turn_1",
+    "started": 100,
+    "status": "completed",
+    "summary": "turn completed \u00b7 1 requests \u00b7 1 tools \u00b7 10000 ms",
+    "detail": "{\n  \"session\": \"Review\",\n  \"turn\": {\"id\": \"turn_1\", \"status\": \"completed\"}\n}",
+    "detail_bytes": 80,
+    "detail_truncated": false
+   }
+  ],
+  "lanes": []
+ },
+ "conversation": {
+  "version": 2,
+  "session_id": "ses_inspector",
+  "session": "ses_inspector",
+  "view": "Conversation",
+  "limit": 50,
+  "before": null,
+  "next_before": "WyJjIiwxXQ",
+  "more": true,
+  "generated": 110,
+  "head": 412,
+  "session_head": 380,
+  "log_head": 9120,
+  "generation": "g_ab12",
+  "floor": 0,
+  "filters": {},
+  "tree": [
+   {
+    "id": "ses_inspector",
+    "title": "Review",
+    "parent": null,
+    "depth": 0,
+    "status": "idle",
+    "agent": "build",
+    "model": "scripted/m"
+   },
+   {
+    "id": "ses_child",
+    "title": "Scout",
+    "parent": "ses_inspector",
+    "depth": 1,
+    "status": "running",
+    "agent": "explore",
+    "model": "scripted/m"
+   }
+  ],
+  "cache": {
+   "scope": "session lifetime",
+   "input": 12000,
+   "cached": 8400,
+   "uncached": 3600,
+   "hit_percent": 70.0,
+   "denominator": "input tokens reported by provider",
+   "coverage": {
+    "requests_with_usage": 11,
+    "requests_total": 12,
+    "complete": false
+   },
+   "models": {
+    "scripted/m": {
+     "requests": 11,
+     "input": 12000,
+     "cached": 8400,
+     "output": 800,
+     "reasoning": 100,
+     "uncached": 3600,
+     "hit_percent": 70.0
+    }
+   },
+   "write": null,
+   "write_known": false
+  },
+  "cache_range": null,
+  "notes": [
+   "Read-only diagnostics \u00b7 newest page first \u00b7 cursor paging is stable under new writes",
+   "Cache: lifetime provider reports of the selected session; not a prediction of the next cache hit.",
+   "Cache writes: unknown (providers fold them into input and the store does not retain them).",
+   "1 detail(s) clipped, 22.7 KB omitted; fetch the full record on demand."
+  ],
+  "omitted": [
+   {
+    "kind": "detail",
+    "count": 1,
+    "bytes": 23200,
+    "reason": "detail text clipped (per-record or response byte limit); fetch /inspect/record for the full record"
+   }
+  ],
+  "text": "user \u00b7 1 part",
+  "records": [
+   {
+    "kind": "message",
+    "id": "msg_1",
+    "seq": 1,
+    "role": "user",
+    "session_id": "ses_inspector",
+    "summary": "user \u00b7 1 part \u00b7 42 B",
+    "detail": "{\n  \"role\": \"user\",\n  \"parts\": [{\"type\": \"text\", \"text\": \"Review the diff\"}]\n}",
+    "detail_bytes": 78,
+    "detail_truncated": false
+   },
+   {
+    "kind": "message",
+    "id": "msg_2",
+    "seq": 2,
+    "role": "assistant",
+    "session_id": "ses_inspector",
+    "summary": "assistant \u00b7 3 parts \u00b7 31.2 KB",
+    "detail": "{\n  \"id\": \"msg_2\",\n  \"role\": \"assistant\",\n  \"parts\": [{\"type\": \"text\", \"text\": \"Reading the files first\u2026 (clipped)",
+    "detail_bytes": 31200,
+    "detail_truncated": true
+   }
+  ],
+  "lanes": []
+ },
+ "conversation_older": {
+  "version": 2,
+  "session_id": "ses_inspector",
+  "session": "ses_inspector",
+  "view": "Conversation",
+  "limit": 50,
+  "before": "WyJjIiwxXQ",
+  "next_before": null,
+  "more": false,
+  "generated": 110,
+  "head": 412,
+  "session_head": 380,
+  "log_head": 9120,
+  "generation": "g_ab12",
+  "floor": 0,
+  "filters": {},
+  "tree": [
+   {
+    "id": "ses_inspector",
+    "title": "Review",
+    "parent": null,
+    "depth": 0,
+    "status": "idle",
+    "agent": "build",
+    "model": "scripted/m"
+   },
+   {
+    "id": "ses_child",
+    "title": "Scout",
+    "parent": "ses_inspector",
+    "depth": 1,
+    "status": "running",
+    "agent": "explore",
+    "model": "scripted/m"
+   }
+  ],
+  "cache": {
+   "scope": "session lifetime",
+   "input": 12000,
+   "cached": 8400,
+   "uncached": 3600,
+   "hit_percent": 70.0,
+   "denominator": "input tokens reported by provider",
+   "coverage": {
+    "requests_with_usage": 11,
+    "requests_total": 12,
+    "complete": false
+   },
+   "models": {
+    "scripted/m": {
+     "requests": 11,
+     "input": 12000,
+     "cached": 8400,
+     "output": 800,
+     "reasoning": 100,
+     "uncached": 3600,
+     "hit_percent": 70.0
+    }
+   },
+   "write": null,
+   "write_known": false
+  },
+  "cache_range": null,
+  "notes": [
+   "Read-only diagnostics \u00b7 newest page first \u00b7 cursor paging is stable under new writes",
+   "Cache: lifetime provider reports of the selected session; not a prediction of the next cache hit.",
+   "Cache writes: unknown (providers fold them into input and the store does not retain them)."
+  ],
+  "omitted": [],
+  "text": "older",
+  "records": [
+   {
+    "kind": "message",
+    "id": "msg_0",
+    "seq": 0,
+    "role": "user",
+    "session_id": "ses_inspector",
+    "summary": "user \u00b7 1 part \u00b7 20 B",
+    "detail": "{\"role\": \"user\", \"parts\": []}",
+    "detail_bytes": 28,
+    "detail_truncated": false
+   }
+  ],
+  "lanes": []
+ },
+ "conversation_filtered": {
+  "version": 2,
+  "session_id": "ses_inspector",
+  "session": "ses_inspector",
+  "view": "Conversation",
+  "limit": 50,
+  "before": null,
+  "next_before": null,
+  "more": false,
+  "generated": 110,
+  "head": 412,
+  "session_head": 380,
+  "log_head": 9120,
+  "generation": "g_ab12",
+  "floor": 0,
+  "filters": {
+   "q": "bash"
+  },
+  "tree": [
+   {
+    "id": "ses_inspector",
+    "title": "Review",
+    "parent": null,
+    "depth": 0,
+    "status": "idle",
+    "agent": "build",
+    "model": "scripted/m"
+   },
+   {
+    "id": "ses_child",
+    "title": "Scout",
+    "parent": "ses_inspector",
+    "depth": 1,
+    "status": "running",
+    "agent": "explore",
+    "model": "scripted/m"
+   }
+  ],
+  "cache": {
+   "scope": "session lifetime",
+   "input": 12000,
+   "cached": 8400,
+   "uncached": 3600,
+   "hit_percent": 70.0,
+   "denominator": "input tokens reported by provider",
+   "coverage": {
+    "requests_with_usage": 11,
+    "requests_total": 12,
+    "complete": false
+   },
+   "models": {
+    "scripted/m": {
+     "requests": 11,
+     "input": 12000,
+     "cached": 8400,
+     "output": 800,
+     "reasoning": 100,
+     "uncached": 3600,
+     "hit_percent": 70.0
+    }
+   },
+   "write": null,
+   "write_known": false
+  },
+  "cache_range": null,
+  "notes": [
+   "Read-only diagnostics \u00b7 newest page first \u00b7 cursor paging is stable under new writes",
+   "Cache: lifetime provider reports of the selected session; not a prediction of the next cache hit.",
+   "Cache writes: unknown (providers fold them into input and the store does not retain them)."
+  ],
+  "omitted": [],
+  "text": "filtered",
+  "records": [
+   {
+    "kind": "message",
+    "id": "msg_9",
+    "seq": 9,
+    "role": "user",
+    "session_id": "ses_inspector",
+    "summary": "assistant \u00b7 1 part \u00b7 matched bash",
+    "detail": "{\n  \"role\": \"user\",\n  \"parts\": [{\"type\": \"text\", \"text\": \"Review the diff\"}]\n}",
+    "detail_bytes": 78,
+    "detail_truncated": false
+   }
+  ],
+  "lanes": []
+ },
+ "questions": {
+  "version": 2,
+  "session_id": "ses_inspector",
+  "session": "ses_inspector",
+  "view": "Questions",
+  "limit": 50,
+  "before": null,
+  "next_before": null,
+  "more": false,
+  "generated": 110,
+  "head": 412,
+  "session_head": 380,
+  "log_head": 9120,
+  "generation": "g_ab12",
+  "floor": 0,
+  "filters": {},
+  "tree": [
+   {
+    "id": "ses_inspector",
+    "title": "Review",
+    "parent": null,
+    "depth": 0,
+    "status": "idle",
+    "agent": "build",
+    "model": "scripted/m"
+   },
+   {
+    "id": "ses_child",
+    "title": "Scout",
+    "parent": "ses_inspector",
+    "depth": 1,
+    "status": "running",
+    "agent": "explore",
+    "model": "scripted/m"
+   }
+  ],
+  "cache": {
+   "scope": "session lifetime",
+   "input": 12000,
+   "cached": 8400,
+   "uncached": 3600,
+   "hit_percent": 70.0,
+   "denominator": "input tokens reported by provider",
+   "coverage": {
+    "requests_with_usage": 11,
+    "requests_total": 12,
+    "complete": false
+   },
+   "models": {
+    "scripted/m": {
+     "requests": 11,
+     "input": 12000,
+     "cached": 8400,
+     "output": 800,
+     "reasoning": 100,
+     "uncached": 3600,
+     "hit_percent": 70.0
+    }
+   },
+   "write": null,
+   "write_known": false
+  },
+  "cache_range": null,
+  "notes": [
+   "Read-only diagnostics \u00b7 newest page first \u00b7 cursor paging is stable under new writes",
+   "Cache: lifetime provider reports of the selected session; not a prediction of the next cache hit.",
+   "Cache writes: unknown (providers fold them into input and the store does not retain them)."
+  ],
+  "omitted": [],
+  "text": "questions",
+  "records": [
+   {
+    "kind": "question",
+    "id": "q_1",
+    "session_id": "ses_inspector",
+    "status": "pending",
+    "call_id": "call_9",
+    "turn_id": "turn_1",
+    "links": {
+     "turn": "turn_1",
+     "tool": "call_9"
+    },
+    "summary": "question pending \u00b7 1 item \u00b7 tool call call_9",
+    "detail": "{\n  \"asked\": {\"questions\": [{\"question\": \"Ship it?\"}]},\n  \"replied\": null\n}",
+    "detail_bytes": 70,
+    "detail_truncated": false
+   },
+   {
+    "kind": "question",
+    "id": "q_0",
+    "session_id": "ses_inspector",
+    "status": "replied",
+    "call_id": "call_3",
+    "turn_id": "turn_0",
+    "links": {
+     "turn": "turn_0",
+     "tool": "call_3"
+    },
+    "summary": "question replied \u00b7 1 item \u00b7 tool call call_3",
+    "detail": "{\n  \"asked\": {\"questions\": [{\"question\": \"Which file?\"}]},\n  \"replied\": {\"answers\": [\"a.py\"]}\n}",
+    "detail_bytes": 90,
+    "detail_truncated": false
+   }
+  ],
+  "lanes": []
+ },
+ "raw": {
+  "version": 2,
+  "session_id": "ses_inspector",
+  "session": "ses_inspector",
+  "view": "Raw",
+  "limit": 50,
+  "before": null,
+  "next_before": null,
+  "more": false,
+  "generated": 110,
+  "head": 412,
+  "session_head": 380,
+  "log_head": 9120,
+  "generation": "g_ab12",
+  "floor": 0,
+  "filters": {},
+  "tree": [
+   {
+    "id": "ses_inspector",
+    "title": "Review",
+    "parent": null,
+    "depth": 0,
+    "status": "idle",
+    "agent": "build",
+    "model": "scripted/m"
+   },
+   {
+    "id": "ses_child",
+    "title": "Scout",
+    "parent": "ses_inspector",
+    "depth": 1,
+    "status": "running",
+    "agent": "explore",
+    "model": "scripted/m"
+   }
+  ],
+  "cache": {
+   "scope": "session lifetime",
+   "input": 12000,
+   "cached": 8400,
+   "uncached": 3600,
+   "hit_percent": 70.0,
+   "denominator": "input tokens reported by provider",
+   "coverage": {
+    "requests_with_usage": 11,
+    "requests_total": 12,
+    "complete": false
+   },
+   "models": {
+    "scripted/m": {
+     "requests": 11,
+     "input": 12000,
+     "cached": 8400,
+     "output": 800,
+     "reasoning": 100,
+     "uncached": 3600,
+     "hit_percent": 70.0
+    }
+   },
+   "write": null,
+   "write_known": false
+  },
+  "cache_range": null,
+  "notes": [
+   "Read-only diagnostics \u00b7 newest page first \u00b7 cursor paging is stable under new writes",
+   "Cache: lifetime provider reports of the selected session; not a prediction of the next cache hit.",
+   "Cache writes: unknown (providers fold them into input and the store does not retain them)."
+  ],
+  "omitted": [],
+  "text": "raw",
+  "records": [
+   {
+    "kind": "event",
+    "id": 101,
+    "seq": 4,
+    "type": "turn.started",
+    "time": 100.0,
+    "session_id": "ses_inspector",
+    "turn_id": "turn_1",
+    "payload_state": "inline",
+    "summary": "turn.started",
+    "detail": "{\"type\": \"turn.started\"}",
+    "detail_bytes": 24,
+    "detail_truncated": false
+   }
+  ],
+  "lanes": []
+ },
+ "head": {
+  "session_id": "ses_inspector",
+  "session": "ses_inspector",
+  "head": 412,
+  "session_head": 380,
+  "log_head": 9120,
+  "generation": "g_ab12",
+  "floor": 0
+ },
+ "head_changed": {
+  "session_id": "ses_inspector",
+  "session": "ses_inspector",
+  "head": 418,
+  "session_head": 386,
+  "log_head": 9126,
+  "generation": "g_ab12",
+  "floor": 0
+ },
+ "record": {
+  "kind": "message",
+  "id": "msg_2",
+  "session_id": "ses_inspector",
+  "detail_bytes": 31200,
+  "record": {
+   "id": "msg_2",
+   "role": "assistant",
+   "parts": [
+    {
+     "type": "text",
+     "text": "FULL RECORD TEXT: all of the assistant message"
+    }
+   ]
+  }
+ }
 }
