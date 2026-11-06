@@ -248,6 +248,13 @@ export class Model {
         if (!old || (d.revision ?? 0) >= old.revision) this.projects.set(d.id, d as Project);
         break;
       }
+      case "project.reordered":
+        // Renumber in place; a project this client has not seen yet keeps its own position.
+        (d.order as string[] | undefined)?.forEach((id, position) => {
+          const p = this.projects.get(id);
+          if (p) this.projects.set(id, { ...p, position });
+        });
+        break;
       case "project.deleted":
         this.projects.delete(d.id);
         for (const s of [...this.sessions.values()]) if (s.project_id === d.id) this.dropSession(s.id);

@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        New session      +                                                                 □
+     │
+     │                        ▣
+  D  │ ⌕ Search sessions ctrl+k      System prompt ~900
+ ─── │
+     │  No sessions yet. Type        AGENTS.md  unavailable or not read
+     │  in the composer to
+  A  │  start one.                   Tools [0]
+ ─── │
+     │                               Skills [0]  none
+     │
+  C  │                               MCP [1] (1 off)
+ ─── │                                 ○ browser-use · disabled in configuration
+     │
+     │                          Remove project
+  +  │
+     │                          Remove "bravo" from Nexus?
+     │                          Files on disk are never touched.
+     │
+     │                                                           ▌[ Cancel ]  [ Remove ]
+     │
+     │                          ←→ choose · enter confirm · esc cancel
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │                                Message to start a new session
+     │
+     │                                Build · … · default                                                         0
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/claude-501/s15-proj/bravo
+     │  Settings         ctrl+,    ───────────────────────────────────────────────────────────────────────────────────

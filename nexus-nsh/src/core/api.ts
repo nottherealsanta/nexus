@@ -1,6 +1,12 @@
 // Core API shapes the shell needs (docs/api.md). Loose on purpose: Core owns the schema.
 
-export interface Project { id: string; path: string; name: string; created: number; updated: number; revision: number }
+export interface Project {
+  id: string; path: string; name: string; created: number; updated: number; revision: number;
+  /** The user's saved display order; absent from an older Core. */
+  position?: number;
+  /** `current`, `passive` or `inactive` (see project-rail.ts); absent from an older Core. */
+  status?: string;
+}
 export interface SessionSkill { name: string; description: string; scope: string; state: "on" | "off"; locked: boolean }
 export interface SessionMcp { server: string; tools: number | null; state: "on" | "off" | "unavailable"; locked: boolean; error: string | null; warnings?: string[] }
 export interface Session {

@@ -13,6 +13,7 @@ export const manifest = {
    "project.inactive",
    "project.can_move_up",
    "project.can_move_down",
+   "sidebar.projects_focus",
    "session.idle",
    "session.busy",
    "session.interrupted",
@@ -170,6 +171,14 @@ export const manifest = {
     ],
     "action": "text_edit.cancel",
     "note": "Inline rename, settings field, find bar, key capture: cancel the edit and keep focus. Composer text is NOT cleared by Esc."
+   },
+   {
+    "id": "sidebar_back",
+    "when": [
+     "sidebar.projects_focus"
+    ],
+    "action": "sidebar.step_back",
+    "note": "The sidebar's project list steps back to the session list (Right does the same); the projects overview, when open, closes first with the overlay rule."
    },
    {
     "id": "drawer",
@@ -1203,6 +1212,24 @@ export const manifest = {
    "placement": [
     "drawer"
    ]
+  },
+  {
+   "id": "sidebar.step_back",
+   "title": "Step back out of the sidebar",
+   "category": "navigation",
+   "keys": {
+    "tui": "esc",
+    "nsh": "esc"
+   },
+   "key_context": "escape_chain",
+   "when": [
+    "sidebar.projects_focus"
+   ],
+   "unavailable_reason": "The project list does not have the keys.",
+   "placement": [
+    "sidebar"
+   ],
+   "note": "Keyboard flow from an empty composer: Left opens the session sidebar, Left again focuses the project list (Up/Down select), Left again opens the projects overview. Esc or Right steps back out in reverse. With text in the composer Left moves the cursor as usual, so the flow carries no key of its own."
   },
   {
    "id": "overlay.close",
@@ -2474,7 +2501,7 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "note": "Saved order, active sessions and archived sessions per project; inactive projects are restored here with r."
+   "note": "Left from the project list opens it. Saved order, each project's active sessions as a tree with their state, a per-project archived toggle (collapsed), passive projects dimmed, inactive projects grouped last under Inactive and restored with r. Esc or Right closes it."
   },
   {
    "id": "project.remove",
@@ -2488,7 +2515,7 @@ export const manifest = {
     "palette",
     "row_menu"
    ],
-   "note": "Confirm; its Nexus sessions and history are deleted. Files on disk stay."
+   "note": "Confirm; the project leaves Nexus but its sessions are kept (adding the folder again restores them) and files on disk are never touched. Refused while a session is running."
   },
   {
    "id": "sidebar.row_menu",

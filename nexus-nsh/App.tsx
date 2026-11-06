@@ -19,6 +19,7 @@ import { Annotate } from "./src/ui/annotate";
 import { ManagerStage } from "./src/ui/manager/stage";
 import { installManager } from "./src/core/manager";
 import { cancelDictation, microphoneAvailable, startDictation, stopDictation } from "./src/dictation";
+import { ProjectsOverviewHost } from "./src/ui/projects-overview";
 import { AddProject, Blocking, Confirm, Drawers, Palette, Picker, RenameSession, SkillChecklist } from "./src/ui/overlays";
 import { SessionSwitcher } from "./src/ui/switcher";
 import { ConnectScreen, coreEditing } from "./src/ui/connect";
@@ -95,6 +96,7 @@ function App() {
         <Palette />
         <SessionSwitcher />
         <Picker />
+        <ProjectsOverviewHost />
         <SkillChecklist />
         <AlertDetail />
         <UsageDialog />

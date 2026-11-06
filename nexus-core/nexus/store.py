@@ -640,6 +640,9 @@ def _usage_json(row: sqlite3.Row) -> dict[str, int] | None:
     return dict(zip(USAGE_KEYS, values, strict=True)) if values is not None else None
 
 
+REMOVED = 2  # `project.hidden` of a project the user removed from Nexus (see `Store.unregister_project`)
+
+
 @dataclass(frozen=True, slots=True)
 class Project:
     id: str
@@ -648,7 +651,7 @@ class Project:
     created: float
     updated: float
     revision: int = 1
-    hidden: int = 0  # 1 = the Manager's project; never listed (nexus/manager)
+    hidden: int = 0  # 1 = the Manager's project; 2 = removed by the user (sessions kept, kind "detached")
     position: int = 0  # user-defined display order among the user's projects
     status: str = "current"  # "current" | "passive" | "inactive"
 
@@ -1060,6 +1063,8 @@ class Store:
         if not Path(resolved).is_dir():
             raise ValueError(f"{resolved} is not a directory")
         row = self.db.execute("select * from project where path = ?", (resolved,)).fetchone()
+        if row and row["hidden"] == REMOVED:
+            return self._restore_project(row["id"], name), True
         if row:
             return Project(**row), False
         now = time.time()
@@ -1073,6 +1078,39 @@ class Store:
                 " values (?, ?, ?, ?, ?, 1, ?, ?, ?)",
                 (project.id, project.path, project.name, now, now, int(hidden), position, "current"))
         return project, True
+
+    def _restore_project(self, project_id: str, name: str | None) -> Project:
+        """Register a removed project's path again: it returns at the end of the rail, current, with its sessions."""
+        position = self.db.execute(
+            "select coalesce(max(position), -1) + 1 from project where hidden = 0").fetchone()[0]
+        with self.db:
+            self.db.execute(
+                "update project set hidden = 0, status = 'current', position = ?, updated = ?,"
+                " revision = revision + 1" + (", name = ?" if name else "") + " where id = ?",
+                (position, time.time(), *([name] if name else []), project_id))
+            self.db.execute("update session set kind = 'user' where project_id = ? and kind = 'detached'",
+                            (project_id,))
+        self._hidden.difference_update(
+            {r["id"] for r in self.db.execute("select id from session where project_id = ?", (project_id,))})
+        return self.project(project_id)  # type: ignore[return-value]
+
+    def unregister_project(self, project_id: str) -> list[str]:
+        """Take a project out of Nexus's lists without deleting anything.
+
+        The project row and every session stay in the database; the sessions become kind `detached`, which every
+        default list, search, snapshot and event stream already excludes. Opening the same path again restores
+        them. Returns the ids of the sessions that left the lists.
+        """
+        with self.db:
+            ids = [r["id"] for r in self.db.execute(
+                "select id from session where project_id = ? and kind = 'user'", (project_id,))]
+            if self.db.execute("update project set hidden = ?, updated = ?, revision = revision + 1"
+                               " where id = ? and hidden = 0", (REMOVED, time.time(), project_id)).rowcount == 0:
+                raise ValueError(f"no project {project_id}")
+            self.db.execute("update session set kind = 'detached' where project_id = ? and kind = 'user'",
+                            (project_id,))
+        self._hidden.update(ids)
+        return ids
 
     def projects(self, *, hidden: bool = False) -> list[Project]:
         """The user's projects in their saved order. `hidden=True` also returns the Manager's own project."""
@@ -1205,8 +1243,8 @@ class Store:
         """
         clause = _archive_clause(archived)
         if kind is not None:
-            if kind not in ("user", "manager"):
-                raise ValueError("kind must be 'user', 'manager' or None")
+            if kind not in ("user", "manager", "detached"):
+                raise ValueError("kind must be 'user', 'manager', 'detached' or None")
             clause += f" and kind = '{kind}'"
         if project_id:
             rows = self.db.execute(

@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files]        · Alpha chat ×    +                                                                ◨
+     │                            Alpha chat
+▏    │▌  Alpha            2  9d                                                             SESSION
+▏ A  │   /work/nexus-home/ws       │                                                        Agent    build
+▏  1 │   Bravo            1  9d    │  hi                                  #1 · 8:31 PM      Model    …
+     │   /work/nexus-home/ws       │                                                        Effort   default
+     │   Charlie                                                                                        dle
+  B  │   /work/n  Projects
+   1 │ + Add pro                                                                                        1 PM · 9d
+     │            Alpha  · Current                                                                      _1a17d…cc428a38
+     │              ├ Alpha chat · idle
+  +  │           ▌  ├ ▾ 1 archived
+     │              └ Alpha old chat · archived                                                          reported
+     │            Bravo  · Passive                                                                       reported
+     │              └ Bravo notes · idle                                                                 reported
+     │            Inactive
+     │            Charlie  · Inactive  · r restore
+     │              └ Charlie draft · idle                                                              status…
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │            ↑↓ select · a archived · 1/2/3 current/passive/inactive · r restore · enter open · e
+     │
+     │                                Type a message…
+     │
+     │                                Build · … · default                           0
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /work/nexus-home/ws
+     │  Settings         ctrl+,    ─────────────────────────────────────────────────────

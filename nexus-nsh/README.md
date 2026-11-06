@@ -280,9 +280,9 @@ first message is labelled `Totals since …`, and requests that reported no usag
 are counted as unknown. It also counts descendant sessions. Right-click or Shift+F10 opens the
 manifest-driven session/project row menu, including confirmed project removal,
 and Projects, opened by its command, has a trailing `+ Add project` row. A 48 px project rail (NSH only; the TUI keeps its five cells) stays beside the sidebar whether it is open or
-closed, except on phones and below 500 px, which keep the project picker in the Sessions tab. A border separates it from the sidebar, and the sidebar's project-session and Files tabs keep their icons. It shows projects in creation order, with stable uppercase initials
+closed, except on phones and below 500 px, which keep the project picker in the Sessions tab. A border separates it from the sidebar, and the sidebar's project-session and Files tabs keep their icons. It shows projects in Core's saved order (drag a tile to reorder, or Alt+Up / Alt+Down and the row menu's Move project up/down; Esc or dropping outside the rail cancels; a press without travel still selects), without inactive projects, with stable uppercase initials in creation order (moving a project never changes a label)
 (collisions use the next available consonant, then a numeric suffix; the first character stays centred). Projects with running sessions or session activity
-within the last hour are lighter gray; inactive projects are darker. Selection is a soft
+within the last hour are lighter gray; passive projects are dimmed further and idle ones are darker. The row menu sets a project's status (current, passive, inactive; the names are the user's, 2026-11-06). An inactive project leaves the rail and is restored by pressing it in the Projects tab. Remove project asks first, only unregisters the project (its sessions are kept and return if the folder is added again; files are never touched) and is refused while a session runs. Selection is a soft
 filled square with no edge marker. Each project has a counter in each corner: attention (violet) and unread
 (info) on top, running (success) and idle (primary) below, with any count past
 nine shown as `*`. A project with
@@ -320,6 +320,16 @@ governs, and one clickable tool grid. Desktop session rows place the status mark
 session view's `directory` differs from the one it was read for, as after a move), while directory
 and worktree actions remain disabled with a reason. Kernel state is the remaining
 session-info item not reported by Core.
+
+**Keyboard flow from an empty composer (PLAN 15.4).** Only while the composer is focused and empty: Left opens the
+session sidebar and gives it the keys (the composer is blurred); Left again focuses the project list (Up/Down move a
+cursor bar among the projects, Enter opens one, restoring an inactive project first); Left again opens the **projects
+overview** (also the palette command "Projects overview"). Esc or Right steps back out in reverse order. With text in the
+composer Left moves the cursor as usual. The overview (`src/ui/projects-overview.tsx`, rows from `overviewRows`) lists
+the projects in their saved order with a `├`/`└` tree of each project's active root sessions and their state, a per-project
+`N archived` toggle (`a` or Enter; collapsed), passive projects dimmed, and inactive projects last under `Inactive`,
+restored with `r` (`1`/`2`/`3` set current, passive, inactive). The project picker (`project.switch`, `cmd+shift+k`) lists
+every project, inactive ones marked, and choosing an inactive one restores it, as in the TUI. Tests: `keyboard-flow.test.tsx`.
 
 The Files tab is the TUI's expanding tree: one Core listing per directory read, folders expand and collapse in place
 with the shared fold glyphs and two cells of indent per depth, `.git` is never listed, and a file's Git letter sits at
