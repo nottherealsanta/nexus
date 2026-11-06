@@ -57,7 +57,7 @@ rectangle on the cell grid; the TUI has no rounded corners, and only circular st
 meters are round. The project rail is five cells wide and always there, from 70 columns, whether
 the sidebar is open or not; a border separates it from the open sidebar.
 Projects keep creation order with uppercase initials; collisions use the next
-available consonant, then a numeric suffix; the first character stays centred. The rail has one empty row above its projects. Running or recently active projects
+available consonant, then a numeric suffix; the first character stays centred. The rail has one empty row above its projects. The selected project tile draws a lighter block (`interactive.active`) with a left `▏` bar (`interactive.active_bar`); the selected session row in the sidebar gets the same block and bar across both of its lines, with its title in `text.highlight` (white in dark mode) and not bold. Running or recently active projects
 (within one hour) are lighter gray. Each tile has a counter in each corner:
 attention (purple) and unread (blue) on top, running (green) and idle (white) below,
 counting root sessions, with archived sessions left out and subagents counted under

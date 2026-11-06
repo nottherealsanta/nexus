@@ -1310,6 +1310,39 @@ fn long_session_titles_end_in_an_ellipsis_in_every_tier() {
 }
 
 #[test]
+fn selected_session_row_takes_the_rail_active_block_and_bar() {
+    use ratatui::style::Modifier;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.state.model.sessions.get_mut(SESSION).unwrap().title = "Selected title".into();
+    let (buf, rows) = draw(&mut app, 120, 36);
+    let y = rows
+        .iter()
+        .position(|row| row.chars().take(34).collect::<String>().contains("Selected title"))
+        .expect("the selected session row") as u16;
+    let left = app.regions.left.expect("sidebar");
+    let active = app.theme.bg("interactive.active");
+    let bar = app.theme.fg("interactive.active_bar");
+    let sidebar = app.theme.bg("surface.sidebar");
+    assert_ne!(active.bg, sidebar.bg, "the block is lighter than the sidebar");
+    let x = (left.x..left.right())
+        .find(|x| buf[(*x, y)].symbol() == "\u{258f}")
+        .expect("the left accent bar");
+    assert_eq!(buf[(x, y)].fg, bar.fg.unwrap());
+    // Both lines of the row sit on the block, to its right edge.
+    for line in [y, y + 1] {
+        assert_eq!(buf[(x + 4, line)].bg, active.bg.unwrap(), "line {line}");
+        assert_eq!(buf[(left.right() - 2, line)].bg, active.bg.unwrap(), "line {line}");
+    }
+    // The title is white (`text.highlight`) and not bold.
+    let tx = (x..left.right())
+        .find(|x| buf[(*x, y)].symbol() == "S")
+        .expect("title");
+    let cell = &buf[(tx, y)];
+    assert_eq!(cell.fg, app.theme.fg("text.highlight").fg.unwrap());
+    assert!(!cell.modifier.contains(Modifier::BOLD));
+}
+
+#[test]
 fn worktree_groups_keep_cursor_on_the_same_session_when_branch_data_arrives() {
     use nexus_tui::api::Frame;
     use nexus_tui::sync::SyncMsg;
