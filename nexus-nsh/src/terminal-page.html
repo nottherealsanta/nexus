@@ -1,11 +1,16 @@
 <!doctype html><html><head><meta charset="utf-8"><style>html,body,#terminal{height:100%;width:100%;margin:0;overflow:hidden;background:#101010}*{box-sizing:border-box}</style><style>/* XTERM_CSS */</style></head><body><div id="terminal"></div><script>/* XTERM_JS */</script><script>/* FIT_JS */</script><script>
 const term = new Terminal({scrollback: 10000, cursorBlink: true, convertEol: false, allowProposedApi: true});
 const fit = new FitAddon.FitAddon();
-function fitScreen() { const size = fit.proposeDimensions(); if (size) term.resize(Math.max(1, Math.min(500, size.cols)), Math.max(1, Math.min(200, size.rows))); }
+let writable = false, applyingSize = false;
+function fitScreen() {
+  const size = fit.proposeDimensions(); if (!size) return;
+  const cols = Math.max(1, Math.min(500, size.cols)), rows = Math.max(1, Math.min(200, size.rows));
+  if (writable) resizeFromCore(cols, rows);
+  send('resize', {cols, rows});
+}
 term.loadAddon(fit);
 term.open(document.getElementById('terminal'));
 term.parser.registerOscHandler(52, () => true);
-let writable = false, applyingSize = false;
 function send(type, data = {}) { window.nsh.postMessage(JSON.stringify({type, ...data})); }
 function resizeFromCore(cols, rows) { applyingSize = true; try { term.resize(cols, rows); } finally { applyingSize = false; } }
 term.onData(data => { if (writable) send('input', {data}); });
@@ -29,7 +34,7 @@ window.addEventListener('message', e => {
     case 'theme': term.options.theme = {background:m.background, foreground:m.foreground, cursor:m.foreground}; document.body.style.background = m.background; document.getElementById('terminal').style.background = m.background; break;
     case 'focus': term.focus(); break;
     case 'copy': send('selection', {data: term.getSelection()}); break;
-    case 'fit': fitScreen(); send('resize', {cols:term.cols, rows:term.rows}); break;
+    case 'fit': fitScreen(); break;
   }
 });
 new ResizeObserver(() => fitScreen()).observe(document.getElementById('terminal'));

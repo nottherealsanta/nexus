@@ -61,7 +61,8 @@ function detach() {
 export async function selectTerminal(id: string) {
   if (queuedInput) { terminalError.set("Wait for terminal input to be acknowledged"); return; }
   detach(); terminalRename.set(false); terminalSelected.set(id); terminalNotice.set(""); terminalError.set(""); seq = 0; inputSeq = 0;
-  send({type:"reset"});
+  const item = terminalItems().find(t => t.id === id);
+  send({type:"reset", rows:item?.rows, cols:item?.cols});
   const gen = generation;
   try {
     const a = await terminals.attach(id, client);
