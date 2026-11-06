@@ -1234,21 +1234,65 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                              "history_truncated": runtime.store.log_floor() > 0,
                              "compaction": runtime.store.compaction(sid)})
 
+    def _inspector_target(request: Request) -> tuple[str, str | None]:
+        sid = p(request, "id")
+        runtime.session(sid)
+        session = request.query_params.get("session") or None
+        if session is not None:
+            runtime.session(session)
+        return sid, session
+
     async def native_inspector(request: Request) -> Response:
-        from .inspector_data import inspect
+        from . import inspector_data as insp
+
+        sid, session = _inspector_target(request)
+        query = request.query_params
+        if query.get("page") not in (None, "", "0"):
+            raise ValueError("page was removed in inspector v2; use before=<next_before>")
+        try:
+            limit = int(query.get("limit") or insp.PAGE)
+        except ValueError as exc:
+            raise ValueError("limit must be an integer") from exc
+        data = insp.inspect(
+            runtime.store, sid, view=query.get("view", "Timing"), before=query.get("before") or None, limit=limit,
+            session=session, q=query.get("q"), kind=query.get("kind"), status=query.get("status"),
+            types=[t for t in (query.get("type") or "").split(",") if t])
+        if not data["before"] and data["session"] == sid and data["view"] in ("Requests", "Raw"):
+            if data["view"] == "Requests":
+                parts = [("Snapshot", json.dumps(runtime.snapshot_json(sid), indent=2)),
+                         ("Next request", json.dumps(await runtime.context_usage(sid), indent=2))]
+                label = "Retained requests"
+            else:
+                parts = [("Session record", json.dumps(runtime.session_json(runtime.session(sid)), indent=2)),
+                         ("Retained event counts", json.dumps(runtime.store.event_counts(sid), indent=2))]
+                label = "Retained events"
+            head = ""
+            for name, body in parts:
+                body, lost = insp.clip(body)
+                head += f"{name}\n{body}\n\n"
+                if lost:
+                    data["omitted"].append({"kind": "section", "bytes": lost, "reason": f"{name} clipped to {insp.EXTRA_MAX} bytes"})
+            data["text"] = head + label + "\n" + data["text"]
+        return JSONResponse(data, headers={"cache-control": "no-store"})
+
+    async def native_inspector_head(request: Request) -> Response:
+        from . import inspector_data as insp
+
+        sid, session = _inspector_target(request)
+        return JSONResponse(insp.head(runtime.store, sid, session), headers={"cache-control": "no-store"})
+
+    async def native_inspector_record(request: Request) -> Response:
+        from . import inspector_data as insp
 
         sid = p(request, "id")
         runtime.session(sid)
-        data = inspect(runtime.store, sid, view=request.query_params.get("view", "Timing"),
-                       page=int(request.query_params.get("page", "0")))
-        if data["view"] == "Requests" and data["page"] == 0:
-            data["text"] = "Snapshot\n" + json.dumps(runtime.snapshot_json(sid), indent=2) + "\n\nNext request\n" + json.dumps(
-                await runtime.context_usage(sid), indent=2) + "\n\nRetained requests\n" + data["text"]
-        if data["view"] == "Raw" and data["page"] == 0:
-            data["text"] = "Session record\n" + json.dumps(runtime.session_json(runtime.session(sid)), indent=2) + (
-                "\n\nRetained event counts\n" + json.dumps(runtime.store.event_counts(sid), indent=2)
-                + "\n\nRetained events\n" + data["text"])
-        return JSONResponse(data, headers={"cache-control": "no-store"})
+        kind, ident = request.query_params.get("kind"), request.query_params.get("id")
+        if not kind or not ident:
+            raise ValueError("kind and id are required")
+        found = insp.record(runtime.store, sid, kind, ident)
+        if found is None:
+            raise NotFound(f"no {kind} record {ident} in this session tree")
+        return JSONResponse(found, headers={"cache-control": "no-store"})
 
     async def turns(request: Request) -> Response:
         """Turn summaries, oldest first: the newest page, or one page after/before a turn."""
@@ -1794,6 +1838,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/session/{id}/diagnostics", route(diagnostics), methods=["GET", "POST"]),
         Route("/api/session/{id}/turn", route(turns)),
         Route("/api/session/{id}/inspect", route(native_inspector)),
+        Route("/api/session/{id}/inspect/head", route(native_inspector_head)),
+        Route("/api/session/{id}/inspect/record", route(native_inspector_record)),
         Route("/api/session/{id}/children", route(children)),
         Route("/api/session/{id}/tree", route(tree)),
         Route("/api/session/{id}/context", route(context)),

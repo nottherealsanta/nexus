@@ -1373,13 +1373,13 @@ do not remove the standalone browser inspector until its useful functions have n
   explicit snapshot resync on overflow/retention changes. No second unbounded event log, no repeated
   full-tree fetch per token, and no background refresh while the inspector is closed. Keep a visible
   paused/live/disconnected state and manual Refresh; an offline view must not look current.
-- [ ] **Stable, bounded loading.** Replace offset-only paging with documented stable boundaries/cursors
+- [ ] **Stable, bounded loading.** (Core landed: inspect API v2 with opaque cursors, byte/lane/tree bounds, `omitted`, `/inspect/record`, `/inspect/head`; clients and client-side memory/render checks pending.) Replace offset-only paging with documented stable boundaries/cursors
   so new turns cannot duplicate or skip older pages. Bound server queries and response bytes, avoid
   loading every message to show one page, virtualize long client lists and load large JSON on demand.
   Announce omitted sessions/lanes/bytes and expired diagnostics; provide a way to inspect the omitted
   records, not just a permanent truncation notice. Profile a large seeded session/tree before choosing
   budgets, then commit repeatable request-count, memory and render-latency regression checks.
-- [ ] **Cache accounting.** Keep lifetime/session, selected-call and displayed-range totals separately
+- [ ] **Cache accounting.** (Core landed: `cache`/`cache_range` with coverage and per-model totals; cache writes stay *unknown* because the Claude dialect folds `cache_creation_input_tokens` into `input_tokens` and only reads are stored. Keeping writes needs a versioned `Usage`/`turn_request`/`session_usage` change, not done.) Keep lifetime/session, selected-call and displayed-range totals separately
   labelled. Show per-model breakdowns, explicit unknown/partial coverage and the exact hit-rate
   denominator; do not double-count retries, child sessions or cumulative provider updates. Investigate
   provider-reported cache-read/cache-write fields end to end before adding storage. Only show cache

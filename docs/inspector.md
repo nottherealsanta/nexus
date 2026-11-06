@@ -7,44 +7,141 @@ and a tool's inspector action now open a native, read-only modal, not a browser.
 It uses the clients' existing authenticated Core transport, including remote NSH
 connections. Close it with Esc to return to the same session and draft.
 
-The five views are **Timing**, **Conversation**, **Steps**, **Requests**, and
-**Raw**. Conversation contains canonical saved message JSON; Steps contains
-durable turns, model requests, usage, HTTP/first-byte measurements, attempts and
-tool results; Requests includes the snapshot, next request and retained redacted
-wire requests/responses; Raw contains the session record, event counts and retained event JSON. Kernels and shells
+The six views are **Timing**, **Conversation**, **Steps**, **Requests**,
+**Raw** and **Questions**. Conversation contains canonical saved message JSON;
+Steps contains durable turns, model requests, usage, HTTP/first-byte
+measurements, attempts and tool results; Requests includes the snapshot, next
+request and retained redacted wire requests/responses; Raw contains the session
+record, event counts and retained event JSON; Questions lists pending and replied
+`ask` requests with links to their turn and tool call. Kernels and shells
 remain in their existing resources modal. The standalone browser inspector below
-remains available, including its richer Questions and kernel detail views.
+remains available, including its richer kernel detail views.
+
+Client rules (both clients, same behavior):
+
+- **Select a session** from `tree` (`session=<id>` on every request) without
+  switching the chat session. Filters `q`, `kind`, `status`, `type` are sent to Core.
+- **Page with cursors**, never offsets: pass `next_before` as `before` for the
+  older page. Keep a stack of cursors to go newer. Records within a page are
+  oldest first; pages go newest to oldest.
+- **Render `summary`** as the row and show `detail` (exact JSON) on expand. If
+  `detail_truncated`, offer "load full" which calls `/inspect/record`.
+- **Refresh only on change.** While open, react to session events (or poll),
+  call `/inspect/head`, and refetch only when `head` or `generation` differ from
+  the last response. Coalesce bursts into one refetch, tag each request with a
+  sequence number and ignore a response that is not the latest (navigation,
+  view switch, filter change, close). Do not fetch or poll while the inspector
+  is closed. A `generation` change or a `floor` above the held cursor means the
+  history changed: drop held cursors and reload the newest page. Show
+  live/paused/disconnected state and keep manual Refresh; an offline view
+  must not look current.
+
+### Inspector API v2
+
+`GET /api/session/{id}/inspect?view=&before=&limit=&session=&q=&kind=&status=&type=`
+
+| Field | Meaning |
+| --- | --- |
+| `version` | `2` |
+| `session_id` / `session` | the requested session / the one inspected (`session` param or the same) |
+| `before`, `next_before`, `more`, `limit` | cursor paging; `next_before` is null on the last page |
+| `head`, `session_head`, `log_head`, `generation`, `floor` | `head` = highest event id in the inspected session and its descendants, `session_head` = the session alone; `log_head`/`generation`/`floor` are the global log watermark |
+| `filters` | the filters applied |
+| `tree` | `[{id, title, parent, depth, status (running/idle/archived), agent, model}]`, root first, at most 200 |
+| `cache` / `cache_range` | see "Cache and Gantt timing" |
+| `records` | rows of Conversation/Steps/Requests/Raw/Questions: `{kind, id, summary, detail, detail_bytes, detail_truncated, ...}` plus `seq`, `role`, `type`, `turn_id`, `session_id`, `status`, `links` where they apply |
+| `lanes` | Timing/Steps lanes (below) |
+| `text` | the same page as one text blob (summaries + clipped details) for simple renderers |
+| `notes`, `omitted` | human notes and machine-readable omissions `[{kind, count?, bytes?, reason}]`; kinds `tree`, `sessions`, `lanes`, `detail`, `section` |
+
+Cursors are opaque base64url JSON bound to a view family and a stable
+boundary: Conversation = message `seq`; Requests/Raw = event id; Timing/Steps =
+`(turn started, turn id)` over the whole selected subtree (Steps: the selected
+session); Questions = `(asked time, question id)`. Rows written after page 1
+land newer than every boundary, so the union of older pages is exact and never
+duplicates or skips. A cursor from another view family is 400.
+
+Filters (applied in SQL): `q` is a substring match (Conversation: message parts;
+Steps/Timing: turn id/error/data, tool name/arguments/output, request model;
+Raw/Requests: event type and inline payload; Questions: asked/replied JSON).
+`kind`: Timing/Steps lane kind `turn|model|tool|attempt`; Conversation role.
+`status`: Timing/Steps turn status; Questions `pending|replied`. `type`: comma
+list of event types for Raw (Requests intersects with `wire_request,wire_response`).
+
+Example (abridged, `view=Steps&limit=1`):
+
+```json
+{"version": 2, "session_id": "ses_1", "session": "ses_1", "view": "Steps", "limit": 1,
+ "before": null, "next_before": "WyJ0IiwxNzMxLjUsInR1cm5fOWYiXQ", "more": true, "generated": 1760000000.1,
+ "head": 412, "session_head": 380, "log_head": 9120, "generation": "g_ab12", "floor": 0,
+ "filters": {},
+ "tree": [{"id": "ses_1", "title": "Review", "parent": null, "depth": 0, "status": "idle",
+           "agent": "build", "model": "openai/gpt-5"}],
+ "cache": {"scope": "session lifetime", "input": 12000, "cached": 9000, "uncached": 3000,
+           "hit_percent": 75.0, "denominator": "input tokens reported by provider",
+           "coverage": {"requests_with_usage": 11, "requests_total": 12, "complete": false},
+           "models": {"openai/gpt-5": {"requests": 11, "input": 12000, "cached": 9000, "output": 800,
+                      "reasoning": 100, "uncached": 3000, "hit_percent": 75.0}},
+           "write": null, "write_known": false},
+ "cache_range": {"scope": "displayed page", "input": 1000, "cached": 750, "uncached": 250,
+                 "hit_percent": 75.0, "denominator": "input tokens reported by provider",
+                 "coverage": {"requests_with_usage": 1, "requests_total": 1}, "models": {}},
+ "omitted": [{"kind": "detail", "count": 1, "bytes": 31200, "reason": "detail text clipped ..."}],
+ "records": [{"kind": "turn", "id": "turn_9f", "session_id": "ses_1", "turn_id": "turn_9f",
+              "started": 1731.5, "status": "completed",
+              "summary": "turn completed · 2 requests · 1 tools · 4200 ms",
+              "detail": "{...first 8,000 bytes...", "detail_bytes": 39200, "detail_truncated": true}],
+ "lanes": [{"id": "ses_1:tool:call_1", "kind": "tool", "label": "bash", "turn_id": "turn_9f",
+            "start": 1731.6, "end": 1731.94, "running": false, "end_unknown": false, "status": "finished",
+            "ref": {"kind": "tool", "id": "turn_9f:call_1"}, "summary": "tool bash finished 340 ms",
+            "detail": "{...}", "detail_bytes": 410, "detail_truncated": false}],
+ "notes": ["..."], "text": "..."}
+```
+
+Bounds: details are clipped at 8,000 bytes each and, because `text` repeats them,
+at about 2 MB per response in total (`omitted` says how many details and bytes
+were left out); at most 2,000 lanes (the oldest on the page are dropped and
+counted); at most 200 tree entries and 200 sessions in a Timing subtree. The
+page's children are fetched with one `in (...)` query per table, not one query
+per row.
 
 ### Cache and Gantt timing
 
-- The cache header reports the **selected session's lifetime** input, cached and
-  uncached tokens, and `cached / input × 100`. It uses the durable spend ledger,
-  not a sum of visible event rows or repeated cumulative usage reports. Child
-  usage is not added to this header. No provider reports means **unknown**, not
-  zero; a zero-input percentage is unknown. Cache writes are explicitly unknown
-  because the store does not retain them separately. These are observed token
-  counts, not a promise that the next call will hit the cache or a cost estimate.
-  **Cache info** (`i` in the TUI) expands the explanatory notes.
-- Timing is a Gantt chart on one absolute time axis (labels are seconds from
-  the earliest displayed start), grouped by session, including descendants.
-  Turns, model calls, tools and retry attempts have separate rows, so overlaps
-  stay visible. Select a row for its complete retained JSON, including per-call
-  usage, model, HTTP status and TTFB where known. Unfinished running operations
-  extend to the snapshot time; historical missing ends say **end unknown**.
-  Nested calls inside `code` do not have independently retained start/end
-  measurements: the chart shows their parent `code` tool, and Raw has the
-  retained nested-call records rather than invented timing bars.
-- Both clients support zoom (1–64×), horizontal pan, details, copying, refresh,
-  and older/newer pages. NSH uses buttons and clickable lanes. TUI uses `1`–`5`
-  for views, `r` refresh, `n` older, `p` newer, `+`/`-` zoom, `h`/`l` pan,
-  `j`/`k` select, Enter details, `c` copy, and arrows/Page Up/Page Down scroll.
-  Views are snapshots: use Refresh during a live turn.
-- Pages contain 50 messages/events or 50 turns **per session**. Timing includes
-  at most 50 sessions and 2,000 lanes with an explicit omission notice; Steps
-  retains all execution records for each of its displayed turns. Compaction and
+- `cache` is the **selected session's lifetime** ledger (`session_usage`), never a
+  sum of visible rows, repeated cumulative reports or child sessions. Fields:
+  `scope: "session lifetime"`, `input`, `cached`, `uncached = input - cached`,
+  `hit_percent = cached / input`, `denominator: "input tokens reported by
+  provider"`, `coverage {requests_with_usage, requests_total, complete}`, and
+  `models` with the same numbers per model. `cache_range` is separately labelled
+  (`scope: "displayed page"`) and sums only the requests on the returned
+  Timing/Steps page (null for other views); each request counts once (its
+  attempts are already summed). A selected call's own usage is in its lane detail.
+  No provider reports means **unknown** (null), not zero.
+- **What providers report.** The Responses and chat dialects report
+  `cached_tokens` (cache read) inside input tokens. The Claude dialect reports
+  `cache_read_input_tokens` and `cache_creation_input_tokens`, but Nexus folds
+  both into `input_tokens` and stores only the read count as
+  `cached_input_tokens`. **Cache writes are therefore unknown**
+  (`write: null, write_known: false`); keeping them needs a versioned
+  storage/codec change (tracked in PLAN.md 14.1). TTL/expiry and cost savings are
+  never shown, and cache validity is never inferred from timestamps. These are
+  observed token counts, not a promise about the next call.
+- Timing is a Gantt chart on one absolute time axis, grouped by session,
+  including descendants. Turns, model calls, tools and retry attempts have separate
+  lanes with stable ids `session:kind:id`; `ref` names the record for
+  `/inspect/record`. Model lanes carry `ttfb` (seconds from the wire request to
+  its first event) only when it was recorded. Unfinished running operations
+  extend to the snapshot time; historical missing ends say **end unknown**
+  (`end_unknown`). Nested calls inside `code` have no independent timings.
+- Both clients support zoom (1-64x), horizontal pan, details, copying, refresh,
+  and older/newer paging (a stack of cursors). NSH uses buttons and clickable
+  lanes. TUI uses `1`-`6` for views, `r` refresh, `n` older, `p` newer, `+`/`-`
+  zoom, `h`/`l` pan, `j`/`k` select, Enter details, `c` copy, and arrows/Page
+  Up/Page Down.
+- A page holds up to `limit` (default 50, max 200) messages, events, questions or
+  turns; Timing's turns are counted across the whole subtree. Compaction and
   missing diagnostics are announced; canonical messages are not reconstructed
-  from diagnostic partials. Older/newer paging is relative to the newest retained
-  records at refresh time, not a pinned export snapshot.
+  from diagnostic partials. Pages are cursors, not a pinned snapshot.
 
 Implementation: `nexus-core/nexus/inspector_data.py`,
 `nexus-nsh/src/ui/inspector.tsx`, `nexus-tui/src/inspector.rs`.
@@ -129,6 +226,10 @@ normal.
   and the visible snapshot note in their instructions; the note says the prompt
   is not an exact historical record.
 - Text is shown as plain text. Markdown is not rendered.
+- Native inspector API v2 limits: 8,000 bytes per detail, about 2 MB per response,
+  2,000 lanes, 200 tree entries, `limit` at most 200. Anything omitted appears in
+  `omitted` and `notes`, and clipped details load in full from `/inspect/record`.
+  Cache writes are unknown. `q` over Raw/Requests matches inline payloads only.
 - Live updates re-render the open session when its events arrive. Events of a
   child show in the child's own page.
 - The Questions card (Step 10) was added after the Playwright checks above and

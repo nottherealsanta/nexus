@@ -52,15 +52,26 @@ including cursors whose rows remain in another interleaved session.
 
 ## Endpoints
 
-`GET /api/session/{id}/inspect?view=Timing&page=0` is the read-only native
-inspector projection. `view` is one of `Timing`, `Conversation`, `Steps`,
-`Requests`, `Raw`; `page` is a nonnegative integer (0 = newest). Returns
-`{session_id, view, page, more, generated, cache, notes, text, lanes}` with
-`Cache-Control: no-store`. Cache is the selected session's durable ledger;
-Timing includes descendants on one absolute seconds axis. Lanes contain
-`id, session_id, session, kind, label, start, end, running, end_unknown, status,
-detail` (retained JSON). Unknown usage/write counts are null, not zero.
-See [inspector.md](inspector.md) for paging, retention and bounds.
+`GET /api/session/{id}/inspect` is the read-only native inspector projection
+(**Inspector API v2**, `"version": 2`; full contract and example in
+[inspector.md](inspector.md#inspector-api-v2)). Query: `view` (`Timing`
+default, `Conversation`, `Steps`, `Requests`, `Raw`, `Questions`), `before`
+(opaque cursor from `next_before`; absent = newest page), `limit` (default 50,
+max 200), `session` (inspect another member of the same tree), and the filters
+`q`, `kind`, `status`, `type` (comma list of event types). The old `page`
+parameter is gone: `page=0` is ignored, any other value is 400. Returns
+`{version, session_id, session, view, limit, before, next_before, more, generated,
+head, session_head, log_head, generation, floor, filters, cache, cache_range,
+tree, notes, omitted, text, records, lanes}` with `Cache-Control: no-store`.
+Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
+
+- `GET /api/session/{id}/inspect/head[?session=]` returns
+  `{session_id, session, head, session_head, log_head, generation, floor}` cheaply
+  (indexed `max(id)` reads) so a client can skip a refetch when nothing changed.
+- `GET /api/session/{id}/inspect/record?kind=&id=` returns one full record
+  (`{kind, id, session_id, detail_bytes, record}`) for any `detail` the page
+  clipped. `kind` is `message|event|turn|request|tool|attempt`; a tool id is
+  `turn_id:call_id`. 404 when the record is not in this session's tree.
 
 | Method | Path | Body / query | Returns |
 | --- | --- | --- | --- |
