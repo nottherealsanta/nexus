@@ -4951,6 +4951,11 @@ fn project_rail_labels_activity_and_session_restoration() {
     };
     assert_eq!(label(first.y + 1), "N");
     assert_eq!(label(second.y + 1), "NT");
+    // The two-letter label "NT" is centred, so the middle cell holds its second letter.
+    assert_eq!(
+        buf[(second.x + second.width / 2, second.y + 1)].symbol(),
+        "T"
+    );
     let x = (second.x..second.right())
         .find(|x| buf[(*x, second.y + 1)].symbol() == "N")
         .unwrap();

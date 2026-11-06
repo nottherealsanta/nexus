@@ -197,7 +197,7 @@ What the 12 TUI failures were (all fixed):
   now that the rail draws a multi-byte `▏`; the copy code itself was right.
 - **Stale tests after the 11-06 design changes:** the left sidebar is 5 cells right of where tests assumed (the project
   rail), the search glyph and session rows moved one cell left, the selected session carries the active block (not the
-  spacer row), and the rail's second project is `T`-prefixed in the fixture.
+  spacer row), and the rail's two-letter label `NT` is centred, so its middle cell is `T` (the test expected `N`).
 - **Stale Markdown test:** a Mermaid fence draws as a diagram with `◇ mermaid · copy source`; its source is still
   available to Copy (asserted through `fence_sources`).
 - **Six Manager tests:** the header indicator is gated on `[manager] enabled` (off by default); the fixture never
