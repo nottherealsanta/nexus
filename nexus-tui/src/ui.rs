@@ -367,6 +367,9 @@ pub struct Dialog {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditTarget {
+    RenameTerminal {
+        id: String,
+    },
     RenameSession {
         id: String,
         revision: i64,
@@ -642,6 +645,8 @@ pub enum Target {
     /// The kernel and running-shell counts on the location strip.
     ComposerResources,
     ComposerTerminals,
+    TerminalTab(usize),
+    TerminalNew,
     TerminalTakeControl,
     /// The Files tree root line (project checkout / session worktree).
     FilesRoot,

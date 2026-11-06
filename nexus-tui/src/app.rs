@@ -5865,6 +5865,25 @@ impl App {
                     });
                 }
             }
+            "terminal.rename" => {
+                if let Some(terminal) = self
+                    .terminal_panel
+                    .terminals
+                    .iter()
+                    .find(|t| Some(&t.id) == self.terminal_panel.selected.as_ref())
+                {
+                    let mut buf = Composer::new();
+                    buf.set_text(&terminal.name);
+                    self.ui.edit = Some(TextEdit {
+                        label: "Rename".into(),
+                        target: EditTarget::RenameTerminal {
+                            id: terminal.id.clone(),
+                        },
+                        buf,
+                        restore: self.restore_point(),
+                    });
+                }
+            }
             "terminal.acquire" | "terminal.release" => {
                 if self.terminal_panel.control_busy {
                     return;
@@ -7585,6 +7604,26 @@ impl App {
                 }
                 return;
             }
+            ApiCall::TerminalRename { id, .. } => {
+                match done.result {
+                    Ok(result) => {
+                        if let Some(updated) = result.terminal {
+                            if let Some(item) = self
+                                .terminal_panel
+                                .terminals
+                                .iter_mut()
+                                .find(|t| t.id == id)
+                            {
+                                *item = updated;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.toast(Level::Error, format!("Could not rename terminal: {error}"))
+                    }
+                }
+                return;
+            }
             ApiCall::VoiceStatus { generation } => {
                 self.apply_voice_status(generation, done.result);
                 return;
@@ -9112,6 +9151,7 @@ impl App {
             && self.terminal_focused
             && self.ui.overlay.is_none()
             && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
         {
             if ev.code == KeyCode::Char(']') && ev.modifiers.contains(KeyModifiers::CONTROL) {
                 self.terminal_focused = false;
@@ -9122,11 +9162,20 @@ impl App {
             return;
         }
         let Some(name) = keys::name(&ev) else { return };
-        if self.terminal_open && self.ui.overlay.is_none() && name == "esc" {
+        if self.terminal_open
+            && self.ui.overlay.is_none()
+            && self.ui.edit.is_none()
+            && self.ui.dialog.is_none()
+            && name == "esc"
+        {
             self.close_panel();
             return;
         }
-        if self.terminal_open && self.ui.overlay.is_none() {
+        if self.terminal_open
+            && self.ui.overlay.is_none()
+            && self.ui.edit.is_none()
+            && self.ui.dialog.is_none()
+        {
             match name.as_str() {
                 "up" => self.terminal_panel.cursor = self.terminal_panel.cursor.saturating_sub(1),
                 "down" => {
@@ -9135,7 +9184,7 @@ impl App {
                 }
                 "enter" if self.terminal_panel.cursor == 0 => self.execute("terminal.new"),
                 "c" => self.execute("terminal.acquire"),
-                "r" => self.execute("terminal.release"),
+                "r" => self.execute("terminal.rename"),
                 "enter" => self.terminal_select(self.terminal_panel.cursor - 1),
                 _ => {}
             }
@@ -9562,6 +9611,9 @@ impl App {
                         title,
                         revision,
                     }),
+                    EditTarget::RenameTerminal { id } => {
+                        self.api(ApiCall::TerminalRename { id, name: title })
+                    }
                     EditTarget::ChangeDirectory { id } => self.api(ApiCall::ChangeDirectory {
                         session: id,
                         directory: title,
@@ -13772,6 +13824,11 @@ impl App {
                 self.open_overlay(OverlayKind::Resources { top: 0 });
             }
             Target::ComposerTerminals => self.execute("terminal.open"),
+            Target::TerminalNew => self.execute("terminal.new"),
+            Target::TerminalTab(index) => {
+                self.terminal_panel.cursor = index + 1;
+                self.terminal_select(index);
+            }
             Target::TerminalTakeControl => self.execute("terminal.acquire"),
             Target::FilesRoot => self.run_command("files.root_toggle"),
             Target::PanelBack => self.close_panel(),
@@ -14192,6 +14249,7 @@ impl ActionDone {
         match self.call {
             ApiCall::TerminalList { .. }
             | ApiCall::TerminalCreate { .. }
+            | ApiCall::TerminalRename { .. }
             | ApiCall::TerminalControl { .. }
             | ApiCall::TerminalInput { .. }
             | ApiCall::TerminalResize { .. } => "Terminal failed",

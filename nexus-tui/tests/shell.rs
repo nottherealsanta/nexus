@@ -98,6 +98,24 @@ fn terminal_attachment_automatically_requests_control() {
 }
 
 #[test]
+fn terminal_rename_edits_the_selected_tab() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.terminals.push(
+        serde_json::from_value(serde_json::json!({
+            "id":"t1", "name":"Terminal", "workspace":"/tmp", "status":"running",
+            "controller":null, "rows":24, "cols":80
+        }))
+        .unwrap(),
+    );
+    app.terminal_panel.selected = Some("t1".into());
+    app.execute("terminal.rename");
+    app.ui.edit.as_mut().unwrap().buf.set_text("Build");
+    press(&mut app, &["enter"]);
+    assert!(app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::TerminalRename { id, name }) if id == "t1" && name == "Build")));
+}
+
+#[test]
 fn terminal_input_waits_for_ack_and_ctrl_bracket_returns_to_list() {
     use nexus_tui::actions::{ActionDone, Done};
     use nexus_tui::terminal_panel::TerminalFocus;

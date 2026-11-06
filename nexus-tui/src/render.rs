@@ -2369,7 +2369,7 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let header = format!("Terminals ({})  ", cx.app.terminal_panel.terminals.len());
     put(buf, x, r.y, &header, cx.st(PRIMARY, CANVAS), r.width);
     x = x.saturating_add(width(&header) as u16).min(r.right());
-    for terminal in &cx.app.terminal_panel.terminals {
+    for (index, terminal) in cx.app.terminal_panel.terminals.iter().enumerate() {
         let label = format!(
             "{} {}  ",
             if terminal.status == "running" {
@@ -2381,6 +2381,10 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         );
         let remaining = r.right().saturating_sub(x);
         put(buf, x, r.y, &label, cx.st(PRIMARY, CANVAS), remaining);
+        hits.add(
+            Rect::new(x, r.y, (width(&label) as u16).min(remaining), 1),
+            Target::TerminalTab(index),
+        );
         x = x.saturating_add(width(&label) as u16).min(r.right());
     }
     put(
@@ -2390,6 +2394,10 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         "+",
         cx.st(ACCENT, CANVAS),
         r.right().saturating_sub(x),
+    );
+    hits.add(
+        Rect::new(x, r.y, r.right().saturating_sub(x).min(1), 1),
+        Target::TerminalNew,
     );
     if cx.app.terminal_panel.selected.is_some() && r.height > 1 {
         let screen = Rect::new(r.x, r.y + 1, r.width, r.height - 1);
