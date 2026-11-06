@@ -29,5 +29,8 @@ try {
   assert(captured.some(m => m.type === "focus-list"));
   assert.equal(captured.filter(m => m.type === "input").length, 2);
   assert.match(await page.locator("body").innerText(), /\n0\s*$/);
-  console.log("NSH global Ctrl+C/Esc bindings did not fire; both reached xterm");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(100);
+  assert.match(await page.locator("body").innerText(), /\n1\s*$/);
+  console.log("NSH global Ctrl+C/Esc bindings did not fire in xterm; Ctrl+] returned keys to NSH");
 } finally { await browser.close(); }
