@@ -31,5 +31,12 @@ test('terminal page captures keys, copies only the selection, and blocks OSC 52'
     await page.evaluate(() => window.postMessage(JSON.stringify({type:'write', data:btoa('\x1b]52;c;SGk=\x07')}), '*'));
     await page.waitForTimeout(50);
     assert(!messages.some(m => m.type === 'selection'));
+    await page.evaluate(() => term.write('\x1b[?2004h', () => term.paste('paste')));
+    await page.waitForTimeout(50);
+    assert(messages.some(m => m.type === 'input' && m.data === '\x1b[200~paste\x1b[201~'));
+    await page.evaluate(() => term.write('\x1b[?1049h界', () => window.doneWriting = true));
+    await page.waitForFunction(() => window.doneWriting);
+    assert.equal(await page.evaluate(() => term.buffer.active.type), 'alternate');
+    assert.equal(await page.evaluate(() => term.buffer.active.getLine(0).getCell(0).getWidth()), 2);
   } finally { await browser.close(); }
 });
