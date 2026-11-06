@@ -134,6 +134,8 @@ from .paths import home
 from .runtime import Busy, Conflict, NotFound, Runtime, message_json, project_json
 from .skills import install as skills_install
 from .store import TURN_PAGE, TURN_PAGE_MAX, Store
+from .terminal_api import routes as terminal_routes
+from .terminals import TerminalService
 from .tools import ToolError
 from .voice.audio import MAX_WAV_BYTES, VoiceAudioError, parse_wav
 from .voice.manager import VoiceManager
@@ -420,6 +422,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     config_revision = config.read()["revision"]
     client_views = ClientViews()
     runtime.manager.attach_views(client_views)
+    terminal_service = TerminalService(runtime.store.db)
 
     async def config_api(request: Request) -> Response:
         nonlocal config_revision
@@ -1877,6 +1880,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/manager/navigate/result", route(manager_navigate_result), methods=["POST"]),
         Route("/api/event", route(events)),
     ]
+    routes.extend(terminal_routes(terminal_service, runtime, route, token=token, url=url))
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
@@ -1897,6 +1901,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             with suppress(asyncio.CancelledError):
                 await watcher
             await voice.close()
+            await terminal_service.shutdown()
             await runtime.shutdown()
 
     app = Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(GZipMiddleware)])

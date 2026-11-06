@@ -92,6 +92,8 @@ class Terminal:
         self.frames: deque[tuple[dict[str, Any], int]] = deque()
         self.retained = 0
         self.discarded = 0
+        self._safe: set[int] = set()
+        self._discard_to_boundary = False
         self.seq = 0
         self.attachments: dict[str, Attachment] = {}
         self.controller: str | None = None
@@ -114,6 +116,8 @@ class Terminal:
             os.close(slave)
         self.pid = self.process.pid
         os.set_blocking(self.fd, False)
+        self._fd_closed = False
+        self._close_lock = asyncio.Lock()
         self.loop = asyncio.get_running_loop()
         self.loop.add_reader(self.fd, self._read)
         self.waiter = self.loop.create_task(self._wait())
@@ -135,13 +139,27 @@ class Terminal:
         self.seq += 1
         frame = {"version": 1, "seq": self.seq, "type": kind, **payload}
         size = len(base64.b64decode(payload["data"])) if kind == "output" else 0
-        self.frames.append((frame, size))
-        self.retained += size
+        safe = self.parser._taking_plain_text is True and not self.parser.utf8_decoder.getstate()[0]
+        if self._discard_to_boundary:
+            self.discarded += size
+            self._discard_to_boundary = not safe
+        else:
+            self.frames.append((frame, size))
+            self.retained += size
+            if safe:
+                self._safe.add(self.seq)
         removed = 0
         while self.frames and (self.retained > RING_BYTES or len(self.frames) > 4096):
-            _, n = self.frames.popleft()
-            self.retained -= n
-            removed += n
+            while self.frames:
+                old, n = self.frames.popleft()
+                self.retained -= n
+                removed += n
+                boundary = old["seq"] in self._safe
+                self._safe.discard(old["seq"])
+                if boundary:
+                    break
+            else:
+                self._discard_to_boundary = True
         self.discarded += removed
         for attachment in list(self.attachments.values()):
             if attachment.queue is not None:
@@ -275,6 +293,10 @@ class Terminal:
         self._persist()
 
     async def close(self) -> None:
+        async with self._close_lock:
+            await self._close()
+
+    async def _close(self) -> None:
         if self.status == "running":
             self.status = "closed"
             try:
@@ -284,6 +306,10 @@ class Terminal:
             if foreground > 0 and foreground != self.pid:
                 try:
                     os.killpg(foreground, signal.SIGHUP)
+                except ProcessLookupError:
+                    pass
+                try:
+                    os.killpg(foreground, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
             try:
@@ -307,11 +333,10 @@ class Terminal:
                     except ProcessLookupError:
                         pass
                 await self.waiter
-        self.loop.remove_reader(self.fd)
-        try:
+        if not self._fd_closed:
+            self._fd_closed = True
+            self.loop.remove_reader(self.fd)
             os.close(self.fd)
-        except OSError:
-            pass
         for aid in list(self.attachments):
             self.detach(aid)
 
