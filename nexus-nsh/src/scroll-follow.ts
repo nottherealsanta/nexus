@@ -4,6 +4,10 @@
 // scrolls back down to the end (or a jump asks for it explicitly).
 export const END_SLOP = 24; // scrolling down to within this of the end follows it again
 
+export function mayFollowQueued(queuedSession: string, currentSession: string, following: boolean): boolean {
+  return following && queuedSession === currentSession;
+}
+
 export function followsAfterScroll(m: {
   y: number;
   lastY: number;

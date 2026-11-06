@@ -31,14 +31,14 @@ describe("terminal parity", () => {
     const app = await open("./App.tsx", { network, width: 1280, height: 768 });
     await app.waitFor("id:header");
     const shown = app.texts();
-    // The shared control glyph, not the web-search verb glyph `*`.
-    expect(shown.includes("⌕")).toBe(true);
     expect(shown.includes("*")).toBe(false);
     if (shown.includes("⌘K")) {
-      // A browser or desktop build keeps the platform's command key.
+      // Desktop and web render the search icon as an image.
+      expect(app.shows("id:session-search")).toBe(true);
       expect(shown.includes("ctrl+k")).toBe(false);
     } else {
       // The terminal target reaches the TUI's keys, so it shows their spelling.
+      expect(shown.includes("⌕")).toBe(true);
       expect(shown.includes("ctrl+k")).toBe(true);
       expect(shown.includes("⌃K")).toBe(false);
       expect(shown.includes("ctrl+,")).toBe(true);

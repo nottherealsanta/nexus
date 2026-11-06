@@ -6,6 +6,12 @@ these rules are historical. The rules below describe the TUI.
 
 ## Shared modal rules (2026-11-04)
 
+User clarification (2026-11-06): NSH desktop/web keeps the TUI's control placement,
+wording and behavior while using theme-tinted SVG icons and polished screen-native
+surfaces, including rounded modals and picker rows. Manager consent uses a
+translucent solid fill rather than backdrop blur. This presentation-only difference
+is recorded in the porting ledger.
+
 These rules apply to both clients, including NSH's Void palette. Modal widths have three
 classes: small (TUI 60 cells / NSH 500 px) for confirmations and short input; medium
 (72 cells / 600 px) for palettes, pickers, provider details, usage and notifications;

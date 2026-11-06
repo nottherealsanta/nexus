@@ -421,7 +421,7 @@ function EditableComposer() {
           </If>
           <If when={pasting()}><Text class={T.meta}>Preparing image…</Text></If>
           <DictationStatus />
-          <View class="w-full bg-card px-4 pb-1" testID="composer-surface">
+          <View class="w-full rounded-(--radius-card) bg-card px-4 pb-1" testID="composer-surface">
           <View class="h-6" testID="composer-top-padding" />
           <View class="w-full flex-row items-end gap-3" testID="composer-input-row">
           <Input

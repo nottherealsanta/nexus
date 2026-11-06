@@ -1,6 +1,6 @@
-// One modal recipe (DESIGN_PLAN D13): a borderless square raised block over the scrim, 24 px
+// One modal recipe (DESIGN_PLAN D13): a borderless raised block over the scrim, 24 px
 // padding and the shadow `0 12px 40px rgb(0 0 0 / .4)`. Title first,
-// key hints last. Rows are 32 px with a selection band. Square corners match the TUI's modal.
+// key hints last. Rows are 32 px with a selection band.
 import { Text, View, windowSize } from "nsh";
 import type { JSX } from "nsh";
 import { Dialog } from "nsh/base";
@@ -27,7 +27,7 @@ export function Modal(p: {
     >
       <View testID={p.testID ? `${p.testID}-shell` : undefined}
         style={{ boxShadow: SHADOW, width: isNarrow() ? "100%" : WIDTH[p.size ?? "medium"], maxWidth: "100%", pointerEvents: "auto" }}
-        class={`${p.tall ? "max-h-[90%]" : "max-h-[70%]"} rounded-none bg-popover overflow-hidden ${p.padded === false ? "" : "p-6"}`}>
+        class={`${p.tall ? "max-h-[90%]" : "max-h-[70%]"} rounded-(--radius-card) bg-popover overflow-hidden ${p.padded === false ? "" : "p-6"}`}>
         <View accessibilityLabel={p.label} testID={p.testID} class="min-h-0">
           {p.children}
         </View>

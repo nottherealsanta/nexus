@@ -1,7 +1,7 @@
 // The timeline follows the end as the TUI does, and keeps measured rows across rebuilds.
 import { describe, expect, open, test } from "nsh/test";
 import { keepIdentity } from "./src/ui/keep-identity";
-import { followsAfterScroll, pinReleased, pinSpacer } from "./src/scroll-follow";
+import { followsAfterScroll, mayFollowQueued, pinReleased, pinSpacer } from "./src/scroll-follow";
 
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
 const session = { id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Long session", model: "", permission: "ask", created: 1, updated: 2, effort: null, agent: "build", parent_id: null, archived: 0, revision: 1, disabled_tools: "[]" };
@@ -31,10 +31,25 @@ const network = {
   "GET */api/session/ses_2/snapshot": { body: null },
   "GET */api/session/ses_2/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
   "GET */api/session/ses_2/worktrees": { body: { worktrees: [] } },
+  "GET */api/session/ses_2": { body: session2 },
   "GET */api/session/*": { body: session },
 };
 
 describe("timeline scrolling", () => {
+  test("the virtual list compensates once for a measured row growing above the viewport", async () => {
+    const app = await open("./ScrollAnchorFixture.tsx", { width: 600, height: 500, platform: "web" });
+    await app.scroll("id:anchor-list", 150);
+    await app.press("id:save-offset");
+    await app.press("id:grow-row");
+    await app.waitFor("text:delta 80");
+    await app.press("id:measure");
+    await app.waitFor("text:position 0");
+  });
+  test("a queued follow cannot move a different session or a reader who stopped following", () => {
+    expect(mayFollowQueued("one", "one", true)).toBe(true);
+    expect(mayFollowQueued("one", "two", true)).toBe(false);
+    expect(mayFollowQueued("one", "one", false)).toBe(false);
+  });
   test("a session opens at its end, scrolling up leaves it, and the jump returns to it", async () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768 });
     await app.waitFor("text:Long session");
@@ -90,6 +105,7 @@ describe("timeline scrolling", () => {
     await app.waitFor("id:timeline-row");
     await app.scroll("id:timeline", -600);
     await app.waitFor("id:jump-latest");
+    const before = app.texts().filter((t: string) => /^Message \d+/.test(t));
     await app.press("id:session-ses_2");
     await app.waitFor("text:Other session");
     await app.press("id:session-ses_1");
@@ -97,6 +113,61 @@ describe("timeline scrolling", () => {
     // It reopens at the saved offset, not forced back to the end.
     await app.waitFor("id:jump-latest");
     expect(app.shows("id:jump-latest")).toBe(true);
+    expect(app.texts().some((t: string) => before.includes(t))).toBe(true);
+  });
+
+  test("loading an older page requests and displays the older messages", async () => {
+    const app = await open("./App.tsx", {
+      network: {
+        ...network,
+        "GET */api/session/ses_1/message*": (request: any) => ({
+          body: request.url.includes("before=")
+            ? { messages: messages.slice(0, 20), more: false }
+            : { messages: messages.slice(20), more: true },
+        }),
+      }, width: 1024, height: 768,
+    });
+    await app.waitFor("text:Long session");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:timeline-row");
+    await app.scroll("id:timeline", -4000);
+    await app.waitFor("id:load-older");
+    await app.press("id:load-older");
+    await app.waitUntil(() => app.requests().some((r: any) => r.url.includes("before=21")));
+    await app.waitUntil(() => !app.shows("id:load-older"));
+    await app.scroll("id:timeline", -2500);
+    await app.waitFor("text:/Message 0/");
+    expect(app.shows("id:jump-latest")).toBe(true);
+    await app.press("id:jump-latest");
+    await app.waitFor("text:/Message 59/");
+  });
+
+  test("live deltas while reading history do not resume following", async () => {
+    let send = false;
+    let sent = false;
+    const delta = { id: 1, cursor: "log_t:1", session_id: "ses_1", type: "text_delta", data: { text: "A live reply that grew below the reader. ".repeat(60) } };
+    const app = await open("./App.tsx", {
+      network: {
+        ...network,
+        "GET */api/event*": () => {
+          const event = send && !sent ? (sent = true, `event: text_delta\ndata: ${JSON.stringify(delta)}\n\n`) : "";
+          return { body: connected + event, headers: { "content-type": "text/event-stream" }, delay: 150 };
+        },
+      }, width: 1024, height: 768,
+    });
+    await app.waitFor("text:Long session");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:timeline-row");
+    await app.scroll("id:timeline", -600);
+    await app.waitFor("id:jump-latest");
+    const before = app.texts().filter((t: string) => /^Message \d+/.test(t));
+    send = true;
+    await app.waitUntil(() => sent);
+    await app.wait(800);
+    expect(app.shows("id:jump-latest")).toBe(true);
+    expect(app.texts().some((t: string) => before.includes(t))).toBe(true);
+    await app.press("id:jump-latest");
+    await app.waitFor("text:/A live reply that grew below the reader/");
   });
 
   test("streaming content never pulls a reader who scrolled up back down", () => {

@@ -14,6 +14,11 @@ hand.
 
 The app itself is TSX (`App.tsx`, `src/`); `package.json` is tooling only.
 
+The timeline lets the NSH virtual list preserve the visible row when measurements
+or splices change content above it; the app does not apply a second height
+correction. Following the latest message and restoring a session's position remain
+app-controlled. Deferred follow commands are scoped to the session that queued them.
+
 **Open inspector** stays inside NSH, using the same authenticated transport as the
 session (Inspector API v2), and does the same as the Rust TUI with buttons, inputs and the
 same keys. Six views: Timing (one shared-axis Gantt, lanes grouped by session, a fixed ruler,
@@ -31,11 +36,15 @@ commands in `interface/manifest.toml` (the same bare keys as the TUI). The Sessi
 See [the inspector guide](../docs/inspector.md).
 
 The Rust TUI is the visual reference for the shared NSH app. NSH uses Monaspace
-Argon for interface text and prose and a full-width reading column with fixed 8 px
-outer and inner gutters. Desktop and web controls rendered by the shared Icon
-component use the bundled, theme-tinted SVGs; sidebar open/closed indicators and
-the timeline's status and tool glyphs retain the shared TUI glyphs. Button labels
-remain accessible names and tooltips, not visible fallback text.
+Argon for interface text and prose and a full-width reading column with a fixed 24 px
+outer gutter and 8 px inner gutters. Desktop and web controls use bundled,
+theme-tinted SVGs, including sidebar tabs and the Settings row alongside their
+labels. Open and closed sidebar indicators use distinct icons; timeline status
+and animated running marks retain their shared TUI meanings. Rounded surfaces,
+hover, focus and pressed states are screen-specific presentation, not different
+placement or behavior. Manager consent uses a translucent solid surface without
+backdrop blur so that GPUI can render it too. Icon-only buttons retain accessible
+names and tooltips.
 The session search icon, field and shortcut are laid out side by side, without
 absolute overlays. Phone touch targets and mobile navigation remain unchanged.
 Narrow desktop/web headers show one flexible title instead of a fixed-width tab
@@ -70,6 +79,11 @@ The first run builds a terminal host with Nexus's native services. Diagnostics g
 to `.nsh/tui.log`. On macOS, local Core discovery uses the same `~/.nexus/daemon.json`
 path as the native window; custom `NEXUS10_HOME` discovery is not supported by the
 native TSX transport yet.
+
+The experimental `nexus gpui` host loads the build's `capabilities.json` alongside
+`bundle.js`; without that file it fails to launch rather than silently dropping
+the filesystem grants needed for local daemon discovery. The AppKit `nexus macos`
+launcher remains separate. Neither native launcher starts Core automatically.
 
 The terminal app reads like the Rust client. The sidebar search uses the shared `⌕`
 control glyph, key hints show the TUI's spellings (`ctrl+k`, `ctrl+,`) and the
@@ -396,6 +410,25 @@ nsh test --target web                                # uses an installed Chrome/
 nsh test --target web --browser "/path/to/Chromium"  # explicit browser
 npm run test:host                                    # host proxy hardening (node --test)
 ```
+
+`nsh test scroll-anchor-native.test.tsx --target macos` (or `--target gpui` / `web`)
+checks the platform List's visible-marker anchoring for row growth and prepends.
+The default headless engine does not match these hosts for row growth: after an
+initial offset of 150 it reports no offset correction and an 80-pixel marker shift.
+These fixture tests do not exercise Core history loading or the packaged app.
+
+The full-app browser coordinate regression uses a fake Core and a separate web
+development host (no daemon):
+
+```sh
+NEXUS10_HOME=/tmp/nexus-scroll-home node scripts/nsh-web.mjs dev App.tsx --target web --port 18791
+node e2e/timeline-anchor.mjs --url http://127.0.0.1:18791
+node e2e/timeline-anchor.mjs --url http://127.0.0.1:18791 --more
+node e2e/timeline-anchor.mjs --url http://127.0.0.1:18791 --move
+```
+
+It measures a message before and after the older page arrives, including when
+the reader moves while it is pending. Add `--browser /path/to/Chrome` if needed.
 
 Visual/interaction harness (a real `nexus daemon start` and a scripted Core,
 then Playwright at 390x844, 1024x768 and 1440x900 in dark and light). The scripted

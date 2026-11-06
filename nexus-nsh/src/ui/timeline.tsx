@@ -17,7 +17,7 @@ import type { IconName } from "../icons";
 import { roles, statusGlyphs } from "../gen/theme";
 import { pasteLabel } from "../pastes";
 import { keepIdentity } from "./keep-identity";
-import { END_SLOP, followsAfterScroll, pinReleased, pinSpacer } from "../scroll-follow";
+import { END_SLOP, followsAfterScroll, mayFollowQueued, pinReleased, pinSpacer } from "../scroll-follow";
 import { closedFenceSources, mermaidImage, mermaidText, toneClass } from "../mermaid";
 import { WORDS } from "../manager";
 import "../../fonts/MonaspaceArgon-Regular.otf";
@@ -1460,9 +1460,6 @@ export function Timeline() {
   let following = true;
   let lastY = 0;
   let endQueued = false;
-  // The first visible row when a height changes: keep it where it is, as the TUI does.
-  let anchored: { sid: string; key: string } | null = null;
-  let previousHeights: Record<string, number> = {};
   let restoring = 0; // a session's saved offset, applied until its rows settle
   let restoringSid: string | null = null;
   // Rows measure over a few frames when a session opens; the offsets those
@@ -1474,8 +1471,9 @@ export function Timeline() {
   /** One command per engine turn, however many rows reported a new height. */
   const keepEnd = () => {
     if (!following || endQueued) return;
+    const sid = viewId();
     endQueued = true;
-    setTimeout(() => { endQueued = false; if (following) toEnd(); }, 0);
+    setTimeout(() => { endQueued = false; if (mayFollowQueued(sid, viewId(), following)) toEnd(); }, 0);
   };
   jump.fn = () => { follow(true); toEnd(); };
   // Follow state is per view: a scroll position from the session just left must
@@ -1501,7 +1499,39 @@ export function Timeline() {
     scrolledUp.set(atEnd ? false : true);
     restoringSid = atEnd ? null : sid;
     restoring = atEnd ? 0 : scrollOf(sid);
-    if (atEnd) setTimeout(toEnd, 0);
+    if (atEnd) setTimeout(() => { if (mayFollowQueued(sid, viewId(), following)) toEnd(); }, 0);
+  });
+  // A history page replaces the load-older row as well as inserting rows. Keep
+  // the old visible row by key, rather than applying a second height delta.
+  let beforePage: { sid: string; rows: Row[]; firstSeq: number | undefined } | null = null;
+  effect(() => {
+    const sid = viewId();
+    const current = rows();
+    const previous = beforePage;
+    const firstSeq = model.selected?.messages[0]?.seq;
+    beforePage = { sid, rows: current, firstSeq };
+    if (!previous || previous.sid !== sid || following || previous.rows[0]?.kind !== "older" || previous.rows[0].action !== "load-older") return;
+    if (firstSeq === undefined || previous.firstSeq === undefined || firstSeq >= previous.firstSeq) return;
+    const offset = untracked(() => scrollOf(sid));
+    const heights = untracked(rowHeights);
+    let top = LIST_PAD;
+    let old: Row | undefined;
+    for (const row of previous.rows) {
+      const height = heights[heightKey(sid, row.key)] ?? ROW_ESTIMATE;
+      if (top + height > offset && row.kind !== "older") { old = row; break; }
+      top += height;
+    }
+    if (!old) return;
+    const index = current.findIndex((row) => row.key === old!.key);
+    if (index < 0) return;
+    const key = old.key;
+    const fromTop = top - offset;
+    setTimeout(() => {
+      if (viewId() !== sid || following) return;
+      const at = rows().findIndex((row) => row.key === key);
+      if (at < 0) return;
+      try { ref?.scrollToIndex({ index: at, viewOffset: fromTop, animated: false }); } catch {}
+    }, 0);
   });
   // The pinned first message: its row's top is the scroll offset, held as rows measure.
   const pin = signal<string | null>(null);
@@ -1557,36 +1587,11 @@ export function Timeline() {
       if (total >= target + viewHOf(viewId())) restoringSid = null;
     }
   });
-  // New rows and a growing reply keep the end in view while following; heights
-  // changing above the viewport keep the first visible row anchored while not.
+  // The virtual list anchors measured rows itself. Only follow the end here;
+  // a second height compensation would move the viewport twice.
   effect(() => {
-    const heights = rowHeights();
-    const rowsNow = rows();
-    const sid = viewId();
-    if (!following && !untracked(pinned) && anchored && anchored.sid === sid) {
-      let delta = 0;
-      for (const r of rowsNow) {
-        if (r.key === anchored.key) break;
-        const key = heightKey(sid, r.key);
-        const now = heights[key], was = previousHeights[key];
-        if (now !== undefined) delta += now - (was ?? ROW_ESTIMATE);
-      }
-      if (Math.abs(delta) > 0.5) {
-        const offset = Math.max(0, lastY + delta);
-        try { ref?.scrollToOffset({ offset, animated: false }); } catch {}
-        lastY = offset;
-      }
-    }
-    if (!following) {
-      let top = LIST_PAD;
-      anchored = null;
-      for (const r of rowsNow) {
-        const h = heights[heightKey(sid, r.key)] ?? ROW_ESTIMATE;
-        if (top + h > lastY + 1) { anchored = { sid, key: r.key }; break; }
-        top += h;
-      }
-    }
-    previousHeights = heights;
+    rowHeights();
+    rows();
     untracked(keepEnd);
   });
   return (

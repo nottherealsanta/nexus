@@ -147,7 +147,7 @@ function PickerBody() {
               <Each of={filtered()} key={(x) => x.id}>
                 {(it, i) => (
                   <Button onPress={() => choose(it())} selected={idx() === clamp(i())} accessibilityLabel={it().label} testID={`pick-${i()}`}
-                    class={`group/row relative rounded-none px-3 min-h-8 justify-center hover:bg-accent ${idx() === clamp(i()) ? "bg-selection" : ""} ${FOCUS}`}>
+                    class={`group/row relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent active:bg-selection ${idx() === clamp(i()) ? "bg-selection" : ""} ${FOCUS}`}>
                     <View class="flex-row items-center gap-3">
                       <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{favorites().includes(it().id) ? `★ ${it().label}` : it().label}</Text>
                       <If when={!!it().hint}><Text style={{ numberOfLines: 1 }} class={`${TS.base} text-muted-foreground tabular-nums`}>{it().hint}</Text></If>

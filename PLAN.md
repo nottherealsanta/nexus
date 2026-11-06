@@ -58,7 +58,8 @@ Made (user):
 
 - [~] Added an independent `nexus-gpui` host and launcher. The NSH 0.4.0 bundle and host compile; window rendering, Core connectivity, theme and parity remain unverified. `nsh run App.tsx --target gpui --port 0` produced no output before a 45-second timeout, so its development host is not confirmed working.
 - The host pins the same NSH 0.4.0 revision as `nexus-nsh/native` and the installed CLI, rather than the tag, so their registry types match. It registers the app's native Mermaid, annotation and microphone modules. GPUI uses runtime Metal shaders.
-- NSH documents GPUI differences including no blur/backdrop filter (the Manager stage uses one), different opacity, partial transforms and rounded clipping, macOS video placeholders, web views above NSH content without ancestor clipping, and limited accessibility actions. These are limitations to investigate, not approved UI differences. Verify the theme, assets, network/auth and native features against AppKit and the TUI before considering this more than a spike.
+- GPUI now loads the built bundle's capabilities metadata: without it, the NSH runtime denies reading the local daemon file. Bundle loading has a regression test; a live GPUI/Core connection remains unverified. Native discovery still does not honor a custom `NEXUS10_HOME`.
+- NSH documents GPUI differences including no blur/backdrop filter, different opacity, partial transforms and rounded clipping, macOS video placeholders, web views above NSH content without ancestor clipping, and limited accessibility actions. Manager consent now uses a translucent solid surface without backdrop blur. Verify the theme, assets, network/auth and native features against AppKit and the TUI before considering this more than a spike.
 
 Open (each has a default that holds unless the user objects):
 
@@ -643,6 +644,20 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] Tests in both clients: stream while scrolled up (the view must not move); stop just short of the end; send
   a message (its band at the top, the reply below); a long reply growing past the viewport (no follow until the
   end is reached); a session switch and back (position restored); late-measured rows above the viewport.
+- [ ] Investigate remaining NSH scroll jumps end to end with a scratch Core: the NSH List fixture preserves a
+  visible marker for a row growing above it and for prepended rows on web, AppKit and GPUI development hosts;
+  the headless engine instead reports offset delta 0 and marker displacement 80 after growth despite an initial
+  offset of 150. A headless trace shows the core did emit `ScrollBy` 80; upstream `nsh-testing/src/screen.rs`
+  applies that item but, unlike scroll commands, does not add it to `scrolled` for reporting back to the engine.
+  This is a plausible cause of stale reported offset/measurement, not yet confirmed by an upstream fix.
+  Fake-network full-app tests exercise history paging and a live delta, and compare some mounted message text
+  across streaming and a session switch on web, AppKit and GPUI. A browser-coordinate regression confirmed that
+  loading older history left offset 0 and displaced the previous first message out of the mounted viewport. NSH now
+  restores the old visible row by key on a page prepend; browser tests retain its exact position with the last page,
+  another page available, and a scroll while the request is pending. Native paging tests verify data/navigation,
+  not coordinates. A GPUI switch test failed once under concurrent host runs and passed five serial reruns; its
+  cause remains unknown. Exact native positioning, packaged hosts and a live scratch Core remain unverified.
+  Do not treat these cases as proof that all random jumps are fixed.
 - [ ] Write the generator (`interface/scripts/spinners.py` or `scripts/gen.py`) that emits the frame lists, and add
   `[glyphs.spinner_tab]` and `[glyphs.spinner_agent]` (unicode, ascii) to `interface/theme.toml`, with the random
   shape choice specified as data (variants plus a per-session seed) so both clients behave the same.
@@ -1055,8 +1070,10 @@ Terminal evidence capture and agent-control policy apply to section 2 as well.
 Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](docs/archive/PLAN-2026-11-06.md#landed).
 
 - **NSH control icons (11-06).** Restored bundled theme-tinted SVGs in the shared
-  desktop/web Icon component; sidebar state indicators and timeline glyphs remain
-  shared with the TUI. Web rendering checked in a seeded browser; AppKit and GPUI
+  desktop/web Icon component, sidebar tabs and Settings row, with distinct sidebar
+  open/closed icons and unchanged status semantics. Rounded surfaces, focus and
+  pressed states and a no-blur Manager consent surface are an approved NSH visual
+  difference. Web before/after and a seeded TUI frame were checked; AppKit and GPUI
   visual rendering still need verification. The GPUI bundle includes the assets.
 
 - **NSH web archiver discovery (11-06).** Web build, test and development commands

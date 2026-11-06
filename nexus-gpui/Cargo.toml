@@ -1,0 +1,15 @@
+[package]
+name = "nexus-gpui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+nsh-platform-gpui = { git = "https://github.com/longbridge/nsh", rev = "3789a451f6d4935a3b13890fb1020a427d20a8ee", features = ["runtime-shaders"] }
+nsh-base = { git = "https://github.com/longbridge/nsh", rev = "3789a451f6d4935a3b13890fb1020a427d20a8ee" }
+nexus-nsh-native = { path = "../nexus-nsh/native" }
+
+[profile.dev.package.quickjs-jit-sys]
+opt-level = 3
+[profile.dev.package.taffy]
+opt-level = 3

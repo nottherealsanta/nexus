@@ -3,15 +3,20 @@ import type { JSX } from "nsh";
 import { Image, Text, View, colorScheme, effect, platform, signal } from "nsh";
 import { Button } from "nsh/base";
 import { icons, type IconName } from "../icons";
+import panelClosed from "../icons/panel-closed.svg";
 import { attention as attentionGlyphs, controlGlyphs, fold, sidebarGlyphs, structure, verbGlyphs } from "../gen/theme";
 import { statusGlyphs, attention, spinner as spinnerFrames, shimmerColors, shimmerMotion } from "../gen/theme";
 import { config, isNarrow } from "../store";
 
-// Weight and colour carry the hierarchy; titles, prose and code share a size.
+// Screen typography keeps metadata quieter while preserving terminal cell sizing.
 const typeSize = platform.idiom !== "terminal" && (platform.os === "web" || platform.os === "macos")
   ? "text-[14px] leading-6" : "text-[16px] leading-6";
+const titleSize = platform.idiom !== "terminal" && (platform.os === "web" || platform.os === "macos")
+  ? "text-[16px] leading-6" : typeSize;
+const metaSize = platform.idiom !== "terminal" && (platform.os === "web" || platform.os === "macos")
+  ? "text-[12px] leading-5" : typeSize;
 export const TS = {
-  title: typeSize,
+  title: titleSize,
   body: typeSize,
   base: typeSize,
   mono: `font-mono ${typeSize}`,
@@ -23,8 +28,8 @@ export const T = {
   base: `${TS.base} text-foreground`,
   label: `${TS.base} font-medium text-foreground`,
   sec: `${TS.base} text-foreground-secondary`,
-  meta: `${TS.base} text-muted-foreground tabular-nums`,
-  section: `${TS.base} font-medium text-muted-foreground`,
+  meta: `${metaSize} text-muted-foreground tabular-nums`,
+  section: `${metaSize} font-medium text-muted-foreground`,
   mono: `${TS.mono} text-foreground-secondary`,
 };
 export const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring";
@@ -54,9 +59,8 @@ export const iconGlyphs: Record<IconName, string> = {
 export function Icon(p: { name: IconName; size?: number; class?: string; selected?: boolean }) {
   const size = p.size ?? 16;
   const glyph = () => p.selected === false && p.name === "panel-left" ? sidebarGlyphs.left_closed.unicode : p.selected === false && p.name === "panel-right" ? sidebarGlyphs.right_closed.unicode : iconGlyphs[p.name];
-  // The panel glyphs distinguish open and closed, as in the TUI.
-  if (p.name !== "panel-left" && p.name !== "panel-right" && platform.idiom !== "terminal") {
-    return <Image src={icons[p.name]} style={{ width: size, height: size }} class={`shrink-0 ${p.class ?? "tint-foreground-secondary"}`} accessible={false} />;
+  if (platform.idiom !== "terminal") {
+    return <Image src={p.selected === false && (p.name === "panel-left" || p.name === "panel-right") ? panelClosed : icons[p.name]} style={{ width: size, height: size }} class={`shrink-0 ${p.class ?? "tint-foreground-secondary"}`} accessible={false} />;
   }
   return <View class="shrink-0 items-center justify-center" style={{ width: size, height: size }} accessible={false}>
     <Text class={`font-mono text-center ${TS.base} ${(p.class ?? "tint-foreground-secondary").replaceAll("tint-", "text-")}`} accessible={false}>{glyph()}</Text>
@@ -83,7 +87,7 @@ export function Btn(p: { initial?: boolean; label: string; onFocus?: () => void;
   return (
     <View role="button" focusable
       onFocus={p.onFocus} onPress={p.onPress} disabled={p.disabled || p.busy} testID={p.testID} accessibilityLabel={p.reason && p.disabled ? `${p.label}, unavailable: ${p.reason}` : p.label}
-      class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 active:opacity-80 ${skin} ${p.initial ? "border-ring" : ""} ${p.class ?? ""} ${FOCUS}`}
+      class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 ${k === "primary" ? "active:bg-primary" : "active:bg-selection"} ${skin} ${p.initial ? "border-ring" : ""} ${p.class ?? ""} ${FOCUS}`}
     >
       <If when={p.icon}>{() => <Icon name={p.icon!} class={k === "primary" ? "tint-on-accent" : k === "danger" ? "tint-error" : "tint-foreground-secondary"} />}</If>
       <Text class={`${TS.base} font-medium ${fg}`}>{p.busy ? "Working…" : p.label}</Text>

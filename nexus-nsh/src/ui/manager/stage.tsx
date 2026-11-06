@@ -1,7 +1,7 @@
 // Manager dropdown and the one-row braille indicator, anchored to the header in both clients.
 import { Overlay, Scroll, Text, View, colorScheme, effect, keymap, signal, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
-import { FOCUS, T, TS } from "../kit";
+import { FOCUS, Icon, T, TS } from "../kit";
 import { CardBody } from "./cards";
 import { brailleField, waveColor, waveOpacity } from "./braille";
 import { OrbMode, WORDS, cardCaption, cardTitle } from "../../manager";
@@ -120,8 +120,8 @@ function Layer() {
         <Input value={fieldText() ?? ""} autoFocus={dropdownInteractive()} placeholder={WORDS.placeholder} accessibilityLabel="Tell the Manager" testID="manager-field"
           onFocus={() => dropdownInteractive.set(true)} onChange={({ value }) => fieldText.set(value)} onSubmit={submitField} submitBehavior="submit" class={`h-12 w-full bg-card px-3 ${TS.body} text-popover-foreground`} />
         <View class="flex-row justify-between items-center gap-3">
-        <Button onPress={() => void run("manager.audio_toggle")} class={`py-2 ${FOCUS}`} testID="manager-voice-toggle" accessibilityLabel={voiceEnabled() ? "Voice on" : "Voice off"}><Text class={T.body}>{voiceEnabled() ? "Voice: on" : "Voice: off"}</Text></Button>
-        <Button onPress={() => void run("manager.open_session")}  class={`items-start py-2 ${FOCUS}`} testID="manager-open-session"><Text class={T.body}>Open Manager session</Text></Button>
+        <Button onPress={() => void run("manager.audio_toggle")} class={`flex-row items-center gap-2 rounded-(--radius) px-2 py-2 hover:bg-accent active:bg-selection ${FOCUS}`} testID="manager-voice-toggle" accessibilityLabel={voiceEnabled() ? "Voice on" : "Voice off"}><Icon name="mic" size={14} /><Text class={T.body}>{voiceEnabled() ? "Voice: on" : "Voice: off"}</Text></Button>
+        <Button onPress={() => void run("manager.open_session")}  class={`flex-row items-center gap-2 rounded-(--radius) px-2 py-2 hover:bg-accent active:bg-selection ${FOCUS}`} testID="manager-open-session"><Icon name="session" size={14} /><Text class={T.body}>Open Manager session</Text></Button>
         </View>
       </View>
     </>}</If>
@@ -135,8 +135,8 @@ function Layer() {
 /** The privacy notice before a first call: in the modal style, accepted with enter and cancelled with esc. */
 function ConsentPanel(p: { width: number }) {
   return (
-    <View class="bg-popover/80 rounded-(--radius-card) p-6 gap-3" testID="manager-consent" accessibilityLabel="Manager privacy notice"
-      style={{ width: p.width, backdropFilter: "blur(22px) saturate(1.15)", boxShadow: SHADOW }}>
+    <View class="bg-popover/95 rounded-(--radius-card) p-6 gap-3" testID="manager-consent" accessibilityLabel="Manager privacy notice"
+      style={{ width: p.width, boxShadow: SHADOW }}>
       <Text class={T.section}>Privacy</Text>
       <Text style={{ userSelect: "text" }} class={T.body}>{consent()?.notice ?? ""}</Text>
       <Text class={`${T.meta} pt-1`} testID="manager-consent-hints">enter accept · esc cancel</Text>

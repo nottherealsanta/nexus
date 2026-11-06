@@ -38,9 +38,10 @@ export function SidebarTabs(p: { labels?: boolean }) {
             selected={leftTab() === t().id} accessibilityLabel={t().label} testID={`tab-${t().id}`} disabled={false}
             onPress={() => { leftTab.set(t().id); if (t().id === "files") void loadFiles(); savePrefs(); }}
             tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{t().label}{hint(t().command) ? `  ${hint(t().command)}` : ""}</Text>}
-            class={`flex-row items-center justify-center rounded-(--radius) px-1 hover:bg-accent ${leftTab() === t().id ? "bg-background" : ""} ${isNarrow() ? "min-h-11" : "min-h-6"} ${FOCUS}`}
+            class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) px-2 hover:bg-accent active:bg-selection ${leftTab() === t().id ? "bg-background" : ""} ${isNarrow() ? "min-h-11" : "min-h-6"} ${FOCUS}`}
           >
-            <Text class={`${TS.base} ${leftTab() === t().id ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{`[${t().label}]`}</Text>
+            <Icon name={t().id} size={14} class={leftTab() === t().id ? "tint-foreground" : "tint-muted-foreground"} />
+            <Text class={`${TS.base} ${leftTab() === t().id ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{t().label}</Text>
           </Tab>
         )}
       </Each>
@@ -70,6 +71,7 @@ export function LeftSidebar(p: { drawer?: boolean }) {
           onPress={() => run("app.settings")} testID="open-settings" accessibilityLabel="Settings" selected={centre() === "settings"}
           class={`flex-row items-center gap-2 rounded-(--radius) px-2 hover:bg-accent ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}
         >
+          <Icon name="settings" size={16} class="tint-muted-foreground" />
           <Text class={`flex-1 ${TS.base} text-foreground`}>Settings</Text>
           <Text class={T.meta}>{hint("app.settings") ?? ""}</Text>
         </Button>
@@ -337,7 +339,7 @@ export function SessionsTab() {
             }>
               <Button onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} testID="new-session-row" accessibilityLabel="New session"
                 class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}>
-                <View class="w-4 items-center justify-center"><Text class={`${TS.base} text-muted-foreground`}>+</Text></View>
+                <Icon name="plus" size={16} class="tint-muted-foreground" />
                 <Text class={`${TS.base} text-muted-foreground`}>New session</Text>
               </Button>
             </If>
@@ -396,6 +398,7 @@ function SessionRow(p: { s: () => Session }) {
             <If when={!phone}><View class="w-4 items-center justify-center">
               <If when={att()}><AttentionMark kind="waiting" /></If>
               <If when={!att() && s().status === "busy"}><Status kind="running" /></If>
+              <If when={!att() && s().status !== "busy"}><Icon name="session" size={14} class="tint-muted-foreground" /></If>
             </View></If>
             <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${sel() ? "text-highlight" : "text-foreground"}`}>{s().title || "Untitled"}</Text>
             <If when={!phone}>

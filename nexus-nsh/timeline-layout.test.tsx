@@ -96,11 +96,11 @@ describe("timeline reading column", () => {
     expect(app.shows("id:context-sections")).toBe(true);
     expect(app.shows("id:new-session")).toBe(true);
     expect(app.shows("id:new-session-column")).toBe(true);
-    expect(app.texts().includes(iconGlyphs["panel-left"])).toBe(true);
-    expect(app.texts().includes(iconGlyphs["arrow-up"])).toBe(true);
+    expect(app.shows("id:toggle-left")).toBe(true);
+    expect(app.shows("id:send")).toBe(true);
     expect(app.texts().includes("Send message")).toBe(false);
-    expect(app.texts().includes("[Sessions]")).toBe(true);
-    expect(app.texts().includes("[Files]")).toBe(true);
+    expect(app.texts().includes("Sessions")).toBe(true);
+    expect(app.texts().includes("Files")).toBe(true);
     expect(app.shows("id:right-rail")).toBe(false);
     expect(app.shows("id:composer-bottom-edge")).toBe(true);
     expect(app.shows("id:activity-bar")).toBe(true);
