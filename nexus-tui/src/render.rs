@@ -253,7 +253,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         draw_waiting(&cx, buf, regions.waiting, &mut hits);
         draw_composer(&cx, buf, regions.composer, &mut hits);
         if let Some(dock) = regions.terminal {
-            draw_terminal_dock(&cx, buf, dock);
+            draw_terminal_dock(&cx, buf, dock, &mut hits);
         }
         if let Some(behind) = metrics.2 {
             draw_jump(&cx, buf, regions.composer, behind, &mut hits);
@@ -2363,7 +2363,7 @@ fn git_marker(code: &str) -> Option<(char, &'static str)> {
     }
 }
 
-fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect) {
+fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     clear(buf, r, cx.st(PRIMARY, CANVAS));
     let mut x = r.x;
     let header = format!("Terminals ({})  ", cx.app.terminal_panel.terminals.len());
@@ -2394,6 +2394,26 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect) {
     if cx.app.terminal_panel.selected.is_some() && r.height > 1 {
         let screen = Rect::new(r.x, r.y + 1, r.width, r.height - 1);
         cx.app.terminal_panel.screen.render(screen, buf);
+        if !cx.app.terminal_controlled && cx.app.terminal_panel.attachment.is_some() {
+            let label = "Read-only · Take control";
+            put(
+                buf,
+                screen.x,
+                screen.y,
+                label,
+                cx.st("status.warning", CANVAS),
+                screen.width,
+            );
+            hits.add(
+                Rect::new(
+                    screen.x,
+                    screen.y,
+                    (width(label) as u16).min(screen.width),
+                    1,
+                ),
+                Target::TerminalTakeControl,
+            );
+        }
         if cx.app.terminal_panel.screen.gap {
             put(
                 buf,

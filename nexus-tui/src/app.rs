@@ -1019,6 +1019,43 @@ pub fn sync_msg_affects_view(msg: &SyncMsg) -> bool {
 }
 
 impl App {
+    fn terminal_select(&mut self, index: usize) {
+        if self.terminal_panel.input_busy || !self.terminal_panel.input_queue.is_empty() {
+            self.toast(Level::Warning, "Wait for terminal input to be acknowledged");
+            return;
+        }
+        let Some(terminal) = self.terminal_panel.terminals.get(index) else {
+            return;
+        };
+        let id = terminal.id.clone();
+        if self.terminal_panel.selected.as_deref() == Some(&id)
+            && self.terminal_panel.attachment.is_some()
+        {
+            self.terminal_focused = true;
+            self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::Screen;
+            return;
+        }
+        self.terminal_panel.generation += 1;
+        self.terminal_controlled = false;
+        self.terminal_panel.next_input = 1;
+        self.terminal_panel.input_busy = false;
+        self.terminal_panel.input_queue.clear();
+        self.terminal_panel.resize_busy = false;
+        self.terminal_panel.control_busy = false;
+        self.terminal_panel.size = None;
+        self.terminal_panel.screen =
+            crate::terminal_screen::TerminalScreen::new(terminal.rows, terminal.cols);
+        self.terminal_panel.selected = Some(id.clone());
+        self.terminal_panel.attachment = None;
+        self.terminal_selected = true;
+        self.terminal_focused = true;
+        self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::Screen;
+        self.effects.push(Effect::TerminalAttach {
+            id,
+            client: self.terminal_panel.client_id.clone(),
+            generation: self.terminal_panel.generation,
+        });
+    }
     fn terminal_send_next(&mut self) {
         if !self.terminal_controlled || self.terminal_panel.input_busy {
             return;
@@ -1082,7 +1119,8 @@ impl App {
                 generation,
                 attachment,
             } if generation == self.terminal_panel.generation && self.terminal_open => {
-                self.terminal_panel.attachment = Some(attachment)
+                self.terminal_panel.attachment = Some(attachment);
+                self.execute("terminal.acquire");
             }
             TerminalEvent::Frame { generation, frame }
                 if generation == self.terminal_panel.generation && self.terminal_open =>
@@ -7514,7 +7552,11 @@ impl App {
                     self.terminal_panel.loading = false;
                     match done.result {
                         Ok(result) => {
-                            self.terminal_panel.terminals = result.terminals.unwrap_or_default()
+                            self.terminal_panel.terminals = result.terminals.unwrap_or_default();
+                            if !self.terminal_panel.terminals.is_empty() {
+                                self.terminal_panel.cursor = 1;
+                                self.terminal_select(0);
+                            }
                         }
                         Err(error) => {
                             self.toast(Level::Error, format!("Could not list terminals: {error}"))
@@ -7532,6 +7574,8 @@ impl App {
                     {
                         if let Some(terminal) = result.terminal {
                             self.terminal_panel.terminals.push(terminal);
+                            self.terminal_panel.cursor = self.terminal_panel.terminals.len();
+                            self.terminal_select(self.terminal_panel.cursor - 1);
                         }
                     }
                     Err(error) => {
@@ -9092,48 +9136,7 @@ impl App {
                 "enter" if self.terminal_panel.cursor == 0 => self.execute("terminal.new"),
                 "c" => self.execute("terminal.acquire"),
                 "r" => self.execute("terminal.release"),
-                "enter" => {
-                    if self.terminal_panel.input_busy || !self.terminal_panel.input_queue.is_empty()
-                    {
-                        self.toast(Level::Warning, "Wait for terminal input to be acknowledged");
-                        return;
-                    }
-                    if let Some(terminal) = self
-                        .terminal_panel
-                        .terminals
-                        .get(self.terminal_panel.cursor - 1)
-                    {
-                        let id = terminal.id.clone();
-                        if self.terminal_panel.selected.as_deref() == Some(&id)
-                            && self.terminal_panel.attachment.is_some()
-                        {
-                            self.terminal_focused = true;
-                            self.terminal_panel.focus =
-                                crate::terminal_panel::TerminalFocus::Screen;
-                            return;
-                        }
-                        self.terminal_panel.generation += 1;
-                        self.terminal_controlled = false;
-                        self.terminal_panel.next_input = 1;
-                        self.terminal_panel.input_busy = false;
-                        self.terminal_panel.input_queue.clear();
-                        self.terminal_panel.resize_busy = false;
-                        self.terminal_panel.control_busy = false;
-                        self.terminal_panel.size = None;
-                        self.terminal_panel.screen = crate::terminal_screen::TerminalScreen::new(
-                            terminal.rows,
-                            terminal.cols,
-                        );
-                        self.terminal_panel.selected = Some(id.clone());
-                        self.terminal_panel.attachment = None;
-                        self.terminal_selected = true;
-                        self.effects.push(Effect::TerminalAttach {
-                            id,
-                            client: self.terminal_panel.client_id.clone(),
-                            generation: self.terminal_panel.generation,
-                        });
-                    }
-                }
+                "enter" => self.terminal_select(self.terminal_panel.cursor - 1),
                 _ => {}
             }
             return;
@@ -13769,6 +13772,7 @@ impl App {
                 self.open_overlay(OverlayKind::Resources { top: 0 });
             }
             Target::ComposerTerminals => self.execute("terminal.open"),
+            Target::TerminalTakeControl => self.execute("terminal.acquire"),
             Target::FilesRoot => self.run_command("files.root_toggle"),
             Target::PanelBack => self.close_panel(),
             Target::FilePreview => self.run_command("editor.preview"),
