@@ -8,20 +8,22 @@ see its README for the current controls and limitations.
 
 ## Client behaviour
 
-The desktop workspace has a **Terminal** tab with a resource list and the selected
-terminal's screen. Mobile does not expose this tab. The list shows each name,
-creation workspace, status (`running`, `exited`, `closed`, or `ended`) and
-controller identity, or `No controller`. **New**, **Rename**, **Close**, and
-**Take control** / **Release control** are explicit actions. Selecting a resource
-switches the screen without terminating the previous resource. Closing the panel
-only detaches; **Close** terminates the selected resource. Closing a running
-terminal first asks `Close running terminal?` with **Close terminal** and **Cancel**.
-An exited terminal can be closed without that warning.
+The desktop workspace has a bottom terminal dock below the composer and activity bar;
+mobile never exposes it. The header **Terminal** toggle shows a terminal count and
+opens or closes the dock, remembering its state. The dock header reads **Terminals (N)**.
+Each terminal has a tab showing a running/exited status dot, its name, and a close
+**×**; **+** creates a terminal. Select a tab to switch, and double-click it or use
+**Rename** to rename. **Take control** / **Release control** are explicit actions.
+Opening or creating a terminal takes control if available and focuses its screen;
+otherwise a read-only banner offers **Take control**. Closing the dock detaches;
+the tab close action terminates. Closing a running terminal first asks
+`Close running terminal?` with **Close terminal** and **Cancel**. An exited
+terminal can be closed without that warning.
 
 The screen receives input only while focused and while this attachment holds
 control. Taking control never steals it from another attachment. A failed control
-request is visible; reconnecting creates a new attachment and requires taking
-control again. Input is serialized and acknowledged before the next input; an
+request is visible; reconnecting creates a new attachment and must reacquire
+control before typing. Input is serialized and acknowledged before the next input; an
 indeterminate input is reported, not replayed on a new attachment. A gap resets
 the parser and visibly says `Terminal history was discarded; screen may be incomplete.`
 The screen uses the retained replay and subsequent live output; this is not a
