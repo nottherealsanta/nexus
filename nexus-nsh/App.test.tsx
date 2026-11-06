@@ -498,7 +498,7 @@ describe("history", () => {
     expect(loads()).toBe(1);
     expect(app.requests().some((r) => r.url.includes("/api/snapshot") && r.url.includes("session=ses_1"))).toBe(false);
     pid = 2; // the stream keeps dropping; the next handshake sees a new daemon and resyncs
-    for (let i = 0; i < 12; i++) await app.clock.fastForward(5000);
+    for (let i = 0; i < 12; i++) await app.clock!.fastForward(5000);
     expect(app.requests().some((r) => r.url.includes("/api/snapshot") && r.url.includes("session=ses_1"))).toBe(true);
     expect(loads()).toBe(2);
   });
@@ -514,7 +514,7 @@ describe("history", () => {
       },
       width: 1024, height: 768, platform: "web",
     });
-    for (let i = 0; i < 30; i++) await app.clock.fastForward(5000); // several backoff cycles
+    for (let i = 0; i < 30; i++) await app.clock!.fastForward(5000); // several backoff cycles
     expect(app.requests().filter((r) => r.url.includes("/api/info")).length > 3).toBe(true);
     expect(app.requests().filter((r) => r.method === "POST" && r.url.includes("/__nexus/start")).length).toBe(1);
   });

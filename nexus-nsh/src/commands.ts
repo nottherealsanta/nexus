@@ -974,12 +974,12 @@ export function bindKeys(): () => void {
     }
   }
   // The editor's own keys act only while a file is open (cmd+s saves; cmd+e starts editing;
-  // cmd+f opens the find bar).
+  // cmd+f opens the find bar). A bare terminal key (e) must not be taken from a text field.
   for (const id of ["editor.save", "editor.edit", "editor.find", "editor.preview"]) {
     const c = byId.get(id);
     for (const k of new Set(platform.idiom === "terminal" ? [c?.keys?.tui, c?.keys?.nsh] : [c?.keys?.nsh])) {
       if (!k) continue;
-      try { offs.push(keymap.bind(toKeystroke(k), () => { if (openFile()) void run(id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+      try { offs.push(keymap.bind(toKeystroke(k), () => { if (openFile()) void run(id); }, { when: hasModifier(k) ? "always" : "notEditing" })); } catch { /* the platform keeps this keystroke */ }
     }
   }
   try { offs.push(keymap.bind("escape", () => { escape(); }, { when: "always" })); } catch {}
