@@ -13224,6 +13224,18 @@ impl App {
             Target::ContextPreview { title, text } => {
                 self.open_context_section(&title, None, Some(text));
             }
+            Target::InspectorRow(id) => {
+                if let Some(i) = self.inspector_mut() {
+                    i.pick(&id);
+                }
+                self.inspector_follow();
+            }
+            Target::InspectorSession(id) => {
+                let act = self.inspector_mut().map(|i| i.set_target(id));
+                if let Some(act) = act {
+                    self.inspector_act(act);
+                }
+            }
             Target::ContextEntry(index) => self.context_entry_toggle(index),
             Target::ContextToggle(index) => self.toggle_context_item(index),
             Target::ContextInfo(index) => {

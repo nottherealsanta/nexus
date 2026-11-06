@@ -52,8 +52,7 @@ commands in `interface/manifest.toml` (bare keys, only while the inspector is op
 views, `r` refresh, `w` pause/resume, `[`/`]` session, `/` search, `f` kind, `s` status,
 `t` event types, `x` clear, `j`/`k` select, Enter expand, `e` full record, `n`/`p`
 older/newer, `c` copy, `i` cache notes, `=`/`-` zoom, `h`/`l` pan, `z` fit. NSH also has
-buttons for each. Known gaps: no click on the TUI list, NSH keyboard selection does not
-scroll the body, and the standalone browser inspector remains for kernels and jobs.
+buttons for each. Rows and the Sessions tree (a wrapping one-line list in both) are clickable, and `j`/`k` keep the selected row in view in both. Known gap: the standalone browser inspector remains for kernels and jobs.
 
 ### Inspector API v2
 

@@ -16,7 +16,7 @@ existing layout or controls.
 instead of a browser. Views: `1` Timing (one shared-axis Gantt, lanes grouped by
 session, a fixed ruler), `2` Conversation, `3` Steps, `4` Requests, `5` Raw, `6`
 Questions. Lists show each record's `summary`; Enter expands the exact `detail`
-JSON and `e` loads the full record when it was clipped. `n`/`p` page to older/newer
+JSON and `e` loads the full record when it was clipped. Rows and session-tree entries are clickable (click a row to select and expand it). `n`/`p` page to older/newer
 records by cursor (never page numbers); `[`/`]` inspect another session of the
 tree without leaving the chat; `/` searches, `f`/`s` cycle the kind/status filter,
 `t` filters event types, `x` clears. `w` pauses live updates, `r` refreshes. The

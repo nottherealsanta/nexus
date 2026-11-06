@@ -43,6 +43,8 @@ export interface InspectorState {
   error: string; paused: boolean; connected: boolean; newer: boolean; info: boolean;
 }
 export const inspector = signal<InspectorState | null>(null);
+/** The body's scroll offset as last reported (tests read it). */
+export const scrollTop = signal(0);
 
 const blank = (): Page => ({ filters: { q: "", kind: "", status: "", types: "" }, stack: [], selected: null, expanded: {}, full: {}, top: 0, zoom: 1, pan: 0 });
 const keyOf = (s: InspectorState) => `${s.target}|${s.view}`;
@@ -289,10 +291,30 @@ export function indexOf(s: InspectorState): number {
   return at < 0 ? 0 : at;
 }
 export function select(id: string | null) { update((s) => { own(s).selected = id; }); }
+/** Row buttons by record id, so a keyboard move can bring the selected row into view. */
+export const rowNodes = new Map<string, any>();
+/** The scrolling body, so a keyboard move can keep the selected row in view. */
+export const scrollNode: { current: any } = { current: null };
+async function reveal(id: string) {
+  try {
+    const row = rowNodes.get(id); const box = scrollNode.current;
+    if (!row || !box) return;
+    const [r, b] = await Promise.all([row.measure(), box.measure()]);
+    if (!r || !b) return;
+    const top = r.pagePosition.y - b.pagePosition.y; const bottom = top + r.bounds.size.height;
+    const view = b.bounds.size.height; const now = Math.round(inspector() ? pageOf(inspector()!).top : 0);
+    if (top < 0) box.scrollTo({ y: Math.max(0, now + top), animated: false });
+    else if (bottom > view) box.scrollTo({ y: now + bottom - view, animated: false });
+  } catch { /* not measurable yet */ }
+}
 export function move(delta: number) {
   const s = inspector(); if (!s) return;
   const rows = rowsOf(dataOf(s), s.view); if (!rows.length) return;
-  select(idOf(rows[Math.min(Math.max(0, indexOf(s) + delta), rows.length - 1)]!));
+  const id = idOf(rows[Math.min(Math.max(0, indexOf(s) + delta), rows.length - 1)]!);
+  select(id);
+  // The row may be redrawn first when the window moves, so measure after a beat.
+  setTimeout(() => void reveal(id), 0);
+  setTimeout(() => void reveal(id), 80);
 }
 export function toggleExpand(id?: string) {
   const s = inspector(); if (!s) return;

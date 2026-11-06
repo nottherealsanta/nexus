@@ -8948,6 +8948,15 @@ fn draw_inspector(
         put(buf, m.x, y, line, style, m.w);
         y += 1;
     }
+    for (row, col, w, id) in &parts.tree_hits {
+        let at = m.body.y + *row as u16;
+        if at < y && *col < m.w as usize {
+            hits.add(
+                Rect::new(m.x + *col as u16, at, (*w as u16).min(m.w), 1),
+                Target::InspectorSession(id.clone()),
+            );
+        }
+    }
     let h = (m.body.y + m.body.height).saturating_sub(y) as usize;
     let top = i.page().top.min(parts.body.len().saturating_sub(h));
     let bold = cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD);
@@ -8962,6 +8971,14 @@ fn draw_inspector(
             cx.st(PRIMARY, RAISED)
         };
         put(buf, m.x, y + k as u16, row, style, m.w);
+    }
+    for (line, id) in &parts.row_hits {
+        if *line >= top && *line < top + h {
+            hits.add(
+                Rect::new(m.x, y + (*line - top) as u16, m.w, 1),
+                Target::InspectorRow(id.clone()),
+            );
+        }
     }
     hint_row(
         cx,

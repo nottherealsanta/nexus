@@ -437,6 +437,13 @@ impl Inspector {
         let next = (self.index() as isize + delta).clamp(0, n as isize - 1) as usize;
         self.select_at(next);
     }
+    /// A click on a row selects it and toggles its details.
+    pub fn pick(&mut self, id: &str) {
+        if self.items().iter().any(|v| id_of(v) == id) {
+            self.page_mut().selected = Some(id.to_owned());
+            self.expand();
+        }
+    }
     pub fn expand(&mut self) {
         if let Some(item) = self.selected_item() {
             let id = id_of(&item);
@@ -782,6 +789,7 @@ impl Inspector {
             filters.push_str(&format!(" · type {}", show(&f.types)));
         }
         fixed.push(filters);
+        let mut tree_hits = Vec::new();
         if let Some(tree) = data["tree"].as_array().filter(|t| t.len() > 1) {
             let at = tree
                 .iter()
@@ -789,24 +797,43 @@ impl Inspector {
                 .unwrap_or(0);
             let start = at.saturating_sub(2).min(tree.len().saturating_sub(6));
             let range = start..(start + 6).min(tree.len());
-            let mut line = format!("Sessions ({}) [ ] · ", tree.len());
+            // Entries wrap onto further lines; each remembers where it is so a click can pick it.
+            let mut tokens: Vec<(String, Option<String>)> =
+                vec![(format!("Sessions ({}) [ ]", tree.len()), None)];
             if range.start > 0 {
-                line.push_str(&format!("… {} before · ", range.start));
+                tokens.push((format!("… {} before", range.start), None));
             }
-            let names: Vec<String> = tree[range.clone()]
-                .iter()
-                .map(|n| {
+            for n in &tree[range.clone()] {
+                tokens.push((
                     format!(
                         "{}{} {}",
                         if id_of(n) == self.target { "›" } else { "" },
                         n["title"].as_str().unwrap_or(&id_of(n)),
                         n["status"].as_str().unwrap_or(""),
-                    )
-                })
-                .collect();
-            line.push_str(&names.join(" · "));
+                    ),
+                    Some(id_of(n)),
+                ));
+            }
             if range.end < tree.len() {
-                line.push_str(&format!(" · … {} after", tree.len() - range.end));
+                tokens.push((format!("… {} after", tree.len() - range.end), None));
+            }
+            let mut line = String::new();
+            let mut col = 0usize;
+            for (k, (text, id)) in tokens.into_iter().enumerate() {
+                let w = text.chars().count();
+                if k > 0 && col + 3 + w > width {
+                    fixed.push(std::mem::take(&mut line));
+                    line = "  ".into();
+                    col = 2;
+                } else if k > 0 {
+                    line.push_str(" · ");
+                    col += 3;
+                }
+                if let Some(id) = id {
+                    tree_hits.push((fixed.len(), col, w.min(width.saturating_sub(col)), id));
+                }
+                line.push_str(&text);
+                col += w;
             }
             fixed.push(line);
         }
@@ -858,6 +885,7 @@ impl Inspector {
         });
         out.push(String::new());
         let mut cursor_line = None;
+        let mut row_hits_out: Vec<(usize, String)> = Vec::new();
         if items.is_empty() {
             out.push(if self.view == 0 {
                 if f.any() {
@@ -901,11 +929,13 @@ impl Inspector {
                     if i == index {
                         cursor_line = Some(out.len());
                     }
+                    row_hits_out.push((out.len(), id.clone()));
                     out.push(gantt.as_ref().unwrap().row(item, mark, fold));
                 } else {
                     if i == index {
                         cursor_line = Some(out.len());
                     }
+                    row_hits_out.push((out.len(), id.clone()));
                     out.push(clip(
                         &format!("{mark} {fold} {}", item["summary"].as_str().unwrap_or("")),
                         width,
@@ -922,7 +952,9 @@ impl Inspector {
         // Hard-wrap long lines here so the overlay's rows map one to one onto these lines.
         let mut lines: Vec<String> = Vec::new();
         let mut selected = None;
+        let mut starts = Vec::with_capacity(out.len());
         for (i, line) in out.iter().enumerate() {
+            starts.push(lines.len());
             if Some(i) == cursor_line {
                 selected = Some(lines.len());
             }
@@ -939,6 +971,11 @@ impl Inspector {
             fixed,
             body: lines,
             cursor: selected,
+            tree_hits,
+            row_hits: row_hits_out
+                .into_iter()
+                .map(|(at, id)| (starts[at], id))
+                .collect(),
         }
     }
 
@@ -1052,6 +1089,10 @@ pub struct Parts {
     pub fixed: Vec<String>,
     pub body: Vec<String>,
     pub cursor: Option<usize>,
+    /// Clickable session-tree entries: fixed row, column, width, session id.
+    pub tree_hits: Vec<(usize, usize, usize, String)>,
+    /// Clickable rows: body line and record id.
+    pub row_hits: Vec<(usize, String)>,
 }
 
 struct Gantt {

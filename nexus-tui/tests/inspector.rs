@@ -377,3 +377,47 @@ fn screenshots_when_requested() {
     answer(&mut app, &call, scenario("timing"));
     shot(&mut app, "tui-narrow", 80, 40);
 }
+
+/// Where `needle` is drawn: (column, row).
+fn find(app: &mut App, w: u16, h: u16, needle: &str) -> (u16, u16) {
+    let lines = draw(app, w, h).1;
+    for (y, line) in lines.iter().enumerate() {
+        if let Some(at) = line.find(needle) {
+            return (line[..at].chars().count() as u16, y as u16);
+        }
+    }
+    panic!("{needle} is not on screen");
+}
+
+#[test]
+fn clicking_rows_expands_them_and_clicking_the_tree_picks_the_session() {
+    let mut app = ready();
+    press(&mut app, &["2"]);
+    let call = calls(&mut app).remove(0);
+    answer(&mut app, &call, scenario("conversation"));
+    // A click selects the row and toggles its details.
+    let (x, y) = find(&mut app, 160, 50, "assistant · 3 parts");
+    click(&mut app, x + 2, y);
+    let i = inspector(&app);
+    assert_eq!(i.page().selected.as_deref(), Some("msg_2"));
+    assert!(i.page().expanded.contains("msg_2"));
+    click(&mut app, x + 2, y);
+    assert!(!inspector(&app).page().expanded.contains("msg_2"));
+    // A click on a session in the tree inspects it, as `]` does.
+    let (x, y) = find(&mut app, 160, 50, "Scout running");
+    click(&mut app, x + 1, y);
+    let child = calls(&mut app).remove(0);
+    assert!(has(&query(&child), "session", "ses_child"));
+    // At a narrow width the entries wrap and are still clickable.
+    let mut narrow = with_turn(opts(Mode::Dark, Tier::TrueColor), (60, 40));
+    narrow.run_command("session.open_inspector");
+    let call = calls(&mut narrow).remove(0);
+    answer(&mut narrow, &call, scenario("timing"));
+    let (x, y) = find(&mut narrow, 60, 40, "Scout running");
+    click(&mut narrow, x + 1, y);
+    assert!(has(
+        &query(&calls(&mut narrow).remove(0)),
+        "session",
+        "ses_child"
+    ));
+}

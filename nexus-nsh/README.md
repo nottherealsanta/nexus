@@ -27,8 +27,7 @@ while open and refetches only on change, and Pause live/Refresh are always there
 expansion, scroll, zoom and filters are kept per session and view. The cache panel labels the
 session lifetime and the displayed page separately, with coverage, the hit-rate denominator,
 per-model rows and unknown writes; `omitted` and notes are listed. Keys are the `inspector.*`
-commands in `interface/manifest.toml` (the same bare keys as the TUI). Known gap: keyboard
-selection does not scroll the body to keep the row in view.
+commands in `interface/manifest.toml` (the same bare keys as the TUI). The Sessions tree is a wrapping one-line list like the TUI's, and `j`/`k` keep the selected row in view.
 See [the inspector guide](../docs/inspector.md).
 
 The Rust TUI is the visual reference for the shared NSH app. All NSH targets use

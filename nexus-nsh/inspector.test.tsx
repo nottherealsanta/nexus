@@ -238,6 +238,22 @@ describe("native inspector (API v2)", () => {
     await see(app, "Cache: lifetime provider reports");
   });
 
+  test("j/k keeps the selected row in view in a long list", async () => {
+    const records = Array.from({ length: 45 }, (_, n) => ({ id: `r${n}`, kind: "message", summary: `user · row number ${n}`, detail: "{}" }));
+    const app = await open("./InspectorFixture.tsx", { width: 1280, height: 600, colorScheme: "dark", network: { "GET */api/session/*/inspect*": (r: { url: string }) => (r.url.includes("/inspect/head") ? { body: scenario.head } : { body: { ...scenario.conversation, more: false, next_before: null, omitted: [], records } }) } });
+    await app.waitFor("id:inspector");
+    await app.press("id:inspect-Conversation");
+    await see(app, "row number 0");
+    for (let n = 0; n < 40; n++) { await app.keyboard.press("j"); await new Promise((r) => setTimeout(r, 15)); }
+    await new Promise((r) => setTimeout(r, 150));
+    const top = () => Number((app.texts().find((t) => t.startsWith("scroll ")) ?? "scroll 0").slice(7));
+    expect(top()).toBeGreaterThan(1000); // the list followed the selection down
+    const down = top();
+    for (let n = 0; n < 40; n++) { await app.keyboard.press("k"); await new Promise((r) => setTimeout(r, 15)); }
+    await new Promise((r) => setTimeout(r, 150));
+    expect(top()).toBeLessThan(down / 2); // and back up
+  });
+
   test("narrow inspector keeps navigation and refresh reachable", async () => {
     const app = await fixture({ width: 390, height: 844 });
     expect(app.shows("id:inspect-refresh")).toBe(true);

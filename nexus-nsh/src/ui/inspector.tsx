@@ -6,7 +6,7 @@ import { commands, toKeystroke } from "../commands";
 import {
   cacheLines, clearFilters, closeInspector, copyText, cycleFilter, dataOf, filtersLine, focusers, idOf, indexOf, inspectorCommand, inspector, inspectorViews, kindOptions, loadFull,
   newer, older, omittedLines, pageOf, panBy, refreshInspector, rowsOf, select, setFilter, setTarget, setView, statusLine, statusOptions, supportsType, timingWindow, toggleExpand,
-  toggleInfo, toggleLive, treeWindow, windowRange, zoomBy, fit, bytesText,
+  toggleInfo, toggleLive, rowNodes, scrollNode, scrollTop, treeWindow, windowRange, zoomBy, fit, bytesText,
 } from "../inspector";
 import type { Row } from "../inspector";
 
@@ -83,11 +83,11 @@ function InspectorBody() {
         <Btn label="Clear filters" onPress={clearFilters} testID="inspect-clear" />
       </View>
       <If when={tree().length > 1}>
-        <View class="flex-row flex-wrap items-center gap-2" testID="inspect-tree">
+        <View class="flex-row flex-wrap items-center gap-x-1" testID="inspect-tree">
           <Text class={T.meta}>{`Sessions (${tree().length}) [ ]`}</Text>
-          <If when={treeWindow(tree(), state().target).before > 0}><Text class={T.meta}>{`… ${treeWindow(tree(), state().target).before} before`}</Text></If>
-          <Each of={treeWindow(tree(), state().target).nodes} key={(n) => n.id}>{(n) => <If when={n().id === state().target} else={<Btn label={`${n().title ?? n().id} ${n().status}`} onPress={() => setTarget(n().id)} testID={`inspect-session-${n().id}`} />}><Btn label={`›${n().title ?? n().id} ${n().status}`} kind="primary" onPress={() => setTarget(n().id)} testID={`inspect-session-${n().id}`} /></If>}</Each>
-          <If when={treeWindow(tree(), state().target).after > 0}><Text class={T.meta}>{`… ${treeWindow(tree(), state().target).after} after`}</Text></If>
+          <If when={treeWindow(tree(), state().target).before > 0}><Text class={T.meta}>{`· … ${treeWindow(tree(), state().target).before} before`}</Text></If>
+          <Each of={treeWindow(tree(), state().target).nodes} key={(n) => n.id}>{(n) => <><Text class={T.meta}>·</Text><Button onPress={() => setTarget(n().id)} accessibilityLabel={`${n().title ?? n().id} ${n().status}`} testID={`inspect-session-${n().id}`} class={FOCUS}><Text class={`${T.base} ${n().id === state().target ? "font-medium text-foreground" : "text-muted-foreground"}`}>{`${n().id === state().target ? "›" : ""}${n().title ?? n().id} ${n().status}`}</Text></Button></>}</Each>
+          <If when={treeWindow(tree(), state().target).after > 0}><Text class={T.meta}>{`· … ${treeWindow(tree(), state().target).after} after`}</Text></If>
         </View>
       </If>
       <View class="gap-1">
@@ -118,7 +118,7 @@ function InspectorBody() {
           </If>
       </View>
       </>}
-      <Scroll ref={(n: any) => { scroll = n; }} onScroll={(e: any) => { const s = inspector(); if (s) pageOf(s).top = e.offset.y; }} style={{ height: bodyHeight() }} testID="inspector-body">
+      <Scroll ref={(n: any) => { scroll = n; scrollNode.current = n; }} onScroll={(e: any) => { const s = inspector(); if (s) pageOf(s).top = e.offset.y; scrollTop.set(Math.round(e.offset.y)); }} style={{ height: bodyHeight() }} testID="inspector-body">
         <View class="gap-1">
           {() => small() && <>
       <Text class={T.meta} testID="inspect-filters">{filtersLine(state())}</Text>
@@ -191,7 +191,7 @@ function InspectorBody() {
               const shown = () => (r().end ?? 0) >= win().start && (r().start ?? 0) <= win().start + win().span;
               return <View class="gap-1">
                 <If when={header()}><Text class={`${T.label} pt-2`} testID={`inspect-group-${r().session_id}`}>{`${r().session ?? r().session_id} · ${rows().filter((x) => x.session_id === r().session_id).length} operation${rows().filter((x) => x.session_id === r().session_id).length === 1 ? "" : "s"}`}</Text></If>
-                <Button onPress={() => { if (page().selected === id()) toggleExpand(id()); else { select(id()); toggleExpand(id()); } }} accessibilityLabel={view() === 0 ? `${r().session}, ${r().kind}, ${r().label}, ${r().status}, ${duration(r())}` : r().summary ?? id()} testID={view() === 0 ? `lane-${id()}` : `row-${id()}`}
+                <Button ref={(n: any) => { if (n) rowNodes.set(id(), n); else rowNodes.delete(id()); }} onPress={() => { if (page().selected === id()) toggleExpand(id()); else { select(id()); toggleExpand(id()); } }} accessibilityLabel={view() === 0 ? `${r().session}, ${r().kind}, ${r().label}, ${r().status}, ${duration(r())}` : r().summary ?? id()} testID={view() === 0 ? `lane-${id()}` : `row-${id()}`}
                   class={`flex-row items-center min-h-9 gap-2 ${picked() ? "bg-selection" : ""} ${FOCUS}`}>
                   <If when={view() === 0} else={<Text class={`${T.base} flex-1 ${picked() ? "font-medium" : ""}`}>{`${open() ? "▾" : "▸"} ${r().summary ?? ""}`}</Text>}>
                     <View style={{ width: labelWidth() }}><Text class="text-xs text-foreground" style={{ numberOfLines: 1 }}>{`${open() ? "▾" : "▸"} ${r().kind}`}</Text><Text class={T.meta} style={{ numberOfLines: 1 }}>{r().label ?? ""}</Text></View>
