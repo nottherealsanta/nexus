@@ -56,6 +56,9 @@ The terminal-specific HTTP and streaming contract is in [terminals.md](terminals
 Terminal routes require the daemon bearer token and reject the existing tokenless
 non-loopback mode. The terminal stream is separate from session events and model
 context. Replay after discarded output is explicitly lossy; see the contract.
+`PATCH /api/terminal/{id}` with `{"name": "…"}` renames a resource and returns
+its updated metadata. Names default to `Terminal` and have the validation and
+persistence rules documented in the terminal contract.
 
 ## Endpoints
 

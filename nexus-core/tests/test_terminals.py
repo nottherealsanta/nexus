@@ -2,6 +2,7 @@ import asyncio
 import base64
 import os
 import shlex
+import sqlite3
 import sys
 
 import pytest
@@ -12,6 +13,26 @@ from nexus.terminals import Screen, TerminalService
 
 def output(term):
     return b"".join(base64.b64decode(frame["data"]) for frame, _ in term.frames if frame["type"] == "output")
+
+
+async def test_name_persists_and_legacy_metadata_defaults(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    db = sqlite3.connect(":memory:")
+    service = TerminalService(db)
+    term = service.create(project_id="p", workspace=str(tmp_path), creator="one", session_id=None, rows=24, cols=80)
+    service.rename(term.id, "Named")
+    assert term.frames[-1][0]["type"] == "rename"
+    await service.shutdown()
+    restarted = TerminalService(db)
+    assert restarted.metadata(term.id)["name"] == "Named"
+    restarted.rename(term.id, "After restart")
+    assert TerminalService(db).metadata(term.id)["name"] == "After restart"
+    metadata = restarted.metadata(term.id)
+    del metadata["name"]
+    db.execute("update terminal_resource set metadata=? where id=?", (json.dumps(metadata), term.id))
+    assert restarted.list("p")[0]["name"] == "Terminal"
 
 
 async def wait_for(predicate):

@@ -65,6 +65,7 @@ not reveal resource existence. Responses containing terminal state or output use
 | `POST /api/terminal` | `project_id`, `workspace`, optional `session_id`, `client_id`, `rows`, `cols` | 201 and metadata; fail rather than silently choose a different workspace |
 | `GET /api/terminal?project_id=…` | project identity | metadata list, including ended resources |
 | `GET /api/terminal/{id}` | | metadata |
+| `PATCH /api/terminal/{id}` | `name` | updated metadata; rename any resource, including ended resources |
 | `POST /api/terminal/{id}/attach` | `client_id` | new opaque attachment ID, initially read-only; an attachment belongs to one stream connection |
 | `GET /api/terminal/{id}/stream?attachment_id=…` | optional `after` sequence | versioned stream described below |
 | `POST /api/terminal/{id}/control` | `attachment_id`, `action` (`acquire` or `release`) | updated controller; acquisition while another attachment holds it returns 409, never steals |
@@ -80,6 +81,11 @@ attachment and reacquire control explicitly; control never transfers implicitly.
 Stale attachments cannot input, resize or signal. A stream that never connects
 must expire: the implementation must document and test a bounded attach lease.
 Control changes are observable to viewers without recording typed bytes.
+
+New and legacy resources default to `Terminal`. Names are trimmed, must contain
+1–80 Unicode characters, and cannot contain Unicode control, format, surrogate,
+private-use or unassigned characters. Renames are persisted and live attachments
+receive a `rename` frame with the new `name`.
 
 Input sequence numbers start at 1 per attachment and increase by exactly one.
 Core serializes writes per attachment, records the last accepted sequence and a

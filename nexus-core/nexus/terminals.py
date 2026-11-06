@@ -15,6 +15,7 @@ import subprocess
 import sys
 import termios
 import time
+import unicodedata
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -30,6 +31,8 @@ MAX_ATTACHMENTS = 16
 RING_BYTES = 1024 * 1024
 MAX_INPUT = 16 * 1024
 LEASE_SECONDS = 30
+DEFAULT_NAME = "Terminal"
+MAX_NAME = 80
 
 
 class Screen(pyte.Screen):
@@ -80,6 +83,7 @@ class Terminal:
     def __init__(self, *, project_id: str, workspace: str, creator: str, session_id: str | None,
                  rows: int, cols: int, persist: Callable[[dict[str, Any]], None] | None = None) -> None:
         self.id = secrets.token_urlsafe(18)
+        self.name = DEFAULT_NAME
         self.project_id, self.workspace, self.creator, self.session_id = project_id, workspace, creator, session_id
         self.created = time.time()
         self.ended: float | None = None
@@ -129,7 +133,7 @@ class Terminal:
 
     def metadata(self) -> dict[str, Any]:
         controller = self.attachments.get(self.controller or "")
-        return {"id": self.id, "project_id": self.project_id, "workspace": self.workspace,
+        return {"id": self.id, "name": self.name, "project_id": self.project_id, "workspace": self.workspace,
                 "session_id": self.session_id, "creator": self.creator, "status": self.status,
                 "created": self.created, "ended": self.ended, "rows": self.rows, "cols": self.cols,
                 "exit_code": self.exit_code, "signal": self.signal,
@@ -371,7 +375,7 @@ class TerminalService:
             return [t.metadata() for t in self.terminals.values() if t.project_id == project_id]
         rows = [row for (raw,) in self.db.execute("select metadata from terminal_resource")
                 if (row := json.loads(raw))["project_id"] == project_id]
-        return [self.terminals[row["id"]].metadata() if row["id"] in self.terminals else row for row in rows]
+        return [self.metadata(row["id"]) for row in rows]
 
     def metadata(self, terminal_id: str) -> dict[str, Any]:
         if terminal_id in self.terminals:
@@ -379,8 +383,27 @@ class TerminalService:
         if self.db is not None:
             row = self.db.execute("select metadata from terminal_resource where id=?", (terminal_id,)).fetchone()
             if row:
-                return json.loads(row[0])
+                metadata = json.loads(row[0])
+                metadata.setdefault("name", DEFAULT_NAME)
+                return metadata
         raise NotFound("unknown terminal")
+
+    def rename(self, terminal_id: str, name: Any) -> dict[str, Any]:
+        if not isinstance(name, str):
+            raise ValueError("invalid terminal name")
+        name = name.strip()
+        if not name or len(name) > MAX_NAME or any(unicodedata.category(c).startswith("C") for c in name):
+            raise ValueError("terminal name must be 1..80 characters without control characters")
+        metadata = self.metadata(terminal_id)
+        if terminal_id in self.terminals:
+            term = self.terminals[terminal_id]
+            term.name = name
+            term._persist()
+            term._emit("rename", name=name)
+            return term.metadata()
+        metadata["name"] = name
+        self.save(metadata)
+        return metadata
 
     def create(self, *, project_id: str, workspace: str, creator: str, session_id: str | None,
                rows: int, cols: int) -> Terminal:

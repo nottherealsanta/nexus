@@ -89,6 +89,23 @@ async def test_terminal_requires_auth_and_correct_origin(terminal_server):
     assert (await client.post("/api/terminal", json=body, headers={"Authorization": "Bearer wrong"})).status_code == 401
 
 
+async def test_terminal_rename_validation_and_listing(terminal_server):
+    client, project, workspace = terminal_server
+    created = await client.post("/api/terminal", json={"project_id": project.id, "workspace": str(workspace),
+                                                       "client_id": "one"})
+    assert created.json()["name"] == "Terminal"
+    path = f"/api/terminal/{created.json()['id']}"
+    for name in ("", "  ", "a" * 81, "bad\nname", 123, None):
+        assert (await client.patch(path, json={"name": name})).status_code == 400
+    assert (await client.patch(path, json={"name": "Work", "extra": True})).status_code == 400
+    renamed = await client.patch(path, json={"name": "  Work  "})
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Work"
+    assert (await client.get("/api/terminal", params={"project_id": project.id})).json()[0]["name"] == "Work"
+    assert (await client.delete(path)).status_code == 200
+    assert (await client.patch(path, json={"name": "Done"})).json()["name"] == "Done"
+
+
 async def test_tokenless_non_loopback_refuses_terminal_routes(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     app = build_app(make_runtime(Store(tmp_path / "db.sqlite")), token="", url="http://0.0.0.0:4747")

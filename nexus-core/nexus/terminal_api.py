@@ -76,6 +76,11 @@ def routes(service: TerminalService, runtime: Runtime, wrap: Callable[..., Any],
 
     async def resource(request: Request) -> Response:
         terminal_id = request.path_params["id"]
+        if request.method == "PATCH":
+            data = await body(request)
+            if set(data) != {"name"}:
+                raise ValueError("expected name")
+            return JSONResponse(service.rename(terminal_id, data["name"]), headers={"cache-control": "no-store"})
         if request.method == "DELETE" and terminal_id in service.terminals:
             await service.get(terminal_id).close()
         return JSONResponse(service.metadata(terminal_id), headers={"cache-control": "no-store"})
@@ -169,7 +174,7 @@ def routes(service: TerminalService, runtime: Runtime, wrap: Callable[..., Any],
                                  headers={"cache-control": "no-store", "x-accel-buffering": "no"})
 
     return [Route("/api/terminal", checked(collection), methods=["GET", "POST"]),
-            Route("/api/terminal/{id}", checked(resource), methods=["GET", "DELETE"]),
+            Route("/api/terminal/{id}", checked(resource), methods=["GET", "PATCH", "DELETE"]),
             Route("/api/terminal/{id}/attach", checked(attach), methods=["POST"]),
             Route("/api/terminal/{id}/stream", checked(stream)),
             Route("/api/terminal/{id}/{action}", checked(action), methods=["POST"])]
