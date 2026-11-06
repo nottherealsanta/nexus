@@ -7,6 +7,7 @@ describe("terminal panel", () => {
     await app.waitFor("id:terminal-panel");
     const text = app.texts().join("\n");
     expect(text).toContain("Terminal");
+    expect(text).toContain("New terminal");
     expect(text).toContain("Shell");
     expect(text).toContain("/work/demo");
     expect(text).toContain("running · No controller");

@@ -16,18 +16,21 @@ export const terminalName = signal("");
 const client = newKey();
 let attachment: string | null = null;
 let abort: AbortController | null = null;
+let inputAbort: AbortController | null = null;
 let generation = 0;
 let seq = 0;
 let inputSeq = 0;
 let inputs = Promise.resolve();
-let sender: ((message: object) => void) | null = null;
+let queuedInput = 0;
+type TerminalMessage = {type: string; [key: string]: unknown};
+let sender: ((message: TerminalMessage) => void | Promise<void>) | null = null;
 let cols = 80, rows = 24;
-const send = (message: object) => sender?.(message);
+const send = (message: TerminalMessage) => sender?.(message);
 const failure = (error: unknown) => terminalError.set(error instanceof Error ? error.message : String(error));
 const selected = () => terminalItems().find(t => t.id === terminalSelected());
 const changeItem = (item: TerminalResource) => terminalItems.update(items => items.map(t => t.id === item.id ? item : t));
 
-export function setTerminalSender(fn: ((message: object) => void) | null) { sender = fn; }
+export function setTerminalSender(fn: ((message: TerminalMessage) => void | Promise<void>) | null) { sender = fn; }
 export async function refreshTerminals() {
   const project = currentProject();
   if (!project) return;
@@ -45,7 +48,7 @@ export function closeTerminalPanel() {
 export function disconnectTerminal() { detach(); }
 function detach() {
   const id = terminalSelected(), aid = attachment;
-  generation++; abort?.abort(); abort = null; attachment = null;
+  generation++; abort?.abort(); abort = null; attachment = null; inputAbort?.abort(); inputAbort = null;
   terminalControlled.set(false); send({type:"writable", value:false});
   if (id && aid) void terminals.detach(id, aid).catch(() => {});
 }
@@ -56,13 +59,14 @@ export async function selectTerminal(id: string) {
   try {
     const a = await terminals.attach(id, client);
     if (gen !== generation) { void terminals.detach(id, a.attachment_id).catch(() => {}); return; }
-    attachment = a.attachment_id; abort = new AbortController();
+    attachment = a.attachment_id; abort = new AbortController(); inputAbort = new AbortController();
     void stream(id, a.attachment_id, gen, abort.signal);
   } catch (e) { if (gen === generation) failure(e); }
 }
 async function stream(id: string, first: string, gen: number, signal: AbortSignal) {
   let aid = first;
   let after: number | null = null;
+  let uncertainWrite = false;
   while (gen === generation && !signal.aborted) {
     try {
       for await (const frame of terminalStream(id, aid, after, signal)) {
@@ -72,22 +76,24 @@ async function stream(id: string, first: string, gen: number, signal: AbortSigna
           send({type:"reset", rows:frame.rows, cols:frame.cols}); seq = frame.seq;
         } else {
           if (seq && frame.seq !== seq + 1) throw new Error("Terminal stream lost frames.");
+          if (frame.type === "output" && typeof frame.data === "string") { uncertainWrite = true; await send({type:"write", data:frame.data}); uncertainWrite = false; }
+          if (gen !== generation || signal.aborted) return;
           seq = frame.seq;
-          if (frame.type === "output" && typeof frame.data === "string") send({type:"write", data:frame.data});
           if (frame.type === "discard") terminalNotice.set("Terminal history was discarded; screen may be incomplete.");
           if (["control", "exit", "rename"].includes(frame.type)) void refreshTerminals();
         }
       }
     } catch (e) { if (signal.aborted || gen !== generation) return; failure(e); }
     if (signal.aborted || gen !== generation) return;
-    terminalControlled.set(false); attachment = null; send({type:"writable",value:false});
+    terminalControlled.set(false); attachment = null; inputAbort?.abort(); inputAbort = null; send({type:"writable",value:false});
+    if (uncertainWrite) { seq = 0; send({type:"reset"}); uncertainWrite = false; }
     terminalNotice.set("Terminal disconnected; resynchronizing. Take control again to type.");
     await new Promise<void>(resolve => setTimeout(resolve, 500));
     if (signal.aborted || gen !== generation) return;
     try {
       const next = await terminals.attach(id, client);
       if (signal.aborted || gen !== generation) { void terminals.detach(id, next.attachment_id).catch(() => {}); return; }
-      aid = next.attachment_id; attachment = aid; inputSeq = 0; after = seq;
+      aid = next.attachment_id; attachment = aid; inputAbort = new AbortController(); inputSeq = 0; after = seq || null;
     } catch (e) { failure(e); return; }
   }
 }
@@ -126,16 +132,18 @@ export function resizeTerminal(r: number, c: number) {
   if (id && aid && terminalControlled()) void terminals.resize(id, aid, rows, cols).catch(failure);
 }
 export function inputTerminal(value: string) {
-  const id = terminalSelected(), aid = attachment, gen = generation;
+  const id = terminalSelected(), aid = attachment, gen = generation, signal = inputAbort?.signal;
   if (!id || !aid || !terminalControlled()) return;
   const bytes = new TextEncoder().encode(value);
+  if (queuedInput + bytes.length > 1024 * 1024) { terminalError.set("Terminal input queue is full; input was not sent."); return; }
+  queuedInput += bytes.length;
   inputs = inputs.then(async () => {
     for (let offset = 0; offset < bytes.length; offset += 16384) {
       if (generation !== gen || attachment !== aid || !terminalControlled()) return;
       let binary = ""; for (const b of bytes.subarray(offset, offset + 16384)) binary += String.fromCharCode(b);
       const data = btoa(binary), n = ++inputSeq;
       for (let attempt = 0; ; attempt++) {
-        try { await terminals.input(id, aid, n, data); break; }
+        try { await terminals.input(id, aid, n, data, signal); break; }
         catch (e) {
           if (generation !== gen || attachment !== aid) { terminalError.set("Terminal input outcome is indeterminate."); return; }
           if (attempt < 2 && e instanceof ApiError && e.isUnreachable) continue;
@@ -144,7 +152,7 @@ export function inputTerminal(value: string) {
         }
       }
     }
-  });
+  }).finally(() => { queuedInput -= bytes.length; });
 }
 export function beginRenameTerminal() { terminalName.set(selected()?.name ?? ""); terminalRename.set(true); }
 export function currentTerminal() { return selected(); }

@@ -14,9 +14,11 @@ try {
   await page.getByRole("button", {name:"Take control"}).click({timeout:10000});
   await page.getByRole("button", {name:"Release control"}).waitFor();
   await page.getByRole("button", {name:"Rename", exact:true}).click();
-  await page.getByLabel("Terminal name").locator("input").fill("Terminal smoke");
+  const name = `Terminal smoke ${Date.now()}`;
+  await page.getByLabel("Terminal name").locator("input").fill(name);
+  const renamed = page.waitForResponse(r => r.request().method() === "PATCH" && r.url().includes("/api/terminal/"));
   await page.getByRole("button", {name:"Rename", exact:true}).last().click();
-  await page.getByText("Terminal smoke", {exact:true}).waitFor();
+  assert.equal((await (await renamed).json()).name, name);
   await page.getByRole("button", {name:"Release control"}).click();
   await page.getByRole("button", {name:"Take control"}).click();
   await page.getByRole("button", {name:"Release control"}).waitFor();
@@ -32,13 +34,14 @@ try {
   await page.waitForTimeout(500);
   await page.keyboard.press("Control+c");
   await page.waitForTimeout(200);
-  await page.keyboard.type("printf NEXUS_TERMINAL_SMOKE");
+  await page.keyboard.type("seq 1 500; printf '%s%s' NEXUS_TERMINAL_ SMOKE");
   await page.keyboard.press("Enter");
-  await screen.waitForFunction(() => (document.querySelector('.xterm-rows')?.textContent?.match(/NEXUS_TERMINAL_SMOKE/g) ?? []).length >= 2, null, {timeout:10000});
+  await screen.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('NEXUS_TERMINAL_SMOKE'), null, {timeout:15000});
   await page.keyboard.press("Control+]");
   await page.getByRole("button", {name:"Close", exact:true}).click();
   await page.getByText("Close running terminal?").waitFor();
+  const closed = page.waitForResponse(r => r.request().method() === "DELETE" && r.url().includes("/api/terminal/"));
   await page.getByRole("button", {name:"Close terminal", exact:true}).click();
-  await page.getByText(/closed · No controller/).last().waitFor({timeout:10000});
+  assert.equal((await (await closed).json()).status, "closed");
   console.log("real Core: create, attach, control, shell input/output and confirmed close passed");
 } finally { await browser.close(); }

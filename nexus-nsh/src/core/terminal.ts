@@ -25,8 +25,8 @@ export const terminals = {
   detach: (id: string, attachment_id: string) => request("POST", `${resource(id)}/detach`, { body: { attachment_id } }),
   resize: (id: string, attachment_id: string, rows: number, cols: number) =>
     request<TerminalResource>("POST", `${resource(id)}/resize`, { body: { attachment_id, rows, cols } }),
-  input: (id: string, attachment_id: string, input_seq: number, data: string) =>
-    request<{ input_seq: number }>("POST", `${resource(id)}/input`, { body: { attachment_id, input_seq, data } }),
+  input: (id: string, attachment_id: string, input_seq: number, data: string, signal?: AbortSignal) =>
+    request<{ input_seq: number }>("POST", `${resource(id)}/input`, { body: { attachment_id, input_seq, data }, signal }),
   signal: (id: string, attachment_id: string, signal: "INT" | "TERM" | "HUP") =>
     request("POST", `${resource(id)}/signal`, { body: { attachment_id, signal } }),
 };

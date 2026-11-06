@@ -1,16 +1,17 @@
-import { Clipboard, Scroll, Text, View, WebView, effect, keymap, type WebViewRef, type ViewRef } from "nsh";
+import { Clipboard, Scroll, Text, View, WebView, effect, keymap, signal, type WebViewRef, type ViewRef } from "nsh";
 import { commands, toKeystroke } from "../commands";
 import { PRINTABLE_KEYS } from "../manager";
 import { Button, Dialog, Input } from "nsh/base";
 import { terminalPage } from "../gen/terminal-page";
 import { beginRenameTerminal, closeTerminalPanel, controlTerminal, disconnectTerminal, inputTerminal, newTerminal, renameTerminal, requestTerminalClose, requestTerminalCopy, resizeTerminal, selectTerminal, setTerminalActions, setTerminalSender, terminalControlled, terminalError, terminalFocused, terminalItems, terminalName, terminalNotice, terminalOpen, terminalRename, terminalSelected } from "../terminal-panel";
-import { isNarrow, width } from "../store";
+import { confirmDialog, isNarrow, width } from "../store";
 import { Btn, FOCUS, T } from "./kit";
 import { SCRIM } from "./modal";
 
 export function TerminalPanel() {
   let web: WebViewRef | undefined;
   let list: ViewRef | undefined;
+  const cursor = signal(0);
   let copyPending = false;
   effect(() => {
     if (!terminalFocused()) return;
@@ -21,21 +22,52 @@ export function TerminalPanel() {
     return () => off.forEach(f => f());
   });
   let ready = false;
-  let pending: object[] = [];
-  let pendingBytes = 0;
-  const send = (message: object) => {
-    if (ready && web) { web.postMessage(JSON.stringify(message)); return; }
-    pendingBytes += JSON.stringify(message).length;
-    if (pendingBytes > 1500000) { pending = []; pendingBytes = 0; disconnectTerminal(); terminalError.set("Terminal screen did not load; select the terminal to resynchronize."); return; }
-    pending.push(message);
+  let pending: string[] = [];
+  let pendingBytes = 0, writeId = 0;
+  const writes = new Map<number, {resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>}>();
+  const send = (message: {type: string; [key: string]: unknown}): void | Promise<void> => {
+    let ack: Promise<void> | undefined;
+    if (message.type === "write") {
+      const id = ++writeId; message = {...message, id};
+      ack = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => { writes.delete(id); reject(new Error("Terminal screen stopped responding.")); }, 15000);
+        writes.set(id, {resolve, reject, timer});
+      });
+    }
+    const payload = JSON.stringify(message);
+    if (ready && web) web.postMessage(payload);
+    else {
+      pendingBytes += payload.length;
+      if (pendingBytes > 1500000) { pending = []; pendingBytes = 0; disconnectTerminal(); terminalError.set("Terminal screen did not load; select the terminal to resynchronize."); }
+      else pending.push(payload);
+    }
+    return ack;
   };
   setTerminalSender(send);
   const focusList = () => { terminalFocused.set(false); web?.injectJavaScript("document.activeElement.blur()"); list?.focus(); };
   setTerminalActions(() => { copyPending = true; send({type:"copy"}); }, focusList);
-  effect(() => () => { setTerminalSender(null); setTerminalActions(null, null); });
+  const create = async () => { await newTerminal(); const index = terminalItems().findIndex(t => t.id === terminalSelected()); if (index >= 0) cursor.set(index + 1); };
+  effect(() => () => { setTerminalSender(null); setTerminalActions(null, null); for (const write of writes.values()) { clearTimeout(write.timer); write.reject(new Error("Terminal panel closed.")); } writes.clear(); });
+  effect(() => {
+    if (terminalFocused() || terminalRename() || confirmDialog()) return;
+    const bindings: Record<string, () => void> = {
+      up: () => cursor.set(Math.max(0, cursor() - 1)),
+      down: () => cursor.set(Math.min(terminalItems().length, cursor() + 1)),
+      enter: () => {
+        if (cursor() === 0) { void create(); return; }
+        const item = terminalItems()[cursor() - 1]; if (!item) return;
+        if (terminalSelected() === item.id) send({type:"focus"}); else void selectTerminal(item.id);
+      },
+      c: () => { void controlTerminal("acquire"); },
+      r: () => { void controlTerminal("release"); },
+    };
+    const offs = Object.entries(bindings).map(([key, fn]) => keymap.bind(key, fn, {when:"always"}));
+    return () => offs.forEach(off => off());
+  });
   const message = (e: {data:string}) => {
     let m: any; try { m = JSON.parse(e.data); } catch { return; }
-    if (m.type === "ready") { ready = true; for (const p of pending) send(p); pending = []; send({type:"writable",value:terminalControlled()}); }
+    if (m.type === "ready") { ready = true; for (const p of pending) web?.postMessage(p); pending = []; pendingBytes = 0; send({type:"writable",value:terminalControlled()}); }
+    if (m.type === "written" && typeof m.id === "number") { const write = writes.get(m.id); if (write) { clearTimeout(write.timer); writes.delete(m.id); write.resolve(); } }
     if (m.type === "focus") terminalFocused.set(!!m.focused);
     if (m.type === "focus-list") focusList();
     if (m.type === "input" && typeof m.data === "string") inputTerminal(m.data);
@@ -50,12 +82,13 @@ export function TerminalPanel() {
     <View class="flex-1 min-h-0" testID="terminal-panel">
       <View class="flex-row items-center gap-2 px-3 min-h-11 border-b border-border bg-sidebar">
         <Text class={`flex-1 ${T.title}`}>Terminal</Text>
-        <Btn label="New" onPress={() => void newTerminal()} testID="terminal-new" />
+        <Btn label="New" onPress={() => void create()} testID="terminal-new" />
         <Btn label="Close panel" onPress={close} testID="terminal-panel-close" />
       </View>
       <View class="flex-1 min-h-0 flex-row">
         <Scroll ref={r => { list = r; }} focusable class="w-64 border-r border-border" testID="terminal-list">
-          <Each of={terminalItems()} key={t => t.id}>{t => <Button onPress={() => void selectTerminal(t().id)} selected={terminalSelected() === t().id} accessibilityLabel={t().name} testID={`terminal-resource-${t().id}`} class={`p-2 border-b border-border ${FOCUS}`}>
+          <Button onPress={() => { cursor.set(0); void create(); }} selected={cursor() === 0} accessibilityLabel="New terminal" class={`p-2 border-b border-border ${FOCUS}`}><Text class={T.label}>New terminal</Text></Button>
+          <Each of={terminalItems()} key={t => t.id}>{(t, index) => <Button onPress={() => { cursor.set(index() + 1); void selectTerminal(t().id); }} selected={cursor() === index() + 1} accessibilityLabel={t().name} testID={`terminal-resource-${t().id}`} class={`p-2 border-b border-border ${FOCUS}`}>
             <Text class={T.label}>{t().name}</Text><Text class={T.meta}>{t().workspace}</Text><Text class={T.meta}>{`${t().status} · ${t().controller ?? "No controller"}`}</Text>
           </Button>}</Each>
         </Scroll>

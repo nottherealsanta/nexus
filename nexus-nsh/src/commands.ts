@@ -30,7 +30,7 @@ import { rowSessions } from "./ui/sidebar";
 import { PROJECT_STATUS, dropMove, orderedProjects, projectStatus, railProjects } from "./project-rail";
 import type { ProjectStatus } from "./project-rail";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
-import { beginRenameTerminal, closeTerminalPanel, controlTerminal, focusTerminalList, newTerminal, openTerminal, requestTerminalClose, requestTerminalCopy, terminalAvailable, terminalControlled, terminalFocused, terminalOpen, terminalSelected } from "./terminal-panel";
+import { beginRenameTerminal, closeTerminalPanel, controlTerminal, focusTerminalList, newTerminal, openTerminal, requestTerminalClose, requestTerminalCopy, terminalAvailable, terminalControlled, terminalFocused, terminalOpen, terminalRename, terminalSelected } from "./terminal-panel";
 
 export interface Cmd {
   id: string; title: string; category: string; slash?: string; keys?: { tui?: string; nsh?: string };
@@ -961,7 +961,8 @@ const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d
 /** Esc is not a per-command lookup: the manifest's ordered rules decide (interface/README.md "Esc precedence"). */
 export function escape() {
   if (terminalFocused()) return null;
-  if (terminalOpen() && !confirmDialog()) { closeTerminalPanel(); return "terminal"; }
+  if (terminalOpen() && terminalRename()) { terminalRename.set(false); return "terminal_rename"; }
+  if (terminalOpen() && !confirmDialog() && !term("overlay.open")) { closeTerminalPanel(); return "terminal"; }
   const drag = railDrag();
   if (drag) { railDrag.set({ ...drag, cancelled: true }); return "rail_drag"; }
   if (inspector()) { closeInspector(); return "inspector"; }

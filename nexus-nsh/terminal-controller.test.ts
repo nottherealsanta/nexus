@@ -12,6 +12,7 @@ describe("terminal controller", () => {
     const original = globalThis.fetch;
     const calls: any[] = [], screen: any[] = [];
     let release!: (value: Response) => void;
+    let screenAck!: () => void;
     let first = true, retry = true;
     globalThis.fetch = async (url, init) => {
       const path = String(url), body = init?.body ? JSON.parse(String(init.body)) : {};
@@ -29,11 +30,12 @@ describe("terminal controller", () => {
       if (path.endsWith("/input")) return reply({input_seq:body.input_seq});
       return reply({});
     };
-    setTerminalSender(m => screen.push(m));
+    setTerminalSender(m => { screen.push(m); if (m.type === "write") return new Promise<void>(resolve => { screenAck = resolve; }); });
     try {
       await selectTerminal("t"); await tick();
       expect(terminalNotice()).toContain("Terminal history was discarded");
       expect(screen.some(m => m.type === "write" && m.data === "aGk=")).toBe(true);
+      screenAck(); await tick();
       await controlTerminal("acquire"); expect(terminalControlled()).toBe(true);
       inputTerminal("a"); inputTerminal("b"); await tick();
       expect(calls.filter(c => c.path.endsWith("/input")).length).toBe(1);
