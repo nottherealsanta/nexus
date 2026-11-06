@@ -322,11 +322,11 @@ and worktree actions remain disabled with a reason. Kernel state is the remainin
 session-info item not reported by Core.
 
 **Keyboard flow from an empty composer (PLAN 15.4).** Only while the composer is focused and empty: Left opens the
-session sidebar and gives it the keys (the composer is blurred); Left again focuses the project list (Up/Down move a
+session sidebar and gives it the keys (the composer is blurred; Up/Down move a session cursor, Enter opens the session); Left again focuses the project list (Up/Down move a
 cursor bar among the projects, Enter opens one, restoring an inactive project first); Left again opens the **projects
-overview** (also the palette command "Projects overview"). Esc or Right steps back out in reverse order. With text in the
+overview** (also the palette command "Projects overview"). Esc or Right steps back out in reverse order, whenever the Projects tab holds the keys (also when opened by its command). With text in the
 composer Left moves the cursor as usual. The overview (`src/ui/projects-overview.tsx`, rows from `overviewRows`) lists
-the projects in their saved order with a `├`/`└` tree of each project's active root sessions and their state, a per-project
+the projects in their saved order with a `├`/`└` tree of each project's active root sessions and their state (`running`, `needs input`, `failed`, `finished`, `idle`), a per-project
 `N archived` toggle (`a` or Enter; collapsed), passive projects dimmed, and inactive projects last under `Inactive`,
 restored with `r` (`1`/`2`/`3` set current, passive, inactive). The project picker (`project.switch`, `cmd+shift+k`) lists
 every project, inactive ones marked, and choosing an inactive one restores it, as in the TUI. Tests: `keyboard-flow.test.tsx`.

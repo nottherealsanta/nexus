@@ -154,8 +154,9 @@ export function overviewRows(projects: Iterable<Project>, sessions: Iterable<Ses
 }
 
 /** A session's state word in the overview, in the TUI's order of precedence. */
-export function sessionStateWord(s: Pick<Session, "archived" | "status">, waiting: boolean, running: boolean, unread: boolean): string {
+export function sessionStateWord(s: Pick<Session, "archived" | "status">, waiting: boolean, running: boolean, unread: boolean, failed = false): string {
   if (waiting) return "needs input";
+  if (failed) return "failed";
   if (running || s.status === "busy") return "running";
   if (s.archived) return "archived";
   if (unread) return "finished";

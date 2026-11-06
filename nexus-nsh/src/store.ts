@@ -195,6 +195,8 @@ export const projectsOverview = signal<null | { cursor: number; archived: string
 export const composerFocused = signal(false);
 export const flowStage = signal<null | "sessions" | "projects">(null);
 /** The project the flow's Up/Down has selected in the project list. */
+/** The session the flow's Up/Down has selected in the session list. */
+export const flowSession = signal<string | null>(null);
 export const flowProject = signal<string | null>(null);
 export const picker = signal<null | { title: string; items: PickerItem[]; note?: string }>(null);
 export const confirmDialog = signal<null | { title: string; body: string; confirm: string; destructive: boolean; run: () => Promise<void> | void; busy?: boolean; error?: string }>(null);

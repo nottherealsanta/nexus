@@ -4,7 +4,7 @@ import { Button, ContextMenu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/ba
 import { Btn, Empty, FocusEdge, Icon, IconButton, Status, AttentionMark, T, TS, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
 import { manifest } from "../gen/manifest";
 import { availability, byId, commands, keyLabel, moveProject, newSession, run, setProjectStatus, toggleLeft } from "../commands";
-import { railDrag, archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, flowProject, flowStage, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
+import { railDrag, archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, flowProject, flowSession, flowStage, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
 import { fileTree, filesExpanded, loadFiles, openFile, showFile, toggleFileDir } from "../store";
@@ -248,7 +248,8 @@ function rowItems(): Item[] {
   }
   return out;
 }
-function rowSessions(): Session[] {
+/** The session list as shown, for the keyboard flow's cursor. */
+export function rowSessions(): Session[] {
   m();
   const all = model.sessionsRecent().filter((s) => !s.parent_id);
   const p = currentProject();
@@ -368,6 +369,7 @@ function SessionRow(p: { s: () => Session }) {
   const sel = () => model.selected?.sessionId === s().id && centre() === "session";
   const n = () => childCount(s().id);
   const att = () => { m(); return attention(s().id); };
+  const flowCursor = () => flowStage() === "sessions" && flowSession() === s().id;
   const two = () => !!(place() || snippetOf(s().id) || phone || n() > 0);
   return (
     <ContextMenu
@@ -385,8 +387,9 @@ function SessionRow(p: { s: () => Session }) {
           onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== s().id && focusedSidebarRow()?.id === s().id) focusedSidebarRow.set(null); }}
           onPress={() => { dismissSessionSearch(); focusedSidebarRow.set(ref()); void selectSession(s().id); }} accessibilityState={{ selected: sel() }} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${s().status === "busy" ? "running" : "idle"}`}
-          class={`group/row relative rounded-none px-2 hover:bg-accent ${sel() ? "bg-selection" : ""} ${phone ? "min-h-[72px] py-3 pr-14" : isNarrow() ? (two() ? "min-h-[64px] py-2" : "min-h-11 justify-center") : (two() ? "h-16 py-2" : "h-8 justify-center")} ${FOCUS}`}
+          class={`group/row relative rounded-none px-2 hover:bg-accent ${sel() || flowCursor() ? "bg-selection" : ""} ${phone ? "min-h-[72px] py-3 pr-14" : isNarrow() ? (two() ? "min-h-[64px] py-2" : "min-h-11 justify-center") : (two() ? "h-16 py-2" : "h-8 justify-center")} ${FOCUS}`}
         >
+          <If when={flowCursor()}><FocusEdge testID={`session-cursor-${s().id}`} /></If>
           <View class="flex-row items-center gap-2 h-6">
             <If when={!phone}><View class="w-4 items-center justify-center">
               <If when={att()}><AttentionMark kind="waiting" /></If>

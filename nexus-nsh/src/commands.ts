@@ -9,7 +9,7 @@ import {
   editFile, fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   firstPrompts, pendingInputs, contextDetail, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  composerFocused, flowProject, flowStage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
+  composerFocused, flowProject, flowSession, flowStage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
 } from "./store";
 import { ApiError, apiBase, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
@@ -26,6 +26,7 @@ import { dictationPhase } from "./voice-state";
 import { toggleManagerDropdown, toggleManagerAudio, cancelListening, cancelTurn, closeField, dismissCard, managerEscapeRule, managerSlash, managerTerm, minimise, openField, openManagerContext, openManagerSession, sendListening, scrollDetails, startQuietly, stopCall, stopSpeech, submitField, talk } from "./core/manager";
 import { refreshSearchService, searchStartReason, startSearchService } from "./search-service";
 import { closeInspector, inspectSession, inspector } from "./inspector";
+import { rowSessions } from "./ui/sidebar";
 import { PROJECT_STATUS, dropMove, orderedProjects, projectStatus, railProjects } from "./project-rail";
 import type { ProjectStatus } from "./project-rail";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
@@ -168,7 +169,12 @@ export function openSettings() {
 }
 on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
 on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
-function tab(t: "sessions" | "files" | "projects") { if (t === "files") void loadFiles(); leftTab.set(t); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true); }
+function tab(t: "sessions" | "files" | "projects") {
+  if (t === "files") void loadFiles(); leftTab.set(t);
+  // As in the TUI, the sidebar tab holds the keys: Esc and Right step back, Left goes further in.
+  flowStage.set(t === "files" ? null : t);
+  if (t === "projects") flowProject.set(currentProject() ?? null); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true);
+}
 
 export function newSession() {
   rememberNewSession(currentProject());
@@ -1068,9 +1074,10 @@ export function flowStart() {
   leftTab.set("sessions");
   if (isNarrow()) drawer.set("left"); else leftOpen.set(true);
   flowStage.set("sessions");
+  flowSession.set(viewed()?.id ?? rowSessions()[0]?.id ?? null);
   blurComposer.fn?.();
 }
-export function flowEnd() { flowStage.set(null); flowProject.set(null); focusComposer.fn?.(); }
+export function flowEnd() { flowStage.set(null); flowProject.set(null); flowSession.set(null); focusComposer.fn?.(); }
 /** Left again: the sessions give way to the project list, whose Left opens the overview. */
 function flowIn() {
   const stage = flowStage();
@@ -1084,10 +1091,17 @@ function flowIn() {
 function flowBack() {
   if (projectsOverview()) { projectsOverview.set(null); return; }
   const stage = flowStage();
-  if (stage === "projects") { leftTab.set("sessions"); flowStage.set("sessions"); flowProject.set(null); }
+  if (stage === "projects") { leftTab.set("sessions"); flowStage.set("sessions"); flowProject.set(null); flowSession.set(viewed()?.id ?? null); }
   else flowEnd();
 }
 function flowMove(delta: number) {
+  if (flowStage() === "sessions") {
+    const ids = rowSessions().map((x) => x.id);
+    if (!ids.length) return;
+    const at = ids.indexOf(flowSession() ?? "");
+    flowSession.set(ids[Math.max(0, Math.min(ids.length - 1, (at < 0 ? (delta > 0 ? -1 : 0) : at) + delta))]);
+    return;
+  }
   if (flowStage() !== "projects") return;
   const ids = orderedProjects(model.projects.values()).map((p) => p.id);
   if (!ids.length) return;
@@ -1095,6 +1109,11 @@ function flowMove(delta: number) {
   flowProject.set(ids[Math.max(0, Math.min(ids.length - 1, (at < 0 ? 0 : at) + delta))]);
 }
 function flowOpen() {
+  if (flowStage() === "sessions") {
+    const sid = flowSession();
+    if (sid) { void selectSession(sid); flowEnd(); }
+    return;
+  }
   const id = flowProject();
   const project = id ? model.projects.get(id) : undefined;
   if (!id || !project) return;
@@ -1106,7 +1125,7 @@ function flowOpen() {
 effect(() => {
   if (!flowStage() || projectsOverview()) return;
   const keys: Record<string, () => void> = { left: flowIn, right: flowBack };
-  if (flowStage() === "projects") { keys.up = () => flowMove(-1); keys.down = () => flowMove(1); keys.enter = flowOpen; }
+  keys.up = () => flowMove(-1); keys.down = () => flowMove(1); keys.enter = flowOpen;
   const offs: (() => void)[] = [];
   for (const [k, fn] of Object.entries(keys)) {
     try { offs.push(keymap.bind(k, fn, { when: "always" })); } catch { /* the platform keeps this keystroke */ }

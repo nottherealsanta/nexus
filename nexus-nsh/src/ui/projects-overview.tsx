@@ -58,7 +58,7 @@ function ProjectsOverviewBody() {
   const project = (id: string) => model.projects.get(id);
   const stateOf = (id: string) => {
     const s = model.sessions.get(id);
-    return s ? sessionStateWord(s, attention(id) === "waiting", model.running.has(id), model.unreadSessions.has(id)) : "idle";
+    return s ? sessionStateWord(s, attention(id) === "waiting", model.running.has(id), model.unreadSessions.has(id), model.failedSessions.has(id)) : "idle";
   };
   const line = (row: OverviewRow) => {
     switch (row.kind) {

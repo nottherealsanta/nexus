@@ -16,7 +16,6 @@ const sessions = [
   session("ses_b1", "bravo", "Bravo notes", 4), session("ses_c1", "charlie", "Charlie draft", 3),
 ];
 const network = (extra: Record<string, unknown> = {}) => ({
-  ...extra,
   "GET */__nexus/host": { body: { host: "test", canStart: false } },
   "GET */api/info": { body: { name: "nexus", version: "0.10.0.dev0", pid: 1 } },
   "GET */api/snapshot*": { body: { watermark: { generation: "log_t", head: 0, floor: 0, head_cursor: "log_t:0" }, projects, sessions, running: [], approvals: [], questions: [], selected: null } },
@@ -28,6 +27,7 @@ const network = (extra: Record<string, unknown> = {}) => ({
   "GET */api/skill*": { body: { skills: [], problems: [] } },
   "GET */api/mcp*": { body: { servers: [] } },
   "GET */api/project/*/worktrees": { body: { worktrees: [] } },
+  ...extra,
 });
 const launch = (extra: Record<string, unknown> = {}) => open("./App.tsx", { network: network(extra), width: 1100, height: 800, platform: "web", colorScheme: "dark" });
 
@@ -43,6 +43,8 @@ describe("projects overview rows (logic)", () => {
     expect(overviewRows([project("z", 1)], [], new Set()).map((r) => r.kind)).toEqual(["project", "empty"]);
     expect(sessionStateWord({ archived: false, status: "idle" }, true, true, true)).toBe("needs input");
     expect(sessionStateWord({ archived: false, status: "busy" }, false, false, false)).toBe("running");
+    expect(sessionStateWord({ archived: false, status: "busy" }, false, true, true, true)).toBe("failed");
+    expect(sessionStateWord({ archived: false, status: "busy" }, true, true, true, true)).toBe("needs input");
     expect(sessionStateWord({ archived: true, status: "idle" }, false, false, true)).toBe("archived");
     expect(sessionStateWord({ archived: false, status: "idle" }, false, false, true)).toBe("finished");
     expect(sessionStateWord({ archived: false, status: "idle" }, false, false, false)).toBe("idle");
@@ -152,5 +154,38 @@ describe("keyboard flow from an empty composer (app)", () => {
     await app.press("id:pick-2");
     await app.waitUntil(() => app.requests().some((r) => r.method === "PATCH" && r.url.endsWith("/api/project/prj_charlie")));
     expect(JSON.parse((app.requests().find((r) => r.method === "PATCH") as any).body)).toEqual({ status: "current" });
+  });
+
+  test("Up/Down move a session cursor in the session list and Enter opens it", async () => {
+    const app = await launch();
+    await app.waitFor("id:composer-input");
+    await app.type("id:composer-input", "");
+    await app.keyboard.press("left");
+    await app.waitFor("id:session-cursor-ses_b1");
+    await app.keyboard.press("down");
+    await app.keyboard.press("up");
+    expect(app.shows("id:session-cursor-ses_b1")).toBe(true);
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => !app.shows("id:session-cursor-ses_b1"));
+  });
+
+  test("Esc steps back from the Projects tab whenever it has focus, e.g. opened by its command", async () => {
+    const app = await launch();
+    await app.waitFor("id:composer-input");
+    await app.keyboard.press("mod+3");
+    await app.waitFor("id:project-cursor-prj_bravo");
+    await app.keyboard.press("escape");
+    await app.waitUntil(() => !app.shows("id:project-cursor-prj_bravo"));
+    expect(app.shows("id:session-cursor-ses_b1") || app.shows("id:session-ses_b1")).toBe(true);
+  });
+
+  test("a session whose last turn failed shows as failed in the overview", async () => {
+    const failing = sessions.map((x) => (x.id === "ses_a1" ? { ...x, status: "failed" } : x));
+    const app = await launch({ "GET */api/snapshot*": { body: { watermark: { generation: "log_t", head: 0, floor: 0, head_cursor: "log_t:0" }, projects, sessions: failing, running: [], approvals: [], questions: [], selected: null } } });
+    await app.waitFor("id:composer-input");
+    await app.type("id:composer-input", "");
+    for (let i = 0; i < 3; i++) await app.keyboard.press("left");
+    await app.waitFor("id:projects-overview");
+    expect(app.texts().join("\n")).toContain("· failed");
   });
 });
