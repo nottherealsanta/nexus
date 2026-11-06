@@ -140,8 +140,9 @@ Work:
   Draft contract in `docs/terminals.md`; not implemented or verified, and design review remains open.
 - [ ] Core PTY service: spawn in the chosen workspace, process group, resize, binary-safe I/O, UTF-8 split across
   chunks, signals and exit codes, bounded scrollback with an announced discard, orphan cleanup, limits.
-  An unexposed `terminals.py` prototype and initial PTY tests exist; the HTTP API, durable restart state,
-  complete checkpoint/replay, signal handling and abrupt-death orphan cleanup are not implemented or verified.
+  An unexposed `terminals.py` prototype uses `openpty` and a pre-exec-free controlling-terminal helper;
+  initial PTY tests exist. The HTTP API, durable restart state, complete checkpoint/replay, signal handling
+  and abrupt-death orphan cleanup are not implemented or verified.
 - [ ] TUI: panel with a terminal tab and resource list; keys arbitrated with global shortcuts (Esc, Ctrl chords,
   paste, mouse); selection/copy through OSC 52.
 - [ ] NSH: the same panel, tabs, list and keys (xterm.js in a WebView on web/macOS; spike the focus and key capture
