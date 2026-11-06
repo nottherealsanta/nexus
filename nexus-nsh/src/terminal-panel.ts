@@ -18,6 +18,7 @@ let attachment: string | null = null;
 let abort: AbortController | null = null;
 let inputAbort: AbortController | null = null;
 let generation = 0;
+let refreshGeneration = 0;
 let seq = 0;
 let inputSeq = 0;
 let inputs = Promise.resolve();
@@ -28,14 +29,14 @@ let cols = 80, rows = 24;
 const send = (message: TerminalMessage) => sender?.(message);
 const failure = (error: unknown) => terminalError.set(error instanceof Error ? error.message : String(error));
 const selected = () => terminalItems().find(t => t.id === terminalSelected());
-const changeItem = (item: TerminalResource) => terminalItems.update(items => items.map(t => t.id === item.id ? item : t));
+const changeItem = (item: TerminalResource) => { refreshGeneration++; terminalItems.update(items => items.map(t => t.id === item.id ? item : t)); };
 
 export function setTerminalSender(fn: ((message: TerminalMessage) => void | Promise<void>) | null) { sender = fn; }
 export async function refreshTerminals() {
-  const project = currentProject();
+  const project = currentProject(), request = ++refreshGeneration;
   if (!project) return;
-  try { const items = await terminals.list(project); if (project === currentProject()) terminalItems.set(items); }
-  catch (e) { failure(e); }
+  try { const items = await terminals.list(project); if (request === refreshGeneration && project === currentProject()) terminalItems.set(items); }
+  catch (e) { if (request === refreshGeneration) failure(e); }
 }
 export async function openTerminal() {
   if (!terminalAvailable || !currentProject()) return;

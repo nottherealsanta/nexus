@@ -1,12 +1,24 @@
 import { describe, expect, test } from "nsh/test";
 import { setApiBase } from "./src/core/transport";
-import { closeTerminalPanel, controlTerminal, inputTerminal, selectTerminal, setTerminalSender, terminalControlled, terminalError, terminalItems, terminalNotice } from "./src/terminal-panel";
+import { closeTerminalPanel, controlTerminal, inputTerminal, refreshTerminals, selectTerminal, setTerminalSender, terminalControlled, terminalError, terminalItems, terminalNotice } from "./src/terminal-panel";
+import { currentProject } from "./src/store";
 
 const resource = {id:"t",name:"Shell",project_id:"p",workspace:"/work",session_id:null,creator:"test",status:"running" as const,created:1,ended:null,rows:24,cols:80,exit_code:null,signal:null,controller:null};
 const reply = (body: unknown) => new Response(JSON.stringify(body), {status:200});
 const tick = () => new Promise(r => setTimeout(r, 25));
 
 describe("terminal controller", () => {
+  test("a late list response cannot replace a newer resource state", async () => {
+    setApiBase("http://nexus.test"); currentProject.set("p");
+    const original = globalThis.fetch, replies: ((response: Response) => void)[] = [];
+    globalThis.fetch = async () => new Promise<Response>(resolve => replies.push(resolve));
+    try {
+      const first = refreshTerminals(), second = refreshTerminals();
+      await tick(); replies[1](reply([{...resource, name:"new"}])); await second;
+      replies[0](reply([{...resource, name:"old"}])); await first;
+      expect(terminalItems()[0].name).toBe("new");
+    } finally { globalThis.fetch = original; }
+  });
   test("replays gap and output, takes control and serializes inputs", async () => {
     setApiBase("http://nexus.test"); terminalItems.set([resource]); terminalError.set(""); terminalNotice.set("");
     const original = globalThis.fetch;
