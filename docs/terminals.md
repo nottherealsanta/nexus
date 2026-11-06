@@ -1,16 +1,14 @@
-# Terminal resources: proposed Core contract
+# Terminal resources: Core contract
 
-**Design only; not implemented or verified.** This is the first terminal slice
-of [PLAN.md section 2](../PLAN.md#2-terminal-inside-nexus). The browser resource
-and both terminal UIs are separate work. These routes must not be advertised as
-available until implemented and tested.
+This is the Core terminal slice of [PLAN.md section 2](../PLAN.md#2-terminal-inside-nexus).
+The browser resource and both terminal UIs are separate work.
 
 ## Resource and authority
 
 Core owns each PTY, not a client or `bash_jobs`. A resource has an opaque `id`,
 `project_id`, absolute creation `workspace`, optional `session_id`, `creator`
 (client identity, not an agent), `status` (`running`, `exited`, `closed`, or
-`interrupted`), creation and end timestamps, dimensions, exit code or terminating
+`ended`), creation and end timestamps, dimensions, exit code or terminating
 signal where known, and current controller identity or null. A session directory
 change never moves an existing terminal. Validate the chosen workspace against
 the project and any associated session before spawning; reject mismatches.
@@ -24,7 +22,7 @@ controller or type in this version.
 
 ## HTTP operations
 
-All routes below are proposed under `/api/terminal`; JSON requests and replies
+All routes below are under `/api/terminal`; JSON requests and replies
 use the API's normal error envelope. Unknown or unauthorized resource IDs must
 not reveal resource existence. Responses containing terminal state or output use
 `Cache-Control: no-store`.
@@ -48,8 +46,7 @@ shutdown. It cannot be reused for a later connection. On reconnect create a new
 attachment and reacquire control explicitly; control never transfers implicitly.
 Stale attachments cannot input, resize or signal. A stream that never connects
 must expire: the implementation must document and test a bounded attach lease.
-Control changes should be observable to all viewers and recorded as bounded
-diagnostic metadata, without recording typed bytes.
+Control changes are observable to viewers without recording typed bytes.
 
 Input sequence numbers start at 1 per attachment and increase by exactly one.
 Core serializes writes per attachment, records the last accepted sequence and a
@@ -70,31 +67,30 @@ Use a dedicated SSE stream of JSON frames, not `/api/event`. Each frame has
 payload. Output frames carry base64 bytes, never independently decoded chunks;
 clients feed a streaming UTF-8/VT parser. Sequence numbers cover all frames,
 including lifecycle, control and discard notices. Event IDs carry the sequence.
-A stream begins with a checkpoint or a replay strictly after `after`, and then
+A stream begins with replay strictly after `after`, and then
 continues live with no race between snapshot and subscription.
 
-Core retains a bounded raw output ring and a pyte screen checkpoint, with the
-private-SGR and alternate-screen fixes noted in the spike. A checkpoint must
-represent the screen, cursor, attributes, active buffer, relevant terminal modes
-and incremental decoder/parser state at its sequence boundary, or explicitly
-report what it cannot restore. Its encoding and compatibility with both client
-parsers must be verified before implementation is considered complete. Raw
-bytes after that boundary are replayed in order. Neither a screen checkpoint nor
-raw ring implies unlimited scrollback.
+Core retains a bounded raw output ring, cut at UTF-8 and parser boundaries;
+pyte is only an optional text snapshot, not a reconnect checkpoint. A client
+that retains its parser state can resume after its last sequence. A fresh client
+replays from the ring start. If output was discarded, the `gap` frame announces
+the discarded byte count and carries base64 RIS (`ESC c`) plus current rows and
+columns; apply the dimensions and reset before replaying. **This is lossy**:
+reset and remaining bytes cannot reconstruct screen contents, modes or cursor
+state that were established solely by discarded output. A running full-screen
+program may need to redraw. The ring does not imply unlimited scrollback.
 
 When a requested sequence has been discarded, or a viewer falls behind the
-bounded outgoing queue, emit `gap` with the requested cursor, retained floor,
-head and discard count, then require resynchronization from a fresh atomic
-checkpoint and following bytes. Announce scrollback loss rather than pretending
-it was retained. A slow viewer must not block PTY reads or other viewers; close
-its stream if it cannot receive the gap notice. Never silently skip output.
-Core restart marks persisted running metadata `interrupted`; it must not claim
-to resume a PTY, checkpoint, attachment, or input acknowledgment.
+bounded outgoing queue, resynchronize from the retained ring. A `gap` carries
+the retained floor, head and discard count. A slow viewer is disconnected and
+must reattach; it does not block PTY reads or other viewers. Core restart marks
+persisted running metadata `ended`, with reason `core_restart`; it does not
+resume a PTY, attachment, or input acknowledgment.
 
 ## Safety and lifecycle requirements
 
-Terminal routes are enabled only on loopback or with independently verified
-authentication; the current tokenless non-loopback mode must reject every
+Terminal routes require the daemon bearer token; the current tokenless
+non-loopback mode rejects every
 terminal operation, including stream and metadata. Validate browser origins and
 protect mutations against cross-origin requests; query-string tokens must not
 leak in logs. Do not rely on a remote peer address alone behind a proxy. Do not
@@ -107,12 +103,13 @@ in **both** renderers; raw output is not authorization. Core must not execute
 these actions while parsing checkpoints. The shell runs with the user's
 permissions and is not a sandbox.
 
-Set a defined `TERM`, validate dimensions and bound resource count, attachments,
-input, replay, scrollback and per-viewer queues. Define concrete limits and the
-idle policy in the implementation, reject excess work, and test them. Explicit
-Close and normal daemon shutdown terminate the process group gracefully, then
-force-stop after a bounded grace period, reap children and close descriptors.
-Abrupt Core death needs an OS-backed orphan strategy, not just an in-process
-shutdown callback. Ended metadata survives restart; output persistence is not
-required. Platform support and any unverified cleanup behavior must be stated
-honestly.
+`TERM=xterm-256color`. Limits are 16 resources per daemon, 16 attachments per
+resource, 16 KiB per input, a 1 MiB raw ring, 4,096 retained frames and 256
+queued frames per viewer. An attachment that has not connected expires after
+30 seconds. There is no idle timeout for a running shell. Explicit Close and
+normal daemon shutdown signal the shell and current foreground process groups,
+reap the shell and close descriptors. On abrupt Core death, closure of the PTY
+master sends SIGHUP to its foreground group. A subprocess test verifies that a
+foreground shell exits when Core is killed on macOS; a separately grouped job
+and other platforms are **not verified**. Stray `nohup` and `setsid` processes
+are out of scope. Ended metadata survives restart; output does not.

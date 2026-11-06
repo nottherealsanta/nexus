@@ -32,7 +32,7 @@ When an item lands, tick it, add a one-line record under [Landed](#landed) and u
 | 5 | Mobile cut-down client | Not started; phone build still renders the full timeline. Decided: mobile can approve and answer anything a client can | [5](#5-mobile-cut-down-client-sessions-manager-settings) |
 | 6 | ZMX mode (Claude Code, Antigravity) | **Later (user, 11-06).** Plan only, nothing built; kept here for reference | [6](#6-zmx-mode-for-claude-code-and-antigravity-later) |
 | 3 | Manager, finished and tested end to end | M1–M5 built; real GPT-Live call worked 11-04; evals, long calls, iOS/native audio and hands-free open | [3](#3-manager-finish-and-test-end-to-end) |
-| 2 | Terminal inside Nexus | Spikes done (`reports/section14/spikes.md`); no product code | [2](#2-terminal-inside-nexus) |
+| 2 | Terminal inside Nexus | Core PTY and HTTP/SSE slice; client panels not started | [2](#2-terminal-inside-nexus) |
 | 7 | Everything else carried over | Full backlog in section 9, not scheduled | [7](#7-carried-over-not-scheduled) |
 | 8 | Provider usage panel (table) | Fully specified, not started; both clients | [8](#8-provider-usage-panel-usage-table) |
 
@@ -123,9 +123,9 @@ Defaults to confirm at the first design review (change any of them freely):
 
 - **Core owns the PTY** (`nexus-core/nexus/terminals.py`): clients are viewers/controllers, never process owners.
   Resources have opaque ids, a project/workspace, a creator, status and timestamps. Do not reuse `bash_jobs`.
-- **Parser strategy:** Core keeps a bounded raw ring plus a screen checkpoint (pyte, patched for private SGR and the
-  alt screen); clients receive checkpoint + subsequent bytes and parse them locally: `vt100` into ratatui in the TUI,
-  xterm.js in NSH web/macOS. Decision needed: Core-parsed cell grid instead (consistent, more bandwidth).
+- **Parser strategy:** Core keeps a bounded raw ring; clients parse it locally (`vt100` in the TUI, xterm.js in NSH).
+  Replay after discard resets the parser and announces the gap; it cannot restore state lost with discarded bytes.
+  pyte is an optional text snapshot, not a reconnect checkpoint (user decision).
 - **One active writer;** many viewers. Control is explicit, shown, and released on disconnect, never handed to an agent.
 - **Closing a panel detaches; Close terminates.** A Core restart marks terminals ended, never "resumed".
 - **Not in the model's context** unless the user attaches output explicitly (a normal visible message with provenance).
@@ -137,17 +137,16 @@ Work:
 
 - [ ] Design review and the decisions above; shared resource contract (API, versioned data stream with sequence
   numbers, bounded replay, gap/resync, input ids so a retry never repeats a command). `docs/api.md` first.
-  Draft contract in `docs/terminals.md`; not implemented or verified, and design review remains open.
+  Contract and Core endpoints in `docs/terminals.md`; the remaining client design review is open.
 - [ ] Core PTY service: spawn in the chosen workspace, process group, resize, binary-safe I/O, UTF-8 split across
   chunks, signals and exit codes, bounded scrollback with an announced discard, orphan cleanup, limits.
-  An unexposed `terminals.py` prototype uses `openpty` and a pre-exec-free controlling-terminal helper;
-  initial PTY tests exist. The HTTP API, durable restart state, complete checkpoint/replay, signal handling
-  and abrupt-death orphan cleanup are not implemented or verified.
+  Core and HTTP/SSE are implemented and tested; a foreground shell exiting on abrupt Core death is tested on
+  macOS. Cleanup of a separately grouped foreground job and other platforms is not verified.
 - [ ] TUI: panel with a terminal tab and resource list; keys arbitrated with global shortcuts (Esc, Ctrl chords,
   paste, mouse); selection/copy through OSC 52.
 - [ ] NSH: the same panel, tabs, list and keys (xterm.js in a WebView on web/macOS; spike the focus and key capture
   against NSH's keymap first). Manifest commands in `interface/manifest.toml`.
-- [ ] Tests on real PTYs in an isolated workspace: shell I/O, alt-screen program (`less`, an editor), resize, split byte
+- [x] Tests on real PTYs in an isolated workspace: shell I/O, alt-screen program, resize, split byte
   sequences, high-volume output, two clients, control contention, reconnect, exit, close, Core shutdown.
 - [ ] Docs: `docs/api.md`, a new `docs/terminals.md`, both READMEs; screenshots in both clients; ledger rows for any
   approved difference.
@@ -1050,6 +1049,8 @@ Terminal evidence capture and agent-control policy apply to section 2 as well.
 ## Landed
 
 Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](docs/archive/PLAN-2026-11-06.md#landed).
+
+- **Core terminal resource slice.** PTY service, bounded replay and authenticated HTTP/SSE routes; real-PTY and HTTP tests. UI panels and cross-platform orphan cleanup verification remain open.
 
 - **Modal backdrop back to translucent (11-06).** Reverted `0452ee80`: the TUI blends the page 50% toward
   `surface.canvas` (`paint::scrim`) under every modal again, NSH is back to its translucent `bg-black/65` backdrop and
