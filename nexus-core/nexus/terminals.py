@@ -6,10 +6,11 @@ import base64
 import fcntl
 import hashlib
 import os
-import pty
 import secrets
 import signal
 import struct
+import subprocess
+import sys
 import termios
 import time
 from collections import deque
@@ -91,17 +92,24 @@ class Terminal:
         self.seq = 0
         self.attachments: dict[str, Attachment] = {}
         self.controller: str | None = None
-        self.pid, self.fd = pty.fork()
-        if self.pid == 0:
-            try:
-                os.chdir(workspace)
-                os.environ["TERM"] = "xterm-256color"
-                shell = os.environ.get("SHELL") or "/bin/sh"
-                os.execl(shell, shell, "-i")
-            except (OSError, ValueError):
-                os._exit(127)
+        self.fd, slave = os.openpty()
+        try:
+            self._winsize(rows, cols)
+            env = os.environ.copy()
+            env["TERM"] = "xterm-256color"
+            shell = env.get("SHELL") or "/bin/sh"
+            child = Path(__file__).with_name("_terminal_child.py")
+            self.process = subprocess.Popen(
+                [sys.executable, "-I", str(child), shell], cwd=workspace, env=env,
+                stdin=slave, stdout=slave, stderr=slave, start_new_session=True, close_fds=True,
+            )
+        except BaseException:
+            os.close(self.fd)
+            raise
+        finally:
+            os.close(slave)
+        self.pid = self.process.pid
         os.set_blocking(self.fd, False)
-        self._winsize(rows, cols)
         self.loop = asyncio.get_running_loop()
         self.loop.add_reader(self.fd, self._read)
         self.waiter = self.loop.create_task(self._wait())
@@ -164,13 +172,13 @@ class Terminal:
                 "discarded": self.discarded}
 
     async def _wait(self) -> None:
-        _, status = await asyncio.to_thread(os.waitpid, self.pid, 0)
+        status = await asyncio.to_thread(self.process.wait)
         self.status = "exited" if self.status == "running" else self.status
         self.ended = time.time()
-        if os.WIFEXITED(status):
-            self.exit_code = os.WEXITSTATUS(status)
-        elif os.WIFSIGNALED(status):
-            self.signal = os.WTERMSIG(status)
+        if status >= 0:
+            self.exit_code = status
+        else:
+            self.signal = -status
         self._emit("exit", status=self.status, exit_code=self.exit_code, signal=self.signal)
 
     def attach(self, client_id: str) -> str:
@@ -258,6 +266,15 @@ class Terminal:
     async def close(self) -> None:
         if self.status == "running":
             self.status = "closed"
+            try:
+                foreground = os.tcgetpgrp(self.fd)
+            except OSError:
+                foreground = self.pid
+            if foreground > 0 and foreground != self.pid:
+                try:
+                    os.killpg(foreground, signal.SIGHUP)
+                except ProcessLookupError:
+                    pass
             try:
                 os.killpg(self.pid, signal.SIGHUP)
             except ProcessLookupError:
