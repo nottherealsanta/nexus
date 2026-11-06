@@ -8074,18 +8074,7 @@ fn boxed(cx: &Cx, buf: &mut Buffer, r: Rect, title: &str, bg: &str) {
 fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut HitMap) {
     hits.add(area, Target::Scrim);
     match &o.kind {
-        OverlayKind::Inspector(i) => {
-            let width = modal_box(area, MODAL_LARGE, 10).width.saturating_sub(4) as usize;
-            draw_context_detail(
-                cx,
-                buf,
-                area,
-                "Session inspector",
-                &i.text(width),
-                i.top,
-                hits,
-            );
-        }
+        OverlayKind::Inspector(i) => draw_inspector(cx, buf, area, i, hits),
         OverlayKind::Palette(p) => {
             let anchor = (p.mode == PaletteMode::RowMenu)
                 .then(|| hits.rect_of(&Target::SideRow(cx.app.cursor(cx.app.ui.tab))))
@@ -8919,6 +8908,77 @@ fn draw_notifications(cx: &Cx, buf: &mut Buffer, area: Rect, selected: usize, hi
 
 /// The full text of one alert: the modal recipe, the title from the alert,
 /// the whole text wrapped and scrollable (D15).
+/// Text width and visible rows of the inspector overlay.
+pub fn inspector_metrics(area: Rect) -> (usize, usize) {
+    let b = modal_box(area, MODAL_LARGE, 40);
+    (
+        b.width.saturating_sub(4) as usize,
+        (b.height as usize).saturating_sub(6).max(4),
+    )
+}
+
+/// The native inspector: a fixed header (views, live state, filters, sessions), a
+/// scrolling body whose selected row is bold, and the key hints.
+fn draw_inspector(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    i: &crate::inspector::Inspector,
+    hits: &mut HitMap,
+) {
+    let (width, _) = inspector_metrics(area);
+    let parts = i.parts(width, crate::app::now_secs());
+    let b = modal_box(area, MODAL_LARGE, 40);
+    let m = modal(cx, buf, area, b, "Session inspector", hits);
+    let mut y = m.body.y;
+    for (n, line) in parts.fixed.iter().enumerate() {
+        let style = if n == 2 {
+            if line.starts_with('○') {
+                cx.st("status.error", RAISED)
+            } else if line.starts_with('‖') {
+                cx.st("status.warning", RAISED)
+            } else {
+                cx.st("status.success", RAISED)
+            }
+        } else if n == 1 {
+            cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD)
+        } else {
+            cx.st(SECONDARY, RAISED)
+        };
+        put(buf, m.x, y, line, style, m.w);
+        y += 1;
+    }
+    let h = (m.body.y + m.body.height).saturating_sub(y) as usize;
+    let top = i.page().top.min(parts.body.len().saturating_sub(h));
+    let bold = cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD);
+    for (k, row) in parts.body.iter().skip(top).take(h).enumerate() {
+        let style = if Some(top + k) == parts.cursor {
+            bold
+        } else if row.starts_with("Omitted") || row.starts_with("Error") {
+            cx.st("status.warning", RAISED)
+        } else if row.starts_with(' ') || row.starts_with("…") {
+            cx.st(SECONDARY, RAISED)
+        } else {
+            cx.st(PRIMARY, RAISED)
+        };
+        put(buf, m.x, y + k as u16, row, style, m.w);
+    }
+    hint_row(
+        cx,
+        buf,
+        &m,
+        &[
+            ("1-6", "view"),
+            ("j/k", "select"),
+            ("enter", "expand"),
+            ("/", "search"),
+            ("w", "pause"),
+            ("n/p", "older/newer"),
+            ("esc", "close"),
+        ],
+    );
+}
+
 fn context_detail_layout(area: Rect, text: &str) -> (Rect, Vec<String>) {
     let wide = MODAL_LARGE;
     let actual_width = modal_box(area, wide, 10).width.saturating_sub(4) as usize;
