@@ -36,6 +36,25 @@ Client rules (both clients, same behavior):
   live/paused/disconnected state and keep manual Refresh; an offline view
   must not look current.
 
+State kept per (inspected session, view): filters, cursor stack, selected row id,
+expanded row ids, loaded full records, scroll, zoom and pan. Selection is by row id, so
+rows that arrive do not move it. Switching views or sessions and back restores it; Refresh
+keeps it. Long lists draw at most 60 rows around the selection ("... n rows above/below").
+
+Layout (identical in both clients): title and inspected session (`session → inspecting
+Scout`), the six views, the live state line, the filters line and inputs, the tree selector,
+the Timing ruler and zoom controls, then the body (cache panel with the session-lifetime and
+displayed-page totals, coverage, per-model rows and "Writes unknown"; `omitted` and notes;
+the rows) and the page controls. Live states: `Live` (connected, newest page), `Paused`
+(user paused, or an older page is shown; "newer records available" when the head moved),
+`Disconnected` (a request failed; data is labelled "not current"). Keys are the `inspector.*`
+commands in `interface/manifest.toml` (bare keys, only while the inspector is open): `1`-`6`
+views, `r` refresh, `w` pause/resume, `[`/`]` session, `/` search, `f` kind, `s` status,
+`t` event types, `x` clear, `j`/`k` select, Enter expand, `e` full record, `n`/`p`
+older/newer, `c` copy, `i` cache notes, `=`/`-` zoom, `h`/`l` pan, `z` fit. NSH also has
+buttons for each. Known gaps: no click on the TUI list, NSH keyboard selection does not
+scroll the body, and the standalone browser inspector remains for kernels and jobs.
+
 ### Inspector API v2
 
 `GET /api/session/{id}/inspect?view=&before=&limit=&session=&q=&kind=&status=&type=`
@@ -133,11 +152,9 @@ per row.
   its first event) only when it was recorded. Unfinished running operations
   extend to the snapshot time; historical missing ends say **end unknown**
   (`end_unknown`). Nested calls inside `code` have no independent timings.
-- Both clients support zoom (1-64x), horizontal pan, details, copying, refresh,
-  and older/newer paging (a stack of cursors). NSH uses buttons and clickable
-  lanes. TUI uses `1`-`6` for views, `r` refresh, `n` older, `p` newer, `+`/`-`
-  zoom, `h`/`l` pan, `j`/`k` select, Enter details, `c` copy, and arrows/Page
-  Up/Page Down.
+- Both clients support zoom (1-64x), horizontal pan, fit, details, copying, refresh,
+  and older/newer paging (a stack of cursors) with the keys above. NSH adds buttons
+  and clickable rows; the TUI also scrolls with arrows/Page Up/Page Down.
 - A page holds up to `limit` (default 50, max 200) messages, events, questions or
   turns; Timing's turns are counted across the whole subtree. Compaction and
   missing diagnostics are announced; canonical messages are not reconstructed

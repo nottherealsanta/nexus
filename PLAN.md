@@ -1362,31 +1362,31 @@ confirm them at the first design review.
 The current modal is a read-only, manually refreshed projection. Keep it working while improving it;
 do not remove the standalone browser inspector until its useful functions have native equivalents.
 
-- [ ] **Shared navigation and readable views.** Preserve selection, zoom, expanded details and scroll
+- [~] **Shared navigation and readable views.** (Clients landed in TUI and NSH: Questions view, per-view state kept across refresh/view/session switches, tree selector, `q`/`kind`/`status`/`type` filters, `summary` rows with expandable `detail` and on-demand `/inspect/record`. Pending: links from Questions into the kernel/job modal.) Preserve selection, zoom, expanded details and scroll
   while refreshing or switching back. Add a session/tree selector and search/filter by request, tool,
   status and event type. Render structured summaries with expandable exact JSON rather than making
   long JSON dumps the only way to understand Conversation, Steps or Requests. Bring pending/replied
   Questions and links to existing kernel/job details into the native inspector. Keep canonical model
   context distinct from diagnostic partials and resource views.
-- [ ] **Incremental live data.** Use existing session events to invalidate only affected inspector data;
+- [~] **Incremental live data.** (Clients landed: `/inspect/head` poll every 2 s only while open, refetch only on head/generation change, one request in flight, stale responses ignored, Live/Paused/Disconnected state with manual Refresh. Not done: using the SSE session events instead of polling, durable-cursor replay.) Use existing session events to invalidate only affected inspector data;
   coalesce refreshes and cancel/ignore stale requests on navigation or close. Reuse durable cursors and
   explicit snapshot resync on overflow/retention changes. No second unbounded event log, no repeated
   full-tree fetch per token, and no background refresh while the inspector is closed. Keep a visible
   paused/live/disconnected state and manual Refresh; an offline view must not look current.
-- [ ] **Stable, bounded loading.** (Core landed: inspect API v2 with opaque cursors, byte/lane/tree bounds, `omitted`, `/inspect/record`, `/inspect/head`; clients and client-side memory/render checks pending.) Replace offset-only paging with documented stable boundaries/cursors
+- [ ] **Stable, bounded loading.** (Core landed: inspect API v2 with opaque cursors, byte/lane/tree bounds, `omitted`, `/inspect/record`, `/inspect/head`. Clients landed: cursor stack paging, `omitted` and notes shown, at most 60 rows drawn around the selection. Client memory/render-latency regression checks still pending.) Replace offset-only paging with documented stable boundaries/cursors
   so new turns cannot duplicate or skip older pages. Bound server queries and response bytes, avoid
   loading every message to show one page, virtualize long client lists and load large JSON on demand.
   Announce omitted sessions/lanes/bytes and expired diagnostics; provide a way to inspect the omitted
   records, not just a permanent truncation notice. Profile a large seeded session/tree before choosing
   budgets, then commit repeatable request-count, memory and render-latency regression checks.
-- [ ] **Cache accounting.** (Core landed: `cache`/`cache_range` with coverage and per-model totals; cache writes stay *unknown* because the Claude dialect folds `cache_creation_input_tokens` into `input_tokens` and only reads are stored. Keeping writes needs a versioned `Usage`/`turn_request`/`session_usage` change, not done.) Keep lifetime/session, selected-call and displayed-range totals separately
+- [~] **Cache accounting.** (Clients landed: lifetime vs displayed page, coverage, denominator, per-model rows, writes unknown. Selected-call totals are in lane details only.) (Core landed: `cache`/`cache_range` with coverage and per-model totals; cache writes stay *unknown* because the Claude dialect folds `cache_creation_input_tokens` into `input_tokens` and only reads are stored. Keeping writes needs a versioned `Usage`/`turn_request`/`session_usage` change, not done.) Keep lifetime/session, selected-call and displayed-range totals separately
   labelled. Show per-model breakdowns, explicit unknown/partial coverage and the exact hit-rate
   denominator; do not double-count retries, child sessions or cumulative provider updates. Investigate
   provider-reported cache-read/cache-write fields end to end before adding storage. Only show cache
   writes, TTL/expiry or cost savings when actually measured/supported; otherwise retain unknown, and
   never infer provider cache validity from a recent request timestamp. Version any codec/storage change
   and keep old sessions readable.
-- [ ] **Gantt v2.** Retain one shared axis and stable session/request/call IDs. Add useful lane grouping,
+- [~] **Gantt v2.** (Clients landed: shared axis, lanes grouped by session with stable ids, fixed ruler, fit/zoom/pan, first-byte marker only when recorded, "end unknown". Not done: collapse lanes by group, nested `code` call timings.) Retain one shared axis and stable session/request/call IDs. Add useful lane grouping,
   collapse/filter, fit-to-range, a clear ruler, selected-range zoom and details linking back to the exact
   request or tool. Show retries, waiting intervals and TTFB markers only where recorded; label unknown
   spans. Capture nested `code` call timings prospectively if feasible, with monotonic duration and wall
