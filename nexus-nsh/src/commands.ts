@@ -30,7 +30,7 @@ import { rowSessions } from "./ui/sidebar";
 import { PROJECT_STATUS, dropMove, orderedProjects, projectStatus, railProjects } from "./project-rail";
 import type { ProjectStatus } from "./project-rail";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
-import { beginRenameTerminal, closeTerminalPanel, controlTerminal, focusTerminalList, newTerminal, openTerminal, requestTerminalClose, requestTerminalCopy, terminalControlled, terminalFocused, terminalOpen, terminalSelected } from "./terminal-panel";
+import { beginRenameTerminal, closeTerminalPanel, controlTerminal, focusTerminalList, newTerminal, openTerminal, requestTerminalClose, requestTerminalCopy, terminalAvailable, terminalControlled, terminalFocused, terminalOpen, terminalSelected } from "./terminal-panel";
 
 export interface Cmd {
   id: string; title: string; category: string; slash?: string; keys?: { tui?: string; nsh?: string };
@@ -38,7 +38,7 @@ export interface Cmd {
   leader?: string[];
   key_context?: string; when: string[]; unavailable_reason?: string; placement: string[]; status?: string; clients?: string; note?: string;
 }
-export const commands: Cmd[] = (manifest.command as unknown as Cmd[]).filter((c) => (c.clients ?? "both") !== "tui");
+export const commands: Cmd[] = (manifest.command as unknown as Cmd[]).filter((c) => (c.clients ?? "both") !== "tui" && !(!terminalAvailable && c.id.startsWith("terminal.")));
 export const byId = new Map(commands.map((c) => [c.id, c]));
 
 // --- context terms ----------------------------------------------------------------------

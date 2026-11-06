@@ -2,7 +2,7 @@ import { platform, signal } from "nsh";
 import { ApiError, newKey } from "./core/transport";
 import { terminals, terminalStream, type TerminalResource } from "./core/terminal";
 import { confirmDialog, currentProject, model, viewed } from "./store";
-const phone = platform.idiom === "phone";
+export const terminalAvailable = (platform.os === "web" || platform.os === "macos" || platform.os === "windows" || platform.os === "linux") && platform.desktop && platform.idiom !== "terminal";
 
 export const terminalOpen = signal(false);
 export const terminalFocused = signal(false);
@@ -35,7 +35,7 @@ export async function refreshTerminals() {
   catch (e) { failure(e); }
 }
 export async function openTerminal() {
-  if (phone || !currentProject()) return;
+  if (!terminalAvailable || !currentProject()) return;
   terminalOpen.set(true); terminalError.set("");
   await refreshTerminals();
 }
@@ -92,7 +92,7 @@ async function stream(id: string, first: string, gen: number, signal: AbortSigna
   }
 }
 export async function newTerminal() {
-  const project_id = currentProject(); if (!project_id || phone) return;
+  const project_id = currentProject(); if (!project_id || !terminalAvailable) return;
   const session = viewed(); const project = model.projects.get(project_id);
   const workspace = session?.project_id === project_id ? session.directory : project?.path;
   if (!workspace) { terminalError.set("No workspace selected."); return; }

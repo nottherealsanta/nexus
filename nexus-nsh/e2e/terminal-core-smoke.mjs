@@ -20,6 +20,11 @@ try {
   }
   assert(screen, "xterm WebView did not load");
   await screen.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.type("sleep 30");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(500);
+  await page.keyboard.press("Control+c");
+  await page.waitForTimeout(200);
   await page.keyboard.type("printf NEXUS_TERMINAL_SMOKE");
   await page.keyboard.press("Enter");
   await screen.waitForFunction(() => (document.querySelector('.xterm-rows')?.textContent?.match(/NEXUS_TERMINAL_SMOKE/g) ?? []).length >= 2, null, {timeout:10000});
