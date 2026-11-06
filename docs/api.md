@@ -107,8 +107,10 @@ See [inspector.md](inspector.md) for paging, retention and bounds.
 | GET | `/api/project` | | `[Project]`, most recently used first |
 | POST | `/api/project` | `{path, name?}` | the project at `path`, created if new |
 | GET | `/api/project/{id}` | | `Project` |
-| PATCH | `/api/project/{id}` | `{name, expected_revision?}` or `If-Match` | `Project`; a stale revision is 409 |
-| DELETE | `/api/project/{id}` | | 204; deletes its sessions too |
+| PATCH | `/api/project/{id}` | `{name?, status?, expected_revision?}` or `If-Match`; at least one of `name`, `status` | `Project`; a stale revision is 409; `status` is `current`, `passive` or `inactive` (see [Project rail](#project-rail-order-status-and-removal)) |
+| POST | `/api/project/{id}/move` | exactly one of `{before: id\|null}` or `{after: id\|null}` | `{projects}`: every visible project in the new order. `before: null` is the end, `after: null` the start |
+| POST | `/api/project/{id}/remove` | | `{id, removed: true, sessions_kept}`; unregisters the project and keeps its sessions stored, never touching files; 409 while a session is running or has pending work |
+| DELETE | `/api/project/{id}` | | 204; **permanently deletes** the project and its sessions (the rail uses `remove` instead) |
 | GET | `/api/project/{id}/worktrees` | | the project checkout's worktrees (`repository`, `main`, `worktrees[]`, `project_directory`); 400 outside Git |
 | GET | `/api/project/{id}/files` | `?path=`, `?session=` | one directory level ([Project files and Git](#project-files-and-git)) |
 | GET | `/api/project/{id}/file` | `?path=`, `?session=` | UTF-8 text, a SHA-256 `revision` and a language hint; binary or over 1 MiB is rejected |
@@ -539,6 +541,8 @@ durable reconciliation for a lost HTTP response.
 | `POST /api/project` | yes | — | A replayed create returns the same project id; deletion later does not recreate it |
 | `PATCH /api/project/{id}` | yes | `If-Match` / `expected_revision` | Replay returns the original project; stale revision 409 |
 | `DELETE /api/project/{id}` | yes | — | Replay is 204 even though the project and sessions are gone |
+| `POST /api/project/{id}/move` | yes | — | Applied against Core's current order (not a client's list); replay returns the original list; an unknown id is 400 |
+| `POST /api/project/{id}/remove` | yes | — | Replay returns the original answer; a project already removed is 404 |
 | `POST /api/session` | yes | — | Replay returns the same session; a child is not created twice |
 | `PATCH /api/session/{id}` | yes | `If-Match` / `expected_revision` | Replay before recheck; stale revision 409 |
 | `DELETE /api/session/{id}` | yes | — | Replay is 204; tombstones already recorded |
@@ -918,7 +922,22 @@ tombstone (`{"id": "ses_…"}`) so a reconnect cannot miss them for lack of a
 session row. Deleting a session still deletes its messages, events and
 snapshots; the tombstone contains only the id needed for synchronization.
 Deleting a project publishes one tombstone per deleted session, then
-`project.deleted`.
+`project.deleted`. Removing one (`remove`) publishes the same tombstones, since the sessions leave every list,
+then `project.deleted` with `removed: true`.
+
+### Project rail: order, status and removal
+
+`Project` carries two rail fields, both stored in Core so every client and the overview agree:
+
+- `position` (integer): the user's saved display order among visible projects, `0` first. New projects append;
+  databases from before this field start in creation order. `POST /api/project/{id}/move` renumbers all visible
+  projects atomically and publishes `project.reordered`; `/api/snapshot` and `GET /api/project` list projects
+  in this order. Clients keep initials assigned in creation order, independent of display order.
+- `status`: `current` (normal, in the rail), `passive` (in the rail, dimmed) or `inactive` (not in the rail, listed
+  by the API and restored by setting `current`). **The names are inferred and await the user's confirmation**; they
+  live in one constant per codebase. Changing status is `PATCH` and bumps `revision`.
+
+Older Cores omit both fields; clients then fall back to creation order and `current`.
 
 | Type | Data |
 | --- | --- |
@@ -930,7 +949,8 @@ Deleting a project publishes one tombstone per deleted session, then
 | `mcp.connected` / `mcp.disconnected` / `mcp.failed` / `mcp.tools_changed` | `{server, …}`: an MCP server's connection changed; global, live only ([mcp.md](mcp.md)) |
 | `extension.failed` | `{path, error}`: a user tool file is invalid; global, live only |
 | `project.created` / `project.updated` | `Project`; global, stored |
-| `project.deleted` | `{id}`; global, stored |
+| `project.reordered` | `{order: [id, …]}`: all visible projects in their new saved order; global, stored |
+| `project.deleted` | `{id}`, plus `removed: true` when the project was unregistered with `remove` (its sessions are kept); global, stored |
 | `session.created` / `session.updated` | `Session`, stored in that session's log |
 | `session.snapshot` | a snapshot summary, emitted once when an old session is lazily reconstructed |
 | `session.deleted` | `{id}`: a global tombstone stored without the session's history |

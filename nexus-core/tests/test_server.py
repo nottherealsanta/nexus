@@ -1024,3 +1024,78 @@ async def test_project_order_survives_a_restart(setup):
     assert [p.id for p in reopened.projects()] == [second["id"], first["id"]]
     assert [p.position for p in reopened.projects()] == [0, 1]
     reopened.close()
+
+
+async def test_remove_project_keeps_sessions_and_files_and_add_restores_them(setup):
+    rt, client, _provider, workspace = setup
+    (workspace / "keep.txt").write_text("precious")
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    pid = rt.session(sid).project_id
+    other = workspace.parent / "other2"
+    other.mkdir()
+    await client.post("/api/project", json={"path": str(other)})
+    removed = await client.post(f"/api/project/{pid}/remove")
+    assert removed.status_code == 200, removed.text
+    assert removed.json() == {"id": pid, "removed": True, "sessions_kept": 1}
+    # Nothing is deleted: files, the session rows and the project row stay.
+    assert (workspace / "keep.txt").read_text() == "precious"
+    assert rt.store.session(sid) is not None and rt.store.project(pid) is not None
+    # But the project and its sessions leave every list.
+    assert pid not in [p["id"] for p in (await client.get("/api/project")).json()]
+    snapshot = (await client.get("/api/snapshot")).json()
+    assert pid not in [p["id"] for p in snapshot["projects"]] and sid not in [s["id"] for s in snapshot["sessions"]]
+    assert sid not in [s["id"] for s in (await client.get("/api/session")).json()]
+    # Removing twice is a 404 from the rail's point of view (hidden project)...
+    again = await client.post(f"/api/project/{pid}/remove")
+    assert again.status_code in (400, 404)
+    # ...and adding the same path restores the project at the end, current, with its session.
+    restored = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    assert restored["id"] == pid and restored["status"] == "current"
+    assert [p["id"] for p in (await client.get("/api/project")).json()][-1] == pid
+    assert sid in [s["id"] for s in (await client.get("/api/session")).json()]
+    assert (workspace / "keep.txt").read_text() == "precious"
+
+
+async def test_remove_project_refuses_while_a_session_is_running(setup):
+    rt, client, _provider, workspace = setup
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    pid = rt.session(sid).project_id
+    rt.turns[sid] = object()  # a running turn
+    try:
+        refused = await client.post(f"/api/project/{pid}/remove")
+        assert refused.status_code == 409
+    finally:
+        del rt.turns[sid]
+    assert pid in [p["id"] for p in (await client.get("/api/project")).json()]
+    assert (await client.post(f"/api/project/{pid}/remove")).status_code == 200
+
+
+async def test_removed_projects_stay_removed_after_a_restart(setup):
+    rt, client, _provider, workspace = setup
+    sid = (await client.post("/api/session", json={"directory": str(workspace)})).json()["id"]
+    pid = rt.session(sid).project_id
+    await client.post(f"/api/project/{pid}/remove")
+    reopened = Store(rt.store.path)
+    assert pid not in [p.id for p in reopened.projects()]
+    assert reopened.is_hidden(sid) and reopened.sessions() == []
+    reopened.close()
+
+
+async def test_old_store_without_order_or_status_columns_migrates_in_creation_order(tmp_path):
+    import sqlite3
+    store = Store(tmp_path / "nexus.db")
+    for name in ("a", "b", "c"):
+        (tmp_path / name).mkdir()
+        store.project_for_path(str(tmp_path / name))
+    path = store.path
+    store.close()
+    db = sqlite3.connect(path)
+    db.execute("alter table project drop column position")
+    db.execute("alter table project drop column status")
+    db.commit()
+    db.close()
+    migrated = Store(path)
+    assert [p.name for p in migrated.projects()] == ["a", "b", "c"]
+    assert [p.position for p in migrated.projects()] == [0, 1, 2]
+    assert {p.status for p in migrated.projects()} == {"current"}
+    migrated.close()

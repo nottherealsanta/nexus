@@ -60,6 +60,18 @@ the latest GitHub release and never installs.
 - **Project.** A directory, unique by its resolved absolute path.
   `POST /api/project {path}` returns the existing project or creates one, named
   after the folder by default.
+- **Rail order and status.** Each project has a `position` (user-defined order) and a `status` (`current`, `passive`,
+  `inactive`; names inferred, awaiting the user's confirmation). Both are plain columns added in place to the
+  existing 0.10 database (`Store._migrate_manager_columns`, schema version unchanged): an old store reads fine, and
+  its projects start in creation order, `current`. See [api.md](api.md#project-rail-order-status-and-removal).
+- **Removing a project** (`POST /api/project/{id}/remove`) only unregisters it and never touches files, worktrees or
+  the directory. It is refused (409) while any of its sessions runs a turn, waits for an approval or question,
+  holds pending input, runs a background job or has a busy kernel. Otherwise the project row is marked removed
+  (`hidden = 2`) and its sessions become kind `detached`: still stored, with messages, events and snapshots, but
+  excluded from every list, search, snapshot and stream like the Manager's. Clients receive `session.deleted`
+  tombstones and `project.deleted` (`removed: true`). Adding the same path again (`POST /api/project`) restores
+  the project, `current`, at the end of the rail, with its sessions. `DELETE /api/project/{id}` remains the
+  permanent delete.
 - **Hidden Manager sessions.** The Manager ([manager.md](manager.md)) is `kind = "manager"` sessions in a hidden
   project. Every default list, search, snapshot, idle-archive sweep and event stream excludes them; their events stay
   in the durable log and open by id.

@@ -1034,6 +1034,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             return Response(status_code=204)
         return JSONResponse(project_json(runtime.project(pid)))
 
+    async def project_remove(request: Request) -> Response:
+        sessions = runtime.remove_project(p(request, "id"))
+        return JSONResponse({"id": p(request, "id"), "removed": True, "sessions_kept": len(sessions)})
+
     async def project_move(request: Request) -> Response:
         body = await _body(request)
         has_before, has_after = "before" in body, "after" in body
@@ -1758,6 +1762,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/project", route(projects), methods=["GET", "POST"]),
         Route("/api/project/{id}", route(project), methods=["GET", "PATCH", "DELETE"]),
         Route("/api/project/{id}/move", route(project_move), methods=["POST"]),
+        Route("/api/project/{id}/remove", route(project_remove), methods=["POST"]),
         Route("/api/project/{id}/worktrees", route(project_worktrees)),
         Route("/api/project/{id}/mcp", route(project_mcp_list)),
         Route("/api/project/{id}/mcp/{name}/restart", route(project_mcp_restart), methods=["POST"]),
