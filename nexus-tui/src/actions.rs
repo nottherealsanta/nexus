@@ -50,6 +50,26 @@ impl std::fmt::Debug for Secret {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApiCall {
+    TerminalControl {
+        id: String,
+        attachment: String,
+        generation: u64,
+        acquire: bool,
+    },
+    TerminalInput {
+        id: String,
+        attachment: String,
+        generation: u64,
+        seq: u64,
+        bytes: Vec<u8>,
+    },
+    TerminalResize {
+        id: String,
+        attachment: String,
+        generation: u64,
+        rows: u16,
+        cols: u16,
+    },
     TerminalList {
         project: String,
     },
@@ -357,7 +377,11 @@ impl ApiCall {
     /// Past-tense label for the success toast.
     pub fn done_label(&self) -> &'static str {
         match self {
-            ApiCall::TerminalList { .. } | ApiCall::TerminalCreate { .. } => "",
+            ApiCall::TerminalList { .. }
+            | ApiCall::TerminalCreate { .. }
+            | ApiCall::TerminalControl { .. }
+            | ApiCall::TerminalInput { .. }
+            | ApiCall::TerminalResize { .. } => "",
             ApiCall::Shell { .. } => "",
             ApiCall::Input { .. } => "Pending input updated",
             ApiCall::Provider { sign_out: true, .. } => "Signed out",
@@ -532,6 +556,41 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
     let key = RequestId::new();
     let mut done = Done::default();
     match call {
+        ApiCall::TerminalControl {
+            id,
+            attachment,
+            acquire,
+            ..
+        } => {
+            crate::terminal_api::TerminalApi(api.http.clone())
+                .control(id, attachment, *acquire)
+                .await
+                .map_err(e)?;
+        }
+        ApiCall::TerminalInput {
+            id,
+            attachment,
+            seq,
+            bytes,
+            ..
+        } => {
+            crate::terminal_api::TerminalApi(api.http.clone())
+                .input(id, attachment, *seq, bytes)
+                .await
+                .map_err(e)?;
+        }
+        ApiCall::TerminalResize {
+            id,
+            attachment,
+            rows,
+            cols,
+            ..
+        } => {
+            crate::terminal_api::TerminalApi(api.http.clone())
+                .resize(id, attachment, *rows, *cols)
+                .await
+                .map_err(e)?;
+        }
         ApiCall::TerminalList { project } => {
             done.terminals = Some(
                 crate::terminal_api::TerminalApi(api.http.clone())

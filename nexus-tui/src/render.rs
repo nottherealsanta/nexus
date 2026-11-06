@@ -2380,7 +2380,18 @@ fn draw_panel(cx: &Cx, buf: &mut Buffer, r: Rect, area: Rect, hits: &mut HitMap)
         } else {
             r.width
         };
-        put(buf, r.x, r.y, "Terminal", cx.st(PRIMARY, CANVAS), r.width);
+        put(
+            buf,
+            r.x,
+            r.y,
+            if cx.app.terminal_focused {
+                "Terminal  Ctrl+] list"
+            } else {
+                "Terminal  Enter open  c take control  r release  Esc close"
+            },
+            cx.st(PRIMARY, CANVAS),
+            r.width,
+        );
         if r.height > 1 {
             put(
                 buf,

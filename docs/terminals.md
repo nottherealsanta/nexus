@@ -2,7 +2,9 @@
 
 This is the Core terminal slice of [PLAN.md section 2](../PLAN.md#2-terminal-inside-nexus).
 The browser resource and both terminal UIs are separate work. The client behaviour
-below is the shared target, not a claim that either UI has shipped.
+below is the shared target, not a claim that either UI is complete. The TUI has
+an initial list, creation, attachment, screen, control, input and resize slice;
+see its README for the current controls and limitations.
 
 ## Client behaviour
 

@@ -12,6 +12,13 @@ sidebar/fold/tool glyphs, a monospace interface and compact full-width reading
 gutters on terminal, web and native targets. This does not change the Rust client's
 existing layout or controls.
 
+**Terminal** in the command palette opens the Core terminal panel. Use Up/Down
+and Enter to create a terminal or attach to a listed one. On an attached
+terminal, `c` takes control and `r` releases it; Enter on the selected row
+focuses its screen. Ctrl+] returns to the list and Esc from the list detaches.
+Input is sent only while this attachment has control. The terminal panel is
+still incomplete: rename, explicit close, selection and copy are not wired.
+
 **Open inspector** opens the native inspector modal (Inspector API v2), shared with NSH,
 instead of a browser. Views: `1` Timing (one shared-axis Gantt, lanes grouped by
 session, a fixed ruler), `2` Conversation, `3` Steps, `4` Requests, `5` Raw, `6`

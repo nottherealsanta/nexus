@@ -72,6 +72,61 @@ fn selecting_terminal_attaches_and_renders_stream_output() {
     assert!(rows.join("\n").contains("hello"));
 }
 
+#[test]
+fn terminal_input_waits_for_ack_and_ctrl_bracket_returns_to_list() {
+    use nexus_tui::actions::{ActionDone, Done};
+    use nexus_tui::terminal_panel::TerminalFocus;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.selected = Some("t1".into());
+    app.terminal_panel.attachment = Some("a1".into());
+    app.terminal_controlled = true;
+    app.terminal_focused = true;
+    app.terminal_panel.focus = TerminalFocus::Screen;
+    app.effects.clear();
+    press(&mut app, &["a", "b"]);
+    let calls: Vec<_> = app
+        .effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Api(call @ ApiCall::TerminalInput { .. }) => Some(call.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(matches!(&calls[..], [ApiCall::TerminalInput { seq: 1, bytes, .. }] if bytes == b"a"));
+    app.apply_done(ActionDone {
+        call: calls[0].clone(),
+        result: Ok(Done::default()),
+    });
+    assert!(app.effects.iter().any(
+        |e| matches!(e, Effect::Api(ApiCall::TerminalInput { seq: 2, bytes, .. }) if bytes == b"b")
+    ));
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char(']'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
+    assert_eq!(app.terminal_panel.focus, TerminalFocus::List);
+    assert!(!app.terminal_focused);
+}
+
+#[test]
+fn terminal_resize_tracks_panel_geometry_only_under_control() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.selected = Some("t1".into());
+    app.terminal_panel.attachment = Some("a1".into());
+    draw(&mut app, 120, 36);
+    app.effects.clear();
+    app.terminal_resize();
+    assert!(!app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::TerminalResize { .. }))));
+    app.terminal_controlled = true;
+    app.terminal_resize();
+    assert!(app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::TerminalResize { rows, cols, .. }) if *rows > 0 && *cols > 0)));
+}
+
 fn joined(rows: &[String]) -> String {
     rows.join("\n")
 }

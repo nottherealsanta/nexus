@@ -32,7 +32,7 @@ When an item lands, tick it, add a one-line record under [Landed](#landed) and u
 | 5 | Mobile cut-down client | Not started; phone build still renders the full timeline. Decided: mobile can approve and answer anything a client can | [5](#5-mobile-cut-down-client-sessions-manager-settings) |
 | 6 | ZMX mode (Claude Code, Antigravity) | **Later (user, 11-06).** Plan only, nothing built; kept here for reference | [6](#6-zmx-mode-for-claude-code-and-antigravity-later) |
 | 3 | Manager, finished and tested end to end | M1–M5 built; real GPT-Live call worked 11-04; evals, long calls, iOS/native audio and hands-free open | [3](#3-manager-finish-and-test-end-to-end) |
-| 2 | Terminal inside Nexus | Core PTY and HTTP/SSE slice; client panels not started | [2](#2-terminal-inside-nexus) |
+| 2 | Terminal inside Nexus | Core PTY and HTTP/SSE slice; initial TUI terminal panel, not feature-complete | [2](#2-terminal-inside-nexus) |
 | 7 | Everything else carried over | Full backlog in section 9, not scheduled | [7](#7-carried-over-not-scheduled) |
 | 8 | Provider usage panel (table) | Fully specified, not started; both clients | [8](#8-provider-usage-panel-usage-table) |
 

@@ -234,7 +234,9 @@ fn draw_terminal(terminal: &mut term::Term, app: &mut App) -> std::io::Result<()
 
 impl Interactive {
     fn draw(&mut self) -> std::io::Result<()> {
-        draw_terminal(&mut self.terminal, &mut self.app)
+        draw_terminal(&mut self.terminal, &mut self.app)?;
+        self.app.terminal_resize();
+        Ok(())
     }
 
     /// Reconcile program status and run this item's effects, in order. Effects
