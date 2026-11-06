@@ -1,4 +1,5 @@
-import { Clipboard, Scroll, Text, View, WebView, effect, keymap, signal, type WebViewRef, type ViewRef } from "nsh";
+import { Clipboard, Scroll, Text, View, WebView, colorScheme, effect, keymap, signal, type WebViewRef, type ViewRef } from "nsh";
+import theme from "../../gen/theme.json";
 import { commands, term, toKeystroke } from "../commands";
 import { PRINTABLE_KEYS } from "../manager";
 import { Button, Dialog, Input } from "nsh/base";
@@ -44,6 +45,7 @@ export function TerminalPanel() {
     return ack;
   };
   setTerminalSender(send);
+  effect(() => { const colors = theme.cssVars[colorScheme() === "light" ? "light" : "dark"]; send({type:"theme",background:colors.background,foreground:colors.foreground}); });
   const focusList = () => { terminalFocused.set(false); web?.injectJavaScript("document.activeElement.blur()"); list?.focus(); };
   setTerminalActions(() => { copyPending = true; send({type:"copy"}); }, focusList);
   const create = async () => { await newTerminal(); const index = terminalItems().findIndex(t => t.id === terminalSelected()); if (index >= 0) cursor.set(index + 1); };

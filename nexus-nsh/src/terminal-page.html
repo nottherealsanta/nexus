@@ -23,6 +23,7 @@ window.addEventListener('message', e => {
     case 'write': term.write(Uint8Array.from(atob(m.data), c => c.charCodeAt(0)), () => send('written', {id:m.id})); break;
     case 'reset': term.write('\x1bc', () => { if (m.cols && m.rows) term.resize(m.cols,m.rows); }); break;
     case 'writable': writable = !!m.value; break;
+    case 'theme': term.options.theme = {background:m.background, foreground:m.foreground, cursor:m.foreground}; document.body.style.background = m.background; document.getElementById('terminal').style.background = m.background; break;
     case 'focus': term.focus(); break;
     case 'copy': send('selection', {data: term.getSelection()}); break;
     case 'fit': fit.fit(); break;

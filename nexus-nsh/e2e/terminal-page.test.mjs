@@ -20,7 +20,8 @@ test('terminal page captures keys, copies only the selection, and blocks OSC 52'
     await page.evaluate(() => { window.nsh = { postMessage: data => window.capture(data) }; });
     await page.setContent(html);
     await page.waitForFunction(() => document.querySelector('.xterm-helper-textarea'));
-    await page.evaluate(() => window.postMessage(JSON.stringify({type:'writable',value:true}), '*'));
+    await page.evaluate(() => { window.postMessage(JSON.stringify({type:'writable',value:true}), '*'); window.postMessage(JSON.stringify({type:'theme',background:'#f7f7f5',foreground:'#1f2124'}), '*'); });
+    await page.waitForFunction(() => term.options.theme.background === '#f7f7f5');
     await page.locator('.xterm-helper-textarea').focus();
     await page.keyboard.press('Control+c');
     await page.keyboard.press('Control+]');
