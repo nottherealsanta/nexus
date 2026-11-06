@@ -1054,13 +1054,13 @@ impl App {
             return;
         }
         let (Some(r), Some(id), Some(attachment)) = (
-            self.regions.panel,
+            self.regions.terminal,
             self.terminal_panel.selected.clone(),
             self.terminal_panel.attachment.clone(),
         ) else {
             return;
         };
-        let width = r.width.saturating_sub((r.width / 3).min(32) + 1).min(500);
+        let width = r.width.min(500);
         let height = r.height.saturating_sub(1).min(200);
         if width == 0 || height == 0 || self.terminal_panel.size == Some((height, width)) {
             return;

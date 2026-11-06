@@ -46,6 +46,7 @@ pub struct Flags {
     pub left_width: u16,
     /// A file or diff is open, in a modal over the whole window.
     pub panel_open: bool,
+    pub terminal_open: bool,
 }
 
 /// Width of the docked left sidebar, bounded so the centre keeps `MIN_CENTRE`.
@@ -99,6 +100,7 @@ pub struct Regions {
     pub timeline: Rect,
     pub waiting: Rect,
     pub composer: Rect,
+    pub terminal: Option<Rect>,
     // Header anchors: leading toggle, trailing toggle, notification bell, title.
     pub toggle_left: Rect,
     pub toggle_right: Rect,
@@ -230,7 +232,13 @@ impl Regions {
                 right = Some(r(x + w, body_y, rw, body_h));
             }
         }
-        let centre = r(x, body_y, w, body_h);
+        let dock_height = if flags.terminal_open {
+            (body_h / 3).max(3).min(body_h.saturating_sub(6))
+        } else {
+            0
+        };
+        let centre = r(x, body_y, w, body_h - dock_height);
+        let terminal = (dock_height > 0).then(|| r(x, centre.bottom(), w, dock_height));
         let panel = flags.panel_open.then(|| panel_rect(area));
 
         let drawer = flags.drawer.filter(|_| narrow).map(|side| {
@@ -326,6 +334,7 @@ impl Regions {
             timeline,
             waiting,
             composer,
+            terminal,
             toggle_left,
             toggle_right,
             bell,
