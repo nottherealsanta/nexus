@@ -793,7 +793,6 @@ category = "navigation"
 when = ["has_project"]
 unavailable_reason = "Open a project first."
 placement = ["palette", "menu"]
-status = "deferred"
 
 [[command]]
 id = "terminal.new"
@@ -802,7 +801,6 @@ category = "navigation"
 when = ["terminal.open"]
 unavailable_reason = "Open Terminal first."
 placement = ["panel"]
-status = "deferred"
 
 [[command]]
 id = "terminal.rename"
@@ -811,7 +809,6 @@ category = "navigation"
 when = ["terminal.selected"]
 unavailable_reason = "Select a terminal first."
 placement = ["panel"]
-status = "blocked_core"
 
 [[command]]
 id = "terminal.close"
@@ -820,7 +817,6 @@ category = "navigation"
 when = ["terminal.selected"]
 unavailable_reason = "Select a terminal first."
 placement = ["panel"]
-status = "deferred"
 
 [[command]]
 id = "terminal.acquire"
@@ -829,7 +825,6 @@ category = "navigation"
 when = ["terminal.selected", "!terminal.controlled"]
 unavailable_reason = "Select a terminal without control first."
 placement = ["panel"]
-status = "deferred"
 
 [[command]]
 id = "terminal.release"
@@ -838,7 +833,6 @@ category = "navigation"
 when = ["terminal.controlled"]
 unavailable_reason = "This attachment does not have control."
 placement = ["panel"]
-status = "deferred"
 
 [[command]]
 id = "terminal.copy"
@@ -847,7 +841,6 @@ category = "copy"
 when = ["terminal.selected"]
 unavailable_reason = "Select terminal text first."
 placement = ["panel"]
-status = "deferred"
 
 [[command]]
 id = "terminal.focus_list"
@@ -858,7 +851,6 @@ key_context = "terminal"
 when = ["terminal.focused"]
 unavailable_reason = "The terminal screen does not have focus."
 placement = ["panel"]
-status = "deferred"
 
 [[command]]
 id = "sidebar.left.toggle"
