@@ -1,7 +1,7 @@
 {
   "name": "Nexus",
   "id": "dev.nexus10.nsh",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "build": 1,
   "icon": "../interface/brand/nexus-1024.png",
   "appearance": "system",
