@@ -8,6 +8,8 @@
   "theme": "gen/theme.json",
   "rust": "native",
   "capabilities": {
+    "webview": { "hosts": [] },
+    "clipboard": true,
     "network": {
       "hosts": [
         "*"

@@ -41,6 +41,12 @@ Narrow desktop/web headers show one flexible title instead of a fixed-width tab
 strip and add button, matching the Rust TUI's narrow header. Session switching and
 creation remain available through the sidebar and shortcuts.
 
+## Workspace terminals
+
+Desktop and web expose Core-owned terminal resources through **Terminal**. The xterm.js screen is embedded in a WebView; it is not part of the session or model context. Closing the panel detaches, while **Close** terminates a resource. Control is explicit, and a reconnect requires taking control again. A discarded-history notice means replay is lossy. Output cannot write the clipboard: select text and use **Copy**.
+
+Keyboard routing assumes the focused WebView receives keys after NSH's keymap has been overridden with pass-through bindings. The web renderer uses a sandboxed iframe; the macOS host has a native key monitor that consumes matching shortcuts before dispatch, so simply ignoring shortcut callbacks is not sufficient. Ctrl+] moves focus to the list. Browser and OS reserved shortcuts remain platform-owned. Native focus and input routing require a real macOS verification.
+
 ## Terminal backend
 
 `nexus nsh tui` starts Core and runs this same TSX app with upstream NSH's terminal

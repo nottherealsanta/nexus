@@ -30,6 +30,7 @@ import { rowSessions } from "./ui/sidebar";
 import { PROJECT_STATUS, dropMove, orderedProjects, projectStatus, railProjects } from "./project-rail";
 import type { ProjectStatus } from "./project-rail";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
+import { beginRenameTerminal, closeTerminalPanel, controlTerminal, focusTerminalList, newTerminal, openTerminal, requestTerminalClose, requestTerminalCopy, terminalControlled, terminalFocused, terminalOpen, terminalSelected } from "./terminal-panel";
 
 export interface Cmd {
   id: string; title: string; category: string; slash?: string; keys?: { tui?: string; nsh?: string };
@@ -109,6 +110,10 @@ function evalTerm(t: string): boolean {
     case "timeline.scrolled_up": return scrolledUp();
     case "timeline.has_older": return !!model.selected?.messagesMore;
     case "view.settings": return centre() === "settings";
+    case "terminal.open": return terminalOpen();
+    case "terminal.selected": return !!terminalSelected();
+    case "terminal.focused": return terminalFocused();
+    case "terminal.controlled": return terminalControlled();
     case "panel.file": return openFile() !== null;
     case "panel.diff": return false;
     case "editor.dirty": return fileDirty();
@@ -151,6 +156,14 @@ async function showUsage() {
 }
 
 const on = (id: string, run: Handler["run"], mutates = false) => handlers.set(id, { run, mutates });
+on("terminal.open", openTerminal);
+on("terminal.new", newTerminal);
+on("terminal.rename", beginRenameTerminal);
+on("terminal.close", requestTerminalClose);
+on("terminal.copy", requestTerminalCopy);
+on("terminal.focus_list", focusTerminalList);
+on("terminal.acquire", () => controlTerminal("acquire"));
+on("terminal.release", () => controlTerminal("release"));
 
 /** Copies text to the system clipboard and confirms it (the timeline's message copy). */
 export function copyText(text: string, done: string) { void Clipboard.writeText(text).then(() => toast("success", done)); }
@@ -947,6 +960,8 @@ const GLOBAL_CONTEXTS = new Set(["global"]);
 const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d+$/.test(k);
 /** Esc is not a per-command lookup: the manifest's ordered rules decide (interface/README.md "Esc precedence"). */
 export function escape() {
+  if (terminalFocused()) return null;
+  if (terminalOpen() && !confirmDialog()) { closeTerminalPanel(); return "terminal"; }
   const drag = railDrag();
   if (drag) { railDrag.set({ ...drag, cancelled: true }); return "rail_drag"; }
   if (inspector()) { closeInspector(); return "inspector"; }
@@ -1008,7 +1023,7 @@ export function bindLeader(): () => void {
   };
   const arm = () => {
     disarm();
-    if (term("overlay.open") || term("dialog.open") || textEdit.active()) return;
+    if (terminalFocused() || term("overlay.open") || term("dialog.open") || textEdit.active()) return;
     // Esc cancels the armed leader instead of falling through to interrupt/back.
     const keys: Record<string, () => void> = { escape: disarm };
     for (const c of commands) for (const key of c.leader ?? []) keys[key] = () => { disarm(); void run(c.id); };
@@ -1027,7 +1042,7 @@ export function bindKeys(): () => void {
     const keys = platform.idiom === "terminal" ? [c.keys?.tui, c.keys?.nsh] : [c.keys?.nsh];
     for (const k of new Set(keys)) {
       if (!k || k === "esc" || !GLOBAL_CONTEXTS.has(c.key_context ?? "") || !hasModifier(k)) continue;
-      try { offs.push(keymap.bind(toKeystroke(k), () => { void run(c.id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+      try { offs.push(keymap.bind(toKeystroke(k), () => { if (!terminalFocused()) void run(c.id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
     }
   }
   for (const id of ["sidebar.row_menu", "tool.raw_toggle", "tool.show_all_output"]) {

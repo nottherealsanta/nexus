@@ -8,6 +8,8 @@ import { Icon, IconButton, FOCUS, T, TS } from "./src/ui/kit";
 import { RightSidebar } from "./src/ui/right";
 import { Centre } from "./src/ui/centre";
 import { FilePanel } from "./src/ui/editor";
+import { TerminalPanel } from "./src/ui/terminal";
+import { terminalOpen } from "./src/terminal-panel";
 import { ContextDetailModal } from "./src/ui/newsession";
 import { ManagerContextModal } from "./src/ui/manager/context-modal";
 import { ResourcesModal } from "./src/ui/resources";
@@ -89,6 +91,7 @@ function App() {
           <Drawers />
         </View>
         <If when={panelOpen()}><FilePanel /></If>
+        <If when={terminalOpen()}><TerminalPanel /></If>
         </>}><PhoneShell /></If>
         <ContextDetailModal />
         <ResourcesModal />
