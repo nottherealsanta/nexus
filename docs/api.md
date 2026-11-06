@@ -50,6 +50,13 @@ including cursors whose rows remain in another interleaved session.
   413 (voice audio over 120 s), 422 (a voice request that cannot run, with `code`)
   or 502 (a provider, auth or one-shot failure).
 
+## Terminal resource API (design, not implemented)
+
+The proposed terminal-specific HTTP and streaming contract is in
+[terminals.md](terminals.md). These routes are **not available yet**; in
+particular, the existing tokenless non-loopback mode must not expose them.
+The terminal stream is separate from session events and model context.
+
 ## Endpoints
 
 `GET /api/session/{id}/inspect` is the read-only native inspector projection

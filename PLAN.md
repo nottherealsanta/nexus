@@ -137,6 +137,7 @@ Work:
 
 - [ ] Design review and the decisions above; shared resource contract (API, versioned data stream with sequence
   numbers, bounded replay, gap/resync, input ids so a retry never repeats a command). `docs/api.md` first.
+  Draft contract in `docs/terminals.md`; not implemented or verified, and design review remains open.
 - [ ] Core PTY service: spawn in the chosen workspace, process group, resize, binary-safe I/O, UTF-8 split across
   chunks, signals and exit codes, bounded scrollback with an announced discard, orphan cleanup, limits.
 - [ ] TUI: panel with a terminal tab and resource list; keys arbitrated with global shortcuts (Esc, Ctrl chords,
