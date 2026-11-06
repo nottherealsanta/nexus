@@ -1,0 +1,48 @@
+  ◧      [Sessions] [Files]              New session      +                                                                                                   □ 
+     │                                  i 2 other sessions waiting for input                                                                                go  
+▏1   │▌  Nexus                  8  5m                                                                                                                           
+▏ N  │   /private/tmp/…ws/nexus-demo                                                                                                                            
+▏  6 │   Notes                 2  14m      System prompt ~885                                                                                                   
+     │   /private/tmp/…/ws/docs-site                                                                                                                            
+ 1   │   Nimbus                1  14m      AGENTS.md  unavailable or not read                                                                                   
+ NT  │   /private/tmp/…dit/ws/nimbus                                                                                                                            
+   1 │   Nova                  1  14m      Tools [15] ~2.4K                                                                                                     
+     │   /private/tmp/…audit/ws/nova         ● read                      ● bash_output               ● web_search                                               
+     │   Side project          1  14m        ● grep                      ● bash_kill                 ● web_fetch                                                
+ NM  │   /private/tmp/…/side-project         ● glob                      ● edit                      ● ask                                                      
+   1 │ + Add project                         ● ls                        ● patch                     ● code                                                     
+     │                                                                                                              ace_tools                                   
+     │                                        Command palette                                                                                                   
+ NV  │                                     S                                                                                                                    
+   1 │                                        ⌕ type to filter commands                                                                                         
+     │                                     M  ────────────────────────────────────────────────────────────────────                                              
+     │                                        SESSION                                                                                                           
+  S  │                                       ▌  New session                                                 ctrl+n                                              
+   1 │                                     t    Switch session                                              ctrl+k                                              
+     │                                          Sessions: current project or all projects                                                                       
+     │                                          Sessions: show archived                                                                                         
+  +  │                                          Actions for this row                                             m                                              
+     │                                          Open session  · Focus a session row first.                   enter                                              
+     │                                          Search sessions  · Not available yet.                       ctrl+f                                              
+     │                                          Close tab  · Open a session first.                           alt+x                                              
+     │                                          Next tab  · Open a session first.                            alt+]                                              
+     │                                          Previous tab  · Open a session first.                        alt+[                                              
+     │                                          Rename session  · Open a session first.                                                                         
+     │                                          Archive session  · Archiving needs an idle or interrupted sessio…                                               
+     │                                          Unarchive session  · This session is not archived.                                                              
+     │                                                                                                                                                          
+     │                                        ↑↓ move · enter run · esc close                             1 of 173                                              
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                      All scenarios                                                                                                       
+     │                                                                                                                                                          
+     │                                      Build · m scripted · default                                                                                  0     
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+     │                                   /private/tmp/claude-501/-Users-santa-repos-nexus/ae18cd23-3c30-45e9-8fce-4498e2bbec4d/scratchpad/audit/ws/nexus-demo   
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  

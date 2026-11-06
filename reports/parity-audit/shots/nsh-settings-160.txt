@@ -1,0 +1,48 @@
+ ◧     [Sessions]  [Files]               · All scenarios  ×  +                                                                                              □
+                                   ▣      i  2 other sessions waiting for input                                                                           go
+1     ⌕  Search sessions       ctrl+k
+  N      All scenarios            21m      AGENTS.md not found · /private/tmp/claude-501/-Users-santa-re…98e2bbec4d/scratchpad/audit/ws/nexus-demo/AGENTS.md
+    6    Thinking now             28m
+      ◆  Waiting for approval     29m      Tools [15] ~2.5K
+1        Mermaid diagrams         29m      ●   read                    ●   bash                    ●   patch                   ●   ask
+ NT                                        ●   grep                    ●   bash_output             ●   write                   ●   code
+    1    Release notes for 0.10… ╭────────────────────────────────────────────────────────────────────────────────────────────╮●   expose_workspace_tools
+         Failed tool             │                                                                                            │
+         All scenarios           │  Settings                                                                                  │
+ NM                              │   ⌕   Filter settings…                                                                     │
+    1 +  New session             │  ▌Appearance             Appearance                                                        │
+                                 │   Providers              Theme                                    System   Light   Dark    │
+                                 │   Agents                 Animations                                                        │
+ NV                              │   Tools                  Spinners and the working                              on   off    │
+    1                            │   MCP                    shimmer; off keeps an idle                                        │
+                                 │   Context                terminal still.                                                   │
+                                 │   Voice and speech       Sidebar                                                           │
+  S                              │   Manager                The project rail always                                           │                 #1 · 12:28 PM
+    1                            │   Keybindings            shows; this opens or closes                        full   rail    │
+                                 │   Notifications          the sidebar beside it. Drag                                       │
+ +                               │   About                  the edge to resize.                                               │
+                                 │                          Timeline detail                                                   │
+                                 │                          Low groups activity into                                          │
+                                 │                          one line, medium lists each                low   medium   high    │
+                                 │                          tool collapsed, high                                              │
+                                 │                          expands every tool.                                               │e thought belongs in the
+                                 │                          Scroll bar                                                        │
+                                 │                          Shows a subdued bar only                                          │
+                                 │                          while the timeline scrolls,                           off   on    │                      ⧉ Copy
+                                 │                          then hides it after a                                             │
+                                 │                          moment.                                                           │
+                                 │                          Details sidebar                                       off   on    │
+                                 │                          Sessions shown                     this project   all projects    │
+                                 │                          Archived sessions                                     off   on    │
+                                 │  ↑↓ section · enter open · esc close                                     Core 0.10.0.dev0  │
+                                 │                                                                                            │
+                                 ╰────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                   m · 7 tools · 24.4Ki · 510o · 90r · 58%c · 0.1s · 12:28 PM
+
+
+                                           Type a message…                                                                                          ♪    ↑
+
+                                           Build  ·  m scripted  ·  default                                                                             7.2K
+                                         ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                         /private/tmp/claude-501/-Users-santa-repos-ne…s/ae18cd23-3c30-45e9-8fce-4498e2bbec4d/scratchpad/audit/ws/nexus-demo
+       Settings                ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

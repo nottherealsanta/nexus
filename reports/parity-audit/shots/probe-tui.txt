@@ -1,0 +1,48 @@
+  ◧      [Sessions] [Files]              New session      +                                                                                                   □ 
+     │                                  i 2 other sessions waiting for input                                                                                go  
+▏1 1 │                              ▣                                                                                                                           
+▏ N  │ ⌕ Search sessions       ctrl+k                                                                                                                           
+▏  4 │                                     System prompt ~885                                                                                                   
+     │ ◆ Waiting for approval      8m                                                                                                                           
+ 1   │                                     AGENTS.md  unavailable or not read                                                                                   
+ NT  │                                                                                                                                                          
+   1 │ ● Thinking now              8m      Tools [15] ~2.4K                                                                                                     
+     │                                       ● read                      ● bash_output               ● web_search                                               
+     │                                       ● grep                      ● bash_kill                 ● web_fetch                                                
+ NM  │   Mermaid diagrams          8m        ● glob                      ● edit                      ● ask                                                      
+   1 │                                       ● ls                        ● patch                     ● code                                                     
+     │                                       ● bash                      ● write                     ● expose_workspace_tools                                   
+     │   Release notes for 0.10 w… 8m                                                                                                                           
+ NV  │                                     Skills [0]  none                                                                                                     
+   1 │                                                                                                                                                          
+     │   Failed tool               8m      MCP [1] (1 off)                                                                                                      
+     │                                       ○ browser-use · disabled in configuration                                                                          
+  S  │                                                                                                                                                          
+   1 │   All scenarios             8m      total  ~46 tok                                                                                                       
+     │                            1 ↳                                                                                                                           
+     │                                                                                                                                                          
+  +  │ + New session                                                                                                                                            
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                      Message to start a new session                                                                                      
+     │                                                                                                                                                          
+     │                                      Build · m scripted · default                                                                                  0     
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+     │                                   /private/tmp/claude-501/-Users-santa-repos-nexus/ae18cd23-3c30-45e9-8fce-4498e2bbec4d/scratchpad/audit/ws/nexus-demo   
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  

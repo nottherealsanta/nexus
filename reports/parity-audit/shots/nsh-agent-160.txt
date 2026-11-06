@@ -1,0 +1,48 @@
+ ◧     [Sessions]  [Files]               · All scenarios  ×  +                                                                                              □
+                                   ▣    All scenarios
+1     ⌕  Search sessions       ctrl+k     i  2 other sessions waiting for input                                                                           go
+  N      All scenarios            21m      AGENTS.md not found · /private/tmp/claude-501/-Users-santa-re…98e2bbec4d/scratchpad/audit/ws/nexus-demo/AGENTS.md
+    6    Thinking now             28m
+      ◆  Waiting for approval     29m      Tools [15] ~2.5K
+1        Mermaid diagrams         29m      ●   read                    ●   bash                    ●   patch                   ●   ask
+ NT                                        ●   grep                    ●   bash_output             ●   write                   ●   code
+    1    Release notes for 0.10…  29m      ●   glob                    ●   bash_kill               ●   web_search              ●   expose_workspace_tools
+         Failed tool              29m      ●   ls                      ●   edit                    ●   web_fetch
+         All scenarios            29m
+ NM                               1 ↳      Skills [0] none
+    1 +  New session
+                                           MCP [0] none
+
+ NV                                        total ~3,400 tok
+    1
+
+
+  S                                      ╭───────────────────────────────────────────────────────────────────────────╮                          #1 · 12:28 PM
+    1                                    │                                                                           │
+                                         │  Change agent                                                             │
+ +                                       │  Type to filter agents…                                                   │
+                                         │   build                                                   builtin · all   │
+                                         │   orchestrate                                         builtin · primary   │
+                                         │   scenario                                                 global · all   │
+                                         │  ↑↓ move · enter choose · esc close                               1 of 3  │
+                                         │                                                                           │, the live thought belongs in the
+                                         ╰───────────────────────────────────────────────────────────────────────────╯
+
+                                           python                                                                                                    ⧉ Copy
+                                           def build_rows(messages, turns):
+                                               return group_activities(rows)
+
+                                          ☑ thoughts and tools share one group
+                                          ☑ failed tools stay visible
+                                          ☐ footer waits for the turn to finish
+
+                                          The child session and image are below; open either to inspect it.
+                                                                                                   m · 7 tools · 24.4Ki · 510o · 90r · 58%c · 0.1s · 12:28 PM
+
+
+                                           Type a message…                                                                                          ♪    ↑
+
+                                           Build  ·  m scripted  ·  default                                                                             7.2K
+                                         ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                         /private/tmp/claude-501/-Users-santa-repos-ne…s/ae18cd23-3c30-45e9-8fce-4498e2bbec4d/scratchpad/audit/ws/nexus-demo
+       Settings                ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

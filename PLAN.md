@@ -1575,6 +1575,42 @@ change, and any client-specific difference needs the user's approval and a ledge
   with the left accent bar). Remove the bold from its title and make the title white in dark mode. Both
   clients, theme tokens shared, screenshots compared.
 
+**15.7 Look-and-function parity pass (user, 2026-11-06)** — the user compared both clients in Ghostty: the Rust TUI
+looks better, `nexus nsh tui` does not look the same, and Settings neither looks nor works the same. **The TUI is the
+reference; change NSH to match.** Partial captures: [reports/parity-audit/](reports/parity-audit/).
+
+- [x] **Modal backdrop (user decision):** no dimming; behind a modal the whole screen is the theme background
+  (`surface.canvas`) in both clients (TUI `paint::cover`, NSH `bg-background`). Drawers and Manager cards keep the
+  blended scrim. Ledger row added. Not yet verified in a terminal run or by NSH tests.
+- [~] **Framed modals:** upstream nsh 0.4.0 frames every overlay layer (`nsh-platform-tui/src/render.rs`,
+  `frame_around`) with no option to disable it. NSH's terminal `Modal` is now an app-drawn frameless block with
+  the TUI's `modalRect` geometry, title and footer; web keeps `Dialog`. Not yet covered by tests or screenshots.
+- [ ] **Settings, terminal port (not started):** build `settings-term.tsx` from a line model in whole cells,
+  `modalRect(88, 40)`, 22-column section list with a `│` rule, one row per setting, padded `" opt "` segments,
+  selected row in the settings selection colour with a `▌` bar, selected row's detail lines above the hint row,
+  windowed list. Port the TUI key model (`settings_key` / `settings_page_key`, `nexus-tui/src/app.rs` ~10887 and
+  ~12322): section list Up/Down; **Right, Enter, Tab move into the values** (today NSH binds only Left and Up/Down,
+  which is why Right does nothing); values Up/Down, Left/Right on segments (wrapping, Enter also cycles), number rows
+  step; Tab/Esc back to the sections; Esc clears search, then closes. Hints `enter select · ←→ value · esc back` /
+  `↑↓ section · enter open · esc close`, "N sections" at the right. Theme row: the TUI shows light/dark, NSH
+  system/light/dark — align. TUI-only rows `appearance.monochrome`, `notifications.terminal`: decide or list as
+  TUI-only. Providers/Agents pages: line lists like the TUI, not cards. Drive tests from
+  `interface/scenarios/settings-focus.json` in both clients.
+- [ ] **Shell (not started):** context header tool grid (TUI `● read`, one space, indented, 3 columns; NSH wide gap,
+  4 columns; same for Skills/MCP and `total` spacing); project rail (accent bar on the selected tile, separators
+  between tiles, divider to the sidebar, counts in tile corners); sidebar session rows (two-line rows, title + age
+  then `⌥ branch`, blank line between rows; NSH squashes them and shows stray `46 ↳`); search row has no filled
+  background in the TUI; NSH timeline surface is black where the TUI uses its dark surface; extra gray strip under
+  the NSH composer; NSH shows no cursor in the empty composer; model name is primary in the TUI footer; header tab
+  strip and Manager/toggle placement.
+- [ ] **Other screens:** palette, model/agent pickers, help, Files and Projects tabs, search, a session with tool
+  groups, Manager dropdown, inspector, overview, 80x24 — compare with the captures in reports/parity-audit/ and fix.
+- [ ] **Capture method:** tmux does not answer OSC 10/11, so NSH falls back to a bandless look under tmux; use the
+  pty harness in `reports/parity-audit/harness/` (answers like Ghostty) for screenshots.
+- [ ] **Build disk use:** a shared `CARGO_TARGET_DIR` across worktrees grew ~22 GB in 30 minutes (each worktree
+  and flag set builds new NSH crate copies, ~1 GB per NSH build) and `nsh run` hot-reload loops keep rebuilding.
+  Run parity work in one worktree, avoid long hot-reload loops, prune the target dir.
+
 **15.6 Retirement checklist for `nexus-tui`**
 
 - [ ] Every approved difference is in the ledger; the shared scenarios and screenshot comparisons match.

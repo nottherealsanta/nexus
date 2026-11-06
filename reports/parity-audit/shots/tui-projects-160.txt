@@ -1,0 +1,48 @@
+  ◧      [Sessions] [Files]              New session      +                                                                                                   □ 
+     │                                  i 2 other sessions waiting for input                                                                                go  
+▏1   │▌  Nexus                  8  5m                                                                                                                           
+▏ N  │   /private/tmp/…ws/nexus-demo                                                                                                                            
+▏  6 │   Notes                 2  14m      System prompt ~885                                                                                                   
+     │   /private/tmp/…/ws/docs-site                                                                                                                            
+ 1   │   Nimbus                1  14m      AGENTS.md  unavailable or not read                                                                                   
+ NT  │   /private/tmp/…dit/ws/nimbus                                                                                                                            
+   1 │   Nova                  1  14m      Tools [15] ~2.4K                                                                                                     
+     │   /private/tmp/…audit/ws/nova         ● read                      ● bash_output               ● web_search                                               
+     │   Side project          1  14m        ● grep                      ● bash_kill                 ● web_fetch                                                
+ NM  │   /private/tmp/…/side-project         ● glob                      ● edit                      ● ask                                                      
+   1 │ + Add project                         ● ls                        ● patch                     ● code                                                     
+     │                                       ● bash                      ● write                     ● expose_workspace_tools                                   
+     │                                                                                                                                                          
+ NV  │                                     Skills [0]  none                                                                                                     
+   1 │                                                                                                                                                          
+     │                                     MCP [1] (1 off)                                                                                                      
+     │                                       ○ browser-use · disabled in configuration                                                                          
+  S  │                                                                                                                                                          
+   1 │                                     total  ~46 tok                                                                                                       
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+  +  │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                                                                                                                                          
+     │                                      All scenarios                                                                                                       
+     │                                                                                                                                                          
+     │                                      Build · m scripted · default                                                                                  0     
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+     │                                   /private/tmp/claude-501/-Users-santa-repos-nexus/ae18cd23-3c30-45e9-8fce-4498e2bbec4d/scratchpad/audit/ws/nexus-demo   
+     │  Settings               ctrl+,    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  
