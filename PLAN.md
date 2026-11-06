@@ -27,16 +27,17 @@ When an item lands, tick it, add a one-line record under [Landed](#landed) and u
 
 | # | Work | State | First step |
 | --- | --- | --- | --- |
-| 4 | Tests and lints | **In progress (11-06).** Core green (1200 passed, 1 skipped); TUI and NSH below | [4](#4-fix-all-tests-and-lints), do this first |
+| 4 | Tests and lints | **Core and TUI green (816 TUI tests pass; fmt, clippy, ruff clean). NSH: 2 failing tests left** | [4](#4-fix-all-tests-and-lints), do this first |
 | 1 | Unmerged work | Local `main` is **34 commits ahead of `origin/main`, unpushed**; PR #100 open; PR #99 looks obsolete | [1](#1-merge-what-is-unmerged) |
 | 5 | Mobile cut-down client | Not started; phone build still renders the full timeline. Decided: mobile can approve and answer anything a client can | [5](#5-mobile-cut-down-client-sessions-manager-settings) |
 | 6 | ZMX mode (Claude Code, Antigravity) | **Later (user, 11-06).** Plan only, nothing built; kept here for reference | [6](#6-zmx-mode-for-claude-code-and-antigravity-later) |
 | 3 | Manager, finished and tested end to end | M1–M5 built; real GPT-Live call worked 11-04; evals, long calls, iOS/native audio and hands-free open | [3](#3-manager-finish-and-test-end-to-end) |
 | 2 | Terminal inside Nexus | Spikes done (`reports/section14/spikes.md`); no product code | [2](#2-terminal-inside-nexus) |
 | 7 | Everything else carried over | Listed, not scheduled | [7](#7-carried-over-not-scheduled) |
+| 8 | Provider usage panel (table) | Fully specified, not started; both clients | [8](#8-provider-usage-panel-usage-table) |
 
 Suggested order: 4, then 1 (so the release PR can merge on a green tree), then 5, then 2 and 3 in whatever order the
-user prefers (3 needs real-model approvals). Section 6 (ZMX) is for later.
+user prefers (3 needs real-model approvals). Section 6 (ZMX) is for later. Section 8 (the usage panel) is small, self-contained and can go any time after 4.
 
 ## Decisions
 
@@ -175,41 +176,37 @@ checks below pass in the TUI and NSH and the iOS client (section 5 makes the Man
 
 ## 4. Fix all tests and lints
 
-Measured 2026-11-06 on `main` plus the modal revert. Fix each cause; do not just update expectations (decide whether the
-code or the test is wrong).
+Status 2026-11-06: **Core and the TUI are green; NSH is still to do.** Each failure was triaged (code or test wrong?)
+rather than updated blindly.
 
-| Suite | Result | Work |
+| Suite | Result | Left |
 | --- | --- | --- |
-| Core `uv run pytest -q`, `ruff check nexus tests`, `uv lock --check` | **1200 passed, 1 skipped** (162 s) | [ ] Re-run `ruff` and `lock --check`; watch `test_server.py::test_code_nested_write_needs_no_approval_and_kernel_api` (one flake seen under load) and the long `test_archive.py` hangs seen under heavy load |
-| TUI `cargo fmt --check` | Fails: 5 diffs (`live.rs`, `manager.rs`, `dictation.rs`, `render.rs`, `tests/manager.rs`) | [ ] `cargo fmt` |
-| TUI `cargo clippy --all-targets -- -D warnings` | Fails: 10 errors | [ ] `is_multiple_of` ×3, `div_ceil` ×1, identical `if` blocks ×2 (`app.rs`, `render.rs`), `chunks_exact` constant size ×2 (`live.rs`, `speech.rs`), `iter().any()` → `contains()` ×2 |
-| TUI `cargo test --no-fail-fast` | **12 fail** | See below |
-| NSH `nsh check` | Known errors fixed earlier (11-06); re-run | [ ] Re-run |
-| NSH `nsh test --target web` | 277/279 on 11-06 | [ ] Fix the two failing tests (the `i7` picker-footer wording check is one; find the other) |
+| Core `uv run pytest -q` | 1200 passed, 1 skipped (162 s) before the lint change | [ ] Re-run once after the `manager/context.py` lint fix; watch `test_server.py::test_code_nested_write_needs_no_approval_and_kernel_api` (one flake seen under load) and the `test_archive.py` hangs seen under heavy load |
+| Core `ruff check nexus tests`, `uv lock --check` | **Clean** (fixed ISC004 in `nexus/manager/context.py`) | — |
+| TUI `cargo fmt --check` | **Clean** | — |
+| TUI `cargo clippy --all-targets -- -D warnings` | **Clean** (10 errors fixed: `is_multiple_of`, `div_ceil`, `as_chunks`, `contains`, duplicate `if` blocks) | — |
+| TUI `cargo test --no-fail-fast` | **816 passed, 0 failed, 8 ignored** | — |
+| NSH `nsh check` | Known errors were fixed earlier | [ ] Re-run |
+| NSH `nsh test --target web` | 277/279 on 11-06 | [ ] Find and fix the 2 failures (the `i7` picker-footer wording check is one) |
 | `check_manifest.py`, `check_theme.py --overlay nexus-nsh/theme-void.toml` | Clean (184 commands, 602 contrast checks) | Keep clean |
-| `nexus-mermaid`, `nexus-annotate` | Clean at last check | Re-run |
+| `nexus-mermaid`, `nexus-annotate` | Clean at last check | [ ] Re-run |
 
-TUI failures to triage (code or test wrong?):
+What the 12 TUI failures were (all fixed):
 
-- `markdown::tests::old_renderer_keeps_links_tables_and_fence_source_visible`
-- `shell::dark_frames_use_the_theme_file_surfaces` (surface `#0b0b0b`, test expects `#141414`)
-- `shell::composer_rows_are_edge_input_blank_control_edge_strip_at_every_width`
-- `shell::project_rail_labels_activity_and_session_restoration` (`T` where `N` is expected; the rail changed in 15.3)
-- `shell::session_rows_follow_d03_at_sidebar_widths_22_28_and_34`
-- `timeline::mouse_drag_selects_and_copies_timeline_text_without_activating_the_block` — **looks like a real
-  regression in selection/copy; fix the code first**
-- Manager header and dropdown tests in `tests/manager.rs`: `header_indicator_and_connecting_show_before_the_start_reply`,
-  `hovering_the_live_voice_indicator_offers_stop_and_clicking_it_stops_the_voice`,
-  `palette_context_modal_closes_before_the_dropdown`, `shared_dropdown_contract_keeps_text_audio_and_debug_separate`,
-  `the_header_has_a_manager_button_left_of_the_right_toggle_that_opens_the_context`,
-  `the_header_indicator_is_a_braille_wave_field_and_goes_on_end` (the 11-05 braille indicator and Stop-on-hover
-  decisions are the likely cause; update the tests to the decided design unless a behavior is actually broken)
-- (`a_viewed_subagent_keeps_the_root_tab_and_names_itself_below` passes now.)
+- **Real bug, fixed in the test only:** the drag-copy test computed its click column from a byte offset, which is wrong
+  now that the rail draws a multi-byte `▏`; the copy code itself was right.
+- **Stale tests after the 11-06 design changes:** the left sidebar is 5 cells right of where tests assumed (the project
+  rail), the search glyph and session rows moved one cell left, the selected session carries the active block (not the
+  spacer row), and the rail's second project is `T`-prefixed in the fixture.
+- **Stale Markdown test:** a Mermaid fence draws as a diagram with `◇ mermaid · copy source`; its source is still
+  available to Copy (asserted through `fence_sources`).
+- **Six Manager tests:** the header indicator is gated on `[manager] enabled` (off by default); the fixture never
+  enabled it. No product bug.
 
 Then:
 
-- [ ] Re-run everything and write the result table here; record anything that fails only under load.
-- [ ] Add the TUI replay bench result (draws were ~3× the earlier figure) to the table without gating on it.
+- [ ] Fix the two NSH failures and re-run `nsh check`; re-run the Core suite and record the result here.
+- [ ] Record anything that fails only under load. Add the TUI replay-bench result to this table without gating on it.
 
 ## 5. Mobile cut-down client: Sessions, Manager, Settings
 
@@ -281,7 +278,6 @@ All details are in the archive; section numbers are that file's. Pick these up d
 
 - **File explorer, editor, Git page (4):** wire the vendored editor into the TUI, find/replace, explorer file actions and
   the watcher, the read-only then full Git page. Desktop and web only.
-- **Provider usage table (16):** ten-block gauge, percent left, reserve and expiry in both clients; fully specified.
 - **Providers (10):** real OpenAI and Ollama calls, Anthropic Messages, Gemini, Claude SDK remaining items.
 - **Worktrees (11):** review and integration commands; cleanup on archive or delete.
 - **Event storage (13):** deploy the committed compaction, move the remaining history readers onto state tables.
@@ -293,6 +289,165 @@ All details are in the archive; section numbers are that file's. Pick these up d
 - **Real-device verification (2):** real daemon with both clients, OSC 7501, audio, drawing modal, iOS.
 - **Browser (old 14.4–14.5), inspector hardening remainder (14.1):** deferred; see Decisions.
 - **CI:** deferred by the user.
+
+## 8. Provider usage panel (usage table)
+
+The user's review of the Provider usage modal (screenshot, 11-06) asks for a table instead of the current
+label + bar + prose rows: a ten-block progress gauge, then the percentage left, the reserve (the old Nexus
+pace calculation) and the expiry time. The words marked in red go away. Both clients land this in the same
+change; no desktop client-specific difference is expected. **Not started.** Carried over whole from the previous plan's section 16 (user asked to keep it, 2026-11-06).
+
+### 8.1 The table and its cells (both clients)
+
+One header row, then a provider group row and one column-aligned row per window. The gauge shows *used*
+and the next column states what is left, so the two add to 100%:
+
+```text
+Window                                  Progress    Left  Reserve  Expires
+ChatGPT (Codex)  Plus
+  5-hour                                ██████████    0%      —    1h 8m
+  Weekly                                ██▃░░░░░░░   76%     -1%   5d 9h
+Claude (Agent SDK)  Pro
+  5-hour session                        ███▅░░░░░░   64%      —     now
+  Weekly (all models)                   ██████▆░░░   32%    +11%   1d 12h
+xAI  SuperGrok Lite
+  Weekly                                ▁░░░░░░░░░   99%    +30%   4d 20h
+GitHub Copilot  Business
+  Premium requests (monthly)            ▇░░░░░░░░░   91%     +8%   24d 18h
+OpenCode Go
+  5-hour                                ░░░░░░░░░░  100%      —    1h 6m
+  Weekly                                ███▂░░░░░░   67%    +28%   2d 18h
+  Monthly                               ████▆░░░░░   53%    -10%   19d 0h
+Updated 2m ago
+r refresh · esc close
+```
+
+- [ ] **Header row:** `Window`, `Progress`, `Left`, `Reserve`, `Expires`, muted, once above the first
+  provider. Provider group rows keep the bold name and the muted plan (`ChatGPT (Codex)  Plus`); its window
+  labels are indented two cells. Do not repeat the provider on every window.
+- [ ] **Progress (the wide column, exactly 10 cells):** `used_percent` decides the fill in eighths:
+  `e = round(used × 80 / 100)` (nearest, ties to even), then ten cells filled left to right, each cell
+  holding `min(8, max(0, e − 8·i))` eighths. Full cells are `█` (U+2588); the boundary cell is
+  `▁▂▃▄▅▆▇` (U+2581–U+2587), so it fills **from the bottom up** as requested; empty cells are `░`
+  (U+2591). 24% → `██▃░░░░░░░`, 36% → `███▅░░░░░░`, 100% → ten `█`, 0%/unknown → ten `░`. The bar is
+  horizontal because the table is one line per window; a literal ten-row-tall gauge would make every
+  window ten lines high. Glyphs come from the block-elements range the user linked
+  (`https://unicode-explorer.com/b/2580`).
+- [ ] **Left:** `100 − used_percent`, following the old Nexus `percent()` rule: a whole percent, except a
+  non-whole value under 10 or over 90 keeps one decimal (`0.2%`, `99.8%`); unknown is `—`. Right-aligned.
+  This replaces the old used-percent column (42% used now reads 58%).
+- [ ] **Reserve:** copy the `nexus01` calculation from `nexus/ui_support/usage.py`
+  (`RESERVE_MIN_PERIOD`, `elapsed_percent`, `reserve`, `reserve_phrase`): only when `period_seconds` is
+  at least 7 days and `used_percent` and a future `resets_at` are known;
+  `elapsed = 100 × (1 − (resets_at − now) / period_seconds)`, `reserve = elapsed − used`. Round to the
+  nearest integer with ties to even, as Python's `round` does (8.5 → 8). Show `+N%` for spare usage,
+  `-N%` for over pace, `0%` for on pace and `—` when not estimable (five-hour windows, missing period, a
+  reset already due). Right-aligned; spare takes the success colour, over pace the warning colour,
+  `0%`/`—` stay muted. Do not show the old `┃` pace marker.
+- [ ] **Expires:** the time until reset only, never an absolute stamp: `now` under a minute, otherwise the
+  two largest units (`3h 10m`, `2d 4h`, `6d 5h`); `—` when `resets_at` is missing or the reset is due.
+  Left-aligned. This is the old `resets in …` text without the words.
+- [ ] **Colours and tone:** filled gauge cells keep the existing used-percent thresholds (success below
+  70, warning below 90, error at 90 and above); empty cells use the dim border/muted role. The label and
+  the Left number stay in primary text; the provider plan, header, `—` and notes are muted.
+- [ ] **Words removed (the red marks):** drop the Codex `Limit reached: new requests wait for the next
+  reset` note, the xAI per-product notes such as `GrokChat: 1% of credits`, and every per-window `detail`
+  suffix (`225 of 300 left`, `20,280 over quota`, `· 20,28…`). `detail` stays in the API for other
+  consumers but is never printed by this modal; when a window has no `resets_at`, Expires is `—`
+  rather than the old raw-text fallback. Keep the other notes (credits balance/unlimited, no plan
+  limits, `Could not read the limits: …`, `No limit windows reported.`) as muted full-width lines under
+  their provider, plus `Updated … ago`, the empty and loading states and the `r refresh · esc close`
+  footer.
+- [ ] **Responsive rules:** the gauge and the three numbers keep their widths; the Window column flexes
+  and truncates with `…`; Expires truncates with `…`. Never wrap a window row. The TUI keeps its
+  80–88-cell large modal and 30-row cap. NSH uses its large modal as `tall` (90% of the window) so the
+  table fits; on phone widths (a standing phone-layout exception) each window becomes two lines: label,
+  then gauge, Left, Reserve and Expires.
+
+### 8.2 Data and formatting
+
+- [ ] `period_seconds` and `kind` are already in the API (`GET /api/usage`); parse them in both clients.
+  The reserve is derived client-side from `used_percent`, `resets_at`, `period_seconds` and the client's
+  `now`, beside the countdown; do not add a server endpoint or store a stale reserve in the snapshot.
+- [ ] Unknown `used_percent` → ten empty cells, `—` Left, `—` Reserve, and the countdown if known.
+  Missing `period_seconds` (older snapshots) → Reserve `—`, everything else unchanged. A reset at or
+  before `now` → Expires `now`, Reserve `—`.
+- [ ] Filter the removed notes in both clients as well as at the source, so an older saved snapshot
+  cannot bring them back: Codex notes starting `Limit reached:`; xAI notes ending ` of credits` that
+  are not `Prepaid credits:`. The existing xAI prepaid and Copilot chat/completions/AI-credit filters
+  stay.
+- [ ] Keep the snapshot semantics: the modal is a snapshot; countdowns and reserve do not tick while it
+  stays open (the existing background-refresh follow-up remains separate).
+
+### 8.3 Core
+
+- [ ] `nexus-core/nexus/provider_usage.py`: remove the `limit_reached` note in `parse_codex` and the
+  `productUsage` note loop in `parse_xai`; keep the credits and prepaid notes. Keep
+  `parse_copilot`/`parse_claude` `detail` values (the API keeps them; the modal stops printing them).
+- [ ] Update `nexus-core/tests/test_provider_usage.py` with a `limit_reached: true` payload and a
+  `productUsage` list, asserting neither becomes a note; keep the existing prepaid and detail assertions.
+- [ ] `docs/api.md` (Usage K11): say the modal is a table of gauge + percent left + reserve + expiry;
+  `detail` is retained for other consumers but not shown; note the reserve rule and its 7-day threshold.
+
+### 8.4 TUI (`nexus-tui`)
+
+- [ ] `src/usage.rs`: extend `Row` with a `Header` row and make `Window` carry the label, the used value,
+  the formatted Left, Reserve and Expires strings (computed from `now`). Parse `period_seconds` and
+  `kind`. Drop the `detail` join from the reset text. Add pure helpers for `gauge_cells(used) -> [u8;
+  10]`, `percent_left`, `reserve`, `reserve_text` and `duration` with unit tests at 0, 1, 9, 10, 24, 36,
+  47, 68, 90 and 100 percent; five-hour vs weekly/monthly; a missing/old period; a reset in the past;
+  unknown usage; and the half-to-even tie (8.5 → 8).
+- [ ] `src/render.rs::draw_usage`: draw the header and the five fixed columns, map `gauge_cells` through
+  the theme glyphs, colour only the filled cells, right-align Left/Reserve, left-align Expires, and
+  truncate the label and Expires. Keep `MODAL_LARGE`, the height clamp and the existing `r`/`esc` hits.
+- [ ] ASCII mode: ten `#`/`-` cells; a partially filled cell counts as `#` (rounded up). Colour rules are
+  unchanged.
+- [ ] `interface/theme.toml`: add `[glyphs.usage]` with `full` (`█`/`#`), `empty` (`░`/`-`) and
+  `eighth_1`…`eighth_7` (`▁`…`▇`/`#`); add `usage` to the glyph checks in `interface/check_theme.py`,
+  the `Glyphs` struct/accessor in `src/theme.rs`, and the generator in `nexus-nsh/scripts/gen.py`.
+- [ ] `tests/behaviour.rs` (and the usage unit tests): assert the header, the gauge strings, `76%`/`0%`
+  Left, reserve cells and the hidden `Limit reached` / `of credits` / `of 300 left` text.
+- [ ] `nexus-tui/README.md`: update the K11 bullet to the table.
+
+### 8.5 NSH (`nexus-nsh`)
+
+- [ ] `src/store.ts`: add `period_seconds?: number | null` and `kind?: string` to the usage window type.
+- [ ] New pure `src/usage-format.ts` (or exports beside `until`): `leftPercent`, `reservePercent`,
+  `reserveText`, `gaugeCells` and `until` with the same rounding and threshold rules as the TUI.
+- [ ] `src/ui/usage.tsx`: replace the flex bars with a monospace table: header row, provider group rows,
+  window rows, 10-cell gauge drawn from the generated `usage` glyphs, fixed-width Left/Reserve/Expires
+  columns and a flexing Window column. Mark the gauge `accessible={false}` and give each row an
+  accessibility label with all four values. Use `Modal … tall`; keep the existing refresh/footer and the
+  loading/empty/error states. Hide the removed notes in `notes()` for older snapshots.
+- [ ] `usage.test.tsx`: update the expected percentages to the Left values (42% used → 58%), assert the
+  header, a gauge string such as `██▃`, `—`/reserve cells, and the absence of `Limit reached`, `of
+  credits` and the Copilot detail. Unit-test the pure formatting helpers with a fixed clock (including
+  8.5 → 8 and the 7-day threshold).
+- [ ] `nexus-nsh/README.md`: update the K11 bullet to the table.
+
+### 8.6 Shared scenario and screenshots
+
+- [ ] Extend `interface/scenarios/provider-usage.json` with the values above: Codex 100%/24%, Claude
+  36%/68%, xAI 1%, Copilot 9%, OpenCode 0%/33%/47%, plus the notes that must disappear (`Limit
+  reached: …`, `GrokChat: 1% of credits`), a provider with no plan limits and one with an error.
+  Keep time-dependent assertions in the pure helper tests; the scenario test asserts labels, Left
+  values, gauge glyphs and the hidden words.
+- [ ] Add a usage fixture to `nexus-nsh/e2e/scripted_core.py` that returns the scenario with
+  `resets_at`/`period_seconds` computed relative to the capture time (monkeypatch
+  `nexus.provider_usage.providers_usage` or seed the usage cache), so both clients see identical rows
+  without provider calls. Document the mode in the script's docstring.
+- [ ] Capture the same state in both clients: TUI `--dump-frame` at 170x50 and 120x36, NSH web at a
+  comparable window (plus one phone-width capture). Compare the header, column order, gauge glyphs,
+  numbers, colours and the absence of the marked words; save under `reports/provider-usage-table/`.
+
+### 8.7 Checks when it lands
+
+- [ ] `cd nexus-core && uv run pytest tests/test_provider_usage.py -q && uv run ruff check nexus/provider_usage.py tests/test_provider_usage.py`
+- [ ] `cd nexus-tui && cargo test usage && cargo test --test behaviour usage && cargo fmt --check && cargo clippy --all-targets -- -D warnings`
+- [ ] `cd nexus-nsh && npm run gen && nsh test usage.test.tsx --target web` (plus the pure helper test and `nsh check`; record the known `app.clock` / `Button.onFocus` errors if they remain).
+- [ ] `python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml && python3 interface/check_manifest.py`
+- [ ] Update `docs/porting-ledger.md` on landing: "Provider usage showed a continuous bar, used percent and prose notes | Both clients show a five-column table: ten-block gauge filled bottom-up, percent left, reserve (old 7-day pace formula), expiry; the Codex limit-reached note, xAI per-product credit notes and per-window detail text are gone (2026-11-06) | User request". Record any screenshot-only difference; none is expected on desktop.
+- [ ] Tick this section, move its one-line record to Landed and remove the status-table row's "planned" wording.
 
 ## Landed
 
