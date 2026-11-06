@@ -1,5 +1,5 @@
 import { Clipboard, Scroll, Text, View, WebView, effect, keymap, signal, type WebViewRef, type ViewRef } from "nsh";
-import { commands, toKeystroke } from "../commands";
+import { commands, term, toKeystroke } from "../commands";
 import { PRINTABLE_KEYS } from "../manager";
 import { Button, Dialog, Input } from "nsh/base";
 import { terminalPage } from "../gen/terminal-page";
@@ -49,7 +49,7 @@ export function TerminalPanel() {
   const create = async () => { await newTerminal(); const index = terminalItems().findIndex(t => t.id === terminalSelected()); if (index >= 0) cursor.set(index + 1); };
   effect(() => () => { setTerminalSender(null); setTerminalActions(null, null); for (const write of writes.values()) { clearTimeout(write.timer); write.reject(new Error("Terminal panel closed.")); } writes.clear(); });
   effect(() => {
-    if (terminalFocused() || terminalRename() || confirmDialog()) return;
+    if (terminalFocused() || terminalRename() || confirmDialog() || term("overlay.open")) return;
     const bindings: Record<string, () => void> = {
       up: () => cursor.set(Math.max(0, cursor() - 1)),
       down: () => cursor.set(Math.min(terminalItems().length, cursor() + 1)),
