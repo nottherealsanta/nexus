@@ -2371,7 +2371,7 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     x = x.saturating_add(width(&header) as u16).min(r.right());
     for (index, terminal) in cx.app.terminal_panel.terminals.iter().enumerate() {
         let label = format!(
-            "{} {}  ",
+            "{} {} ",
             if terminal.status == "running" {
                 "●"
             } else {
@@ -2386,6 +2386,11 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             Target::TerminalTab(index),
         );
         x = x.saturating_add(width(&label) as u16).min(r.right());
+        if x < r.right() {
+            put(buf, x, r.y, "×", cx.st(MUTED, CANVAS), 1);
+            hits.add(Rect::new(x, r.y, 1, 1), Target::TerminalClose(index));
+            x = (x + 2).min(r.right());
+        }
     }
     put(
         buf,

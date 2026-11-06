@@ -318,6 +318,7 @@ impl FileEdit {
 /// A deferred action that a confirm dialog performs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Confirmed {
+    CloseTerminal(String),
     ResumeArchived {
         session: String,
         mode: Option<String>,
@@ -646,6 +647,7 @@ pub enum Target {
     ComposerResources,
     ComposerTerminals,
     TerminalTab(usize),
+    TerminalClose(usize),
     TerminalNew,
     TerminalTakeControl,
     /// The Files tree root line (project checkout / session worktree).

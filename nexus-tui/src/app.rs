@@ -5884,6 +5884,30 @@ impl App {
                     });
                 }
             }
+            "terminal.close" => {
+                if let Some(terminal) = self
+                    .terminal_panel
+                    .terminals
+                    .iter()
+                    .find(|t| Some(&t.id) == self.terminal_panel.selected.as_ref())
+                {
+                    let id = terminal.id.clone();
+                    if terminal.status == "running" {
+                        self.ui.dialog = Some(Dialog {
+                            title: "Close running terminal?".into(),
+                            body: vec![],
+                            cancel: "Cancel".into(),
+                            confirm: "Close terminal".into(),
+                            danger: true,
+                            action: Confirmed::CloseTerminal(id),
+                            button: 0,
+                            restore: self.restore_point(),
+                        });
+                    } else {
+                        self.api(ApiCall::TerminalClose { id });
+                    }
+                }
+            }
             "terminal.acquire" | "terminal.release" => {
                 if self.terminal_panel.control_busy {
                     return;
@@ -6621,6 +6645,7 @@ impl App {
         self.apply_restore(d.restore);
         if yes {
             match d.action {
+                Confirmed::CloseTerminal(id) => self.api(ApiCall::TerminalClose { id }),
                 Confirmed::ResumeArchived { session, mode } => {
                     if self.viewed_id() == Some(session.as_str()) {
                         self.send_mode_confirmed(mode.as_deref(), true);
@@ -7620,6 +7645,29 @@ impl App {
                     }
                     Err(error) => {
                         self.toast(Level::Error, format!("Could not rename terminal: {error}"))
+                    }
+                }
+                return;
+            }
+            ApiCall::TerminalClose { id } => {
+                match done.result {
+                    Ok(_) => {
+                        self.terminal_panel.terminals.retain(|t| t.id != id);
+                        if self.terminal_panel.selected.as_deref() == Some(&id) {
+                            self.effects.push(Effect::TerminalStop);
+                            self.terminal_panel.generation += 1;
+                            self.terminal_panel.selected = None;
+                            self.terminal_panel.attachment = None;
+                            self.terminal_selected = false;
+                            self.terminal_focused = false;
+                            self.terminal_controlled = false;
+                            if !self.terminal_panel.terminals.is_empty() {
+                                self.terminal_select(0);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.toast(Level::Error, format!("Could not close terminal: {error}"))
                     }
                 }
                 return;
@@ -13829,6 +13877,14 @@ impl App {
                 self.terminal_panel.cursor = index + 1;
                 self.terminal_select(index);
             }
+            Target::TerminalClose(index) => {
+                if let Some(terminal) = self.terminal_panel.terminals.get(index) {
+                    let previous = self.terminal_panel.selected.clone();
+                    self.terminal_panel.selected = Some(terminal.id.clone());
+                    self.execute("terminal.close");
+                    self.terminal_panel.selected = previous;
+                }
+            }
             Target::TerminalTakeControl => self.execute("terminal.acquire"),
             Target::FilesRoot => self.run_command("files.root_toggle"),
             Target::PanelBack => self.close_panel(),
@@ -14250,6 +14306,7 @@ impl ActionDone {
             ApiCall::TerminalList { .. }
             | ApiCall::TerminalCreate { .. }
             | ApiCall::TerminalRename { .. }
+            | ApiCall::TerminalClose { .. }
             | ApiCall::TerminalControl { .. }
             | ApiCall::TerminalInput { .. }
             | ApiCall::TerminalResize { .. } => "Terminal failed",
