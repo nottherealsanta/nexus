@@ -1043,6 +1043,7 @@ impl App {
         self.terminal_panel.resize_busy = false;
         self.terminal_panel.control_busy = false;
         self.terminal_panel.size = None;
+        self.terminal_panel.selection = None;
         self.terminal_panel.screen =
             crate::terminal_screen::TerminalScreen::new(terminal.rows, terminal.cols);
         self.terminal_panel.selected = Some(id.clone());
@@ -5882,6 +5883,16 @@ impl App {
                         buf,
                         restore: self.restore_point(),
                     });
+                }
+            }
+            "terminal.copy" => {
+                if let Some(selection) = &self.terminal_panel.selection {
+                    if selection.dragged() {
+                        let text = selection.text();
+                        if !text.is_empty() {
+                            self.effects.push(Effect::Copy(text));
+                        }
+                    }
                 }
             }
             "terminal.close" => {
@@ -13336,6 +13347,44 @@ impl App {
         }
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if self.terminal_open
+                    && self.ui.overlay.is_none()
+                    && self.ui.dialog.is_none()
+                    && self.ui.edit.is_none()
+                {
+                    if let Some(dock) = self.regions.terminal {
+                        let area = Rect::new(
+                            dock.x,
+                            dock.y + 1,
+                            dock.width,
+                            dock.height.saturating_sub(1),
+                        );
+                        if area.width > 0
+                            && area.height > 0
+                            && contains(area, ev.column, ev.row)
+                            && !matches!(
+                                self.hits.at(ev.column, ev.row),
+                                Some(Target::TerminalTakeControl)
+                            )
+                            && self.terminal_selected
+                        {
+                            let mut screen = ratatui::buffer::Buffer::empty(area);
+                            self.terminal_panel.screen.render(area, &mut screen);
+                            let point = (ev.column, ev.row);
+                            self.terminal_panel.selection = Some(crate::selection::Selection {
+                                area,
+                                screen,
+                                start: point,
+                                end: point,
+                            });
+                            self.terminal_panel.selecting = true;
+                            self.terminal_focused = true;
+                            self.terminal_panel.focus =
+                                crate::terminal_panel::TerminalFocus::Screen;
+                            return;
+                        }
+                    }
+                }
                 if self.ui.overlay.is_none()
                     && self.ui.dialog.is_none()
                     && self.ui.edit.is_none()
@@ -13511,6 +13560,12 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if self.terminal_panel.selecting {
+                    if let Some(selection) = &mut self.terminal_panel.selection {
+                        selection.set_end(ev.column, ev.row);
+                    }
+                    return;
+                }
                 if let Some((selection, _)) = self.timeline_drag.as_mut() {
                     selection.set_end(ev.column, ev.row);
                     return;
@@ -13539,6 +13594,13 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.terminal_panel.selecting {
+                    self.terminal_panel.selecting = false;
+                    if let Some(selection) = &mut self.terminal_panel.selection {
+                        selection.set_end(ev.column, ev.row);
+                    }
+                    return;
+                }
                 if let Some(drag) = self.ui.rail_drag.take() {
                     let ids = self.rail_project_ids();
                     if drag.active && !drag.cancelled && drag.to != drag.from {
@@ -13873,6 +13935,7 @@ impl App {
             }
             Target::ComposerTerminals => self.execute("terminal.open"),
             Target::TerminalNew => self.execute("terminal.new"),
+            Target::TerminalCopy => self.execute("terminal.copy"),
             Target::TerminalTab(index) => {
                 self.terminal_panel.cursor = index + 1;
                 self.terminal_select(index);

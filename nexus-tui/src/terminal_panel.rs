@@ -41,6 +41,8 @@ pub struct TerminalPanel {
     pub size: Option<(u16, u16)>,
     pub resize_busy: bool,
     pub control_busy: bool,
+    pub selection: Option<crate::selection::Selection>,
+    pub selecting: bool,
 }
 
 pub fn key_bytes(key: crossterm::event::KeyEvent) -> Option<Vec<u8>> {
@@ -117,6 +119,8 @@ impl Default for TerminalPanel {
             size: None,
             resize_busy: false,
             control_busy: false,
+            selection: None,
+            selecting: false,
         }
     }
 }

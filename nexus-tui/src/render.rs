@@ -2404,9 +2404,26 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         Rect::new(x, r.y, r.right().saturating_sub(x).min(1), 1),
         Target::TerminalNew,
     );
+    x = x.saturating_add(2).min(r.right());
+    if cx
+        .app
+        .terminal_panel
+        .selection
+        .as_ref()
+        .is_some_and(|s| s.dragged())
+    {
+        let remaining = r.right().saturating_sub(x);
+        put(buf, x, r.y, "Copy", cx.st(ACCENT, CANVAS), remaining);
+        hits.add(Rect::new(x, r.y, remaining.min(4), 1), Target::TerminalCopy);
+    }
     if cx.app.terminal_panel.selected.is_some() && r.height > 1 {
         let screen = Rect::new(r.x, r.y + 1, r.width, r.height - 1);
         cx.app.terminal_panel.screen.render(screen, buf);
+        if let Some(selection) = &cx.app.terminal_panel.selection {
+            if selection.dragged() && selection.area == screen {
+                selection.highlight(buf);
+            }
+        }
         if !cx.app.terminal_controlled && cx.app.terminal_panel.attachment.is_some() {
             let label = "Read-only · Take control";
             put(

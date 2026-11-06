@@ -649,6 +649,7 @@ pub enum Target {
     TerminalTab(usize),
     TerminalClose(usize),
     TerminalNew,
+    TerminalCopy,
     TerminalTakeControl,
     /// The Files tree root line (project checkout / session worktree).
     FilesRoot,

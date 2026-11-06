@@ -143,6 +143,35 @@ fn closing_running_terminal_requires_confirmation() {
 }
 
 #[test]
+fn terminal_copy_requires_selection_and_explicit_action() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use nexus_tui::terminal_panel::TerminalEvent;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.selected = Some("t1".into());
+    app.terminal_selected = true;
+    let generation = app.terminal_panel.generation;
+    app.terminal_event(TerminalEvent::Frame { generation, frame: serde_json::json!({"version":1,"seq":1,"type":"output","data":"SGVsbG8bXTUyO2M7YzJWamNtVjAHRQ=="}) });
+    draw(&mut app, 120, 36);
+    let dock = app.regions.terminal.unwrap();
+    let mouse = |kind, column| MouseEvent {
+        kind,
+        column,
+        row: dock.y + 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), dock.x));
+    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), dock.x + 4));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), dock.x + 4));
+    assert!(!app.effects.iter().any(|e| matches!(e, Effect::Copy(_))));
+    app.execute("terminal.copy");
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Copy(text) if text == "Hello")));
+}
+
+#[test]
 fn terminal_input_waits_for_ack_and_ctrl_bracket_returns_to_list() {
     use nexus_tui::actions::{ActionDone, Done};
     use nexus_tui::terminal_panel::TerminalFocus;
