@@ -382,6 +382,23 @@ impl Http {
         let bytes = resp.bytes_stream().map(|r| r.map_err(Error::from));
         Ok(EventStream::new(bytes))
     }
+
+    pub async fn sse(&self, path: &str, query: &[(&str, String)]) -> Result<EventStream, Error> {
+        let req = self
+            .streams
+            .get(format!("{}{}", self.base, path))
+            .header("accept", "text/event-stream")
+            .query(query);
+        let resp = self.authorized(req).send().await?;
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(Error::Api(ApiError::from_body(status, &text)));
+        }
+        Ok(EventStream::new(
+            resp.bytes_stream().map(|r| r.map_err(Error::from)),
+        ))
+    }
 }
 
 async fn read_reply(resp: reqwest::Response) -> Result<Reply, Error> {

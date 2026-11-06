@@ -48,6 +48,7 @@ pub mod sticky;
 pub mod svg;
 pub mod sync;
 pub mod term;
+pub mod terminal_api;
 pub mod text;
 pub mod theme;
 pub mod timeline;
