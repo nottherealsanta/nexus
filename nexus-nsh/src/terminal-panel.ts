@@ -1,7 +1,7 @@
 import { platform, signal } from "nsh";
 import { ApiError, newKey } from "./core/transport";
 import { terminals, terminalStream, type TerminalResource } from "./core/terminal";
-import { confirmDialog, currentProject, model, viewed } from "./store";
+import { confirmDialog, currentProject, model, toast, viewed } from "./store";
 export const terminalAvailable = (platform.os === "web" || platform.os === "macos" || platform.os === "windows" || platform.os === "linux") && platform.desktop && platform.idiom !== "terminal";
 
 export const terminalOpen = signal(false);
@@ -23,6 +23,9 @@ let seq = 0;
 let inputSeq = 0;
 let inputs = Promise.resolve();
 let queuedInput = 0;
+let inputInFlight = false;
+let controlBusy = false;
+let resizeBusy = false;
 type TerminalMessage = {type: string; [key: string]: unknown};
 let sender: ((message: TerminalMessage) => void | Promise<void>) | null = null;
 let cols = 80, rows = 24;
@@ -44,17 +47,19 @@ export async function openTerminal() {
   await refreshTerminals();
 }
 export function closeTerminalPanel() {
-  terminalOpen.set(false); terminalFocused.set(false); detach(); terminalSelected.set(null);
+  if (inputInFlight) toast("warning", "Terminal input outcome may be indeterminate after detaching");
+  terminalOpen.set(false); terminalFocused.set(false); terminalRename.set(false); terminalNotice.set(""); detach(); terminalSelected.set(null);
 }
 export function disconnectTerminal() { detach(); }
 function detach() {
   const id = terminalSelected(), aid = attachment;
-  generation++; abort?.abort(); abort = null; attachment = null; inputAbort?.abort(); inputAbort = null;
+  generation++; controlBusy = false; resizeBusy = false; abort?.abort(); abort = null; attachment = null; inputAbort?.abort(); inputAbort = null;
   terminalControlled.set(false); send({type:"writable", value:false});
   if (id && aid) void terminals.detach(id, aid).catch(() => {});
 }
 export async function selectTerminal(id: string) {
-  detach(); terminalSelected.set(id); terminalNotice.set(""); terminalError.set(""); seq = 0; inputSeq = 0;
+  if (queuedInput) { terminalError.set("Wait for terminal input to be acknowledged"); return; }
+  detach(); terminalRename.set(false); terminalSelected.set(id); terminalNotice.set(""); terminalError.set(""); seq = 0; inputSeq = 0;
   send({type:"reset"});
   const gen = generation;
   try {
@@ -86,7 +91,7 @@ async function stream(id: string, first: string, gen: number, signal: AbortSigna
       }
     } catch (e) { if (signal.aborted || gen !== generation) return; failure(e); }
     if (signal.aborted || gen !== generation) return;
-    terminalControlled.set(false); attachment = null; inputAbort?.abort(); inputAbort = null; send({type:"writable",value:false});
+    terminalControlled.set(false); attachment = null; controlBusy = false; resizeBusy = false; inputAbort?.abort(); inputAbort = null; send({type:"writable",value:false});
     if (uncertainWrite) { seq = 0; send({type:"reset"}); uncertainWrite = false; }
     terminalNotice.set("Terminal disconnected; resynchronizing. Take control again to type.");
     await new Promise<void>(resolve => setTimeout(resolve, 500));
@@ -100,6 +105,7 @@ async function stream(id: string, first: string, gen: number, signal: AbortSigna
 }
 export async function newTerminal() {
   const project_id = currentProject(); if (!project_id || !terminalAvailable) return;
+  if (queuedInput) { terminalError.set("Wait for terminal input to be acknowledged"); return; }
   const session = viewed(); const project = model.projects.get(project_id);
   const workspace = session?.project_id === project_id ? session.directory : project?.path;
   if (!workspace) { terminalError.set("No workspace selected."); return; }
@@ -110,27 +116,43 @@ export async function newTerminal() {
 }
 export async function renameTerminal() {
   const id = terminalSelected(); if (!id) return;
-  try { changeItem(await terminals.rename(id, terminalName())); terminalRename.set(false); }
+  try { changeItem(await terminals.rename(id, terminalName())); if (terminalSelected() === id) terminalRename.set(false); }
   catch (e) { failure(e); }
 }
-export async function terminateTerminal() {
-  const id = terminalSelected(); if (!id) return;
-  try { changeItem(await terminals.close(id)); detach(); await refreshTerminals(); }
+export async function terminateTerminal(id = terminalSelected()) {
+  if (!id) return;
+  try { changeItem(await terminals.close(id)); if (terminalSelected() === id) detach(); await refreshTerminals(); }
   catch (e) { failure(e); }
 }
 export async function controlTerminal(action: "acquire" | "release") {
-  const id = terminalSelected(), aid = attachment; if (!id || !aid) return;
+  const id = terminalSelected(), aid = attachment; if (!id || !aid || controlBusy) return;
+  if (queuedInput) { terminalError.set("Wait for terminal input to be acknowledged"); return; }
+  controlBusy = true;
   try {
     const item = await terminals.control(id, aid, action);
     if (aid !== attachment) return;
     changeItem(item); terminalControlled.set(action === "acquire"); send({type:"writable",value:action === "acquire"});
-    if (action === "acquire") await terminals.resize(id, aid, rows, cols);
-  } catch (e) { failure(e); }
+    if (action === "acquire") await flushResize();
+  } catch (e) { if (aid === attachment) failure(e); }
+  finally { if (aid === attachment) controlBusy = false; }
+}
+async function flushResize() {
+  const id = terminalSelected(), aid = attachment;
+  if (!id || !aid || !terminalControlled() || resizeBusy) return;
+  resizeBusy = true;
+  try {
+    for (;;) {
+      const sentRows = rows, sentCols = cols;
+      await terminals.resize(id, aid, sentRows, sentCols);
+      if (aid !== attachment || !terminalControlled() || (sentRows === rows && sentCols === cols)) return;
+    }
+  } catch (e) { if (aid === attachment && terminalControlled()) failure(e); }
+  finally { if (aid === attachment) resizeBusy = false; }
 }
 export function resizeTerminal(r: number, c: number) {
   if (!Number.isInteger(r) || !Number.isInteger(c) || r < 1 || c < 1) return;
-  rows = r; cols = c; const id = terminalSelected(), aid = attachment;
-  if (id && aid && terminalControlled()) void terminals.resize(id, aid, rows, cols).catch(failure);
+  rows = r; cols = c;
+  void flushResize();
 }
 export function inputTerminal(value: string) {
   const id = terminalSelected(), aid = attachment, gen = generation, signal = inputAbort?.signal;
@@ -144,23 +166,27 @@ export function inputTerminal(value: string) {
       let binary = ""; for (const b of bytes.subarray(offset, offset + 16384)) binary += String.fromCharCode(b);
       const data = btoa(binary), n = ++inputSeq;
       for (let attempt = 0; ; attempt++) {
+        inputInFlight = true;
         try { await terminals.input(id, aid, n, data, signal); break; }
         catch (e) {
           if (generation !== gen || attachment !== aid) { terminalError.set("Terminal input outcome is indeterminate."); return; }
           if (attempt < 2 && e instanceof ApiError && e.isUnreachable) continue;
           terminalError.set("Terminal input outcome is indeterminate; reconnect before typing again.");
           detach(); return;
-        }
+        } finally { inputInFlight = false; }
       }
     }
-  }).finally(() => { queuedInput -= bytes.length; });
+  }).finally(() => {
+    queuedInput -= bytes.length;
+    if (!queuedInput && terminalError() === "Wait for terminal input to be acknowledged") terminalError.set("");
+  });
 }
 export function beginRenameTerminal() { terminalName.set(selected()?.name ?? ""); terminalRename.set(true); }
 export function currentTerminal() { return selected(); }
 export function requestTerminalClose() {
   const t = selected(); if (!t) return;
-  if (t.status === "running") confirmDialog.set({title:"Close running terminal?",body:"",confirm:"Close terminal",destructive:true,run:terminateTerminal});
-  else void terminateTerminal();
+  if (t.status === "running") confirmDialog.set({title:"Close running terminal?",body:"",confirm:"Close terminal",destructive:true,run:() => terminateTerminal(t.id)});
+  else void terminateTerminal(t.id);
 }
 let copyAction: (() => void) | null = null;
 let focusListAction: (() => void) | null = null;
