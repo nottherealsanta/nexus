@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        · Refactor the loader ×    +                                                       □
+     │                            Refactor the loader
+▏    │                        ▣    │  Go ahead, but keep the change small.                             #2 · 11:01 AM
+▏ N  │ ⌕ Search sessions ctrl+k    │  日本語のコメントも残してください。
+▏  4 │                             │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 20 lines of this turn above
+     │▏  Refactor the load… now
+     │▏  ⌥ master           1 ↳                 ▄▄▄▄▄▄▄▄▄▄▄▄▄
+  S  │                                          ▄▀▀▀▀▀▀▀▀▀▀▀
+   1 │   Review the CJK wi… now
+     │   ⌥ master
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  +  │   Release notes for… now
+     │   ⌥ master
+     │
+     │   Fix flaky test in… now
+     │   ⌥ master
+     │                                               ▄▄▄
+     │ + New session                   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▀▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+     │
+     │
+     │                                         ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+     │                                         ▀▀▀▀▄▄▀▀ ▄▀▄▀▀▄
+     │                                         ▀▀ ▀▀▀▀▀▀▀▀▀▀▀▀
+     │
+     │                                 ▀▀▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▀▀ est on its mtime, and the new test checks
+     │                                  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │
+     │                                       GPT-6.1 Terra · 2 tools · 156Ki · 4.0Ko · 720r · 80%c · 0.0s · 11:01 AM
+     │
+     │
+     │                                Type a message…
+     │
+     │                                Build · … · default                                                     48.2K
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/claude-501/s15root/ws/nexus-demo  ⌥ master
+     │  Settings         ctrl+,    ───────────────────────────────────────────────────────────────────────────────────

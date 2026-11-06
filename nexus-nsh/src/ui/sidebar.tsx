@@ -146,7 +146,7 @@ export function SessionRail() {
                 <View class="w-full flex-row justify-between px-1">
                   <Each of={CORNERS.slice(0, 2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
                 </View>
-                <Text class={`${TS.base} font-medium ${activity(p().id).active ? "text-foreground opacity-70" : "text-muted-foreground opacity-30"}`}>{labels().get(p().id)}</Text>
+                <Text class={`${TS.base} font-medium ${currentProject() === p().id ? "text-highlight" : activity(p().id).active ? "text-foreground opacity-70" : "text-muted-foreground opacity-30"}`}>{labels().get(p().id)}</Text>
                 <View class="w-full flex-row justify-between px-1">
                   <Each of={CORNERS.slice(2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
                 </View>

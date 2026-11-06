@@ -71,11 +71,11 @@ by drawing the shared `▌` focus bar where a pixel-wide bar cannot exist; the c
 selected row also carries that bar.
 `terminal-parity.test.tsx` checks those (`nsh test terminal-parity.test.tsx --target tui`).
 
-Known differences from `nexus tui` in the terminal backend: upstream frames modals; NSH's
+Known differences from `nexus tui` in the terminal backend: upstream frames modals (the user decided on 2026-11-06 that NSH drops the frame to match the TUI; it needs an upstream nsh option and is recorded in the porting ledger); NSH's
 composer keeps its voice and send buttons (approved by the user 2026-11-06). Settings uses
 the same segmented value controls as the TUI, and the timeline's scroll bar is shared:
 both draw it only while scrolling, then fade it out. The framed modals are the terminal
-backend's own rendering and still need a decision.
+backend's own rendering; removing them waits on upstream.
 
 A new session's first message appears immediately below its context preview as
 `You · Sending…`. The chosen settings stay visible until Core's message and history
