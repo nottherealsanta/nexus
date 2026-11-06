@@ -2381,7 +2381,11 @@ fn draw_panel(cx: &Cx, buf: &mut Buffer, r: Rect, area: Rect, hits: &mut HitMap)
                 buf,
                 r.x,
                 r.y + 1,
-                "New terminal",
+                if cx.app.terminal_panel.cursor == 0 {
+                    "> New terminal"
+                } else {
+                    "  New terminal"
+                },
                 cx.st(ACCENT, CANVAS),
                 r.width,
             );
@@ -2396,8 +2400,16 @@ fn draw_panel(cx: &Cx, buf: &mut Buffer, r: Rect, area: Rect, hits: &mut HitMap)
                 r.x,
                 y,
                 &format!(
-                    "{}  {}  {}",
-                    terminal.name, terminal.workspace, terminal.status
+                    "{} {}  {}  {}  {}",
+                    if cx.app.terminal_panel.cursor == i + 1 {
+                        ">"
+                    } else {
+                        " "
+                    },
+                    terminal.name,
+                    terminal.workspace,
+                    terminal.status,
+                    terminal.controller.as_deref().unwrap_or("No controller")
                 ),
                 cx.st(PRIMARY, CANVAS),
                 r.width,

@@ -87,6 +87,7 @@ impl Notify {
 /// else is shown disabled with a reason, never as a control that appears to work.
 pub const WIRED: &[&str] = &[
     "terminal.open",
+    "terminal.new",
     "palette.open",
     "app.help_keys",
     "app.quit",
@@ -5682,9 +5683,32 @@ impl App {
                 if self.edit_blocks() {
                     return;
                 }
+                let Some(project) = self.current_project() else {
+                    return;
+                };
                 self.terminal_open = true;
                 self.ui.file_open = false;
                 self.ui.diff_open = None;
+                self.terminal_panel.terminals.clear();
+                self.terminal_panel.cursor = 0;
+                self.terminal_panel.loading = true;
+                self.api(ApiCall::TerminalList { project });
+            }
+            "terminal.new" => {
+                if self.terminal_panel.creating || self.terminal_panel.loading {
+                    return;
+                }
+                if let (Some(project), Some(workspace)) =
+                    (self.current_project(), self.files_root())
+                {
+                    self.terminal_panel.creating = true;
+                    self.api(ApiCall::TerminalCreate {
+                        project,
+                        workspace,
+                        session: self.files_session(),
+                        client: self.terminal_panel.client_id.clone(),
+                    });
+                }
             }
             "palette.open" => {
                 if matches!(
@@ -7278,6 +7302,39 @@ impl App {
         self.timeline_revision
             .set(self.timeline_revision.get().wrapping_add(1));
         match done.call.clone() {
+            ApiCall::TerminalList { project } => {
+                if self.current_project().as_deref() == Some(project.as_str()) && self.terminal_open
+                {
+                    self.terminal_panel.loading = false;
+                    match done.result {
+                        Ok(result) => {
+                            self.terminal_panel.terminals = result.terminals.unwrap_or_default()
+                        }
+                        Err(error) => {
+                            self.toast(Level::Error, format!("Could not list terminals: {error}"))
+                        }
+                    }
+                }
+                return;
+            }
+            ApiCall::TerminalCreate { project, .. } => {
+                self.terminal_panel.creating = false;
+                match done.result {
+                    Ok(result)
+                        if self.current_project().as_deref() == Some(project.as_str())
+                            && self.terminal_open =>
+                    {
+                        if let Some(terminal) = result.terminal {
+                            self.terminal_panel.terminals.push(terminal);
+                        }
+                    }
+                    Err(error) => {
+                        self.toast(Level::Error, format!("Could not create terminal: {error}"))
+                    }
+                    _ => {}
+                }
+                return;
+            }
             ApiCall::VoiceStatus { generation } => {
                 self.apply_voice_status(generation, done.result);
                 return;
@@ -8803,6 +8860,18 @@ impl App {
         let Some(name) = keys::name(&ev) else { return };
         if self.terminal_open && self.ui.overlay.is_none() && name == "esc" {
             self.terminal_open = false;
+            return;
+        }
+        if self.terminal_open && self.ui.overlay.is_none() {
+            match name.as_str() {
+                "up" => self.terminal_panel.cursor = self.terminal_panel.cursor.saturating_sub(1),
+                "down" => {
+                    self.terminal_panel.cursor =
+                        (self.terminal_panel.cursor + 1).min(self.terminal_panel.terminals.len())
+                }
+                "enter" if self.terminal_panel.cursor == 0 => self.execute("terminal.new"),
+                _ => {}
+            }
             return;
         }
         if name != "ctrl+c" {
@@ -13840,6 +13909,7 @@ impl App {
 impl ActionDone {
     fn call_name(&self) -> &'static str {
         match self.call {
+            ApiCall::TerminalList { .. } | ApiCall::TerminalCreate { .. } => "Terminal failed",
             ApiCall::Input { .. } => "Pending input failed",
             ApiCall::Provider { .. } => "Provider sign-in failed",
             ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. } => "Send failed",

@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use crate::transport::{Error, EventStream, Http};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct TerminalResource {
     pub id: String,
     pub name: String,

@@ -13,6 +13,10 @@ pub struct TerminalPanel {
     pub selected: Option<String>,
     pub focus: TerminalFocus,
     pub screen: TerminalScreen,
+    pub cursor: usize,
+    pub creating: bool,
+    pub loading: bool,
+    pub client_id: String,
 }
 
 impl Default for TerminalPanel {
@@ -22,6 +26,10 @@ impl Default for TerminalPanel {
             selected: None,
             focus: TerminalFocus::List,
             screen: TerminalScreen::new(24, 80),
+            cursor: 0,
+            creating: false,
+            loading: false,
+            client_id: crate::api::RequestId::new().as_str().to_owned(),
         }
     }
 }

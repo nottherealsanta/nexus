@@ -22,6 +22,30 @@ fn terminal_command_opens_a_panel_with_new_action() {
     assert!(rows.join("\n").contains("New terminal"));
 }
 
+#[test]
+fn terminal_open_lists_and_new_creates_in_current_workspace() {
+    use nexus_tui::actions::{ActionDone, Done};
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    let call = app
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Api(call @ ApiCall::TerminalList { .. }) => Some(call.clone()),
+            _ => None,
+        })
+        .expect("list requested");
+    app.apply_done(ActionDone {
+        call,
+        result: Ok(Done {
+            terminals: Some(vec![]),
+            ..Done::default()
+        }),
+    });
+    app.execute("terminal.new");
+    assert!(app.effects.iter().any(|effect| matches!(effect, Effect::Api(ApiCall::TerminalCreate { workspace, .. }) if !workspace.is_empty())));
+}
+
 fn joined(rows: &[String]) -> String {
     rows.join("\n")
 }
