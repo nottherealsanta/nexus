@@ -139,6 +139,17 @@ footer or select it in the timeline and press Enter for further details includin
 marked unknown, and finish time is omitted when it was not recorded; elapsed
 time based on the last available message is prefixed `~`.
 
+**Keyboard flow from an empty composer (PLAN 15.4).** Only when the composer is empty (with text, Left moves the
+cursor as always): Left opens the session sidebar and focuses it; Left again focuses the project list (Up/Down move
+among the projects); Left again opens the **projects overview** (also the palette command `project.overview`). Esc or Right
+steps back out in reverse order: the overview closes, then the project list returns to the session list, then the
+composer takes the keys. The overview is a modal listing the projects in their saved order; under each a `├`/`└`
+tree of only its active root sessions with their state (`running`, `needs input`, `finished`, `idle`), and a
+`N archived` toggle (`a` or Enter; collapsed by default) that lists the archived ones. Passive projects are dimmed;
+inactive projects are grouped at the end under `Inactive` and restored with `r` (`1`/`2`/`3` set current, passive,
+inactive; Enter opens a session or a project's new-session view). NSH draws the same rows (`overviewRows` in
+`nexus-nsh/src/project-rail.ts`). Tests: `tests/keyboard_flow.rs`.
+
 `/learn <source>` asks whether to install into this project or every project, previews the
 source, then either installs an unambiguous set of new skills or opens a checklist. The checklist
 uses ↑/↓, Space, `a` (all), `n` (none), `i` (invert), Enter (install) and Esc (cancel); ticking

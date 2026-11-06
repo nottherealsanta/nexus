@@ -26,18 +26,32 @@ fn app() -> App {
         p.status = status.map(Into::into);
         app.state.model.projects.insert(p.id.clone(), p);
     }
-    let template = app
+    let template_id = app
         .state
         .model
         .sessions
         .values()
         .find(|s| s.project_id == first)
         .unwrap()
+        .id
         .clone();
+    app.state
+        .model
+        .sessions
+        .get_mut(&template_id)
+        .unwrap()
+        .title = "Alpha chat".into();
+    app.state
+        .model
+        .sessions
+        .get_mut(&template_id)
+        .unwrap()
+        .updated = 5.0;
+    let template = app.state.model.sessions[&template_id].clone();
     for (id, project, title, archived, updated) in [
         ("s_alpha_old", first.as_str(), "Alpha old chat", true, 1.0),
-        ("s_bravo", "bravo", "Bravo notes", false, 5.0),
-        ("s_charlie", "charlie", "Charlie draft", false, 6.0),
+        ("s_bravo", "bravo", "Bravo notes", false, 4.0),
+        ("s_charlie", "charlie", "Charlie draft", false, 3.0),
     ] {
         let mut s = template.clone();
         s.id = id.into();
@@ -104,7 +118,11 @@ fn esc_and_right_step_back_out_in_reverse_order() {
         assert!(app.ui.overlay.is_none(), "{out}: overview closes first");
         assert_eq!((app.ui.focus, app.ui.tab), (Focus::Sidebar, Tab::Projects));
         press(&mut app, &[out]);
-        assert_eq!((app.ui.focus, app.ui.tab), (Focus::Sidebar, Tab::Sessions), "{out}");
+        assert_eq!(
+            (app.ui.focus, app.ui.tab),
+            (Focus::Sidebar, Tab::Sessions),
+            "{out}"
+        );
         press(&mut app, &[out]);
         assert_eq!(app.ui.focus, Focus::Composer, "{out}");
     }
@@ -130,11 +148,19 @@ fn the_overview_is_a_tree_of_active_sessions_with_inactive_projects_last() {
             .position(|l| l.contains(needle))
             .unwrap_or_else(|| panic!("{needle}\n{text}"))
     };
-    let group = text.lines().position(|l| l.contains("│            Inactive ")).unwrap_or_else(|| panic!("group\n{text}"));
-    assert!(line("Alpha  ·") < line("Bravo  ·") && line("Bravo  ·") < group && group < line("Charlie  ·"), "{text}");
+    let group = text
+        .lines()
+        .position(|l| l.contains("│            Inactive "))
+        .unwrap_or_else(|| panic!("group\n{text}"));
+    assert!(
+        line("Alpha  ·") < line("Bravo  ·")
+            && line("Bravo  ·") < group
+            && group < line("Charlie  ·"),
+        "{text}"
+    );
     assert!(text.contains("Bravo  · Passive"), "{text}");
     assert!(text.contains("└ Bravo notes · idle"), "{text}");
-    assert!(text.contains("├ New session · idle"), "{text}");
+    assert!(text.contains("├ Alpha chat · idle"), "{text}");
     assert!(text.contains("Charlie  · Inactive  · r restore"), "{text}");
     // Archived sessions stay hidden until the project's toggle opens them.
     assert!(text.contains("▸ 1 archived"), "{text}");
@@ -148,10 +174,16 @@ fn the_archived_toggle_shows_and_hides_a_projects_archived_sessions() {
     // Alpha, its one active session, then its archived toggle.
     press(&mut app, &["down", "down", "a"]);
     let text = overview_text(&mut app);
-    assert!(text.contains("▾ 1 archived") && text.contains("Alpha old chat · archived"), "{text}");
+    assert!(
+        text.contains("▾ 1 archived") && text.contains("Alpha old chat · archived"),
+        "{text}"
+    );
     press(&mut app, &["enter"]);
     let text = overview_text(&mut app);
-    assert!(text.contains("▸ 1 archived") && !text.contains("Alpha old chat"), "{text}");
+    assert!(
+        text.contains("▸ 1 archived") && !text.contains("Alpha old chat"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -165,4 +197,28 @@ fn r_restores_an_inactive_project_in_one_action() {
         calls.iter().any(|c| matches!(c, ApiCall::SetProjectStatus { project, status } if project == "charlie" && status == "current")),
         "{calls:?}"
     );
+}
+
+/// With `NEXUS_OVERVIEW_SHOTS=<dir>` the overview is written as SVG and text for the parity screenshots.
+#[test]
+fn overview_screenshots() {
+    let Ok(dir) = std::env::var("NEXUS_OVERVIEW_SHOTS") else {
+        return;
+    };
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut app = app();
+    press(&mut app, &["left", "left", "left"]);
+    for (name, keys) in [
+        ("tui-overview", vec![]),
+        ("tui-overview-archived", vec!["down", "down", "a"]),
+    ] {
+        press(&mut app, &keys);
+        let (buffer, rows) = draw(&mut app, 120, 40);
+        std::fs::write(
+            format!("{dir}/{name}.svg"),
+            nexus_tui::svg::to_svg(&buffer, "#ededed", "#0b0b0b"),
+        )
+        .unwrap();
+        std::fs::write(format!("{dir}/{name}.txt"), rows.join("\n")).unwrap();
+    }
 }
