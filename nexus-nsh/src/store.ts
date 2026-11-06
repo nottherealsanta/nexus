@@ -195,7 +195,7 @@ export const addProjectOpen = signal(false);
 /** Choices made before a session exists; consumed by its creation request. */
 export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string; disabled_tools?: string[] }>({});
 export const firstPrompts = signal<Record<string, { text: string; images: number; session?: string; choices: ReturnType<typeof sessionDraft> }>>({});
-/** The session whose first message is confirmed and should be pinned to the top of its timeline. */
+/** The session whose first message just settled: its timeline pins that message to the top. */
 export const firstPin = signal<string | null>(null);
 export function pendingFirstPrompt() {
   m();

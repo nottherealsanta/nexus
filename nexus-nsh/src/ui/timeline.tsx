@@ -1495,16 +1495,7 @@ export function Timeline() {
     // A session at its end (or never opened) follows; one left further up returns to its offset.
     const atEnd = first || atEndOf()[sid] !== false;
     // The first message of a session just created pins to the top; nothing else scrolls it.
-    if (untracked(firstPin) === sid) {
-      firstPin.set(null);
-      pin.set(sid);
-      pinTarget = 0;
-      pinAt = Date.now();
-      follow(false);
-      scrolledUp.set(false);
-      restoringSid = null;
-      return;
-    }
+    if (untracked(firstPin) === sid) { startPin(sid); return; }
     pin.set(null);
     follow(atEnd);
     scrolledUp.set(atEnd ? false : true);
@@ -1516,6 +1507,17 @@ export function Timeline() {
   const pin = signal<string | null>(null);
   let pinTarget = 0;
   let pinAt = 0;
+  const startPin = (sid: string) => {
+    firstPin.set(null);
+    pin.set(sid);
+    pinTarget = 0;
+    pinAt = Date.now();
+    follow(false);
+    scrolledUp.set(false);
+    restoringSid = null;
+  };
+  // The first message can settle after this timeline is already showing its session.
+  effect(() => { const sid = firstPin(); if (sid && sid === untracked(viewId) && sid === scopedSession) untracked(() => startPin(sid)); });
   const pinned = () => pin() !== null && pin() === viewId();
   const pinFrom = (heights: Record<string, number>, sid: string) => {
     const all = rows();
@@ -1592,7 +1594,12 @@ export function Timeline() {
       <If when={rows().length > 0} else={<EmptyTimeline />}>
         <List
           ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 + spacer() }} scrollbar={false}
-          onLayout={keepEnd}
+          onLayout={(b: any) => {
+            const h = b?.bounds?.size?.height ?? b?.size?.height;
+            const sid = viewId();
+            if (h) viewH.update((all) => all[sid] === h ? all : { ...all, [sid]: h });
+            keepEnd();
+          }}
           onScroll={(e) => {
             const sid = viewId();
             const y = e.offset.y, height = e.contentSize.height;
@@ -1609,7 +1616,7 @@ export function Timeline() {
             const now = followsAfterScroll({ y, lastY, gap, following, contentH: height, viewH: e.size.height });
             if (now !== following) follow(now);
             atEndOf.update((all) => all[sid] === (gap <= END_SLOP) ? all : { ...all, [sid]: gap <= END_SLOP });
-            if (pin() === sid && pinReleased({ y, target: pinTarget, sinceApplied: Date.now() - pinAt })) pin.set(null);
+            if (pin() === sid && pinReleased({ y, target: pinTarget, sinceApplied: Date.now() - pinAt, contentH: height, viewH: e.size.height })) pin.set(null);
             lastY = y;
             if (restoringSid === sid && Math.abs(y - restoring) <= 1) restoringSid = null;
           }}
@@ -1618,6 +1625,7 @@ export function Timeline() {
           {(r) => <RowView r={r} sid={viewId()} />}
         </List>
       </If>
+      <If when={pinned()}><View testID="first-pin" class="absolute w-px h-px" style={{ pointerEvents: "none" }} /></If>
       <If when={scrollBar()}>
         {() => {
           const b = scrollBar()!;

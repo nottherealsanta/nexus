@@ -30,6 +30,8 @@ export function pinSpacer(below: number, viewH: number): number {
 }
 
 /** The reader has moved the view off the pin (not the pin's own settling). */
-export function pinReleased(m: { y: number; target: number; sinceApplied: number }): boolean {
+export function pinReleased(m: { y: number; target: number; sinceApplied: number; contentH?: number; viewH?: number }): boolean {
+  // A view that cannot reach the pin yet (the spacer or the rows are still arriving) has not been moved.
+  if (m.contentH !== undefined && m.viewH !== undefined && m.contentH < m.target + m.viewH - 2) return false;
   return m.sinceApplied > 150 && Math.abs(m.y - m.target) > 2;
 }
