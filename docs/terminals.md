@@ -1,7 +1,40 @@
 # Terminal resources: Core contract
 
 This is the Core terminal slice of [PLAN.md section 2](../PLAN.md#2-terminal-inside-nexus).
-The browser resource and both terminal UIs are separate work.
+The browser resource and both terminal UIs are separate work. The client behaviour
+below is the shared target, not a claim that either UI has shipped.
+
+## Client behaviour
+
+The desktop workspace has a **Terminal** tab with a resource list and the selected
+terminal's screen. Mobile does not expose this tab. The list shows each name,
+creation workspace, status (`running`, `exited`, `closed`, or `ended`) and
+controller identity, or `No controller`. **New**, **Rename**, **Close**, and
+**Take control** / **Release control** are explicit actions. Selecting a resource
+switches the screen without terminating the previous resource. Closing the panel
+only detaches; **Close** terminates the selected resource. Closing a running
+terminal first asks `Close running terminal?` with **Close terminal** and **Cancel**.
+An exited terminal can be closed without that warning.
+
+The screen receives input only while focused and while this attachment holds
+control. Taking control never steals it from another attachment. A failed control
+request is visible; reconnecting creates a new attachment and requires taking
+control again. Input is serialized and acknowledged before the next input; an
+indeterminate input is reported, not replayed on a new attachment. A gap resets
+the parser and visibly says `Terminal history was discarded; screen may be incomplete.`
+The screen uses the retained replay and subsequent live output; this is not a
+lossless screen checkpoint. Scrollback is bounded.
+
+When the screen has focus, keyboard input, including Esc and Ctrl+C, belongs to
+the terminal rather than global Nexus shortcuts. **Ctrl+]** returns focus to the
+resource list without sending that key to the shell; from the list, Esc closes
+the panel. Paste goes only to the focused terminal, using bracketed paste when
+requested by the application. Mouse interaction is owned by the terminal screen
+when focused and by Nexus otherwise; selection and an explicit **Copy** action
+are required before emitting OSC 52. Escape sequences in terminal output never
+write the clipboard or open URLs or files by themselves. Resizing the screen
+resizes the PTY only while this attachment has control. Terminal contents are
+never automatically added to model context.
 
 ## Resource and authority
 
