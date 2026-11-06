@@ -38,5 +38,13 @@ test('terminal page captures keys, copies only the selection, and blocks OSC 52'
     await page.waitForFunction(() => window.doneWriting);
     assert.equal(await page.evaluate(() => term.buffer.active.type), 'alternate');
     assert.equal(await page.evaluate(() => term.buffer.active.getLine(0).getCell(0).getWidth()), 2);
+    await page.evaluate(() => {
+      for (const m of [{type:'write', id:1, data:btoa('OLD')}, {type:'reset'}, {type:'write', id:2, data:btoa('NEW')}]) window.postMessage(JSON.stringify(m), '*');
+    });
+    for (let i = 0; i < 20 && !messages.some(m => m.type === 'written' && m.id === 2); i++) await page.waitForTimeout(25);
+    assert(messages.some(m => m.type === 'written' && m.id === 2));
+    const content = await page.evaluate(() => Array.from({length:term.rows}, (_, i) => term.buffer.active.getLine(i)?.translateToString(true) ?? '').join('\n'));
+    assert(content.includes('NEW'));
+    assert(!content.includes('OLD'));
   } finally { await browser.close(); }
 });

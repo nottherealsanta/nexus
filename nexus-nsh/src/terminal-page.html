@@ -21,7 +21,7 @@ window.addEventListener('message', e => {
   let m; try { m = JSON.parse(e.data); } catch { return; }
   switch (m.type) {
     case 'write': term.write(Uint8Array.from(atob(m.data), c => c.charCodeAt(0)), () => send('written', {id:m.id})); break;
-    case 'reset': term.write('', () => { term.reset(); if (m.cols && m.rows) term.resize(m.cols,m.rows); }); break;
+    case 'reset': term.write('\x1bc', () => { if (m.cols && m.rows) term.resize(m.cols,m.rows); }); break;
     case 'writable': writable = !!m.value; break;
     case 'focus': term.focus(); break;
     case 'copy': send('selection', {data: term.getSelection()}); break;
