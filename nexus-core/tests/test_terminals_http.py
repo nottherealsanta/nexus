@@ -53,6 +53,8 @@ async def test_http_two_viewers_control_reconnect_and_close(terminal_server):
         async with client.stream("GET", path + "/stream", params={"attachment_id": second}) as b:
             assert b.status_code == 200
             assert (await client.post(path + "/control", json={"attachment_id": first, "action": "acquire"})).status_code == 200
+            listing = await client.get("/api/terminal", params={"project_id": project.id})
+            assert listing.json()[0]["controller"] == "one"
             assert (await client.post(path + "/control", json={"attachment_id": second, "action": "acquire"})).status_code == 409
             data = base64.b64encode(b"printf HTTPMARKER\\n\n").decode()
             result = await client.post(path + "/input", json={"attachment_id": first, "input_seq": 1, "data": data})

@@ -368,8 +368,9 @@ class TerminalService:
     def list(self, project_id: str) -> list[dict[str, Any]]:
         if self.db is None:
             return [t.metadata() for t in self.terminals.values() if t.project_id == project_id]
-        return [row for (raw,) in self.db.execute("select metadata from terminal_resource")
+        rows = [row for (raw,) in self.db.execute("select metadata from terminal_resource")
                 if (row := json.loads(raw))["project_id"] == project_id]
+        return [self.terminals[row["id"]].metadata() if row["id"] in self.terminals else row for row in rows]
 
     def metadata(self, terminal_id: str) -> dict[str, Any]:
         if terminal_id in self.terminals:
