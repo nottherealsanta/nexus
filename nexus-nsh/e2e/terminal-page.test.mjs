@@ -20,8 +20,14 @@ test('terminal page captures keys, copies only the selection, and blocks OSC 52'
     await page.evaluate(() => { window.nsh = { postMessage: data => window.capture(data) }; window.clipWrites = []; Object.defineProperty(navigator, 'clipboard', {value:{writeText: text => { window.clipWrites.push(text); return Promise.resolve(); }}, configurable:true}); });
     await page.setContent(html);
     await page.waitForFunction(() => document.querySelector('.xterm-helper-textarea'));
+    assert.equal(await page.evaluate(() => term.options.scrollback), 10000);
     await page.evaluate(() => { window.postMessage(JSON.stringify({type:'writable',value:true}), '*'); window.postMessage(JSON.stringify({type:'theme',background:'#f7f7f5',foreground:'#1f2124'}), '*'); });
     await page.waitForFunction(() => term.options.theme.background === '#f7f7f5');
+    await page.waitForTimeout(50);
+    const resizeCount = messages.filter(m => m.type === 'resize').length;
+    await page.evaluate(() => window.postMessage(JSON.stringify({type:'dimensions', rows:10, cols:40}), '*'));
+    await page.waitForFunction(() => term.rows === 10 && term.cols === 40);
+    assert.equal(messages.filter(m => m.type === 'resize').length, resizeCount);
     await page.locator('.xterm-helper-textarea').focus();
     await page.keyboard.press('Control+c');
     await page.keyboard.press('Control+]');

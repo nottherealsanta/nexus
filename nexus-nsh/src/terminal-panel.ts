@@ -32,6 +32,7 @@ let cols = 80, rows = 24;
 const send = (message: TerminalMessage) => sender?.(message);
 const failure = (error: unknown) => terminalError.set(error instanceof Error ? error.message : String(error));
 const selected = () => terminalItems().find(t => t.id === terminalSelected());
+const validDimensions = (r: unknown, c: unknown) => Number.isInteger(r) && Number.isInteger(c) && Number(r) >= 1 && Number(r) <= 200 && Number(c) >= 1 && Number(c) <= 500;
 const changeItem = (item: TerminalResource) => { refreshGeneration++; terminalItems.update(items => items.map(t => t.id === item.id ? item : t)); };
 
 export function setTerminalSender(fn: ((message: TerminalMessage) => void | Promise<void>) | null) { sender = fn; }
@@ -78,11 +79,20 @@ async function stream(id: string, first: string, gen: number, signal: AbortSigna
       for await (const frame of terminalStream(id, aid, after, signal)) {
         if (gen !== generation) return;
         if (frame.type === "gap") {
+          if (!validDimensions(frame.rows, frame.cols)) throw new Error("Invalid terminal dimensions.");
           terminalNotice.set("Terminal history was discarded; screen may be incomplete.");
           send({type:"reset", rows:frame.rows, cols:frame.cols}); seq = frame.seq;
         } else {
+          if (seq && frame.seq <= seq) continue;
           if (seq && frame.seq !== seq + 1) throw new Error("Terminal stream lost frames.");
-          if (frame.type === "output" && typeof frame.data === "string") { uncertainWrite = true; await send({type:"write", data:frame.data}); uncertainWrite = false; }
+          if (frame.type === "output") {
+            if (typeof frame.data !== "string") throw new Error("Missing terminal output data.");
+            uncertainWrite = true; await send({type:"write", data:frame.data}); uncertainWrite = false;
+          }
+          if (frame.type === "resize") {
+            if (!validDimensions(frame.rows, frame.cols)) throw new Error("Invalid terminal dimensions.");
+            send({type:"dimensions", rows:frame.rows, cols:frame.cols});
+          }
           if (gen !== generation || signal.aborted) return;
           seq = frame.seq;
           if (frame.type === "discard") terminalNotice.set("Terminal history was discarded; screen may be incomplete.");
@@ -132,7 +142,7 @@ export async function controlTerminal(action: "acquire" | "release") {
     const item = await terminals.control(id, aid, action);
     if (aid !== attachment) return;
     changeItem(item); terminalControlled.set(action === "acquire"); send({type:"writable",value:action === "acquire"});
-    if (action === "acquire") await flushResize();
+    if (action === "acquire") { send({type:"fit"}); await flushResize(); }
   } catch (e) { if (aid === attachment) failure(e); }
   finally { if (aid === attachment) controlBusy = false; }
 }
@@ -150,7 +160,7 @@ async function flushResize() {
   finally { if (aid === attachment) resizeBusy = false; }
 }
 export function resizeTerminal(r: number, c: number) {
-  if (!Number.isInteger(r) || !Number.isInteger(c) || r < 1 || c < 1) return;
+  if (!validDimensions(r, c)) return;
   rows = r; cols = c;
   void flushResize();
 }

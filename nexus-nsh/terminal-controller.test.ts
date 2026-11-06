@@ -55,7 +55,7 @@ describe("terminal controller", () => {
       const path = String(url), body = init?.body ? JSON.parse(String(init.body)) : {};
       calls.push({path,body,method:init?.method});
       if (path.includes("/stream?")) {
-        const chunk = new TextEncoder().encode('event: gap\ndata: {"version":1,"type":"gap","seq":2,"rows":24,"cols":80}\n\nid: 3\nevent: output\ndata: {"version":1,"type":"output","seq":3,"data":"aGk="}\n\n');
+        const chunk = new TextEncoder().encode('event: gap\ndata: {"version":1,"type":"gap","seq":2,"rows":24,"cols":80}\n\nid: 3\nevent: output\ndata: {"version":1,"type":"output","seq":3,"data":"aGk="}\n\nid: 3\nevent: output\ndata: {"version":1,"type":"output","seq":3,"data":"aGk="}\n\nid: 4\nevent: resize\ndata: {"version":1,"type":"resize","seq":4,"rows":30,"cols":100}\n\n');
         let sent = false;
         return {ok:true,status:200,body:{getReader:() => ({read:() => sent ? new Promise(() => {}) : (sent = true, Promise.resolve({done:false,value:chunk})),cancel:async () => {}})}} as any;
       }
@@ -74,6 +74,8 @@ describe("terminal controller", () => {
       expect(terminalNotice()).toContain("Terminal history was discarded");
       expect(screen.some(m => m.type === "write" && m.data === "aGk=")).toBe(true);
       screenAck(); await tick();
+      expect(screen.filter(m => m.type === "write").length).toBe(1);
+      expect(screen.some(m => m.type === "dimensions" && m.rows === 30 && m.cols === 100)).toBe(true);
       await controlTerminal("acquire"); expect(terminalControlled()).toBe(true);
       holdResize = true; resizeTerminal(30, 100); resizeTerminal(40, 110); await tick();
       expect(calls.filter(c => c.path.endsWith("/resize")).map(c => [c.body.rows, c.body.cols])).toEqual([[24,80],[30,100]]);
