@@ -36,11 +36,13 @@ was only reviewed statically, or only tested offline, says so.
 | Polish | Modal first pass, compact Settings navigation/focus and brighter Working shimmer done in both clients | Finish modal audit; scroll model, tab/subagent spinners, group fold, iOS — [8.0](#80-polish-user-review-2026-11-04) |
 | Editor, explorer, Git page | Steps 0–1 done, step 2 in progress. The TUI app still edits in the plain `Composer` buffer; the vendored editor is used only by `examples/editor_demo.rs`. NSH's Files tab is now the TUI's expanding tree; no Git tab in either client | Wire the vendored editor into the TUI — [4](#4-file-explorer-file-editor-and-git-page) |
 | NSH terminal (`nexus nsh tui`) | Launcher, NSH 0.4.0 CLI, parity pass and the 0.4.0 test-host fixes done; the web suite is green except the documented matcher gaps | Remaining visual differences listed in [8.2](#82-nsh) |
+| TUI → NSH terminal migration (11-06) | Planned, not started; decisions and ideas recorded | Gaps, scroll bar, segmented Settings, project rail/overview, sidebar highlight, retirement — [15](#15-move-the-tui-from-the-rust-implementation-to-the-nsh-implementation) |
 | Inspector follow-up, integrated terminal and browser (11-06) | Native inspector first pass landed; terminal/browser are planned, not built | Local baseline → inspector hardening → shared resource contract → interactive terminal → browser; scope/security/rendering gates in [14](#14-inspector-hardening-integrated-terminal-and-browser) |
 | Manager | M1–M5 implemented; a real TUI GPT-Live conversation with delegated search/read tools worked (11-04). Audio/context polish built; the header indicator is a gray braille wave field with Stop-on-hover for Live and a dimmed app behind the panel (11-05); latest sound quality not yet listening-verified | Remaining spikes, real-model evals, native/iOS audio, long-call reliability and hands-free — [3](#3-manager) |
 | Mermaid (Manager step 0) | Done in both clients | Real terminal image-protocol check, screenshots — [3.2](#32-mermaid-verification) |
 | Settings | Compact two-pane dialog; gray selections, white active-pane bar, segmented values (←/→ in the TUI, Tab/Esc to headings); focused checks and screenshots done | Real sign-ins, provider/tool-grid review, native/full browser coverage — [8.3](#83-settings) |
 | Providers | Codex, Copilot, Grok, OpenCode, Claude (Agent SDK) work | OpenAI and Ollama real calls; Anthropic Messages, Gemini — [10](#10-providers) |
+| Provider usage table (11-06) | Planned; both clients still show bars plus the words marked in the review image | Ten-block gauge, percent left, reserve and expiry — [16](#16-provider-usage-table-11-06) |
 | Event storage | Shared request components, live-only deltas with client checkpoints, finished-session compaction and incremental reclamation implemented; offline scratch copy 178.2 MB → 2.37 MB | Deployment and any real-home compaction remain explicit follow-up — [13](#13-event-storage-harden-finished-sessions-into-messages-and-flush-their-events) |
 
 ## Health check (2026-11-04)
@@ -72,6 +74,7 @@ because Apple's `ar` produces a broken archive.
 
 ## Landed
 
+- **Orchestrator does quick work itself (11-06).** Seen in `ses_1a1ae77940ddcbfb915`: writing PLAN.md §15, whose content the orchestrator already had, took three build children (two failed on HTTP 429) because `orchestrate.md` forbade it to edit files. The prompt now has it do quick, well-understood work directly (writing up a plan or doc it has the content for, small edits, single commands, finishing after a child fails on a provider error) and delegate long-running work; it may fix small slips found while checking. It already had every `build` tool, so only the prompt changed.
 - **Interrupt order and resuming sub agents (11-06).** Seen in `ses_1a1ae77940ddcbfb915`. (1) `Runtime.interrupt` cancelled descendants before the session itself, so a parent waiting on `session` got the child's "interrupted" report as an ordinary result, took in a steer that had been queued an hour earlier, and sent another request before its own cancel landed. Its timeline read tool result → steer → `interrupted`. The session is now cancelled first: the parent stops inside the call, the steer stays queued, and the dangling `session` result names the interrupted child. (2) The orchestrator started a new build child instead of resuming the interrupted one, and shelved the old task. An interrupted or failed child's report, and the parent-interrupt result, now say the child is idle with its conversation and should be continued with `message_session`, and `orchestrate.md` prefers continuing a child whose task the work belongs to, and treats an interrupted task as unfinished. Two regression tests in `tests/test_children.py`; the ordering test fails on the old order with a second parent request. Core suite: 1190 passed.
 
 - **Voice transcript provenance (11-06).** Both clients add the editable note `[Voice transcript — may contain errors.]` once when inserting nonempty final dictation. It is visible in the composer and retained verbatim in the context timeline and model input, including mixed typed/dictated messages. Empty results do not mark drafts; OS keyboard dictation cannot be identified automatically. Shared scenario: two TUI integration checks and eight NSH browser checks pass; composer/timeline screenshots compared in `reports/voice-transcript/`. Full TUI run retains 14 failures in Markdown, Manager, shell and timeline amid concurrent UI work; NSH type check retains the known `app.clock` and `Button.onFocus` errors. No real microphone or provider call was used.
@@ -1514,6 +1517,227 @@ do not remove the standalone browser inspector until its useful functions have n
 and stable paging with one seeded long-running tree. In parallel, run disposable PTY/browser rendering
 spikes. Then land resource metadata/access/lifecycle tests before adding shell or browser input. Do not
 bundle the entire roadmap into one unreviewable change or block the terminal MVP on optional agent control.
+
+### 15. Move the TUI from the Rust implementation to the NSH implementation
+
+Goal (user, 2026-11-06): go fully from the current Rust `nexus-tui` to the NSH implementation of the TUI
+(`nexus nsh tui`: the NSH TSX app on NSH's terminal backend), with complete look-and-function parity, so
+`nexus-tui` can be retired. Until then both clients stay peers: every UI change lands in both in the same
+change, and any client-specific difference needs the user's approval and a ledger row. All steps below are
+**not started** unless stated.
+
+**15.1 Close the remaining NSH-terminal gaps** (from [8.2](#82-nsh))
+
+- [ ] Fix the two failing NSH web tests: `child-navigation-parity` (choosing a sibling in the strip keeps the
+  same root tab) and `void-second-pass` (the working row steps aside while the session waits on the user).
+- [ ] Make the `--target tui` run green; the model-picker test drops the "e" in typed text under the terminal host.
+- [ ] First-send pinning (user band at the top with a shrinking spacer), as in [8.0](#80-polish-user-review-2026-11-04).
+- [ ] New-session view, narrow layouts and states, sidebar search, native prose rendering; Files tab polish.
+- [ ] Remaining `nsh check` errors (`app.clock` x2, `Button.onFocus`).
+
+**15.2 Decisions made (user, 2026-11-06)**
+
+- [ ] **Composer voice/send buttons:** approved client-specific difference (NSH has them, the TUI has none).
+  Record a ledger row.
+- [ ] **Timeline scroll bar:** a Settings option in both clients, same wording and placement. It appears only while
+  the user is scrolling, hides after a short idle, is dark gray and subdued, never shifts layout, and uses a
+  shared theme token (`interface/theme.toml`, checked by `check_theme.py`). Tests in both clients.
+- [ ] **Settings value controls:** the TUI adopts NSH's segmented controls (Left/Right moves the segment; the
+  existing Esc stepping stays). Remove the old cycling-difference ledger row.
+- [ ] **Framed modals (NSH upstream frames vs the TUI):** still undecided; ask before changing.
+
+**15.3 Project rail**
+
+- [ ] **Reorder by drag** (mouse in both clients; a keyboard alternative in the TUI, e.g. alt+up/down). The order
+  is stored in Core (API field, `docs/api.md`) so both clients and the overview agree.
+- [ ] **Remove a project:** with confirmation. It only unregisters the project from Nexus and never deletes
+  files; define and document what happens to its sessions under the daemon's existing semantics.
+- [ ] **Three-tier status** so a project can be set aside temporarily and brought back. The user's sentence was
+  cut off ("current, passive, and then..."), so the naming is **inferred, awaiting confirmation**:
+  *current* (normal, in the rail), *passive* (dimmed in the rail), *inactive* (hidden from the rail, listed in
+  the overview under "Inactive", restored with one action). Stored in Core, documented, same names in both clients.
+
+**15.4 Keyboard flow from an empty composer** (only when the composer is empty)
+
+- [ ] Left opens the left session sidebar.
+- [ ] Left again focuses the project list; Up/Down select a project.
+- [ ] Left again opens a new full **projects overview**: projects in their preserved order; under each, a tree
+  (`├` / `└`) of only its **active** sessions with their state; a per-project toggle shows archived sessions
+  (collapsed by default, because the list can be very long). Inactive projects are grouped at the end.
+- [ ] Esc or Right steps back out in reverse order.
+
+**15.5 Sidebar selection highlight**
+
+- [ ] The selected session row in the sidebar gets the project rail's active treatment (a lighter filled block
+  with the left accent bar). Remove the bold from its title and make the title white in dark mode. Both
+  clients, theme tokens shared, screenshots compared.
+
+**15.6 Retirement checklist for `nexus-tui`**
+
+- [ ] Every approved difference is in the ledger; the shared scenarios and screenshot comparisons match.
+- [ ] `nexus nsh tui` passes its tests and covers launch time, resize, mouse, keyboard, clipboard and image
+  rendering as well as `nexus tui` does.
+- [ ] `nexus` / `nexus tui` launch the NSH terminal app by default; the Rust crate is kept until the user
+  approves removal, then docs, scripts (`scripts/nexus`) and CI references are updated.
+
+## 16. Provider usage table (11-06)
+
+The user's review of the Provider usage modal (screenshot, 11-06) asks for a table instead of the current
+label + bar + prose rows: a ten-block progress gauge, then the percentage left, the reserve (the old Nexus
+pace calculation) and the expiry time. The words marked in red go away. Both clients land this in the same
+change; no desktop client-specific difference is expected. **Not started.**
+
+### 16.1 The table and its cells (both clients)
+
+One header row, then a provider group row and one column-aligned row per window. The gauge shows *used*
+and the next column states what is left, so the two add to 100%:
+
+```text
+Window                                  Progress    Left  Reserve  Expires
+ChatGPT (Codex)  Plus
+  5-hour                                ██████████    0%      —    1h 8m
+  Weekly                                ██▃░░░░░░░   76%     -1%   5d 9h
+Claude (Agent SDK)  Pro
+  5-hour session                        ███▅░░░░░░   64%      —     now
+  Weekly (all models)                   ██████▆░░░   32%    +11%   1d 12h
+xAI  SuperGrok Lite
+  Weekly                                ▁░░░░░░░░░   99%    +30%   4d 20h
+GitHub Copilot  Business
+  Premium requests (monthly)            ▇░░░░░░░░░   91%     +8%   24d 18h
+OpenCode Go
+  5-hour                                ░░░░░░░░░░  100%      —    1h 6m
+  Weekly                                ███▂░░░░░░   67%    +28%   2d 18h
+  Monthly                               ████▆░░░░░   53%    -10%   19d 0h
+Updated 2m ago
+r refresh · esc close
+```
+
+- [ ] **Header row:** `Window`, `Progress`, `Left`, `Reserve`, `Expires`, muted, once above the first
+  provider. Provider group rows keep the bold name and the muted plan (`ChatGPT (Codex)  Plus`); its window
+  labels are indented two cells. Do not repeat the provider on every window.
+- [ ] **Progress (the wide column, exactly 10 cells):** `used_percent` decides the fill in eighths:
+  `e = round(used × 80 / 100)` (nearest, ties to even), then ten cells filled left to right, each cell
+  holding `min(8, max(0, e − 8·i))` eighths. Full cells are `█` (U+2588); the boundary cell is
+  `▁▂▃▄▅▆▇` (U+2581–U+2587), so it fills **from the bottom up** as requested; empty cells are `░`
+  (U+2591). 24% → `██▃░░░░░░░`, 36% → `███▅░░░░░░`, 100% → ten `█`, 0%/unknown → ten `░`. The bar is
+  horizontal because the table is one line per window; a literal ten-row-tall gauge would make every
+  window ten lines high. Glyphs come from the block-elements range the user linked
+  (`https://unicode-explorer.com/b/2580`).
+- [ ] **Left:** `100 − used_percent`, following the old Nexus `percent()` rule: a whole percent, except a
+  non-whole value under 10 or over 90 keeps one decimal (`0.2%`, `99.8%`); unknown is `—`. Right-aligned.
+  This replaces the old used-percent column (42% used now reads 58%).
+- [ ] **Reserve:** copy the `nexus01` calculation from `nexus/ui_support/usage.py`
+  (`RESERVE_MIN_PERIOD`, `elapsed_percent`, `reserve`, `reserve_phrase`): only when `period_seconds` is
+  at least 7 days and `used_percent` and a future `resets_at` are known;
+  `elapsed = 100 × (1 − (resets_at − now) / period_seconds)`, `reserve = elapsed − used`. Round to the
+  nearest integer with ties to even, as Python's `round` does (8.5 → 8). Show `+N%` for spare usage,
+  `-N%` for over pace, `0%` for on pace and `—` when not estimable (five-hour windows, missing period, a
+  reset already due). Right-aligned; spare takes the success colour, over pace the warning colour,
+  `0%`/`—` stay muted. Do not show the old `┃` pace marker.
+- [ ] **Expires:** the time until reset only, never an absolute stamp: `now` under a minute, otherwise the
+  two largest units (`3h 10m`, `2d 4h`, `6d 5h`); `—` when `resets_at` is missing or the reset is due.
+  Left-aligned. This is the old `resets in …` text without the words.
+- [ ] **Colours and tone:** filled gauge cells keep the existing used-percent thresholds (success below
+  70, warning below 90, error at 90 and above); empty cells use the dim border/muted role. The label and
+  the Left number stay in primary text; the provider plan, header, `—` and notes are muted.
+- [ ] **Words removed (the red marks):** drop the Codex `Limit reached: new requests wait for the next
+  reset` note, the xAI per-product notes such as `GrokChat: 1% of credits`, and every per-window `detail`
+  suffix (`225 of 300 left`, `20,280 over quota`, `· 20,28…`). `detail` stays in the API for other
+  consumers but is never printed by this modal; when a window has no `resets_at`, Expires is `—`
+  rather than the old raw-text fallback. Keep the other notes (credits balance/unlimited, no plan
+  limits, `Could not read the limits: …`, `No limit windows reported.`) as muted full-width lines under
+  their provider, plus `Updated … ago`, the empty and loading states and the `r refresh · esc close`
+  footer.
+- [ ] **Responsive rules:** the gauge and the three numbers keep their widths; the Window column flexes
+  and truncates with `…`; Expires truncates with `…`. Never wrap a window row. The TUI keeps its
+  80–88-cell large modal and 30-row cap. NSH uses its large modal as `tall` (90% of the window) so the
+  table fits; on phone widths (a standing phone-layout exception) each window becomes two lines: label,
+  then gauge, Left, Reserve and Expires.
+
+### 16.2 Data and formatting
+
+- [ ] `period_seconds` and `kind` are already in the API (`GET /api/usage`); parse them in both clients.
+  The reserve is derived client-side from `used_percent`, `resets_at`, `period_seconds` and the client's
+  `now`, beside the countdown; do not add a server endpoint or store a stale reserve in the snapshot.
+- [ ] Unknown `used_percent` → ten empty cells, `—` Left, `—` Reserve, and the countdown if known.
+  Missing `period_seconds` (older snapshots) → Reserve `—`, everything else unchanged. A reset at or
+  before `now` → Expires `now`, Reserve `—`.
+- [ ] Filter the removed notes in both clients as well as at the source, so an older saved snapshot
+  cannot bring them back: Codex notes starting `Limit reached:`; xAI notes ending ` of credits` that
+  are not `Prepaid credits:`. The existing xAI prepaid and Copilot chat/completions/AI-credit filters
+  stay.
+- [ ] Keep the snapshot semantics: the modal is a snapshot; countdowns and reserve do not tick while it
+  stays open (the existing background-refresh follow-up remains separate).
+
+### 16.3 Core
+
+- [ ] `nexus-core/nexus/provider_usage.py`: remove the `limit_reached` note in `parse_codex` and the
+  `productUsage` note loop in `parse_xai`; keep the credits and prepaid notes. Keep
+  `parse_copilot`/`parse_claude` `detail` values (the API keeps them; the modal stops printing them).
+- [ ] Update `nexus-core/tests/test_provider_usage.py` with a `limit_reached: true` payload and a
+  `productUsage` list, asserting neither becomes a note; keep the existing prepaid and detail assertions.
+- [ ] `docs/api.md` (Usage K11): say the modal is a table of gauge + percent left + reserve + expiry;
+  `detail` is retained for other consumers but not shown; note the reserve rule and its 7-day threshold.
+
+### 16.4 TUI (`nexus-tui`)
+
+- [ ] `src/usage.rs`: extend `Row` with a `Header` row and make `Window` carry the label, the used value,
+  the formatted Left, Reserve and Expires strings (computed from `now`). Parse `period_seconds` and
+  `kind`. Drop the `detail` join from the reset text. Add pure helpers for `gauge_cells(used) -> [u8;
+  10]`, `percent_left`, `reserve`, `reserve_text` and `duration` with unit tests at 0, 1, 9, 10, 24, 36,
+  47, 68, 90 and 100 percent; five-hour vs weekly/monthly; a missing/old period; a reset in the past;
+  unknown usage; and the half-to-even tie (8.5 → 8).
+- [ ] `src/render.rs::draw_usage`: draw the header and the five fixed columns, map `gauge_cells` through
+  the theme glyphs, colour only the filled cells, right-align Left/Reserve, left-align Expires, and
+  truncate the label and Expires. Keep `MODAL_LARGE`, the height clamp and the existing `r`/`esc` hits.
+- [ ] ASCII mode: ten `#`/`-` cells; a partially filled cell counts as `#` (rounded up). Colour rules are
+  unchanged.
+- [ ] `interface/theme.toml`: add `[glyphs.usage]` with `full` (`█`/`#`), `empty` (`░`/`-`) and
+  `eighth_1`…`eighth_7` (`▁`…`▇`/`#`); add `usage` to the glyph checks in `interface/check_theme.py`,
+  the `Glyphs` struct/accessor in `src/theme.rs`, and the generator in `nexus-nsh/scripts/gen.py`.
+- [ ] `tests/behaviour.rs` (and the usage unit tests): assert the header, the gauge strings, `76%`/`0%`
+  Left, reserve cells and the hidden `Limit reached` / `of credits` / `of 300 left` text.
+- [ ] `nexus-tui/README.md`: update the K11 bullet to the table.
+
+### 16.5 NSH (`nexus-nsh`)
+
+- [ ] `src/store.ts`: add `period_seconds?: number | null` and `kind?: string` to the usage window type.
+- [ ] New pure `src/usage-format.ts` (or exports beside `until`): `leftPercent`, `reservePercent`,
+  `reserveText`, `gaugeCells` and `until` with the same rounding and threshold rules as the TUI.
+- [ ] `src/ui/usage.tsx`: replace the flex bars with a monospace table: header row, provider group rows,
+  window rows, 10-cell gauge drawn from the generated `usage` glyphs, fixed-width Left/Reserve/Expires
+  columns and a flexing Window column. Mark the gauge `accessible={false}` and give each row an
+  accessibility label with all four values. Use `Modal … tall`; keep the existing refresh/footer and the
+  loading/empty/error states. Hide the removed notes in `notes()` for older snapshots.
+- [ ] `usage.test.tsx`: update the expected percentages to the Left values (42% used → 58%), assert the
+  header, a gauge string such as `██▃`, `—`/reserve cells, and the absence of `Limit reached`, `of
+  credits` and the Copilot detail. Unit-test the pure formatting helpers with a fixed clock (including
+  8.5 → 8 and the 7-day threshold).
+- [ ] `nexus-nsh/README.md`: update the K11 bullet to the table.
+
+### 16.6 Shared scenario and screenshots
+
+- [ ] Extend `interface/scenarios/provider-usage.json` with the values above: Codex 100%/24%, Claude
+  36%/68%, xAI 1%, Copilot 9%, OpenCode 0%/33%/47%, plus the notes that must disappear (`Limit
+  reached: …`, `GrokChat: 1% of credits`), a provider with no plan limits and one with an error.
+  Keep time-dependent assertions in the pure helper tests; the scenario test asserts labels, Left
+  values, gauge glyphs and the hidden words.
+- [ ] Add a usage fixture to `nexus-nsh/e2e/scripted_core.py` that returns the scenario with
+  `resets_at`/`period_seconds` computed relative to the capture time (monkeypatch
+  `nexus.provider_usage.providers_usage` or seed the usage cache), so both clients see identical rows
+  without provider calls. Document the mode in the script's docstring.
+- [ ] Capture the same state in both clients: TUI `--dump-frame` at 170x50 and 120x36, NSH web at a
+  comparable window (plus one phone-width capture). Compare the header, column order, gauge glyphs,
+  numbers, colours and the absence of the marked words; save under `reports/provider-usage-table/`.
+
+### 16.7 Checks when it lands
+
+- [ ] `cd nexus-core && uv run pytest tests/test_provider_usage.py -q && uv run ruff check nexus/provider_usage.py tests/test_provider_usage.py`
+- [ ] `cd nexus-tui && cargo test usage && cargo test --test behaviour usage && cargo fmt --check && cargo clippy --all-targets -- -D warnings`
+- [ ] `cd nexus-nsh && npm run gen && nsh test usage.test.tsx --target web` (plus the pure helper test and `nsh check`; record the known `app.clock` / `Button.onFocus` errors if they remain).
+- [ ] `python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml && python3 interface/check_manifest.py`
+- [ ] Update `docs/porting-ledger.md` on landing: "Provider usage showed a continuous bar, used percent and prose notes | Both clients show a five-column table: ten-block gauge filled bottom-up, percent left, reserve (old 7-day pace formula), expiry; the Codex limit-reached note, xAI per-product credit notes and per-window detail text are gone (2026-11-06) | User request". Record any screenshot-only difference; none is expected on desktop.
+- [ ] Tick this section, move its one-line record to Landed and remove the status-table row's "planned" wording.
 
 ## Decisions made (2026-11-04, user)
 

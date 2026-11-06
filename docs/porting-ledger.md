@@ -115,7 +115,7 @@ A client-specific UI difference between the TUI and NSH also needs a row, statin
 | Workspace is the unit | Project (a path) owns sessions; a session has its own `directory` | Room for worktrees per session |
 | `auth/` beside the model layer | `llmhub/auth/` | Sign-in exists only to serve providers |
 | Agent definitions mixed into config and code | One Markdown file per agent (frontmatter + prompt) | Readable, editable, per project |
-| One general agent that also spawns helpers | `orchestrate` (delegates) vs `build` (does the work); children are `build`, `quick`, `scout`, `plan` | Clear roles; the orchestrator's context stays clean |
+| One general agent that also spawns helpers | `orchestrate` (delegates long-running work, does quick work itself) vs `build` (does the work); children are `build`, `quick`, `scout`, `plan` | Clear roles; the orchestrator's context stays clean, without a child round trip for a small edit |
 | Subagents run inside a tool call | Child sessions with `launched_by`, `parent_id`, `parent_call_id` | A child's work is a full, visible, resumable session |
 | A parent could only launch a child and wait for it | The first `session` call exposes `message_session` (once, persisted): a steer for a working child, a follow-up turn for an idle one; the answer returns as a notification (2026-10-28) | Delegation needs steering and follow-ups, not only fire-and-collect |
 | Four kernel tools (`code_start`, `code_attach`, `code_run`, `code_reset`), one kernel per agent | One `code` tool; kernels owned by the daemon, shared by id across sessions | Simpler to use; a session tree works in one kernel |
