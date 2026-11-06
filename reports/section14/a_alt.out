@@ -1,0 +1,7 @@
+hamming% PS1='$ '; echo MAIN-SCREEN-MARKER
+MAIN-SCREEN-MARKER
+$ vim -u NONE -N doc.txt
+$ echo after-vim
+after-vim
+$ exit
+MARKER restored: True | after-vim: True

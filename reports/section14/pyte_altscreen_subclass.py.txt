@@ -1,0 +1,22 @@
+import pyte, copy
+class AltScreen(pyte.Screen):
+    """pyte + private SGR tolerance + DECSET 1049/47/1047 alternate buffer (spike, ~15 lines)."""
+    def __init__(s,*a,**k): super().__init__(*a,**k); s._saved=None
+    def select_graphic_rendition(s,*a,private=False,**k):
+        if not private: super().select_graphic_rendition(*a,**k)
+    def set_mode(s,*modes,**kw):
+        if kw.get("private") and any(m in (47,1047,1049) for m in modes):
+            if s._saved is None:
+                s._saved=(s.buffer,s.cursor,s.dirty); s.buffer=pyte.screens.defaultdict(lambda: pyte.screens.defaultdict(lambda: s.default_char)); s.cursor=pyte.screens.Cursor(0,0); s.erase_in_display(2)
+            modes=[m for m in modes if m not in (47,1047,1049)]
+        if modes: super().set_mode(*modes,**kw)
+    def reset_mode(s,*modes,**kw):
+        if kw.get("private") and any(m in (47,1047,1049) for m in modes):
+            if s._saved: s.buffer,s.cursor,_=s._saved; s._saved=None; s.dirty.update(range(s.lines))
+            modes=[m for m in modes if m not in (47,1047,1049)]
+        if modes: super().reset_mode(*modes,**kw)
+raw=open("shell.raw","rb").read()
+s=AltScreen(80,24); st=pyte.ByteStream(s)
+for j in range(0,len(raw),3): st.feed(raw[j:j+3])
+print("\n".join(l.rstrip() for l in s.display[:6]))
+print("MARKER restored:", any("MAIN-SCREEN-MARKER" in l for l in s.display), "| after-vim:", any("after-vim" in l for l in s.display))

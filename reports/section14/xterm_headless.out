@@ -1,0 +1,7 @@
+type alternate rows0-3:
+|  1 line 001 héllo 世界 ünï ✓
+|  2 line 002 héllo 世界 ünï ✓
+|  3 line 003 héllo 世界 ünï ✓
+|  4 hello 世line 004 héllo 世界 ünï ✓
+serialize() bytes: 1134 (replayable ANSI checkpoint incl. alt buffer)
+after leave type normal normal row0: hamming% PS1='$ '; echo MAIN-SCREEN-MARKER
