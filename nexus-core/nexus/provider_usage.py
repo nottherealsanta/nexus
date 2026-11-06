@@ -165,9 +165,6 @@ def parse_codex(data: Mapping[str, Any]) -> dict[str, Any]:
             add(item.get("rate_limit"), f"{name} " if name else "", kind="other")  # side quotas never gate the provider
     add(data.get("code_review_rate_limit"), "Code review ", kind="other")
     notes: list[str] = []
-    limits = data.get("rate_limit")
-    if isinstance(limits, Mapping) and limits.get("limit_reached") is True:
-        notes.append("Limit reached: new requests wait for the next reset")
     credits = data.get("credits")
     if isinstance(credits, Mapping):
         if credits.get("unlimited") is True:
@@ -275,10 +272,6 @@ def parse_xai(data: Mapping[str, Any], plan: str = "", now: float | None = None)
         raise UsageError("the xAI billing response had no usage or period")
     windows = [_window(_period_label(period), used, end, detail=detail, period=period)]
     notes: list[str] = []
-    products = config.get("productUsage")
-    for item in products[:8] if isinstance(products, list) else ():
-        if isinstance(item, Mapping) and (name := _text(item.get("product"), 40)) and (share := _percent(item.get("usagePercent"))) is not None:
-            notes.append(f"{name}: {share:g}% of credits")
     balance = config.get("prepaidBalance")
     if isinstance(balance, Mapping):
         cents = 0.0 if "val" not in balance else _number(balance.get("val"))

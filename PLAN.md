@@ -392,12 +392,12 @@ r refresh · esc close
 
 ### 8.3 Core
 
-- [ ] `nexus-core/nexus/provider_usage.py`: remove the `limit_reached` note in `parse_codex` and the
+- [x] `nexus-core/nexus/provider_usage.py`: remove the `limit_reached` note in `parse_codex` and the
   `productUsage` note loop in `parse_xai`; keep the credits and prepaid notes. Keep
   `parse_copilot`/`parse_claude` `detail` values (the API keeps them; the modal stops printing them).
-- [ ] Update `nexus-core/tests/test_provider_usage.py` with a `limit_reached: true` payload and a
+- [x] Update `nexus-core/tests/test_provider_usage.py` with a `limit_reached: true` payload and a
   `productUsage` list, asserting neither becomes a note; keep the existing prepaid and detail assertions.
-- [ ] `docs/api.md` (Usage K11): say the modal is a table of gauge + percent left + reserve + expiry;
+- [x] `docs/api.md` (Usage K11): say the modal is a table of gauge + percent left + reserve + expiry;
   `detail` is retained for other consumers but not shown; note the reserve rule and its 7-day threshold.
 
 ### 8.4 TUI (`nexus-tui`)
@@ -453,7 +453,7 @@ r refresh · esc close
 
 ### 8.7 Checks when it lands
 
-- [ ] `cd nexus-core && uv run pytest tests/test_provider_usage.py -q && uv run ruff check nexus/provider_usage.py tests/test_provider_usage.py`
+- [x] `cd nexus-core && uv run pytest tests/test_provider_usage.py -q && uv run ruff check nexus/provider_usage.py tests/test_provider_usage.py`
 - [ ] `cd nexus-tui && cargo test usage && cargo test --test behaviour usage && cargo fmt --check && cargo clippy --all-targets -- -D warnings`
 - [ ] `cd nexus-nsh && npm run gen && nsh test usage.test.tsx --target web` (plus the pure helper test and `nsh check`; record the known `app.clock` / `Button.onFocus` errors if they remain).
 - [ ] `python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml && python3 interface/check_manifest.py`

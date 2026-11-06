@@ -1,8 +1,13 @@
 {
   "fetched": 1,
   "providers": [
-    {"id": "grok", "label": "xAI", "windows": [{"label": "Weekly", "used_percent": 22}], "notes": ["Prepaid credits: $2.50", "Other xAI note"]},
-    {"id": "copilot", "label": "GitHub Copilot", "windows": [{"label": "Premium requests (monthly)", "used_percent": 42}, {"label": "Chat (monthly)", "used_percent": 61}, {"label": "Completions (monthly)", "used_percent": 73}], "notes": ["AI credits used this period: 10", "Chat: unlimited", "Completions: unlimited", "Other Copilot note"]},
-    {"id": "other", "label": "Other provider", "windows": [{"label": "Chat (monthly)", "used_percent": 10}], "notes": ["Prepaid credits: $1.00"]}
+    {"id": "codex", "label": "ChatGPT (Codex)", "plan": "Plus", "windows": [{"label": "5-hour", "used_percent": 100, "period_seconds": 18000, "kind": "five_hour"}, {"label": "Weekly", "used_percent": 24, "period_seconds": 604800, "kind": "weekly"}], "notes": ["Limit reached: new requests wait for the next reset"]},
+    {"id": "claude", "label": "Claude (Agent SDK)", "plan": "Pro", "windows": [{"label": "5-hour session", "used_percent": 36, "period_seconds": 18000, "kind": "five_hour"}, {"label": "Weekly (all models)", "used_percent": 68, "period_seconds": 604800, "kind": "weekly"}]},
+    {"id": "grok", "label": "xAI", "plan": "SuperGrok Lite", "windows": [{"label": "Weekly", "used_percent": 1, "period_seconds": 604800, "kind": "weekly"}], "notes": ["Prepaid credits: $2.50", "GrokChat: 1% of credits", "Other xAI note"]},
+    {"id": "copilot", "label": "GitHub Copilot", "plan": "Business", "windows": [{"label": "Premium requests (monthly)", "used_percent": 9, "period_seconds": 2592000, "kind": "monthly", "detail": "225 of 300 left"}, {"label": "Chat (monthly)", "used_percent": 61}, {"label": "Completions (monthly)", "used_percent": 73}], "notes": ["AI credits used this period: 10", "Chat: unlimited", "Completions: unlimited", "Other Copilot note"]},
+    {"id": "opencode", "label": "OpenCode Go", "windows": [{"label": "5-hour", "used_percent": 0, "period_seconds": 18000, "kind": "five_hour"}, {"label": "Weekly", "used_percent": 33, "period_seconds": 604800, "kind": "weekly"}, {"label": "Monthly", "used_percent": 47, "period_seconds": 2592000, "kind": "monthly"}]},
+    {"id": "other", "label": "Other provider", "windows": [{"label": "Chat (monthly)", "used_percent": 10}], "notes": ["Prepaid credits: $1.00"]},
+    {"id": "openai", "label": "OpenAI", "windows": [], "notes": ["No plan limits; token usage is in the session totals."]},
+    {"id": "error", "label": "Unavailable provider", "windows": [], "error": "timed out"}
   ]
 }
