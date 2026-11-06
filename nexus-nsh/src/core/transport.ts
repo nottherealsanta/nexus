@@ -183,10 +183,9 @@ export class SseParser {
   }
 }
 
-/** Streams frames from GET /api/event (authenticated by the host). Throws ApiError for non-200. */
-export async function* eventStream(cursor: string | null, signal: AbortSignal): AsyncGenerator<SseFrame> {
-  const q = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-  const get = () => fetch(apiUrl(`/api/event${q}`), { headers: authHeaders({ accept: "text/event-stream" }), signal });
+/** Authenticated SSE stream; aborting or closing the generator disconnects the reader. */
+export async function* sseStream(path: string, signal: AbortSignal): AsyncGenerator<SseFrame> {
+  const get = () => fetch(apiUrl(path), { headers: authHeaders({ accept: "text/event-stream" }), signal });
   await ensureAuth();
   let res: Response;
   try {
@@ -212,6 +211,12 @@ export async function* eventStream(cursor: string | null, signal: AbortSignal): 
   } finally {
     try { await reader.cancel(); } catch {}
   }
+}
+
+/** Streams frames from GET /api/event. */
+export function eventStream(cursor: string | null, signal: AbortSignal): AsyncGenerator<SseFrame> {
+  const q = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+  return sseStream(`/api/event${q}`, signal);
 }
 
 export class Backoff {
