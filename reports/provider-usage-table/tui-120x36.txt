@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        New session      +                                                                 □
+     │
+     │                        ▣
+  +  │ ⌕ Search sessions ctrl+k
+     │
+     │  No proje
+     │  one with  Provider usage
+     │  project
+     │            Window                                        Progress      Left  Reserve  Expires
+     │            ChatGPT (Codex)  Plus
+     │              5-hour                                      ██████████      0%        —  2h 59m
+     │              Weekly                                      ██▃░░░░░░░     76%     +16%  4d 4h
+     │            Claude (Agent SDK)  Pro
+     │              5-hour session                              ███▅░░░░░░     64%        —  2h 59m
+     │              Weekly (all models)                         ██████▆░░░     32%     -28%  4d 4h
+     │            xAI  SuperGrok Lite
+     │              Weekly                                      ▁░░░░░░░░░     99%     +39%  4d 4h
+     │            Other xAI note
+     │            GitHub Copilot  Business
+     │              Premium requests (monthly)                  ▇░░░░░░░░░     91%     +31%  17d 23h
+     │            Other Copilot note
+     │            OpenCode Go
+     │              5-hour                                      ░░░░░░░░░░    100%        —  2h 59m
+     │              Weekly                                      ███▂░░░░░░     67%      +7%  4d 4h
+     │              Monthly                                     ████▆░░░░░     53%      -7%  17d 23h
+     │            Other provider
+     │              Chat (monthly)                              █░░░░░░░░░     90%        —  —
+     │
+     │            r refresh · ↑↓ scroll · esc close
+     │
+     │                                Message to start a new session
+     │
+     │                                Build · m scripted · default                                                0
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │
+     │  Settings         ctrl+,    ───────────────────────────────────────────────────────────────────────────────────

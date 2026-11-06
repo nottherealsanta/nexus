@@ -1,40 +1,103 @@
-//! The provider-usage text for `GET /api/usage` (K11): one block per connected provider, one line per window.
+//! Provider usage table for `GET /api/usage` (K11).
 
 use serde_json::Value;
 
-/// `3h 10m`, `2d 4h`, `45s`: how long until `at`, in the two largest units.
-pub fn until(at: f64, now: f64) -> String {
+const WEEK: f64 = 604_800.0;
+
+pub fn gauge_cells(used: Option<f64>) -> [u8; 10] {
+    let eighths = used
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0)
+        .clamp(0.0, 100.0);
+    let eighths = (eighths * 0.8).round_ties_even() as i32;
+    std::array::from_fn(|i| (eighths - 8 * i as i32).clamp(0, 8) as u8)
+}
+
+pub fn percent_left(used: Option<f64>) -> String {
+    let Some(used) = used.filter(|v| v.is_finite()) else {
+        return "—".into();
+    };
+    let left = 100.0 - used.clamp(0.0, 100.0);
+    if left.fract() != 0.0 && !(10.0..=90.0).contains(&left) {
+        format!("{left:.1}%")
+    } else {
+        format!("{left:.0}%")
+    }
+}
+
+pub fn reserve(
+    used: Option<f64>,
+    reset: Option<f64>,
+    period: Option<f64>,
+    now: f64,
+) -> Option<f64> {
+    let (used, reset, period) = (used?, reset?, period?);
+    if !used.is_finite()
+        || !reset.is_finite()
+        || !period.is_finite()
+        || period < WEEK
+        || reset <= now
+    {
+        return None;
+    }
+    Some(100.0 * (1.0 - (reset - now) / period) - used.clamp(0.0, 100.0))
+}
+
+pub fn reserve_text(value: Option<f64>) -> String {
+    match value.filter(|v| v.is_finite()).map(f64::round_ties_even) {
+        Some(v) if v > 0.0 => format!("+{v:.0}%"),
+        Some(v) if v < 0.0 => format!("{v:.0}%"),
+        Some(_) => "0%".into(),
+        None => "—".into(),
+    }
+}
+
+/// Duration to a reset, at minute precision, with the two largest units.
+pub fn duration(at: Option<f64>, now: f64) -> String {
+    let Some(at) = at.filter(|v| v.is_finite()) else {
+        return "—".into();
+    };
     let secs = (at - now).max(0.0) as u64;
     let (d, h, m) = (secs / 86_400, secs % 86_400 / 3600, secs % 3600 / 60);
     match (d, h, m) {
-        (0, 0, 0) => format!("{secs}s"),
+        (0, 0, 0) => "now".into(),
         (0, 0, m) => format!("{m}m"),
         (0, h, m) => format!("{h}h {m}m"),
         (d, h, _) => format!("{d}d {h}h"),
     }
 }
 
-/// One line of the usage modal.
+fn age(at: f64, now: f64) -> String {
+    let secs = (now - at).max(0.0) as u64;
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        duration(Some(now), at)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Row {
-    /// A provider heading: name, then its plan.
-    Provider { name: String, plan: String },
-    /// A limit window: whole percent used (`None` when the provider did not say) and when it resets.
+    Header,
+    Provider {
+        name: String,
+        plan: String,
+    },
     Window {
         label: String,
         used: Option<u8>,
-        reset: String,
+        cells: [u8; 10],
+        kind: String,
+        left: String,
+        reserve: String,
+        expires: String,
     },
-    /// A reason or remark under a provider, in plain text.
     Note(String),
-    /// Space between providers.
     Gap,
 }
 
 pub const EMPTY: &str = "No provider is connected. Connect one in Settings.";
 
-/// The modal's rows for `GET /api/usage`: a heading per connected provider, one row per window, then its notes.
-/// Reserve, pace marks and absolute reset times are left out; the bar and "resets in" say it.
 pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
     if usage.get("fetched").is_some_and(Value::is_null) {
         return vec![Row::Note(
@@ -44,23 +107,22 @@ pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
     let mut out = Vec::new();
     for p in usage["providers"].as_array().into_iter().flatten() {
         let id = p["id"].as_str().unwrap_or_default();
-        if !out.is_empty() {
-            out.push(Row::Gap);
+        if out.is_empty() {
+            out.push(Row::Header);
         }
-        let text = |key: &str| p[key].as_str().unwrap_or_default().to_owned();
         out.push(Row::Provider {
             name: p["label"]
                 .as_str()
                 .or(p["id"].as_str())
                 .unwrap_or("provider")
                 .to_owned(),
-            plan: text("plan"),
+            plan: p["plan"].as_str().unwrap_or_default().to_owned(),
         });
         if let Some(error) = p["error"].as_str().filter(|s| !s.is_empty()) {
             out.push(Row::Note(format!("Could not read the limits: {error}")));
             continue;
         }
-        let windows = p["windows"]
+        let windows: Vec<_> = p["windows"]
             .as_array()
             .into_iter()
             .flatten()
@@ -68,49 +130,48 @@ pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
                 let label = w["label"].as_str().unwrap_or_default();
                 id != "copilot" || !(label == "Chat (monthly)" || label == "Completions (monthly)")
             })
-            .collect::<Vec<_>>();
+            .collect();
         for w in &windows {
-            let detail = w["detail"].as_str().filter(|s| !s.is_empty());
-            let reset = match (w["resets_at"].as_f64(), detail) {
-                (Some(at), Some(d)) => format!("resets in {} · {d}", until(at, now)),
-                (Some(at), None) => format!("resets in {}", until(at, now)),
-                (None, d) => d.unwrap_or_default().to_owned(),
-            };
+            let used = w["used_percent"].as_f64().map(|u| u.clamp(0.0, 100.0));
+            let reset = w["resets_at"].as_f64();
             out.push(Row::Window {
                 label: w["label"].as_str().unwrap_or("window").to_owned(),
-                used: w["used_percent"]
-                    .as_f64()
-                    .map(|u| u.round().clamp(0.0, 100.0) as u8),
-                reset,
+                used: used.map(|u| u as u8),
+                cells: gauge_cells(used),
+                kind: w["kind"].as_str().unwrap_or_default().to_owned(),
+                left: percent_left(used),
+                reserve: reserve_text(reserve(used, reset, w["period_seconds"].as_f64(), now)),
+                expires: duration(reset, now),
             });
         }
-        let notes = p["notes"]
+        let notes: Vec<_> = p["notes"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|n| n.as_str())
+            .filter_map(Value::as_str)
             .filter(|n| !n.is_empty())
+            .filter(|n| !(id == "codex" && n.starts_with("Limit reached:")))
             .filter(|n| {
-                !(id == "grok" && n.starts_with("Prepaid credits:"))
-                    && !(id == "copilot"
-                        && (n.starts_with("AI credits used this period:")
-                            || n.starts_with("Chat: ")
-                            || n.starts_with("Completions: ")))
+                !(id == "grok" && (n.starts_with("Prepaid credits:") || n.ends_with(" of credits")))
             })
-            .collect::<Vec<_>>();
+            .filter(|n| {
+                !(id == "copilot"
+                    && (n.starts_with("AI credits used this period:")
+                        || n.starts_with("Chat: ")
+                        || n.starts_with("Completions: ")))
+            })
+            .collect();
         if windows.is_empty() && notes.is_empty() {
             out.push(Row::Note("No limit windows reported.".into()));
         }
-        for note in notes {
-            out.push(Row::Note(note.to_owned()));
-        }
+        out.extend(notes.into_iter().map(|n| Row::Note(n.to_owned())));
     }
     if out.is_empty() {
         out.push(Row::Note(EMPTY.into()));
     }
     if let Some(fetched) = usage["fetched"].as_f64() {
         out.push(Row::Gap);
-        out.push(Row::Note(format!("Updated {} ago", until(now, fetched))));
+        out.push(Row::Note(format!("Updated {} ago", age(fetched, now))));
     }
     out
 }
@@ -118,81 +179,83 @@ pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn hides_only_the_requested_provider_usage_rows_in_cached_snapshots() {
-        let usage: Value = serde_json::from_str(include_str!(
+    fn usage_gauge_and_left() {
+        for (used, eighths) in [
+            (0., 0),
+            (1., 1),
+            (9., 7),
+            (10., 8),
+            (24., 19),
+            (36., 29),
+            (47., 38),
+            (68., 54),
+            (90., 72),
+            (100., 80),
+        ] {
+            assert_eq!(
+                gauge_cells(Some(used))
+                    .iter()
+                    .map(|v| u32::from(*v))
+                    .sum::<u32>(),
+                eighths
+            );
+        }
+        assert_eq!(gauge_cells(None), [0; 10]);
+        assert_eq!(gauge_cells(Some(10.625))[1], 0); // 8.5 eighths rounds to eight
+        assert_eq!(gauge_cells(Some(11.875))[1], 2); // 9.5 rounds to ten
+        assert_eq!(gauge_cells(Some(24.0)), [8, 8, 3, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(gauge_cells(Some(36.0)), [8, 8, 8, 5, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(percent_left(Some(24.0)), "76%");
+        assert_eq!(percent_left(Some(100.0)), "0%");
+        assert_eq!(percent_left(Some(0.2)), "99.8%");
+        assert_eq!(percent_left(Some(99.8)), "0.2%");
+        assert_eq!(percent_left(None), "—");
+    }
+    #[test]
+    fn usage_reserve_and_duration() {
+        assert_eq!(reserve_text(Some(8.5)), "+8%");
+        assert_eq!(
+            reserve_text(reserve(Some(41.5), Some(WEEK / 2.0), Some(WEEK), 0.0)),
+            "+8%"
+        );
+        assert_eq!(reserve_text(Some(-8.5)), "-8%");
+        assert_eq!(reserve_text(Some(0.0)), "0%");
+        assert_eq!(reserve_text(Some(8.6)), "+9%");
+        assert_eq!(
+            reserve(Some(10.), Some(302_400.), Some(WEEK), 0.),
+            Some(40.)
+        );
+        assert!(reserve(Some(10.), Some(100.), Some(18_000.), 0.).is_none());
+        assert!(reserve(Some(10.), Some(100.), Some(WEEK - 1.), 0.).is_none());
+        assert!(reserve(Some(10.), Some(100.), None, 0.).is_none());
+        assert!(reserve(None, Some(100.), Some(WEEK), 0.).is_none());
+        assert!(reserve(Some(10.), Some(0.), Some(WEEK), 0.).is_none());
+        assert!(reserve(Some(10.), Some(100.), Some(30. * 86400.), 0.).is_some());
+        assert_eq!(duration(None, 0.), "—");
+        assert_eq!(duration(Some(-1.), 0.), "now");
+        assert_eq!(duration(Some(59.), 0.), "now");
+        assert_eq!(duration(Some(11_400.), 0.), "3h 10m");
+        assert_eq!(duration(Some(187_200.), 0.), "2d 4h");
+    }
+    #[test]
+    fn usage_cached_notes_and_details_are_hidden() {
+        let data: Value = serde_json::from_str(include_str!(
             "../../interface/scenarios/provider-usage.json"
         ))
         .unwrap();
-        let rows = rows(&usage, 1.0);
-        assert!(rows.iter().any(
-            |r| matches!(r, Row::Window { label, .. } if label == "Premium requests (monthly)")
-        ));
-        assert!(rows.iter().any(
-            |r| matches!(r, Row::Window { label, used: Some(10), .. } if label == "Chat (monthly)")
-        ));
-        assert!(!rows.iter().any(|r| matches!(
-            r,
-            Row::Window {
-                used: Some(61 | 73),
-                ..
-            }
-        )));
-        for text in [
+        let text = format!("{:?}", rows(&data, 1.0));
+        for hidden in [
+            "Limit reached",
+            "of credits",
+            "of 300 left",
             "Prepaid credits: $2.50",
-            "AI credits used this period: 10",
-            "Chat: unlimited",
-            "Completions: unlimited",
+            "AI credits used this period",
         ] {
-            assert!(!rows.contains(&Row::Note(text.into())));
+            assert!(!text.contains(hidden), "{text}");
         }
-        for text in [
-            "Other xAI note",
-            "Other Copilot note",
-            "Prepaid credits: $1.00",
-        ] {
-            assert!(rows.contains(&Row::Note(text.into())));
-        }
-    }
-
-    #[test]
-    fn windows_read_as_percent_and_time_left() {
-        let usage = serde_json::json!({"providers": [
-            {"id": "codex", "label": "ChatGPT (Codex)", "plan": "plus", "notes": [], "windows": [
-                {"label": "5-hour", "used_percent": 42.4, "resets_at": 10_800.0 + 600.0}]},
-            {"id": "copilot", "label": "GitHub Copilot", "error": "timed out", "windows": []},
-            {"id": "openai", "label": "OpenAI (API key)", "notes": ["No plan limits; token usage is in the session totals."], "windows": []}]});
-        assert_eq!(
-            rows(&usage, 0.0),
-            vec![
-                Row::Provider {
-                    name: "ChatGPT (Codex)".into(),
-                    plan: "plus".into()
-                },
-                Row::Window {
-                    label: "5-hour".into(),
-                    used: Some(42),
-                    reset: "resets in 3h 10m".into()
-                },
-                Row::Gap,
-                Row::Provider {
-                    name: "GitHub Copilot".into(),
-                    plan: String::new()
-                },
-                Row::Note("Could not read the limits: timed out".into()),
-                Row::Gap,
-                Row::Provider {
-                    name: "OpenAI (API key)".into(),
-                    plan: String::new()
-                },
-                Row::Note("No plan limits; token usage is in the session totals.".into()),
-            ]
-        );
-        assert_eq!(until(90_000.0, 0.0), "1d 1h");
-        assert_eq!(
-            rows(&serde_json::json!({"providers": []}), 0.0),
-            vec![Row::Note(EMPTY.into())]
-        );
+        assert!(text.contains("Other xAI note"));
+        assert!(text.contains("Prepaid credits: $1.00"));
+        assert!(matches!(rows(&data, 1.0)[0], Row::Header));
     }
 }

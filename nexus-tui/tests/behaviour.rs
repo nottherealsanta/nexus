@@ -2697,7 +2697,7 @@ fn draft_tool_switch_stays_visible_through_replanning() {
 }
 
 #[test]
-fn ctrl_u_reads_plan_limits_into_a_bar_modal() {
+fn usage_ctrl_u_reads_plan_limits_into_a_table_modal() {
     let mut app = app();
     app.effects.clear();
     press(&mut app, &["ctrl+u"]);
@@ -2708,10 +2708,13 @@ fn ctrl_u_reads_plan_limits_into_a_bar_modal() {
         .iter()
         .any(|e| matches!(e, Effect::Api(ApiCall::Usage))));
     let usage = serde_json::json!({"providers": [
-        {"id": "codex", "label": "ChatGPT (Codex)", "plan": "plus", "notes": [], "windows": [
-            {"label": "5-hour", "used_percent": 42.0, "resets_at": 1e12},
-            {"label": "weekly", "used_percent": 95.0, "resets_at": null}]},
+        {"id": "codex", "label": "ChatGPT (Codex)", "plan": "plus", "notes": ["Limit reached: blocked"], "windows": [
+            {"label": "5-hour", "used_percent": 100.0, "resets_at": 1e12},
+            {"label": "weekly", "used_percent": 24.0, "resets_at": 302400.0, "period_seconds": 604800}]},
+        {"id": "grok", "label": "xAI", "notes": ["GrokChat: 1% of credits"], "windows": []},
+        {"id": "copilot", "label": "Copilot", "windows": [{"label": "Premium", "used_percent": 9, "detail": "225 of 300 left"}]},
         {"id": "copilot", "label": "GitHub Copilot", "error": "timed out", "windows": []}]});
+    let fixed_rows = nexus_tui::usage::rows(&usage, 0.0);
     app.apply_done(ActionDone {
         call: ApiCall::Usage,
         result: Ok(Done {
@@ -2723,12 +2726,35 @@ fn ctrl_u_reads_plan_limits_into_a_bar_modal() {
         app.ui.overlay.as_ref().map(|o| &o.kind),
         Some(OverlayKind::Usage { .. })
     ));
+    if let Some(OverlayKind::Usage { rows, .. }) = app.ui.overlay.as_mut().map(|o| &mut o.kind) {
+        *rows = fixed_rows;
+    }
     let (_, rows) = draw(&mut app, 120, 36);
     let text = rows.join("\n");
     assert!(text.contains("Provider usage"), "{text}");
     assert!(text.contains("ChatGPT (Codex)"), "{text}");
-    assert!(text.contains(" 42%"), "{text}");
-    assert!(text.contains(" 95%"), "{text}");
+    for expected in [
+        "Window",
+        "Progress",
+        "Left",
+        "Reserve",
+        "Expires",
+        "██████████",
+        "██▃░░░░░░░",
+        "76%",
+        "0%",
+        "+26%",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    for hidden in ["Limit reached", "of credits", "of 300 left"] {
+        assert!(!text.contains(hidden), "{text}");
+    }
+    app.theme.opts.ascii = true;
+    let (_, ascii_rows) = draw(&mut app, 120, 36);
+    let ascii = ascii_rows.join("\n");
+    assert!(ascii.contains("##########"), "{ascii}");
+    assert!(ascii.contains("###-------"), "{ascii}");
     assert!(
         text.contains("Could not read the limits: timed out"),
         "{text}"
@@ -2747,6 +2773,60 @@ fn ctrl_u_reads_plan_limits_into_a_bar_modal() {
         result: Ok(Done::default()),
     });
     assert!(app.ui.overlay.is_none());
+}
+
+#[test]
+fn usage_shared_scenario_renders_table_at_desktop_sizes() {
+    let data: serde_json::Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/provider-usage.json"
+    ))
+    .unwrap();
+    let mut app = app();
+    press(&mut app, &["ctrl+u"]);
+    app.apply_done(ActionDone {
+        call: ApiCall::Usage,
+        result: Ok(Done {
+            usage: Some(data.clone()),
+            ..Done::default()
+        }),
+    });
+    if let Some(OverlayKind::Usage { rows, .. }) = app.ui.overlay.as_mut().map(|o| &mut o.kind) {
+        *rows = nexus_tui::usage::rows(&data, 1.0);
+    } else {
+        panic!("usage overlay missing");
+    }
+    for (w, h) in [(170, 50), (120, 36)] {
+        let (_, rows) = draw(&mut app, w, h);
+        let text = rows.join("\n");
+        for expected in [
+            "Window",
+            "Progress",
+            "Reserve",
+            "Expires",
+            "ChatGPT (Codex)",
+            "██▃░░░░░░░",
+            "76%",
+            "██████████",
+            "0%",
+            "Claude (Agent SDK)",
+            "███▅░░░░░░",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        for hidden in ["Limit reached", "of credits", "of 300 left"] {
+            assert!(!text.contains(hidden), "{text}");
+        }
+        press(&mut app, &["pagedown", "pagedown", "pagedown", "pagedown"]);
+        let (_, rows) = draw(&mut app, w, h);
+        let text = rows.join("\n");
+        assert!(
+            text.contains("Window")
+                && text.contains("Unavailable provider")
+                && text.contains("Updated"),
+            "{text}"
+        );
+        press(&mut app, &["pageup", "pageup", "pageup", "pageup"]);
+    }
 }
 
 #[test]

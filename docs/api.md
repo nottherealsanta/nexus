@@ -1515,3 +1515,6 @@ window is `{label, used_percent, resets_at, period_seconds, kind, detail}`. Prov
 usage modal immediately, show the snapshot age, and offer `r` to refresh; closing it does not wait for the response.
 The clients hide xAI prepaid credits and Copilot chat, completions and AI-credit details, including in older saved
 snapshots; the API retains those details.
+The planned usage table shows a ten-cell usage gauge, percent left, reserve and expiry. Window `detail` remains
+available to other API consumers but is not shown in the table. Reserve is elapsed period percentage minus used
+percentage, calculated by the client only for periods of at least seven days with a future reset and known usage.

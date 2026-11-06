@@ -28,11 +28,13 @@ def test_plan_windows_parse_from_each_provider():
     codex = parse_codex({
         "plan_type": "plus",
         "rate_limit": {
+            "limit_reached": True,
             "primary_window": {"used_percent": 42, "reset_at": 1_700_000_000, "limit_window_seconds": 18_000},
             "secondary_window": {"used_percent": 80, "reset_at": 1_700_100_000, "limit_window_seconds": 604_800},
         },
     })
     assert codex["plan"] == "Plus"
+    assert codex["notes"] == []
     assert [w["label"] for w in codex["windows"]] == ["5-hour", "Weekly"]
     assert codex["windows"][0]["used_percent"] == 42
 
@@ -55,6 +57,7 @@ def test_plan_windows_parse_from_each_provider():
         "creditUsagePercent": 12.5,
         "currentPeriod": {"start": 1_700_000_000, "end": 1_700_604_800},
         "prepaidBalance": {"val": 250},
+        "productUsage": [{"product": "GrokChat", "usagePercent": 1}],
     }}, plan="SuperGrok", now=1_700_100_000)
     assert grok["plan"] == "SuperGrok"
     assert grok["windows"][0]["label"] == "Weekly"

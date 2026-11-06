@@ -325,6 +325,44 @@ export const controlGlyphs = {
     "ascii": "m"
   }
 } as const;
+export const usageGlyphs = {
+  "full": {
+    "unicode": "\u2588",
+    "ascii": "#"
+  },
+  "empty": {
+    "unicode": "\u2591",
+    "ascii": "-"
+  },
+  "eighth_1": {
+    "unicode": "\u2581",
+    "ascii": "#"
+  },
+  "eighth_2": {
+    "unicode": "\u2582",
+    "ascii": "#"
+  },
+  "eighth_3": {
+    "unicode": "\u2583",
+    "ascii": "#"
+  },
+  "eighth_4": {
+    "unicode": "\u2584",
+    "ascii": "#"
+  },
+  "eighth_5": {
+    "unicode": "\u2585",
+    "ascii": "#"
+  },
+  "eighth_6": {
+    "unicode": "\u2586",
+    "ascii": "#"
+  },
+  "eighth_7": {
+    "unicode": "\u2587",
+    "ascii": "#"
+  }
+} as const;
 export const spinner = ["\u28fe", "\u28fd", "\u28fb", "\u28bf", "\u287f", "\u28df", "\u28ef", "\u28f7"];
 export const managerColors = {"light": {"listening": "#23687f", "thinking": "#6743ae", "speaking": "#a84e16", "idle": "#7f868d"}, "dark": {"listening": "#69b7d5", "thinking": "#a78bfa", "speaking": "#e8a46e", "idle": "#6f757c"}} as const;
 export const shimmerMotion = {"cycle_frames": 12, "frame_ms": 125, "reach": 3.0, "crest": 0.5} as const;

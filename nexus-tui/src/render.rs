@@ -8147,7 +8147,7 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
         OverlayKind::AlertDetail { id, top, .. } => {
             draw_alert_detail(cx, buf, area, *id, *top, hits)
         }
-        OverlayKind::Usage { rows } => draw_usage(cx, buf, area, rows, hits),
+        OverlayKind::Usage { rows, top } => draw_usage(cx, buf, area, rows, *top, hits),
         OverlayKind::Resources { top } => draw_resources(cx, buf, area, *top, hits),
         OverlayKind::Projects(o) => draw_projects_overview(cx, buf, area, o, hits),
     }
@@ -8299,31 +8299,63 @@ fn draw_projects_overview(
     hint_row(cx, buf, &m, &hints);
 }
 
-/// `/usage`: a heading per connected provider, then one row per limit window as
-/// `label  ━━━━────  42%  resets in 3h 10m`. Only the filled part of the bar takes the tone.
+/// `/usage`: provider groups and aligned limit-window table.
+pub(crate) fn usage_scroll_max(area: Rect, rows: &[crate::usage::Row]) -> usize {
+    let b = modal_box(area, MODAL_LARGE, (rows.len() + 6).clamp(9, 30) as u16);
+    let body = Modal::of(b).body.height as usize;
+    let header = usize::from(matches!(rows.first(), Some(crate::usage::Row::Header)));
+    rows.len()
+        .saturating_sub(header)
+        .saturating_sub(body.saturating_sub(header))
+}
+
 fn draw_usage(
     cx: &Cx,
     buf: &mut Buffer,
     area: Rect,
     rows: &[crate::usage::Row],
+    top: usize,
     hits: &mut HitMap,
 ) {
     use crate::usage::Row;
     let b = modal_box(area, MODAL_LARGE, (rows.len() + 6).clamp(9, 30) as u16);
     let m = modal(cx, buf, area, b, "Provider usage", hits);
-    let (filled, track) = if cx.t.opts.ascii {
-        ("#", "-")
-    } else {
-        ("━", "─")
-    };
-    let label_w = m.w.saturating_sub(34).clamp(8, 22);
-    let bar_w = (m.w as usize)
-        .saturating_sub(label_w as usize + 26)
-        .clamp(8, 24);
-    for (i, row) in rows.iter().take(m.body.height as usize).enumerate() {
+    let label_w = m.w.saturating_sub(38);
+    let bx = m.x + label_w;
+    let lx = bx + 12;
+    let rx = bx + 20;
+    let ex = bx + 29;
+    let header = usize::from(matches!(rows.first(), Some(Row::Header)));
+    let top = top.min(usage_scroll_max(area, rows));
+    for (i, row) in rows
+        .iter()
+        .take(header)
+        .chain(rows.iter().skip(header + top))
+        .take(m.body.height as usize)
+        .enumerate()
+    {
         let y = m.body.y + i as u16;
         match row {
             Row::Gap => {}
+            Row::Header => {
+                for (x, text, width) in [
+                    (m.x, "Window", label_w),
+                    (bx, "Progress", 10),
+                    (lx, "  Left", 6),
+                    (rx, "Reserve", 7),
+                    (ex, "Expires", 7),
+                ] {
+                    let available = (m.x + m.w).saturating_sub(x).min(width);
+                    put(
+                        buf,
+                        x,
+                        y,
+                        &truncate(text, available as usize, cx.ell()),
+                        cx.st(MUTED, RAISED),
+                        available,
+                    );
+                }
+            }
             Row::Provider { name, plan } => {
                 let x = put(
                     buf,
@@ -8354,64 +8386,89 @@ fn draw_usage(
                     m.w,
                 );
             }
-            Row::Window { label, used, reset } => {
+            Row::Window {
+                label,
+                used,
+                cells,
+                left,
+                reserve,
+                expires,
+                ..
+            } => {
                 let end = m.x + m.w;
-                let x = put(
+                let width = label_w.saturating_sub(2);
+                put(
                     buf,
                     m.x + 2,
                     y,
-                    &truncate(label, label_w as usize, cx.ell()),
-                    cx.st(SECONDARY, RAISED),
-                    label_w,
-                );
-                let _ = x;
-                let bx = m.x + label_w + 4;
-                let n = used.map_or(0, |u| (usize::from(u) * bar_w).div_ceil(100));
-                let tone = match used {
-                    Some(90..) => "status.error",
-                    Some(70..) => "status.warning",
-                    Some(_) => "status.success",
-                    None => MUTED,
-                };
-                let bar = format!("{}{}", filled.repeat(n), track.repeat(bar_w - n));
-                put(
-                    buf,
-                    bx,
-                    y,
-                    &track.repeat(bar_w),
-                    cx.st(MUTED, RAISED),
-                    bar_w as u16,
-                );
-                put(
-                    buf,
-                    bx,
-                    y,
-                    &bar[..bar.char_indices().nth(n).map_or(bar.len(), |(i, _)| i)],
-                    cx.st(tone, RAISED),
-                    n as u16,
-                );
-                let tx = bx + bar_w as u16 + 2;
-                let pct = used.map_or("  ?".to_owned(), |u| format!("{u:>3}%"));
-                let x = put(
-                    buf,
-                    tx,
-                    y,
-                    &pct,
+                    &truncate(label, width as usize, cx.ell()),
                     cx.st(PRIMARY, RAISED),
-                    end.saturating_sub(tx),
+                    width,
                 );
+                let tone = if used.is_some_and(|u| u >= 90) {
+                    "status.error"
+                } else if used.is_some_and(|u| u >= 70) {
+                    "status.warning"
+                } else {
+                    "status.success"
+                };
+                for (i, cell) in cells.iter().enumerate() {
+                    let x = bx + i as u16;
+                    if x < end {
+                        put(
+                            buf,
+                            x,
+                            y,
+                            cx.t.usage_glyph(*cell),
+                            cx.st(if *cell == 0 { MUTED } else { tone }, RAISED),
+                            1,
+                        );
+                    }
+                }
+                let reserve_tone = if reserve.starts_with('+') {
+                    "status.success"
+                } else if reserve.starts_with('-') {
+                    "status.warning"
+                } else {
+                    MUTED
+                };
+                for (x, text, width, tone) in [
+                    (
+                        lx,
+                        format!("{left:>6}"),
+                        6,
+                        if left == "—" { MUTED } else { PRIMARY },
+                    ),
+                    (rx, format!("{reserve:>7}"), 7, reserve_tone),
+                ] {
+                    let available = end.saturating_sub(x).min(width);
+                    put(
+                        buf,
+                        x,
+                        y,
+                        &truncate(&text, available as usize, cx.ell()),
+                        cx.st(tone, RAISED),
+                        available,
+                    );
+                }
+                let available = end.saturating_sub(ex);
                 put(
                     buf,
-                    x + 2,
+                    ex,
                     y,
-                    &truncate(reset, end.saturating_sub(x + 2) as usize, cx.ell()),
-                    cx.st(MUTED, RAISED),
-                    end.saturating_sub(x + 2),
+                    &truncate(expires, available as usize, cx.ell()),
+                    cx.st(if expires == "—" { MUTED } else { PRIMARY }, RAISED),
+                    available,
                 );
             }
         }
     }
-    hint_row(cx, buf, &m, &[("r", "refresh"), ("esc", "close")]);
+    hint_row(
+        cx,
+        buf,
+        &m,
+        &[("r", "refresh"), (updown(cx), "scroll"), ("esc", "close")],
+    );
     hits.add(
         Rect::new(m.x, m.hint_y, m.w.min(9), 1),
         Target::UsageRefresh,

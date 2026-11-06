@@ -331,9 +331,11 @@ palette's Load older turns) reads the page before the oldest. A running session 
 once, `a` allow for the session, `n` deny, `d` deny with the composer's text as the note.
 Choosing a model or agent for an existing session first asks `…/switch-cost` and confirms when
 the cache would be lost. `/usage` shows provider usage (`GET /api/usage`): every connected provider, with plan
-windows where it reports them. The modal hides xAI prepaid credits and Copilot chat, completions and AI-credit
-details; other providers' corresponding rows are unchanged. Core stores the latest snapshot and refreshes it every 10 minutes by default;
-Settings → Context changes the interval, and `r` refreshes it on demand. Esc closes the modal without waiting. A tool result's images
+windows where it reports them, in a table of ten-cell used gauge, percent left, reserve and expiry. Reserve is
+available for windows of at least seven days with a future reset. The modal hides Codex limit-reached and xAI
+per-product notes, window details, xAI prepaid credits and Copilot chat, completions and AI-credit details.
+Core stores the latest snapshot and refreshes it every 10 minutes by default;
+Settings → Context changes the interval, and `r` refreshes it on demand. Use ↑/↓ or Page Up/Down to scroll the table; Esc closes the modal without waiting. A tool result's images
 are named under its output (`▣ image name · mime · artifact id`); a terminal cannot show them.
 
 Responsive layout (D17, `layout::Breakpoint`): from 160 columns both sidebars are docked at 34
