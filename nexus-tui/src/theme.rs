@@ -169,6 +169,7 @@ pub struct Glyphs {
     pub attention: BTreeMap<String, AttentionGlyph>,
     pub structure: BTreeMap<String, Pair>,
     pub control: BTreeMap<String, Pair>,
+    pub usage: BTreeMap<String, Pair>,
 }
 
 impl ThemeData {
@@ -514,6 +515,21 @@ impl Theme {
 
     pub fn control(&self, name: &str) -> &str {
         self.pick(&self.data.glyphs.control[name])
+    }
+
+    pub fn usage_glyph(&self, eighths: u8) -> &str {
+        let name = match eighths {
+            0 => "empty",
+            1 => "eighth_1",
+            2 => "eighth_2",
+            3 => "eighth_3",
+            4 => "eighth_4",
+            5 => "eighth_5",
+            6 => "eighth_6",
+            7 => "eighth_7",
+            _ => "full",
+        };
+        self.pick(&self.data.glyphs.usage[name])
     }
 
     /// Spinner frame; the static running glyph under reduced motion.

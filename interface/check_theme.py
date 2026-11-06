@@ -171,10 +171,14 @@ def main(path, overlay=None):
     st = data["glyphs"]["status"]
     if set(st) != set(STATUSES):
         errors.append(f"glyphs.status must be exactly {STATUSES}")
-    for table in ("status", "fold", "sidebar", "attention", "structure", "verb"):
+    if set(data["glyphs"]["usage"]) != {"full", "empty", *(f"eighth_{i}" for i in range(1, 8))}:
+        errors.append("glyphs.usage must contain full, empty and eighth_1 through eighth_7")
+    for table in ("status", "fold", "sidebar", "attention", "structure", "verb", "usage"):
         for name, g in data["glyphs"][table].items():
             for mode in ("unicode", "ascii"):
                 s = g[mode]
+                if table == "usage" and len(s) != 1:
+                    errors.append(f"glyph usage.{name}.{mode} must be one cell")
                 if any(unicodedata.east_asian_width(ch) in "WF" or ord(ch) > 0x1F000 for ch in s):
                     errors.append(f"glyph {table}.{name}.{mode} is wide or emoji")
                 if mode == "ascii" and not s.isascii():

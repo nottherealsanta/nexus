@@ -499,6 +499,17 @@ waiting     = { unicode = "◆", ascii = "?", label = "waiting",     token = "in
 interrupted = { unicode = "◼", ascii = "!", label = "interrupted", token = "status.warning" }
 cancelled   = { unicode = "⊖", ascii = "o", label = "cancelled",   token = "text.muted" }
 
+[glyphs.usage]
+full = { unicode = "█", ascii = "#" }
+empty = { unicode = "░", ascii = "-" }
+eighth_1 = { unicode = "▁", ascii = "#" }
+eighth_2 = { unicode = "▂", ascii = "#" }
+eighth_3 = { unicode = "▃", ascii = "#" }
+eighth_4 = { unicode = "▄", ascii = "#" }
+eighth_5 = { unicode = "▅", ascii = "#" }
+eighth_6 = { unicode = "▆", ascii = "#" }
+eighth_7 = { unicode = "▇", ascii = "#" }
+
 [glyphs.spinner]
 unicode = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
 ascii = ["|", "/", "-", "\\"]

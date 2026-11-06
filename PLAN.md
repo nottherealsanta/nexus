@@ -306,7 +306,7 @@ The areas, at a glance:
 The user's review of the Provider usage modal (screenshot, 11-06) asks for a table instead of the current
 label + bar + prose rows: a ten-block progress gauge, then the percentage left, the reserve (the old Nexus
 pace calculation) and the expiry time. The words marked in red go away. Both clients land this in the same
-change; no desktop client-specific difference is expected. **Not started.** Carried over whole from the previous plan's section 16 (user asked to keep it, 2026-11-06).
+change; no desktop client-specific difference is expected. **Core and TUI implemented; NSH and cross-client verification pending.** Carried over whole from the previous plan's section 16 (user asked to keep it, 2026-11-06).
 
 ### 8.1 The table and its cells (both clients)
 
@@ -402,23 +402,23 @@ r refresh · esc close
 
 ### 8.4 TUI (`nexus-tui`)
 
-- [ ] `src/usage.rs`: extend `Row` with a `Header` row and make `Window` carry the label, the used value,
+- [x] `src/usage.rs`: extend `Row` with a `Header` row and make `Window` carry the label, the used value,
   the formatted Left, Reserve and Expires strings (computed from `now`). Parse `period_seconds` and
   `kind`. Drop the `detail` join from the reset text. Add pure helpers for `gauge_cells(used) -> [u8;
   10]`, `percent_left`, `reserve`, `reserve_text` and `duration` with unit tests at 0, 1, 9, 10, 24, 36,
   47, 68, 90 and 100 percent; five-hour vs weekly/monthly; a missing/old period; a reset in the past;
   unknown usage; and the half-to-even tie (8.5 → 8).
-- [ ] `src/render.rs::draw_usage`: draw the header and the five fixed columns, map `gauge_cells` through
+- [x] `src/render.rs::draw_usage`: draw the header and the five fixed columns, map `gauge_cells` through
   the theme glyphs, colour only the filled cells, right-align Left/Reserve, left-align Expires, and
   truncate the label and Expires. Keep `MODAL_LARGE`, the height clamp and the existing `r`/`esc` hits.
-- [ ] ASCII mode: ten `#`/`-` cells; a partially filled cell counts as `#` (rounded up). Colour rules are
+- [x] ASCII mode: ten `#`/`-` cells; a partially filled cell counts as `#` (rounded up). Colour rules are
   unchanged.
-- [ ] `interface/theme.toml`: add `[glyphs.usage]` with `full` (`█`/`#`), `empty` (`░`/`-`) and
+- [x] `interface/theme.toml`: add `[glyphs.usage]` with `full` (`█`/`#`), `empty` (`░`/`-`) and
   `eighth_1`…`eighth_7` (`▁`…`▇`/`#`); add `usage` to the glyph checks in `interface/check_theme.py`,
   the `Glyphs` struct/accessor in `src/theme.rs`, and the generator in `nexus-nsh/scripts/gen.py`.
-- [ ] `tests/behaviour.rs` (and the usage unit tests): assert the header, the gauge strings, `76%`/`0%`
+- [x] `tests/behaviour.rs` (and the usage unit tests): assert the header, the gauge strings, `76%`/`0%`
   Left, reserve cells and the hidden `Limit reached` / `of credits` / `of 300 left` text.
-- [ ] `nexus-tui/README.md`: update the K11 bullet to the table.
+- [x] `nexus-tui/README.md`: update the K11 bullet to the table.
 
 ### 8.5 NSH (`nexus-nsh`)
 
@@ -438,7 +438,7 @@ r refresh · esc close
 
 ### 8.6 Shared scenario and screenshots
 
-- [ ] Extend `interface/scenarios/provider-usage.json` with the values above: Codex 100%/24%, Claude
+- [x] Extend `interface/scenarios/provider-usage.json` with the values above: Codex 100%/24%, Claude
   36%/68%, xAI 1%, Copilot 9%, OpenCode 0%/33%/47%, plus the notes that must disappear (`Limit
   reached: …`, `GrokChat: 1% of credits`), a provider with no plan limits and one with an error.
   Keep time-dependent assertions in the pure helper tests; the scenario test asserts labels, Left
@@ -454,9 +454,9 @@ r refresh · esc close
 ### 8.7 Checks when it lands
 
 - [x] `cd nexus-core && uv run pytest tests/test_provider_usage.py -q && uv run ruff check nexus/provider_usage.py tests/test_provider_usage.py`
-- [ ] `cd nexus-tui && cargo test usage && cargo test --test behaviour usage && cargo fmt --check && cargo clippy --all-targets -- -D warnings`
+- [x] `cd nexus-tui && cargo test usage && cargo test --test behaviour usage && cargo fmt --check && cargo clippy --all-targets -- -D warnings`
 - [ ] `cd nexus-nsh && npm run gen && nsh test usage.test.tsx --target web` (plus the pure helper test and `nsh check`; record the known `app.clock` / `Button.onFocus` errors if they remain).
-- [ ] `python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml && python3 interface/check_manifest.py`
+- [x] `python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml && python3 interface/check_manifest.py`
 - [ ] Update `docs/porting-ledger.md` on landing: "Provider usage showed a continuous bar, used percent and prose notes | Both clients show a five-column table: ten-block gauge filled bottom-up, percent left, reserve (old 7-day pace formula), expiry; the Codex limit-reached note, xAI per-product credit notes and per-window detail text are gone (2026-11-06) | User request". Record any screenshot-only difference; none is expected on desktop.
 - [ ] Tick this section, move its one-line record to Landed and remove the status-table row's "planned" wording.
 
