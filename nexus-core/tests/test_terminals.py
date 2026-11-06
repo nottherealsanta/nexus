@@ -1,6 +1,8 @@
 import asyncio
 import base64
 import os
+import shlex
+import sys
 
 import pytest
 
@@ -59,3 +61,28 @@ def test_screen_split_utf8_and_alt_screen():
     assert "界" in screen.display[0]
     stream.feed(b"\x1b[?1049l")
     assert "marker" in screen.display[0]
+
+
+async def test_real_program_alt_screen_and_split_utf8(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    program = tmp_path / "alt.py"
+    program.write_text(
+        "import os,time\n"
+        "os.write(1,b'\\x1b[?1049h')\n"
+        "os.write(1,b'\\xe7'); time.sleep(.2); os.write(1,b'\\x95\\x8c')\n"
+        "os.read(0,10)\n"
+        "os.write(1,b'\\x1b[?1049l')\n"
+    )
+    service = TerminalService()
+    term = service.create(project_id="p", workspace=str(tmp_path), creator="one", session_id=None, rows=24, cols=80)
+    aid = term.attach("one")
+    term.attachments[aid].connected = True
+    term.control(aid, "acquire")
+    try:
+        term.input(aid, 1, f"{shlex.quote(sys.executable)} {shlex.quote(str(program))}\n".encode())
+        await wait_for(lambda: term.screen._normal is not None and any("界" in row for row in term.screen.display))
+        term.input(aid, 2, b"\n")
+        await wait_for(lambda: term.screen._normal is None)
+    finally:
+        await service.shutdown()

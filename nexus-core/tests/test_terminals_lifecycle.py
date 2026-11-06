@@ -3,6 +3,7 @@ import base64
 import os
 import signal
 import sqlite3
+import sys
 
 import pytest
 
@@ -83,3 +84,51 @@ def test_restart_marks_running_metadata_ended():
     recovered = TerminalService(db).metadata("t")
     assert recovered["status"] == "ended"
     assert recovered["reason"] == "core_restart"
+
+
+async def test_core_death_hangs_up_foreground_shell(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    script = """
+import asyncio, os, sys
+from nexus.terminals import TerminalService
+async def main():
+    t = TerminalService().create(project_id='p', workspace=sys.argv[1], creator='c', session_id=None, rows=24, cols=80)
+    while True:
+        try:
+            if os.tcgetpgrp(t.fd) == t.pid:
+                break
+        except OSError:
+            pass
+        await asyncio.sleep(.01)
+    print(t.pid, flush=True)
+    await asyncio.Event().wait()
+asyncio.run(main())
+"""
+    core = await asyncio.create_subprocess_exec(sys.executable, "-c", script, str(tmp_path),
+                                                stdout=asyncio.subprocess.PIPE)
+    shell_pid = 0
+    try:
+        assert core.stdout is not None
+        shell_pid = int(await asyncio.wait_for(core.stdout.readline(), 5))
+        core.kill()
+        await core.wait()
+
+        def shell_gone():
+            try:
+                os.kill(shell_pid, 0)
+            except ProcessLookupError:
+                return True
+            return False
+
+        await wait_until(shell_gone)
+        shell_pid = 0
+    finally:
+        if core.returncode is None:
+            core.kill()
+            await core.wait()
+        if shell_pid:
+            try:
+                os.killpg(shell_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
