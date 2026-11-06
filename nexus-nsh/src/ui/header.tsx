@@ -11,6 +11,7 @@ import { ManagerHeaderIndicator, managerHeaderIndicatorVisible } from "./manager
 import { call } from "../core/manager";
 import { coreEditing } from "./connect";
 import { currentAlerts } from "./alerts";
+import { stripLayout } from "../strip-layout";
 import { rightSidebarWidth, textCellPoints, workspaceTabCells } from "./geometry";
 
 function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
@@ -148,13 +149,22 @@ export function SubagentStrip() {
     const above = new Set(ancestors().map((s) => s.id));
     return subagentsOf(r.id).filter((s) => !above.has(s.id));
   };
+  // Terminal-column layout, as the TUI: one cell width, shrunk and thinned to the strip's room.
+  const layout = () => {
+    m();
+    const unit = textCellPoints();
+    const room = Math.floor((Math.min(width(), 760) - 16) / unit);
+    return stripLayout({ ancestors: ancestors(), children: children(), viewed: session()?.id ?? "", room });
+  };
+  const stripTab = () => layout().cell * textCellPoints();
   return (
     <If when={!!parent()}>
       <View class="w-full bg-background" testID="subagent-strip" role="toolbar" accessibilityLabel="Subagent navigation">
         <View class={`w-full max-w-[760px] mx-auto flex-row items-center gap-1.5 px-2 ${isNarrow() ? "min-h-12" : "min-h-8"} min-w-0`}>
-          <Scroll horizontal scrollbar={false} class="flex-1 min-w-0">
+          <View class="flex-1 min-w-0 overflow-hidden">
             <View class="flex-row items-center gap-1">
-            <Each of={ancestors()} key={(ancestor) => ancestor.id}>
+            <If when={layout().droppedLeft}><Text class={`shrink-0 ${TS.base} text-muted-foreground`} accessibilityLabel="Earlier sessions">…</Text></If>
+            <Each of={layout().ancestors} key={(ancestor) => ancestor.id}>
               {(ancestor) => {
                 const isParent = () => ancestor().id === parent()?.id;
                 const isRoot = () => ancestor().id === root()?.id;
@@ -163,7 +173,7 @@ export function SubagentStrip() {
                     onPress={() => void selectSession(ancestor().id)}
                     testID={isParent() ? "subagent-back" : isRoot() ? "subagent-root" : `subagent-crumb-${ancestor().id}`}
                     accessibilityLabel={isParent() ? `Back to ${ancestor().title || "parent session"}` : `Open ${isRoot() ? "root" : "ancestor"} session ${ancestor().title || "Untitled"}`}
-                    style={{ width: tabWidth() }} class={`${tabBox()} gap-1.5 px-2.5 text-muted-foreground hover:bg-accent hover:text-foreground ${FOCUS}`}
+                    style={{ width: stripTab() }} class={`${tabBox()} gap-1.5 px-2.5 text-muted-foreground hover:bg-accent hover:text-foreground ${FOCUS}`}
                   >
                     <Text testID={isRoot() ? "subagent-root-title" : undefined} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base}`}>{ancestor().title || "Untitled"}</Text>
                   </Button>
@@ -171,7 +181,7 @@ export function SubagentStrip() {
               }}
             </Each>
             <View class="mx-0.5 h-4 w-px shrink-0 bg-border" accessible={false} />
-            <Each of={children()} key={(child) => child.id}>
+            <Each of={layout().children} key={(child) => child.id}>
               {(child) => {
                 const state = () => childState(child().id);
                 const open = () => session()?.id === child().id;
@@ -180,22 +190,19 @@ export function SubagentStrip() {
                     onPress={() => void selectSession(child().id)} selected={open()}
                     testID={`subagent-${child().id}`}
                     accessibilityLabel={`${capitalize(child().agent)} ${child().title || "Untitled"}, ${state().label}${open() ? ", open" : ""}`}
-                    style={{ width: tabWidth() }} class={`${tabBox()} gap-1.5 px-2.5 ${open() ? "bg-background" : "hover:bg-accent"} ${FOCUS}`}
+                    style={{ width: stripTab() }} class={`${tabBox()} gap-1.5 px-2.5 ${open() ? "bg-background" : "hover:bg-accent"} ${FOCUS}`}
                   >
                     <If when={state().spin} else={<Text class={`shrink-0 ${TS.base} ${state().tone}`} accessibilityLabel={state().label}>{state().glyph}</Text>}>
                       <Spinner class={`shrink-0 ${TS.base} ${state().tone}`} label={state().label} />
                     </If>
                     <Text class={`shrink-0 ${TS.base} ${agentColor(child().agent)}`}>{capitalize(child().agent)}</Text>
                     <Text testID={open() ? `subagent-current-${child().id}` : undefined} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base} ${open() ? "font-semibold text-foreground" : "text-foreground-secondary"}`}>{child().title || "Untitled"}</Text>
-                    <If when={!isNarrow()}>
-                      <Text class={`shrink-0 ${TS.base} text-muted-foreground tabular-nums`}>{state().label}</Text>
-                    </If>
                   </Button>
                 );
               }}
             </Each>
             </View>
-          </Scroll>
+          </View>
         </View>
       </View>
     </If>

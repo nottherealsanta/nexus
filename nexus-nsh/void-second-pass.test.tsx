@@ -68,6 +68,8 @@ describe("Void second pass", () => {
     const busy = [first, second, child].map((s) => (s.id === "ses_1" ? { ...s, status: "busy" } : s));
     const app = await view(snapshot({ sessions: busy, approvals: [approval] }, busy));
     await app.waitFor("text:Refactor loader");
+    // The launch splash fades over the first frame and swallows presses until it is gone.
+    for (let i = 0; i < 100 && app.shows("id:splash"); i++) await new Promise((r) => setTimeout(r, 100));
     await app.press("id:session-ses_1");
     await app.waitFor("id:waiting-card");
     expect(app.shows("id:working-row")).toBe(false);

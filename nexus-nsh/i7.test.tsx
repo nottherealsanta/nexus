@@ -74,7 +74,7 @@ describe("modal recipe (I7)", () => {
     await app.waitFor("id:cmd-model.change");
     await app.press("id:cmd-model.change");
     await app.waitFor("id:picker");
-    expect(app.texts().includes("↑↓ move · enter choose · esc close")).toBe(true);
+    expect(app.texts().includes("↑↓ move · tab favorite · enter choose · esc close")).toBe(true); // the model picker adds favorites, as in the TUI
     await app.waitFor("id:pick-0");
   });
 

@@ -135,7 +135,7 @@ interrupted one adds `/continue`. A turn with no usage says `usage unknown`. A r
 once the turn is done, and the live thought stays inside the active activity
 group. Settled history is rebuilt only on structural changes; text and reasoning
 deltas update a coalesced live tail, and wire-only events do not redraw, so a long
-session does not re-walk every message and tool detail per token. A session opens at its latest message the first time and at its saved offset afterwards; it follows new content until the reader scrolls up (any upward scroll leaves follow at once, so streamed content never pulls the reader back), which shows the jump pill, and jumping or scrolling back to the end follows again. Height changes above the viewport keep the first visible row anchored. Durations read `0.4s`, `4.2s`, `1m 05s` and
+session does not re-walk every message and tool detail per token. A session's first message is pinned to the top once it settles (as in the TUI): the list's bottom padding is a spacer (`pinSpacer`, view height less what the message and reply take) and the offset is the message row's top, re-applied as rows measure; the pin ends when the reader moves the view, and only the first send pins. A session opens at its latest message the first time and at its saved offset afterwards; it follows new content until the reader scrolls up (any upward scroll leaves follow at once, so streamed content never pulls the reader back), which shows the jump pill, and jumping or scrolling back to the end follows again. Height changes above the viewport keep the first visible row anchored. Durations read `0.4s`, `4.2s`, `1m 05s` and
 `1h 02m`. The finish time is omitted when unavailable or while the turn is
 running. Activity groups are 28 px rows with the TUI's content: counts in first-seen
 order (edits count the files they touch), `+N −M` beside the summary from
@@ -223,7 +223,7 @@ with a hover fill. Their × shows on hover (and on the viewed tab). Tabs are roo
 sessions only: opening a subagent keeps its root's tab in view. Under the header
 a subagent strip shows the path above the viewed child as parent tabs (the last
 is the back control), a divider rail, then the root's other sessions as equal
-tabs with their state glyph and agent, with the viewed child selected. The run status sits at the
+tabs with their state glyph and agent (no state word), with the viewed child selected. As in the TUI, every strip tab has one width of 10 to 30 terminal columns (`src/strip-layout.ts`, mapped to points by the text cell size); when the row is too full, the oldest ancestors drop from the left with a `…` marker, then the children farthest from the viewed one, and last the cells narrow. The strip never scrolls. The run status sits at the
 centre's right edge; the bell and right toggle are at the far right. The context timeline
 uses the full available centre width with fixed 8 px horizontal padding at every
 viewport. Every card shares the column's left edge, and assistant prose plus
@@ -408,7 +408,8 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/core/view.ts` | Client view reporting: the current project, session and panel ids (`files` or `file`; NSH has no Git diff panel), keyed by the event stream that issued them, re-sent after every reconnect and retried on a capped backoff. |
 | `src/store.ts` | Reactive view state: connection, model revision, drafts, overlays, alerts, prefs, the Files tree's directory listings and expanded set, and the view sent to Core. |
 | `src/file-tree.ts` | Pure flattening of the Files tree (depth-first through expanded folders, `.git` skipped), shared with tests. |
-| `src/scroll-follow.ts` | Pure timeline follow decision: an upward scroll leaves follow, returning near the end resumes it. |
+| `src/strip-layout.ts` | Pure subagent strip layout, the TUI's: one 10..30 column cell, thinned and shrunk to fit. |
+| `src/scroll-follow.ts` | Pure timeline follow decision (and the first-send pin's spacer and release): an upward scroll leaves follow, returning near the end resumes it. |
 | `src/commands.ts` | The command registry from the manifest: availability terms, handlers, direct keys, the three-second Ctrl+X leader and Esc chain. |
 | `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, code fences, thoughts, groups and members, children, diagnostics (live, or from summaries), the floor row, footers, and the sticky user bar. |
 | `src/ui/diff.tsx` | Diffs of edit, write and patch details: split at window width 1100 px and up, unified below, built from the tool detail lines (so the detail cap still applies). The empty side of an add or remove is a flat fill: NSH views cannot draw the hatch. |

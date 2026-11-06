@@ -725,12 +725,22 @@ pub struct PendingFirstPrompt {
     pub choices: Draft,
 }
 
+/// The first-send pin: the session, and the scroll it applied once drawn (a different scroll means the
+/// reader moved, which ends the pin).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstPin {
+    pub session: String,
+    pub applied: Option<Scroll>,
+}
+
 pub struct Ui {
     /// Sessions opened as header tabs, in the order they were opened.
     pub tabs: Vec<String>,
     pub detail: crate::ui::Detail,
     pub draft: Draft,
     pub first_prompts: HashMap<String, PendingFirstPrompt>,
+    /// A session's first message is pinned to the top of the timeline until the reader scrolls.
+    pub first_pin: Option<FirstPin>,
     pub completion: CompletionState,
     pub focus: Focus,
     pub left_open: bool,
@@ -1013,6 +1023,7 @@ impl App {
                 detail: crate::ui::Detail::default(),
                 draft: Draft::default(),
                 first_prompts: HashMap::new(),
+                first_pin: None,
                 focus: Focus::Composer,
                 left_open: true,
                 last_project_session: HashMap::new(),
@@ -6630,6 +6641,23 @@ impl App {
             .then_some(pending)
     }
 
+    /// The line a pinned first message starts at, while its pin holds.
+    pub fn first_pin_top(&self, blocks: &[crate::timeline::Block]) -> Option<usize> {
+        let pin = self.ui.first_pin.as_ref()?;
+        if self.viewed_id() != Some(pin.session.as_str()) {
+            return None;
+        }
+        blocks
+            .iter()
+            .find(|block| {
+                matches!(
+                    block.kind,
+                    crate::timeline::BlockKind::User | crate::timeline::BlockKind::Turn
+                )
+            })
+            .map(|block| block.start)
+    }
+
     fn first_prompt_confirmed(&self, pending: &PendingFirstPrompt) -> bool {
         self.messages().iter().any(|m| m.role == "user")
             && (pending.history_loaded
@@ -6652,6 +6680,12 @@ impl App {
             return;
         }
         let pending = self.ui.first_prompts.remove(&project).unwrap();
+        if let Some(session) = self.viewed_id().map(str::to_owned) {
+            self.ui.first_pin = Some(FirstPin {
+                session,
+                applied: None,
+            });
+        }
         if self.ui.draft == pending.choices {
             self.ui.draft = Draft::default();
         }

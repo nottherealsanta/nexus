@@ -2,6 +2,7 @@
 // a viewed child keeps its root's tab, and the subagent strip goes back to the parent and
 // selects children with their own running, waiting or completed state.
 import { describe, expect, open, test } from "nsh/test";
+import { stripLayout } from "./src/strip-layout";
 
 const parent = {
   id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Parent", model: "scripted/m",
@@ -92,7 +93,9 @@ describe("child-session navigation parity", () => {
     expect(app.shows("id:session-tab-ses_child2")).toBe(false);
     expect(app.shows("id:subagent-ses_child")).toBe(true);
     expect(app.shows("id:subagent-ses_child2")).toBe(true);
-    expect(app.texts().some((t) => t.includes("completed"))).toBe(true);
+    // The strip carries a state glyph, not a state word (as in the TUI).
+    const glyphBefore = () => { const t = app.texts(); return t[t.lastIndexOf("Research") - 2]; };
+    expect(glyphBefore()).toBe("✓");
 
     await app.press("id:subagent-back");
     await app.waitFor("id:child-card");
@@ -111,7 +114,8 @@ describe("child-session navigation parity", () => {
 
   test("the strip shows a running child as running", async () => {
     const app = await openChild({ childStatus: "busy", running: [{ id: "turn_child", session_id: "ses_child" }] });
-    expect(app.texts().some((t) => t.includes("running"))).toBe(true);
+    const t = app.texts();
+    expect(t[t.lastIndexOf("Research") - 2]).not.toBe("✓");
     expect(app.shows("id:session-tab-ses_child")).toBe(false);
   });
 
@@ -131,5 +135,26 @@ describe("child-session navigation parity", () => {
     });
     expect(app.texts().some((t) => t.includes("waiting"))).toBe(true);
     expect(app.shows("id:session-tab-ses_child")).toBe(false);
+  });
+
+  test("the strip lays out as the TUI does: one 10..30 column cell, shrunk and thinned to its room", () => {
+    const item = (id: string, title: string, agent = "scout") => ({ id, title, agent });
+    const kids = ["a", "b", "c", "d", "e", "f"].map((k, i) => item(k, `Child number ${i}`));
+    // Room enough: nothing dropped, one shared cell clamped to 30 columns.
+    const roomy = stripLayout({ ancestors: [item("r", "Parent")], children: kids, viewed: "c", room: 400 });
+    expect(roomy.children.length).toBe(6);
+    expect(roomy.droppedLeft).toBe(false);
+    expect(roomy.cell).toBeGreaterThanOrEqual(10);
+    expect(roomy.cell).toBeLessThanOrEqual(30);
+    // Tight: tabs farthest from the viewed child go (the tail first), the viewed one stays, and cells never exceed the room.
+    const tight = stripLayout({ ancestors: [item("r", "Parent")], children: kids, viewed: "b", room: 70 });
+    expect(tight.children.length).toBeLessThan(6);
+    expect(tight.children.some((c) => c.id === "b")).toBe(true);
+    expect(tight.children[tight.children.length - 1].id).toBe("b");
+    expect((tight.ancestors.length + tight.children.length) * (tight.cell + 1) + 2).toBeLessThanOrEqual(67);
+    // A deep path drops the oldest ancestors from the left and marks it.
+    const deep = stripLayout({ ancestors: [item("r", "Root"), item("p", "Middle"), item("q", "Parent")], children: [item("c", "Leaf")], viewed: "c", room: 50 });
+    expect(deep.droppedLeft).toBe(true);
+    expect(deep.ancestors[deep.ancestors.length - 1].id).toBe("q");
   });
 });

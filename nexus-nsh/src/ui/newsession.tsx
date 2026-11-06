@@ -328,9 +328,9 @@ function SkillPicker(p: { entries: ContextEntry[]; rows: InventoryRow[]; focus?:
               <Text class={`${TS.mono} font-semibold text-foreground ${focused() === entry().key && focusedAction() === "name" ? "underline" : ""}`}>{entry().name}</Text>
             </View>
             <Text style={{ numberOfLines: 2 }} class={T.sec}>{entry().description}</Text>
-            <Button role="switch" selected={row()?.on ?? false} onFocus={() => { focused.set(entry().key); focusedAction.set("toggle"); }} onPress={() => p.toggle?.("skill", entry().key, row()?.locked ?? true)} accessibilityLabel={`${entry().name} ${row()?.on ? "on" : "off"}`} testID={`skill-toggle-${entry().key}`} class="self-start px-2 py-1 hover:bg-accent focus-visible:outline-none">
+            <View role="switch" focusable accessibilityState={{ selected: row()?.on ?? false }} onFocus={() => { focused.set(entry().key); focusedAction.set("toggle"); }} onPress={() => p.toggle?.("skill", entry().key, row()?.locked ?? true)} accessibilityLabel={`${entry().name} ${row()?.on ? "on" : "off"}`} testID={`skill-toggle-${entry().key}`} class="self-start px-2 py-1 hover:bg-accent focus-visible:outline-none">
               <Text class={`${T.sec} ${focused() === entry().key && focusedAction() === "toggle" ? "underline" : ""}`}>{row()?.locked ? "Locked · new session" : row()?.on ? "● Enabled" : "○ Disabled"}</Text>
-            </Button>
+            </View>
           </View>;
         }}</Each>
       </View>}</Each>

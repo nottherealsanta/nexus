@@ -1,7 +1,7 @@
 // The timeline follows the end as the TUI does, and keeps measured rows across rebuilds.
 import { describe, expect, open, test } from "nsh/test";
 import { keepIdentity } from "./src/ui/keep-identity";
-import { followsAfterScroll } from "./src/scroll-follow";
+import { followsAfterScroll, pinReleased, pinSpacer } from "./src/scroll-follow";
 
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
 const session = { id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Long session", model: "", permission: "ask", created: 1, updated: 2, effort: null, agent: "build", parent_id: null, archived: 0, revision: 1, disabled_tools: "[]" };
@@ -120,5 +120,48 @@ describe("timeline scrolling", () => {
     expect(next[2]).not.toBe(c);
     expect((next[2] as any).text).toBe("new");
     expect(next[3].key).toBe("d");
+  });
+
+  test("a session's first message is pinned to the top: the view stays there while the reply is empty", async () => {
+    const created = { ...session, id: "ses_new", title: "First", created: 3, updated: 3 };
+    const first = [{ id: "msg_first", session_id: "ses_new", seq: 1, role: "user", parts: [{ type: "text", text: "Pin this message" }], created: 1 }];
+    const app = await open("./App.tsx", {
+      network: {
+        "POST */api/session": { body: created },
+        "GET */api/session/ses_new": { body: created },
+        "GET */api/session/ses_new/message*": { body: first },
+        "GET */api/session/ses_new/snapshot": { body: { starting: {} } },
+        "GET */api/session/ses_new/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
+        "GET */api/session/ses_new/worktrees": { body: { worktrees: [] } },
+        "POST */api/session/ses_new/prompt": { status: 204, body: null },
+        ...network,
+      },
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("id:rail-project-prj_1");
+    await app.press("id:new-session-row");
+    await app.type("id:composer-input", "Pin this message");
+    await app.press("id:send");
+    await app.waitFor("id:first-pin");
+    await app.wait(400);
+    expect(app.texts().some((t) => t.includes("Pin this message"))).toBe(true);
+    // A pinned view is not "scrolled up": no jump pill, and nothing pulls it to the bottom.
+    expect(app.shows("id:jump-latest")).toBe(false);
+    // The pin holds while nothing else happens, and ends when the reader scrolls.
+    expect(app.shows("id:first-pin")).toBe(true);
+    await app.scroll("id:timeline", -200);
+    await app.waitUntil(() => !app.shows("id:first-pin"));
+  });
+
+  test("the first-send spacer fills what the reply leaves of the view, and goes once the reply fills it", () => {
+    expect(pinSpacer(100, 700)).toBe(600);
+    expect(pinSpacer(700, 700)).toBe(0);
+    expect(pinSpacer(900, 700)).toBe(0);
+  });
+
+  test("the pin ends when the reader moves the view, not when it settles", () => {
+    expect(pinReleased({ y: 300, target: 300, sinceApplied: 1000 })).toBe(false);
+    expect(pinReleased({ y: 100, target: 300, sinceApplied: 50 })).toBe(false);
+    expect(pinReleased({ y: 100, target: 300, sinceApplied: 1000 })).toBe(true);
   });
 });
