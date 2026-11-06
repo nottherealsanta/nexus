@@ -150,7 +150,8 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         right_open: app.ui.right_open,
         drawer: app.ui.drawer,
         left_width: app.ui.left_width,
-        panel_open: app.terminal_open || app.ui.file_open || app.ui.diff_open.is_some(),
+        panel_open: app.ui.file_open || app.ui.diff_open.is_some(),
+        terminal_open: app.terminal_open,
     };
     let regions = {
         let a: &App = app;
@@ -251,6 +252,9 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         }
         draw_waiting(&cx, buf, regions.waiting, &mut hits);
         draw_composer(&cx, buf, regions.composer, &mut hits);
+        if let Some(dock) = regions.terminal {
+            draw_terminal_dock(&cx, buf, dock, &mut hits);
+        }
         if let Some(behind) = metrics.2 {
             draw_jump(&cx, buf, regions.composer, behind, &mut hits);
         }
@@ -2359,6 +2363,100 @@ fn git_marker(code: &str) -> Option<(char, &'static str)> {
     }
 }
 
+fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
+    clear(buf, r, cx.st(PRIMARY, CANVAS));
+    let mut x = r.x;
+    let header = format!("Terminals ({})  ", cx.app.terminal_panel.terminals.len());
+    put(buf, x, r.y, &header, cx.st(PRIMARY, CANVAS), r.width);
+    x = x.saturating_add(width(&header) as u16).min(r.right());
+    for (index, terminal) in cx.app.terminal_panel.terminals.iter().enumerate() {
+        let label = format!(
+            "{} {} ",
+            if terminal.status == "running" {
+                "●"
+            } else {
+                "○"
+            },
+            terminal.name
+        );
+        let remaining = r.right().saturating_sub(x);
+        put(buf, x, r.y, &label, cx.st(PRIMARY, CANVAS), remaining);
+        hits.add(
+            Rect::new(x, r.y, (width(&label) as u16).min(remaining), 1),
+            Target::TerminalTab(index),
+        );
+        x = x.saturating_add(width(&label) as u16).min(r.right());
+        if x < r.right() {
+            put(buf, x, r.y, "×", cx.st(MUTED, CANVAS), 1);
+            hits.add(Rect::new(x, r.y, 1, 1), Target::TerminalClose(index));
+            x = (x + 2).min(r.right());
+        }
+    }
+    put(
+        buf,
+        x,
+        r.y,
+        "+",
+        cx.st(ACCENT, CANVAS),
+        r.right().saturating_sub(x),
+    );
+    hits.add(
+        Rect::new(x, r.y, r.right().saturating_sub(x).min(1), 1),
+        Target::TerminalNew,
+    );
+    x = x.saturating_add(2).min(r.right());
+    if cx
+        .app
+        .terminal_panel
+        .selection
+        .as_ref()
+        .is_some_and(|s| s.dragged())
+    {
+        let remaining = r.right().saturating_sub(x);
+        put(buf, x, r.y, "Copy", cx.st(ACCENT, CANVAS), remaining);
+        hits.add(Rect::new(x, r.y, remaining.min(4), 1), Target::TerminalCopy);
+    }
+    if cx.app.terminal_panel.selected.is_some() && r.height > 1 {
+        let screen = Rect::new(r.x, r.y + 1, r.width, r.height - 1);
+        cx.app.terminal_panel.screen.render(screen, buf);
+        if let Some(selection) = &cx.app.terminal_panel.selection {
+            if selection.dragged() && selection.area == screen {
+                selection.highlight(buf);
+            }
+        }
+        if !cx.app.terminal_controlled && cx.app.terminal_panel.attachment.is_some() {
+            let label = "Read-only · Take control";
+            put(
+                buf,
+                screen.x,
+                screen.y,
+                label,
+                cx.st("status.warning", CANVAS),
+                screen.width,
+            );
+            hits.add(
+                Rect::new(
+                    screen.x,
+                    screen.y,
+                    (width(label) as u16).min(screen.width),
+                    1,
+                ),
+                Target::TerminalTakeControl,
+            );
+        }
+        if cx.app.terminal_panel.screen.gap {
+            put(
+                buf,
+                screen.x,
+                screen.y,
+                crate::terminal_screen::GAP_NOTICE,
+                cx.st("status.warning", CANVAS),
+                screen.width,
+            );
+        }
+    }
+}
+
 /// The file/diff panel. Wide, it sits beside the timeline; narrow, it covers
 /// the whole window (the composer included). When it hides a live session's
 /// approvals or question, the header says so.
@@ -2374,83 +2472,7 @@ fn draw_panel(cx: &Cx, buf: &mut Buffer, r: Rect, area: Rect, hits: &mut HitMap)
     clear(buf, frame, cx.st(PRIMARY, PANEL));
     hits.add(frame, Target::Swallow);
     clear(buf, r, cx.st(PRIMARY, CANVAS));
-    if cx.app.terminal_open {
-        let list_width = if cx.app.terminal_panel.selected.is_some() {
-            (r.width / 3).min(32)
-        } else {
-            r.width
-        };
-        put(
-            buf,
-            r.x,
-            r.y,
-            if cx.app.terminal_focused {
-                "Terminal  Ctrl+] list"
-            } else {
-                "Terminal  Enter open  c take control  r release  Esc close"
-            },
-            cx.st(PRIMARY, CANVAS),
-            r.width,
-        );
-        if r.height > 1 {
-            put(
-                buf,
-                r.x,
-                r.y + 1,
-                if cx.app.terminal_panel.cursor == 0 {
-                    "> New terminal"
-                } else {
-                    "  New terminal"
-                },
-                cx.st(ACCENT, CANVAS),
-                list_width,
-            );
-        }
-        for (i, terminal) in cx.app.terminal_panel.terminals.iter().enumerate() {
-            let y = r.y.saturating_add(2).saturating_add(i as u16);
-            if y >= r.bottom() {
-                break;
-            }
-            put(
-                buf,
-                r.x,
-                y,
-                &format!(
-                    "{} {}  {}  {}  {}",
-                    if cx.app.terminal_panel.cursor == i + 1 {
-                        ">"
-                    } else {
-                        " "
-                    },
-                    terminal.name,
-                    terminal.workspace,
-                    terminal.status,
-                    terminal.controller.as_deref().unwrap_or("No controller")
-                ),
-                cx.st(PRIMARY, CANVAS),
-                list_width,
-            );
-        }
-        if cx.app.terminal_panel.selected.is_some() && r.width > list_width + 1 && r.height > 2 {
-            let screen_area = Rect::new(
-                r.x + list_width + 1,
-                r.y + 1,
-                r.width - list_width - 1,
-                r.height - 1,
-            );
-            cx.app.terminal_panel.screen.render(screen_area, buf);
-            if cx.app.terminal_panel.screen.gap {
-                put(
-                    buf,
-                    screen_area.x,
-                    screen_area.y,
-                    crate::terminal_screen::GAP_NOTICE,
-                    cx.st("status.warning", CANVAS),
-                    screen_area.width,
-                );
-            }
-        }
-    } else if cx.app.ui.diff_open.is_some() {
+    if cx.app.ui.diff_open.is_some() {
         draw_diff_view(cx, buf, r, true, hits);
     } else if cx.app.ui.file_open {
         draw_file_view(cx, buf, r, true, hits);
@@ -6902,20 +6924,12 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     // Live kernels and running background shells, centred in the strip. A
     // kernel chip is absent when no kernel exists; shells appear only while one
     // is running. Clicking the chip opens the full list.
-    let (kernels, shells) = a.resource_counts();
+    let (kernels, _) = a.resource_counts();
     let mut parts = Vec::new();
     if kernels > 0 {
-        parts.push(format!(
-            "{kernels} {}",
-            if kernels == 1 { "kernel" } else { "kernels" }
-        ));
+        parts.push("kernel".to_string());
     }
-    if shells > 0 {
-        parts.push(format!(
-            "{shells} {}",
-            if shells == 1 { "shell" } else { "shells" }
-        ));
-    }
+    parts.push(format!("{} shell", a.terminal_panel.terminals.len()));
     let chip = if parts.is_empty() {
         String::new()
     } else {
@@ -6924,7 +6938,11 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let chip_w = u16::try_from(width(&chip)).unwrap_or(u16::MAX);
     let available = end.saturating_sub(start);
     let show_chip = chip_w > 2 && available > chip_w.saturating_add(8);
-    let chip_x = start + available.saturating_sub(chip_w) / 2;
+    let chip_x = if a.viewed_id().is_some_and(|id| a.is_busy(id)) {
+        start + available.saturating_sub(chip_w) / 2
+    } else {
+        end.saturating_sub(chip_w)
+    };
     let left_end = if show_chip {
         chip_x.saturating_sub(2)
     } else {
@@ -6978,7 +6996,18 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 .add_modifier(Modifier::BOLD),
             chip_w,
         );
-        hits.add(Rect::new(chip_x, y, chip_w, 1), Target::ComposerResources);
+        let kernel_w = if kernels > 0 {
+            width(&format!(" kernel{}", cx.sep())) as u16
+        } else {
+            1
+        };
+        if kernels > 0 {
+            hits.add(Rect::new(chip_x, y, kernel_w, 1), Target::ComposerResources);
+        }
+        hits.add(
+            Rect::new(chip_x + kernel_w, y, chip_w.saturating_sub(kernel_w), 1),
+            Target::ComposerTerminals,
+        );
     }
 }
 

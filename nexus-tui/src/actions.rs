@@ -79,6 +79,13 @@ pub enum ApiCall {
         session: Option<String>,
         client: String,
     },
+    TerminalRename {
+        id: String,
+        name: String,
+    },
+    TerminalClose {
+        id: String,
+    },
     /// Connect (`method`: `device`, `local`, `api_key` with `key`) or, with `sign_out`, disconnect or cancel.
     Provider {
         id: String,
@@ -379,6 +386,8 @@ impl ApiCall {
         match self {
             ApiCall::TerminalList { .. }
             | ApiCall::TerminalCreate { .. }
+            | ApiCall::TerminalRename { .. }
+            | ApiCall::TerminalClose { .. }
             | ApiCall::TerminalControl { .. }
             | ApiCall::TerminalInput { .. }
             | ApiCall::TerminalResize { .. } => "",
@@ -608,6 +617,22 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             done.terminal = Some(
                 crate::terminal_api::TerminalApi(api.http.clone())
                     .create(project, workspace, session.as_deref(), client, 24, 80)
+                    .await
+                    .map_err(e)?,
+            );
+        }
+        ApiCall::TerminalRename { id, name } => {
+            done.terminal = Some(
+                crate::terminal_api::TerminalApi(api.http.clone())
+                    .rename(id, name)
+                    .await
+                    .map_err(e)?,
+            );
+        }
+        ApiCall::TerminalClose { id } => {
+            done.terminal = Some(
+                crate::terminal_api::TerminalApi(api.http.clone())
+                    .close(id)
                     .await
                     .map_err(e)?,
             );

@@ -318,6 +318,7 @@ impl FileEdit {
 /// A deferred action that a confirm dialog performs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Confirmed {
+    CloseTerminal(String),
     ResumeArchived {
         session: String,
         mode: Option<String>,
@@ -367,6 +368,9 @@ pub struct Dialog {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditTarget {
+    RenameTerminal {
+        id: String,
+    },
     RenameSession {
         id: String,
         revision: i64,
@@ -641,6 +645,12 @@ pub enum Target {
     ComposerWorktree,
     /// The kernel and running-shell counts on the location strip.
     ComposerResources,
+    ComposerTerminals,
+    TerminalTab(usize),
+    TerminalClose(usize),
+    TerminalNew,
+    TerminalCopy,
+    TerminalTakeControl,
     /// The Files tree root line (project checkout / session worktree).
     FilesRoot,
     /// The panel header's `‹ Back`: close the file or diff panel.

@@ -19,6 +19,7 @@ import type { ToolDetailLine } from "./timeline";
 import { DiffView, diffItems } from "./diff";
 import { TEXT_INSET, TimelineColumn } from "./reading-column";
 import { structure } from "../gen/theme";
+import { openTerminal, refreshTerminals, restoreTerminalDock, terminalAvailable, terminalItems, terminalOpen } from "../terminal-panel";
 
 import { imageDrafts, readImage } from "../images";
 import { isBigPaste, makePaste, normalisePaste, pasteDrafts, pasteLabel, prunePastes } from "../pastes";
@@ -734,6 +735,7 @@ function LocationStrip(p: { working: boolean }) {
   // narrow column and truncates needlessly in a wide one.
   const stripWidth = signal(0);
   const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
+  effect(() => { if (terminalAvailable && currentProject()) { void refreshTerminals(); void restoreTerminalDock(); } });
   const session = () => { m(); return viewed(); };
   const directory = () => session()?.directory ?? project()?.path ?? "";
   const selectedTree = () => {
@@ -778,13 +780,6 @@ function LocationStrip(p: { working: boolean }) {
     return c ? availability(c) : { ok: false, reason: "Worktree controls are not available in NSH." };
   };
   const tooltip = (text: string) => <Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{text}</Text>;
-  const chipLabel = () => {
-    const c = resourceCounts();
-    return [
-      c.kernels ? `${c.kernels} ${c.kernels === 1 ? "kernel" : "kernels"}` : "",
-      c.shells ? `${c.shells} ${c.shells === 1 ? "shell" : "shells"}` : "",
-    ].filter(Boolean).join(" · ");
-  };
   const openResources = () => {
     resourcesOpen.set(true);
     void loadResources();
@@ -815,12 +810,13 @@ function LocationStrip(p: { working: boolean }) {
           </If>
           <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={T.mono}>⑂</Text></If>
         </View>
-        <If when={!!chipLabel()}>
-          <Button onPress={openResources} accessibilityLabel={`Kernels and shells: ${chipLabel()}`} testID="location-resources"
+        <If when={resourceCounts().kernels > 0}>
+          <Button onPress={openResources} accessibilityLabel="kernel" testID="location-resources"
             class={`rounded-(--radius) bg-selection px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}>
-            <Text style={{ numberOfLines: 1 }} class="text-xs leading-4 font-semibold text-primary tabular-nums">{chipLabel()}</Text>
+            <Text style={{ numberOfLines: 1 }} class="text-xs leading-4 font-semibold text-primary">kernel</Text>
           </Button>
         </If>
+        <If when={terminalAvailable && !phone}><Button onPress={() => void openTerminal()} selected={terminalOpen()} accessibilityLabel={`${terminalItems().length} shell`} testID="location-shell" class={`rounded-(--radius) bg-selection px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}><Text class="text-xs leading-4 font-semibold text-primary tabular-nums">{`${terminalItems().length} shell`}</Text></Button></If>
         <If when={p.working}><View class="shrink-0 min-w-0 flex-row items-center justify-end"><WorkingRow /></View></If>
       </View>
     </If>

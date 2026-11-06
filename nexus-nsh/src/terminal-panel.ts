@@ -1,4 +1,4 @@
-import { platform, signal } from "nsh";
+import { Storage, platform, signal } from "nsh";
 import { ApiError, newKey } from "./core/transport";
 import { terminals, terminalStream, type TerminalResource } from "./core/terminal";
 import { confirmDialog, currentProject, model, toast, viewed } from "./store";
@@ -26,6 +26,7 @@ let queuedInput = 0;
 let inputInFlight = false;
 let controlBusy = false;
 let resizeBusy = false;
+let restored = false;
 type TerminalMessage = {type: string; [key: string]: unknown};
 let sender: ((message: TerminalMessage) => void | Promise<void>) | null = null;
 let cols = 80, rows = 24;
@@ -39,17 +40,27 @@ export function setTerminalSender(fn: ((message: TerminalMessage) => void | Prom
 export async function refreshTerminals() {
   const project = currentProject(), request = ++refreshGeneration;
   if (!project) return;
-  try { const items = await terminals.list(project); if (request === refreshGeneration && project === currentProject()) terminalItems.set(items); }
+  try { const items = await terminals.list(project); if (request === refreshGeneration && project === currentProject()) terminalItems.set(items.filter(item => item.status !== "closed")); }
   catch (e) { if (request === refreshGeneration) failure(e); }
+}
+export async function restoreTerminalDock() {
+  if (restored || !terminalAvailable || !currentProject()) return;
+  restored = true;
+  try { if (await Storage.getItem("nexus.terminal.open") === "true" && !terminalOpen()) await openTerminal(); } catch {}
 }
 export async function openTerminal() {
   if (!terminalAvailable || !currentProject()) return;
+  if (terminalOpen()) { closeTerminalPanel(); return; }
   terminalOpen.set(true); terminalError.set("");
+  void Storage.setItem("nexus.terminal.open", "true").catch(() => {});
   await refreshTerminals();
+  const item = terminalItems().find(t => t.status === "running") ?? terminalItems()[0];
+  if (item && terminalOpen()) await selectTerminal(item.id);
 }
 export function closeTerminalPanel() {
   if (inputInFlight) toast("warning", "Terminal input outcome may be indeterminate after detaching");
   terminalOpen.set(false); terminalFocused.set(false); terminalRename.set(false); terminalNotice.set(""); detach(); terminalSelected.set(null);
+  void Storage.setItem("nexus.terminal.open", "false").catch(() => {});
 }
 export function disconnectTerminal() { detach(); }
 function detach() {
@@ -69,6 +80,8 @@ export async function selectTerminal(id: string) {
     if (gen !== generation) { void terminals.detach(id, a.attachment_id).catch(() => {}); return; }
     attachment = a.attachment_id; abort = new AbortController(); inputAbort = new AbortController();
     void stream(id, a.attachment_id, gen, abort.signal);
+    if (item?.status === "running") await controlTerminal("acquire");
+    if (gen === generation) send({type:"focus"});
   } catch (e) { if (gen === generation) failure(e); }
 }
 async function stream(id: string, first: string, gen: number, signal: AbortSignal) {
@@ -194,8 +207,8 @@ export function inputTerminal(value: string) {
 }
 export function beginRenameTerminal() { terminalName.set(selected()?.name ?? ""); terminalRename.set(true); }
 export function currentTerminal() { return selected(); }
-export function requestTerminalClose() {
-  const t = selected(); if (!t) return;
+export function requestTerminalClose(id = terminalSelected()) {
+  const t = terminalItems().find(item => item.id === id); if (!t) return;
   if (t.status === "running") confirmDialog.set({title:"Close running terminal?",body:"",confirm:"Close terminal",destructive:true,run:() => terminateTerminal(t.id)});
   else void terminateTerminal(t.id);
 }

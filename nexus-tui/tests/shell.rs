@@ -13,13 +13,16 @@ use ratatui::style::Color;
 const SIZES: [(u16, u16); 3] = [(80, 24), (120, 36), (160, 48)];
 
 #[test]
-fn terminal_command_opens_a_panel_with_new_action() {
+fn terminal_command_opens_a_bottom_dock() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("terminal.open");
     let (_, rows) = draw(&mut app, 120, 36);
     assert!(app.terminal_open);
-    assert!(app.regions.panel.is_some());
-    assert!(rows.join("\n").contains("New terminal"));
+    assert!(app.regions.panel.is_none());
+    let dock = app.regions.terminal.unwrap();
+    assert_eq!(dock.y, app.regions.composer.bottom());
+    assert!(rows[dock.y as usize].contains("Terminals (0)"));
+    assert!(rows[dock.y as usize].contains('+'));
 }
 
 #[test]
@@ -73,6 +76,102 @@ fn selecting_terminal_attaches_and_renders_stream_output() {
 }
 
 #[test]
+fn terminal_attachment_automatically_requests_control() {
+    use nexus_tui::terminal_panel::TerminalEvent;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.terminals.push(
+        serde_json::from_value(serde_json::json!({
+            "id":"t1", "name":"Terminal", "workspace":"/tmp", "status":"running",
+            "controller":null, "rows":24, "cols":80
+        }))
+        .unwrap(),
+    );
+    press(&mut app, &["down", "enter"]);
+    assert!(app.terminal_focused);
+    let generation = app.terminal_panel.generation;
+    app.terminal_event(TerminalEvent::Attached {
+        generation,
+        attachment: "a1".into(),
+    });
+    assert!(app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::TerminalControl { acquire: true, attachment, .. }) if attachment == "a1")));
+}
+
+#[test]
+fn terminal_rename_edits_the_selected_tab() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.terminals.push(
+        serde_json::from_value(serde_json::json!({
+            "id":"t1", "name":"Terminal", "workspace":"/tmp", "status":"running",
+            "controller":null, "rows":24, "cols":80
+        }))
+        .unwrap(),
+    );
+    app.terminal_panel.selected = Some("t1".into());
+    app.execute("terminal.rename");
+    app.ui.edit.as_mut().unwrap().buf.set_text("Build");
+    press(&mut app, &["enter"]);
+    assert!(app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::TerminalRename { id, name }) if id == "t1" && name == "Build")));
+}
+
+#[test]
+fn closing_running_terminal_requires_confirmation() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.terminals.push(
+        serde_json::from_value(serde_json::json!({
+            "id":"t1", "name":"Terminal", "workspace":"/tmp", "status":"running",
+            "controller":null, "rows":24, "cols":80
+        }))
+        .unwrap(),
+    );
+    app.terminal_panel.selected = Some("t1".into());
+    app.execute("terminal.close");
+    let dialog = app.ui.dialog.as_ref().unwrap();
+    assert_eq!(dialog.title, "Close running terminal?");
+    assert_eq!(dialog.confirm, "Close terminal");
+    assert!(!app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::TerminalClose { .. }))));
+    app.execute("alert.confirm");
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::TerminalClose { id }) if id == "t1")));
+}
+
+#[test]
+fn terminal_copy_requires_selection_and_explicit_action() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use nexus_tui::terminal_panel::TerminalEvent;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.selected = Some("t1".into());
+    app.terminal_selected = true;
+    let generation = app.terminal_panel.generation;
+    app.terminal_event(TerminalEvent::Frame { generation, frame: serde_json::json!({"version":1,"seq":1,"type":"output","data":"SGVsbG8bXTUyO2M7YzJWamNtVjAHRQ=="}) });
+    draw(&mut app, 120, 36);
+    let dock = app.regions.terminal.unwrap();
+    let mouse = |kind, column| MouseEvent {
+        kind,
+        column,
+        row: dock.y + 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), dock.x));
+    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), dock.x + 4));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), dock.x + 4));
+    assert!(!app.effects.iter().any(|e| matches!(e, Effect::Copy(_))));
+    app.execute("terminal.copy");
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Copy(text) if text == "Hello")));
+}
+
+#[test]
 fn terminal_input_waits_for_ack_and_ctrl_bracket_returns_to_list() {
     use nexus_tui::actions::{ActionDone, Done};
     use nexus_tui::terminal_panel::TerminalFocus;
@@ -107,6 +206,28 @@ fn terminal_input_waits_for_ack_and_ctrl_bracket_returns_to_list() {
     ));
     assert_eq!(app.terminal_panel.focus, TerminalFocus::List);
     assert!(!app.terminal_focused);
+}
+
+#[test]
+fn terminal_ctrl_c_goes_to_shell_and_ctrl_bracket_is_not_sent() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.selected = Some("t1".into());
+    app.terminal_panel.attachment = Some("a1".into());
+    app.terminal_controlled = true;
+    app.terminal_focused = true;
+    app.effects.clear();
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::TerminalInput { bytes, .. }) if bytes == &[3])));
+    assert!(!app.effects.iter().any(|e| matches!(e, Effect::Quit)));
+    let before = app.effects.len();
+    app.handle_key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
+    assert!(!app.terminal_focused);
+    assert_eq!(app.effects.len(), before);
 }
 
 #[test]
@@ -3159,7 +3280,8 @@ fn working_strip_aligns_with_usage_and_omits_output_tokens() {
     assert!(!strip.contains('↓'), "{strip}");
     assert_eq!(
         control.trim_end().chars().count(),
-        strip.trim_end().chars().count()
+        strip.trim_end().chars().count(),
+        "control: {control:?}\nstrip: {strip:?}"
     );
 }
 

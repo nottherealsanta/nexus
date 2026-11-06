@@ -1019,6 +1019,44 @@ pub fn sync_msg_affects_view(msg: &SyncMsg) -> bool {
 }
 
 impl App {
+    fn terminal_select(&mut self, index: usize) {
+        if self.terminal_panel.input_busy || !self.terminal_panel.input_queue.is_empty() {
+            self.toast(Level::Warning, "Wait for terminal input to be acknowledged");
+            return;
+        }
+        let Some(terminal) = self.terminal_panel.terminals.get(index) else {
+            return;
+        };
+        let id = terminal.id.clone();
+        if self.terminal_panel.selected.as_deref() == Some(&id)
+            && self.terminal_panel.attachment.is_some()
+        {
+            self.terminal_focused = true;
+            self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::Screen;
+            return;
+        }
+        self.terminal_panel.generation += 1;
+        self.terminal_controlled = false;
+        self.terminal_panel.next_input = 1;
+        self.terminal_panel.input_busy = false;
+        self.terminal_panel.input_queue.clear();
+        self.terminal_panel.resize_busy = false;
+        self.terminal_panel.control_busy = false;
+        self.terminal_panel.size = None;
+        self.terminal_panel.selection = None;
+        self.terminal_panel.screen =
+            crate::terminal_screen::TerminalScreen::new(terminal.rows, terminal.cols);
+        self.terminal_panel.selected = Some(id.clone());
+        self.terminal_panel.attachment = None;
+        self.terminal_selected = true;
+        self.terminal_focused = true;
+        self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::Screen;
+        self.effects.push(Effect::TerminalAttach {
+            id,
+            client: self.terminal_panel.client_id.clone(),
+            generation: self.terminal_panel.generation,
+        });
+    }
     fn terminal_send_next(&mut self) {
         if !self.terminal_controlled || self.terminal_panel.input_busy {
             return;
@@ -1054,13 +1092,13 @@ impl App {
             return;
         }
         let (Some(r), Some(id), Some(attachment)) = (
-            self.regions.panel,
+            self.regions.terminal,
             self.terminal_panel.selected.clone(),
             self.terminal_panel.attachment.clone(),
         ) else {
             return;
         };
-        let width = r.width.saturating_sub((r.width / 3).min(32) + 1).min(500);
+        let width = r.width.min(500);
         let height = r.height.saturating_sub(1).min(200);
         if width == 0 || height == 0 || self.terminal_panel.size == Some((height, width)) {
             return;
@@ -1082,7 +1120,8 @@ impl App {
                 generation,
                 attachment,
             } if generation == self.terminal_panel.generation && self.terminal_open => {
-                self.terminal_panel.attachment = Some(attachment)
+                self.terminal_panel.attachment = Some(attachment);
+                self.execute("terminal.acquire");
             }
             TerminalEvent::Frame { generation, frame }
                 if generation == self.terminal_panel.generation && self.terminal_open =>
@@ -5792,6 +5831,10 @@ impl App {
     pub fn execute(&mut self, id: &str) {
         match id {
             "terminal.open" => {
+                if self.terminal_open {
+                    self.close_panel();
+                    return;
+                }
                 if self.edit_blocks() {
                     return;
                 }
@@ -5821,6 +5864,59 @@ impl App {
                         session: self.files_session(),
                         client: self.terminal_panel.client_id.clone(),
                     });
+                }
+            }
+            "terminal.rename" => {
+                if let Some(terminal) = self
+                    .terminal_panel
+                    .terminals
+                    .iter()
+                    .find(|t| Some(&t.id) == self.terminal_panel.selected.as_ref())
+                {
+                    let mut buf = Composer::new();
+                    buf.set_text(&terminal.name);
+                    self.ui.edit = Some(TextEdit {
+                        label: "Rename".into(),
+                        target: EditTarget::RenameTerminal {
+                            id: terminal.id.clone(),
+                        },
+                        buf,
+                        restore: self.restore_point(),
+                    });
+                }
+            }
+            "terminal.copy" => {
+                if let Some(selection) = &self.terminal_panel.selection {
+                    if selection.dragged() {
+                        let text = selection.text();
+                        if !text.is_empty() {
+                            self.effects.push(Effect::Copy(text));
+                        }
+                    }
+                }
+            }
+            "terminal.close" => {
+                if let Some(terminal) = self
+                    .terminal_panel
+                    .terminals
+                    .iter()
+                    .find(|t| Some(&t.id) == self.terminal_panel.selected.as_ref())
+                {
+                    let id = terminal.id.clone();
+                    if terminal.status == "running" {
+                        self.ui.dialog = Some(Dialog {
+                            title: "Close running terminal?".into(),
+                            body: vec![],
+                            cancel: "Cancel".into(),
+                            confirm: "Close terminal".into(),
+                            danger: true,
+                            action: Confirmed::CloseTerminal(id),
+                            button: 0,
+                            restore: self.restore_point(),
+                        });
+                    } else {
+                        self.api(ApiCall::TerminalClose { id });
+                    }
                 }
             }
             "terminal.acquire" | "terminal.release" => {
@@ -6560,6 +6656,7 @@ impl App {
         self.apply_restore(d.restore);
         if yes {
             match d.action {
+                Confirmed::CloseTerminal(id) => self.api(ApiCall::TerminalClose { id }),
                 Confirmed::ResumeArchived { session, mode } => {
                     if self.viewed_id() == Some(session.as_str()) {
                         self.send_mode_confirmed(mode.as_deref(), true);
@@ -7510,7 +7607,11 @@ impl App {
                     self.terminal_panel.loading = false;
                     match done.result {
                         Ok(result) => {
-                            self.terminal_panel.terminals = result.terminals.unwrap_or_default()
+                            self.terminal_panel.terminals = result.terminals.unwrap_or_default();
+                            if !self.terminal_panel.terminals.is_empty() {
+                                self.terminal_panel.cursor = 1;
+                                self.terminal_select(0);
+                            }
                         }
                         Err(error) => {
                             self.toast(Level::Error, format!("Could not list terminals: {error}"))
@@ -7528,12 +7629,57 @@ impl App {
                     {
                         if let Some(terminal) = result.terminal {
                             self.terminal_panel.terminals.push(terminal);
+                            self.terminal_panel.cursor = self.terminal_panel.terminals.len();
+                            self.terminal_select(self.terminal_panel.cursor - 1);
                         }
                     }
                     Err(error) => {
                         self.toast(Level::Error, format!("Could not create terminal: {error}"))
                     }
                     _ => {}
+                }
+                return;
+            }
+            ApiCall::TerminalRename { id, .. } => {
+                match done.result {
+                    Ok(result) => {
+                        if let Some(updated) = result.terminal {
+                            if let Some(item) = self
+                                .terminal_panel
+                                .terminals
+                                .iter_mut()
+                                .find(|t| t.id == id)
+                            {
+                                *item = updated;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.toast(Level::Error, format!("Could not rename terminal: {error}"))
+                    }
+                }
+                return;
+            }
+            ApiCall::TerminalClose { id } => {
+                match done.result {
+                    Ok(_) => {
+                        self.terminal_panel.terminals.retain(|t| t.id != id);
+                        if self.terminal_panel.selected.as_deref() == Some(&id) {
+                            self.effects.push(Effect::TerminalStop);
+                            self.terminal_panel.generation += 1;
+                            self.terminal_panel.selected = None;
+                            self.terminal_panel.attachment = None;
+                            self.terminal_selected = false;
+                            self.terminal_focused = false;
+                            self.terminal_controlled = false;
+                            if !self.terminal_panel.terminals.is_empty() {
+                                self.terminal_select(0);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.toast(Level::Error, format!("Could not close terminal: {error}"))
+                    }
                 }
                 return;
             }
@@ -9064,6 +9210,7 @@ impl App {
             && self.terminal_focused
             && self.ui.overlay.is_none()
             && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
         {
             if ev.code == KeyCode::Char(']') && ev.modifiers.contains(KeyModifiers::CONTROL) {
                 self.terminal_focused = false;
@@ -9074,11 +9221,20 @@ impl App {
             return;
         }
         let Some(name) = keys::name(&ev) else { return };
-        if self.terminal_open && self.ui.overlay.is_none() && name == "esc" {
+        if self.terminal_open
+            && self.ui.overlay.is_none()
+            && self.ui.edit.is_none()
+            && self.ui.dialog.is_none()
+            && name == "esc"
+        {
             self.close_panel();
             return;
         }
-        if self.terminal_open && self.ui.overlay.is_none() {
+        if self.terminal_open
+            && self.ui.overlay.is_none()
+            && self.ui.edit.is_none()
+            && self.ui.dialog.is_none()
+        {
             match name.as_str() {
                 "up" => self.terminal_panel.cursor = self.terminal_panel.cursor.saturating_sub(1),
                 "down" => {
@@ -9087,49 +9243,8 @@ impl App {
                 }
                 "enter" if self.terminal_panel.cursor == 0 => self.execute("terminal.new"),
                 "c" => self.execute("terminal.acquire"),
-                "r" => self.execute("terminal.release"),
-                "enter" => {
-                    if self.terminal_panel.input_busy || !self.terminal_panel.input_queue.is_empty()
-                    {
-                        self.toast(Level::Warning, "Wait for terminal input to be acknowledged");
-                        return;
-                    }
-                    if let Some(terminal) = self
-                        .terminal_panel
-                        .terminals
-                        .get(self.terminal_panel.cursor - 1)
-                    {
-                        let id = terminal.id.clone();
-                        if self.terminal_panel.selected.as_deref() == Some(&id)
-                            && self.terminal_panel.attachment.is_some()
-                        {
-                            self.terminal_focused = true;
-                            self.terminal_panel.focus =
-                                crate::terminal_panel::TerminalFocus::Screen;
-                            return;
-                        }
-                        self.terminal_panel.generation += 1;
-                        self.terminal_controlled = false;
-                        self.terminal_panel.next_input = 1;
-                        self.terminal_panel.input_busy = false;
-                        self.terminal_panel.input_queue.clear();
-                        self.terminal_panel.resize_busy = false;
-                        self.terminal_panel.control_busy = false;
-                        self.terminal_panel.size = None;
-                        self.terminal_panel.screen = crate::terminal_screen::TerminalScreen::new(
-                            terminal.rows,
-                            terminal.cols,
-                        );
-                        self.terminal_panel.selected = Some(id.clone());
-                        self.terminal_panel.attachment = None;
-                        self.terminal_selected = true;
-                        self.effects.push(Effect::TerminalAttach {
-                            id,
-                            client: self.terminal_panel.client_id.clone(),
-                            generation: self.terminal_panel.generation,
-                        });
-                    }
-                }
+                "r" => self.execute("terminal.rename"),
+                "enter" => self.terminal_select(self.terminal_panel.cursor - 1),
                 _ => {}
             }
             return;
@@ -9555,6 +9670,9 @@ impl App {
                         title,
                         revision,
                     }),
+                    EditTarget::RenameTerminal { id } => {
+                        self.api(ApiCall::TerminalRename { id, name: title })
+                    }
                     EditTarget::ChangeDirectory { id } => self.api(ApiCall::ChangeDirectory {
                         session: id,
                         directory: title,
@@ -13229,6 +13347,44 @@ impl App {
         }
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if self.terminal_open
+                    && self.ui.overlay.is_none()
+                    && self.ui.dialog.is_none()
+                    && self.ui.edit.is_none()
+                {
+                    if let Some(dock) = self.regions.terminal {
+                        let area = Rect::new(
+                            dock.x,
+                            dock.y + 1,
+                            dock.width,
+                            dock.height.saturating_sub(1),
+                        );
+                        if area.width > 0
+                            && area.height > 0
+                            && contains(area, ev.column, ev.row)
+                            && !matches!(
+                                self.hits.at(ev.column, ev.row),
+                                Some(Target::TerminalTakeControl)
+                            )
+                            && self.terminal_selected
+                        {
+                            let mut screen = ratatui::buffer::Buffer::empty(area);
+                            self.terminal_panel.screen.render(area, &mut screen);
+                            let point = (ev.column, ev.row);
+                            self.terminal_panel.selection = Some(crate::selection::Selection {
+                                area,
+                                screen,
+                                start: point,
+                                end: point,
+                            });
+                            self.terminal_panel.selecting = true;
+                            self.terminal_focused = true;
+                            self.terminal_panel.focus =
+                                crate::terminal_panel::TerminalFocus::Screen;
+                            return;
+                        }
+                    }
+                }
                 if self.ui.overlay.is_none()
                     && self.ui.dialog.is_none()
                     && self.ui.edit.is_none()
@@ -13404,6 +13560,12 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if self.terminal_panel.selecting {
+                    if let Some(selection) = &mut self.terminal_panel.selection {
+                        selection.set_end(ev.column, ev.row);
+                    }
+                    return;
+                }
                 if let Some((selection, _)) = self.timeline_drag.as_mut() {
                     selection.set_end(ev.column, ev.row);
                     return;
@@ -13432,6 +13594,13 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.terminal_panel.selecting {
+                    self.terminal_panel.selecting = false;
+                    if let Some(selection) = &mut self.terminal_panel.selection {
+                        selection.set_end(ev.column, ev.row);
+                    }
+                    return;
+                }
                 if let Some(drag) = self.ui.rail_drag.take() {
                     let ids = self.rail_project_ids();
                     if drag.active && !drag.cancelled && drag.to != drag.from {
@@ -13764,6 +13933,22 @@ impl App {
                 self.effects.push(Effect::Sync(SyncCommand::Resources));
                 self.open_overlay(OverlayKind::Resources { top: 0 });
             }
+            Target::ComposerTerminals => self.execute("terminal.open"),
+            Target::TerminalNew => self.execute("terminal.new"),
+            Target::TerminalCopy => self.execute("terminal.copy"),
+            Target::TerminalTab(index) => {
+                self.terminal_panel.cursor = index + 1;
+                self.terminal_select(index);
+            }
+            Target::TerminalClose(index) => {
+                if let Some(terminal) = self.terminal_panel.terminals.get(index) {
+                    let previous = self.terminal_panel.selected.clone();
+                    self.terminal_panel.selected = Some(terminal.id.clone());
+                    self.execute("terminal.close");
+                    self.terminal_panel.selected = previous;
+                }
+            }
+            Target::TerminalTakeControl => self.execute("terminal.acquire"),
             Target::FilesRoot => self.run_command("files.root_toggle"),
             Target::PanelBack => self.close_panel(),
             Target::FilePreview => self.run_command("editor.preview"),
@@ -14183,6 +14368,8 @@ impl ActionDone {
         match self.call {
             ApiCall::TerminalList { .. }
             | ApiCall::TerminalCreate { .. }
+            | ApiCall::TerminalRename { .. }
+            | ApiCall::TerminalClose { .. }
             | ApiCall::TerminalControl { .. }
             | ApiCall::TerminalInput { .. }
             | ApiCall::TerminalResize { .. } => "Terminal failed",
