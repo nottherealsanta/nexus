@@ -209,6 +209,28 @@ fn terminal_input_waits_for_ack_and_ctrl_bracket_returns_to_list() {
 }
 
 #[test]
+fn terminal_ctrl_c_goes_to_shell_and_ctrl_bracket_is_not_sent() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.selected = Some("t1".into());
+    app.terminal_panel.attachment = Some("a1".into());
+    app.terminal_controlled = true;
+    app.terminal_focused = true;
+    app.effects.clear();
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::TerminalInput { bytes, .. }) if bytes == &[3])));
+    assert!(!app.effects.iter().any(|e| matches!(e, Effect::Quit)));
+    let before = app.effects.len();
+    app.handle_key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
+    assert!(!app.terminal_focused);
+    assert_eq!(app.effects.len(), before);
+}
+
+#[test]
 fn terminal_resize_tracks_panel_geometry_only_under_control() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("terminal.open");
