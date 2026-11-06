@@ -17,8 +17,9 @@ for deliberate changes from old Nexus.
   [.agents/skills/nexus-ui-parity/SKILL.md](.agents/skills/nexus-ui-parity/SKILL.md).
   A client-specific difference needs the user's explicit approval first, and is then
   recorded in [docs/porting-ledger.md](docs/porting-ledger.md).
-- **Mobile is a cut-down client.** iOS and any other mobile target (NSH) only lets the user
-  talk to the Manager and view sessions. A session view shows the session's status, the
+- **Mobile is a cut-down client.** iOS and any other mobile target (NSH) has three tabs only:
+  Sessions, Manager and Settings (the user may talk to the Manager, view sessions and change the
+  settings that apply). A session view shows the session's status, the
   user's messages and the agent's replies, and nothing else: no tool groups and no
   context header. Everything else (file explorer, file editor, Git management, the
   integrated terminal and browser, the inspector and the other desktop surfaces) is for
