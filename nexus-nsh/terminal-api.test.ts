@@ -17,6 +17,20 @@ describe("terminal transport", () => {
       expect(seen.init.headers["idempotency-key"]).toBe(undefined);
     } finally { globalThis.fetch = original; }
   });
+  test("rename sends the name to the Core resource endpoint", async () => {
+    const original = globalThis.fetch;
+    let seen: any;
+    globalThis.fetch = async (url, init) => {
+      seen = { url: String(url), init };
+      return new Response(JSON.stringify({ name: "build" }), { status: 200 });
+    };
+    try {
+      expect((await terminals.rename("term/1", "build")).name).toBe("build");
+      expect(seen.url.endsWith("/api/terminal/term%2F1")).toBe(true);
+      expect(seen.init.method).toBe("PATCH");
+      expect(JSON.parse(seen.init.body)).toEqual({ name: "build" });
+    } finally { globalThis.fetch = original; }
+  });
   test("SSE parser retains terminal frames split across chunks", () => {
     const parser = new SseParser();
     expect(parser.feed('id: 7\nevent: output\ndata: {"seq":')).toEqual([]);

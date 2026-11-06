@@ -2,7 +2,7 @@
 import { request, sseStream } from "./transport";
 
 export interface TerminalResource {
-  id: string; project_id: string; workspace: string; session_id: string | null;
+  id: string; name: string; project_id: string; workspace: string; session_id: string | null;
   creator: string; status: "running" | "exited" | "closed" | "ended";
   created: number; ended: number | null; rows: number; cols: number;
   exit_code: number | null; signal: number | null; controller: string | null;
@@ -17,6 +17,7 @@ export const terminals = {
   create: (body: { project_id: string; workspace: string; session_id?: string; client_id: string; rows: number; cols: number }) =>
     request<TerminalResource>("POST", "/api/terminal", { body }),
   get: (id: string) => request<TerminalResource>("GET", resource(id)),
+  rename: (id: string, name: string) => request<TerminalResource>("PATCH", resource(id), { body: { name } }),
   close: (id: string) => request<TerminalResource>("DELETE", resource(id)),
   attach: (id: string, client_id: string) => request<{ attachment_id: string }>("POST", `${resource(id)}/attach`, { body: { client_id } }),
   control: (id: string, attachment_id: string, action: "acquire" | "release") =>
