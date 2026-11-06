@@ -144,12 +144,17 @@ fn dark_frames_use_the_theme_file_surfaces() {
     assert_eq!(buf[(100, 10)].bg, sidebar, "right sidebar");
     assert_eq!(buf[(27, 10)].symbol(), " ", "no edge rule in truecolor");
     assert_eq!(buf[(90, 10)].symbol(), " ");
-    assert_eq!(buf[(33, 10)].bg, sidebar);
+    assert_eq!(buf[(32, 10)].bg, sidebar, "last column of the left sidebar");
+    assert_eq!(
+        buf[(33, 10)].bg,
+        Color::Rgb(0x0b, 0x0b, 0x0b),
+        "first timeline column"
+    );
     // surfaces collapse in ANSI-16 and mono: the edge is drawn there
     for tier in [Tier::Ansi16, Tier::Mono] {
         let mut low = with_turn(opts(Mode::Dark, tier), (120, 36));
         let (buf, _) = draw(&mut low, 120, 36);
-        assert_eq!(buf[(33, 10)].symbol(), "│", "{tier:?}");
+        assert_eq!(buf[(32, 10)].symbol(), "│", "{tier:?}");
         assert_eq!(buf[(90, 10)].symbol(), "│", "{tier:?}");
     }
     let mut light = with_turn(opts(Mode::Light, Tier::TrueColor), (120, 36));
@@ -2938,7 +2943,11 @@ fn composer_rows_are_edge_input_blank_control_edge_strip_at_every_width() {
         let card = |y: u16| row_text(&buf, y);
         let x = r.x as usize + 2;
         // Live row, then a full top padding row at the card's width (inset 2).
-        assert!(card(r.y).trim().is_empty(), "{w}: idle live row is blank");
+        let live: String = (r.x..r.right()).map(|x| buf[(x, r.y)].symbol()).collect();
+        assert!(
+            live.trim().is_empty(),
+            "{w}: idle live row is blank: {live:?}"
+        );
         let top = &buf[(r.x + 2, r.y + 1)];
         assert_eq!(top.symbol(), " ", "{w}");
         assert_ne!(
@@ -3145,7 +3154,7 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
         let key = col_of(&text[first], "ctrl+k");
         assert_eq!(
             text[first].find('⌕').map(|_| col_of(&text[first], "⌕")),
-            Some(2)
+            Some(1)
         );
         assert!(
             key + 6 < w as usize,
@@ -3157,9 +3166,10 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
         let detail = &text[first + 3];
         assert!(text[first + 4].trim().is_empty(), "spacer {w}");
         assert!(text[first + 5].contains("+ New session"), "{w}");
-        // mark slot at x=2, title at x=4, time right-aligned with a margin of 1.
-        assert!(title.starts_with("  ●"), "{w}: unread mark: {title:?}");
-        assert_eq!(col_of(title, "Refactor"), 4, "{w}");
+        // The open session's active bar at x=0, the mark slot at x=1, title at x=3, time
+        // right-aligned with a margin of 1.
+        assert!(title.starts_with("▏●"), "{w}: unread mark: {title:?}");
+        assert_eq!(col_of(title, "Refactor"), 3, "{w}");
         assert!(
             title.trim_end().ends_with('h') || title.trim_end().ends_with("now"),
             "{title:?}"
@@ -3169,7 +3179,7 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
             "{w}: margin"
         );
         // line 2: the branch and the child count right-aligned.
-        assert_eq!(col_of(detail, "⌥"), 4, "{w}");
+        assert_eq!(col_of(detail, "⌥"), 3, "{w}");
         assert!(!detail.contains("build"), "{w}");
         assert!(detail.trim_end().ends_with("1 ↳"), "{w}: {detail:?}");
         assert!(
@@ -3179,13 +3189,18 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
         if w >= 28 {
             assert!(detail.contains("⌥ main"), "{w}: {detail:?}");
         }
-        // The open session carries the selection band on both lines.
+        // The open session carries the active block on both lines, not on the spacer (PLAN 15.5).
         let band = buf[(w / 2, (first + 3) as u16)].bg;
-        assert_eq!(band, buf[(w / 2, (first + 4) as u16)].bg, "{w}");
         assert_eq!(
             band,
             buf[(w / 2, (first + 2) as u16)].bg,
             "{w}: band vs header"
+        );
+        assert_eq!(band, Color::Rgb(0x24, 0x24, 0x24), "{w}: active block");
+        assert_eq!(
+            buf[(w / 2, (first + 4) as u16)].bg,
+            Color::Rgb(0x14, 0x14, 0x14),
+            "{w}: the spacer stays on the sidebar"
         );
         // Settings is pinned to the bottom row.
         assert!(
@@ -4936,10 +4951,6 @@ fn project_rail_labels_activity_and_session_restoration() {
     };
     assert_eq!(label(first.y + 1), "N");
     assert_eq!(label(second.y + 1), "NT");
-    assert_eq!(
-        buf[(second.x + second.width / 2, second.y + 1)].symbol(),
-        "N"
-    );
     let x = (second.x..second.right())
         .find(|x| buf[(*x, second.y + 1)].symbol() == "N")
         .unwrap();

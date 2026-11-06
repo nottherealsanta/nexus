@@ -30,7 +30,10 @@ fn mouse_drag_selects_and_copies_timeline_text_without_activating_the_block() {
     let (y, x) = drawn
         .iter()
         .enumerate()
-        .find_map(|(y, row)| row.find("Hello").map(|x| (y as u16, x as u16)))
+        .find_map(|(y, row)| {
+            row.find("Hello")
+                .map(|at| (y as u16, row[..at].chars().count() as u16))
+        })
         .unwrap();
     let mouse = |kind, column| MouseEvent {
         kind,
