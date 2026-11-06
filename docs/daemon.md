@@ -61,7 +61,7 @@ the latest GitHub release and never installs.
   `POST /api/project {path}` returns the existing project or creates one, named
   after the folder by default.
 - **Rail order and status.** Each project has a `position` (user-defined order) and a `status` (`current`, `passive`,
-  `inactive`; names inferred, awaiting the user's confirmation). Both are plain columns added in place to the
+  `inactive`; names confirmed by the user, 2026-11-06). Both are plain columns added in place to the
   existing 0.10 database (`Store._migrate_manager_columns`, schema version unchanged): an old store reads fine, and
   its projects start in creation order, `current`. See [api.md](api.md#project-rail-order-status-and-removal).
 - **Removing a project** (`POST /api/project/{id}/remove`) only unregisters it and never touches files, worktrees or

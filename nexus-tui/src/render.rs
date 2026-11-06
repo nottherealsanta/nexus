@@ -1996,7 +1996,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 let dragging = a.ui.rail_drag;
                 let is_source = dragging.is_some_and(|d| d.active && d.from == i);
                 let is_target = dragging.is_some_and(|d| d.active && !d.cancelled && d.to == i);
-                let passive = a.project_status(&p.id) == "passive";
+                let passive = a.project_status(&p.id) == crate::api::project_status::PASSIVE;
                 let (running, latest) = rail_activity(a, &p.id);
                 let token = if running > 0 || (latest > 0.0 && now_secs() - latest < 3600.0) {
                     SECONDARY
@@ -8175,14 +8175,18 @@ fn draw_projects_overview(
                     .to_owned();
                 let status = a.project_status(id);
                 let label = match status {
-                    "passive" => "Passive",
-                    "inactive" => "Inactive",
+                    crate::api::project_status::PASSIVE => "Passive",
+                    crate::api::project_status::INACTIVE => "Inactive",
                     _ => "Current",
                 };
-                let tone = if status == "passive" { muted } else { bold };
+                let tone = if status == crate::api::project_status::PASSIVE {
+                    muted
+                } else {
+                    bold
+                };
                 line.push(Span::styled(name, tone));
                 line.push(Span::styled(format!("  · {label}"), muted));
-                if status == "inactive" {
+                if status == crate::api::project_status::INACTIVE {
                     line.push(Span::styled("  · r restore", secondary));
                 }
             }

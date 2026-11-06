@@ -934,7 +934,7 @@ then `project.deleted` with `removed: true`.
   projects atomically and publishes `project.reordered`; `/api/snapshot` and `GET /api/project` list projects
   in this order. Clients keep initials assigned in creation order, independent of display order.
 - `status`: `current` (normal, in the rail), `passive` (in the rail, dimmed) or `inactive` (not in the rail, listed
-  by the API and restored by setting `current`). **The names are inferred and await the user's confirmation**; they
+  by the API and restored by setting `current`). The names were confirmed by the user (2026-11-06); they
   live in one constant per codebase. Changing status is `PATCH` and bumps `revision`.
 
 Older Cores omit both fields; clients then fall back to creation order and `current`.

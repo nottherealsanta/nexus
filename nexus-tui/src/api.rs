@@ -201,6 +201,14 @@ pub struct Project {
     pub status: Option<String>,
 }
 
+/// The three-tier project status. The names were confirmed by the user
+/// (2026-11-06, PLAN 15.3); this is the only place in the TUI that spells them.
+pub mod project_status {
+    pub const CURRENT: &str = "current";
+    pub const PASSIVE: &str = "passive";
+    pub const INACTIVE: &str = "inactive";
+}
+
 /// A session as `Session` JSON or as a raw snapshot row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
@@ -1067,12 +1075,13 @@ impl CoreApi {
         .try_decode()
     }
 
-    /// Delete a project and its sessions (`DELETE /api/project/{id}`).
+    /// Unregister a project (`POST /api/project/{id}/remove`): Core keeps its
+    /// sessions and never touches files.
     pub async fn delete_project(&self, id: &str, key: &RequestId) -> Result<Outcome<()>, Error> {
         Ok(self
             .mutate(
-                Method::DELETE,
-                &format!("/api/project/{id}"),
+                Method::POST,
+                &format!("/api/project/{id}/remove"),
                 None,
                 key,
                 None,
