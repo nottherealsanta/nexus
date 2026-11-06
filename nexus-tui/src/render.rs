@@ -29,6 +29,10 @@ const SECONDARY: &str = "text.secondary";
 const MUTED: &str = "text.muted";
 const ACCENT: &str = "interactive.accent";
 const MULTI: &str = "interactive.multi";
+/// The active sidebar block (selected project tile, selected session row) and its left bar.
+const ACTIVE: &str = "interactive.active";
+const ACTIVE_BAR: &str = "interactive.active_bar";
+const HIGHLIGHT: &str = "text.highlight";
 
 struct Cx<'a> {
     app: &'a App,
@@ -2004,10 +2008,10 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     MUTED
                 };
                 let lifted = selected || hovered;
-                let bg = if lifted { RAISED } else { SIDEBAR };
+                let bg = if lifted { ACTIVE } else { SIDEBAR };
                 let tile = Rect::new(band.x, band.y, inner, 3).intersection(r);
                 if lifted {
-                    clear(buf, tile, cx.st(PRIMARY, RAISED));
+                    clear(buf, tile, cx.st(PRIMARY, ACTIVE));
                 }
                 let mut style = cx.st(token, bg);
                 if token == MUTED || passive || is_source {
@@ -2019,7 +2023,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                         .add_modifier(Modifier::BOLD);
                 }
                 if selected {
-                    style = cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD);
+                    style = cx.st(PRIMARY, ACTIVE).add_modifier(Modifier::BOLD);
                 }
                 let label = labels.get(&p.id).cloned().unwrap_or_default();
                 let label = &label;
@@ -2033,7 +2037,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                             band.x,
                             y,
                             if cx.t.opts.ascii { "|" } else { "▏" },
-                            cx.st(PRIMARY, bg),
+                            cx.st(ACTIVE_BAR, bg),
                             1,
                         );
                     }
@@ -3157,8 +3161,24 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                 };
                 let first = matches!(v, SRow::Title(_));
                 let selected = viewed == Some(s.id.as_str());
-                let bg = Style::default();
+                // The selected session takes the project rail's active treatment: the
+                // lighter block and the left bar (`interactive.active`, `active_bar`).
+                let bg = if selected {
+                    Style::default().bg(cx.st(PRIMARY, ACTIVE).bg.unwrap_or_default())
+                } else {
+                    Style::default()
+                };
                 clear(buf, rr, cx.st(SECONDARY, SIDEBAR).patch(bg));
+                if selected {
+                    put(
+                        buf,
+                        rr.x,
+                        y,
+                        if cx.t.opts.ascii { "|" } else { "▏" },
+                        cx.st(ACTIVE_BAR, SIDEBAR).patch(bg),
+                        1,
+                    );
+                }
                 if focused && i == cursor {
                     put(
                         buf,
@@ -3178,15 +3198,14 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                     }
                     let token = if s.archived {
                         MUTED
-                    } else if selected || a.ui.unread_sessions.contains(&s.id) {
+                    } else if selected {
+                        HIGHLIGHT
+                    } else if a.ui.unread_sessions.contains(&s.id) {
                         PRIMARY
                     } else {
                         SECONDARY
                     };
-                    let mut style = cx.st(token, SIDEBAR).patch(bg);
-                    if selected {
-                        style = style.add_modifier(Modifier::BOLD);
-                    }
+                    let style = cx.st(token, SIDEBAR).patch(bg);
                     let age = text::age(now_secs(), s.updated);
                     let aw = width(&age) as u16;
                     // Hovering the two rows of a session offers `×` where the time is.
@@ -3202,7 +3221,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                         clear(
                             buf,
                             Rect::new(inner_right - aw.max(1), y, aw.max(1), 1),
-                            cx.st(MUTED, SIDEBAR),
+                            cx.st(MUTED, SIDEBAR).patch(bg),
                         );
                         put(
                             buf,

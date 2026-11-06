@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        Settings      +                                                                    □
+     │                           ▌
+▏    │                        ▣
+▏ N  │ ⌕ Search sessions ctrl+k      System prompt ~1.7K
+▏  4 │
+     │   Refacto
+     │   ⌥ maste  Settings
+  S  │
+   1 │   Review   ⌕ Filter settings…
+     │   ⌥ maste  ────────────────────────────────────────────────────────────────────────────────────
+     │            ▌ Appearance          │   Theme                                         light  dark
+  +  │   Release    Providers           │   Monochrome mode                                   off  on
+     │   ⌥ maste    Agents              │   Animations                                        on  off
+     │              Tools               │   Sidebar                                        full  rail
+     │   Fix fla    MCP                 │   Timeline detail                         low  medium  high
+     │   ⌥ maste    Context             │   Scroll bar                                        off  on
+     │              Voice and speech    │   Details sidebar                                   off  on
+     │ + New ses    Manager             │   Sessions shown                 this project  all projects
+     │              Keybindings         │   Archived sessions                                 off  on
+     │              Notifications       │
+     │              About               │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │
+     │            ↑↓ section · enter open · esc close                                      11 sections
+     │
+     │                                Message to start a new session
+     │
+     │                                Build · … · default                                                         0
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/claude-501/s15root/ws/nexus-demo  ⌥ master
+     │  Settings         ctrl+,    ───────────────────────────────────────────────────────────────────────────────────

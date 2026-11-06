@@ -141,11 +141,12 @@ export function SessionRail() {
                   </View>
                 </Tooltip>}
                 style={{ width: RAIL_PX }}
-                class={`items-center rounded-none hover:bg-accent ${currentProject() === p().id ? "bg-selection" : ""} ${FOCUS}`}>
+                class={`relative items-center rounded-none hover:bg-accent ${currentProject() === p().id ? "bg-active hover:bg-active" : ""} ${FOCUS}`}>
+                <If when={currentProject() === p().id}><ActiveBar testID={`rail-active-${p().id}`} /></If>
                 <View class="w-full flex-row justify-between px-1">
                   <Each of={CORNERS.slice(0, 2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
                 </View>
-                <Text class={`${TS.base} font-medium ${activity(p().id).active ? "text-foreground opacity-70" : "text-muted-foreground opacity-30"}`}>{labels().get(p().id)}</Text>
+                <Text class={`${TS.base} font-medium ${currentProject() === p().id ? "text-highlight" : activity(p().id).active ? "text-foreground opacity-70" : "text-muted-foreground opacity-30"}`}>{labels().get(p().id)}</Text>
                 <View class="w-full flex-row justify-between px-1">
                   <Each of={CORNERS.slice(2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
                 </View>
@@ -350,14 +351,15 @@ function SessionRow(p: { s: () => Session }) {
           onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== s().id && focusedSidebarRow()?.id === s().id) focusedSidebarRow.set(null); }}
           onPress={() => { dismissSessionSearch(); focusedSidebarRow.set(ref()); void selectSession(s().id); }} accessibilityState={{ selected: sel() }} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${s().status === "busy" ? "running" : "idle"}`}
-          class={`group/row relative rounded-none px-2 hover:bg-accent ${sel() ? "bg-selection" : ""} ${phone ? "min-h-[72px] py-3 pr-14" : isNarrow() ? (two() ? "min-h-[64px] py-2" : "min-h-11 justify-center") : (two() ? "h-16 py-2" : "h-8 justify-center")} ${FOCUS}`}
+          class={`group/row relative rounded-none px-2 hover:bg-accent ${sel() ? "bg-active hover:bg-active" : ""} ${phone ? "min-h-[72px] py-3 pr-14" : isNarrow() ? (two() ? "min-h-[64px] py-2" : "min-h-11 justify-center") : (two() ? "h-16 py-2" : "h-8 justify-center")} ${FOCUS}`}
         >
+          <If when={sel()}><ActiveBar testID={`session-active-${s().id}`} /></If>
           <View class="flex-row items-center gap-2 h-6">
             <If when={!phone}><View class="w-4 items-center justify-center">
               <If when={att()}><AttentionMark kind="waiting" /></If>
               <If when={!att() && s().status === "busy"}><Status kind="running" /></If>
             </View></If>
-            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} font-medium text-foreground`}>{s().title || "Untitled"}</Text>
+            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${sel() ? "text-highlight" : "text-foreground"}`}>{s().title || "Untitled"}</Text>
             <If when={!phone}>
               <View class="flex-row items-center gap-1">
                 <Text class={`${T.meta} ${touch ? "opacity-0" : "group-hover/row:opacity-0"}`}>{relTime(s().updated, (tick(), Date.now()))}</Text>
@@ -385,6 +387,10 @@ function SessionRow(p: { s: () => Session }) {
       <RowMenuItems row={ref} />
     </ContextMenu>
   );
+}
+/** The active sidebar block's left bar (`interactive.active_bar`), drawn over the row so it never shifts layout. */
+function ActiveBar(p: { testID: string }) {
+  return <View testID={p.testID} accessible={false} class="absolute left-0 top-0 bottom-0 w-0.5 bg-active-bar" style={{ pointerEvents: "none" }} />;
 }
 function RowMenuItems(p: { row: () => SidebarRowTarget }) {
   const items = () => commands.filter((c) => c.placement.includes("row_menu") && c.id.startsWith(`${p.row().kind}.`));

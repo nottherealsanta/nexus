@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        · Refactor the loader ×    +                                                       □
+     │                            Refactor the loader
+▏    │                        ▣    │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 17 lines of this turn above
+▏ N  │ ⌕ Search sessions ctrl+k    │
+▏  4 │                             │  Go ahead, but keep the change small.                             #2 · 11:01 AM
+     │   Refactor the load… now    │  日本語のコメントも残してください。
+     │   ⌥ master           1 ↳    │
+  S  │
+   1 │   Review the CJK wi… now       ⣿ Scout List every call site of parse_manifest and say …
+     │   ⌥ master                       0.0s
+     │
+  +  │   Release notes for… now       A small example:
+     │   ⌥ master
+     │                                  ╭─ python                                                                      ┃
+     │   Fix flaky test in… now         │ print("hello")                                                               ┃
+     │   ⌥ master                       ╰─                                                                             ┃
+     │                                                                                                                 ┃
+     │ + New session                    ╭─ sh                                                                          ┃
+     │                                  │ printf done                                                                  ┃
+     │                                  ╰─                                                                             ┃
+     │                                                                                                                 ┃
+     │                                ▄▄▄▄▄▄▄▄▄
+     │                                   ▀▄▀▀
+     │                                ▀▀▀▀▀▀▀▀▀
+     │
+     │                                ▄▄▄▄▄▄▄▄▄▄
+     │                                  ▄▄▄▄▄
+     │                                ▀▀▀▀▀▀▀▀▀▀
+     │                                                                                                  ↓ 3 new · end
+     │
+     │                                Type a message…
+     │
+     │                                Build · … · default                                                     48.2K
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/claude-501/s15root/ws/nexus-demo  ⌥ master
+     │  Settings         ctrl+,    ───────────────────────────────────────────────────────────────────────────────────

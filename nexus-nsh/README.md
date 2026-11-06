@@ -78,11 +78,11 @@ by drawing the shared `▌` focus bar where a pixel-wide bar cannot exist; the c
 selected row also carries that bar.
 `terminal-parity.test.tsx` checks those (`nsh test terminal-parity.test.tsx --target tui`).
 
-Known differences from `nexus tui` in the terminal backend: upstream frames modals; NSH's
+Known differences from `nexus tui` in the terminal backend: upstream frames modals (the user decided on 2026-11-06 that NSH drops the frame to match the TUI; it needs an upstream nsh option and is recorded in the porting ledger); NSH's
 composer keeps its voice and send buttons (approved by the user 2026-11-06). Settings uses
 the same segmented value controls as the TUI, and the timeline's scroll bar is shared:
 both draw it only while scrolling, then fade it out. The framed modals are the terminal
-backend's own rendering and still need a decision.
+backend's own rendering; removing them waits on upstream.
 
 A new session's first message appears immediately below its context preview as
 `You · Sending…`. The chosen settings stay visible until Core's message and history
@@ -289,8 +289,10 @@ manifest-driven session/project row menu, including confirmed project removal,
 and Projects, opened by its command, has a trailing `+ Add project` row. A 48 px project rail (NSH only; the TUI keeps its five cells) stays beside the sidebar whether it is open or
 closed, except on phones and below 500 px, which keep the project picker in the Sessions tab. A border separates it from the sidebar, and the sidebar's project-session and Files tabs keep their icons. It shows projects in creation order, with stable uppercase initials
 (collisions use the next available consonant, then a numeric suffix; the first character stays centred). Projects with running sessions or session activity
-within the last hour are lighter gray; inactive projects are darker. Selection is a soft
-filled square with no edge marker. Each project has a counter in each corner: attention (violet) and unread
+within the last hour are lighter gray; inactive projects are darker. The selected project, and the selected session row in the sidebar, share one active
+treatment: a lighter block (`interactive.active`) with a left bar (`interactive.active_bar`)
+drawn over the row, so nothing shifts. The selected session's title is `text.highlight`
+(white in dark mode) and never bold. Each project has a counter in each corner: attention (violet) and unread
 (info) on top, running (success) and idle (primary) below, with any count past
 nine shown as `*`. A project with
 no counts shows a muted rule below its initials instead. Hover or
