@@ -1,0 +1,33 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body,#terminal{height:100%;width:100%;margin:0;overflow:hidden;background:#101010}*{box-sizing:border-box}</style><style>/* XTERM_CSS */</style></head><body><div id="terminal"></div><script>/* XTERM_JS */</script><script>/* FIT_JS */</script><script>
+const term = new Terminal({scrollback: 5000, cursorBlink: true, convertEol: false, allowProposedApi: true});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(document.getElementById('terminal'));
+term.parser.registerOscHandler(52, () => true);
+let writable = false;
+function send(type, data = {}) { window.nsh.postMessage(JSON.stringify({type, ...data})); }
+term.onData(data => { if (writable) send('input', {data}); });
+term.onResize(({cols,rows}) => send('resize', {cols,rows}));
+term.attachCustomKeyEventHandler(e => {
+  if (e.ctrlKey && !e.altKey && !e.metaKey && e.key === ']') {
+    if (e.type === 'keydown') send('focus-list');
+    return false;
+  }
+  return true;
+});
+term.textarea.addEventListener('focus', () => send('focus', {focused:true}));
+term.textarea.addEventListener('blur', () => send('focus', {focused:false}));
+window.addEventListener('message', e => {
+  let m; try { m = JSON.parse(e.data); } catch { return; }
+  switch (m.type) {
+    case 'write': term.write(Uint8Array.from(atob(m.data), c => c.charCodeAt(0))); break;
+    case 'reset': term.reset(); if (m.cols && m.rows) term.resize(m.cols,m.rows); break;
+    case 'writable': writable = !!m.value; break;
+    case 'focus': term.focus(); break;
+    case 'copy': send('selection', {data: term.getSelection()}); break;
+    case 'fit': fit.fit(); break;
+  }
+});
+new ResizeObserver(() => fit.fit()).observe(document.getElementById('terminal'));
+setTimeout(() => { fit.fit(); send('ready'); }, 0);
+</script></body></html>
