@@ -557,7 +557,7 @@ const timed = new Set<number>();
 /** The alert whose full text is open in the detail modal (D15). */
 export const alertDetail = signal<Toast | null>(null);
 /** One row of `GET /api/usage` (K11): a connected provider with its plan and limit windows, notes, or why it could not be read. */
-export interface UsageProvider { id: string; label?: string; plan?: string; error?: string; notes?: string[]; windows?: { label?: string; used_percent?: number | null; resets_at?: number | null; detail?: string }[] }
+export interface UsageProvider { id: string; label?: string; plan?: string; error?: string; notes?: string[]; windows?: { label?: string; used_percent?: number | null; resets_at?: number | null; period_seconds?: number | null; kind?: string; detail?: string }[] }
 /** The open provider-usage dialog (`app.usage`); `null` when closed. */
 export const usageDialog = signal<{ providers: UsageProvider[]; loading: boolean; missing?: boolean; fetched?: number | null } | null>(null);
 /**

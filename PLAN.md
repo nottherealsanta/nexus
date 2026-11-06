@@ -306,7 +306,7 @@ The areas, at a glance:
 The user's review of the Provider usage modal (screenshot, 11-06) asks for a table instead of the current
 label + bar + prose rows: a ten-block progress gauge, then the percentage left, the reserve (the old Nexus
 pace calculation) and the expiry time. The words marked in red go away. Both clients land this in the same
-change; no desktop client-specific difference is expected. **Core and TUI implemented; NSH and cross-client verification pending.** Carried over whole from the previous plan's section 16 (user asked to keep it, 2026-11-06).
+change; no desktop client-specific difference is expected. **Core, TUI and NSH implemented; cross-client screenshot verification pending.** Carried over whole from the previous plan's section 16 (user asked to keep it, 2026-11-06).
 
 ### 8.1 The table and its cells (both clients)
 
@@ -422,19 +422,19 @@ r refresh · esc close
 
 ### 8.5 NSH (`nexus-nsh`)
 
-- [ ] `src/store.ts`: add `period_seconds?: number | null` and `kind?: string` to the usage window type.
-- [ ] New pure `src/usage-format.ts` (or exports beside `until`): `leftPercent`, `reservePercent`,
+- [x] `src/store.ts`: add `period_seconds?: number | null` and `kind?: string` to the usage window type.
+- [x] New pure `src/usage-format.ts` (or exports beside `until`): `leftPercent`, `reservePercent`,
   `reserveText`, `gaugeCells` and `until` with the same rounding and threshold rules as the TUI.
-- [ ] `src/ui/usage.tsx`: replace the flex bars with a monospace table: header row, provider group rows,
+- [x] `src/ui/usage.tsx`: replace the flex bars with a monospace table: header row, provider group rows,
   window rows, 10-cell gauge drawn from the generated `usage` glyphs, fixed-width Left/Reserve/Expires
   columns and a flexing Window column. Mark the gauge `accessible={false}` and give each row an
   accessibility label with all four values. Use `Modal … tall`; keep the existing refresh/footer and the
   loading/empty/error states. Hide the removed notes in `notes()` for older snapshots.
-- [ ] `usage.test.tsx`: update the expected percentages to the Left values (42% used → 58%), assert the
+- [x] `usage.test.tsx`: update the expected percentages to the Left values (42% used → 58%), assert the
   header, a gauge string such as `██▃`, `—`/reserve cells, and the absence of `Limit reached`, `of
   credits` and the Copilot detail. Unit-test the pure formatting helpers with a fixed clock (including
   8.5 → 8 and the 7-day threshold).
-- [ ] `nexus-nsh/README.md`: update the K11 bullet to the table.
+- [x] `nexus-nsh/README.md`: update the K11 bullet to the table.
 
 ### 8.6 Shared scenario and screenshots
 
@@ -443,7 +443,7 @@ r refresh · esc close
   reached: …`, `GrokChat: 1% of credits`), a provider with no plan limits and one with an error.
   Keep time-dependent assertions in the pure helper tests; the scenario test asserts labels, Left
   values, gauge glyphs and the hidden words.
-- [ ] Add a usage fixture to `nexus-nsh/e2e/scripted_core.py` that returns the scenario with
+- [x] Add a usage fixture to `nexus-nsh/e2e/scripted_core.py` that returns the scenario with
   `resets_at`/`period_seconds` computed relative to the capture time (monkeypatch
   `nexus.provider_usage.providers_usage` or seed the usage cache), so both clients see identical rows
   without provider calls. Document the mode in the script's docstring.
@@ -455,9 +455,9 @@ r refresh · esc close
 
 - [x] `cd nexus-core && uv run pytest tests/test_provider_usage.py -q && uv run ruff check nexus/provider_usage.py tests/test_provider_usage.py`
 - [x] `cd nexus-tui && cargo test usage && cargo test --test behaviour usage && cargo fmt --check && cargo clippy --all-targets -- -D warnings`
-- [ ] `cd nexus-nsh && npm run gen && nsh test usage.test.tsx --target web` (plus the pure helper test and `nsh check`; record the known `app.clock` / `Button.onFocus` errors if they remain).
+- [x] `cd nexus-nsh && npm run gen && nsh test usage.test.tsx --target web` (plus the pure helper test and `nsh check`; record the known `app.clock` / `Button.onFocus` errors if they remain).
 - [x] `python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml && python3 interface/check_manifest.py`
-- [ ] Update `docs/porting-ledger.md` on landing: "Provider usage showed a continuous bar, used percent and prose notes | Both clients show a five-column table: ten-block gauge filled bottom-up, percent left, reserve (old 7-day pace formula), expiry; the Codex limit-reached note, xAI per-product credit notes and per-window detail text are gone (2026-11-06) | User request". Record any screenshot-only difference; none is expected on desktop.
+- [x] Update `docs/porting-ledger.md` on landing: "Provider usage showed a continuous bar, used percent and prose notes | Both clients show a five-column table: ten-block gauge filled bottom-up, percent left, reserve (old 7-day pace formula), expiry; the Codex limit-reached note, xAI per-product credit notes and per-window detail text are gone (2026-11-06) | User request". Record any screenshot-only difference; none is expected on desktop.
 - [ ] Tick this section, move its one-line record to Landed and remove the status-table row's "planned" wording.
 
 ## 9. Backlog carried over from the previous plan

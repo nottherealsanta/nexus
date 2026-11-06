@@ -33,8 +33,8 @@ describe("provider usage", () => {
     await app.keyboard.press("mod+shift+u");
     await app.waitFor("text:Other Copilot note");
     const shown = app.texts().join("\n");
-    for (const text of ["42%", "10%", "Other xAI note", "Other Copilot note", "Prepaid credits: $1.00"]) expect(shown.includes(text)).toBe(true);
-    for (const text of ["61%", "73%", "Prepaid credits: $2.50", "AI credits used this period: 10", "Chat: unlimited", "Completions: unlimited"]) expect(shown.includes(text)).toBe(false);
+    for (const text of ["Window", "Progress", "Left", "Reserve", "Expires", "██▃", "76%", "90%", "Other xAI note", "Other Copilot note", "Prepaid credits: $1.00"]) expect(shown.includes(text)).toBe(true);
+    for (const text of ["Limit reached:", "of credits", "225 of 300 left", "Prepaid credits: $2.50", "AI credits used this period: 10", "Chat: unlimited", "Completions: unlimited"]) expect(shown.includes(text)).toBe(false);
   });
 
   test("lists every connected provider, including those without plan limits", async () => {
@@ -56,11 +56,11 @@ describe("provider usage", () => {
     await app.waitFor("id:usage");
     const shown = app.texts().join("\n");
     expect(shown.includes("Provider usage")).toBe(true);
-    expect(shown.includes("ChatGPT (Codex)") && shown.includes("42%")).toBe(true);
+    expect(shown.includes("ChatGPT (Codex)") && shown.includes("58%")).toBe(true);
     expect(shown.includes("OpenAI (API key)")).toBe(true);
     expect(shown.includes("No plan limits; token usage is in the session totals.")).toBe(true);
     await app.press("id:usage-refresh");
-    await app.waitFor("text:55%");
+    await app.waitFor("text:45%");
     await app.keyboard.press("escape");
     expect(app.shows("id:usage")).toBe(false);
   });

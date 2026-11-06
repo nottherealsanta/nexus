@@ -11,6 +11,8 @@ failure, a child and an image; "mermaid" answers with the shared Mermaid scenari
 reasoning so the live group and footer can be seen; "tool" asks for a bash call (waits for
 approval), "slow" streams text slowly, "fail" reads a missing file, "ask" calls the `ask` tool,
 anything else answers with Markdown.
+Set NEXUS_USAGE_FIXTURE=1 to serve the shared provider-usage scenario, with resets relative to
+startup time, instead of querying real providers. Both GET and refresh use the same fixture.
 """
 import asyncio
 import json
@@ -19,6 +21,7 @@ import secrets
 import signal
 import sys
 import time
+from pathlib import Path
 
 from nexus import runtime as runtime_module
 from nexus.daemon import _write_info, info_path
@@ -220,6 +223,23 @@ def main() -> None:
     )
     store = Store(h / "nexus.db")
     store.set_preference("model.last", "scripted/m")
+    if os.environ.get("NEXUS_USAGE_FIXTURE") == "1":
+        from nexus import provider_usage
+
+        async def fixture_usage():
+            now = time.time()
+            scenario = json.loads((Path(__file__).resolve().parents[2] / "interface/scenarios/provider-usage.json").read_text())
+            scenario["fetched"] = now
+            for provider in scenario["providers"]:
+                for window in provider.get("windows", []):
+                    if window.get("period_seconds"):
+                        window["resets_at"] = now + window["period_seconds"] * 0.6
+            return scenario
+
+        provider_usage.providers_usage = fixture_usage
+        store.db.execute("create table if not exists provider_usage_cache (id integer primary key, snapshot text not null)")
+        store.db.execute("insert or replace into provider_usage_cache (id, snapshot) values (1, ?)", (json.dumps(asyncio.run(fixture_usage())),))
+        store.db.commit()
     rt = make_runtime(store)
     token = secrets.token_urlsafe(32)
     url = f"http://127.0.0.1:{port}"
