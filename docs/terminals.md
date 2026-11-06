@@ -9,8 +9,10 @@ see its README for the current controls and limitations.
 ## Client behaviour
 
 The desktop workspace has a bottom terminal dock below the composer and activity bar;
-mobile never exposes it. The header **Terminal** toggle shows a terminal count and
-opens or closes the dock, remembering its state. The dock header reads **Terminals (N)**.
+mobile never exposes it. The activity indicator **<n> shell** shows the terminal
+count; clicking it opens or closes the dock, remembering its state. The distinct
+**kernel** indicator has no number (there is exactly one kernel). The dock header
+reads **Terminals (N)**.
 Each terminal has a tab showing a running/exited status dot, its name, and a close
 **×**; **+** creates a terminal. Select a tab to switch, and double-click it or use
 **Rename** to rename. **Take control** / **Release control** are explicit actions.
