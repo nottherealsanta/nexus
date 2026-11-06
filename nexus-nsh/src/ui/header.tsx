@@ -28,6 +28,15 @@ const tabWidth = () => {
   const unit = textCellPoints();
   return workspaceTabCells(titles, tabRoom() / unit || 160) * unit;
 };
+/**
+ * The subagent strip's tab width: sized from the strip's own titles (a child also carries its agent
+ * and state label), so a sibling's tab never shrinks to the parent's width and overlaps its neighbour.
+ */
+function stripWidth(items: { title: string; extra: number }[]) {
+  const unit = textCellPoints();
+  const cells = Math.max(14, ...items.map((i) => Math.min(24, Array.from(i.title || "Untitled").length) + i.extra));
+  return Math.min(cells, 44) * unit;
+}
 const tabHeight = () => isNarrow() ? "h-10" : "h-7";
 const tabBox = () => `shrink-0 flex-row items-center rounded-(--radius) ${tabHeight()}`;
 
@@ -148,6 +157,14 @@ export function SubagentStrip() {
     const above = new Set(ancestors().map((s) => s.id));
     return subagentsOf(r.id).filter((s) => !above.has(s.id));
   };
+  const stripTab = () => {
+    m();
+    const narrow = isNarrow();
+    return stripWidth([
+      ...ancestors().map((a) => ({ title: a.title, extra: 5 })),
+      ...children().map((c) => ({ title: c.title, extra: 8 + Array.from(c.agent ?? "").length + (narrow ? 0 : 10) })),
+    ]);
+  };
   return (
     <If when={!!parent()}>
       <View class="w-full bg-background" testID="subagent-strip" role="toolbar" accessibilityLabel="Subagent navigation">
@@ -163,7 +180,7 @@ export function SubagentStrip() {
                     onPress={() => void selectSession(ancestor().id)}
                     testID={isParent() ? "subagent-back" : isRoot() ? "subagent-root" : `subagent-crumb-${ancestor().id}`}
                     accessibilityLabel={isParent() ? `Back to ${ancestor().title || "parent session"}` : `Open ${isRoot() ? "root" : "ancestor"} session ${ancestor().title || "Untitled"}`}
-                    style={{ width: tabWidth() }} class={`${tabBox()} gap-1.5 px-2.5 text-muted-foreground hover:bg-accent hover:text-foreground ${FOCUS}`}
+                    style={{ width: stripTab() }} class={`${tabBox()} gap-1.5 px-2.5 text-muted-foreground hover:bg-accent hover:text-foreground ${FOCUS}`}
                   >
                     <Text testID={isRoot() ? "subagent-root-title" : undefined} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base}`}>{ancestor().title || "Untitled"}</Text>
                   </Button>
@@ -180,7 +197,7 @@ export function SubagentStrip() {
                     onPress={() => void selectSession(child().id)} selected={open()}
                     testID={`subagent-${child().id}`}
                     accessibilityLabel={`${capitalize(child().agent)} ${child().title || "Untitled"}, ${state().label}${open() ? ", open" : ""}`}
-                    style={{ width: tabWidth() }} class={`${tabBox()} gap-1.5 px-2.5 ${open() ? "bg-background" : "hover:bg-accent"} ${FOCUS}`}
+                    style={{ width: stripTab() }} class={`${tabBox()} gap-1.5 px-2.5 ${open() ? "bg-background" : "hover:bg-accent"} ${FOCUS}`}
                   >
                     <If when={state().spin} else={<Text class={`shrink-0 ${TS.base} ${state().tone}`} accessibilityLabel={state().label}>{state().glyph}</Text>}>
                       <Spinner class={`shrink-0 ${TS.base} ${state().tone}`} label={state().label} />
