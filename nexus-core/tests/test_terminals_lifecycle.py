@@ -1,5 +1,7 @@
 import asyncio
 import base64
+import os
+import signal
 
 import pytest
 
@@ -49,3 +51,25 @@ async def test_detach_reconnect_and_shutdown(tmp_path, monkeypatch):
         term.input(first, 1, b"no")
     await service.shutdown()
     assert term.status == "closed"
+
+
+async def test_controlling_terminal_and_signalled_exit(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    service = TerminalService()
+    term = service.create(project_id="p", workspace=str(tmp_path), creator="client", session_id=None, rows=24, cols=80)
+    def has_controlling_terminal():
+        try:
+            return os.tcgetpgrp(term.fd) == term.pid
+        except OSError:
+            return False
+
+    try:
+        await wait_until(has_controlling_terminal)
+        assert os.getsid(term.pid) == term.pid
+        os.killpg(term.pid, signal.SIGKILL)
+        await wait_until(lambda: term.status == "exited")
+        assert term.signal == signal.SIGKILL
+        assert term.exit_code is None
+    finally:
+        await service.shutdown()
