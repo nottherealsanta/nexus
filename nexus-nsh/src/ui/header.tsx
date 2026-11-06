@@ -11,6 +11,7 @@ import { ManagerHeaderIndicator, managerHeaderIndicatorVisible } from "./manager
 import { call } from "../core/manager";
 import { coreEditing } from "./connect";
 import { currentAlerts } from "./alerts";
+import { stripLayout } from "../strip-layout";
 import { rightSidebarWidth, textCellPoints, workspaceTabCells } from "./geometry";
 
 function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
@@ -28,15 +29,6 @@ const tabWidth = () => {
   const unit = textCellPoints();
   return workspaceTabCells(titles, tabRoom() / unit || 160) * unit;
 };
-/**
- * The subagent strip's tab width: sized from the strip's own titles (a child also carries its agent
- * and state label), so a sibling's tab never shrinks to the parent's width and overlaps its neighbour.
- */
-function stripWidth(items: { title: string; extra: number }[]) {
-  const unit = textCellPoints();
-  const cells = Math.max(14, ...items.map((i) => Math.min(24, Array.from(i.title || "Untitled").length) + i.extra));
-  return Math.min(cells, 44) * unit;
-}
 const tabHeight = () => isNarrow() ? "h-10" : "h-7";
 const tabBox = () => `shrink-0 flex-row items-center rounded-(--radius) ${tabHeight()}`;
 
@@ -157,21 +149,22 @@ export function SubagentStrip() {
     const above = new Set(ancestors().map((s) => s.id));
     return subagentsOf(r.id).filter((s) => !above.has(s.id));
   };
-  const stripTab = () => {
+  // Terminal-column layout, as the TUI: one cell width, shrunk and thinned to the strip's room.
+  const layout = () => {
     m();
-    const narrow = isNarrow();
-    return stripWidth([
-      ...ancestors().map((a) => ({ title: a.title, extra: 5 })),
-      ...children().map((c) => ({ title: c.title, extra: 8 + Array.from(c.agent ?? "").length + (narrow ? 0 : 10) })),
-    ]);
+    const unit = textCellPoints();
+    const room = Math.floor((Math.min(width(), 760) - 16) / unit);
+    return stripLayout({ ancestors: ancestors(), children: children(), viewed: session()?.id ?? "", room });
   };
+  const stripTab = () => layout().cell * textCellPoints();
   return (
     <If when={!!parent()}>
       <View class="w-full bg-background" testID="subagent-strip" role="toolbar" accessibilityLabel="Subagent navigation">
         <View class={`w-full max-w-[760px] mx-auto flex-row items-center gap-1.5 px-2 ${isNarrow() ? "min-h-12" : "min-h-8"} min-w-0`}>
-          <Scroll horizontal scrollbar={false} class="flex-1 min-w-0">
+          <View class="flex-1 min-w-0 overflow-hidden">
             <View class="flex-row items-center gap-1">
-            <Each of={ancestors()} key={(ancestor) => ancestor.id}>
+            <If when={layout().droppedLeft}><Text class={`shrink-0 ${TS.base} text-muted-foreground`} accessibilityLabel="Earlier sessions">…</Text></If>
+            <Each of={layout().ancestors} key={(ancestor) => ancestor.id}>
               {(ancestor) => {
                 const isParent = () => ancestor().id === parent()?.id;
                 const isRoot = () => ancestor().id === root()?.id;
@@ -188,7 +181,7 @@ export function SubagentStrip() {
               }}
             </Each>
             <View class="mx-0.5 h-4 w-px shrink-0 bg-border" accessible={false} />
-            <Each of={children()} key={(child) => child.id}>
+            <Each of={layout().children} key={(child) => child.id}>
               {(child) => {
                 const state = () => childState(child().id);
                 const open = () => session()?.id === child().id;
@@ -204,15 +197,12 @@ export function SubagentStrip() {
                     </If>
                     <Text class={`shrink-0 ${TS.base} ${agentColor(child().agent)}`}>{capitalize(child().agent)}</Text>
                     <Text testID={open() ? `subagent-current-${child().id}` : undefined} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base} ${open() ? "font-semibold text-foreground" : "text-foreground-secondary"}`}>{child().title || "Untitled"}</Text>
-                    <If when={!isNarrow()}>
-                      <Text class={`shrink-0 ${TS.base} text-muted-foreground tabular-nums`}>{state().label}</Text>
-                    </If>
                   </Button>
                 );
               }}
             </Each>
             </View>
-          </Scroll>
+          </View>
         </View>
       </View>
     </If>

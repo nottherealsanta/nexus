@@ -319,7 +319,7 @@ and 36 cells; at 120-159 they are 28 and 30; at 100-119 the left stays docked an
 closed until opened (the toggle docks it; a saved preference wins); below 100 both are drawers
 of 34 and 36 cells over the page, which `paint::scrim` dims (a click on the scrim closes the
 drawer). Under 100 the header keeps the two toggles, the run status and the bell, and the tab
-strip gives way to a breadcrumb of the viewed session cut from the left (`… › child`).
+strip gives way to a breadcrumb of the viewed session cut from the left (`… › child`). The subagent strip under the tabs draws every tab at one width of 10 to 30 columns (the widest title, plus a child's agent, +2); when the row is too full it first thins tabs (the oldest ancestors from the left, with a `…` marker, then the children farthest from the viewed one) and finally narrows the cells.
 
 States (D18): launch shows the splash (`nexus-tui/src/splash.rs`): the `_/` logo in
 `text.primary` (white in the dark theme), a 30-segment milestone bar, its percentage and the
@@ -369,7 +369,7 @@ its text has scrolled off the top, `sticky.rs` pins a copy under
 the header (three rows at most, a `░` shade row with `↑ N lines of this turn
 above`); the next band pushes it up and a click scrolls back. The timeline keeps one
 scroll per session and adopts it after a sync-driven selection, so a root's pinned
-band never appears over a child. While the reader scrolls, a subdued
+band never appears over a child. A session's first message is pinned: once Core confirms it, the timeline scrolls so that message's turn starts at the top and a spacer (blank rows, never drawn) lets the view reach it even while the reply is empty. The reply grows below without moving the view, the spacer shrinks as it grows, and the pin ends the moment the reader scrolls. Only the first send pins; later sends follow the end as before (`FirstPin` in `app.rs`, applied in `draw_timeline`). While the reader scrolls, a subdued
 `interactive.scrollbar` bar shows in the timeline's right gutter and fades out after
 about a second; Settings → Appearance → Scroll bar turns it off. It never takes
 content space or shifts the layout. The turn footer is
