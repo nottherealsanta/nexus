@@ -321,6 +321,16 @@ session view's `directory` differs from the one it was read for, as after a move
 and worktree actions remain disabled with a reason. Kernel state is the remaining
 session-info item not reported by Core.
 
+**Keyboard flow from an empty composer (PLAN 15.4).** Only while the composer is focused and empty: Left opens the
+session sidebar and gives it the keys (the composer is blurred); Left again focuses the project list (Up/Down move a
+cursor bar among the projects, Enter opens one, restoring an inactive project first); Left again opens the **projects
+overview** (also the palette command "Projects overview"). Esc or Right steps back out in reverse order. With text in the
+composer Left moves the cursor as usual. The overview (`src/ui/projects-overview.tsx`, rows from `overviewRows`) lists
+the projects in their saved order with a `├`/`└` tree of each project's active root sessions and their state, a per-project
+`N archived` toggle (`a` or Enter; collapsed), passive projects dimmed, and inactive projects last under `Inactive`,
+restored with `r` (`1`/`2`/`3` set current, passive, inactive). The project picker (`project.switch`, `cmd+shift+k`) lists
+every project, inactive ones marked, and choosing an inactive one restores it, as in the TUI. Tests: `keyboard-flow.test.tsx`.
+
 The Files tab is the TUI's expanding tree: one Core listing per directory read, folders expand and collapse in place
 with the shared fold glyphs and two cells of indent per depth, `.git` is never listed, and a file's Git letter sits at
 the row's end. Expanded folders keep their state across tab switches and reset when the project changes; the pane's

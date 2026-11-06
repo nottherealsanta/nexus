@@ -188,6 +188,14 @@ export const paletteOpen = signal(false);
 export const switcherOpen = signal(false);
 /** A simple list picker for catalog-backed choices (model, effort, agent). */
 export type PickerItem = { id: string; label: string; hint?: string; detail?: string[]; run: () => void | Promise<void> };
+/** The projects overview (PLAN 15.4): the selected row and the projects whose archived sessions are shown. */
+export const projectsOverview = signal<null | { cursor: number; archived: string[] }>(null);
+/** The keyboard flow from an empty composer: the session list, then the project list, which holds the keys. */
+/** The composer has the keyboard focus. */
+export const composerFocused = signal(false);
+export const flowStage = signal<null | "sessions" | "projects">(null);
+/** The project the flow's Up/Down has selected in the project list. */
+export const flowProject = signal<string | null>(null);
 export const picker = signal<null | { title: string; items: PickerItem[]; note?: string }>(null);
 export const confirmDialog = signal<null | { title: string; body: string; confirm: string; destructive: boolean; run: () => Promise<void> | void; busy?: boolean; error?: string }>(null);
 export const renaming = signal(false);

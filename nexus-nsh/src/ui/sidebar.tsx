@@ -1,10 +1,10 @@
 import type { JSX } from "nsh";
 import { List, PanResponder, Scroll, Text, View, effect, safeArea, signal } from "nsh";
 import { Button, ContextMenu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/base";
-import { Btn, Empty, Icon, IconButton, Status, AttentionMark, T, TS, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
+import { Btn, Empty, FocusEdge, Icon, IconButton, Status, AttentionMark, T, TS, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
 import { manifest } from "../gen/manifest";
 import { availability, byId, commands, keyLabel, moveProject, newSession, run, setProjectStatus, toggleLeft } from "../commands";
-import { railDrag, archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
+import { railDrag, archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, flowProject, flowStage, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
 import { fileTree, filesExpanded, loadFiles, openFile, showFile, toggleFileDir } from "../store";
@@ -521,6 +521,7 @@ function ProjectRow(p: { project: () => Project; count: (id: string) => number }
   const short = () => shortPath(project().path, home());
   const ref = () => ({ kind: "project" as const, id: project().id });
   const selected = () => currentProject() === project().id;
+  const cursor = () => flowStage() === "projects" && flowProject() === project().id;
   return (
     <ContextMenu
       open={sidebarRowMenu()?.kind === "project" && sidebarRowMenu()?.id === project().id}
@@ -536,7 +537,8 @@ function ProjectRow(p: { project: () => Project; count: (id: string) => number }
         <View role="button" onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== project().id && focusedSidebarRow()?.id === project().id) focusedSidebarRow.set(null); }}
           onPress={() => { focusedSidebarRow.set(ref()); if (projectStatus(project()) === PROJECT_STATUS.inactive) void setProjectStatus(project().id, PROJECT_STATUS.current); selectProject(project().id); }} accessibilityState={{ selected: selected() }} testID={`project-${project().id}`} accessibilityLabel={`Project ${project().name}`}
-          class={`gap-0.5 rounded-none px-2.5 py-1.5 hover:bg-accent ${selected() ? "bg-selection" : ""} ${FOCUS}`}>
+          class={`relative gap-0.5 rounded-none px-2.5 py-1.5 hover:bg-accent ${selected() || cursor() ? "bg-selection" : ""} ${FOCUS}`}>
+          <If when={cursor()}><FocusEdge testID={`project-cursor-${project().id}`} /></If>
           <View class="flex-row items-center gap-2">
             <Text style={{ numberOfLines: 1 }} class={`flex-1 ${TS.base} ${selected() ? "text-foreground font-medium" : "text-foreground"}`}>{project().name}</Text>
             <Text class={T.meta}>{`${projectStatus(project()) === PROJECT_STATUS.current ? "" : `${projectStatus(project())} · `}${p.count(project().id)} session${p.count(project().id) === 1 ? "" : "s"} · ${relTime(project().updated)}`}</Text>

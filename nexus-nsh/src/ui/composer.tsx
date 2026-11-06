@@ -2,13 +2,13 @@ import { Image, Scroll, Text, View, effect, keymap, platform, safeArea, signal, 
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Shimmer, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
-import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
+import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
   agentCatalog, contextBudget, contextDetail, draftContext, draftContextKey, draftPlanContext, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
   phone, projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast, annotating,
-  loadResources, resourceCounts, resourcesOpen,
+  loadResources, resourceCounts, resourcesOpen, composerFocused, flowStage, flowProject,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question } from "../core/api";
@@ -80,6 +80,7 @@ export function Composer() {
 function EditableComposer() {
   let ref: any;
   focusComposer.fn = () => { try { ref?.focus(); } catch {} };
+  blurComposer.fn = () => { try { ref?.blur(); } catch {} };
   const h = signal(28);
   // The dock's own width, measured rather than taken from the window: the provider label leaves
   // when the controls would overprint, which the window width alone cannot say.
@@ -439,7 +440,7 @@ function EditableComposer() {
               void send();
             }}
             onChange={({ value: t }) => { selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); prunePastes(key(), t); }}
-            onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
+            onFocus={() => { focused.set(true); composerFocused.set(true); flowStage.set(null); flowProject.set(null); }} onBlur={() => { focused.set(false); composerFocused.set(false); }}
             onSelectionChange={({ start, end }) => caret.set({ start, end })}
             onKeyPress={(e: { key: string }) => {
               if (String(e.key).toLowerCase() !== "escape") return;
