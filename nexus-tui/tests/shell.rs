@@ -46,6 +46,32 @@ fn terminal_open_lists_and_new_creates_in_current_workspace() {
     assert!(app.effects.iter().any(|effect| matches!(effect, Effect::Api(ApiCall::TerminalCreate { workspace, .. }) if !workspace.is_empty())));
 }
 
+#[test]
+fn selecting_terminal_attaches_and_renders_stream_output() {
+    use nexus_tui::terminal_panel::TerminalEvent;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.terminals.push(
+        serde_json::from_value(serde_json::json!({
+            "id":"t1", "name":"Shell", "workspace":"/tmp", "status":"running",
+            "controller":null, "rows":24, "cols":80
+        }))
+        .unwrap(),
+    );
+    press(&mut app, &["down", "enter"]);
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::TerminalAttach { id, .. } if id == "t1")));
+    let generation = app.terminal_panel.generation;
+    app.terminal_event(TerminalEvent::Frame {
+        generation,
+        frame: serde_json::json!({"version":1,"seq":1,"type":"output","data":"aGVsbG8="}),
+    });
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(rows.join("\n").contains("hello"));
+}
+
 fn joined(rows: &[String]) -> String {
     rows.join("\n")
 }

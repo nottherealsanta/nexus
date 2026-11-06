@@ -28,6 +28,12 @@ use crate::ui::*;
 /// Work the event loop performs on the shell's behalf.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
+    TerminalAttach {
+        id: String,
+        client: String,
+        generation: u64,
+    },
+    TerminalStop,
     Quit,
     Suspend,
     Sync(SyncCommand),
@@ -1010,6 +1016,33 @@ pub fn sync_msg_affects_view(msg: &SyncMsg) -> bool {
 }
 
 impl App {
+    pub fn terminal_event(&mut self, event: crate::terminal_panel::TerminalEvent) {
+        use crate::terminal_panel::TerminalEvent;
+        match event {
+            TerminalEvent::Attached {
+                generation,
+                attachment,
+            } if generation == self.terminal_panel.generation && self.terminal_open => {
+                self.terminal_panel.attachment = Some(attachment)
+            }
+            TerminalEvent::Frame { generation, frame }
+                if generation == self.terminal_panel.generation && self.terminal_open =>
+            {
+                if let Err(error) = self.terminal_panel.screen.apply(&frame) {
+                    self.toast(Level::Error, format!("Terminal stream: {error}"));
+                    self.effects.push(Effect::TerminalStop);
+                    self.terminal_panel.attachment = None;
+                }
+            }
+            TerminalEvent::Ended { generation, error }
+                if generation == self.terminal_panel.generation && self.terminal_open =>
+            {
+                self.terminal_panel.attachment = None;
+                self.toast(Level::Error, format!("Terminal stream: {error}"));
+            }
+            _ => {}
+        }
+    }
     pub fn new(state: AppState, theme: Theme, size: (u16, u16)) -> Self {
         let manifest = Arc::new(Manifest::load());
         let mut bindings = HashMap::new();
@@ -5130,6 +5163,9 @@ impl App {
     fn close_panel(&mut self) {
         if self.terminal_open {
             self.terminal_open = false;
+            self.terminal_panel.generation += 1;
+            self.terminal_panel.attachment = None;
+            self.effects.push(Effect::TerminalStop);
             return;
         }
         if self.ui.file_search.take().is_some() {
@@ -8859,7 +8895,7 @@ impl App {
     fn handle_key_inner(&mut self, ev: KeyEvent) {
         let Some(name) = keys::name(&ev) else { return };
         if self.terminal_open && self.ui.overlay.is_none() && name == "esc" {
-            self.terminal_open = false;
+            self.close_panel();
             return;
         }
         if self.terminal_open && self.ui.overlay.is_none() {
@@ -8870,6 +8906,28 @@ impl App {
                         (self.terminal_panel.cursor + 1).min(self.terminal_panel.terminals.len())
                 }
                 "enter" if self.terminal_panel.cursor == 0 => self.execute("terminal.new"),
+                "enter" => {
+                    if let Some(terminal) = self
+                        .terminal_panel
+                        .terminals
+                        .get(self.terminal_panel.cursor - 1)
+                    {
+                        let id = terminal.id.clone();
+                        self.terminal_panel.generation += 1;
+                        self.terminal_panel.screen = crate::terminal_screen::TerminalScreen::new(
+                            terminal.rows,
+                            terminal.cols,
+                        );
+                        self.terminal_panel.selected = Some(id.clone());
+                        self.terminal_panel.attachment = None;
+                        self.terminal_selected = true;
+                        self.effects.push(Effect::TerminalAttach {
+                            id,
+                            client: self.terminal_panel.client_id.clone(),
+                            generation: self.terminal_panel.generation,
+                        });
+                    }
+                }
                 _ => {}
             }
             return;

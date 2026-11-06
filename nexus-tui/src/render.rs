@@ -2375,6 +2375,11 @@ fn draw_panel(cx: &Cx, buf: &mut Buffer, r: Rect, area: Rect, hits: &mut HitMap)
     hits.add(frame, Target::Swallow);
     clear(buf, r, cx.st(PRIMARY, CANVAS));
     if cx.app.terminal_open {
+        let list_width = if cx.app.terminal_panel.selected.is_some() {
+            (r.width / 3).min(32)
+        } else {
+            r.width
+        };
         put(buf, r.x, r.y, "Terminal", cx.st(PRIMARY, CANVAS), r.width);
         if r.height > 1 {
             put(
@@ -2387,7 +2392,7 @@ fn draw_panel(cx: &Cx, buf: &mut Buffer, r: Rect, area: Rect, hits: &mut HitMap)
                     "  New terminal"
                 },
                 cx.st(ACCENT, CANVAS),
-                r.width,
+                list_width,
             );
         }
         for (i, terminal) in cx.app.terminal_panel.terminals.iter().enumerate() {
@@ -2412,8 +2417,27 @@ fn draw_panel(cx: &Cx, buf: &mut Buffer, r: Rect, area: Rect, hits: &mut HitMap)
                     terminal.controller.as_deref().unwrap_or("No controller")
                 ),
                 cx.st(PRIMARY, CANVAS),
-                r.width,
+                list_width,
             );
+        }
+        if cx.app.terminal_panel.selected.is_some() && r.width > list_width + 1 && r.height > 2 {
+            let screen_area = Rect::new(
+                r.x + list_width + 1,
+                r.y + 1,
+                r.width - list_width - 1,
+                r.height - 1,
+            );
+            cx.app.terminal_panel.screen.render(screen_area, buf);
+            if cx.app.terminal_panel.screen.gap {
+                put(
+                    buf,
+                    screen_area.x,
+                    screen_area.y,
+                    crate::terminal_screen::GAP_NOTICE,
+                    cx.st("status.warning", CANVAS),
+                    screen_area.width,
+                );
+            }
         }
     } else if cx.app.ui.diff_open.is_some() {
         draw_diff_view(cx, buf, r, true, hits);

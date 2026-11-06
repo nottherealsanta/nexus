@@ -8,6 +8,22 @@ pub enum TerminalFocus {
     Screen,
 }
 
+#[derive(Debug)]
+pub enum TerminalEvent {
+    Attached {
+        generation: u64,
+        attachment: String,
+    },
+    Frame {
+        generation: u64,
+        frame: serde_json::Value,
+    },
+    Ended {
+        generation: u64,
+        error: String,
+    },
+}
+
 pub struct TerminalPanel {
     pub terminals: Vec<TerminalResource>,
     pub selected: Option<String>,
@@ -17,6 +33,8 @@ pub struct TerminalPanel {
     pub creating: bool,
     pub loading: bool,
     pub client_id: String,
+    pub generation: u64,
+    pub attachment: Option<String>,
 }
 
 impl Default for TerminalPanel {
@@ -30,6 +48,8 @@ impl Default for TerminalPanel {
             creating: false,
             loading: false,
             client_id: crate::api::RequestId::new().as_str().to_owned(),
+            generation: 0,
+            attachment: None,
         }
     }
 }
