@@ -36,6 +36,7 @@ terms = [
   # views and overlays
   "panel.file", "panel.diff", "editor.dirty", "editor.readonly", "editor.markdown", "overlay.open", "dialog.open", "alert.open",
   "drawer.open", "layout.narrow",
+  "terminal.open", "terminal.selected", "terminal.focused", "terminal.controlled",
   # connection and accounts
   "connection.lost", "connection.no_daemon", "provider.signed_in",
   "has_notifications", "text_edit.active", "view.settings",
@@ -80,7 +81,7 @@ contexts = [
   "waiting", "sidebar", "sidebar.sessions", "sidebar.files",
   "sidebar.projects", "sidebar.git", "editor", "drawer", "dialog",
   "manager.listening", "manager.field", "manager.card", "manager.focused",
-  "inspector", "escape_chain",
+  "inspector", "terminal", "escape_chain",
 ]
 
 # Esc closes an interactive Manager dropdown, leaving audio and work running.
@@ -784,6 +785,80 @@ key_context = "escape_chain"
 when = ["dialog.open"]
 unavailable_reason = "No dialog is open."
 placement = ["dialog"]
+
+[[command]]
+id = "terminal.open"
+title = "Terminal"
+category = "navigation"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["palette", "menu"]
+status = "deferred"
+
+[[command]]
+id = "terminal.new"
+title = "New terminal"
+category = "navigation"
+when = ["terminal.open"]
+unavailable_reason = "Open Terminal first."
+placement = ["panel"]
+status = "deferred"
+
+[[command]]
+id = "terminal.rename"
+title = "Rename"
+category = "navigation"
+when = ["terminal.selected"]
+unavailable_reason = "Select a terminal first."
+placement = ["panel"]
+status = "blocked_core"
+
+[[command]]
+id = "terminal.close"
+title = "Close"
+category = "navigation"
+when = ["terminal.selected"]
+unavailable_reason = "Select a terminal first."
+placement = ["panel"]
+status = "deferred"
+
+[[command]]
+id = "terminal.acquire"
+title = "Take control"
+category = "navigation"
+when = ["terminal.selected", "!terminal.controlled"]
+unavailable_reason = "Select a terminal without control first."
+placement = ["panel"]
+status = "deferred"
+
+[[command]]
+id = "terminal.release"
+title = "Release control"
+category = "navigation"
+when = ["terminal.controlled"]
+unavailable_reason = "This attachment does not have control."
+placement = ["panel"]
+status = "deferred"
+
+[[command]]
+id = "terminal.copy"
+title = "Copy"
+category = "copy"
+when = ["terminal.selected"]
+unavailable_reason = "Select terminal text first."
+placement = ["panel"]
+status = "deferred"
+
+[[command]]
+id = "terminal.focus_list"
+title = "Focus terminal list"
+category = "navigation"
+keys = { tui = "ctrl+]", nsh = "ctrl+]" }
+key_context = "terminal"
+when = ["terminal.focused"]
+unavailable_reason = "The terminal screen does not have focus."
+placement = ["panel"]
+status = "deferred"
 
 [[command]]
 id = "sidebar.left.toggle"
