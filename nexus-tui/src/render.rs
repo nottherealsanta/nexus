@@ -364,7 +364,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
     app.regions = regions;
     app.ui.timeline_total = metrics.0;
     app.ui.timeline_height = metrics.1;
-    if let Some(t) = timeline {
+    if let Some(t) = &timeline {
         app.ui.timeline_blocks = t.blocks.clone();
         let n = app.ui.timeline_blocks.len();
         // A fold changes line ranges and can add or remove blocks; keep the
@@ -376,8 +376,25 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         }
         app.ui.timeline_sel = app.ui.timeline_sel.map(|i| i.min(n.saturating_sub(1)));
     }
+    // The first-send pin holds the scroll at the first message until the reader moves it.
+    let pin_top = timeline.as_ref().and_then(|t| app.first_pin_top(&t.blocks));
+    if let Some(top) = pin_top {
+        let held = Scroll { follow: false, top };
+        let applied = app.ui.first_pin.as_ref().and_then(|p| p.applied);
+        match applied {
+            Some(was) if was != app.ui.scroll => app.ui.first_pin = None,
+            _ => {
+                app.ui.scroll = held;
+                if let Some(pin) = app.ui.first_pin.as_mut() {
+                    pin.applied = Some(held);
+                }
+            }
+        }
+    } else if app.ui.first_pin.is_some() && timeline.is_some() {
+        app.ui.first_pin = None;
+    }
     // keep the stored scroll honest after clamping
-    if !app.ui.scroll.follow {
+    if pin_top.is_none() && !app.ui.scroll.follow {
         let max_top = metrics.0.saturating_sub(metrics.1);
         if app.ui.scroll.top >= max_top {
             app.ui.scroll = Scroll::default();
@@ -4577,10 +4594,14 @@ fn draw_timeline(
         }
         return (0, r.height as usize, None);
     }
-    let total = lines.len();
     let h = r.height as usize;
+    // The first message sits at the top; a spacer keeps the page from scrolling short of it.
+    let pin = a.first_pin_top(&timeline.blocks);
+    let total = pin.map_or(lines.len(), |s| lines.len().max(s + h));
     let max_top = total.saturating_sub(h);
-    let top = if a.ui.scroll.follow {
+    let top = if let Some(s) = pin {
+        s.min(max_top)
+    } else if a.ui.scroll.follow {
         max_top
     } else {
         a.ui.scroll.top.min(max_top)

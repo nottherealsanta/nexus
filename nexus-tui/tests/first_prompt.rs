@@ -166,3 +166,56 @@ fn pending_first_prompt_remains_visible_at_narrow_sizes() {
         );
     }
 }
+
+/// Confirm the first message in the viewed session, as the history reply does.
+fn confirmed(a: &mut App, call: ApiCall) {
+    created(a, call);
+    let pending = a.pending_first_prompt().unwrap().text.clone();
+    a.state.model.selected.as_mut().unwrap().messages.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "msg_first", "session_id": "ses_instant", "seq": 1, "role": "user",
+            "parts": [{"type": "text", "text": pending}], "created": 1
+        }))
+        .unwrap(),
+    );
+    a.state.model.selected.as_mut().unwrap().starting = Some(serde_json::json!({}));
+    a.apply_sync(SyncMsg::Connection(ConnectionState::Live));
+}
+
+#[test]
+fn the_first_message_is_pinned_to_the_top_until_the_reader_scrolls() {
+    let (mut a, call) = sending();
+    confirmed(&mut a, call);
+    let text = scenario()["text"].as_str().unwrap().to_owned();
+    let first_word = text.split_whitespace().next().unwrap().to_owned();
+    let (_, lines) = draw(&mut a, 120, 36);
+    let row = lines
+        .iter()
+        .position(|l| l.contains(&first_word))
+        .expect("the sent message is drawn");
+    assert!(row <= 6, "the first message sits at the top, not row {row}: {lines:#?}");
+    let pinned = a.ui.scroll;
+    assert!(!pinned.follow, "the view does not follow the bottom");
+    // an empty reply cannot pull the view away: the spacer holds the pin
+    let (_, again) = draw(&mut a, 120, 36);
+    assert_eq!(a.ui.scroll, pinned);
+    assert_eq!(again.iter().position(|l| l.contains(&first_word)), Some(row));
+    assert!(a.ui.first_pin.is_some());
+    // the reader scrolls: the pin ends and is not re-applied
+    a.scroll_timeline(-1);
+    draw(&mut a, 120, 36);
+    assert!(a.ui.first_pin.is_none());
+}
+
+#[test]
+fn only_the_first_send_pins() {
+    let (mut a, call) = sending();
+    confirmed(&mut a, call);
+    draw(&mut a, 120, 36);
+    a.scroll_timeline(-1);
+    draw(&mut a, 120, 36);
+    a.ui.scroll = nexus_tui::ui::Scroll::default();
+    draw(&mut a, 120, 36);
+    assert!(a.ui.first_pin.is_none());
+    assert!(a.ui.scroll.follow, "later sends follow the normal rule");
+}

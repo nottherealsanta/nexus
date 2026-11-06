@@ -195,6 +195,8 @@ export const addProjectOpen = signal(false);
 /** Choices made before a session exists; consumed by its creation request. */
 export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string; disabled_tools?: string[] }>({});
 export const firstPrompts = signal<Record<string, { text: string; images: number; session?: string; choices: ReturnType<typeof sessionDraft> }>>({});
+/** The session whose first message is confirmed and should be pinned to the top of its timeline. */
+export const firstPin = signal<string | null>(null);
 export function pendingFirstPrompt() {
   m();
   const pending = firstPrompts()[currentProject() ?? ""];
@@ -205,6 +207,7 @@ function finishFirstPrompt() {
   const pending = firstPrompts()[project];
   if (pending?.session && pending.session === model.selected?.sessionId && model.selected.loaded && model.selected.messages.some((m) => m.role === "user")) {
     firstPrompts.update((all) => { const next = { ...all }; delete next[project]; return next; });
+    firstPin.set(pending.session);
     if (sessionDraft() === pending.choices) sessionDraft.set({});
   }
 }

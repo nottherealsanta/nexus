@@ -20,3 +20,16 @@ export function followsAfterScroll(m: {
   if (m.contentH <= m.viewH) return true;
   return m.following;
 }
+
+// The first-send pin: a session's first message sits at the top of the view, with room
+// below it (a spacer) so it can even while the reply is empty. The spacer is the view
+// height less what the pinned row and everything after it already take, and is gone
+// once the reply fills the screen.
+export function pinSpacer(below: number, viewH: number): number {
+  return Math.max(0, viewH - below);
+}
+
+/** The reader has moved the view off the pin (not the pin's own settling). */
+export function pinReleased(m: { y: number; target: number; sinceApplied: number }): boolean {
+  return m.sinceApplied > 150 && Math.abs(m.y - m.target) > 2;
+}

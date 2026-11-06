@@ -9,7 +9,7 @@ import { disabledOf, startingSections, StartingContext } from "./newsession";
 import type { CtxSection } from "./newsession";
 import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
-import { config, contextDetail, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed } from "../store";
+import { config, contextDetail, firstPin, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed } from "../store";
 import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import { apiUrl } from "../core/transport";
@@ -17,7 +17,7 @@ import type { IconName } from "../icons";
 import { roles, statusGlyphs } from "../gen/theme";
 import { pasteLabel } from "../pastes";
 import { keepIdentity } from "./keep-identity";
-import { END_SLOP, followsAfterScroll } from "../scroll-follow";
+import { END_SLOP, followsAfterScroll, pinReleased, pinSpacer } from "../scroll-follow";
 import { closedFenceSources, mermaidImage, mermaidText, toneClass } from "../mermaid";
 import { WORDS } from "../manager";
 import "../../fonts/MonaspaceArgon-Regular.otf";
@@ -1494,11 +1494,52 @@ export function Timeline() {
     seenSessions.add(sid);
     // A session at its end (or never opened) follows; one left further up returns to its offset.
     const atEnd = first || atEndOf()[sid] !== false;
+    // The first message of a session just created pins to the top; nothing else scrolls it.
+    if (untracked(firstPin) === sid) {
+      firstPin.set(null);
+      pin.set(sid);
+      pinTarget = 0;
+      pinAt = Date.now();
+      follow(false);
+      scrolledUp.set(false);
+      restoringSid = null;
+      return;
+    }
+    pin.set(null);
     follow(atEnd);
     scrolledUp.set(atEnd ? false : true);
     restoringSid = atEnd ? null : sid;
     restoring = atEnd ? 0 : scrollOf(sid);
     if (atEnd) setTimeout(toEnd, 0);
+  });
+  // The pinned first message: its row's top is the scroll offset, held as rows measure.
+  const pin = signal<string | null>(null);
+  let pinTarget = 0;
+  let pinAt = 0;
+  const pinned = () => pin() !== null && pin() === viewId();
+  const pinFrom = (heights: Record<string, number>, sid: string) => {
+    const all = rows();
+    const at = all.findIndex((r) => r.kind === "user");
+    if (at < 0) return null;
+    let before = LIST_PAD, below = 0;
+    all.forEach((r, i) => { const h = heights[heightKey(sid, r.key)] ?? ROW_ESTIMATE; if (i < at) before += h; else below += h; });
+    return { before, below };
+  };
+  const spacer = computed(() => {
+    if (!pinned()) return 0;
+    const geo = pinFrom(rowHeights(), viewId());
+    return geo ? pinSpacer(geo.below + LIST_PAD, viewHOf(viewId())) : 0;
+  });
+  effect(() => {
+    if (!pinned()) return;
+    const sid = viewId();
+    const geo = pinFrom(rowHeights(), sid);
+    viewHOf(sid); spacer();
+    if (!geo) return;
+    pinTarget = geo.before;
+    pinAt = Date.now();
+    try { ref?.scrollToOffset({ offset: pinTarget, animated: false }); } catch {}
+    lastY = pinTarget;
   });
   // A restored offset is applied again as rows arrive and measure, until it holds.
   effect(() => {
@@ -1520,7 +1561,7 @@ export function Timeline() {
     const heights = rowHeights();
     const rowsNow = rows();
     const sid = viewId();
-    if (!following && anchored && anchored.sid === sid) {
+    if (!following && !untracked(pinned) && anchored && anchored.sid === sid) {
       let delta = 0;
       for (const r of rowsNow) {
         if (r.key === anchored.key) break;
@@ -1550,7 +1591,7 @@ export function Timeline() {
     <View class="relative flex-1 min-h-0" testID="timeline">
       <If when={rows().length > 0} else={<EmptyTimeline />}>
         <List
-          ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingVertical: 12 }} scrollbar={false}
+          ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 + spacer() }} scrollbar={false}
           onLayout={keepEnd}
           onScroll={(e) => {
             const sid = viewId();
@@ -1568,6 +1609,7 @@ export function Timeline() {
             const now = followsAfterScroll({ y, lastY, gap, following, contentH: height, viewH: e.size.height });
             if (now !== following) follow(now);
             atEndOf.update((all) => all[sid] === (gap <= END_SLOP) ? all : { ...all, [sid]: gap <= END_SLOP });
+            if (pin() === sid && pinReleased({ y, target: pinTarget, sinceApplied: Date.now() - pinAt })) pin.set(null);
             lastY = y;
             if (restoringSid === sid && Math.abs(y - restoring) <= 1) restoringSid = null;
           }}
