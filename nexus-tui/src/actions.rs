@@ -244,7 +244,7 @@ pub enum ApiCall {
     AddProject {
         path: String,
     },
-    /// Remove a project; its sessions go with it.
+    /// Remove (unregister) a project; Core keeps its sessions and never touches files.
     DeleteProject {
         project: String,
     },

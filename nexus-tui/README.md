@@ -68,7 +68,7 @@ rectangle on the cell grid; the TUI has no rounded corners, and only circular st
 meters are round. The project rail is five cells wide and always there, from 70 columns, whether
 the sidebar is open or not; a border separates it from the open sidebar.
 Projects keep creation order with uppercase initials; collisions use the next
-available consonant, then a numeric suffix; the first character stays centred. The rail has one empty row above its projects. The selected project tile draws a lighter block (`interactive.active`) with a left `▏` bar (`interactive.active_bar`); the selected session row in the sidebar gets the same block and bar across both of its lines, with its title in `text.highlight` (white in dark mode) and not bold. Running or recently active projects
+available consonant, then a numeric suffix; the first character stays centred. The rail shows projects in Core's saved order without inactive ones. Drag a tile to reorder (the target tile is highlighted; Esc or dropping outside the rail cancels; a click without a drag still selects), or press `alt+up` / `alt+down` on a project; passive projects are dimmed, and the project picker (`project.switch`) lists inactive ones and restores the chosen one. Removing a project (confirmed) only unregisters it: Core keeps its sessions and files stay. The rail has one empty row above its projects. The selected project tile draws a lighter block (`interactive.active`) with a left `▏` bar (`interactive.active_bar`); the selected session row in the sidebar gets the same block and bar across both of its lines, with its title in `text.highlight` (white in dark mode) and not bold. Running or recently active projects
 (within one hour) are lighter gray. Each tile has a counter in each corner:
 attention (purple) and unread (blue) on top, running (green) and idle (white) below,
 counting root sessions, with archived sessions left out and subagents counted under
@@ -149,6 +149,17 @@ tokens, cached input percentage, elapsed time and recorded finish time. Click th
 footer or select it in the timeline and press Enter for further details including effort. Missing usage is
 marked unknown, and finish time is omitted when it was not recorded; elapsed
 time based on the last available message is prefixed `~`.
+
+**Keyboard flow from an empty composer (PLAN 15.4).** Only when the composer is empty (with text, Left moves the
+cursor as always): Left opens the session sidebar and focuses it; Left again focuses the project list (Up/Down move
+among the projects); Left again opens the **projects overview** (also the palette command `project.overview`). Esc or Right
+steps back out in reverse order: the overview closes, then the project list returns to the session list, then the
+composer takes the keys. The overview is a modal listing the projects in their saved order; under each a `├`/`└`
+tree of only its active root sessions with their state (`running`, `needs input`, `finished`, `idle`), and a
+`N archived` toggle (`a` or Enter; collapsed by default) that lists the archived ones. Passive projects are dimmed;
+inactive projects are grouped at the end under `Inactive` and restored with `r` (`1`/`2`/`3` set current, passive,
+inactive; Enter opens a session or a project's new-session view). NSH draws the same rows (`overviewRows` in
+`nexus-nsh/src/project-rail.ts`). Tests: `tests/keyboard_flow.rs`.
 
 `/learn <source>` asks whether to install into this project or every project, previews the
 source, then either installs an unambiguous set of new skills or opens a checklist. The checklist

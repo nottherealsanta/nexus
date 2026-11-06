@@ -323,6 +323,7 @@ mod tests {
                 "overlay",
                 "dialog",
                 "text_edit",
+                "sidebar_back",
                 "drawer",
                 "alert",
                 "interrupt",

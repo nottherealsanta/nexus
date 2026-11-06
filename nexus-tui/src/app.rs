@@ -101,6 +101,7 @@ pub const WIRED: &[&str] = &[
     "overlay.close",
     "nav.drawer.close",
     "nav.back",
+    "sidebar.step_back",
     "sidebar.left.toggle",
     "sidebar.right.toggle",
     "sidebar.tab.sessions",
@@ -124,6 +125,12 @@ pub const WIRED: &[&str] = &[
     "project.open",
     "project.add",
     "project.remove",
+    "project.move_up",
+    "project.move_down",
+    "project.status.current",
+    "project.status.passive",
+    "project.status.inactive",
+    "project.overview",
     "sidebar.row_menu",
     "session.rename",
     "session.archive",
@@ -219,6 +226,12 @@ pub const WIRED: &[&str] = &[
 
 /// Commands that change Core state: disabled while the connection is not live.
 const MUTATING: &[&str] = &[
+    "project.move_up",
+    "project.move_down",
+    "project.status.current",
+    "project.status.passive",
+    "project.status.inactive",
+    "project.remove",
     "session.new",
     "session.rename",
     "session.archive",
@@ -2706,7 +2719,7 @@ impl App {
     pub fn rail_project_ids(&self) -> Vec<String> {
         self.ordered_projects()
             .into_iter()
-            .filter(|p| self.project_status(&p.id) != "inactive")
+            .filter(|p| self.project_status(&p.id) != crate::api::project_status::INACTIVE)
             .map(|p| p.id.clone())
             .collect()
     }
@@ -2733,9 +2746,9 @@ impl App {
             .get(id)
             .and_then(|p| p.status.as_deref())
         {
-            Some("passive") => "passive",
-            Some("inactive") => "inactive",
-            _ => "current",
+            Some(crate::api::project_status::PASSIVE) => crate::api::project_status::PASSIVE,
+            Some(crate::api::project_status::INACTIVE) => crate::api::project_status::INACTIVE,
+            _ => crate::api::project_status::CURRENT,
         }
     }
 
@@ -2818,13 +2831,13 @@ impl App {
             "has_project" => self.current_project().is_some(),
             "project.current" => self
                 .current_project()
-                .is_some_and(|id| self.project_status(&id) == "current"),
+                .is_some_and(|id| self.project_status(&id) == crate::api::project_status::CURRENT),
             "project.passive" => self
                 .current_project()
-                .is_some_and(|id| self.project_status(&id) == "passive"),
+                .is_some_and(|id| self.project_status(&id) == crate::api::project_status::PASSIVE),
             "project.inactive" => self
                 .current_project()
-                .is_some_and(|id| self.project_status(&id) == "inactive"),
+                .is_some_and(|id| self.project_status(&id) == crate::api::project_status::INACTIVE),
             "project.can_move_up" => self.current_project().is_some_and(|id| {
                 self.project_ids().first().is_some_and(|first| *first != id)
                     && self.project_ids().iter().any(|p| *p == id)
@@ -2858,6 +2871,11 @@ impl App {
             }
             "composer.empty" => {
                 self.composer_ref().is_empty() && self.composer_ref().images.is_empty()
+            }
+            "sidebar.projects_focus" => {
+                self.ui.focus == Focus::Sidebar
+                    && self.ui.tab == Tab::Projects
+                    && self.ui.overlay.is_none()
             }
             "has_queued" => !self.pending_inputs().is_empty(),
             "timeline.scrolled_up" => !self.ui.scroll.follow,
@@ -3735,7 +3753,12 @@ impl App {
                         PaletteItem {
                             kind: PaletteKind::Project(id.clone()),
                             label: p.name.clone(),
-                            hint: p.path.clone(),
+                            hint: if self.project_status(&id) == crate::api::project_status::CURRENT
+                            {
+                                p.path.clone()
+                            } else {
+                                format!("{} · {}", self.project_status(&id), p.path)
+                            },
                             category: "project".into(),
                             reason: None,
                         },
@@ -4154,7 +4177,13 @@ impl App {
                 }
             }
             PaletteKind::Session(id) => self.open_session(&id),
-            PaletteKind::Project(id) => self.select_project(&id),
+            PaletteKind::Project(id) => {
+                // The project picker is also the restore action for an inactive project.
+                if self.project_status(&id) == crate::api::project_status::INACTIVE {
+                    self.set_project_status(&id, crate::api::project_status::CURRENT);
+                }
+                self.select_project(&id)
+            }
             PaletteKind::PoolModel(model) => {
                 if let Some((agent, fallback)) = self.ui.pool_pick.take() {
                     let mut refs = self.agent_refs(&agent, fallback);
@@ -5291,14 +5320,14 @@ impl App {
         let all = self.project_ids();
         let mut inactive = Vec::new();
         for id in all {
-            if self.project_status(&id) == "inactive" {
+            if self.project_status(&id) == crate::api::project_status::INACTIVE {
                 inactive.push(id);
             } else {
                 self.overview_project_rows(&mut rows, o, &id);
             }
         }
         if !inactive.is_empty() {
-            rows.push(OverviewRow::Group("INACTIVE"));
+            rows.push(OverviewRow::Group("Inactive"));
             for id in inactive {
                 self.overview_project_rows(&mut rows, o, &id);
             }
@@ -5516,10 +5545,10 @@ impl App {
             }
             "enter" | "space" => self.overview_activate(),
             "a" => self.overview_toggle_archived(),
-            "1" => self.overview_status("current"),
-            "2" => self.overview_status("passive"),
-            "3" => self.overview_status("inactive"),
-            "r" => self.overview_status("current"),
+            "1" => self.overview_status(crate::api::project_status::CURRENT),
+            "2" => self.overview_status(crate::api::project_status::PASSIVE),
+            "3" => self.overview_status(crate::api::project_status::INACTIVE),
+            "r" => self.overview_status(crate::api::project_status::CURRENT),
             "right" | "l" => self.close_overlay(),
             _ => return false,
         }
@@ -5715,6 +5744,7 @@ impl App {
                     };
                 }
             }
+            "sidebar.step_back" => self.set_tab(Tab::Sessions),
             "nav.back" => {
                 if let Some(p) = self.viewed().and_then(|s| s.parent_id.clone()) {
                     self.open_session(&p);
@@ -5797,17 +5827,17 @@ impl App {
             }
             "project.status.current" => {
                 if let Some(id) = self.menu_project() {
-                    self.set_project_status(&id, "current");
+                    self.set_project_status(&id, crate::api::project_status::CURRENT);
                 }
             }
             "project.status.passive" => {
                 if let Some(id) = self.menu_project() {
-                    self.set_project_status(&id, "passive");
+                    self.set_project_status(&id, crate::api::project_status::PASSIVE);
                 }
             }
             "project.status.inactive" => {
                 if let Some(id) = self.menu_project() {
-                    self.set_project_status(&id, "inactive");
+                    self.set_project_status(&id, crate::api::project_status::INACTIVE);
                 }
             }
             "project.overview" => self.open_projects_overview(),
@@ -6258,17 +6288,14 @@ impl App {
             .values()
             .filter(|s| s.project_id == id)
             .count();
-        let mut body = vec![format!(
-            "Remove \"{}\"{} from Nexus?",
-            p.name,
-            if sessions > 0 {
-                format!(" and its {sessions} session(s)")
-            } else {
-                String::new()
-            }
-        )];
-        body.push("Its sessions and history are deleted. The directory and its files stay.".into());
-        body.push("This cannot be undone.".into());
+        let mut body = vec![format!("Remove \"{}\" from Nexus?", p.name)];
+        if sessions > 0 {
+            body.push(format!(
+                "Its {sessions} session{} kept and return if you add the folder again.",
+                if sessions == 1 { " is" } else { "s are" }
+            ));
+        }
+        body.push("Files on disk are never touched.".into());
         let restore = self.restore_point();
         self.ui.dialog = Some(Dialog {
             title: "Remove project".into(),

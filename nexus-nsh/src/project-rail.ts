@@ -1,13 +1,44 @@
 import type { Project, Session } from "./core/api";
 
+/**
+ * The three-tier project status. The names were confirmed by the user (2026-11-06, PLAN 15.3):
+ * this is the only place in NSH that spells them, so renaming is a change here (and in the manifest ids).
+ */
+export const PROJECT_STATUS = { current: "current", passive: "passive", inactive: "inactive" } as const;
+export type ProjectStatus = (typeof PROJECT_STATUS)[keyof typeof PROJECT_STATUS];
+/** Title-case words for the status, as the clients show them. */
+export const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = { current: "Current", passive: "Passive", inactive: "Inactive" };
+
+/** `current` for an older Core that sends no status. */
+export function projectStatus(p: Pick<Project, "status">): ProjectStatus {
+  return p.status === PROJECT_STATUS.passive || p.status === PROJECT_STATUS.inactive ? p.status : PROJECT_STATUS.current;
+}
+
+/** Every project in Core's saved order (`position`); creation order is the fallback for an older Core. */
+export function orderedProjects(projects: Iterable<Project>): Project[] {
+  return [...projects].sort((a, b) =>
+    Number(a.position == null) - Number(b.position == null) || (a.position ?? 0) - (b.position ?? 0)
+    || a.created - b.created || a.id.localeCompare(b.id));
+}
+
+/** The rail: the saved order without inactive projects. */
 export function railProjects(projects: Iterable<Project>): Project[] {
-  return [...projects].sort((a, b) => a.created - b.created || a.id.localeCompare(b.id));
+  return orderedProjects(projects).filter((p) => projectStatus(p) !== PROJECT_STATUS.inactive);
+}
+
+/** The rail order after dragging `id` to `target` (an index in `ids`): the neighbour for the move call. */
+export function dropMove(ids: readonly string[], id: string, target: number): { before: string | null } | { after: string | null } | null {
+  const from = ids.indexOf(id);
+  const to = Math.max(0, Math.min(ids.length - 1, target));
+  if (from < 0 || to === from) return null;
+  return to < from ? { before: ids[to] } : { after: ids[to] };
 }
 
 export function projectLabels(projects: Iterable<Project>): Map<string, string> {
   const labels = new Map<string, string>();
   const used = new Set<string>();
-  for (const p of railProjects(projects)) {
+  // Initials follow creation order, so moving a project never changes a label.
+  for (const p of [...projects].sort((a, b) => a.created - b.created || a.id.localeCompare(b.id))) {
     const chars = Array.from(p.name.trim().toUpperCase());
     const first = chars[0] || "?";
     let label = first;
@@ -81,3 +112,53 @@ export function projectCounts(
 
 /** A rail counter past nine is an asterisk, so it still fits the rail. */
 export const railCount = (n: number) => n > 9 ? "*" : String(n);
+
+/** One row of the projects overview (PLAN 15.4); the TUI draws the same rows from `App::overview_rows`. */
+export type OverviewRow =
+  | { kind: "group"; title: string }
+  | { kind: "project"; id: string }
+  | { kind: "empty"; project: string }
+  | { kind: "session"; id: string; project: string; archived: boolean; last: boolean }
+  | { kind: "toggle"; project: string; count: number; expanded: boolean };
+
+/**
+ * Projects in their saved order, each followed by a tree of its active root sessions (newest first) and,
+ * when it has archived ones, a toggle (and the archived sessions while it is open). Inactive projects
+ * come last under "Inactive".
+ */
+export function overviewRows(projects: Iterable<Project>, sessions: Iterable<Session>, expanded: ReadonlySet<string>): OverviewRow[] {
+  const all = [...sessions];
+  const rows: OverviewRow[] = [];
+  const add = (id: string) => {
+    rows.push({ kind: "project", id });
+    const roots = all.filter((s) => s.project_id === id && !s.parent_id)
+      .sort((a, b) => b.updated - a.updated || a.id.localeCompare(b.id));
+    const active = roots.filter((s) => !s.archived);
+    const archived = roots.filter((s) => s.archived);
+    if (!active.length) rows.push({ kind: "empty", project: id });
+    active.forEach((s, i) => rows.push({ kind: "session", id: s.id, project: id, archived: false, last: i === active.length - 1 && !archived.length }));
+    if (archived.length) {
+      const open = expanded.has(id);
+      rows.push({ kind: "toggle", project: id, count: archived.length, expanded: open });
+      if (open) archived.forEach((s, i) => rows.push({ kind: "session", id: s.id, project: id, archived: true, last: i === archived.length - 1 }));
+    }
+  };
+  const ordered = orderedProjects(projects);
+  for (const p of ordered) if (projectStatus(p) !== PROJECT_STATUS.inactive) add(p.id);
+  const inactive = ordered.filter((p) => projectStatus(p) === PROJECT_STATUS.inactive);
+  if (inactive.length) {
+    rows.push({ kind: "group", title: "Inactive" });
+    for (const p of inactive) add(p.id);
+  }
+  return rows;
+}
+
+/** A session's state word in the overview, in the TUI's order of precedence. */
+export function sessionStateWord(s: Pick<Session, "archived" | "status">, waiting: boolean, running: boolean, unread: boolean, failed = false): string {
+  if (waiting) return "needs input";
+  if (failed) return "failed";
+  if (running || s.status === "busy") return "running";
+  if (s.archived) return "archived";
+  if (unread) return "finished";
+  return "idle";
+}

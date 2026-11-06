@@ -1100,10 +1100,10 @@ describe("sidebar row menus", () => {
     await app.press("id:row-action-project.remove");
     await app.waitFor("id:confirm-dialog");
     const dialog = app.texts().join("\n");
-    expect(dialog.includes("demo") && dialog.includes("2 sessions")).toBe(true);
-    expect(dialog.includes("The directory and its files stay. This cannot be undone.")).toBe(true);
+    expect(dialog.includes("demo") && dialog.includes("2 sessions are kept")).toBe(true);
+    expect(dialog.includes("Files on disk are never touched.")).toBe(true);
     await app.press("id:confirm-ok");
-    expect(app.requests().some((request) => request.method === "DELETE" && request.url.includes("/api/project/prj_1"))).toBe(false);
+    expect(app.requests().some((request) => request.method === "POST" && request.url.includes("/api/project/prj_1/remove"))).toBe(false);
     expect(app.texts().join("\n").includes("Core is not connected: the view is read-only.")).toBe(true);
   });
 });

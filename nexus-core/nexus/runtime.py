@@ -356,6 +356,9 @@ class Runtime:
         project, created = self.store.project_for_path(path, name)
         if created:
             self.bus.publish("project.created", project_json(project))
+            # A restored project brings its sessions back; a new one has none.
+            for session in self.store.sessions(project.id):
+                self.bus.publish("session.created", self.session_json(session), session_id=session.id)
         return project
 
     def project(self, project_id: str) -> Project:
@@ -425,6 +428,33 @@ class Runtime:
         projects = self.store.reorder_project(project_id, before=before, after=after, use_before=use_before)
         self.bus.publish("project.reordered", {"order": [p.id for p in projects]})
         return projects
+
+    def remove_project(self, project_id: str) -> list[str]:
+        """Unregister a project from Nexus, keeping its sessions and every file.
+
+        Refuses while any of its sessions is running, waiting for the user, holding pending input or running a
+        background job. The sessions stay stored but leave every list (kind `detached`); opening the same path
+        again restores the project and them. Clients get `session.deleted` tombstones (the sessions left their
+        view) and `project.deleted` with `removed: true`.
+        """
+        self.project(project_id)
+        sessions = self.store.sessions(project_id, kind="user")
+        ids = {s.id for s in sessions}
+        busy = set(self.turns) | {sid for sid, _, _ in self.approvals.values()}
+        busy |= {r.session_id for r in self.questions.values()}
+        busy |= {job.session_id for job in self.jobs.list() if job.finished is None}
+        busy |= {item["session_id"] for item in self.inputs.list()}
+        if ids & busy:
+            raise Conflict("project has a running session or pending work; interrupt it first, then remove the project")
+        if any(k.lock.locked() for k in self.kernels.items.values() if k.created_by in ids):
+            raise Conflict("project has a busy kernel; wait for its cell to finish")
+        detached = self.store.unregister_project(project_id)
+        self._publish_tombstones([s for s in sessions if s.id in set(detached)])
+        manager = self.project_mcps.pop(project_id, None)
+        if manager is not None:
+            asyncio.get_running_loop().create_task(manager.close())
+        self.bus.publish("project.deleted", {"id": project_id, "removed": True})
+        return detached
 
     async def delete_project(self, project_id: str) -> None:
         sessions = self.store.sessions(project_id)

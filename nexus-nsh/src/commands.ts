@@ -3,13 +3,13 @@ import type { UsageProvider } from "./store";
 // Command registry built from interface/manifest.toml (generated to src/gen/manifest.ts).
 // Ids, titles, keys, `when` rules, reasons and placements come from the manifest; this file
 // only evaluates terms and binds handlers for the actions whose Core API exists.
-import { Clipboard, keymap, openUrl, platform } from "nsh";
+import { Clipboard, effect, keymap, openUrl, platform } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
   editFile, fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   firstPrompts, pendingInputs, contextDetail, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
+  composerFocused, flowProject, flowSession, flowStage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
 } from "./store";
 import { ApiError, apiBase, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
@@ -26,6 +26,9 @@ import { dictationPhase } from "./voice-state";
 import { toggleManagerDropdown, toggleManagerAudio, cancelListening, cancelTurn, closeField, dismissCard, managerEscapeRule, managerSlash, managerTerm, minimise, openField, openManagerContext, openManagerSession, sendListening, scrollDetails, startQuietly, stopCall, stopSpeech, submitField, talk } from "./core/manager";
 import { refreshSearchService, searchStartReason, startSearchService } from "./search-service";
 import { closeInspector, inspectSession, inspector, inspectorCommand } from "./inspector";
+import { rowSessions } from "./ui/sidebar";
+import { PROJECT_STATUS, dropMove, orderedProjects, projectStatus, railProjects } from "./project-rail";
+import type { ProjectStatus } from "./project-rail";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
 
 export interface Cmd {
@@ -79,6 +82,13 @@ function evalTerm(t: string): boolean {
   switch (t) {
     case "always": return true;
     case "has_project": return !!currentProject();
+    case "project.current": case "project.passive": case "project.inactive": {
+      const p = targetProject() ? model.projects.get(targetProject()!) : undefined;
+      return !!p && projectStatus(p) === t.slice("project.".length);
+    }
+    case "sidebar.projects_focus": return flowStage() === "projects" && !projectsOverview();
+    case "project.can_move_up": return railIndex() > 0;
+    case "project.can_move_down": { const i = railIndex(); return i >= 0 && i < railProjects(model.projects.values()).length - 1; }
     case "has_session": return inSession;
     case "has_turns": return inSession && (model.selected?.messages.some((x) => x.role === "user") ?? false);
     case "session.idle": return inSession && ses!.status !== "busy";
@@ -104,7 +114,7 @@ function evalTerm(t: string): boolean {
     case "editor.dirty": return fileDirty();
     case "editor.readonly": return openFile() !== null && openFile()?.draft === undefined && openFile()?.content !== undefined;
     case "editor.markdown": return openFile() !== null && markdownFile();
-    case "overlay.open": return !!inspector() || paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview() || !!annotating();
+    case "overlay.open": return !!inspector() || !!projectsOverview() || paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview() || !!annotating();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
     case "drawer.open": return !!drawer();
@@ -159,7 +169,12 @@ export function openSettings() {
 }
 on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
 on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
-function tab(t: "sessions" | "files" | "projects") { if (t === "files") void loadFiles(); leftTab.set(t); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true); }
+function tab(t: "sessions" | "files" | "projects") {
+  if (t === "files") void loadFiles(); leftTab.set(t);
+  // As in the TUI, the sidebar tab holds the keys: Esc and Right step back, Left goes further in.
+  flowStage.set(t === "files" ? null : t);
+  if (t === "projects") flowProject.set(currentProject() ?? null); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true);
+}
 
 export function newSession() {
   rememberNewSession(currentProject());
@@ -417,21 +432,54 @@ export function askDelete(id?: string) {
     run: async () => { await request("DELETE", `/api/session/${s.id}`, { key: newKey() }); toast("success", "Session deleted"); },
   });
 }
+/** The project a project command acts on: the row whose menu is open or focused, else the current project. */
+export function targetProject(): string | null {
+  const row = focusedSidebarRow();
+  return row?.kind === "project" ? row.id : currentProject() ?? null;
+}
+/** The target project's place in the rail, or -1 (not in the rail, or none). */
+function railIndex(): number {
+  m();
+  const id = targetProject();
+  return id ? railProjects(model.projects.values()).findIndex((p) => p.id === id) : -1;
+}
+/** Move a project in Core's saved order: before/after a neighbour, or to an end when it is null. */
+export async function moveProject(id: string, to: { before: string | null } | { after: string | null }) {
+  if (!live()) { toast("warning", "Core is not connected: the view is read-only."); return; }
+  try { await request("POST", `/api/project/${id}/move`, { body: to, key: newKey() }); }
+  catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+}
+function moveProjectStep(delta: number) {
+  const ids = railProjects(model.projects.values()).map((p) => p.id);
+  const id = targetProject();
+  if (!id) return;
+  const move = dropMove(ids, id, ids.indexOf(id) + delta);
+  if (move) void moveProject(id, move);
+}
+/** Set a project's status (`PATCH`); the project event updates every client. */
+export async function setProjectStatus(id: string, status: ProjectStatus) {
+  if (!live()) { toast("warning", "Core is not connected: the view is read-only."); return; }
+  try { await request("PATCH", `/api/project/${id}`, { body: { status }, key: newKey() }); }
+  catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+}
+function setCurrentProjectStatus(status: ProjectStatus) { const id = targetProject(); if (id) void setProjectStatus(id, status); }
 export function askRemoveProject(id?: string) {
   const row = focusedSidebarRow();
-  const target = id ?? (leftTab() === "projects" && row?.kind === "project" ? row.id : currentProject());
+  const target = id ?? (row?.kind === "project" ? row.id : currentProject());
   const project = target ? model.projects.get(target) : undefined;
   if (!target || !project) return;
   let sessions = 0;
   for (const session of model.sessions.values()) if (session.project_id === target) sessions++;
   confirmDialog.set({
     title: "Remove project",
-    body: `Remove “${project.name}”${sessions ? ` and its ${sessions} session${sessions === 1 ? "" : "s"}` : ""}?\nThe directory and its files stay. This cannot be undone.`,
+    body: `Remove “${project.name}” from Nexus?${sessions ? `\nIts ${sessions} session${sessions === 1 ? " is" : "s are"} kept and return if you add the folder again.` : ""}\nFiles on disk are never touched.`,
     confirm: "Remove", destructive: true,
     run: async () => {
       if (!live()) { toast("warning", "Core is not connected: the view is read-only."); return; }
-      await request("DELETE", `/api/project/${target}`, { key: newKey() });
-      toast("success", "Project removed");
+      try {
+        await request("POST", `/api/project/${target}/remove`, { key: newKey() });
+        toast("success", "Project removed");
+      } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
     },
   });
 }
@@ -524,6 +572,7 @@ export async function sideQuestion(question: string) {
   } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
 }
 
+export const blurComposer = { fn: (() => {}) as () => void };
 export const focusComposer = { fn: (() => {}) as () => void };
 export const rightWidthHint = { w: 1280 };
 
@@ -539,7 +588,7 @@ on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });
 on("notifications.mark_all_read", () => { notifications.set([]); unread.set(0); });
 on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[0].id); }); // the oldest, drawn on top
 on("alert.cancel", () => { const d = confirmDialog(); if (d) { if (!d.busy) confirmDialog.set(null); } else if (connection().kind !== "incompatible") addProjectOpen.set(false); });
-on("overlay.close", () => { if (annotating()) { annotating.set(null); return; } if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (switcherOpen()) { switcherOpen.set(false); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
+on("overlay.close", () => { if (annotating()) { annotating.set(null); return; } if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (switcherOpen()) { switcherOpen.set(false); return; } if (projectsOverview()) { projectsOverview.set(null); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
 on("nav.drawer.close", () => drawer.set(null));
 on("sidebar.left.toggle", toggleLeft);
 on("sidebar.right.toggle", () => toggleRight(rightWidthHint.w));
@@ -585,9 +634,26 @@ function closeEditor() {
 on("editor.close", closeEditor);
 on("app.usage", () => void showUsage());
 on("turn.load_older", () => { void loadOlderMessages(true); });
-on("project.switch", () => tab("projects"));
+/** The project picker is also the restore action for an inactive project. */
+on("project.switch", () => {
+  const items = orderedProjects(model.projects.values()).map((p) => ({
+    id: p.id, label: p.name,
+    hint: projectStatus(p) === PROJECT_STATUS.current ? p.path : `${projectStatus(p)} · ${p.path}`,
+    run: async () => {
+      picker.set(null);
+      if (projectStatus(p) === PROJECT_STATUS.inactive) await setProjectStatus(p.id, PROJECT_STATUS.current);
+      selectProject(p.id);
+    },
+  }));
+  picker.set({ title: "Switch project", items, note: items.length ? undefined : "No projects yet." });
+});
+on("project.overview", () => openProjectsOverview());
+on("sidebar.step_back", () => flowBack());
 on("project.add", () => addProjectOpen.set(true), true);
 on("project.remove", () => askRemoveProject());
+on("project.move_up", () => moveProjectStep(-1), true);
+on("project.move_down", () => moveProjectStep(1), true);
+for (const status of Object.values(PROJECT_STATUS)) on(`project.status.${status}`, () => setCurrentProjectStatus(status), true);
 on("sidebar.row_menu", openFocusedSidebarMenu);
 on("session.rename", () => renaming.set(true), true);
 on("skills.learn", () => toast("info", "Type /learn followed by owner/repo, a GitHub URL or ./folder"), true);
@@ -881,6 +947,8 @@ const GLOBAL_CONTEXTS = new Set(["global"]);
 const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d+$/.test(k);
 /** Esc is not a per-command lookup: the manifest's ordered rules decide (interface/README.md "Esc precedence"). */
 export function escape() {
+  const drag = railDrag();
+  if (drag) { railDrag.set({ ...drag, cancelled: true }); return "rail_drag"; }
   if (inspector()) { closeInspector(); return "inspector"; }
   // The Manager's context modal closes first, then a consent notice cancels or
   // any open call (focused or minimised) ends.
@@ -985,7 +1053,84 @@ export function bindKeys(): () => void {
     }
   }
   try { offs.push(keymap.bind("escape", () => { escape(); }, { when: "always" })); } catch {}
+  // Left in an empty, focused composer starts the keyboard flow; the key still reaches the input,
+  // where it has nothing to move, and with text in the composer this binding does nothing.
+  try { offs.push(keymap.bind("left", () => { if (!flowStage() && composerFocused() && term("composer.empty")) flowStart(); }, { when: "always", passThrough: true })); } catch {}
   offs.push(bindLeader());
   return () => offs.forEach((f) => f());
 }
 void selectProject;
+
+// ---- keyboard flow from an empty composer (PLAN 15.4) ----
+
+/** Open the projects overview. */
+export function openProjectsOverview() {
+  if (isNarrow()) drawer.set("left"); else leftOpen.set(true);
+  leftTab.set("projects");
+  flowStage.set("projects");
+  projectsOverview.set({ cursor: 0, archived: [] });
+}
+/** Left in an empty composer: open the left session sidebar and give it the keys. */
+export function flowStart() {
+  if (term("overlay.open") || term("dialog.open") || textEdit.active()) return;
+  leftTab.set("sessions");
+  if (isNarrow()) drawer.set("left"); else leftOpen.set(true);
+  flowStage.set("sessions");
+  flowSession.set(viewed()?.id ?? rowSessions()[0]?.id ?? null);
+  blurComposer.fn?.();
+}
+export function flowEnd() { flowStage.set(null); flowProject.set(null); flowSession.set(null); focusComposer.fn?.(); }
+/** Left again: the sessions give way to the project list, whose Left opens the overview. */
+function flowIn() {
+  const stage = flowStage();
+  if (stage === "sessions") {
+    leftTab.set("projects");
+    flowStage.set("projects");
+    flowProject.set(currentProject() ?? orderedProjects(model.projects.values())[0]?.id ?? null);
+  } else if (stage === "projects") openProjectsOverview();
+}
+/** Esc or Right: one step back out, in reverse order. */
+function flowBack() {
+  if (projectsOverview()) { projectsOverview.set(null); return; }
+  const stage = flowStage();
+  if (stage === "projects") { leftTab.set("sessions"); flowStage.set("sessions"); flowProject.set(null); flowSession.set(viewed()?.id ?? null); }
+  else flowEnd();
+}
+function flowMove(delta: number) {
+  if (flowStage() === "sessions") {
+    const ids = rowSessions().map((x) => x.id);
+    if (!ids.length) return;
+    const at = ids.indexOf(flowSession() ?? "");
+    flowSession.set(ids[Math.max(0, Math.min(ids.length - 1, (at < 0 ? (delta > 0 ? -1 : 0) : at) + delta))]);
+    return;
+  }
+  if (flowStage() !== "projects") return;
+  const ids = orderedProjects(model.projects.values()).map((p) => p.id);
+  if (!ids.length) return;
+  const at = ids.indexOf(flowProject() ?? "");
+  flowProject.set(ids[Math.max(0, Math.min(ids.length - 1, (at < 0 ? 0 : at) + delta))]);
+}
+function flowOpen() {
+  if (flowStage() === "sessions") {
+    const sid = flowSession();
+    if (sid) { void selectSession(sid); flowEnd(); }
+    return;
+  }
+  const id = flowProject();
+  const project = id ? model.projects.get(id) : undefined;
+  if (!id || !project) return;
+  if (projectStatus(project) === PROJECT_STATUS.inactive) void setProjectStatus(id, PROJECT_STATUS.current);
+  selectProject(id);
+  flowEnd();
+}
+// While the flow holds the keys (and the overview, which binds its own, is closed) these keys are ours.
+effect(() => {
+  if (!flowStage() || projectsOverview()) return;
+  const keys: Record<string, () => void> = { left: flowIn, right: flowBack };
+  keys.up = () => flowMove(-1); keys.down = () => flowMove(1); keys.enter = flowOpen;
+  const offs: (() => void)[] = [];
+  for (const [k, fn] of Object.entries(keys)) {
+    try { offs.push(keymap.bind(k, fn, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+  }
+    return () => offs.forEach((f) => f());
+});
