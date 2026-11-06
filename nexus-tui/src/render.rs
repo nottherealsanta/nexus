@@ -8972,8 +8972,6 @@ fn draw_inspector(
             ("j/k", "select"),
             ("enter", "expand"),
             ("/", "search"),
-            ("w", "pause"),
-            ("n/p", "older/newer"),
             ("esc", "close"),
         ],
     );

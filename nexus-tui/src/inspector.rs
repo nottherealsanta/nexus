@@ -810,6 +810,12 @@ impl Inspector {
             }
             fixed.push(line);
         }
+        let items = self.items();
+        let gantt = (self.view == 0 && !items.is_empty()).then(|| self.gantt_geometry(width));
+        if let Some(g) = &gantt {
+            // The ruler stays put while the lanes scroll under it.
+            fixed.extend(g.header.iter().cloned());
+        }
         let fixed: Vec<String> = fixed.iter().map(|l| clip(l, width)).collect();
         self.cache_lines(&mut out);
         if let Some(omitted) = data["omitted"].as_array() {
@@ -852,7 +858,6 @@ impl Inspector {
         });
         out.push(String::new());
         let mut cursor_line = None;
-        let items = self.items();
         if items.is_empty() {
             out.push(if self.view == 0 {
                 if f.any() {
@@ -870,10 +875,6 @@ impl Inspector {
             let range = window(index, items.len());
             if range.start > 0 {
                 out.push(format!("… {} rows above", range.start));
-            }
-            let gantt = (self.view == 0).then(|| self.gantt_geometry(width));
-            if let Some(g) = &gantt {
-                out.extend(g.header.iter().cloned());
             }
             let mut last_session = String::new();
             for i in range.clone() {
@@ -1005,20 +1006,23 @@ impl Inspector {
         let stamp = |f: f64| format!("+{:.2}s", start + span * f - origin);
         let mut labels = vec![' '; columns + 2];
         let mut ticks = vec!['─'; columns + 2];
-        for k in 0..=4 {
+        // The ends and the middle always get a label; the quarter marks only when they fit.
+        for k in [0usize, 4, 2, 1, 3] {
             let at = (columns * k / 4).min(columns);
             ticks[at + 1] = '┼';
-            let label = stamp(k as f64 / 4.0);
-            let chars: Vec<char> = label.chars().collect();
+            let chars: Vec<char> = stamp(k as f64 / 4.0).chars().collect();
             let from = if k == 4 {
                 (at + 2).saturating_sub(chars.len())
             } else {
                 at + 1
             };
+            let lo = from.saturating_sub(1);
+            let hi = (from + chars.len() + 1).min(labels.len());
+            if from + chars.len() > labels.len() || labels[lo..hi].iter().any(|c| *c != ' ') {
+                continue;
+            }
             for (j, c) in chars.iter().enumerate() {
-                if from + j < labels.len() {
-                    labels[from + j] = *c;
-                }
+                labels[from + j] = *c;
             }
         }
         let pad = " ".repeat(label_width + 3);
