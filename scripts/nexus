@@ -96,7 +96,12 @@ ensure_cargo() {
 
 ensure_npm() {
   command -v npm >/dev/null 2>&1 || die "npm is not on PATH"
-  [ -d "$NSH/node_modules" ] || (cd "$NSH" && npm install)
+  # Reinstall when the manifest or lockfile changed since the last install
+  # (npm writes node_modules/.package-lock.json on every install).
+  local marker="$NSH/node_modules/.package-lock.json"
+  if [ ! -f "$marker" ] || [ "$NSH/package-lock.json" -nt "$marker" ] || [ "$NSH/package.json" -nt "$marker" ]; then
+    (cd "$NSH" && npm install)
+  fi
 }
 
 ensure_nsh() {
