@@ -3,8 +3,8 @@ import { List, PanResponder, Scroll, Text, View, effect, safeArea, signal } from
 import { Button, ContextMenu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/base";
 import { Btn, Empty, Icon, IconButton, Status, AttentionMark, T, TS, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
 import { manifest } from "../gen/manifest";
-import { availability, byId, commands, keyLabel, newSession, run, toggleLeft } from "../commands";
-import { archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
+import { availability, byId, commands, keyLabel, moveProject, newSession, run, setProjectStatus, toggleLeft } from "../commands";
+import { railDrag, archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
 import { fileTree, filesExpanded, loadFiles, openFile, showFile, toggleFileDir } from "../store";
@@ -12,7 +12,7 @@ import { fileRows } from "../file-tree";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
 import { ProjectMcpPanel } from "./project-mcp";
-import { projectActivity, projectCounts, projectLabels, railCount, railProjects } from "../project-rail";
+import { PROJECT_STATUS, dropMove, orderedProjects, projectActivity, projectCounts, projectLabels, projectStatus, railCount, railProjects } from "../project-rail";
 import { defaultLeftSidebarWidth } from "./geometry";
 
 export const leftSidebarWidth = signal(272);
@@ -89,6 +89,31 @@ export function SessionRail() {
     const c = counts(id);
     return [`${c[0]} attention`, `${c[1]} unread`, `${c[2]} running`, `${c[3]} idle`];
   };
+  // Dragging a tile: the pointer's vertical travel picks the insertion index; release commits it, Esc or
+  // leaving the rail sideways cancels, and a press without travel stays a click.
+  let tileHeight = 56;
+  const RAIL_GAP = 16;
+  const dragPan = (id: string) => PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_event, g) => Math.abs(g.dy) > 4,
+    onPanResponderGrant: () => railDrag.set({ id, to: projects().findIndex((p) => p.id === id), cancelled: false }),
+    onPanResponderMove: (_event, g) => {
+      const d = railDrag();
+      if (!d || d.id !== id) return;
+      const ids = projects();
+      const from = ids.findIndex((p) => p.id === id);
+      const to = Math.max(0, Math.min(ids.length - 1, from + Math.round(g.dy / (tileHeight + RAIL_GAP))));
+      railDrag.set({ ...d, to, cancelled: d.cancelled || Math.abs(g.dx) > RAIL_PX });
+    },
+    onPanResponderRelease: () => {
+      const d = railDrag();
+      railDrag.set(null);
+      if (!d || d.cancelled) return;
+      const move = dropMove(projects().map((p) => p.id), id, d.to);
+      if (move) void moveProject(id, move);
+    },
+    onPanResponderTerminate: () => railDrag.set(null),
+  });
   const railMenu = signal<string | null>(null);
   const railTip = signal<string | null>(null);
   const railFocus = signal<string | null>(null);
@@ -100,14 +125,24 @@ export function SessionRail() {
         <View class="items-center gap-4 pb-2">
         <Each of={projects()} key={(p) => p.id}>
           {(p) => {
+            const pan = dragPan(p().id);
+            const passive = () => projectStatus(p()) === PROJECT_STATUS.passive;
+            const dragging = () => railDrag()?.id === p().id;
+            const target = () => { const d = railDrag(); return !!d && !d.cancelled && projects()[d.to]?.id === p().id && d.id !== p().id; };
             return (
               <ContextMenu
                 open={railMenu() === p().id}
-                onOpenChange={({ open }) => { railMenu.set(open ? p().id : railMenu() === p().id ? null : railMenu()); }}
+                onOpenChange={({ open }) => {
+                  railMenu.set(open ? p().id : railMenu() === p().id ? null : railMenu());
+                  if (open) focusedSidebarRow.set({ kind: "project", id: p().id });
+                  else if (focusedSidebarRow()?.id === p().id) focusedSidebarRow.set(null);
+                }}
                 popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg"
                 trigger={
-              <View role="button" focusable
+              <View role="button" focusable {...pan.panHandlers}
+                onLayout={(b: any) => { tileHeight = b.bounds?.size?.height ?? b.size?.height ?? tileHeight; }}
                 onPress={() => {
+                  if (railDrag()) return;
                   if (currentProject() === p().id) {
                     scopeAll.set(false);
                     if (isNarrow()) { leftTab.set("sessions"); drawer.set(drawer() === "left" ? null : "left"); }
@@ -141,11 +176,11 @@ export function SessionRail() {
                   </View>
                 </Tooltip>}
                 style={{ width: RAIL_PX }}
-                class={`items-center rounded-none hover:bg-accent ${currentProject() === p().id ? "bg-selection" : ""} ${FOCUS}`}>
+                class={`items-center rounded-none hover:bg-accent ${currentProject() === p().id ? "bg-selection" : ""} ${dragging() ? "opacity-40" : ""} ${target() ? "bg-accent" : ""} ${FOCUS}`}>
                 <View class="w-full flex-row justify-between px-1">
                   <Each of={CORNERS.slice(0, 2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
                 </View>
-                <Text class={`${TS.base} font-medium ${activity(p().id).active ? "text-foreground opacity-70" : "text-muted-foreground opacity-30"}`}>{labels().get(p().id)}</Text>
+                <Text testID={`rail-label-${p().id}`} class={`${TS.base} font-medium ${target() ? "text-primary" : activity(p().id).active ? (passive() ? "text-foreground opacity-40" : "text-foreground opacity-70") : "text-muted-foreground opacity-30"}`}>{labels().get(p().id)}</Text>
                 <View class="w-full flex-row justify-between px-1">
                   <Each of={CORNERS.slice(2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
                 </View>
@@ -452,7 +487,7 @@ function FilesTab() {
   </Scroll>;
 }
 function ProjectsTab() {
-  const rows = () => { m(); return model.projectsRecent(); };
+  const rows = () => { m(); return orderedProjects(model.projects.values()); };
   const items = () => [...rows().map((project) => ({ kind: "project" as const, id: project.id, project })), { kind: "add" as const, id: "add-project" }];
   const count = (id: string) => { let n = 0; for (const s of model.sessions.values()) if (s.project_id === id && !s.parent_id && !s.archived) n++; return n; };
   return (
@@ -500,11 +535,11 @@ function ProjectRow(p: { project: () => Project; count: (id: string) => number }
       trigger={
         <View role="button" onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== project().id && focusedSidebarRow()?.id === project().id) focusedSidebarRow.set(null); }}
-          onPress={() => { focusedSidebarRow.set(ref()); selectProject(project().id); }} accessibilityState={{ selected: selected() }} testID={`project-${project().id}`} accessibilityLabel={`Project ${project().name}`}
+          onPress={() => { focusedSidebarRow.set(ref()); if (projectStatus(project()) === PROJECT_STATUS.inactive) void setProjectStatus(project().id, PROJECT_STATUS.current); selectProject(project().id); }} accessibilityState={{ selected: selected() }} testID={`project-${project().id}`} accessibilityLabel={`Project ${project().name}`}
           class={`gap-0.5 rounded-none px-2.5 py-1.5 hover:bg-accent ${selected() ? "bg-selection" : ""} ${FOCUS}`}>
           <View class="flex-row items-center gap-2">
             <Text style={{ numberOfLines: 1 }} class={`flex-1 ${TS.base} ${selected() ? "text-foreground font-medium" : "text-foreground"}`}>{project().name}</Text>
-            <Text class={T.meta}>{`${p.count(project().id)} session${p.count(project().id) === 1 ? "" : "s"} · ${relTime(project().updated)}`}</Text>
+            <Text class={T.meta}>{`${projectStatus(project()) === PROJECT_STATUS.current ? "" : `${projectStatus(project())} · `}${p.count(project().id)} session${p.count(project().id) === 1 ? "" : "s"} · ${relTime(project().updated)}`}</Text>
           </View>
           <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`${T.mono} w-full min-w-0`}>{short()}</Text>
         </View>

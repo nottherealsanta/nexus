@@ -234,6 +234,8 @@ export async function loadDraftContext(project: string, force = false) {
     if (seq === draftSeq) draftAsked = null; // the client-side estimate stays; the next change asks again
   }
 }
+/** A project-rail drag in progress: the dragged project, its insertion index among the rail's projects, and whether Esc cancelled it. */
+export const railDrag = signal<{ id: string; to: number; cancelled: boolean } | null>(null);
 export const waitIndex = signal(0);
 export const tick = signal(Date.now());
 export const settingsSection = signal<string | null>(null);
@@ -693,7 +695,7 @@ function reconcileSelection() {
   if (currentProject() && !model.projects.has(currentProject()!)) currentProject.set(null);
   if (!currentProject()) {
     const sel = model.selected && model.sessions.get(model.selected.sessionId);
-    const p = sel?.project_id ?? model.projectsRecent()[0]?.id ?? null;
+    const p = sel?.project_id ?? (model.projectsRecent().find((x) => x.status !== "inactive") ?? model.projectsRecent()[0])?.id ?? null;
     if (p) currentProject.set(p);
   }
   const selected = model.selected?.sessionId;

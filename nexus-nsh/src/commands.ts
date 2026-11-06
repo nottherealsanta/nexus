@@ -9,7 +9,7 @@ import {
   editFile, fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   firstPrompts, pendingInputs, contextDetail, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
+  focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
 } from "./store";
 import { ApiError, apiBase, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
@@ -26,6 +26,8 @@ import { dictationPhase } from "./voice-state";
 import { toggleManagerDropdown, toggleManagerAudio, cancelListening, cancelTurn, closeField, dismissCard, managerEscapeRule, managerSlash, managerTerm, minimise, openField, openManagerContext, openManagerSession, sendListening, scrollDetails, startQuietly, stopCall, stopSpeech, submitField, talk } from "./core/manager";
 import { refreshSearchService, searchStartReason, startSearchService } from "./search-service";
 import { closeInspector, inspectSession, inspector } from "./inspector";
+import { PROJECT_STATUS, dropMove, projectStatus, railProjects } from "./project-rail";
+import type { ProjectStatus } from "./project-rail";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
 
 export interface Cmd {
@@ -79,6 +81,12 @@ function evalTerm(t: string): boolean {
   switch (t) {
     case "always": return true;
     case "has_project": return !!currentProject();
+    case "project.current": case "project.passive": case "project.inactive": {
+      const p = targetProject() ? model.projects.get(targetProject()!) : undefined;
+      return !!p && projectStatus(p) === t.slice("project.".length);
+    }
+    case "project.can_move_up": return railIndex() > 0;
+    case "project.can_move_down": { const i = railIndex(); return i >= 0 && i < railProjects(model.projects.values()).length - 1; }
     case "has_session": return inSession;
     case "has_turns": return inSession && (model.selected?.messages.some((x) => x.role === "user") ?? false);
     case "session.idle": return inSession && ses!.status !== "busy";
@@ -417,21 +425,54 @@ export function askDelete(id?: string) {
     run: async () => { await request("DELETE", `/api/session/${s.id}`, { key: newKey() }); toast("success", "Session deleted"); },
   });
 }
+/** The project a project command acts on: the row whose menu is open or focused, else the current project. */
+export function targetProject(): string | null {
+  const row = focusedSidebarRow();
+  return row?.kind === "project" ? row.id : currentProject() ?? null;
+}
+/** The target project's place in the rail, or -1 (not in the rail, or none). */
+function railIndex(): number {
+  m();
+  const id = targetProject();
+  return id ? railProjects(model.projects.values()).findIndex((p) => p.id === id) : -1;
+}
+/** Move a project in Core's saved order: before/after a neighbour, or to an end when it is null. */
+export async function moveProject(id: string, to: { before: string | null } | { after: string | null }) {
+  if (!live()) { toast("warning", "Core is not connected: the view is read-only."); return; }
+  try { await request("POST", `/api/project/${id}/move`, { body: to, key: newKey() }); }
+  catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+}
+function moveProjectStep(delta: number) {
+  const ids = railProjects(model.projects.values()).map((p) => p.id);
+  const id = targetProject();
+  if (!id) return;
+  const move = dropMove(ids, id, ids.indexOf(id) + delta);
+  if (move) void moveProject(id, move);
+}
+/** Set a project's status (`PATCH`); the project event updates every client. */
+export async function setProjectStatus(id: string, status: ProjectStatus) {
+  if (!live()) { toast("warning", "Core is not connected: the view is read-only."); return; }
+  try { await request("PATCH", `/api/project/${id}`, { body: { status }, key: newKey() }); }
+  catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+}
+function setCurrentProjectStatus(status: ProjectStatus) { const id = targetProject(); if (id) void setProjectStatus(id, status); }
 export function askRemoveProject(id?: string) {
   const row = focusedSidebarRow();
-  const target = id ?? (leftTab() === "projects" && row?.kind === "project" ? row.id : currentProject());
+  const target = id ?? (row?.kind === "project" ? row.id : currentProject());
   const project = target ? model.projects.get(target) : undefined;
   if (!target || !project) return;
   let sessions = 0;
   for (const session of model.sessions.values()) if (session.project_id === target) sessions++;
   confirmDialog.set({
     title: "Remove project",
-    body: `Remove “${project.name}”${sessions ? ` and its ${sessions} session${sessions === 1 ? "" : "s"}` : ""}?\nThe directory and its files stay. This cannot be undone.`,
+    body: `Remove “${project.name}” from Nexus?${sessions ? `\nIts ${sessions} session${sessions === 1 ? " is" : "s are"} kept and return if you add the folder again.` : ""}\nFiles on disk are never touched.`,
     confirm: "Remove", destructive: true,
     run: async () => {
       if (!live()) { toast("warning", "Core is not connected: the view is read-only."); return; }
-      await request("DELETE", `/api/project/${target}`, { key: newKey() });
-      toast("success", "Project removed");
+      try {
+        await request("POST", `/api/project/${target}/remove`, { key: newKey() });
+        toast("success", "Project removed");
+      } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
     },
   });
 }
@@ -586,6 +627,9 @@ on("turn.load_older", () => { void loadOlderMessages(true); });
 on("project.switch", () => tab("projects"));
 on("project.add", () => addProjectOpen.set(true), true);
 on("project.remove", () => askRemoveProject());
+on("project.move_up", () => moveProjectStep(-1), true);
+on("project.move_down", () => moveProjectStep(1), true);
+for (const status of Object.values(PROJECT_STATUS)) on(`project.status.${status}`, () => setCurrentProjectStatus(status), true);
 on("sidebar.row_menu", openFocusedSidebarMenu);
 on("session.rename", () => renaming.set(true), true);
 on("skills.learn", () => toast("info", "Type /learn followed by owner/repo, a GitHub URL or ./folder"), true);
@@ -879,6 +923,8 @@ const GLOBAL_CONTEXTS = new Set(["global"]);
 const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d+$/.test(k);
 /** Esc is not a per-command lookup: the manifest's ordered rules decide (interface/README.md "Esc precedence"). */
 export function escape() {
+  const drag = railDrag();
+  if (drag) { railDrag.set({ ...drag, cancelled: true }); return "rail_drag"; }
   if (inspector()) { closeInspector(); return "inspector"; }
   // The Manager's context modal closes first, then a consent notice cancels or
   // any open call (focused or minimised) ends.

@@ -280,9 +280,9 @@ first message is labelled `Totals since …`, and requests that reported no usag
 are counted as unknown. It also counts descendant sessions. Right-click or Shift+F10 opens the
 manifest-driven session/project row menu, including confirmed project removal,
 and Projects, opened by its command, has a trailing `+ Add project` row. A 48 px project rail (NSH only; the TUI keeps its five cells) stays beside the sidebar whether it is open or
-closed, except on phones and below 500 px, which keep the project picker in the Sessions tab. A border separates it from the sidebar, and the sidebar's project-session and Files tabs keep their icons. It shows projects in creation order, with stable uppercase initials
+closed, except on phones and below 500 px, which keep the project picker in the Sessions tab. A border separates it from the sidebar, and the sidebar's project-session and Files tabs keep their icons. It shows projects in Core's saved order (drag a tile to reorder, or Alt+Up / Alt+Down and the row menu's Move project up/down; Esc or dropping outside the rail cancels; a press without travel still selects), without inactive projects, with stable uppercase initials in creation order (moving a project never changes a label)
 (collisions use the next available consonant, then a numeric suffix; the first character stays centred). Projects with running sessions or session activity
-within the last hour are lighter gray; inactive projects are darker. Selection is a soft
+within the last hour are lighter gray; passive projects are dimmed further and idle ones are darker. The row menu sets a project's status (current, passive, inactive; the names are the user's, 2026-11-06). An inactive project leaves the rail and is restored by pressing it in the Projects tab. Remove project asks first, only unregisters the project (its sessions are kept and return if the folder is added again; files are never touched) and is refused while a session runs. Selection is a soft
 filled square with no edge marker. Each project has a counter in each corner: attention (violet) and unread
 (info) on top, running (success) and idle (primary) below, with any count past
 nine shown as `*`. A project with

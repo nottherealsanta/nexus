@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        New session      +                                                                 □
+     │
+     │                        ▣
+  D  │ ⌕ Search sessions ctrl+k      System prompt ~900
+ ─── │
+     │  No sessions yet. Type        AGENTS.md  unavailable or not read
+     │  in the composer to
+  A  │  start one.                   Tools [0]
+ ─── │
+     │                               Skills [0]  loading
+     │
+  C  │                               MCP [0]  loading
+ ─── │
+     │                               total  ~900 tok
+     │
+  +  │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │                                Message to start a new session
+     │
+     │                                Build · … · default                                                         0
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/claude-501/s15-proj/bravo
+     │  Settings         ctrl+,    ───────────────────────────────────────────────────────────────────────────────────

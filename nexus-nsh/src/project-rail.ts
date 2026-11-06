@@ -1,13 +1,44 @@
 import type { Project, Session } from "./core/api";
 
+/**
+ * The three-tier project status. The names were confirmed by the user (2026-11-06, PLAN 15.3):
+ * this is the only place in NSH that spells them, so renaming is a change here (and in the manifest ids).
+ */
+export const PROJECT_STATUS = { current: "current", passive: "passive", inactive: "inactive" } as const;
+export type ProjectStatus = (typeof PROJECT_STATUS)[keyof typeof PROJECT_STATUS];
+/** Title-case words for the status, as the clients show them. */
+export const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = { current: "Current", passive: "Passive", inactive: "Inactive" };
+
+/** `current` for an older Core that sends no status. */
+export function projectStatus(p: Pick<Project, "status">): ProjectStatus {
+  return p.status === PROJECT_STATUS.passive || p.status === PROJECT_STATUS.inactive ? p.status : PROJECT_STATUS.current;
+}
+
+/** Every project in Core's saved order (`position`); creation order is the fallback for an older Core. */
+export function orderedProjects(projects: Iterable<Project>): Project[] {
+  return [...projects].sort((a, b) =>
+    Number(a.position == null) - Number(b.position == null) || (a.position ?? 0) - (b.position ?? 0)
+    || a.created - b.created || a.id.localeCompare(b.id));
+}
+
+/** The rail: the saved order without inactive projects. */
 export function railProjects(projects: Iterable<Project>): Project[] {
-  return [...projects].sort((a, b) => a.created - b.created || a.id.localeCompare(b.id));
+  return orderedProjects(projects).filter((p) => projectStatus(p) !== PROJECT_STATUS.inactive);
+}
+
+/** The rail order after dragging `id` to `target` (an index in `ids`): the neighbour for the move call. */
+export function dropMove(ids: readonly string[], id: string, target: number): { before: string | null } | { after: string | null } | null {
+  const from = ids.indexOf(id);
+  const to = Math.max(0, Math.min(ids.length - 1, target));
+  if (from < 0 || to === from) return null;
+  return to < from ? { before: ids[to] } : { after: ids[to] };
 }
 
 export function projectLabels(projects: Iterable<Project>): Map<string, string> {
   const labels = new Map<string, string>();
   const used = new Set<string>();
-  for (const p of railProjects(projects)) {
+  // Initials follow creation order, so moving a project never changes a label.
+  for (const p of [...projects].sort((a, b) => a.created - b.created || a.id.localeCompare(b.id))) {
     const chars = Array.from(p.name.trim().toUpperCase());
     const first = chars[0] || "?";
     let label = first;

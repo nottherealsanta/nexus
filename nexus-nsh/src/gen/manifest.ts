@@ -2488,7 +2488,7 @@ export const manifest = {
     "palette",
     "row_menu"
    ],
-   "note": "Confirm; its Nexus sessions and history are deleted. Files on disk stay."
+   "note": "Confirm; the project leaves Nexus but its sessions are kept (adding the folder again restores them) and files on disk are never touched. Refused while a session is running."
   },
   {
    "id": "sidebar.row_menu",
