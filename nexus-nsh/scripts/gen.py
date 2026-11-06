@@ -6,7 +6,7 @@
   ../interface/manifest.toml -> src/gen/manifest.ts (commands, settings, navigation, keymap)
   theme-void.toml            -> merged over theme.toml first: NSH's palette overlay
 
-Stdlib only, Python 3.11+. Run: npm run gen
+Python 3.11+ and the npm-installed xterm assets. Run: npm run gen
 """
 import json
 import tomllib
@@ -165,6 +165,8 @@ out = hdr.format("manifest.toml")
 out += "export const manifest = " + json.dumps(manifest, indent=1) + " as const;\n"
 (ROOT / "src" / "gen" / "manifest.ts").write_text(out)
 page = (ROOT / "src" / "terminal-page.html").read_text()
+licenses = "\n".join((ROOT / "node_modules" / asset / "LICENSE").read_text() for asset in ("@xterm/xterm", "@xterm/addon-fit"))
+page = page.replace("</head>", "<!--\n" + licenses + "\n--></head>")
 for marker, asset in {
     "/* XTERM_CSS */": "@xterm/xterm/css/xterm.css",
     "/* XTERM_JS */": "@xterm/xterm/lib/xterm.js",
