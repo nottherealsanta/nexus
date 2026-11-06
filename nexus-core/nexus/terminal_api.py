@@ -117,7 +117,10 @@ def routes(service: TerminalService, runtime: Runtime, wrap: Callable[..., Any],
             if name not in signals:
                 raise ValueError("invalid signal")
             try:
-                os.killpg(os.tcgetpgrp(term.fd), signals[name])
+                foreground = os.tcgetpgrp(term.fd)
+                if foreground <= 0 or os.getsid(foreground) != term.pid:
+                    raise Conflict("terminal foreground process is unavailable")
+                os.killpg(foreground, signals[name])
             except OSError as exc:
                 raise Conflict("terminal foreground process is unavailable") from exc
             result = {"signal": name}

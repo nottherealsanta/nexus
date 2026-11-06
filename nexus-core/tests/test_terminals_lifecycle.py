@@ -158,13 +158,20 @@ async def test_close_kills_separately_grouped_foreground_job(tmp_path, monkeypat
         job_pid = int(pidfile.read_text())
         assert os.tcgetpgrp(term.fd) == job_pid and job_pid != term.pid
         await service.shutdown()
-        with pytest.raises(ProcessLookupError):
-            os.kill(job_pid, 0)
+
+        def gone():
+            try:
+                os.kill(job_pid, 0)
+            except ProcessLookupError:
+                return True
+            return False
+
+        await wait_until(gone)
         job_pid = 0
     finally:
         await service.shutdown()
         if job_pid:
             try:
                 os.killpg(job_pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
