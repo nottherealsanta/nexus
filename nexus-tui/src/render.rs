@@ -288,8 +288,8 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
             }
         }
         if let Some(p) = regions.panel {
-            // A modal: the page dims, and a click outside it closes it.
-            paint::scrim(cx.t, buf, area);
+            // A modal: the page is covered, and a click outside it closes it.
+            paint::cover(cx.t, buf, area);
             hits.add(area, Target::PanelBack);
             draw_panel(&cx, buf, p, area, &mut hits);
         }
@@ -7964,7 +7964,7 @@ impl Modal {
 }
 
 fn modal(cx: &Cx, buf: &mut Buffer, area: Rect, r: Rect, title: &str, hits: &mut HitMap) -> Modal {
-    paint::scrim(cx.t, buf, area);
+    paint::cover(cx.t, buf, area);
     clear(buf, r, cx.st(PRIMARY, RAISED));
     hits.add(r, Target::Swallow);
     let m = Modal::of(r);

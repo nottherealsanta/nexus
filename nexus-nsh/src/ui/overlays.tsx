@@ -287,7 +287,7 @@ export function Blocking() {
   const c = () => connection();
   return (
     <If when={c().kind === "incompatible"}>
-      <Modal size="small" label="Incompatible Core" scrim="bg-black/60" onCancel={() => escape()} closeOnBackdropPress={false}>
+      <Modal size="small" label="Incompatible Core" onCancel={() => escape()} closeOnBackdropPress={false}>
         <View testID="blocking-dialog" role="alert" accessibilityLabel="Incompatible Core" class="gap-3">
           <View class="flex-row items-center min-h-8 gap-2"><Text class={`text-error ${TS.title}`}>✕</Text><Text class={`${TS.title} font-semibold text-popover-foreground`}>Incompatible Nexus Core</Text></View>
           <Text class={T.sec}>{(() => { const k = c(); return k.kind === "incompatible" ? `Core reports API ${k.core}; this client speaks 1.x. ${k.update === "client" ? "Update NSH (this app)." : "Update Nexus Core."} No requests are sent until this is fixed.` : ""; })()}</Text>
