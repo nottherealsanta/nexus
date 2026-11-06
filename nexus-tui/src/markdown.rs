@@ -1118,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn old_renderer_keeps_links_tables_and_fence_source_visible() {
+    fn old_renderer_keeps_links_tables_and_fence_source_available() {
         let palette = Palette::from_theme(&Theme::new(Options::default()));
         let source = "# Title\n\n[link](https://example.test)\n\n| A | B |\n|---|---|\n| one | two |\n\n```mermaid\ngraph TD\n```";
         let rows = lines(source, &palette, 60);
@@ -1128,7 +1128,9 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<String>();
         assert!(text.contains("Title") && text.contains("https://example.test"));
-        assert!(text.contains("one") && text.contains("two") && text.contains("graph TD"));
+        assert!(text.contains("one") && text.contains("two"));
+        // The fence draws as a diagram with a copy action; its source stays available to Copy.
+        assert!(text.contains("◇ mermaid · copy source"), "{text}");
         assert_eq!(fence_sources(source), ["graph TD"]);
     }
 

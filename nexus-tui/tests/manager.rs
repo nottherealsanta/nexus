@@ -16,6 +16,8 @@ fn app() -> App {
     let mut a = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 40));
     a.ui.manager.silent = true;
     a.ui.manager.voice_enabled = false; // text-only cases opt out of the default-on Voice toggle
+                                        // The header button and indicator follow `[manager] enabled` (off by default).
+    a.state.config = Some(json!({"values": {"manager": {"enabled": true}}}));
     a
 }
 
