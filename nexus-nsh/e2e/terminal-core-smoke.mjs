@@ -1,5 +1,5 @@
 // Requires a disposable authenticated Core, a selected project and the NSH host at NEXUS_NSH_URL.
-import { chromium } from "playwright";
+import { chromium, devices } from "playwright";
 import assert from "node:assert/strict";
 const url = process.env.NEXUS_NSH_URL;
 if (!url) throw new Error("Set NEXUS_NSH_URL to an isolated NSH host");
@@ -43,5 +43,11 @@ try {
   const closed = page.waitForResponse(r => r.request().method() === "DELETE" && r.url().includes("/api/terminal/"));
   await page.getByRole("button", {name:"Close terminal", exact:true}).click();
   assert.equal((await (await closed).json()).status, "closed");
-  console.log("real Core: create, attach, control, shell input/output and confirmed close passed");
+  const mobile = await browser.newContext({...devices["iPhone 13"]});
+  const phone = await mobile.newPage();
+  await phone.goto(url);
+  await phone.waitForTimeout(2000);
+  assert.equal(await phone.getByRole("button", {name:"Terminal", exact:true}).count(), 0);
+  await mobile.close();
+  console.log("real Core: create, rename, attach, control, Ctrl+C, output, confirmed close and mobile exclusion passed");
 } finally { await browser.close(); }
