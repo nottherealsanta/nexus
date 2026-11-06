@@ -52,6 +52,13 @@ Made (user):
 | 2026-11-06 | **Modals are translucent in the TUI again** (the 50% `paint::scrim` blend), reverting the solid cover of `0452ee80`; NSH is back to its translucent backdrop, so they match |
 | 2026-11-06 | **Mobile = Sessions, Manager and Settings tabs only** (section 5). It can approve and answer everything a desktop client can (allow/deny, questions), showing less on the small screen |
 | 2026-11-06 | **ZMX is for later.** Keep `ZMX_plan.md` and section 6 as they are; build nothing now. The Claude Code Agent SDK / ZMX Settings toggle is part of that later work |
+| 2026-11-06 | **macOS GPUI direction:** spike a Rust GPUI host embedding the existing NSH app; keep the current AppKit client intact and expose the spike separately as `nexus gpui`. |
+
+### GPUI host spike
+
+- [~] Added an independent `nexus-gpui` host and launcher. The NSH 0.4.0 bundle and host compile; window rendering, Core connectivity, theme and parity remain unverified. `nsh run App.tsx --target gpui --port 0` produced no output before a 45-second timeout, so its development host is not confirmed working.
+- The host pins the same NSH 0.4.0 revision as `nexus-nsh/native` and the installed CLI, rather than the tag, so their registry types match. It registers the app's native Mermaid, annotation and microphone modules. GPUI uses runtime Metal shaders.
+- NSH documents GPUI differences including no blur/backdrop filter (the Manager stage uses one), different opacity, partial transforms and rounded clipping, macOS video placeholders, web views above NSH content without ancestor clipping, and limited accessibility actions. These are limitations to investigate, not approved UI differences. Verify the theme, assets, network/auth and native features against AppKit and the TUI before considering this more than a spike.
 
 Open (each has a default that holds unless the user objects):
 
@@ -1046,6 +1053,19 @@ Terminal evidence capture and agent-control policy apply to section 2 as well.
 ## Landed
 
 Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](docs/archive/PLAN-2026-11-06.md#landed).
+
+- **NSH control icons (11-06).** Restored bundled theme-tinted SVGs in the shared
+  desktop/web Icon component; sidebar state indicators and timeline glyphs remain
+  shared with the TUI. Web rendering checked in a seeded browser; AppKit and GPUI
+  visual rendering still need verification. The GPUI bundle includes the assets.
+
+- **NSH web archiver discovery (11-06).** Web build, test and development commands
+  find `llvm-ar` in the active Rust toolchain when it is absent from PATH, preserve
+  explicit archiver settings and explain how to install missing LLVM tools.
+  Verified: full `scripts/nexus build` (Core, release TUI, packaged web) and all
+  11 NSH host tests, including five archiver regression tests.
+  Daemon investigation: the running daemon answers; an isolated startup takes
+  0.57 s and all seven lifecycle tests pass. The reported timeout was not reproduced.
 
 - **Modal backdrop back to translucent (11-06).** Reverted `0452ee80`: the TUI blends the page 50% toward
   `surface.canvas` (`paint::scrim`) under every modal again, NSH is back to its translucent `bg-black/65` backdrop and

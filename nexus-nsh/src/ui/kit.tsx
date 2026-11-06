@@ -1,8 +1,8 @@
 // Small building blocks on NSH base components, styled only with theme tokens.
 import type { JSX } from "nsh";
-import { Text, View, colorScheme, effect, platform, signal } from "nsh";
+import { Image, Text, View, colorScheme, effect, platform, signal } from "nsh";
 import { Button } from "nsh/base";
-import type { IconName } from "../icons";
+import { icons, type IconName } from "../icons";
 import { attention as attentionGlyphs, controlGlyphs, fold, sidebarGlyphs, structure, verbGlyphs } from "../gen/theme";
 import { statusGlyphs, attention, spinner as spinnerFrames, shimmerColors, shimmerMotion } from "../gen/theme";
 import { config, isNarrow } from "../store";
@@ -54,6 +54,10 @@ export const iconGlyphs: Record<IconName, string> = {
 export function Icon(p: { name: IconName; size?: number; class?: string; selected?: boolean }) {
   const size = p.size ?? 16;
   const glyph = () => p.selected === false && p.name === "panel-left" ? sidebarGlyphs.left_closed.unicode : p.selected === false && p.name === "panel-right" ? sidebarGlyphs.right_closed.unicode : iconGlyphs[p.name];
+  // The panel glyphs distinguish open and closed, as in the TUI.
+  if (p.name !== "panel-left" && p.name !== "panel-right" && platform.idiom !== "terminal") {
+    return <Image src={icons[p.name]} style={{ width: size, height: size }} class={`shrink-0 ${p.class ?? "tint-foreground-secondary"}`} accessible={false} />;
+  }
   return <View class="shrink-0 items-center justify-center" style={{ width: size, height: size }} accessible={false}>
     <Text class={`font-mono text-center ${TS.base} ${(p.class ?? "tint-foreground-secondary").replaceAll("tint-", "text-")}`} accessible={false}>{glyph()}</Text>
   </View>;
@@ -64,7 +68,7 @@ export function IconButton(p: { icon: IconName; label: string; onPress?: () => v
     <Button
       onPress={p.onPress} disabled={p.disabled} selected={p.selected} accessibilityLabel={p.label} testID={p.testID}
       tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{p.reason ? `${p.label}: ${p.reason}` : p.label}</Text>}
-      class={`items-center justify-center rounded-(--radius) hover:bg-accent disabled:opacity-50 ${isNarrow() ? "size-11" : "size-8"} ${FOCUS} ${p.class ?? ""}`}
+      class={`items-center justify-center rounded-(--radius) hover:bg-accent active:bg-selection disabled:opacity-50 ${isNarrow() ? "size-11" : "size-8"} ${FOCUS} ${p.class ?? ""}`}
     >
       <Icon name={p.icon} selected={p.selected} class={p.tint ?? "tint-foreground-secondary"} />
     </Button>

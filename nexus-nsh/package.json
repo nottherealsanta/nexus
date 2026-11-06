@@ -8,7 +8,7 @@
   "scripts": {
     "gen": "python3 scripts/gen.py",
     "check": "npm run gen && nsh check",
-    "build": "npm run gen && nsh package App.tsx --target web --out dist && node scripts/icons-web.mjs dist",
+    "build": "npm run gen && node scripts/nsh-web.mjs package App.tsx --target web --out dist && node scripts/icons-web.mjs dist",
     "serve": "node scripts/serve.mjs",
     "macos": "npm run gen && nsh package App.tsx --target macos && node scripts/native-info.mjs .nsh/out/Nexus.app --launch-macos",
     "macos:open": "npm run gen && nsh run App.tsx --target macos",
@@ -16,7 +16,7 @@
     "ios": "npm run gen && nsh package App.tsx --target ios-simulator && node scripts/native-info.mjs .nsh/out/Nexus.app --launch-ios",
     "ios:catalyst": "npm run gen && nsh run App.tsx --target catalyst",
     "ios:device": "npm run gen && nsh package App.tsx --target ios && node scripts/native-info.mjs .nsh/out/Nexus.app",
-    "test": "npm run gen && nsh test --target web",
+    "test": "npm run gen && node scripts/nsh-web.mjs test --target web",
     "test:host": "node --test scripts/*.test.mjs",
     "shots": "node e2e/shots.mjs"
   },

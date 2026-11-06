@@ -30,11 +30,12 @@ per-model rows and unknown writes; `omitted` and notes are listed. Keys are the 
 commands in `interface/manifest.toml` (the same bare keys as the TUI). The Sessions tree is a wrapping one-line list like the TUI's, and `j`/`k` keep the selected row in view.
 See [the inspector guide](../docs/inspector.md).
 
-The Rust TUI is the visual reference for the shared NSH app. All NSH targets use
-Monaspace Argon for interface text and prose, Unicode text icons instead of SVG
-controls, and a full-width reading column with fixed 8 px outer and inner gutters.
-Sidebar, fold and tool icons come from the same glyph tables as the Rust client;
-button labels remain accessible names and tooltips, not visible fallback text.
+The Rust TUI is the visual reference for the shared NSH app. NSH uses Monaspace
+Argon for interface text and prose and a full-width reading column with fixed 8 px
+outer and inner gutters. Desktop and web controls rendered by the shared Icon
+component use the bundled, theme-tinted SVGs; sidebar open/closed indicators and
+the timeline's status and tool glyphs retain the shared TUI glyphs. Button labels
+remain accessible names and tooltips, not visible fallback text.
 The session search icon, field and shortcut are laid out side by side, without
 absolute overlays. Phone touch targets and mobile navigation remain unchanged.
 Narrow desktop/web headers show one flexible title instead of a fixed-width tab
@@ -372,9 +373,15 @@ npm run serve          # the web app on 127.0.0.1:4820, proxying /api to Core (1
 NEXUS10_HOME=/tmp/nx npm run serve -- --port 4821   # another home and port
 ```
 
+The web build, tests and `nexus dev web` use `scripts/nsh-web.mjs` to locate
+the WebAssembly-capable `llvm-ar` needed by zstd. It respects explicit archiver
+settings, then uses `llvm-ar` on PATH or in the active Rust toolchain. If none is
+installed, run `rustup component add llvm-tools`, or set
+`AR_wasm32_unknown_unknown` to its absolute path. Apple's system `ar` is unsuitable.
+
 For web development, `nexus dev web` starts the hot-reloading host and API proxy
 and opens the app. Ctrl-C stops both web servers, leaving Core running. Without
-the launcher, run `nsh dev App.tsx --target web --port 8790` and, in a
+the launcher, run `node scripts/nsh-web.mjs dev App.tsx --target web --port 8790` and, in a
 second terminal, `npm run serve -- --upstream http://127.0.0.1:8790`. Open the
 proxy at `http://127.0.0.1:4820` so API requests still get daemon authentication.
 The NSH development host reloads source changes; the packaged `npm run serve`

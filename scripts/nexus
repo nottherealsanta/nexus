@@ -9,6 +9,7 @@
 #   nexus web [flags]         serve the NSH web app and open it
 #   nexus dev web [flags]     run the hot-reloading web app and open it
 #   nexus macos [flags]       run the NSH app in a macOS window
+#   nexus gpui                experimental GPUI host for the same NSH app
 #   nexus nsh tui [flags]     run the NSH app in the terminal (upstream TUI backend)
 #   nexus ios [flags]         run the NSH app in an iOS simulator (Mac Catalyst when none is installed)
 #   nexus restart             restart the Core daemon
@@ -147,6 +148,15 @@ native() {
   (cd "$NSH" && npm run gen && nsh run App.tsx --target "$target" "$@")
 }
 
+gpui() {
+  [ "$#" -eq 0 ] || die "usage: nexus gpui"
+  ensure_nsh
+  ensure_npm
+  ensure_cargo
+  (cd "$NSH" && npm run gen && nsh build App.tsx -o "$ROOT/nexus-gpui/build")
+  cargo run --manifest-path "$ROOT/nexus-gpui/Cargo.toml" -- "$ROOT/nexus-gpui/build/bundle.js"
+}
+
 nsh_tui() {
   ensure_home
   ensure_uv
@@ -223,7 +233,7 @@ NODE
   trap cleanup_dev_web EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  (cd "$NSH" && exec nsh dev App.tsx --target web --port "$dev_port") & dev_pid=$!
+  (cd "$NSH" && exec node scripts/nsh-web.mjs dev App.tsx --target web --port "$dev_port") & dev_pid=$!
   (cd "$NSH" && NEXUS_NSH_CORE_CMD="$(core_cmd)" exec node scripts/serve.mjs --port "$port" --upstream "http://127.0.0.1:$dev_port") & proxy_pid=$!
   printf '› Waiting for the hot-reloading web app at http://127.0.0.1:%s (Ctrl-C to stop)\n' "$port"
   while :; do
@@ -340,6 +350,7 @@ case "${1:-}" in
   web|w)               shift; web "$@" ;;
   nsh)                 shift; [ "${1:-}" = tui ] || die "usage: nexus nsh tui [flags]"; shift; nsh_tui "$@" ;;
   macos)               shift; native macos "$@" ;;
+  gpui)                shift; gpui "$@" ;;
   ios)                 shift
     if command -v xcrun >/dev/null 2>&1 && xcrun simctl list runtimes 2>/dev/null | grep -qi "iOS"; then
       native ios "$@"
