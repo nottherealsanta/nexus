@@ -641,6 +641,7 @@ pub enum Target {
     ComposerWorktree,
     /// The kernel and running-shell counts on the location strip.
     ComposerResources,
+    ComposerTerminals,
     /// The Files tree root line (project checkout / session worktree).
     FilesRoot,
     /// The panel header's `‹ Back`: close the file or diff panel.

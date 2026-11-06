@@ -3162,7 +3162,8 @@ fn working_strip_aligns_with_usage_and_omits_output_tokens() {
     assert!(!strip.contains('↓'), "{strip}");
     assert_eq!(
         control.trim_end().chars().count(),
-        strip.trim_end().chars().count()
+        strip.trim_end().chars().count(),
+        "control: {control:?}\nstrip: {strip:?}"
     );
 }
 

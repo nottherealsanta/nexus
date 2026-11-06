@@ -6874,20 +6874,12 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     // Live kernels and running background shells, centred in the strip. A
     // kernel chip is absent when no kernel exists; shells appear only while one
     // is running. Clicking the chip opens the full list.
-    let (kernels, shells) = a.resource_counts();
+    let (kernels, _) = a.resource_counts();
     let mut parts = Vec::new();
     if kernels > 0 {
-        parts.push(format!(
-            "{kernels} {}",
-            if kernels == 1 { "kernel" } else { "kernels" }
-        ));
+        parts.push("kernel".to_string());
     }
-    if shells > 0 {
-        parts.push(format!(
-            "{shells} {}",
-            if shells == 1 { "shell" } else { "shells" }
-        ));
-    }
+    parts.push(format!("{} shell", a.terminal_panel.terminals.len()));
     let chip = if parts.is_empty() {
         String::new()
     } else {
@@ -6896,7 +6888,11 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let chip_w = u16::try_from(width(&chip)).unwrap_or(u16::MAX);
     let available = end.saturating_sub(start);
     let show_chip = chip_w > 2 && available > chip_w.saturating_add(8);
-    let chip_x = start + available.saturating_sub(chip_w) / 2;
+    let chip_x = if a.viewed_id().is_some_and(|id| a.is_busy(id)) {
+        start + available.saturating_sub(chip_w) / 2
+    } else {
+        end.saturating_sub(chip_w)
+    };
     let left_end = if show_chip {
         chip_x.saturating_sub(2)
     } else {
@@ -6950,7 +6946,18 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 .add_modifier(Modifier::BOLD),
             chip_w,
         );
-        hits.add(Rect::new(chip_x, y, chip_w, 1), Target::ComposerResources);
+        let kernel_w = if kernels > 0 {
+            width(&format!(" kernel{}", cx.sep())) as u16
+        } else {
+            1
+        };
+        if kernels > 0 {
+            hits.add(Rect::new(chip_x, y, kernel_w, 1), Target::ComposerResources);
+        }
+        hits.add(
+            Rect::new(chip_x + kernel_w, y, chip_w.saturating_sub(kernel_w), 1),
+            Target::ComposerTerminals,
+        );
     }
 }
 

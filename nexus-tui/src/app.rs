@@ -5792,6 +5792,10 @@ impl App {
     pub fn execute(&mut self, id: &str) {
         match id {
             "terminal.open" => {
+                if self.terminal_open {
+                    self.close_panel();
+                    return;
+                }
                 if self.edit_blocks() {
                     return;
                 }
@@ -13764,6 +13768,7 @@ impl App {
                 self.effects.push(Effect::Sync(SyncCommand::Resources));
                 self.open_overlay(OverlayKind::Resources { top: 0 });
             }
+            Target::ComposerTerminals => self.execute("terminal.open"),
             Target::FilesRoot => self.run_command("files.root_toggle"),
             Target::PanelBack => self.close_panel(),
             Target::FilePreview => self.run_command("editor.preview"),

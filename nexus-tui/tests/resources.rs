@@ -42,7 +42,7 @@ fn strip_counts_and_modal_list() {
         .find(|row| row.contains("kernel") && row.contains("shell"))
         .expect("the location strip has kernel and shell counts")
         .clone();
-    assert!(strip.contains("1 kernel · 1 shell"), "strip: {strip:?}");
+    assert!(strip.contains("kernel · 0 shell"), "strip: {strip:?}");
 
     let chip = app
         .hits
