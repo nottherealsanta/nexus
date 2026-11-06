@@ -335,7 +335,7 @@ windows where it reports them, in a table of ten-cell used gauge, percent left, 
 available for windows of at least seven days with a future reset. The modal hides Codex limit-reached and xAI
 per-product notes, window details, xAI prepaid credits and Copilot chat, completions and AI-credit details.
 Core stores the latest snapshot and refreshes it every 10 minutes by default;
-Settings → Context changes the interval, and `r` refreshes it on demand. Esc closes the modal without waiting. A tool result's images
+Settings → Context changes the interval, and `r` refreshes it on demand. Use ↑/↓ or Page Up/Down to scroll the table; Esc closes the modal without waiting. A tool result's images
 are named under its output (`▣ image name · mime · artifact id`); a terminal cannot show them.
 
 Responsive layout (D17, `layout::Breakpoint`): from 160 columns both sidebars are docked at 34

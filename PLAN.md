@@ -34,7 +34,7 @@ When an item lands, tick it, add a one-line record under [Landed](#landed) and u
 | 3 | Manager, finished and tested end to end | M1–M5 built; real GPT-Live call worked 11-04; evals, long calls, iOS/native audio and hands-free open | [3](#3-manager-finish-and-test-end-to-end) |
 | 2 | Terminal inside Nexus | Spikes done (`reports/section14/spikes.md`); no product code | [2](#2-terminal-inside-nexus) |
 | 7 | Everything else carried over | Full backlog in section 9, not scheduled | [7](#7-carried-over-not-scheduled) |
-| 8 | Provider usage panel (table) | Fully specified, not started; both clients | [8](#8-provider-usage-panel-usage-table) |
+| 8 | Provider usage panel (table) | Landed and visually compared in both clients | [8](#8-provider-usage-panel-usage-table) |
 
 Suggested order: 4, then 1 (so the release PR can merge on a green tree), then 5, then 2 and 3 in whatever order the
 user prefers (3 needs real-model approvals). Section 6 (ZMX) is for later. Section 8 (the usage panel) is small, self-contained and can go any time after 4.
@@ -306,7 +306,7 @@ The areas, at a glance:
 The user's review of the Provider usage modal (screenshot, 11-06) asks for a table instead of the current
 label + bar + prose rows: a ten-block progress gauge, then the percentage left, the reserve (the old Nexus
 pace calculation) and the expiry time. The words marked in red go away. Both clients land this in the same
-change; no desktop client-specific difference is expected. **Core, TUI and NSH implemented; cross-client screenshot verification pending.** Carried over whole from the previous plan's section 16 (user asked to keep it, 2026-11-06).
+change; no desktop client-specific difference is expected. **Landed and visually compared in both clients.** Carried over whole from the previous plan's section 16 (user asked to keep it, 2026-11-06).
 
 ### 8.1 The table and its cells (both clients)
 
@@ -333,10 +333,10 @@ Updated 2m ago
 r refresh · esc close
 ```
 
-- [ ] **Header row:** `Window`, `Progress`, `Left`, `Reserve`, `Expires`, muted, once above the first
+- [x] **Header row:** `Window`, `Progress`, `Left`, `Reserve`, `Expires`, muted, once above the first
   provider. Provider group rows keep the bold name and the muted plan (`ChatGPT (Codex)  Plus`); its window
   labels are indented two cells. Do not repeat the provider on every window.
-- [ ] **Progress (the wide column, exactly 10 cells):** `used_percent` decides the fill in eighths:
+- [x] **Progress (the wide column, exactly 10 cells):** `used_percent` decides the fill in eighths:
   `e = round(used × 80 / 100)` (nearest, ties to even), then ten cells filled left to right, each cell
   holding `min(8, max(0, e − 8·i))` eighths. Full cells are `█` (U+2588); the boundary cell is
   `▁▂▃▄▅▆▇` (U+2581–U+2587), so it fills **from the bottom up** as requested; empty cells are `░`
@@ -344,10 +344,10 @@ r refresh · esc close
   horizontal because the table is one line per window; a literal ten-row-tall gauge would make every
   window ten lines high. Glyphs come from the block-elements range the user linked
   (`https://unicode-explorer.com/b/2580`).
-- [ ] **Left:** `100 − used_percent`, following the old Nexus `percent()` rule: a whole percent, except a
+- [x] **Left:** `100 − used_percent`, following the old Nexus `percent()` rule: a whole percent, except a
   non-whole value under 10 or over 90 keeps one decimal (`0.2%`, `99.8%`); unknown is `—`. Right-aligned.
   This replaces the old used-percent column (42% used now reads 58%).
-- [ ] **Reserve:** copy the `nexus01` calculation from `nexus/ui_support/usage.py`
+- [x] **Reserve:** copy the `nexus01` calculation from `nexus/ui_support/usage.py`
   (`RESERVE_MIN_PERIOD`, `elapsed_percent`, `reserve`, `reserve_phrase`): only when `period_seconds` is
   at least 7 days and `used_percent` and a future `resets_at` are known;
   `elapsed = 100 × (1 − (resets_at − now) / period_seconds)`, `reserve = elapsed − used`. Round to the
@@ -355,13 +355,13 @@ r refresh · esc close
   `-N%` for over pace, `0%` for on pace and `—` when not estimable (five-hour windows, missing period, a
   reset already due). Right-aligned; spare takes the success colour, over pace the warning colour,
   `0%`/`—` stay muted. Do not show the old `┃` pace marker.
-- [ ] **Expires:** the time until reset only, never an absolute stamp: `now` under a minute, otherwise the
-  two largest units (`3h 10m`, `2d 4h`, `6d 5h`); `—` when `resets_at` is missing or the reset is due.
+- [x] **Expires:** the time until reset only, never an absolute stamp: `now` under a minute or when due, otherwise the
+  two largest units (`3h 10m`, `2d 4h`, `6d 5h`); `—` when `resets_at` is missing.
   Left-aligned. This is the old `resets in …` text without the words.
-- [ ] **Colours and tone:** filled gauge cells keep the existing used-percent thresholds (success below
+- [x] **Colours and tone:** filled gauge cells keep the existing used-percent thresholds (success below
   70, warning below 90, error at 90 and above); empty cells use the dim border/muted role. The label and
   the Left number stay in primary text; the provider plan, header, `—` and notes are muted.
-- [ ] **Words removed (the red marks):** drop the Codex `Limit reached: new requests wait for the next
+- [x] **Words removed (the red marks):** drop the Codex `Limit reached: new requests wait for the next
   reset` note, the xAI per-product notes such as `GrokChat: 1% of credits`, and every per-window `detail`
   suffix (`225 of 300 left`, `20,280 over quota`, `· 20,28…`). `detail` stays in the API for other
   consumers but is never printed by this modal; when a window has no `resets_at`, Expires is `—`
@@ -369,7 +369,7 @@ r refresh · esc close
   limits, `Could not read the limits: …`, `No limit windows reported.`) as muted full-width lines under
   their provider, plus `Updated … ago`, the empty and loading states and the `r refresh · esc close`
   footer.
-- [ ] **Responsive rules:** the gauge and the three numbers keep their widths; the Window column flexes
+- [x] **Responsive rules:** the gauge and the three numbers keep their widths; the Window column flexes
   and truncates with `…`; Expires truncates with `…`. Never wrap a window row. The TUI keeps its
   80–88-cell large modal and 30-row cap. NSH uses its large modal as `tall` (90% of the window) so the
   table fits; on phone widths (a standing phone-layout exception) each window becomes two lines: label,
@@ -377,17 +377,17 @@ r refresh · esc close
 
 ### 8.2 Data and formatting
 
-- [ ] `period_seconds` and `kind` are already in the API (`GET /api/usage`); parse them in both clients.
+- [x] `period_seconds` and `kind` are already in the API (`GET /api/usage`); parse them in both clients.
   The reserve is derived client-side from `used_percent`, `resets_at`, `period_seconds` and the client's
   `now`, beside the countdown; do not add a server endpoint or store a stale reserve in the snapshot.
-- [ ] Unknown `used_percent` → ten empty cells, `—` Left, `—` Reserve, and the countdown if known.
+- [x] Unknown `used_percent` → ten empty cells, `—` Left, `—` Reserve, and the countdown if known.
   Missing `period_seconds` (older snapshots) → Reserve `—`, everything else unchanged. A reset at or
   before `now` → Expires `now`, Reserve `—`.
-- [ ] Filter the removed notes in both clients as well as at the source, so an older saved snapshot
+- [x] Filter the removed notes in both clients as well as at the source, so an older saved snapshot
   cannot bring them back: Codex notes starting `Limit reached:`; xAI notes ending ` of credits` that
   are not `Prepaid credits:`. The existing xAI prepaid and Copilot chat/completions/AI-credit filters
   stay.
-- [ ] Keep the snapshot semantics: the modal is a snapshot; countdowns and reserve do not tick while it
+- [x] Keep the snapshot semantics: the modal is a snapshot; countdowns and reserve do not tick while it
   stays open (the existing background-refresh follow-up remains separate).
 
 ### 8.3 Core
@@ -447,7 +447,7 @@ r refresh · esc close
   `resets_at`/`period_seconds` computed relative to the capture time (monkeypatch
   `nexus.provider_usage.providers_usage` or seed the usage cache), so both clients see identical rows
   without provider calls. Document the mode in the script's docstring.
-- [ ] Capture the same state in both clients: TUI `--dump-frame` at 170x50 and 120x36, NSH web at a
+- [x] Capture the same state in both clients: TUI `--dump-frame` at 170x50 and 120x36, NSH web at a
   comparable window (plus one phone-width capture). Compare the header, column order, gauge glyphs,
   numbers, colours and the absence of the marked words; save under `reports/provider-usage-table/`.
 
@@ -458,7 +458,7 @@ r refresh · esc close
 - [x] `cd nexus-nsh && npm run gen && nsh test usage.test.tsx --target web` (plus the pure helper test and `nsh check`; record the known `app.clock` / `Button.onFocus` errors if they remain).
 - [x] `python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml && python3 interface/check_manifest.py`
 - [x] Update `docs/porting-ledger.md` on landing: "Provider usage showed a continuous bar, used percent and prose notes | Both clients show a five-column table: ten-block gauge filled bottom-up, percent left, reserve (old 7-day pace formula), expiry; the Codex limit-reached note, xAI per-product credit notes and per-window detail text are gone (2026-11-06) | User request". Record any screenshot-only difference; none is expected on desktop.
-- [ ] Tick this section, move its one-line record to Landed and remove the status-table row's "planned" wording.
+- [x] Tick this section, move its one-line record to Landed and remove the status-table row's "planned" wording.
 
 ## 9. Backlog carried over from the previous plan
 
@@ -1046,6 +1046,8 @@ Terminal evidence capture and agent-control policy apply to section 2 as well.
 ## Landed
 
 Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](docs/archive/PLAN-2026-11-06.md#landed).
+
+- **Provider usage table (11-06).** Core, TUI and NSH show the shared gauge, left, reserve and expiry table; fixture-backed desktop and phone comparisons are in `reports/provider-usage-table/`, including scrollable lower rows.
 
 - **Modal backdrop back to translucent (11-06).** Reverted `0452ee80`: the TUI blends the page 50% toward
   `surface.canvas` (`paint::scrim`) under every modal again, NSH is back to its translucent `bg-black/65` backdrop and

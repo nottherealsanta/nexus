@@ -2726,7 +2726,7 @@ fn usage_ctrl_u_reads_plan_limits_into_a_table_modal() {
         app.ui.overlay.as_ref().map(|o| &o.kind),
         Some(OverlayKind::Usage { .. })
     ));
-    if let Some(OverlayKind::Usage { rows }) = app.ui.overlay.as_mut().map(|o| &mut o.kind) {
+    if let Some(OverlayKind::Usage { rows, .. }) = app.ui.overlay.as_mut().map(|o| &mut o.kind) {
         *rows = fixed_rows;
     }
     let (_, rows) = draw(&mut app, 120, 36);
@@ -2790,7 +2790,7 @@ fn usage_shared_scenario_renders_table_at_desktop_sizes() {
             ..Done::default()
         }),
     });
-    if let Some(OverlayKind::Usage { rows }) = app.ui.overlay.as_mut().map(|o| &mut o.kind) {
+    if let Some(OverlayKind::Usage { rows, .. }) = app.ui.overlay.as_mut().map(|o| &mut o.kind) {
         *rows = nexus_tui::usage::rows(&data, 1.0);
     } else {
         panic!("usage overlay missing");
@@ -2816,6 +2816,16 @@ fn usage_shared_scenario_renders_table_at_desktop_sizes() {
         for hidden in ["Limit reached", "of credits", "of 300 left"] {
             assert!(!text.contains(hidden), "{text}");
         }
+        press(&mut app, &["pagedown", "pagedown", "pagedown", "pagedown"]);
+        let (_, rows) = draw(&mut app, w, h);
+        let text = rows.join("\n");
+        assert!(
+            text.contains("Window")
+                && text.contains("Unavailable provider")
+                && text.contains("Updated"),
+            "{text}"
+        );
+        press(&mut app, &["pageup", "pageup", "pageup", "pageup"]);
     }
 }
 

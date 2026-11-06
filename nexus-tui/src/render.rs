@@ -8147,7 +8147,7 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
         OverlayKind::AlertDetail { id, top, .. } => {
             draw_alert_detail(cx, buf, area, *id, *top, hits)
         }
-        OverlayKind::Usage { rows } => draw_usage(cx, buf, area, rows, hits),
+        OverlayKind::Usage { rows, top } => draw_usage(cx, buf, area, rows, *top, hits),
         OverlayKind::Resources { top } => draw_resources(cx, buf, area, *top, hits),
         OverlayKind::Projects(o) => draw_projects_overview(cx, buf, area, o, hits),
     }
@@ -8300,11 +8300,21 @@ fn draw_projects_overview(
 }
 
 /// `/usage`: provider groups and aligned limit-window table.
+pub(crate) fn usage_scroll_max(area: Rect, rows: &[crate::usage::Row]) -> usize {
+    let b = modal_box(area, MODAL_LARGE, (rows.len() + 6).clamp(9, 30) as u16);
+    let body = Modal::of(b).body.height as usize;
+    let header = usize::from(matches!(rows.first(), Some(crate::usage::Row::Header)));
+    rows.len()
+        .saturating_sub(header)
+        .saturating_sub(body.saturating_sub(header))
+}
+
 fn draw_usage(
     cx: &Cx,
     buf: &mut Buffer,
     area: Rect,
     rows: &[crate::usage::Row],
+    top: usize,
     hits: &mut HitMap,
 ) {
     use crate::usage::Row;
@@ -8315,7 +8325,15 @@ fn draw_usage(
     let lx = bx + 12;
     let rx = bx + 20;
     let ex = bx + 29;
-    for (i, row) in rows.iter().take(m.body.height as usize).enumerate() {
+    let header = usize::from(matches!(rows.first(), Some(Row::Header)));
+    let top = top.min(usage_scroll_max(area, rows));
+    for (i, row) in rows
+        .iter()
+        .take(header)
+        .chain(rows.iter().skip(header + top))
+        .take(m.body.height as usize)
+        .enumerate()
+    {
         let y = m.body.y + i as u16;
         match row {
             Row::Gap => {}
@@ -8445,7 +8463,12 @@ fn draw_usage(
             }
         }
     }
-    hint_row(cx, buf, &m, &[("r", "refresh"), ("esc", "close")]);
+    hint_row(
+        cx,
+        buf,
+        &m,
+        &[("r", "refresh"), (updown(cx), "scroll"), ("esc", "close")],
+    );
     hits.add(
         Rect::new(m.x, m.hint_y, m.w.min(9), 1),
         Target::UsageRefresh,

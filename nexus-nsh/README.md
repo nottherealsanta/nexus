@@ -643,7 +643,7 @@ estimate.
   and expiry. Window detail, Codex limit-reached and xAI per-product credit notes are hidden, as are xAI prepaid credits
   and Copilot chat, completions and AI-credit details. Core stores the latest snapshot and
   refreshes it every 10 minutes by default; Settings → Context changes the interval, and `r` refreshes it on demand.
-  Esc closes the modal without waiting.
+  Scroll the table for further providers; Esc closes the modal without waiting.
 - **Tool images (K8).** A tool row whose result has `media` stays folded and notes the image count; opening it shows the images
   (`/api/artifact/{id}`, same origin) under the output.
 

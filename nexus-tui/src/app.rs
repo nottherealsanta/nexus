@@ -5688,6 +5688,7 @@ impl App {
             "app.usage" => {
                 self.open_overlay(OverlayKind::Usage {
                     rows: vec![crate::usage::Row::Note("Reading provider usage…".into())],
+                    top: 0,
                 });
                 self.api(ApiCall::Usage);
             }
@@ -7416,10 +7417,11 @@ impl App {
             match done.result {
                 Ok(r) => {
                     let rows = crate::usage::rows(&r.usage.unwrap_or_default(), now_secs());
-                    if let Some(OverlayKind::Usage { rows: shown }) =
+                    if let Some(OverlayKind::Usage { rows: shown, top }) =
                         self.ui.overlay.as_mut().map(|o| &mut o.kind)
                     {
                         *shown = rows;
+                        *top = 0;
                     }
                 }
                 Err(error) => {
@@ -9522,8 +9524,11 @@ impl App {
                     .clamp(0, checklist.skills.len().saturating_sub(1) as isize)
                     as usize;
             }
-            Some(OverlayKind::Usage { .. })
-            | Some(OverlayKind::ImagePreview { .. })
+            Some(OverlayKind::Usage { rows, top }) => {
+                let max = crate::render::usage_scroll_max(area, rows);
+                *top = (*top as isize + delta).clamp(0, max as isize) as usize;
+            }
+            Some(OverlayKind::ImagePreview { .. })
             | Some(OverlayKind::Projects(_))
             | Some(OverlayKind::Annotate(_))
             | None => {}

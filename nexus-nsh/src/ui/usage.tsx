@@ -26,9 +26,9 @@ function Window(p: { w: NonNullable<UsageProvider["windows"]>[number]; now: numb
       <Text style={{ numberOfLines: 1 }} class={`${isNarrow() ? "" : "flex-1"} ${mono} text-foreground`}>{p.w.label ?? "window"}</Text>
       <View class="flex-row items-center">
         <Text accessible={false} class={`w-24 ${mono}`}><Text class={color()}>{filled()}</Text><Text class="text-muted-foreground">{empty()}</Text></Text>
-        <Text class={`w-14 text-right ${mono} text-foreground`}>{left()}</Text>
+        <Text class={`w-14 text-right ${mono} ${left() === "—" ? "text-muted-foreground" : "text-foreground"}`}>{left()}</Text>
         <Text class={`w-16 text-right ${mono} ${reserve() == null || reserveLabel() === "0%" ? "text-muted-foreground" : reserve()! > 0 ? "text-success" : "text-warning"}`}>{reserveLabel()}</Text>
-        <Text style={{ numberOfLines: 1 }} class={`w-20 pl-3 ${mono} text-muted-foreground`}>{expires()}</Text>
+        <Text style={{ numberOfLines: 1 }} class={`w-20 pl-3 ${mono} ${expires() === "—" ? "text-muted-foreground" : "text-foreground"}`}>{expires()}</Text>
       </View>
     </View>
   );
@@ -49,7 +49,7 @@ export function UsageDialog() {
             <Text class={`w-24 ${mono} text-muted-foreground`}>Progress</Text><Text class={`w-14 text-right ${mono} text-muted-foreground`}>Left</Text><Text class={`w-16 text-right ${mono} text-muted-foreground`}>Reserve</Text><Text class={`w-20 pl-3 ${mono} text-muted-foreground`}>Expires</Text>
             </View>
           </View>
-          <Scroll style={{ maxHeight: Math.max(48, Math.floor(windowSize().height * 0.9) - 200) }}>
+          <Scroll focusable style={{ maxHeight: Math.max(48, Math.floor(windowSize().height * 0.9) - 200) }}>
           <Each of={d().providers} key={(x: UsageProvider) => x.id}>{(item) => (
             <View class="gap-1 pt-2" testID="usage-provider">
               <View class="flex-row items-baseline gap-2"><Text class="text-[13px] font-semibold text-popover-foreground">{item().label ?? item().id}</Text><If when={!!item().plan}><Text class={T.meta}>{item().plan!}</Text></If></View>
@@ -63,9 +63,9 @@ export function UsageDialog() {
           <If when={!d().providers.length && !d().loading && !d().missing}><Text class={T.meta}>No provider is connected. Connect one in Settings.</Text></If>
           <If when={d().missing && !d().loading}><Text class={T.meta}>No usage snapshot yet. Press r to refresh.</Text></If>
           <If when={d().loading && !d().providers.length}><Text class={T.meta}>Reading provider usage…</Text></If>
-          </Scroll>
           <If when={d().fetched != null}><Text class={T.meta}>{`Updated ${age()} ago`}</Text></If>
-          <View class="flex-row items-center gap-3 pt-3"><Button onPress={() => run("app.usage")} accessibilityLabel="Refresh provider usage" testID="usage-refresh"><Text class={T.meta}>r refresh</Text></Button><Text class={T.meta}>· esc close</Text></View>
+          </Scroll>
+          <View class="flex-row items-center gap-3 pt-3"><Button onPress={() => run("app.usage")} accessibilityLabel="Refresh provider usage" testID="usage-refresh"><Text class={T.meta}>r refresh</Text></Button><Text class={T.meta}>· ↑↓ scroll · esc close</Text></View>
         </View>
       </Modal>;
     }}</If>

@@ -228,6 +228,7 @@ pub enum OverlayKind {
     /// Usage of every connected provider (`/usage`, ctrl+u); `r` reads it again.
     Usage {
         rows: Vec<crate::usage::Row>,
+        top: usize,
     },
     /// Live kernels and background shells of the viewed session tree.
     Resources {
