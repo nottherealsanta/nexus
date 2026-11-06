@@ -1157,10 +1157,10 @@ describe("Core-backed settings values", () => {
     expect(text().includes("parent's model")).toBe(true); // build has no models of its own
     expect(text().includes("2 models · 1 fallback · 1 skipped")).toBe(true);
     expect(app.shows("id:agent-models-plan")).toBe(false); // lists live on each subagent's page
-    await app.screenshot("/private/tmp/claude-501/-Users-santa-repos-nexus10/a98b4c5b-f494-47cf-a88b-f5f971196393/scratchpad/nsh-agents-list.png");
+    await app.screenshot(".nsh/nsh-agents-list.png");
     await app.press("id:agent-row-plan");
     await app.waitFor("id:agent-models-plan");
-    await app.screenshot("/private/tmp/claude-501/-Users-santa-repos-nexus10/a98b4c5b-f494-47cf-a88b-f5f971196393/scratchpad/nsh-agent-plan.png");
+    await app.screenshot(".nsh/nsh-agent-plan.png");
     expect(text().includes("100%")).toBe(true); // groq is not connected: codex has all the odds
     expect(text().includes("not connected · skipped")).toBe(true);
     expect(text().includes("1.")).toBe(true);
