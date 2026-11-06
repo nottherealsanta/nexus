@@ -28,6 +28,12 @@ use crate::ui::*;
 /// Work the event loop performs on the shell's behalf.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
+    TerminalAttach {
+        id: String,
+        client: String,
+        generation: u64,
+    },
+    TerminalStop,
     Quit,
     Suspend,
     Sync(SyncCommand),
@@ -86,6 +92,11 @@ impl Notify {
 /// Commands this shell implements against an existing Core API. Everything
 /// else is shown disabled with a reason, never as a control that appears to work.
 pub const WIRED: &[&str] = &[
+    "terminal.open",
+    "terminal.new",
+    "terminal.acquire",
+    "terminal.release",
+    "terminal.focus_list",
     "palette.open",
     "app.help_keys",
     "app.quit",
@@ -914,6 +925,11 @@ pub struct App {
     pub hits: HitMap,
     pub regions: Regions,
     pub effects: Vec<Effect>,
+    pub terminal_open: bool,
+    pub terminal_panel: crate::terminal_panel::TerminalPanel,
+    pub terminal_selected: bool,
+    pub terminal_focused: bool,
+    pub terminal_controlled: bool,
     pub clock: Instant,
     pub size: (u16, u16),
     pub frame: usize,
@@ -1003,6 +1019,91 @@ pub fn sync_msg_affects_view(msg: &SyncMsg) -> bool {
 }
 
 impl App {
+    fn terminal_send_next(&mut self) {
+        if !self.terminal_controlled || self.terminal_panel.input_busy {
+            return;
+        }
+        let (Some(id), Some(attachment), Some(bytes)) = (
+            self.terminal_panel.selected.clone(),
+            self.terminal_panel.attachment.clone(),
+            self.terminal_panel.input_queue.pop_front(),
+        ) else {
+            return;
+        };
+        self.terminal_panel.input_busy = true;
+        self.api(ApiCall::TerminalInput {
+            id,
+            attachment,
+            generation: self.terminal_panel.generation,
+            seq: self.terminal_panel.next_input,
+            bytes,
+        });
+    }
+
+    fn terminal_input(&mut self, bytes: Vec<u8>) {
+        if self.terminal_controlled && !bytes.is_empty() {
+            for chunk in bytes.chunks(16 * 1024) {
+                self.terminal_panel.input_queue.push_back(chunk.to_vec());
+            }
+            self.terminal_send_next();
+        }
+    }
+
+    pub fn terminal_resize(&mut self) {
+        if !self.terminal_open || !self.terminal_controlled || self.terminal_panel.resize_busy {
+            return;
+        }
+        let (Some(r), Some(id), Some(attachment)) = (
+            self.regions.panel,
+            self.terminal_panel.selected.clone(),
+            self.terminal_panel.attachment.clone(),
+        ) else {
+            return;
+        };
+        let width = r.width.saturating_sub((r.width / 3).min(32) + 1).min(500);
+        let height = r.height.saturating_sub(1).min(200);
+        if width == 0 || height == 0 || self.terminal_panel.size == Some((height, width)) {
+            return;
+        }
+        self.terminal_panel.resize_busy = true;
+        self.api(ApiCall::TerminalResize {
+            id,
+            attachment,
+            generation: self.terminal_panel.generation,
+            rows: height,
+            cols: width,
+        });
+    }
+
+    pub fn terminal_event(&mut self, event: crate::terminal_panel::TerminalEvent) {
+        use crate::terminal_panel::TerminalEvent;
+        match event {
+            TerminalEvent::Attached {
+                generation,
+                attachment,
+            } if generation == self.terminal_panel.generation && self.terminal_open => {
+                self.terminal_panel.attachment = Some(attachment)
+            }
+            TerminalEvent::Frame { generation, frame }
+                if generation == self.terminal_panel.generation && self.terminal_open =>
+            {
+                if let Err(error) = self.terminal_panel.screen.apply(&frame) {
+                    self.toast(Level::Error, format!("Terminal stream: {error}"));
+                    self.effects.push(Effect::TerminalStop);
+                    self.terminal_panel.attachment = None;
+                }
+            }
+            TerminalEvent::Ended { generation, error }
+                if generation == self.terminal_panel.generation && self.terminal_open =>
+            {
+                self.terminal_panel.attachment = None;
+                self.terminal_controlled = false;
+                self.terminal_panel.input_queue.clear();
+                self.toast(Level::Error, format!("Terminal stream: {error}"));
+            }
+            _ => {}
+        }
+    }
     pub fn new(state: AppState, theme: Theme, size: (u16, u16)) -> Self {
         let manifest = Arc::new(Manifest::load());
         let mut bindings = HashMap::new();
@@ -1031,6 +1132,11 @@ impl App {
             manifest,
             theme,
             state,
+            terminal_open: false,
+            terminal_panel: crate::terminal_panel::TerminalPanel::default(),
+            terminal_selected: false,
+            terminal_focused: false,
+            terminal_controlled: false,
             ui: Ui {
                 tabs: Vec::new(),
                 detail: crate::ui::Detail::default(),
@@ -2944,6 +3050,10 @@ impl App {
             }
             "panel.file" => self.ui.file_open,
             "panel.diff" => self.ui.diff_open.is_some(),
+            "terminal.open" => self.terminal_open,
+            "terminal.selected" => self.terminal_selected,
+            "terminal.focused" => self.terminal_focused,
+            "terminal.controlled" => self.terminal_controlled,
             "editor.dirty" => self.ui.file_edit.as_ref().is_some_and(FileEdit::dirty),
             "editor.readonly" => self.ui.file_open && self.ui.file_edit.is_none(),
             "editor.markdown" => self.ui.file_open && self.file_is_markdown(),
@@ -5112,6 +5222,28 @@ impl App {
 
     /// Close the file or diff panel. Unsaved text asks first; a search ends first.
     fn close_panel(&mut self) {
+        if self.terminal_open {
+            if self.terminal_panel.input_busy {
+                self.toast(
+                    Level::Warning,
+                    "Terminal input outcome may be indeterminate after detaching",
+                );
+            }
+            self.terminal_open = false;
+            self.terminal_panel.generation += 1;
+            self.terminal_panel.attachment = None;
+            self.terminal_panel.selected = None;
+            self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::List;
+            self.terminal_focused = false;
+            self.terminal_selected = false;
+            self.terminal_controlled = false;
+            self.terminal_panel.input_queue.clear();
+            self.terminal_panel.control_busy = false;
+            self.terminal_controlled = false;
+            self.terminal_panel.input_queue.clear();
+            self.effects.push(Effect::TerminalStop);
+            return;
+        }
         if self.ui.file_search.take().is_some() {
             return;
         }
@@ -5659,6 +5791,63 @@ impl App {
 
     pub fn execute(&mut self, id: &str) {
         match id {
+            "terminal.open" => {
+                if self.edit_blocks() {
+                    return;
+                }
+                let Some(project) = self.current_project() else {
+                    return;
+                };
+                self.terminal_open = true;
+                self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::List;
+                self.ui.file_open = false;
+                self.ui.diff_open = None;
+                self.terminal_panel.terminals.clear();
+                self.terminal_panel.cursor = 0;
+                self.terminal_panel.loading = true;
+                self.api(ApiCall::TerminalList { project });
+            }
+            "terminal.new" => {
+                if self.terminal_panel.creating || self.terminal_panel.loading {
+                    return;
+                }
+                if let (Some(project), Some(workspace)) =
+                    (self.current_project(), self.files_root())
+                {
+                    self.terminal_panel.creating = true;
+                    self.api(ApiCall::TerminalCreate {
+                        project,
+                        workspace,
+                        session: self.files_session(),
+                        client: self.terminal_panel.client_id.clone(),
+                    });
+                }
+            }
+            "terminal.acquire" | "terminal.release" => {
+                if self.terminal_panel.control_busy {
+                    return;
+                }
+                if self.terminal_panel.input_busy || !self.terminal_panel.input_queue.is_empty() {
+                    self.toast(Level::Warning, "Wait for terminal input to be acknowledged");
+                    return;
+                }
+                if let (Some(terminal_id), Some(attachment)) = (
+                    self.terminal_panel.selected.clone(),
+                    self.terminal_panel.attachment.clone(),
+                ) {
+                    self.terminal_panel.control_busy = true;
+                    self.api(ApiCall::TerminalControl {
+                        id: terminal_id,
+                        attachment,
+                        generation: self.terminal_panel.generation,
+                        acquire: id == "terminal.acquire",
+                    });
+                }
+            }
+            "terminal.focus_list" => {
+                self.terminal_focused = false;
+                self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::List;
+            }
             "palette.open" => {
                 if matches!(
                     self.ui.overlay,
@@ -7252,6 +7441,102 @@ impl App {
         self.timeline_revision
             .set(self.timeline_revision.get().wrapping_add(1));
         match done.call.clone() {
+            ApiCall::TerminalControl {
+                generation,
+                acquire,
+                ..
+            } => {
+                if generation == self.terminal_panel.generation && self.terminal_open {
+                    self.terminal_panel.control_busy = false;
+                    match done.result {
+                        Ok(_) => {
+                            self.terminal_controlled = acquire;
+                            if !acquire {
+                                self.terminal_panel.input_queue.clear();
+                            }
+                            self.terminal_panel.size = None;
+                            self.terminal_resize();
+                        }
+                        Err(error) => {
+                            self.toast(Level::Error, format!("Terminal control: {error}"))
+                        }
+                    }
+                }
+                return;
+            }
+            ApiCall::TerminalInput { generation, .. } => {
+                if generation == self.terminal_panel.generation && self.terminal_open {
+                    self.terminal_panel.input_busy = false;
+                    match done.result {
+                        Ok(_) => {
+                            self.terminal_panel.next_input += 1;
+                            self.terminal_send_next();
+                        }
+                        Err(error) => {
+                            self.terminal_controlled = false;
+                            self.terminal_panel.input_queue.clear();
+                            self.terminal_panel.attachment = None;
+                            self.effects.push(Effect::TerminalStop);
+                            self.toast(
+                                Level::Error,
+                                format!("Terminal input outcome indeterminate: {error}"),
+                            );
+                        }
+                    }
+                }
+                return;
+            }
+            ApiCall::TerminalResize {
+                generation,
+                rows,
+                cols,
+                ..
+            } => {
+                if generation == self.terminal_panel.generation && self.terminal_open {
+                    self.terminal_panel.resize_busy = false;
+                    match done.result {
+                        Ok(_) => {
+                            self.terminal_panel.size = Some((rows, cols));
+                            self.terminal_resize();
+                        }
+                        Err(error) => self.toast(Level::Error, format!("Terminal resize: {error}")),
+                    }
+                }
+                return;
+            }
+            ApiCall::TerminalList { project } => {
+                if self.current_project().as_deref() == Some(project.as_str()) && self.terminal_open
+                {
+                    self.terminal_panel.loading = false;
+                    match done.result {
+                        Ok(result) => {
+                            self.terminal_panel.terminals = result.terminals.unwrap_or_default()
+                        }
+                        Err(error) => {
+                            self.toast(Level::Error, format!("Could not list terminals: {error}"))
+                        }
+                    }
+                }
+                return;
+            }
+            ApiCall::TerminalCreate { project, .. } => {
+                self.terminal_panel.creating = false;
+                match done.result {
+                    Ok(result)
+                        if self.current_project().as_deref() == Some(project.as_str())
+                            && self.terminal_open =>
+                    {
+                        if let Some(terminal) = result.terminal {
+                            self.terminal_panel.terminals.push(terminal);
+                        }
+                    }
+                    Err(error) => {
+                        self.toast(Level::Error, format!("Could not create terminal: {error}"))
+                    }
+                    _ => {}
+                }
+                return;
+            }
             ApiCall::VoiceStatus { generation } => {
                 self.apply_voice_status(generation, done.result);
                 return;
@@ -8775,7 +9060,80 @@ impl App {
     }
 
     fn handle_key_inner(&mut self, ev: KeyEvent) {
+        if self.terminal_open
+            && self.terminal_focused
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+        {
+            if ev.code == KeyCode::Char(']') && ev.modifiers.contains(KeyModifiers::CONTROL) {
+                self.terminal_focused = false;
+                self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::List;
+            } else if let Some(bytes) = crate::terminal_panel::key_bytes(ev) {
+                self.terminal_input(bytes);
+            }
+            return;
+        }
         let Some(name) = keys::name(&ev) else { return };
+        if self.terminal_open && self.ui.overlay.is_none() && name == "esc" {
+            self.close_panel();
+            return;
+        }
+        if self.terminal_open && self.ui.overlay.is_none() {
+            match name.as_str() {
+                "up" => self.terminal_panel.cursor = self.terminal_panel.cursor.saturating_sub(1),
+                "down" => {
+                    self.terminal_panel.cursor =
+                        (self.terminal_panel.cursor + 1).min(self.terminal_panel.terminals.len())
+                }
+                "enter" if self.terminal_panel.cursor == 0 => self.execute("terminal.new"),
+                "c" => self.execute("terminal.acquire"),
+                "r" => self.execute("terminal.release"),
+                "enter" => {
+                    if self.terminal_panel.input_busy || !self.terminal_panel.input_queue.is_empty()
+                    {
+                        self.toast(Level::Warning, "Wait for terminal input to be acknowledged");
+                        return;
+                    }
+                    if let Some(terminal) = self
+                        .terminal_panel
+                        .terminals
+                        .get(self.terminal_panel.cursor - 1)
+                    {
+                        let id = terminal.id.clone();
+                        if self.terminal_panel.selected.as_deref() == Some(&id)
+                            && self.terminal_panel.attachment.is_some()
+                        {
+                            self.terminal_focused = true;
+                            self.terminal_panel.focus =
+                                crate::terminal_panel::TerminalFocus::Screen;
+                            return;
+                        }
+                        self.terminal_panel.generation += 1;
+                        self.terminal_controlled = false;
+                        self.terminal_panel.next_input = 1;
+                        self.terminal_panel.input_busy = false;
+                        self.terminal_panel.input_queue.clear();
+                        self.terminal_panel.resize_busy = false;
+                        self.terminal_panel.control_busy = false;
+                        self.terminal_panel.size = None;
+                        self.terminal_panel.screen = crate::terminal_screen::TerminalScreen::new(
+                            terminal.rows,
+                            terminal.cols,
+                        );
+                        self.terminal_panel.selected = Some(id.clone());
+                        self.terminal_panel.attachment = None;
+                        self.terminal_selected = true;
+                        self.effects.push(Effect::TerminalAttach {
+                            id,
+                            client: self.terminal_panel.client_id.clone(),
+                            generation: self.terminal_panel.generation,
+                        });
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         if name != "ctrl+c" {
             self.ctrl_c = None;
         }
@@ -13541,6 +13899,15 @@ impl App {
     }
 
     pub fn handle_paste(&mut self, text: &str) {
+        if self.terminal_open
+            && self.terminal_focused
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+        {
+            let bytes = self.terminal_panel.screen.paste(text);
+            self.terminal_input(bytes);
+            return;
+        }
         if let Some(Overlay {
             kind: OverlayKind::Palette(p),
             ..
@@ -13814,6 +14181,11 @@ impl App {
 impl ActionDone {
     fn call_name(&self) -> &'static str {
         match self.call {
+            ApiCall::TerminalList { .. }
+            | ApiCall::TerminalCreate { .. }
+            | ApiCall::TerminalControl { .. }
+            | ApiCall::TerminalInput { .. }
+            | ApiCall::TerminalResize { .. } => "Terminal failed",
             ApiCall::Input { .. } => "Pending input failed",
             ApiCall::Provider { .. } => "Provider sign-in failed",
             ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. } => "Send failed",

@@ -213,6 +213,8 @@ struct Interactive {
     capture: Option<nexus_tui::dictation::CaptureHandle>,
     loading_cue: Option<tokio::task::JoinHandle<()>>,
     program_status: nexus_tui::program_status::Tracker,
+    terminal_tx: mpsc::UnboundedSender<nexus_tui::terminal_panel::TerminalEvent>,
+    terminal_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Draw one frame; shared by the first splash paint and the main loop.
@@ -232,7 +234,9 @@ fn draw_terminal(terminal: &mut term::Term, app: &mut App) -> std::io::Result<()
 
 impl Interactive {
     fn draw(&mut self) -> std::io::Result<()> {
-        draw_terminal(&mut self.terminal, &mut self.app)
+        draw_terminal(&mut self.terminal, &mut self.app)?;
+        self.app.terminal_resize();
+        Ok(())
     }
 
     /// Reconcile program status and run this item's effects, in order. Effects
@@ -244,6 +248,53 @@ impl Interactive {
         self.app.persist_prefs();
         for effect in std::mem::take(&mut self.app.effects) {
             match effect {
+                Effect::TerminalStop => {
+                    if let Some(task) = self.terminal_task.take() {
+                        task.abort();
+                    }
+                }
+                Effect::TerminalAttach {
+                    id,
+                    client,
+                    generation,
+                } => {
+                    if let Some(task) = self.terminal_task.take() {
+                        task.abort();
+                    }
+                    let api = actions::api_for(&self.home)
+                        .map(|api| nexus_tui::terminal_api::TerminalApi(api.http));
+                    let tx = self.terminal_tx.clone();
+                    self.terminal_task = Some(tokio::spawn(async move {
+                        use nexus_tui::terminal_panel::TerminalEvent;
+                        let result: Result<(), String> = async {
+                            let api = api.ok_or("Core is not reachable")?;
+                            let attachment =
+                                api.attach(&id, &client).await.map_err(|e| e.to_string())?;
+                            let mut stream = api
+                                .stream(&id, &attachment, None)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            let _ = tx.send(TerminalEvent::Attached {
+                                generation,
+                                attachment,
+                            });
+                            while let Some(frame) =
+                                stream.next().await.map_err(|e| e.to_string())?
+                            {
+                                let frame = serde_json::from_str(&frame.data)
+                                    .map_err(|e| format!("Invalid terminal frame: {e}"))?;
+                                if tx.send(TerminalEvent::Frame { generation, frame }).is_err() {
+                                    return Ok(());
+                                }
+                            }
+                            Err("connection ended".into())
+                        }
+                        .await;
+                        if let Err(error) = result {
+                            let _ = tx.send(TerminalEvent::Ended { generation, error });
+                        }
+                    }));
+                }
                 Effect::Quit => return Ok(Applied::halt(dirty)),
                 Effect::Suspend => {
                     nexus_tui::program_status::emit(self.program_status.release());
@@ -469,6 +520,9 @@ impl Interactive {
     }
 
     fn shutdown(&mut self) {
+        if let Some(task) = self.terminal_task.take() {
+            task.abort();
+        }
         if let Some(handle) = self.capture.take() {
             handle.retire();
         }
@@ -480,6 +534,7 @@ impl Interactive {
 }
 
 enum Wake {
+    Terminal(Option<nexus_tui::terminal_panel::TerminalEvent>),
     Input(Option<Event>),
     Sync(Option<SyncMsg>),
     Image(Option<(String, Result<Option<nexus_tui::images::Image>, String>)>),
@@ -553,6 +608,7 @@ async fn run(
         mpsc::unbounded_channel::<(String, Result<Option<nexus_tui::images::Image>, String>)>();
     let (capture_tx, mut capture_rx) =
         mpsc::unbounded_channel::<nexus_tui::dictation::CaptureEvent>();
+    let (terminal_tx, mut terminal_rx) = mpsc::unbounded_channel();
     let mut inter = Interactive {
         app,
         terminal,
@@ -564,6 +620,8 @@ async fn run(
         capture: None,
         loading_cue: None,
         program_status: nexus_tui::program_status::Tracker::default(),
+        terminal_tx,
+        terminal_task: None,
     };
 
     let mut tick = tokio::time::interval(frames::TICK_INTERVAL);
@@ -608,11 +666,21 @@ async fn run(
             res = image_rx.recv(), if image_open => Wake::Image(res),
             res = done_rx.recv(), if done_open => Wake::Done(res.map(Box::new)),
             res = capture_rx.recv(), if capture_open => Wake::Capture(res),
+            res = terminal_rx.recv() => Wake::Terminal(res),
             _ = splash_tick.tick(), if splash_animating => Wake::Splash,
             _ = indicator_tick.tick(), if indicator_animating => Wake::Indicator,
             _ = tick.tick() => Wake::Tick,
         };
         match wake {
+            Wake::Terminal(Some(event)) => {
+                inter.app.terminal_event(event);
+                let applied = inter.settle()?;
+                dirty = true;
+                if applied.halt {
+                    break 'main;
+                }
+            }
+            Wake::Terminal(None) => {}
             Wake::Input(Some(ev)) => {
                 let applied = inter.apply_input(ev)?;
                 dirty |= applied.dirty;

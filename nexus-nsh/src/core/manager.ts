@@ -7,6 +7,7 @@
 import { Storage, effect, keymap, signal } from "nsh";
 import { ApiError, request } from "./transport";
 import { managerHooks } from "./manager-hooks";
+import { terminalFocused } from "../terminal-panel";
 import type { CoreEvent } from "./api";
 import {
   Card, CARD_COLLAPSE_MS, CAPTION_QUIET_MS, DevOrb, ManagerError, ORB_MS, OrbMode, PRINTABLE_KEYS, Phase, Row,
@@ -896,7 +897,7 @@ export function submitField() {
 function bindEngagedKeys(): () => void {
   const offs: (() => void)[] = [];
   const bind = (key: string, fn: (keystroke: string) => void) => {
-    try { offs.push(keymap.bind(key, (e: { keystroke: string }) => fn(e.keystroke), { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+    try { offs.push(keymap.bind(key, (e: { keystroke: string }) => { if (!terminalFocused()) fn(e.keystroke); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
   };
   bind("pageup", () => scrollDetails(-200));
   bind("pagedown", () => scrollDetails(200));

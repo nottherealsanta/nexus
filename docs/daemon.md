@@ -4,7 +4,9 @@ Nexus Core runs as one background daemon per Nexus home (`~/.nexus`). The
 daemon owns projects, sessions, turns, Monty kernels, background bash jobs,
 tool approvals, pending questions, workspace control operations, session
 archiving, pending directory moves and startup recovery, and exposes them over
-the [HTTP API](api.md). Clients never read Nexus state files.
+the [HTTP API](api.md). Clients never read Nexus state files. Core also owns
+interactive terminal PTYs, with a separate bounded stream and lifecycle described
+in [terminals.md](terminals.md); they never enter model context automatically.
 
 The daemon also keeps the latest provider-usage snapshot in its database, refreshing it every 10 minutes by default
 while running. `[usage] refresh_minutes` changes the interval (1–1440); clients can request an immediate refresh.

@@ -13,6 +13,7 @@ import { coreEditing } from "./connect";
 import { currentAlerts } from "./alerts";
 import { stripLayout } from "../strip-layout";
 import { rightSidebarWidth, textCellPoints, workspaceTabCells } from "./geometry";
+import { terminalAvailable, terminalOpen } from "../terminal-panel";
 
 function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
 
@@ -234,6 +235,7 @@ export function Header() {
       <View class="flex-1 min-w-0 h-full flex-row items-center px-2">
         <View class="flex-1 min-w-0 flex-row items-center gap-2">
           <WorkspaceTabs />
+          <If when={terminalAvailable}><Button onPress={() => void run("terminal.open")} selected={terminalOpen()} accessibilityLabel="Terminal" testID="terminal-tab" class={`shrink-0 px-2 ${tabHeight()} hover:bg-accent ${FOCUS}`}><Text class={`${TS.base} text-foreground`}>Terminal</Text></Button></If>
           <View class="flex-row items-center gap-2 shrink-0">
             <If when={conn().kind === "live" && !!viewed() && (m(), waitItems().length > 0)}>
               <View class="flex-row items-center gap-1 pr-1" testID="header-waiting">

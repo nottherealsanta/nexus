@@ -150,7 +150,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         right_open: app.ui.right_open,
         drawer: app.ui.drawer,
         left_width: app.ui.left_width,
-        panel_open: app.ui.file_open || app.ui.diff_open.is_some(),
+        panel_open: app.terminal_open || app.ui.file_open || app.ui.diff_open.is_some(),
     };
     let regions = {
         let a: &App = app;
@@ -2374,7 +2374,83 @@ fn draw_panel(cx: &Cx, buf: &mut Buffer, r: Rect, area: Rect, hits: &mut HitMap)
     clear(buf, frame, cx.st(PRIMARY, PANEL));
     hits.add(frame, Target::Swallow);
     clear(buf, r, cx.st(PRIMARY, CANVAS));
-    if cx.app.ui.diff_open.is_some() {
+    if cx.app.terminal_open {
+        let list_width = if cx.app.terminal_panel.selected.is_some() {
+            (r.width / 3).min(32)
+        } else {
+            r.width
+        };
+        put(
+            buf,
+            r.x,
+            r.y,
+            if cx.app.terminal_focused {
+                "Terminal  Ctrl+] list"
+            } else {
+                "Terminal  Enter open  c take control  r release  Esc close"
+            },
+            cx.st(PRIMARY, CANVAS),
+            r.width,
+        );
+        if r.height > 1 {
+            put(
+                buf,
+                r.x,
+                r.y + 1,
+                if cx.app.terminal_panel.cursor == 0 {
+                    "> New terminal"
+                } else {
+                    "  New terminal"
+                },
+                cx.st(ACCENT, CANVAS),
+                list_width,
+            );
+        }
+        for (i, terminal) in cx.app.terminal_panel.terminals.iter().enumerate() {
+            let y = r.y.saturating_add(2).saturating_add(i as u16);
+            if y >= r.bottom() {
+                break;
+            }
+            put(
+                buf,
+                r.x,
+                y,
+                &format!(
+                    "{} {}  {}  {}  {}",
+                    if cx.app.terminal_panel.cursor == i + 1 {
+                        ">"
+                    } else {
+                        " "
+                    },
+                    terminal.name,
+                    terminal.workspace,
+                    terminal.status,
+                    terminal.controller.as_deref().unwrap_or("No controller")
+                ),
+                cx.st(PRIMARY, CANVAS),
+                list_width,
+            );
+        }
+        if cx.app.terminal_panel.selected.is_some() && r.width > list_width + 1 && r.height > 2 {
+            let screen_area = Rect::new(
+                r.x + list_width + 1,
+                r.y + 1,
+                r.width - list_width - 1,
+                r.height - 1,
+            );
+            cx.app.terminal_panel.screen.render(screen_area, buf);
+            if cx.app.terminal_panel.screen.gap {
+                put(
+                    buf,
+                    screen_area.x,
+                    screen_area.y,
+                    crate::terminal_screen::GAP_NOTICE,
+                    cx.st("status.warning", CANVAS),
+                    screen_area.width,
+                );
+            }
+        }
+    } else if cx.app.ui.diff_open.is_some() {
         draw_diff_view(cx, buf, r, true, hits);
     } else if cx.app.ui.file_open {
         draw_file_view(cx, buf, r, true, hits);

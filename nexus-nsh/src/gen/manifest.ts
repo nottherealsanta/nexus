@@ -52,6 +52,10 @@ export const manifest = {
    "alert.open",
    "drawer.open",
    "layout.narrow",
+   "terminal.open",
+   "terminal.selected",
+   "terminal.focused",
+   "terminal.controlled",
    "connection.lost",
    "connection.no_daemon",
    "provider.signed_in",
@@ -138,6 +142,7 @@ export const manifest = {
    "manager.card",
    "manager.focused",
    "inspector",
+   "terminal",
    "escape_chain"
   ],
   "escape": [
@@ -1033,6 +1038,109 @@ export const manifest = {
    "unavailable_reason": "No dialog is open.",
    "placement": [
     "dialog"
+   ]
+  },
+  {
+   "id": "terminal.open",
+   "title": "Terminal",
+   "category": "navigation",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project first.",
+   "placement": [
+    "palette",
+    "menu"
+   ]
+  },
+  {
+   "id": "terminal.new",
+   "title": "New terminal",
+   "category": "navigation",
+   "when": [
+    "terminal.open"
+   ],
+   "unavailable_reason": "Open Terminal first.",
+   "placement": [
+    "panel"
+   ]
+  },
+  {
+   "id": "terminal.rename",
+   "title": "Rename",
+   "category": "navigation",
+   "when": [
+    "terminal.selected"
+   ],
+   "unavailable_reason": "Select a terminal first.",
+   "placement": [
+    "panel"
+   ]
+  },
+  {
+   "id": "terminal.close",
+   "title": "Close",
+   "category": "navigation",
+   "when": [
+    "terminal.selected"
+   ],
+   "unavailable_reason": "Select a terminal first.",
+   "placement": [
+    "panel"
+   ]
+  },
+  {
+   "id": "terminal.acquire",
+   "title": "Take control",
+   "category": "navigation",
+   "when": [
+    "terminal.selected",
+    "!terminal.controlled"
+   ],
+   "unavailable_reason": "Select a terminal without control first.",
+   "placement": [
+    "panel"
+   ]
+  },
+  {
+   "id": "terminal.release",
+   "title": "Release control",
+   "category": "navigation",
+   "when": [
+    "terminal.controlled"
+   ],
+   "unavailable_reason": "This attachment does not have control.",
+   "placement": [
+    "panel"
+   ]
+  },
+  {
+   "id": "terminal.copy",
+   "title": "Copy",
+   "category": "copy",
+   "when": [
+    "terminal.selected"
+   ],
+   "unavailable_reason": "Select terminal text first.",
+   "placement": [
+    "panel"
+   ]
+  },
+  {
+   "id": "terminal.focus_list",
+   "title": "Focus terminal list",
+   "category": "navigation",
+   "keys": {
+    "tui": "ctrl+]",
+    "nsh": "ctrl+]"
+   },
+   "key_context": "terminal",
+   "when": [
+    "terminal.focused"
+   ],
+   "unavailable_reason": "The terminal screen does not have focus.",
+   "placement": [
+    "panel"
    ]
   },
   {

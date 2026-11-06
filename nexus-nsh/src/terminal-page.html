@@ -1,0 +1,42 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body,#terminal{height:100%;width:100%;margin:0;overflow:hidden;background:#101010}*{box-sizing:border-box}</style><style>/* XTERM_CSS */</style></head><body><div id="terminal"></div><script>/* XTERM_JS */</script><script>/* FIT_JS */</script><script>
+const term = new Terminal({scrollback: 10000, cursorBlink: true, convertEol: false, allowProposedApi: true});
+const fit = new FitAddon.FitAddon();
+let writable = false, applyingSize = false;
+function fitScreen() {
+  const size = fit.proposeDimensions(); if (!size) return;
+  const cols = Math.max(1, Math.min(500, size.cols)), rows = Math.max(1, Math.min(200, size.rows));
+  if (writable) resizeFromCore(cols, rows);
+  send('resize', {cols, rows});
+}
+term.loadAddon(fit);
+term.open(document.getElementById('terminal'));
+term.parser.registerOscHandler(52, () => true);
+function send(type, data = {}) { window.nsh.postMessage(JSON.stringify({type, ...data})); }
+function resizeFromCore(cols, rows) { applyingSize = true; try { term.resize(cols, rows); } finally { applyingSize = false; } }
+term.onData(data => { if (writable) send('input', {data}); });
+term.onResize(({cols,rows}) => { if (!applyingSize) send('resize', {cols,rows}); });
+term.attachCustomKeyEventHandler(e => {
+  if (e.ctrlKey && !e.altKey && !e.metaKey && e.key === ']') {
+    if (e.type === 'keydown') send('focus-list');
+    return false;
+  }
+  return true;
+});
+term.textarea.addEventListener('focus', () => send('focus', {focused:true}));
+term.textarea.addEventListener('blur', () => send('focus', {focused:false}));
+window.addEventListener('message', e => {
+  let m; try { m = JSON.parse(e.data); } catch { return; }
+  switch (m.type) {
+    case 'write': term.write(Uint8Array.from(atob(m.data), c => c.charCodeAt(0)), () => send('written', {id:m.id})); break;
+    case 'reset': term.write('\x1bc', () => { if (m.cols && m.rows) resizeFromCore(m.cols,m.rows); }); break;
+    case 'dimensions': term.write('\x00', () => resizeFromCore(m.cols,m.rows)); break;
+    case 'writable': writable = !!m.value; break;
+    case 'theme': term.options.theme = {background:m.background, foreground:m.foreground, cursor:m.foreground}; document.body.style.background = m.background; document.getElementById('terminal').style.background = m.background; break;
+    case 'focus': term.focus(); break;
+    case 'copy': send('selection', {data: term.getSelection()}); break;
+    case 'fit': fitScreen(); break;
+  }
+});
+new ResizeObserver(() => fitScreen()).observe(document.getElementById('terminal'));
+setTimeout(() => { fitScreen(); send('ready'); }, 0);
+</script></body></html>
