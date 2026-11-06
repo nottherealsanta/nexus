@@ -2840,11 +2840,11 @@ impl App {
                 .is_some_and(|id| self.project_status(&id) == crate::api::project_status::INACTIVE),
             "project.can_move_up" => self.current_project().is_some_and(|id| {
                 self.project_ids().first().is_some_and(|first| *first != id)
-                    && self.project_ids().iter().any(|p| *p == id)
+                    && self.project_ids().contains(&id)
             }),
             "project.can_move_down" => self.current_project().is_some_and(|id| {
                 self.project_ids().last().is_some_and(|last| *last != id)
-                    && self.project_ids().iter().any(|p| *p == id)
+                    && self.project_ids().contains(&id)
             }),
             "has_session" => has_session,
             "has_turns" => self.messages().iter().any(|m| m.role == "user"),
@@ -11989,8 +11989,6 @@ impl App {
                             "sign-in pending \u{b7} open".to_owned()
                         } else if status == "failed" {
                             "sign-in failed \u{b7} open".to_owned()
-                        } else if connected {
-                            format!("{} \u{b7} open", self.provider_status(p))
                         } else {
                             format!("{} \u{b7} open", self.provider_status(p))
                         },

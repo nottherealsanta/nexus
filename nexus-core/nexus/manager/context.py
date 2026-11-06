@@ -368,8 +368,10 @@ def debug_document(store: Store, episode: Session | None, episodes: list[Session
     """
     clipped_entries = 0
     doc: list[str] = [
-        "This is the Manager's hidden context: what it is given and what it did. It is a debug view, "
-        "not a timeline or a chat (docs/manager.md).",
+        (
+            "This is the Manager's hidden context: what it is given and what it did. It is a debug view, "
+            "not a timeline or a chat (docs/manager.md)."
+        ),
         "",
     ]
     current = episode

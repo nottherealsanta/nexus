@@ -1317,13 +1317,21 @@ fn selected_session_row_takes_the_rail_active_block_and_bar() {
     let (buf, rows) = draw(&mut app, 120, 36);
     let y = rows
         .iter()
-        .position(|row| row.chars().take(34).collect::<String>().contains("Selected title"))
+        .position(|row| {
+            row.chars()
+                .take(34)
+                .collect::<String>()
+                .contains("Selected title")
+        })
         .expect("the selected session row") as u16;
     let left = app.regions.left.expect("sidebar");
     let active = app.theme.bg("interactive.active");
     let bar = app.theme.fg("interactive.active_bar");
     let sidebar = app.theme.bg("surface.sidebar");
-    assert_ne!(active.bg, sidebar.bg, "the block is lighter than the sidebar");
+    assert_ne!(
+        active.bg, sidebar.bg,
+        "the block is lighter than the sidebar"
+    );
     let x = (left.x..left.right())
         .find(|x| buf[(*x, y)].symbol() == "\u{258f}")
         .expect("the left accent bar");
@@ -1331,7 +1339,11 @@ fn selected_session_row_takes_the_rail_active_block_and_bar() {
     // Both lines of the row sit on the block, to its right edge.
     for line in [y, y + 1] {
         assert_eq!(buf[(x + 4, line)].bg, active.bg.unwrap(), "line {line}");
-        assert_eq!(buf[(left.right() - 2, line)].bg, active.bg.unwrap(), "line {line}");
+        assert_eq!(
+            buf[(left.right() - 2, line)].bg,
+            active.bg.unwrap(),
+            "line {line}"
+        );
     }
     // The title is white (`text.highlight`) and not bold.
     let tx = (x..left.right())

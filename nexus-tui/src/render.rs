@@ -4914,9 +4914,7 @@ fn draw_scroll_bar(cx: &Cx, buf: &mut Buffer, r: Rect, top: usize, total: usize,
         return;
     };
     let track = h as u32;
-    let thumb = ((track * track + total as u32 - 1) / total as u32)
-        .max(1)
-        .min(track) as u16;
+    let thumb = (track * track).div_ceil(total as u32).max(1).min(track) as u16;
     let max_top = (total - h).max(1) as u32;
     let travel = track.saturating_sub(thumb as u32);
     let offset = ((top as u32) * travel / max_top) as u16;
@@ -6542,7 +6540,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         a.ui.dictation.phase,
         crate::dictation::Phase::Recording | crate::dictation::Phase::Stopping
     ) {
-        let lit = cx.t.opts.reduced_motion || (a.frame / 4) % 2 == 0;
+        let lit = cx.t.opts.reduced_motion || (a.frame / 4).is_multiple_of(2);
         let style = cx.st("status.error", PANEL);
         let style = if lit {
             style
@@ -7760,9 +7758,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                 (left, "sections"),
                 ("esc", "back"),
             ]
-        } else if page == "agents" {
-            vec![("enter", "open"), ("esc", "back")]
-        } else if page == "providers" {
+        } else if page == "agents" || page == "providers" {
             vec![("enter", "open"), ("esc", "back")]
         } else {
             vec![("enter", "select"), ("esc", "back")]

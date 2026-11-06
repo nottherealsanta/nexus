@@ -193,13 +193,19 @@ fn the_first_message_is_pinned_to_the_top_until_the_reader_scrolls() {
         .iter()
         .position(|l| l.contains(&first_word))
         .expect("the sent message is drawn");
-    assert!(row <= 6, "the first message sits at the top, not row {row}: {lines:#?}");
+    assert!(
+        row <= 6,
+        "the first message sits at the top, not row {row}: {lines:#?}"
+    );
     let pinned = a.ui.scroll;
     assert!(!pinned.follow, "the view does not follow the bottom");
     // an empty reply cannot pull the view away: the spacer holds the pin
     let (_, again) = draw(&mut a, 120, 36);
     assert_eq!(a.ui.scroll, pinned);
-    assert_eq!(again.iter().position(|l| l.contains(&first_word)), Some(row));
+    assert_eq!(
+        again.iter().position(|l| l.contains(&first_word)),
+        Some(row)
+    );
     assert!(a.ui.first_pin.is_some());
     // the reader scrolls: the pin ends and is not re-applied
     a.scroll_timeline(-1);

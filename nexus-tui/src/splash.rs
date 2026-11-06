@@ -258,7 +258,7 @@ impl Splash {
                 continue;
             }
             // A slow twinkle: each particle brightens for a third of a 1.5 s cycle.
-            let bright = (u64::from(frame / 60) + hash(index + 1000) % 3) % 3 == 0;
+            let bright = (u64::from(frame / 60) + hash(index + 1000) % 3).is_multiple_of(3);
             let (glyph, style) = match (bright, p.ascii) {
                 (true, false) => ("•", p.ink),
                 (false, false) => ("·", p.dim),
