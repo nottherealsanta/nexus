@@ -51,11 +51,11 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   `surface.canvas`. No rule separates them: the surface step is the edge, and
   only where surfaces collapse (ANSI-16, monochrome) a `│` in `border.default`
   is drawn at each sidebar edge. `border.strong` is decorative (diff split rule,
-  tool-detail box, block-quote rail). Under a modal the whole frame is covered by `paint::cover`: a solid
-  `surface.canvas` fill hides the page (web NSH: `bg-background` behind the dialog). Drawers and the Manager's
-  card still use the blended `paint::scrim`. Panel surfaces hold the composer; raised surfaces hold user messages and modals.
+  tool-detail box, block-quote rail). Under a modal the buffer is dimmed by `paint::scrim`: each
+  cell's colours move 50% toward the canvas, or `DIM` where colours cannot be
+  blended. Panel surfaces hold the composer; raised surfaces hold user messages and modals.
   One modal recipe (palette, pickers, Settings, confirms, help, notifications): the
-  cover over the whole frame, then a borderless `surface.raised` block with 2 cells of
+  scrim over the whole frame, then a borderless `surface.raised` block with 2 cells of
   padding left and right and 1 row top and bottom; the title (bold) is the first row
   inside, key hints (bold key, muted label, including Esc) the last row;
   at most 70% of the frame high and within 2 cells of its edge. The fill resets

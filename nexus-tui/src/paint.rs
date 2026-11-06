@@ -38,21 +38,6 @@ pub fn scrim(theme: &Theme, buf: &mut Buffer, area: Rect) {
     scrim_by(theme, buf, area, 50);
 }
 
-/// The cover under a modal: a solid `surface.canvas` over `area`, so the page
-/// is hidden rather than dimmed (porting ledger, 2026-11-06). Where the theme
-/// has no colour for the canvas (ANSI-16, monochrome) the terminal default.
-pub fn cover(theme: &Theme, buf: &mut Buffer, area: Rect) {
-    let area = area.intersection(buf.area);
-    let bg = theme.color("surface.canvas").unwrap_or(Color::Reset);
-    for y in area.y..area.bottom() {
-        for x in area.x..area.right() {
-            let cell = &mut buf[(x, y)];
-            cell.reset();
-            cell.set_bg(bg);
-        }
-    }
-}
-
 /// The same scrim, lighter or heavier: `percent` of the way to the canvas. The
 /// Manager's card uses 25, far lighter than a modal's 50.
 pub fn scrim_by(theme: &Theme, buf: &mut Buffer, area: Rect, percent: u8) {
@@ -250,19 +235,6 @@ mod tests {
         assert!(!c.modifier.contains(Modifier::DIM));
         // outside the area: untouched
         assert_eq!(buf[(1, 0)].fg, Color::Reset);
-    }
-
-    #[test]
-    fn cover_hides_the_page_behind_a_modal() {
-        let t = theme(Tier::TrueColor);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
-        buf[(0, 0)].set_symbol("x");
-        buf[(0, 0)].set_fg(Color::Rgb(255, 255, 255));
-        buf[(0, 0)].set_bg(Color::Rgb(100, 0, 40));
-        cover(&t, &mut buf, Rect::new(0, 0, 1, 1));
-        assert_eq!(buf[(0, 0)].symbol(), " ");
-        assert_eq!(Some(buf[(0, 0)].bg), t.color("surface.canvas"));
-        assert_eq!(buf[(1, 0)].bg, Color::Reset);
     }
 
     #[test]
