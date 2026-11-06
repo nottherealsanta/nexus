@@ -1355,8 +1355,8 @@ confirm them at the first design review.
   renderer/native bridge can host them, rather than assuming DOM widgets work in TSX. Record dependency,
   licensing, packaging and platform constraints; do not write a terminal emulator or browser engine.
 - [ ] **Approve scope and differences.** (Open: see Decisions still open, and the decisions list in the spikes report.) Both TUI and NSH must provide the same operations and resource
-  state. NSH web/macOS are the proposed first targets alongside the Rust TUI; mobile inclusion or
-  deferral is still a user decision, not an inherited file-editor exclusion. Prove terminal graphics
+  state. NSH web/macOS are the targets alongside the Rust TUI; the terminal and browser do not ship on
+  mobile (user, 2026-11-06: mobile is a cut-down client, see AGENTS.md). Prove terminal graphics
   browser rendering and define a usable non-graphics-terminal path. If a TUI text/screenshot fallback
   loses capabilities, stop for explicit approval and a ledger row before implementing that difference.
 
@@ -1556,9 +1556,9 @@ change, and any client-specific difference needs the user's approval and a ledge
   *current* (normal, in the rail), *passive* (dimmed in the rail), *inactive* (hidden from the rail, listed in
   the overview under "Inactive", restored with one action). Stored in Core, documented, same names in both clients.
 
-- [ ] **Follow-up (15.3):** remove unregisters (`POST /api/project/{id}/remove`, sessions become `detached`, re-adding the
-  path restores them); the old `DELETE /api/project/{id}` still deletes the project and its sessions permanently.
-  Keep or retire it: see Decisions still open.
+- [x] **Remove and delete both stay (user, 2026-11-06):** remove unregisters (`POST /api/project/{id}/remove`, sessions
+  become `detached`, re-adding the path restores them); `DELETE /api/project/{id}` still deletes the project and its
+  sessions permanently.
 
 **15.4 Keyboard flow from an empty composer** (only when the composer is empty)
 
@@ -1742,6 +1742,19 @@ r refresh · esc close
 - [ ] Update `docs/porting-ledger.md` on landing: "Provider usage showed a continuous bar, used percent and prose notes | Both clients show a five-column table: ten-block gauge filled bottom-up, percent left, reserve (old 7-day pace formula), expiry; the Codex limit-reached note, xAI per-product credit notes and per-window detail text are gone (2026-11-06) | User request". Record any screenshot-only difference; none is expected on desktop.
 - [ ] Tick this section, move its one-line record to Landed and remove the status-table row's "planned" wording.
 
+### 17. Mobile cut-down client (NSH iOS and other mobile targets)
+
+Decision (user, 2026-11-06), recorded in AGENTS.md: mobile only talks to the Manager and views sessions. **Not
+started:** the phone build (`phone` in `nexus-nsh/src/store.ts`) still renders the full timeline.
+
+- [ ] Session view on mobile shows only the session's status, user messages and agent replies: no tool groups, no
+  context header, no other timeline blocks.
+- [ ] Keep the Manager (header indicator, dropdown, cards, typed input and voice) and the session list.
+- [ ] Remove the other desktop surfaces from the mobile build (files, editor, Git, inspector, terminal and browser
+  when they land); check Settings for what still applies.
+- [ ] Tests on the phone idiom and a phone screenshot; update `nexus-nsh/README.md` and the docs that describe
+  mobile.
+
 ## Decisions made (2026-11-04, user)
 
 | Decision | Answer |
@@ -1759,12 +1772,18 @@ r refresh · esc close
 | --- | --- |
 | Manager header indicator | **Gray braille wave field, not the orb.** Three travelling sine waves, a few dots lit, state read through speed and brightness. While the live voice is on, hover shows **Stop** and click stops the voice (the call, session and typed field stay). An open Manager panel dims everything outside it |
 
+## Decisions made (2026-11-06, user)
+
+| Decision | Answer |
+| --- | --- |
+| Project remove vs delete (15.3) | **Keep both:** non-destructive remove, and the permanent `DELETE /api/project/{id}` |
+| Mobile clients | **Cut-down client** (AGENTS.md): talk to the Manager and view sessions; a session shows only its status, user messages and agent replies (no tool groups, no context header). Terminal, browser, files, editor, Git and inspector are desktop/web only |
+
 ## Decisions still open
 
 | Decision | Default or recommendation |
 | --- | --- |
 | Browser/terminal product scope (14) | Proposed: actual integrated interactive tools, with Core-owned resources and shared TUI/NSH operations. Confirm at the first design review |
-| Browser/terminal mobile support (14.0) | Proposed first slice: desktop/web NSH and Rust TUI. Mobile deferral needs explicit approval; the file-editor mobile exclusion does not automatically cover these features |
 | Browser rendering in terminals without image support (14.0) | Spike first. Any text/screenshot fallback that loses capabilities requires explicit user approval and a ledger row before implementation |
 | Remote browser/terminal access (14.2) | Require an approved authenticated attachment model; do not enable powerful new resources on a tokenless non-loopback server by default |
 | Browser profile persistence and agent control (14.4–14.5) | Start with isolated profiles and user control. Decide profile lifetime, sensitive-page capture and scoped agent takeover before adding persistent sign-ins or raw agent input |
@@ -1780,7 +1799,6 @@ r refresh · esc close
 | Turn summaries: store `max_attempts` so a reloaded retry reads "n/max"? | Today reads "retry n in Ns" |
 | Fold the starting context after the first message (NSH Void open question 1)? | Leave it open |
 | Underline prose links because accent equals primary text (Void open question 3)? | Underline in prose |
-| Keep the permanent `DELETE /api/project/{id}` alongside the non-destructive remove (15.3)? | Kept for now |
 | Browser/terminal decisions from the spikes (14.0): Core-parsed cell grid vs raw bytes per client; Chromium distribution and profile lifetime; NSH raw-key input plan | See reports/section14/spikes.md |
 | Project order (8.6): rail only, or also the Projects list and project picker? | Rail only; leave their recent-order behavior unchanged until the user decides |
 

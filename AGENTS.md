@@ -17,8 +17,14 @@ for deliberate changes from old Nexus.
   [.agents/skills/nexus-ui-parity/SKILL.md](.agents/skills/nexus-ui-parity/SKILL.md).
   A client-specific difference needs the user's explicit approval first, and is then
   recorded in [docs/porting-ledger.md](docs/porting-ledger.md).
-- The file explorer, the file editor and Git management are for the TUI and NSH on
-  desktop and web only. They do not ship on iOS or any other mobile target.
+- **Mobile is a cut-down client.** iOS and any other mobile target (NSH) only lets the user
+  talk to the Manager and view sessions. A session view shows the session's status, the
+  user's messages and the agent's replies, and nothing else: no tool groups and no
+  context header. Everything else (file explorer, file editor, Git management, the
+  integrated terminal and browser, the inspector and the other desktop surfaces) is for
+  the TUI and NSH on desktop and web only. The peer rule above applies between the TUI
+  and NSH desktop/web. Mobile leaving something out needs no ledger row, but adding
+  anything to mobile beyond this list needs the user's approval.
 - One timeline: the "timeline" (or "context line"), which is what the user sees
   as a session in the UIs, reflects the agent's context. Everything the model
   receives is shown in order, and the UI shows nothing the model does not have.
