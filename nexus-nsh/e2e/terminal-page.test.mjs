@@ -17,7 +17,7 @@ test('terminal page captures keys, copies only the selection, and blocks OSC 52'
     const messages = [];
     await page.addInitScript(() => { window.nsh = { postMessage: data => window.capture(data) }; });
     await page.goto('about:blank');
-    await page.evaluate(() => { window.nsh = { postMessage: data => window.capture(data) }; });
+    await page.evaluate(() => { window.nsh = { postMessage: data => window.capture(data) }; window.clipWrites = []; Object.defineProperty(navigator, 'clipboard', {value:{writeText: text => { window.clipWrites.push(text); return Promise.resolve(); }}, configurable:true}); });
     await page.setContent(html);
     await page.waitForFunction(() => document.querySelector('.xterm-helper-textarea'));
     await page.evaluate(() => { window.postMessage(JSON.stringify({type:'writable',value:true}), '*'); window.postMessage(JSON.stringify({type:'theme',background:'#f7f7f5',foreground:'#1f2124'}), '*'); });
@@ -32,6 +32,7 @@ test('terminal page captures keys, copies only the selection, and blocks OSC 52'
     await page.evaluate(() => window.postMessage(JSON.stringify({type:'write', data:btoa('\x1b]52;c;SGk=\x07')}), '*'));
     await page.waitForTimeout(50);
     assert(!messages.some(m => m.type === 'selection'));
+    assert.deepEqual(await page.evaluate(() => window.clipWrites), []);
     await page.evaluate(() => term.write('\x1b[?2004h', () => term.paste('paste')));
     await page.waitForTimeout(50);
     assert(messages.some(m => m.type === 'input' && m.data === '\x1b[200~paste\x1b[201~'));
