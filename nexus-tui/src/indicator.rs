@@ -362,13 +362,14 @@ pub fn paint_sized(
     let base = wave_color(theme, indicator);
     // Indexed and mono tiers cannot blend a brightness; they still draw the field,
     // in the state's role token (the speaker's colour, gray otherwise), with idle dimmed.
-    let flat = theme
-        .fg(state_token(state))
-        .add_modifier(if matches!(state, IndicatorState::Idle) {
-            Modifier::DIM
-        } else {
-            Modifier::empty()
-        });
+    let flat =
+        theme
+            .fg(state_token(state))
+            .add_modifier(if matches!(state, IndicatorState::Idle) {
+                Modifier::DIM
+            } else {
+                Modifier::empty()
+            });
     for x in zone.x..zone.right() {
         let at_cell = &mut buf[(x, y)];
         let dot = braille_cell(indicator.t, state, indicator.level, usize::from(x - zone.x));
@@ -587,7 +588,13 @@ mod tests {
         }
         let mut indicator = Indicator::default();
         indicator.pin(state, 0.5);
-        paint(&mut buf, area, Anchor { x: 20, bottom: 1 }, &indicator, theme);
+        paint(
+            &mut buf,
+            area,
+            Anchor { x: 20, bottom: 1 },
+            &indicator,
+            theme,
+        );
         buf[(16, 0)].fg
     }
 

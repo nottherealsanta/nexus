@@ -1,6 +1,7 @@
 {
   "content_key": "enter",
   "return_key": "left",
+  "tui_return_key": "tab",
   "next_section_key": "down",
   "next_section": "providers"
 }

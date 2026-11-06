@@ -1267,6 +1267,25 @@ fn sidebar_tracks_unread_and_error_until_opened_or_retried() {
 }
 
 #[test]
+fn a_failed_child_does_not_mark_its_parent_failed() {
+    use nexus_tui::api::Frame;
+    use nexus_tui::sync::SyncMsg;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let mut child = app.state.model.sessions[SESSION].clone();
+    child.id = "child".into();
+    child.title = "Build".into();
+    child.parent_id = Some(SESSION.into());
+    app.state.model.sessions.insert(child.id.clone(), child);
+    let error = serde_json::json!({"id": 210, "type": "session.error", "session_id": "child", "cursor": "log_c915bfc9b6d826c4:210", "data": {"error": "HTTP 429"}});
+    if let Ok(Frame::Event(event)) = Frame::from_value("session.error", None, &error) {
+        app.apply_sync(SyncMsg::Event(event));
+    }
+    assert!(app.ui.failed_sessions.contains("child"));
+    assert!(!app.ui.failed_sessions.contains(SESSION));
+    assert_ne!(app.session_state(SESSION), "failed");
+}
+
+#[test]
 fn long_session_titles_end_in_an_ellipsis_in_every_tier() {
     // D03 shows `han…`: the old truecolour fade gave way to the ellipsis.
     for tier in [Tier::TrueColor, Tier::Ansi256, Tier::Ansi16] {
@@ -1325,35 +1344,99 @@ fn worktree_groups_keep_cursor_on_the_same_session_when_branch_data_arrives() {
 }
 
 #[test]
-fn settings_arrows_change_animations_monochrome_and_sidebar() {
+fn settings_segments_move_with_left_right_and_esc_steps_back() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("app.settings");
     press(&mut app, &["a", "n", "i", "m"]);
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("Animations"));
+    let text = joined(&rows);
+    assert!(text.contains("Animations"));
+    assert!(text.contains(" on "), "segments show their options: {text}");
+    assert!(
+        text.contains(" off "),
+        "segments show their options: {text}"
+    );
     let before = app.theme.opts.reduced_motion;
     press(&mut app, &["right"]);
     assert_ne!(app.theme.opts.reduced_motion, before);
+    assert!(!app.ui.settings_nav_focus, "Right moves the segment");
+    press(&mut app, &["left"]);
+    assert_eq!(app.theme.opts.reduced_motion, before, "Left steps back");
     press(&mut app, &["esc"]);
     press(&mut app, &["m", "o", "n", "o"]);
     draw(&mut app, 120, 36);
     app.click(Target::SettingsRow(0));
     assert_eq!(app.theme.opts.tier, Tier::Mono);
     press(&mut app, &["left"]);
+    assert!(!app.ui.settings_nav_focus);
+    assert_eq!(
+        app.theme.opts.tier,
+        Tier::TrueColor,
+        "Left moves the segment instead of leaving the pane"
+    );
+    press(&mut app, &["right"]);
+    assert_eq!(app.theme.opts.tier, Tier::Mono);
+    // Tab returns to the section rail; Esc then closes.
+    press(&mut app, &["tab"]);
     assert!(app.ui.settings_nav_focus);
     assert_eq!(
         app.theme.opts.tier,
         Tier::Mono,
-        "Left must not change the value"
+        "Tab must not change a value"
     );
-    press(&mut app, &["enter", "right"]);
-    assert_eq!(app.theme.opts.tier, Tier::TrueColor);
     press(&mut app, &["esc"]);
     press(&mut app, &["s", "i", "d", "e", "b", "a", "r"]);
     press(&mut app, &["right"]);
     assert!(!app.ui.left_open, "rail only");
     press(&mut app, &["right"]);
     assert!(app.ui.left_open, "the sidebar beside the rail");
+}
+
+#[test]
+fn the_timeline_scroll_bar_shows_while_scrolling_then_fades_out() {
+    use std::time::Duration;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    for n in 0..40 {
+        let value = serde_json::json!({"id": 2000 + n, "type": "message.added", "session_id": SESSION,
+            "cursor": format!("log_c915bfc9b6d826c4:{}", 2000 + n),
+            "data": {"id": format!("msg_scroll_{n}"), "session_id": SESSION, "seq": 200 + n,
+                     "created": 1793113500.0 + n as f64,
+                     "role": "assistant", "parts": [{"type": "text", "text": format!("paragraph {n}")}]}});
+        if let Ok(nexus_tui::api::Frame::Event(event)) =
+            nexus_tui::api::Frame::from_value("message.added", None, &value)
+        {
+            app.apply_sync(nexus_tui::sync::SyncMsg::Event(event));
+        }
+    }
+    let glyph = app.theme.structure("rail_heavy").to_owned();
+    let start = app.clock;
+    let r = app.regions.timeline;
+    let (buf, _) = draw(&mut app, 120, 36);
+    assert!(
+        (r.y..r.bottom()).all(|y| buf[(r.right() - 1, y)].symbol() != glyph),
+        "no bar before the reader scrolls"
+    );
+    press(&mut app, &["pageup"]);
+    let (buf, _) = draw(&mut app, 120, 36);
+    assert!(
+        (r.y..r.bottom()).any(|y| buf[(r.right() - 1, y)].symbol() == glyph),
+        "the bar appears while scrolling"
+    );
+    // It fades for a moment, then disappears on the shared tick.
+    assert!(app.tick(start + Duration::from_millis(1100)));
+    let (buf, _) = draw(&mut app, 120, 36);
+    assert!((r.y..r.bottom()).any(|y| buf[(r.right() - 1, y)].symbol() == glyph));
+    assert!(app.tick(start + Duration::from_millis(1600)));
+    let (buf, _) = draw(&mut app, 120, 36);
+    assert!(
+        (r.y..r.bottom()).all(|y| buf[(r.right() - 1, y)].symbol() != glyph),
+        "the bar hides shortly after"
+    );
+    // Turning it off in Settings keeps even a fresh scroll from showing it.
+    app.ui.scrollbar = false;
+    press(&mut app, &["pageup"]);
+    let (buf, _) = draw(&mut app, 120, 36);
+    assert!((r.y..r.bottom()).all(|y| buf[(r.right() - 1, y)].symbol() != glyph));
 }
 
 #[test]
@@ -2706,7 +2789,7 @@ fn sidebar_icons_sit_in_the_band_over_the_sidebar() {
     assert!(rows[0].contains("[Sessions] [Files]"), "{:?}", rows[0]);
     let title_row = rows
         .iter()
-        .skip(1)
+        .skip(2)
         .find(|row| row.contains("New session") && !row.contains("+ New session"))
         .unwrap();
     assert_eq!(
@@ -2766,17 +2849,13 @@ fn a_viewed_subagent_keeps_the_root_tab_and_names_itself_below() {
     assert!(rows[0].contains("Root task"), "{:?}", rows[0]);
     assert!(!rows[0].contains("Child task"), "{:?}", rows[0]);
     assert_eq!(app.tab_ids(), vec!["ses_parent".to_string()]);
-    // the row below the tabs names the viewed subagent: agent, then title; no tabs
-    assert!(rows[1].contains("Scout Child task"), "{:?}", rows[1]);
-    assert!(!rows[1].contains("Root task"), "{:?}", rows[1]);
-    assert!(app
-        .hits
-        .rect_of(&Target::Subagent(SESSION.into()))
-        .is_none());
-    // a root session has no second row
+    // the page opens with the root tab's full title, then the subagent row: agent, then title; no tabs
+    assert!(rows[1].contains("Root task"), "{:?}", rows[1]);
+    assert!(rows[2].contains("Scout Child task"), "{:?}", rows[2]);
+    // a root session has no subagent row
     app.open_session("ses_parent");
     let (_, rows) = draw(&mut app, 160, 40);
-    assert!(!rows[1].contains("Scout"), "{:?}", rows[1]);
+    assert!(!rows[2].contains("Scout"), "{:?}", rows[2]);
     assert_eq!(app.regions.strip.height, 0);
 }
 
@@ -3396,12 +3475,13 @@ fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
         app.theme.color("interactive.settings_focus").unwrap()
     );
     assert!(r.contains((nav.x, nav.y).into()));
-    // The highlight includes both the label and the right-aligned value.
+    // The highlight includes the label; the segmented value draws its own
+    // well and selection band over it.
     let sel = app
         .hits
         .rect_of(&Target::SettingsRow(app.ui.settings_row))
         .unwrap();
-    for x in sel.x..sel.right() {
+    for x in sel.x..sel.x + 5 {
         assert_eq!(buf[(x, sel.y)].bg, selection, "band at {x}");
     }
     assert_eq!(buf[(sel.x, sel.y)].symbol(), " ");
@@ -3409,6 +3489,23 @@ fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
         buf[(sel.x + 5, sel.y)].bg,
         app.theme.color("interactive.accent").unwrap()
     );
+    let selected = app.theme.color("interactive.selection").unwrap();
+    let seg_rects: Vec<_> = (0..3)
+        .filter_map(|option| {
+            app.hits
+                .rect_of(&Target::SettingsSegment {
+                    row: app.ui.settings_row,
+                    option,
+                })
+                .map(|rect| (option, rect))
+        })
+        .collect();
+    assert_eq!(seg_rects.len(), 2, "the Theme row is a segmented control");
+    let lit: Vec<_> = seg_rects
+        .iter()
+        .filter(|(_, rect)| buf[(rect.x, rect.y)].bg == selected)
+        .collect();
+    assert_eq!(lit.len(), 1, "exactly one segment is selected");
     assert!(r.contains((sel.x, sel.y).into()));
     // a row that is not selected stays on the raised surface
     let other = app
@@ -3425,7 +3522,7 @@ fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
     assert_eq!(buf[(sel.x, sel.y)].symbol(), "▌");
     assert_eq!(buf[(nav.x, nav.y)].symbol(), " ");
     app.effects.clear();
-    press(&mut app, &[scenario["return_key"].as_str().unwrap()]);
+    press(&mut app, &[scenario["tui_return_key"].as_str().unwrap()]);
     assert!(app.ui.settings_nav_focus);
     assert!(
         app.effects.is_empty(),
@@ -3434,7 +3531,7 @@ fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
     let (buf, _) = draw(&mut app, 120, 36);
     assert_eq!(buf[(nav.x, nav.y)].symbol(), "▌");
     assert_eq!(buf[(sel.x, sel.y)].symbol(), " ");
-    assert_eq!(buf[(sel.right() - 1, sel.y)].bg, selection);
+    assert_eq!(buf[(lit[0].1.x, lit[0].1.y)].bg, selected);
     press(&mut app, &[scenario["next_section_key"].as_str().unwrap()]);
     assert_eq!(
         app.ui.settings_section,

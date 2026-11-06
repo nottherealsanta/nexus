@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        · Refactor the loader ×    +                                                       □
+     │                             │  The loader re-reads the manifest on every call. Can you cache it  #1 · 9:23 AM
+▏    │                        ▣    │  and add a test?
+▏ N  │ ⌕ Search sessions ctrl+k    │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 15 lines of this turn above
+▏  4 │                             │
+     │   Refactor the load… now    │  Go ahead, but keep the change small.                              #2 · 9:23 AM
+     │   ⌥ master           1 ↳    │  日本語のコメントも残してください。
+  S  │                             │
+   1 │   Review the CJK wi… now
+     │   ⌥ master                     ⣿ Scout List every call site of parse_manifest and say …
+     │                                  0.0s
+  +  │   Release notes for… now
+     │   ⌥ master                     A small example:                                                                 ┃
+     │                                                                                                                 ┃
+     │   Fix flaky test in… now         ╭─ python                                                                      ┃
+     │   ⌥ master                       │ print("hello")                                                               ┃
+     │                                  ╰─                                                                             ┃
+     │ + New session                                                                                                   ┃
+     │                                  ╭─ sh                                                                          ┃
+     │                                  │ printf done                                                                  ┃
+     │                                  ╰─
+     │
+     │                                ▄▄▄▄▄▄▄▄
+     │                                 ▀▀▀▀▀ ▀
+     │                                ▀▀▀▀▀▀▀▀
+     │                                ▄▄▄▄▄▄▄▄
+     │                                  ▄▄▄▄▄▄▄
+     │                                ▀▀▀▀▀▀▀▀▀
+     │                                                                                                  ↓ 3 new · end
+     │
+     │                                Type a message…
+     │
+     │                                Build · … · default                                                     48.2K
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/tui-core.LELeaL/ws/nexus-demo  ⌥ master
+     │  Settings         ctrl+,    ───────────────────────────────────────────────────────────────────────────────────

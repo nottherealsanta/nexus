@@ -1,19 +1,20 @@
 // Small building blocks on NSH base components, styled only with theme tokens.
 import type { JSX } from "nsh";
-import { Text, View, colorScheme, effect, signal } from "nsh";
+import { Text, View, colorScheme, effect, platform, signal } from "nsh";
 import { Button } from "nsh/base";
 import type { IconName } from "../icons";
 import { attention as attentionGlyphs, controlGlyphs, fold, sidebarGlyphs, structure, verbGlyphs } from "../gen/theme";
 import { statusGlyphs, attention, spinner as spinnerFrames, shimmerColors, shimmerMotion } from "../gen/theme";
 import { config, isNarrow } from "../store";
 
-// Type sizes: one shared 16/24 for titles, prose, interface text and code. Weight
-// and colour carry the hierarchy; the size does not.
+// Weight and colour carry the hierarchy; titles, prose and code share a size.
+const typeSize = platform.idiom !== "terminal" && (platform.os === "web" || platform.os === "macos")
+  ? "text-[14px] leading-6" : "text-[16px] leading-6";
 export const TS = {
-  title: "text-[16px] leading-6",
-  body: "text-[16px] leading-6",
-  base: "text-[16px] leading-6",
-  mono: "font-mono text-[16px] leading-6",
+  title: typeSize,
+  body: typeSize,
+  base: typeSize,
+  mono: `font-mono ${typeSize}`,
 };
 // Colour roles on top of the shared sizes: a modal or settings pane picks a role, not a size.
 export const T = {
@@ -33,7 +34,7 @@ export const iconGlyphs: Record<IconName, string> = {
   "panel-right": sidebarGlyphs.right_open.unicode,
   sessions: sidebarGlyphs.tab_sessions.unicode, files: sidebarGlyphs.tab_files.unicode,
   projects: sidebarGlyphs.tab_projects.unicode, settings: controlGlyphs.settings.unicode,
-  plus: controlGlyphs.plus.unicode, search: verbGlyphs.search.unicode,
+  plus: controlGlyphs.plus.unicode, search: controlGlyphs.search.unicode,
   more: controlGlyphs.more.unicode, x: structure.close.unicode,
   "chevron-right": fold.closed.unicode, "chevron-down": fold.open.unicode,
   "chevron-up": controlGlyphs.up.unicode, "arrow-up": controlGlyphs.up.unicode,
@@ -91,7 +92,7 @@ export const TONE: Record<string, string> = {
   "text.primary": "text-foreground", "status.success": "text-success", "status.error": "text-error", "interactive.accent": "text-primary",
   "status.warning": "text-warning", "text.muted": "text-muted-foreground", "status.info": "text-info",
 };
-/** TextView part classes: a calm hierarchy on the shared 16/24 base, told apart by weight and colour. */
+/** TextView part classes: a calm hierarchy told apart by weight and colour. */
 export const PROSE = {
   root: `${TS.body} text-foreground`,
   heading1: `${TS.title} font-semibold`,
@@ -176,6 +177,15 @@ export function Status(p: { kind: keyof typeof statusGlyphs; word?: boolean; cla
 export function AttentionMark(p: { kind: keyof typeof attention }) {
   const g = attention[p.kind];
   return <Text class={`w-3.5 text-center ${TS.base} ${TONE[g.token]}`} accessibilityLabel={p.kind}>{g.unicode}</Text>;
+}
+
+/**
+ * The active Settings pane marker: a 2 px white bar (dark in the light theme). The terminal
+ * backend draws whole cells, so there it is the Rust client's `▌` focus bar instead.
+ */
+export function FocusEdge(p: { testID?: string }) {
+  if (platform.idiom === "terminal") return <Text class="absolute left-0 top-0 text-foreground" accessible={false} testID={p.testID}>{structure.focus_bar.unicode}</Text>;
+  return <View testID={p.testID} class="absolute left-0 top-0 bottom-0 w-[2px] bg-settings-focus" />;
 }
 
 /**

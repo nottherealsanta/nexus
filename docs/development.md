@@ -28,6 +28,17 @@ NSH uses Unicode text icons on every target, including web and iOS, so the termi
 backend does not need image support for its controls. `src/ui/kit.tsx` maps icon names
 to generated glyph tables from `interface/theme.toml`; its interface font is
 Monaspace Argon and its reading column uses fixed compact gutters like the Rust TUI.
+The shared interface text size defaults to 14 px on web and macOS, and 16 px on iOS;
+the terminal backend retains its cell-based sizing.
+In the terminal backend the app shows and binds the manifest's `keys.tui` spellings
+(`ctrl+k`, `ctrl+,`) and uses the shared `⌕` search glyph; pixel-wide marks such as the
+Settings focus bar become their cell glyphs (`▌`).
+
+`nsh test --target tui` runs the app's tests through upstream's terminal backend;
+`app.screenshot(path)` then writes the versioned cell JSON that the parity screenshots
+read. `nexus-nsh/terminal-parity.test.tsx` covers the terminal key labels, the search
+glyph and the focus bar. On a machine without Chrome, the normal web run needs
+`--browser <path>`, for example Playwright's `chrome-headless-shell`.
 
 The TUI and `nexus-mermaid` need Rust 1.97 or newer: the client enables the shared crate's
 `raster` feature and Ondine's compiler requires 1.97. NSH's native crate uses the same features on

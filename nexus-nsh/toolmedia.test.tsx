@@ -50,6 +50,7 @@ describe("Tool images (K8)", () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
+    await app.waitFor("id:timeline-row");
     expect(app.count("id:tool-media-c1")).toBe(0);
     await app.press("id:activity-group-tool-c1");
     await app.waitFor("id:tool-row-c1");

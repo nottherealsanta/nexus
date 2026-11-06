@@ -146,7 +146,7 @@ otherwise the first loaded agent allowed as a root is used (normally
 
 | Agent | Mode | Tools | For |
 | --- | --- | --- | --- |
-| `orchestrate` | primary | read, bash, code + `session` | Breaks a task down, delegates it to sub agents, checks the results, reports. The only agent with the `session` tool. Its prompt says not to edit files. |
+| `orchestrate` | primary | read, bash, code + `session` | Breaks a task down, delegates it to sub agents, checks the results, reports. The only agent with the `session` tool. Its prompt says not to edit files, to continue an existing child with `message_session` when new work belongs to its task (including after an interruption), and to start a new child only for unrelated work. |
 | `build` (default) | all | all | The grunt work: writes and edits code, runs and checks it. Prompt adapted from OpenCode's GPT system prompt (MIT; see `builtin_agents/NOTICE`). |
 | `quick` | subagent | all (effort low, 20 steps) | Small self-contained tasks whose details the parent should not carry in its context. Returns only what the parent needs. |
 | `scout` | subagent | read, grep, glob, ls, code | Reads the material and returns a context brief: answer, relevant files with line ranges and quotes, how they fit, gotchas, what was checked, open questions. |

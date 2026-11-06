@@ -102,12 +102,14 @@ export function previewDue(sampleCount: number, previousPreviewCount: number, sa
   return sampleCount >= minSamples && sampleCount - previousPreviewCount >= newSamples;
 }
 
-/** Join existing composer text and a transcript without replacing the user's draft. */
+export const VOICE_TRANSCRIPT_NOTICE = "[Voice transcript — may contain errors.]";
+
+/** Keep the provenance visible in the draft and in the exact text sent to Core. */
 export function appendTranscript(existing: string, transcript: string): string {
   const text = transcript.trim();
   if (!text) return existing;
-  if (!existing) return text;
-  return `${existing}${existing.endsWith("\n") ? "" : "\n"}${text}`;
+  const joined = existing ? `${existing}${existing.endsWith("\n") ? "" : "\n"}${text}` : text;
+  return joined.startsWith(VOICE_TRANSCRIPT_NOTICE) ? joined : `${VOICE_TRANSCRIPT_NOTICE}\n\n${joined}`;
 }
 
 export function rmsLevel(samples: Float32Array): number {

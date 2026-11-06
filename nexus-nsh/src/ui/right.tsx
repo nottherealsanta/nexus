@@ -214,8 +214,13 @@ export function RightSidebar(p: { drawer?: boolean }) {
                     <Field k="Output" v={fmtCount(totals().output)} />
                     <Field k="Reasoning" v={fmtCount(totals().reasoning)} />
                     {() => {
+                      // As in the TUI: the context in use is Core's exact figure, else the newest
+                      // request's input; the window is Core's, else the model catalog's.
                       const budget = contextBudget()[s()?.id ?? ""];
-                      return budget?.window ? <View class="py-1"><ContextBar used={budget.used} window={budget.window} /></View> : null;
+                      const entry = catalogModel(totals().lastModel || effectiveModel(ses()), modelCatalog() ?? []);
+                      const used = budget?.used || totals().lastInput || 0;
+                      const window = budget?.window ?? (typeof entry?.context === "number" ? entry.context : null);
+                      return window ? <View class="py-1"><ContextBar used={used} window={window} /></View> : null;
                     }}
                     <If when={totals().cost !== null}>
                       <Field k="Cost" v={`${money(totals().cost!)}${totals().partialCost ? "+" : ""}`} />

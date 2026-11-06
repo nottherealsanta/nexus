@@ -52,6 +52,16 @@ including cursors whose rows remain in another interleaved session.
 
 ## Endpoints
 
+`GET /api/session/{id}/inspect?view=Timing&page=0` is the read-only native
+inspector projection. `view` is one of `Timing`, `Conversation`, `Steps`,
+`Requests`, `Raw`; `page` is a nonnegative integer (0 = newest). Returns
+`{session_id, view, page, more, generated, cache, notes, text, lanes}` with
+`Cache-Control: no-store`. Cache is the selected session's durable ledger;
+Timing includes descendants on one absolute seconds axis. Lanes contain
+`id, session_id, session, kind, label, start, end, running, end_unknown, status,
+detail` (retained JSON). Unknown usage/write counts are null, not zero.
+See [inspector.md](inspector.md) for paging, retention and bounds.
+
 | Method | Path | Body / query | Returns |
 | --- | --- | --- | --- |
 | GET | `/api/bash` | | Background bash jobs (metadata: status, command, exit code, counts) |
@@ -89,6 +99,8 @@ including cursors whose rows remain in another interleaved session.
 | POST | `/api/voice/stt/download` | empty | 202 `{state: "downloading", bytes_done, bytes_total, error}`; explicit consent to download pinned weights ([voice.md](voice.md#speech-to-text)) |
 | POST | `/api/voice/tts/download` | empty | 202 `{state: "downloading"}`; consented download of `[speech] tts_model`; progress is `voice.progress` with `target: "tts"` and the state shows in `GET /api/voice` |
 | DELETE | `/api/voice/{stt or tts}` | | removes the configured model repo from the HF cache; 409 while downloading or playing; `{repo, freed, ...status}` |
+| GET | `/api/search/service` | | `{state, url, runtime, detail}` for the local SearXNG behind `web_search`; `state` is `running`, `stopped`, `absent` or `unavailable` |
+| POST | `/api/search/service/start` | empty | starts it (Apple `container`, else Docker; creates `nexus-search/.env` once) and waits up to 30 s; the status, or 422 `search_start_failed` |
 | POST | `/api/voice/speak` | `{session_id}` | streams the latest completed answer as `audio/wav` ([voice.md](voice.md#speech)) |
 | POST | `/api/voice/speak/stop` | empty | `{stopped}` |
 | GET | `/api/agent/{name}` | `?project=` or `?directory=` | `Agent` with `prompt` |

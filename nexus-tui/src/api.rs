@@ -193,6 +193,12 @@ pub struct Project {
     pub updated: f64,
     #[serde(default)]
     pub revision: i64,
+    /// The user's saved display order; absent from older Core versions.
+    #[serde(default)]
+    pub position: Option<i64>,
+    /// `current`, `passive` or `inactive`; absent from older Core versions.
+    #[serde(default)]
+    pub status: Option<String>,
 }
 
 /// A session as `Session` JSON or as a raw snapshot row.
@@ -1008,6 +1014,54 @@ impl CoreApi {
             Some(json!({ "name": name })),
             key,
             expected_revision,
+        )
+        .await?
+        .try_decode()
+    }
+
+    /// Set a project's saved order: immediately before `before`, immediately
+    /// after `after`, or at an end when the chosen id is null.
+    pub async fn move_project(
+        &self,
+        id: &str,
+        before: Option<&str>,
+        after: Option<&str>,
+        key: &RequestId,
+    ) -> Result<Outcome<Vec<Project>>, Error> {
+        let body = if after.is_some() || before.is_none() {
+            json!({ "after": after })
+        } else {
+            json!({ "before": before })
+        };
+        let outcome = self
+            .mutate(
+                Method::POST,
+                &format!("/api/project/{id}/move"),
+                Some(body),
+                key,
+                None,
+            )
+            .await?
+            .try_decode::<Value>()?;
+        Ok(outcome.map(|value| {
+            serde_json::from_value(value.get("projects").cloned().unwrap_or(Value::Null))
+                .unwrap_or_default()
+        }))
+    }
+
+    /// Set the project's three-tier status (`PATCH /api/project/{id}`).
+    pub async fn set_project_status(
+        &self,
+        id: &str,
+        status: &str,
+        key: &RequestId,
+    ) -> Result<Outcome<Project>, Error> {
+        self.mutate(
+            Method::PATCH,
+            &format!("/api/project/{id}"),
+            Some(json!({ "status": status })),
+            key,
+            None,
         )
         .await?
         .try_decode()

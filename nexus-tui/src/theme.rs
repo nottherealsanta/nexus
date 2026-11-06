@@ -168,6 +168,7 @@ pub struct Glyphs {
     pub sidebar: BTreeMap<String, Pair>,
     pub attention: BTreeMap<String, AttentionGlyph>,
     pub structure: BTreeMap<String, Pair>,
+    pub control: BTreeMap<String, Pair>,
 }
 
 impl ThemeData {
@@ -509,6 +510,10 @@ impl Theme {
 
     pub fn structure(&self, name: &str) -> &str {
         self.pick(&self.data.glyphs.structure[name])
+    }
+
+    pub fn control(&self, name: &str) -> &str {
+        self.pick(&self.data.glyphs.control[name])
     }
 
     /// Spinner frame; the static running glyph under reduced motion.

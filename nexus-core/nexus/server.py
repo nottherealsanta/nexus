@@ -25,6 +25,8 @@ are in docs/api.md.
 | POST | /api/mcp/{name}/restart | close and reconnect one server |
 | GET | /api/extension | user tools for `?project=` or `?directory=` (global and project) and file problems |
 | GET | /api/voice | offline voice model status |
+| GET | /api/search/service | state of the local SearXNG behind `web_search` |
+| POST | /api/search/service/start | start it and wait until it answers |
 | POST | /api/voice/transcribe | mono 16 kHz PCM16 WAV → `{text}`; `?partial=1` never queues |
 | POST | /api/voice/stt/download | consented, pinned STT model download |
 | POST | /api/voice/speak | `{session_id}` → streamed WAV; final answer only |
@@ -152,6 +154,11 @@ MAX_PROMPT_BYTES = 12 * 1024 * 1024
 # every control character becomes six bytes and a 4-byte character twelve. The
 # route still enforces the content limit; only the envelope gets more room.
 MAX_FILE_BODY_BYTES = 8 * 1024 * 1024
+
+
+def _version(name: str) -> tuple[int, ...]:
+    """The numbers in a model's display name, so "Sonnet 5.5" sorts above "Sonnet 5" and "Sonnet 4.6"."""
+    return tuple(int(n) for n in re.findall(r"\d+", name.split("(")[0])[:3])
 
 
 def _body_limit(request: Request) -> int:
@@ -710,6 +717,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         data, source = await catalog.load()
         wanted = request.query_params.get("provider")
         out = [to_json(m) | {"ref": m.ref} for pid in connected() if not wanted or pid == wanted for m in await catalog.list_models(data, pid)]
+        out.sort(key=lambda m: (_version(m["name"]), m.get("released") or ""), reverse=True)
         return JSONResponse({"source": source, "models": out})
 
     async def last_model(request: Request) -> Response:
@@ -945,6 +953,17 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         freed = voice_download.remove(repo)
         return JSONResponse({"repo": repo, "freed": freed, **voice_status_module.status()[target]})
 
+    async def search_service_status(request: Request) -> Response:
+        from . import searchservice
+        return JSONResponse(await asyncio.to_thread(searchservice.status))
+
+    async def search_service_start(request: Request) -> Response:
+        from . import searchservice
+        try:
+            return JSONResponse(await asyncio.to_thread(searchservice.start))
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc), "code": "search_start_failed"}, status_code=422)
+
     async def mcp_list(request: Request) -> Response:
         return JSONResponse({"servers": runtime.mcp.status()})
 
@@ -1004,12 +1023,30 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         pid = p(request, "id")
         if request.method == "PATCH":
             body = await _body(request)
-            return JSONResponse(project_json(runtime.rename_project(
-                pid, body["name"], expected_revision=_expected_revision(request, body))))
+            name = body.get("name")
+            status = body.get("status")
+            if name is None and status is None:
+                raise ValueError("PATCH needs a name or a status")
+            return JSONResponse(project_json(runtime.update_project(
+                pid, name=name, status=status, expected_revision=_expected_revision(request, body))))
         if request.method == "DELETE":
             await runtime.delete_project(pid)
             return Response(status_code=204)
         return JSONResponse(project_json(runtime.project(pid)))
+
+    async def project_move(request: Request) -> Response:
+        body = await _body(request)
+        has_before, has_after = "before" in body, "after" in body
+        if has_before == has_after:
+            raise ValueError("give exactly one of before or after (null means an end)")
+        before = body.get("before")
+        after = body.get("after")
+        for value in (before, after):
+            if value is not None and not isinstance(value, str):
+                raise ValueError("before and after must be project ids or null")
+        projects = runtime.move_project(p(request, "id"), before=before, after=after,
+                                        use_before=has_before)
+        return JSONResponse({"projects": [project_json(x) for x in projects]})
 
     async def project_worktrees(request: Request) -> Response:
         return JSONResponse(await runtime.list_project_worktrees(p(request, "id")))
@@ -1196,6 +1233,22 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                              "generation": runtime.store.log_generation(),
                              "history_truncated": runtime.store.log_floor() > 0,
                              "compaction": runtime.store.compaction(sid)})
+
+    async def native_inspector(request: Request) -> Response:
+        from .inspector_data import inspect
+
+        sid = p(request, "id")
+        runtime.session(sid)
+        data = inspect(runtime.store, sid, view=request.query_params.get("view", "Timing"),
+                       page=int(request.query_params.get("page", "0")))
+        if data["view"] == "Requests" and data["page"] == 0:
+            data["text"] = "Snapshot\n" + json.dumps(runtime.snapshot_json(sid), indent=2) + "\n\nNext request\n" + json.dumps(
+                await runtime.context_usage(sid), indent=2) + "\n\nRetained requests\n" + data["text"]
+        if data["view"] == "Raw" and data["page"] == 0:
+            data["text"] = "Session record\n" + json.dumps(runtime.session_json(runtime.session(sid)), indent=2) + (
+                "\n\nRetained event counts\n" + json.dumps(runtime.store.event_counts(sid), indent=2)
+                + "\n\nRetained events\n" + data["text"])
+        return JSONResponse(data, headers={"cache-control": "no-store"})
 
     async def turns(request: Request) -> Response:
         """Turn summaries, oldest first: the newest page, or one page after/before a turn."""
@@ -1693,6 +1746,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/voice/{target}", route(voice_remove), methods=["DELETE"]),
         Route("/api/voice/speak", route(voice_speak), methods=["POST"]),
         Route("/api/voice/speak/stop", route(voice_speak_stop), methods=["POST"]),
+        Route("/api/search/service", route(search_service_status)),
+        Route("/api/search/service/start", route(search_service_start), methods=["POST"]),
         Route("/api/mcp", route(mcp_list)),
         Route("/api/mcp/{name}", route(mcp_one)),
         Route("/api/mcp/{name}/restart", route(mcp_restart), methods=["POST"]),
@@ -1702,6 +1757,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/skill/{name}", route(skill_one)),
         Route("/api/project", route(projects), methods=["GET", "POST"]),
         Route("/api/project/{id}", route(project), methods=["GET", "PATCH", "DELETE"]),
+        Route("/api/project/{id}/move", route(project_move), methods=["POST"]),
         Route("/api/project/{id}/worktrees", route(project_worktrees)),
         Route("/api/project/{id}/mcp", route(project_mcp_list)),
         Route("/api/project/{id}/mcp/{name}/restart", route(project_mcp_restart), methods=["POST"]),
@@ -1737,6 +1793,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/session/{id}/event", route(stored_events)),
         Route("/api/session/{id}/diagnostics", route(diagnostics), methods=["GET", "POST"]),
         Route("/api/session/{id}/turn", route(turns)),
+        Route("/api/session/{id}/inspect", route(native_inspector)),
         Route("/api/session/{id}/children", route(children)),
         Route("/api/session/{id}/tree", route(tree)),
         Route("/api/session/{id}/context", route(context)),

@@ -1942,7 +1942,9 @@ fn the_sticky_header_pins_the_band_and_the_next_band_pushes_it_up() {
             .hits
             .rect_of(&Target::StickyUser(long_idx))
             .expect("pinned band");
-        assert_eq!(pin.y, 1, "{w}x{h}: under the header");
+        // wide layouts have the session heading row under the header; narrow ones do not
+        let want = if w < 100 { 1 } else { 2 };
+        assert_eq!(pin.y, want, "{w}x{h}: under the header");
         let rows = &drawn[pin.y as usize..(pin.y + pin.height) as usize];
         assert_eq!(rows.len(), 4, "3 text rows and the shade row: {rows:?}");
         assert!(rows[0].contains("alpha beta"), "{rows:?}");

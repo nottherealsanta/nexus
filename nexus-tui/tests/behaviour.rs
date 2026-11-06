@@ -1654,6 +1654,7 @@ fn session_actions_are_wired_to_the_api() {
     // failed send puts the draft back
     a.apply_done(nexus_tui::actions::ActionDone {
         call: ApiCall::Prompt {
+            unarchive: None,
             mode: "send".into(),
             images: Vec::new(),
             pastes: Vec::new(),
@@ -1789,6 +1790,7 @@ fn failed_send_restores_expanded_pending_paste() {
     a.handle_paste(&pending);
     a.apply_done(ActionDone {
         call: ApiCall::Prompt {
+            unarchive: None,
             mode: "send".into(),
             images: Vec::new(),
             pastes: Vec::new(),

@@ -1,22 +1,22 @@
 import type { JSX } from "nsh";
 import { Scroll, Text, View, effect, keymap, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, Icon, T, TS, FOCUS, Seg } from "./kit";
+import { Btn, FocusEdge, Icon, T, TS, FOCUS, Seg } from "./kit";
 import { Heading, Modal, ModalFooter, ModalTitle } from "./modal";
 import { manifest } from "../gen/manifest";
 import { byId, commands, copyText, escape, keyLabel, loadProviders, run } from "../commands";
-import { archivedFilter, leftOpen, rightOpen, scopeAll, catalogSource, info, compat, isNarrow, live, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsPage, settingsQuery, settingsReload, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker, providerDetail, providerLogins, confirmDialog, notificationSoundsOn, setNotificationSounds } from "../store";
+import { archivedFilter, leftOpen, rightOpen, scopeAll, catalogSource, info, compat, isNarrow, live, m, model, reloadModelCatalog, savePrefs, scrollBarOn, setScrollBar, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsReload, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker, providerDetail, providerLogins, confirmDialog, notificationSoundsOn, setNotificationSounds } from "../store";
 import { CLIENT_API, CLIENT_VERSION } from "../core/api";
 import { request } from "../core/transport";
 import { voiceInfoLines, voiceActionReason } from "../voice-settings";
 import { voiceStatus } from "../voice-state";
+import { searchStartReason, searchStatusLines } from "../search-service";
 import { MANAGER_ROWS, managerControl } from "./manager/settings";
 import type { VoiceTarget } from "../voice-state";
 
 interface Row { id: string; label: string; kind: string; scope: string; clients?: string; default?: unknown; options?: string[]; command?: string; note?: string; unavailable_reason?: string }
 interface Section { id: string; label: string; unavailable_reason?: string; page?: boolean; note?: string; row?: Row[] }
 const sections = manifest.settings.section as unknown as Section[];
-const settingsNavFocused = signal(true);
 const focusedSetting = signal<string | null>(null);
 const focusSetting = (id: string) => { settingsNavFocused.set(false); focusedSetting.set(id); };
 
@@ -45,7 +45,7 @@ function listFor(id: string): JSX.Element {
     case "keybindings.list": return <Value text={`${commands.filter((c) => c.keys?.nsh).length} commands with keys (see the palette)`} />;
     case "about.versions": {
       const i = info();
-      return lines([`client ${CLIENT_VERSION} (API ${CLIENT_API.major}.${CLIENT_API.minor})`, `Core ${i?.version ?? "—"}`, `API ${i?.api_version ? JSON.stringify(i.api_version) : "not reported"}`, `NSH 0.3.0`], "—");
+      return lines([`client ${CLIENT_VERSION} (API ${CLIENT_API.major}.${CLIENT_API.minor})`, `Core ${i?.version ?? "—"}`, `API ${i?.api_version ? JSON.stringify(i.api_version) : "not reported"}`, `NSH 0.4.0`], "—");
     }
     case "about.daemon": { const i = info(); return lines([`pid ${i?.pid ?? "—"}`, i?.home ?? "—"], "—"); }
     default: return <Value text="—" />;
@@ -63,7 +63,7 @@ async function refreshCatalog() {
 }
 
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["appearance.sidebar", "appearance.details", "appearance.session_scope", "appearance.show_archived", "dictation.push_to_talk", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "notifications.sound", "about.inspector", "agents.default_root", "tools.default_permission", "agents.default_effort", "tools.defaults", "mcp.full_definitions", "mcp.max_listed_tools", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove", ...MANAGER_ROWS]);
+const WIRED = new Set(["appearance.sidebar", "appearance.details", "appearance.session_scope", "appearance.show_archived", "dictation.push_to_talk", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "appearance.scrollbar", "notifications.sound", "about.inspector", "agents.default_root", "tools.default_permission", "agents.default_effort", "tools.defaults", "tools.search_status", "tools.search_start", "mcp.full_definitions", "mcp.max_listed_tools", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove", ...MANAGER_ROWS]);
 
 function voiceTarget(id: string): VoiceTarget | null {
   if (id.startsWith("dictation.stt_")) return "stt";
@@ -76,6 +76,7 @@ function voiceAction(id: string): "download" | "remove" | null {
   return null;
 }
 function voiceSettingReason(id: string): string | undefined {
+  if (id === "tools.search_start") return live() ? searchStartReason() : "Core is not connected: the view is read-only.";
   const target = voiceTarget(id), action = voiceAction(id);
   if (!target || !action) return undefined;
   if (!live()) return "Core is not connected: the view is read-only.";
@@ -456,7 +457,7 @@ function AgentsPage(p: { sec: Section }) {
     <Each of={data().agents?.problems ?? []} key={(problem: any) => JSON.stringify(problem)}>{(problem) => <Text class={`px-3 ${TS.base} text-error`}>{typeof problem() === "string" ? problem() : `${problem().path}: ${problem().error}`}</Text>}</Each>
     <View>
       <Each of={agents()} key={(a: any) => a.name}>{(a) => (
-        <Button onPress={() => settingsPage.set(`agents/${a().name}`)} testID={`agent-row-${a().name}`} accessibilityLabel={`${a().name}: ${agentSummary(a()).text}`}
+        <Button onPress={() => { settingsNavFocused.set(false); settingsPageOpen.set(true); settingsPage.set(`agents/${a().name}`); }} testID={`agent-row-${a().name}`} accessibilityLabel={`${a().name}: ${agentSummary(a()).text}`}
           class={`flex-row items-center gap-6 rounded-none px-3 py-2 hover:bg-accent ${FOCUS}`}>
           <View class="flex-1"><Text class={T.base}>{a().name}</Text><Text class={T.meta} style={{ numberOfLines: 1 }}>{a().description}</Text></View>
           <Text class={`${TS.base} ${agentSummary(a()).warn ? "text-warning" : "text-foreground-secondary"}`}>{agentSummary(a()).text}</Text>
@@ -478,6 +479,17 @@ function control(r: Row): JSX.Element {
       </View>
     );
   }
+  if (r.id === "tools.search_status") {
+    return (
+      <View testID="search-status" class={`gap-1 ${isNarrow() ? "items-start" : "items-end"}`}>
+        <Each of={searchStatusLines()} key={(line) => line}>{(line) => <Text style={{ userSelect: "text", numberOfLines: 2 }} class={`${TS.base} text-foreground-secondary`}>{line()}</Text>}</Each>
+      </View>
+    );
+  }
+  if (r.id === "tools.search_start") {
+    const reason = voiceSettingReason(r.id);
+    return <Btn onFocus={() => focusSetting(r.id)} label={r.label} onPress={() => void run(r.command!)} disabled={!!reason} reason={reason} testID={`setting-${r.id}-action`} />;
+  }
   const action = voiceAction(r.id);
   if (target && action && r.command) {
     const reason = voiceSettingReason(r.id);
@@ -489,6 +501,7 @@ function control(r: Row): JSX.Element {
   }
   if (r.id === "appearance.sidebar") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["full", "rail"]} value={leftOpen() ? "full" : "rail"} onPick={(v) => { leftOpen.set(v === "full"); savePrefs(); }} />;
   if (r.id === "appearance.details") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={rightOpen() ? "on" : "off"} onPick={(v) => { rightOpen.set(v === "on"); savePrefs(); }} />;
+  if (r.id === "appearance.scrollbar") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={scrollBarOn() ? "on" : "off"} onPick={(v) => setScrollBar(v === "on")} />;
   if (r.id === "appearance.session_scope") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["this project", "all projects"]} value={scopeAll() ? "all projects" : "this project"} onPick={(v) => scopeAll.set(v === "all projects")} />;
   if (r.id === "appearance.show_archived") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={archivedFilter() ? "on" : "off"} onPick={(v) => archivedFilter.set(v === "on")} />;
   if (r.id === "appearance.animations") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["on", "off"]} value={config()?.values?.ui?.reduced_motion ? "off" : "on"} onPick={(v) => void patchConfig("ui.reduced_motion", v === "off")} />;
@@ -503,7 +516,7 @@ function control(r: Row): JSX.Element {
       onPick={(v) => setTimelineDetail(v as "low" | "medium" | "high")} />;
   }
 
-  if (r.id === "about.inspector") return <Btn onFocus={() => focusSetting(r.id)} label="Open inspector" onPress={() => { void openUrl(new URL("/inspector", import.meta.url).href).catch(() => toast("info", "Open /inspector on the host page.")); }} />;
+  if (r.id === "about.inspector") return <Btn onFocus={() => focusSetting(r.id)} label="Open inspector" onPress={() => { void run("app.open_inspector"); }} />;
   if (r.id === "tools.default_permission") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["allow", "ask"]} value={config()?.values?.defaults?.permission ?? "allow"} onPick={(v) => void patchConfig("defaults.permission", v)} />;
   if (r.id === "tools.defaults") {
     const disabled: string[] = config()?.values?.tools?.disabled ?? [];
@@ -545,7 +558,7 @@ function SettingRow(p: { r: Row; sec: Section }) {
     <View focusable onFocus={() => focusSetting(r.id)}
       onPress={() => { settingsNavFocused.set(false); focusedSetting.set(r.id); }}
       class={`relative ${isNarrow() ? "gap-2" : "flex-row gap-3 items-center"} px-3 py-2 rounded-none hover:bg-settings-selection focus-within:bg-settings-selection ${focusedSetting() === r.id ? "bg-settings-selection" : ""}`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
-      <If when={!settingsNavFocused() && focusedSetting() === r.id}><View testID="settings-row-focus" class="absolute left-0 top-0 bottom-0 w-[2px] bg-settings-focus" /></If>
+      <If when={!settingsNavFocused() && focusedSetting() === r.id}><FocusEdge testID="settings-row-focus" /></If>
       <View class={isNarrow() ? "" : "w-[44%] pr-2"}>
         <View class="flex-row items-center gap-2">
           <Text class={`${TS.base} ${disabled ? "text-muted-foreground" : "text-foreground"}`}>{r.label}</Text>
@@ -589,10 +602,10 @@ export function SettingsView(p: { inline?: boolean }) {
   const shown = () => sections.filter(hit);
   const cur = () => shown().find((s) => s.id === settingsSection()) ?? shown()[0] ?? sections[0];
   const sectionRefs = new Map<string, { focus: () => void }>();
-  settingsNavFocused.set(true);
   const focusSection = () => {
     if (providerDetail() || picker()) return;
     settingsNavFocused.set(true);
+    settingsPageOpen.set(false);
     effortTarget.set(null);
     sectionRefs.get(cur().id)?.focus();
   };
@@ -602,14 +615,22 @@ export function SettingsView(p: { inline?: boolean }) {
     const offs = ([ ["up", -1], ["down", 1] ] as const).map(([key, by]) => keymap.bind(key, () => {
       const index = shown().findIndex((s) => s.id === cur().id);
       const next = shown()[Math.max(0, Math.min(shown().length - 1, index + by))];
-      if (next) { settingsSection.set(next.id); settingsPage.set(null); sectionRefs.get(next.id)?.focus(); }
+      if (next) { settingsNavFocused.set(true); settingsSection.set(next.id); settingsPage.set(null); settingsPageOpen.set(false); sectionRefs.get(next.id)?.focus(); }
     }, { when: "notEditing" }));
     return () => offs.forEach((off) => off());
   });
   const agent = () => !query() && settingsPage()?.startsWith("agents/") ? settingsPage()!.slice("agents/".length) : null;
   const agentDef = () => (data().agents?.agents ?? []).find((a: any) => a.name === agent());
   const list = () => (cur().row ?? []).filter((r) => (r.clients !== "tui" || r.id === "appearance.timeline_detail") && (!query() || r.label.toLowerCase().includes(query()) || (r.note ?? "").toLowerCase().includes(query())));
-  const page = () => (query() ? null : cur().page ? cur().id : null);
+  const page = () => (query() ? null : (settingsPage() || settingsPageOpen()) && cur().page ? cur().id : null);
+  /** The TUI's hint row for the current pane, one key/verb pair at a time. */
+  const footerHints = (): string[] => {
+    if (settingsNavFocused()) return ["↑↓ section", "enter open", "esc close"];
+    if (agent()) return ["enter select", "→ effort", "d remove", "K/J reorder", "← sections", "esc back"];
+    if (page() === "providers" || page() === "agents") return ["enter open", "esc back"];
+    if (page()) return ["enter select", "esc back"];
+    return ["→ change", "enter select", "← sections", "esc back"];
+  };
   effect(() => { focusedSetting.set(list()[0]?.id ?? null); });
   void m; void model; void compat; void colorScheme; void byId; void keyLabel;
   const content = () => <View class={p.inline ? "flex-1 min-h-0 gap-3 p-4" : "gap-3"}>
@@ -628,10 +649,9 @@ export function SettingsView(p: { inline?: boolean }) {
               <Each of={shown()} key={(s) => s.id}>
                 {(s) => (
                   <View role="button" focusable ref={(n: any) => { if (n) sectionRefs.set(s().id, n); else sectionRefs.delete(s().id); }}
-                    onFocus={() => settingsNavFocused.set(true)}
-                    onPress={() => { settingsNavFocused.set(true); settingsSection.set(s().id); settingsPage.set(null); settingsQuery.set(""); }} accessibilityState={{ selected: cur().id === s().id }} testID={`section-${s().id}`} accessibilityLabel={s().label}
+                    onPress={() => { settingsNavFocused.set(!s().page); settingsPageOpen.set(!!s().page); settingsSection.set(s().id); settingsPage.set(null); settingsQuery.set(""); }} accessibilityState={{ selected: cur().id === s().id }} testID={`section-${s().id}`} accessibilityLabel={s().label}
                     class={`relative flex-row items-center rounded-none px-3 hover:bg-settings-selection ${cur().id === s().id ? "bg-settings-selection" : ""} ${isNarrow() ? "min-h-10" : "min-h-8"}`}>
-                    <If when={cur().id === s().id && settingsNavFocused()}><View testID="settings-section-focus" class="absolute left-0 top-0 bottom-0 w-[2px] bg-settings-focus" /></If>
+                    <If when={cur().id === s().id && settingsNavFocused()}><FocusEdge testID="settings-section-focus" /></If>
                     <Text class={`flex-1 ${TS.base} ${cur().id === s().id ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{s().label}</Text>
                   </View>
                 )}
@@ -670,7 +690,7 @@ export function SettingsView(p: { inline?: boolean }) {
             </Scroll>
           </View>
         </View>
-        <If when={!p.inline}><ModalFooter hints={agent() ? "← sections · esc back" : "← sections · esc close"} right={`Core ${info()?.version ?? "—"}`} /></If>
+        <If when={!p.inline}><ModalFooter hints={footerHints()} right={`Core ${info()?.version ?? "—"}`} /></If>
       </View>;
   return p.inline ? content() : <Modal size="large" label="Settings" testID="settings" onCancel={() => escape()} onOpenChange={(open) => { if (!open && centre() === "settings") void run("app.settings"); }}>{content()}</Modal>;
 }

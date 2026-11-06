@@ -9,9 +9,9 @@ import {
   editFile, fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   firstPrompts, pendingInputs, contextDetail, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsPage, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
+  focusedSidebarRow, focusedTool, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
 } from "./store";
-import { ApiError, newKey, request } from "./core/transport";
+import { ApiError, apiBase, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
 import { Message } from "./core/api";
 import { normalizeSession } from "./core/reduce";
@@ -24,6 +24,8 @@ import { cancelDictation, isDictationBusy, microphoneAvailable, startDictation, 
 import { appendTranscript } from "./dictation-logic";
 import { dictationPhase } from "./voice-state";
 import { toggleManagerDropdown, toggleManagerAudio, cancelListening, cancelTurn, closeField, dismissCard, managerEscapeRule, managerSlash, managerTerm, minimise, openField, openManagerContext, openManagerSession, sendListening, scrollDetails, startQuietly, stopCall, stopSpeech, submitField, talk } from "./core/manager";
+import { refreshSearchService, searchStartReason, startSearchService } from "./search-service";
+import { closeInspector, inspectSession, inspector } from "./inspector";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
 
 export interface Cmd {
@@ -102,7 +104,7 @@ function evalTerm(t: string): boolean {
     case "editor.dirty": return fileDirty();
     case "editor.readonly": return openFile() !== null && openFile()?.draft === undefined && openFile()?.content !== undefined;
     case "editor.markdown": return openFile() !== null && markdownFile();
-    case "overlay.open": return paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview() || !!annotating();
+    case "overlay.open": return !!inspector() || paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview() || !!annotating();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
     case "drawer.open": return !!drawer();
@@ -151,11 +153,12 @@ export function toggleRight(w: number) {
 }
 export function openSettings() {
   if (centre() === "settings") { centre.set(previousCentre()); return; }
-  previousCentre.set(centre()); centre.set("settings"); settingsQuery.set(""); providerDetail.set(null); if (isNarrow()) drawer.set(null);
+  previousCentre.set(centre()); centre.set("settings"); settingsQuery.set(""); providerDetail.set(null); settingsNavFocused.set(true); settingsPageOpen.set(false); if (isNarrow()) drawer.set(null);
   refreshVoiceOnSettingsOpen();
+  void refreshSearchService();
 }
-on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); providerDetail.set(null); }, true);
-on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); providerDetail.set(null); }, true);
+on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
+on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
 function tab(t: "sessions" | "files" | "projects") { if (t === "files") void loadFiles(); leftTab.set(t); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true); }
 
 export function newSession() {
@@ -443,8 +446,25 @@ function openFocusedSidebarMenu() {
 export async function archive(id?: string, undo = false) {
   const s = id ? model.sessions.get(id) : viewed(); if (!s) return;
   const root = (() => { let c = s; while (c.parent_id && model.sessions.get(c.parent_id)) c = model.sessions.get(c.parent_id)!; return c; })();
+  if (undo) { resumeArchived(s.id); return; }
   try { await request("POST", `/api/session/${root.id}/${undo ? "unarchive" : "archive"}`, { key: newKey() }); toast("success", undo ? "Session unarchived" : "Session archived"); }
   catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+}
+
+export function resumeArchived(id: string, go?: () => Promise<void>) {
+  confirmDialog.set({
+    title: "Resume archived session",
+    body: "This moves the session and its children out of the archive. The next request may start with an uncached large context, which can be slower and cost more. Archived code kernels restart with fresh state.",
+    confirm: "Resume", destructive: false,
+    run: async () => {
+      if (!live()) throw new Error("Core is not connected: the view is read-only.");
+      let root = model.sessions.get(id);
+      if (!root) throw new Error("Session no longer exists.");
+      while (root.parent_id && model.sessions.get(root.parent_id)) root = model.sessions.get(root.parent_id)!;
+      await request("POST", `/api/session/${root.id}/unarchive`, { key: newKey() });
+      if (go && viewed()?.id === id) await go();
+    },
+  });
 }
 /** Take pending input out of a session's queue, oldest first; returns its parts. */
 async function takePendingInputs(id: string): Promise<any[]> {
@@ -510,9 +530,9 @@ export const rightWidthHint = { w: 1280 };
 on("palette.open", () => paletteOpen.set(true));
 on("app.settings", openSettings);
 on("app.help_keys", () => contextDetail.set({ title: "Keyboard shortcuts", detail: shortcutText() }));
-on("app.open_inspector", () => { void openUrl(new URL("/inspector", import.meta.url).href).catch(() => toast("info", "Open /inspector on the host page.")); });
+on("app.open_inspector", () => inspectSession());
 on("app.reconnect", () => sync.retryNow());
-on("app.start_daemon", async () => { try { await fetch("/__nexus/start", { method: "POST" }); } catch {} sync.retryNow(); });
+on("app.start_daemon", async () => { try { await fetch(`${apiBase()}/__nexus/start`, { method: "POST" }); } catch {} sync.retryNow(); });
 on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });
 on("notifications.mark_all_read", () => { notifications.set([]); unread.set(0); });
 on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[0].id); }); // the oldest, drawn on top
@@ -636,18 +656,14 @@ on("manager.field_send", () => submitField());
 on("manager.field_close", () => closeField());
 on("manager.card_mic", () => talk(), true);
 on("manager.card_dismiss", () => dismissCard());
+on("search.start", () => startSearchService(), true);
 on("voice.download_stt", () => askVoiceDownload("stt"), true);
 on("voice.remove_stt", () => askVoiceRemove("stt"), true);
 on("voice.download_tts", () => askVoiceDownload("tts"), true);
 on("voice.remove_tts", () => askVoiceRemove("tts"), true);
 on("session.copy_id", () => { const s = viewed(); if (s) void Clipboard.writeText(s.id).then(() => toast("success", "Copied session id")); });
-on("session.open_inspector", () => {
-  const s = viewed();
-  if (!s) return;
-  const url = new URL("/inspector", import.meta.url);
-  url.hash = s.id;
-  void openUrl(url.href).catch(() => toast("info", "Open /inspector on the host page."));
-});
+on("session.open_inspector", () => inspectSession());
+on("tool.open_inspector", () => inspectSession());
 on("tool.show_all_output", () => {
   const tool = focusedTool();
   if (!tool?.clipped) return;
@@ -809,6 +825,7 @@ export function availability(c: Cmd): Availability {
   if (c.status === "deferred") return { ok: false, reason: `Deferred: ${c.unavailable_reason ?? "not built yet"}` };
   const voiceReason = voiceCommandReason(c.id);
   if (voiceReason) return { ok: false, reason: voiceReason };
+  if (c.id === "search.start") { const why = searchStartReason(); if (why) return { ok: false, reason: why }; }
   const h = handlers.get(c.id);
   // Playback is a local NSH state, not a shared manifest term: TUI consumes the
   // same manifest but owns its independent rodio speaking state.
@@ -833,12 +850,15 @@ export async function run(id: string) {
 /** `cmd` becomes `mod` (Cmd on Apple platforms, Ctrl elsewhere). */
 export const toKeystroke = (k: string) => k.replace(/^cmd(\+|$)/, "mod$1").replace("+cmd+", "+mod+");
 export function keyLabel(c: Cmd): string | null {
+  // In the terminal backend the TUI's keys are the ones that reach the app (upstream maps cmd to ctrl),
+  // so show their spelling, as the Rust client does.
+  if (platform.idiom === "terminal") return c.keys?.tui ?? null;
   const k = c.keys?.nsh; if (!k) return null;
   if (k === "esc") return "esc";
   try { return keymap.label(toKeystroke(k)); } catch { return k; }
 }
 
-const shortcutLabel = (k: string) => { try { return keymap.label(toKeystroke(k)); } catch { return k; } };
+const shortcutLabel = (k: string) => platform.idiom === "terminal" ? k : (() => { try { return keymap.label(toKeystroke(k)); } catch { return k; } })();
 /** The manifest's keys as text for `?`: the Ctrl+X leader first, then every direct NSH shortcut. */
 export function shortcutText(): string {
   const leaders = commands.flatMap((c) => (c.leader ?? []).map((k) => `${shortcutLabel(k).padEnd(8)} ${c.title}`));
@@ -859,6 +879,7 @@ const GLOBAL_CONTEXTS = new Set(["global"]);
 const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d+$/.test(k);
 /** Esc is not a per-command lookup: the manifest's ordered rules decide (interface/README.md "Esc precedence"). */
 export function escape() {
+  if (inspector()) { closeInspector(); return "inspector"; }
   // The Manager's context modal closes first, then a consent notice cancels or
   // any open call (focused or minimised) ends.
   const manager = managerEscapeRule();
@@ -870,8 +891,16 @@ export function escape() {
   if (resourcesOpen()) { resourcesOpen.set(false); return "resources"; }
   if (switcherOpen()) { switcherOpen.set(false); return "session_switcher"; }
   if (fileFindOpen()) { fileFindOpen.set(false); return "file_find"; }
+  // Settings steps back one level at a time, as the TUI does: a provider/agent
+  // detail, then a page's content, then the section rail, then the view.
   if (centre() === "settings" && providerDetail()) { providerDetail.set(null); return "provider_detail"; }
+  if (centre() === "settings" && settingsQuery()) { settingsQuery.set(""); return "settings_search"; }
   if (centre() === "settings" && settingsPage()) { settingsPage.set(null); return "settings_page"; }
+  if (centre() === "settings" && !settingsNavFocused()) {
+    settingsPageOpen.set(false);
+    settingsNavFocused.set(true);
+    return "settings_rail";
+  }
   for (const rule of manifest.keymap.escape as readonly { id: string; when: readonly string[]; action: string }[]) {
     if (rule.when.every(term)) {
       if (rule.id === "text_edit") { renaming.set(false); return rule.id; }
@@ -923,29 +952,35 @@ export function bindLeader(): () => void {
 export function bindKeys(): () => void {
   const offs: (() => void)[] = [];
   for (const c of commands) {
-    const k = c.keys?.nsh;
-    if (!k || k === "esc" || !GLOBAL_CONTEXTS.has(c.key_context ?? "") || !hasModifier(k)) continue;
     if (c.id === "app.quit") continue; // platform-owned
-    try { offs.push(keymap.bind(toKeystroke(k), () => { void run(c.id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+    // The terminal backend reaches the TUI's keys, and shows them (keyLabel), so both are live there.
+    const keys = platform.idiom === "terminal" ? [c.keys?.tui, c.keys?.nsh] : [c.keys?.nsh];
+    for (const k of new Set(keys)) {
+      if (!k || k === "esc" || !GLOBAL_CONTEXTS.has(c.key_context ?? "") || !hasModifier(k)) continue;
+      try { offs.push(keymap.bind(toKeystroke(k), () => { void run(c.id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+    }
   }
   for (const id of ["sidebar.row_menu", "tool.raw_toggle", "tool.show_all_output"]) {
     const c = byId.get(id);
-    const k = c?.keys?.nsh;
-    if (!k) continue;
-    try {
-      offs.push(keymap.bind(toKeystroke(k), () => {
-        if (id === "sidebar.row_menu" && focusedSidebarRow()) void run(id);
-        if (id === "tool.raw_toggle" && focusedTool()) void run(id);
-        if (id === "tool.show_all_output" && focusedTool()?.clipped) void run(id);
-      }, { when: "notEditing" }));
-    } catch { /* the platform keeps this keystroke */ }
+    for (const k of new Set(platform.idiom === "terminal" ? [c?.keys?.tui, c?.keys?.nsh] : [c?.keys?.nsh])) {
+      if (!k) continue;
+      try {
+        offs.push(keymap.bind(toKeystroke(k), () => {
+          if (id === "sidebar.row_menu" && focusedSidebarRow()) void run(id);
+          if (id === "tool.raw_toggle" && focusedTool()) void run(id);
+          if (id === "tool.show_all_output" && focusedTool()?.clipped) void run(id);
+        }, { when: "notEditing" }));
+      } catch { /* the platform keeps this keystroke */ }
+    }
   }
   // The editor's own keys act only while a file is open (cmd+s saves; cmd+e starts editing;
   // cmd+f opens the find bar).
   for (const id of ["editor.save", "editor.edit", "editor.find", "editor.preview"]) {
-    const k = byId.get(id)?.keys?.nsh;
-    if (!k) continue;
-    try { offs.push(keymap.bind(toKeystroke(k), () => { if (openFile()) void run(id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+    const c = byId.get(id);
+    for (const k of new Set(platform.idiom === "terminal" ? [c?.keys?.tui, c?.keys?.nsh] : [c?.keys?.nsh])) {
+      if (!k) continue;
+      try { offs.push(keymap.bind(toKeystroke(k), () => { if (openFile()) void run(id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+    }
   }
   try { offs.push(keymap.bind("escape", () => { escape(); }, { when: "always" })); } catch {}
   offs.push(bindLeader());

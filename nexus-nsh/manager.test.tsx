@@ -523,7 +523,8 @@ describe("GPT-Live (audio socket to Core, stubbed)", () => {
       socket.onmessage({ data: new Int16Array(liveSilence.samples_per_packet).fill(bargeScenario.speaker_rms * 32768).buffer });
       browser.worklets[0].port.onmessage({ data: new Int16Array(liveSilence.samples_per_packet).fill(bargeScenario.microphone_rms * 32768).buffer });
       expect(socket.sent.filter((d: unknown) => d instanceof ArrayBuffer)).toHaveLength(liveSilence.silent_packets + 1);
-      expect(Math.abs(browser.starts[0] - 0.06)).toBeLessThan(0.0001);
+      // CUSHION_START is 120 ms (the planner starts 120 ms ahead); packets chain a frame apart.
+      expect(Math.abs(browser.starts[0] - 0.12)).toBeLessThan(0.0001);
       expect(Math.abs(browser.starts[1] - browser.starts[0] - 0.02)).toBeLessThan(0.0001);
       await stopCall();
       for (const part of ["track", "socket", "context"]) expect(browser.log).toContain(part);

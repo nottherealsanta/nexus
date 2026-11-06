@@ -60,6 +60,8 @@ pub enum ApiCall {
     /// Send a prompt to an existing idle session.
     Prompt {
         session: String,
+        /// Root tree to unarchive first, after the user's confirmation.
+        unarchive: Option<String>,
         text: String,
         images: Vec<crate::images::Image>,
         pastes: Vec<(String, String)>,
@@ -125,6 +127,10 @@ pub enum ApiCall {
     VoiceDownload {
         generation: u64,
     },
+    /// The local search service's status (Settings › Tools).
+    SearchServiceStatus,
+    /// Start the local search service and wait until it answers.
+    SearchServiceStart,
     VoiceModel {
         target: VoiceTarget,
         operation: VoiceOperation,
@@ -242,6 +248,17 @@ pub enum ApiCall {
     DeleteProject {
         project: String,
     },
+    /// Move a project in the saved order: before/after a neighbour, or to an end.
+    MoveProject {
+        project: String,
+        before: Option<String>,
+        after: Option<String>,
+    },
+    /// Set the project's three-tier status.
+    SetProjectStatus {
+        project: String,
+        status: String,
+    },
     /// Read the project's prompt history (Up in the composer); never toasts.
     Prompts {
         project: String,
@@ -258,6 +275,12 @@ pub enum ApiCall {
     Usage,
     /// Refresh the stored provider usage snapshot.
     RefreshUsage,
+    Inspector {
+        session: String,
+        view: usize,
+        page: usize,
+        generation: u64,
+    },
     /// Would switching to `model` or `agent` lose the prompt cache? (`GET …/switch-cost`)
     SwitchCost {
         session: String,
@@ -328,6 +351,8 @@ impl ApiCall {
             | ApiCall::ManagerSpeak { .. }
             | ApiCall::ManagerLive { .. }
             | ApiCall::ManagerSpeakStop => "",
+            ApiCall::SearchServiceStatus => "",
+            ApiCall::SearchServiceStart => "Web search is running",
             ApiCall::VoiceDownload { .. } => "Voice model download started",
             ApiCall::VoiceModel {
                 operation: VoiceOperation::Download,
@@ -360,11 +385,14 @@ impl ApiCall {
             ApiCall::ChangeDirectory { .. } => "Directory change requested",
             ApiCall::AddProject { .. } => "Project added",
             ApiCall::DeleteProject { .. } => "Project removed",
+            ApiCall::MoveProject { .. } => "Project moved",
+            ApiCall::SetProjectStatus { .. } => "Project status changed",
             ApiCall::Prompts { .. }
             | ApiCall::Search { .. }
             | ApiCall::OlderMessages { .. }
             | ApiCall::SwitchCost { .. }
             | ApiCall::Usage
+            | ApiCall::Inspector { .. }
             | ApiCall::RefreshUsage => "",
             ApiCall::SaveFile { .. } => "Saved",
         }
@@ -416,6 +444,7 @@ pub struct Done {
     pub saved: Option<Value>,
     /// Core's `/api/usage`.
     pub usage: Option<Value>,
+    pub inspection: Option<Value>,
     /// Core's answer to `…/switch-cost`.
     pub switch_cost: Option<Value>,
     /// A page of older messages and whether more remain.
@@ -426,6 +455,8 @@ pub struct Done {
     pub learn_preview: Option<Value>,
     /// A Core voice status/download response.
     pub voice: Option<Value>,
+    /// Core's `/api/search/service` answer.
+    pub search_service: Option<Value>,
     /// A transcription result. It remains a response until the app inserts it.
     pub transcript: Option<String>,
     /// The answer to a `/btw` question.
@@ -536,6 +567,25 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         ApiCall::Usage => {
             done.usage = Some(api.http.get("/api/usage", &[]).await.map_err(e)?);
         }
+        ApiCall::Inspector {
+            session,
+            view,
+            page,
+            ..
+        } => {
+            done.inspection = Some(
+                api.http
+                    .get(
+                        &format!("/api/session/{session}/inspect"),
+                        &[
+                            ("view", crate::inspector::VIEWS[*view].to_owned()),
+                            ("page", page.to_string()),
+                        ],
+                    )
+                    .await
+                    .map_err(e)?,
+            );
+        }
         ApiCall::RefreshUsage => {
             done.usage = Some(
                 api.http
@@ -607,12 +657,20 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         }
         ApiCall::Prompt {
             session,
+            unarchive,
             text,
             images,
             pastes,
             mode,
             ..
         } => {
+            if let Some(root) = unarchive {
+                conflict(
+                    api.set_archived(root, false, &crate::api::RequestId::new())
+                        .await
+                        .map_err(e)?,
+                )?;
+            }
             conflict(
                 api.prompt_images(session, text, images, pastes, mode, &key)
                     .await
@@ -789,6 +847,25 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         ApiCall::VoiceSettingsStatus { .. } => {
             done.voice = Some(api.http.get("/api/voice", &[]).await.map_err(e)?);
         }
+        ApiCall::SearchServiceStatus => {
+            done.search_service = Some(api.http.get("/api/search/service", &[]).await.map_err(e)?);
+        }
+        ApiCall::SearchServiceStart => {
+            done.search_service = Some(
+                api.http
+                    .call(
+                        reqwest::Method::POST,
+                        "/api/search/service/start",
+                        &[],
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_err(e)?
+                    .body,
+            );
+        }
         ApiCall::VoiceDownload { .. } => {
             done.voice = Some(
                 api.http
@@ -958,6 +1035,24 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         ApiCall::DeleteProject { project } => {
             conflict(api.delete_project(project, &key).await.map_err(e)?)?;
         }
+        ApiCall::MoveProject {
+            project,
+            before,
+            after,
+        } => {
+            conflict(
+                api.move_project(project, before.as_deref(), after.as_deref(), &key)
+                    .await
+                    .map_err(e)?,
+            )?;
+        }
+        ApiCall::SetProjectStatus { project, status } => {
+            conflict(
+                api.set_project_status(project, status, &key)
+                    .await
+                    .map_err(e)?,
+            )?;
+        }
         ApiCall::LearnPreview {
             project,
             source,
@@ -1098,9 +1193,65 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn archived_prompt_unarchives_first_and_stops_on_failure() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for succeeds in [true, false] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let mut paths = Vec::new();
+                for n in 0..if succeeds { 2 } else { 1 } {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut bytes = vec![0; 8192];
+                    let len = socket.read(&mut bytes).await.unwrap();
+                    paths.push(
+                        String::from_utf8_lossy(&bytes[..len])
+                            .lines()
+                            .next()
+                            .unwrap()
+                            .to_owned(),
+                    );
+                    let status = if succeeds { "200 OK" } else { "409 Conflict" };
+                    let body = if !succeeds {
+                        r#"{"error":"Tree is busy"}"#
+                    } else if n == 0 {
+                        r#"{"id":"root","archived":false}"#
+                    } else {
+                        "{}"
+                    };
+                    let response = format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
+                    socket.write_all(response.as_bytes()).await.unwrap();
+                }
+                paths
+            });
+            let call = ApiCall::Prompt {
+                session: "child".into(),
+                unarchive: Some("root".into()),
+                text: "Continue".into(),
+                images: Vec::new(),
+                pastes: Vec::new(),
+                mode: "send".into(),
+                draft: None,
+            };
+            let api = Http::new(&url, "tok").ok().map(CoreApi::new);
+            let done = run(api, call).await;
+            assert_eq!(done.result.is_ok(), succeeds, "{done:?}");
+            let paths = server.await.unwrap();
+            assert_eq!(paths[0], "POST /api/session/root/unarchive HTTP/1.1");
+            if succeeds {
+                assert_eq!(paths[1], "POST /api/session/child/prompt HTTP/1.1");
+            } else {
+                assert_eq!(paths.len(), 1);
+                assert_eq!(done.call.draft(), Some((Some("child"), "Continue")));
+            }
+        }
+    }
+
     #[test]
     fn failed_sends_hand_the_draft_back() {
         let c = ApiCall::Prompt {
+            unarchive: None,
             mode: "send".into(),
             images: Vec::new(),
             pastes: Vec::new(),

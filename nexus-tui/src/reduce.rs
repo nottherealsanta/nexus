@@ -568,6 +568,15 @@ impl Model {
                     }
                 }
             }
+            "project.reordered" => {
+                if let Some(order) = e.data.get("order").and_then(|o| o.as_array()) {
+                    for (position, id) in order.iter().filter_map(|v| v.as_str()).enumerate() {
+                        if let Some(project) = self.projects.get_mut(id) {
+                            project.position = Some(position as i64);
+                        }
+                    }
+                }
+            }
             "project.deleted" => {
                 if let Some(id) = str_field(&e.data, "id") {
                     self.projects.remove(&id);

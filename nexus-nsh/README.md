@@ -14,6 +14,15 @@ hand.
 
 The app itself is TSX (`App.tsx`, `src/`); `package.json` is tooling only.
 
+**Open inspector** now stays inside NSH, using the same authenticated transport
+as the session. Its Timing, Conversation, Steps, Requests and Raw views match
+the Rust TUI. The Timing Gantt chart includes parallel child sessions, model
+calls, tools and attempts, with selectable details, zoom/pan, copy, refresh and
+older/newer pages. The cache header shows lifetime input/cached/uncached tokens
+and hit percentage for the selected session; missing reports and cache writes
+say unknown. These are refreshable snapshots, not a second timeline.
+See [the inspector guide](../docs/inspector.md).
+
 The Rust TUI is the visual reference for the shared NSH app. All NSH targets use
 Monaspace Argon for interface text and prose, Unicode text icons instead of SVG
 controls, and a full-width reading column with fixed 8 px outer and inner gutters.
@@ -34,14 +43,17 @@ NSH's character-grid backend; no separate terminal UI is maintained here. Flags 
 through, for example `nexus nsh tui --fps` or `--points-per-cell 8x16`.
 `npm run tui -- --fps` runs the backend directly when Core is already running.
 
-The native crate pins NSH revision `3789a451f6d4935a3b13890fb1020a427d20a8ee`.
-Use a matching source CLI (the older 0.3.0 CLI does not have `--target tui`):
+The About setting shows NSH 0.4.0. The native crate pins that release at
+`3789a451f6d4935a3b13890fb1020a427d20a8ee`. Use a matching source CLI; older
+builds (0.3.0 and earlier) have no `--target tui`:
 
 ```sh
 git -C ~/.nsh/source fetch origin
 git -C ~/.nsh/source checkout --detach 3789a451f6d4935a3b13890fb1020a427d20a8ee
 cargo build --manifest-path ~/.nsh/source/Cargo.toml -p nsh-cli --release
 ```
+
+`nsh --version` then prints `0.4.0 (3789a45)`; anything else needs the commands above.
 
 These commands assume the upstream source installer has already created
 `~/.nsh/source` and linked `nsh` to its release binary. Otherwise follow
@@ -51,12 +63,32 @@ to `.nsh/tui.log`. On macOS, local Core discovery uses the same `~/.nexus/daemon
 path as the native window; custom `NEXUS10_HOME` discovery is not supported by the
 native TSX transport yet.
 
+The terminal app reads like the Rust client. The sidebar search uses the shared `⌕`
+control glyph, key hints show the TUI's spellings (`ctrl+k`, `ctrl+,`) and the
+manifest's `keys.tui` bindings are live as well as `keys.nsh`, because upstream maps
+the command key to Control in a terminal. Settings keeps the white active-pane marker
+by drawing the shared `▌` focus bar where a pixel-wide bar cannot exist; the command palette's
+selected row also carries that bar.
+`terminal-parity.test.tsx` checks those (`nsh test terminal-parity.test.tsx --target tui`).
+
+Known differences from `nexus tui` in the terminal backend: upstream frames modals; NSH's
+composer keeps its voice and send buttons (approved by the user 2026-11-06). Settings uses
+the same segmented value controls as the TUI, and the timeline's scroll bar is shared:
+both draw it only while scrolling, then fade it out. The framed modals are the terminal
+backend's own rendering and still need a decision.
+
 A new session's first message appears immediately below its context preview as
 `You · Sending…`. The chosen settings stay visible until Core's message and history
 arrive; there is no intermediate loading/default-header flash. This is local
 submission state, not model context. Failures restore the draft in the new-session
 view or, if creation succeeded, the created session. Prompt submission starts
 without waiting for the session-history read.
+
+Final dictation adds the editable note `[Voice transcript — may contain errors.]`
+at the top of the composer, once per message (including mixed typed/dictated
+drafts). The same note stays in the sent context and model input. Empty or
+cancelled dictation does not mark a draft; OS keyboard dictation cannot be
+identified automatically. See [Voice](../docs/voice.md#transcript-provenance).
 
 On native phones, Sessions and Settings are bottom tabs. Sessions offers the
 project picker, project/all-project scope, search and archive filter; selecting a
@@ -85,7 +117,10 @@ Copy and Fold on hover) that folds to one line. Image previews and inline marker
 remain visible without repeating generated attachment labels below the text; previews sit side by side in bordered squares and wrap as needed. A sticky copy of the current
 user card sits under the header with `↑ N lines of this turn above`, pushed up by
 the next card and clicked to scroll back; it pins only bands whose height has been
-measured, so a newly added message cannot make it jump or blink. Its scroll offset and
+measured, so a newly added message cannot make it jump or blink. A subdued
+`interactive.scrollbar` bar appears at the timeline's right edge while the reader
+scrolls, then fades out after about a second; Settings → Appearance → Scroll bar turns
+it off. Its scroll offset and
 measured row heights are keyed by session, so a root's band cannot place the sticky
 header over a child. Turn footers are a right-aligned meta row (`models · tools · 24.5Ki · 570o · 90r · 58%c · elapsed · finished`) with no
 status word: a failed turn shows its first error line above it, and an
@@ -93,7 +128,7 @@ interrupted one adds `/continue`. A turn with no usage says `usage unknown`. A r
 once the turn is done, and the live thought stays inside the active activity
 group. Settled history is rebuilt only on structural changes; text and reasoning
 deltas update a coalesced live tail, and wire-only events do not redraw, so a long
-session does not re-walk every message and tool detail per token. A session opens at its latest message and follows new content until the reader scrolls up, which shows the jump pill; jumping or scrolling back to the end follows again. Durations read `0.4s`, `4.2s`, `1m 05s` and
+session does not re-walk every message and tool detail per token. A session opens at its latest message the first time and at its saved offset afterwards; it follows new content until the reader scrolls up (any upward scroll leaves follow at once, so streamed content never pulls the reader back), which shows the jump pill, and jumping or scrolling back to the end follows again. Height changes above the viewport keep the first visible row anchored. Durations read `0.4s`, `4.2s`, `1m 05s` and
 `1h 02m`. The finish time is omitted when unavailable or while the turn is
 running. Activity groups are 28 px rows with the TUI's content: counts in first-seen
 order (edits count the files they touch), `+N −M` beside the summary from
@@ -255,6 +290,10 @@ no counts shows a muted rule below its initials instead. Hover or
 focus spells out all four counts with the project name;
 clicking restores the project's last selected session in this client, or its newest
 unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and Settings sits at the rail's foot while the sidebar is closed. The sidebar lists the current project's sessions only and ends in `+ New session`. Its archive icon above the search shortcut includes archived sessions alongside active sessions when enabled.
+You can type and send in an archived session: **Resume archived session** warns
+that a large uncached context may be slower and cost more, and that code kernels
+restart fresh. Cancel keeps the draft; Resume unarchives the whole tree before
+sending. Explicit Unarchive shows the same warning without sending a message.
 Projects also shows the selected
 project's `.mcp.json` and `.agents/mcp.json` servers. Enabled, valid entries start
 automatically with a new session, and the panel warns that their commands run then
@@ -282,7 +321,10 @@ session view's `directory` differs from the one it was read for, as after a move
 and worktree actions remain disabled with a reason. Kernel state is the remaining
 session-info item not reported by Core.
 
-Files open in a centred modal over the dimmed page, with long lines wrapped, using `Editor` and `DiffView` from `nsh/base`;
+The Files tab is the TUI's expanding tree: one Core listing per directory read, folders expand and collapse in place
+with the shared fold glyphs and two cells of indent per depth, `.git` is never listed, and a file's Git letter sits at
+the row's end. Expanded folders keep their state across tab switches and reset when the project changes; the pane's
+header names the project and the checkout branch. Files open in a centred modal over the dimmed page, with long lines wrapped, using `Editor` and `DiffView` from `nsh/base`;
 below 1100 px it fills the window. Markdown files (`.md`, `.markdown`) open as rendered prose, and the header's
 Source control shows the numbered source, returning to the preview on a second press. `cmd+f`
 opens a find bar (plain text, a case toggle, previous/next and the match count) after returning to the source;
@@ -349,13 +391,15 @@ e2e/down.sh /tmp/nsh-e2e
 | Path | Role |
 | --- | --- |
 | `App.tsx` | Composition and startup (prefs, sync, keyboard bindings). |
-| `src/core/transport.ts` | Same-origin HTTP (`Idempotency-Key`, `If-Match`), errors, keyed transport retries, SSE reader. |
+| `src/core/transport.ts` | HTTP (`Idempotency-Key`, `If-Match`), errors, keyed transport retries, SSE reader. On the web `apiBase()` is `document.baseURI`'s origin (the app realm has no real `location`), so every request and the host/start fetches are absolute; natively it is set from the Core address. |
 | `src/core/api.ts` | Wire types (including the `/turn` page: `TurnSummary`, `RequestSummary`, `AttemptSummary`, `ToolSummary`, `UsageLedger`) and `/api/info` compatibility (accepts `"1.0"` or `{major, minor}`; the client is written against 1.2). |
 | `src/core/reduce.ts` | Pure client model: snapshot, events, dedup by durable id, history merge (messages and summaries), running-turn scratch and `turn.summary`, cached views of recent sessions. |
 | `src/core/turns.ts` | Pure turn views: requests and usage per turn (summaries plus the running scratch), the newest known usage, ledger totals, tool timings, the floor position. |
-| `src/core/sync.ts` | Connection supervisor: handshake, snapshot, SSE resume, backoff, restart detection, history and `/turn` loading, ledger refresh, and each connection's `server.connected` stream id. |
+| `src/core/sync.ts` | Connection supervisor: handshake, snapshot, SSE resume, backoff, restart detection, history and `/turn` loading, ledger refresh, and each connection's `server.connected` stream id. A stream that ends without an error reopens quietly (the view stays live); the selected history is reloaded only for a genuinely new stream, a restart or a resync. |
 | `src/core/view.ts` | Client view reporting: the current project, session and panel ids (`files` or `file`; NSH has no Git diff panel), keyed by the event stream that issued them, re-sent after every reconnect and retried on a capped backoff. |
-| `src/store.ts` | Reactive view state: connection, model revision, drafts, overlays, alerts, prefs, and the view sent to Core. |
+| `src/store.ts` | Reactive view state: connection, model revision, drafts, overlays, alerts, prefs, the Files tree's directory listings and expanded set, and the view sent to Core. |
+| `src/file-tree.ts` | Pure flattening of the Files tree (depth-first through expanded folders, `.git` skipped), shared with tests. |
+| `src/scroll-follow.ts` | Pure timeline follow decision: an upward scroll leaves follow, returning near the end resumes it. |
 | `src/commands.ts` | The command registry from the manifest: availability terms, handlers, direct keys, the three-second Ctrl+X leader and Esc chain. |
 | `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, code fences, thoughts, groups and members, children, diagnostics (live, or from summaries), the floor row, footers, and the sticky user bar. |
 | `src/ui/diff.tsx` | Diffs of edit, write and patch details: split at window width 1100 px and up, unified below, built from the tool detail lines (so the detail cap still applies). The empty side of an add or remove is a flat fill: NSH views cannot draw the hatch. |
@@ -413,8 +457,10 @@ e2e/down.sh /tmp/nsh-e2e
   `◇ mermaid · copy source`; `src/mermaid.ts` caches by `(source, width, appearance)`
   and looks the native module up with `nativeModule("nexus/native")` when it is
   first needed, so importing the timeline for a pure helper does not load
-  `nexus/native` outside the app bundle. `src/mermaid-logic.ts` holds the
+  `nexus/native` outside the app bundle. `src/dictation.ts` does the same for
+  `Microphone` and treats a missing module as a client without capture. `src/mermaid-logic.ts` holds the
   closed-fence scan and tone classes.
+- **Type size.** Shared interface text defaults to 14 px on web and macOS and 16 px on iOS; the terminal backend retains its cell-based sizing. Explicitly sized text may differ.
 - **Safe areas and touch.** The header pads by `safeArea().top`, the composer dock and
   the sidebar footer by `safeArea().bottom`, so the status bar and home indicator
   never cover chrome. Phone and tablet idioms (`platform.idiom`) keep hover-only
@@ -611,9 +657,11 @@ For modal geometry checks against a disposable visual host, run
 the height cap, visible footers and Esc at normal and short window sizes.
 
 Settings sections have no gaps between rows. Selected sections and setting rows use a
-neutral gray highlight across the entire row, including its value. A white left bar marks the focused pane (dark in the light theme);
-Left returns focus to the section heading without changing the setting. Shift+Right
-steps a value backward; Right advances it.
+neutral gray highlight across the entire row, including its value. A white left bar marks
+the focused pane (dark in the light theme). Choice and switch rows are the same segmented
+controls as the TUI; each option is a press target. Left returns focus to the section
+heading without changing the setting. (The TUI, which is keyboard-first, binds ←/→ to the
+focused segment instead; its Tab returns to the rail.)
 
 Live microphone packets continue during silent output, with browser echo cancellation enabled. The shared silent-output regression scenario covers both clients.
 

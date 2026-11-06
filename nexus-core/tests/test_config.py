@@ -259,10 +259,10 @@ def test_shared_ui_preferences_validate_independently(tmp_path):
     result = config.patch(config.read()["revision"], {
         "ui.detail": "high", "ui.reduced_motion": True,
     }, [])
-    assert result["values"]["ui"] == {"detail": "high", "reduced_motion": True}
+    assert result["values"]["ui"] == {"detail": "high", "reduced_motion": True, "favorite_models": []}
     config.path.write_text('[ui]\ndetail = "unknown"\nreduced_motion = true\n')
     result = config.read()
-    assert result["values"]["ui"] == {"detail": "medium", "reduced_motion": True}
+    assert result["values"]["ui"] == {"detail": "medium", "reduced_motion": True, "favorite_models": []}
     assert "ui.detail: invalid value" in result["errors"]
 
 
@@ -287,3 +287,12 @@ async def test_provider_list_says_how_to_sign_in(tmp_path: Path, monkeypatch) ->
     assert (groq["methods"], groq["key_env"], groq["key_source"], groq["connected"]) == (["api_key"], "GROQ_API_KEY", "env", True)
     assert providers["openai"]["key_source"] is None and providers["openai"]["key_hint"].startswith("from ")
     assert all("default_model" not in p for p in providers.values())
+
+
+def test_favorite_models_validate(tmp_path):
+    config = ConfigFile(tmp_path / "config.toml")
+    result = config.patch(config.read()["revision"], {"ui.favorite_models": ["claude/sonnet-5"]}, [])
+    assert result["values"]["ui"]["favorite_models"] == ["claude/sonnet-5"]
+    for bad in ("claude/sonnet-5", ["nope"], ["a/b", "a/b"], [1]):
+        with pytest.raises(ValueError):
+            config.patch(config.read()["revision"], {"ui.favorite_models": bad}, [])

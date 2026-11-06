@@ -3,6 +3,8 @@ use crate::editor::Editor;
 
 pub type DisplayRows = Vec<Vec<(String, bool)>>;
 
+pub const VOICE_TRANSCRIPT_NOTICE: &str = "[Voice transcript — may contain errors.]";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Composer {
     pub images: Vec<crate::images::Image>,
@@ -139,6 +141,19 @@ impl Composer {
         }
         self.editor.anchor = None;
         self.refresh();
+    }
+    /// Keep the provenance visible in the draft and in the exact text sent to Core.
+    pub fn insert_transcript(&mut self, at: usize, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        self.insert_at(at, text);
+        if !self.editor.text.starts_with(VOICE_TRANSCRIPT_NOTICE) {
+            let prefix = format!("{VOICE_TRANSCRIPT_NOTICE}\n\n");
+            self.editor.text.insert_str(0, &prefix);
+            self.editor.cursor += prefix.len();
+            self.refresh();
+        }
     }
     /// A copy with `s` inserted at `at` (dictation preview), leaving this draft alone.
     pub fn with_inserted(&self, at: usize, s: &str) -> Composer {

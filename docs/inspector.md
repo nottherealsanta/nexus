@@ -1,5 +1,56 @@
 # Session inspector
 
+## Inside NSH and the TUI
+
+**Open inspector** (palette or Settings → About), **Open session in inspector**,
+and a tool's inspector action now open a native, read-only modal, not a browser.
+It uses the clients' existing authenticated Core transport, including remote NSH
+connections. Close it with Esc to return to the same session and draft.
+
+The five views are **Timing**, **Conversation**, **Steps**, **Requests**, and
+**Raw**. Conversation contains canonical saved message JSON; Steps contains
+durable turns, model requests, usage, HTTP/first-byte measurements, attempts and
+tool results; Requests includes the snapshot, next request and retained redacted
+wire requests/responses; Raw contains the session record, event counts and retained event JSON. Kernels and shells
+remain in their existing resources modal. The standalone browser inspector below
+remains available, including its richer Questions and kernel detail views.
+
+### Cache and Gantt timing
+
+- The cache header reports the **selected session's lifetime** input, cached and
+  uncached tokens, and `cached / input × 100`. It uses the durable spend ledger,
+  not a sum of visible event rows or repeated cumulative usage reports. Child
+  usage is not added to this header. No provider reports means **unknown**, not
+  zero; a zero-input percentage is unknown. Cache writes are explicitly unknown
+  because the store does not retain them separately. These are observed token
+  counts, not a promise that the next call will hit the cache or a cost estimate.
+  **Cache info** (`i` in the TUI) expands the explanatory notes.
+- Timing is a Gantt chart on one absolute time axis (labels are seconds from
+  the earliest displayed start), grouped by session, including descendants.
+  Turns, model calls, tools and retry attempts have separate rows, so overlaps
+  stay visible. Select a row for its complete retained JSON, including per-call
+  usage, model, HTTP status and TTFB where known. Unfinished running operations
+  extend to the snapshot time; historical missing ends say **end unknown**.
+  Nested calls inside `code` do not have independently retained start/end
+  measurements: the chart shows their parent `code` tool, and Raw has the
+  retained nested-call records rather than invented timing bars.
+- Both clients support zoom (1–64×), horizontal pan, details, copying, refresh,
+  and older/newer pages. NSH uses buttons and clickable lanes. TUI uses `1`–`5`
+  for views, `r` refresh, `n` older, `p` newer, `+`/`-` zoom, `h`/`l` pan,
+  `j`/`k` select, Enter details, `c` copy, and arrows/Page Up/Page Down scroll.
+  Views are snapshots: use Refresh during a live turn.
+- Pages contain 50 messages/events or 50 turns **per session**. Timing includes
+  at most 50 sessions and 2,000 lanes with an explicit omission notice; Steps
+  retains all execution records for each of its displayed turns. Compaction and
+  missing diagnostics are announced; canonical messages are not reconstructed
+  from diagnostic partials. Older/newer paging is relative to the newest retained
+  records at refresh time, not a pinned export snapshot.
+
+Implementation: `nexus-core/nexus/inspector_data.py`,
+`nexus-nsh/src/ui/inspector.tsx`, `nexus-tui/src/inspector.rs`.
+
+## Standalone browser inspector
+
 A web page served by the daemon that shows every session at four levels of
 detail, from the conversation down to the raw wire traffic. Code:
 `nexus-core/nexus/inspector/index.html` (one static file, no build step).

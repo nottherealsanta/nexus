@@ -62,6 +62,14 @@ describe("manager keys and clicks", () => {
   const board = (scenarios as any).cards.find((c: any) => c.name === "board").card;
   const approval = (scenarios as any).cards.find((c: any) => c.name === "approval").card;
 
+  test("header button follows the Manager setting", async () => {
+    const off = { ...network, "GET */api/config": { body: { ...network["GET */api/config"].body, values: { ...network["GET */api/config"].body.values, manager: { enabled: false } } } } };
+    const app = await open("./ComposerFixture.tsx", { network: off, platform: "web", width: 1280, height: 800 });
+    await app.wait(300);
+    expect(app.shows("id:open-manager-context")).toBe(false);
+    expect(app.shows("id:manager-indicator")).toBe(false);
+  });
+
   test("cards appear over a dimmed app and Escape closes only the dropdown", async () => {
     const app = await withCard(board);
     await app.waitFor("id:manager-card");

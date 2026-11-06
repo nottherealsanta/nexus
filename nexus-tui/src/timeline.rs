@@ -4209,7 +4209,6 @@ fn tool_summary(
                 vec![(line_count(n), summary_style)]
             })
         }
-        "code" => Some(vec![("cell".to_string(), summary_style)]),
         "ask" if a["questions"].as_array().is_some_and(|q| !q.is_empty()) => {
             Some(vec![("question".to_string(), summary_style)])
         }
@@ -4222,10 +4221,7 @@ fn tool_summary(
             .as_str()
             .map(|c| c.lines().next().unwrap_or("").to_owned())
             .unwrap_or_default(),
-        "code" => a["code"]
-            .as_str()
-            .map(|c| c.lines().next().unwrap_or("").to_owned())
-            .unwrap_or_default(),
+        "code" => String::new(),
         "ask" => a["questions"]
             .as_array()
             .and_then(|q| q.first())

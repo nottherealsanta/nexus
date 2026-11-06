@@ -9,7 +9,7 @@ import { disabledOf, startingSections, StartingContext } from "./newsession";
 import type { CtxSection } from "./newsession";
 import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
-import { config, contextDetail, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed } from "../store";
+import { config, contextDetail, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed } from "../store";
 import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import { apiUrl } from "../core/transport";
@@ -17,6 +17,7 @@ import type { IconName } from "../icons";
 import { roles, statusGlyphs } from "../gen/theme";
 import { pasteLabel } from "../pastes";
 import { keepIdentity } from "./keep-identity";
+import { END_SLOP, followsAfterScroll } from "../scroll-follow";
 import { closedFenceSources, mermaidImage, mermaidText, toneClass } from "../mermaid";
 import { WORDS } from "../manager";
 import "../../fonts/MonaspaceArgon-Regular.otf";
@@ -114,7 +115,11 @@ type Band = { key: string; top: number; height: number; n: number; text: string;
 // offset from the root must never place the sticky header in a child session.
 const rowHeights = signal<Record<string, number>>({});
 const scrollY = signal<Record<string, number>>({});
-const viewH = signal(0);
+/** The viewport height of each session's timeline; a switch must not reuse another's geometry. */
+const viewH = signal<Record<string, number>>({});
+const viewHOf = (sid: string) => viewH()[sid] ?? 0;
+/** Whether that session's last scroll put it at the end (an unseen session opens there). */
+const atEndOf = signal<Record<string, boolean>>({});
 const sessionId = () => model.selected?.sessionId ?? "";
 const heightKey = (sid: string, key: string) => `${sid}\u0000${key}`;
 const scrollOf = (sid: string) => scrollY()[sid] ?? 0;
@@ -124,8 +129,36 @@ const focusedBand = signal<string | null>(null);
 const STICKY_LINE = 24; // TS.base's leading-6
 const STICKY_BAR = 28;
 const LIST_PAD = 12; // the list's `py-3`
-const END_SLOP = 24; // scrolling down to within this of the end follows it again
 const ROW_ESTIMATE = 72; // the list's estimatedItemSize, for rows not laid out yet
+// The timeline's own scroll bar (Settings › Scroll bar): a quiet thumb shown
+// while scrolling, then dimmed and hidden. The TUI draws the same cue in its
+// right gutter for the same timings.
+const scrollBar = signal<{ top: number; height: number } | null>(null);
+const scrollBarFading = signal(false);
+let scrollBarFade: ReturnType<typeof setTimeout> | undefined;
+let scrollBarHide: ReturnType<typeof setTimeout> | undefined;
+function hideScrollBar() {
+  clearTimeout(scrollBarFade);
+  clearTimeout(scrollBarHide);
+  scrollBar.set(null);
+  scrollBarFading.set(false);
+}
+function flashScrollBar(y: number, contentH: number, viewH: number) {
+  clearTimeout(scrollBarFade);
+  clearTimeout(scrollBarHide);
+  if (!scrollBarOn() || viewH <= 0 || contentH <= viewH) {
+    hideScrollBar();
+    return;
+  }
+  const thumb = Math.max(8, Math.round((viewH * viewH) / contentH));
+  const travel = Math.max(0, viewH - thumb);
+  const top = Math.round((travel * Math.max(0, Math.min(y, contentH - viewH))) / Math.max(1, contentH - viewH));
+  scrollBar.set({ top, height: thumb });
+  scrollBarFading.set(false);
+  scrollBarFade = setTimeout(() => scrollBarFading.set(true), 900);
+  scrollBarHide = setTimeout(() => { scrollBar.set(null); scrollBarFading.set(false); }, 1300);
+}
+effect(() => { if (!scrollBarOn()) hideScrollBar(); });
 
 function open(key: string, fallback: boolean): boolean {
   const v = timelineOpen()[key];
@@ -167,7 +200,7 @@ function toolArg(name: string, args: string | undefined): string {
     case "edit": case "write": case "read": return str(o.path);
     case "patch": return typeof o.patch === "string" ? patchArg(o.patch) ?? "" : "";
     case "bash": return preview80(first(o.command));
-    case "code": return first(o.code);
+    case "code": return "";
     case "ask": return str(o.questions?.[0]?.question);
     default: return str(o.pattern ?? o.path ?? o.query ?? o.url ?? o.name);
   }
@@ -561,7 +594,6 @@ function buildStableRows(): Row[] {
             else if (name === "edit" || name === "patch") summary = counts ? `+${counts.add} −${counts.del}` : "";
             else if (name === "write") summary = typeof args.content === "string" ? `+${detailLines(args.content).length}` : "";
             else if (name === "read") { if (res) { const n = detailLines(res.output ?? "").length; summary = `${n} line${n === 1 ? "" : "s"}`; } }
-            else if (name === "code") summary = "cell";
             else if (name === "ask" && Array.isArray(args.questions) && args.questions.length) summary = "question";
             const media = ((res as any)?.media ?? []).filter((x: any) => /^image\//.test(x?.mime ?? ""));
             if (media.length && !waiting.has(id)) summary = [summary, `${media.length} image${media.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
@@ -1150,7 +1182,7 @@ function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void })
     const y = scrollOf(sessionId());
     const { bands, total } = list();
     // An offset well past the content (a shrink or a stale frame) must not pin the last band.
-    if (y < 0 || y > total + viewH()) return null;
+    if (y < 0 || y > total + viewHOf(sessionId())) return null;
     let idx = -1;
     bands.forEach((b, i) => { if (b.top + b.height <= y) idx = i; });
     return idx < 0 ? null : { band: bands[idx], next: bands[idx + 1] as Band | undefined };
@@ -1394,7 +1426,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
 /** Rows wholly below the viewport (the jump pill's `N new`). */
 function newBelow(rows: Row[], sid: string): number {
   const h = rowHeights();
-  const bottom = scrollOf(sid) + viewH();
+  const bottom = scrollOf(sid) + viewHOf(sid);
   let top = LIST_PAD, n = 0;
   for (const r of rows) {
     if (top >= bottom) n++;
@@ -1427,8 +1459,15 @@ export function Timeline() {
   // within its distance of the end back down whenever content grew, including rows measured above the viewport.
   let following = true;
   let lastY = 0;
-  let lastGap = 0;
   let endQueued = false;
+  // The first visible row when a height changes: keep it where it is, as the TUI does.
+  let anchored: { sid: string; key: string } | null = null;
+  let previousHeights: Record<string, number> = {};
+  let restoring = 0; // a session's saved offset, applied until its rows settle
+  let restoringSid: string | null = null;
+  // Rows measure over a few frames when a session opens; the offsets those
+  // corrections produce are not the reader scrolling.
+  let openedAt = 0;
   // Instant: a smooth scroll restarts each time a newly measured row moves the end, crawling for seconds on a long session.
   const toEnd = () => { try { ref?.scrollToEnd({ animated: false }); } catch {} };
   const follow = (on: boolean) => { following = on; scrolledUp.set(!on); };
@@ -1440,57 +1479,108 @@ export function Timeline() {
   };
   jump.fn = () => { follow(true); toEnd(); };
   // Follow state is per view: a scroll position from the session just left must
-  // not keep the next one pinned or count its unseen rows.
+  // not keep the next one pinned or count its unseen rows. A session opens at its
+  // latest message the first time; afterwards it opens where it was left.
+  const seenSessions = new Set<string>();
   let scopedSession: string | undefined;
   effect(() => {
     rows();
     const sid = sessionId();
     if (sid === scopedSession) return;
     scopedSession = sid;
-    following = true;
     lastY = 0;
-    lastGap = 0;
-    scrolledUp.set(false);
-    viewH.set(0);
+    openedAt = Date.now();
+    const first = !seenSessions.has(sid);
+    seenSessions.add(sid);
+    // A session at its end (or never opened) follows; one left further up returns to its offset.
+    const atEnd = first || atEndOf()[sid] !== false;
+    follow(atEnd);
+    scrolledUp.set(atEnd ? false : true);
+    restoringSid = atEnd ? null : sid;
+    restoring = atEnd ? 0 : scrollOf(sid);
+    if (atEnd) setTimeout(toEnd, 0);
   });
-  // A session opens at its latest message, as in the TUI.
-  let openedSession: string | undefined;
+  // A restored offset is applied again as rows arrive and measure, until it holds.
   effect(() => {
-    // `rows()` first: `model` is not reactive, so a session still loading must leave a dependency that wakes this effect.
-    const count = rows().length;
-    const sel = model.selected;
-    const id = sel?.loaded && count ? sel.sessionId : undefined;
-    if (!id || id === openedSession) return;
-    openedSession = id;
-    follow(true);
-    setTimeout(toEnd, 0);
+    rows();
+    const heights = rowHeights();
+    if (restoringSid && restoringSid === viewId()) {
+      const target = Math.max(0, restoring);
+      try { ref?.scrollToOffset({ offset: target, animated: false }); } catch {}
+      lastY = target;
+      // Rows now fill the view: the offset holds once the content reaches it.
+      let total = LIST_PAD;
+      for (const r of rows()) total += heights[heightKey(viewId(), r.key)] ?? ROW_ESTIMATE;
+      if (total >= target + viewHOf(viewId())) restoringSid = null;
+    }
   });
-  // New rows, a growing reply and rows changing height keep the end in view while following.
-  effect(() => { rows(); rowHeights(); untracked(keepEnd); });
+  // New rows and a growing reply keep the end in view while following; heights
+  // changing above the viewport keep the first visible row anchored while not.
+  effect(() => {
+    const heights = rowHeights();
+    const rowsNow = rows();
+    const sid = viewId();
+    if (!following && anchored && anchored.sid === sid) {
+      let delta = 0;
+      for (const r of rowsNow) {
+        if (r.key === anchored.key) break;
+        const key = heightKey(sid, r.key);
+        const now = heights[key], was = previousHeights[key];
+        if (now !== undefined) delta += now - (was ?? ROW_ESTIMATE);
+      }
+      if (Math.abs(delta) > 0.5) {
+        const offset = Math.max(0, lastY + delta);
+        try { ref?.scrollToOffset({ offset, animated: false }); } catch {}
+        lastY = offset;
+      }
+    }
+    if (!following) {
+      let top = LIST_PAD;
+      anchored = null;
+      for (const r of rowsNow) {
+        const h = heights[heightKey(sid, r.key)] ?? ROW_ESTIMATE;
+        if (top + h > lastY + 1) { anchored = { sid, key: r.key }; break; }
+        top += h;
+      }
+    }
+    previousHeights = heights;
+    untracked(keepEnd);
+  });
   return (
-    <View class="flex-1 min-h-0" testID="timeline">
+    <View class="relative flex-1 min-h-0" testID="timeline">
       <If when={rows().length > 0} else={<EmptyTimeline />}>
         <List
-          ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingVertical: 12 }}
+          ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingVertical: 12 }} scrollbar={false}
           onLayout={keepEnd}
           onScroll={(e) => {
+            const sid = viewId();
             const y = e.offset.y, height = e.contentSize.height;
-            setScroll(viewId(), y);
-            viewH.set(e.size.height);
-            // Past the end counts as at it: macOS reports the offset settling back there, which is not the reader scrolling up.
+            setScroll(sid, y);
+            // Programmatic settling (opening at the end, auto-follow, a restored
+            // offset) is not the user scrolling; only an upward move or a view
+            // already left the end shows the bar.
+            if (restoringSid !== sid && Date.now() - openedAt > 300 && (!following || y < lastY)) flashScrollBar(y, height, e.size.height);
+            viewH.update((all) => all[sid] === e.size.height ? all : { ...all, [sid]: e.size.height });
+            // Past the end counts as at it: macOS reports the offset settling back there.
             const gap = Math.max(0, height - (y + e.size.height));
-            // The reader moved only if the offset and the gap moved opposite ways: a row changing height above the
-            // viewport moves the offset and the content alike, and one below moves the gap with the offset still.
-            if (height <= e.size.height) { if (!following) follow(true); }
-            else if (y < lastY - 0.5 && gap > lastGap + 0.5) { if (following) follow(false); }
-            else if (y > lastY && gap < lastGap && gap <= END_SLOP && !following) follow(true);
+            // Any upward scroll leaves follow immediately; streaming content must never
+            // pull a reader back. Only scrolling back down to the end resumes it.
+            const now = followsAfterScroll({ y, lastY, gap, following, contentH: height, viewH: e.size.height });
+            if (now !== following) follow(now);
+            atEndOf.update((all) => all[sid] === (gap <= END_SLOP) ? all : { ...all, [sid]: gap <= END_SLOP });
             lastY = y;
-            lastGap = gap;
+            if (restoringSid === sid && Math.abs(y - restoring) <= 1) restoringSid = null;
           }}
           scrollEventThrottle={64}
         >
           {(r) => <RowView r={r} sid={viewId()} />}
         </List>
+      </If>
+      <If when={scrollBar()}>
+        {() => {
+          const b = scrollBar()!;
+          return <View testID="timeline-scrollbar" accessible={false} class="absolute right-0 w-1 bg-scrollbar" style={{ top: b.top, height: b.height, pointerEvents: "none", opacity: scrollBarFading() ? 0.35 : 1 }} />;
+        }}
       </If>
       <StickyBar rows={rows} scrollTo={(offset) => { try { ref?.scrollToOffset({ offset, animated: true }); } catch {} }} />
       <If when={scrolledUp()}>

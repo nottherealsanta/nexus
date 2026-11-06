@@ -8,6 +8,11 @@ export const manifest = {
    "has_project",
    "has_session",
    "has_turns",
+   "project.current",
+   "project.passive",
+   "project.inactive",
+   "project.can_move_up",
+   "project.can_move_down",
    "session.idle",
    "session.busy",
    "session.interrupted",
@@ -393,6 +398,15 @@ export const manifest = {
       "note": "Low groups activity into one line, medium lists each tool collapsed, high expands every tool."
      },
      {
+      "id": "appearance.scrollbar",
+      "label": "Scroll bar",
+      "kind": "toggle",
+      "scope": "client",
+      "clients": "both",
+      "default": true,
+      "note": "Shows a subdued bar only while the timeline scrolls, then hides it after a moment."
+     },
+     {
       "id": "appearance.details",
       "label": "Details sidebar",
       "kind": "toggle",
@@ -476,6 +490,22 @@ export const manifest = {
       "scope": "core",
       "clients": "both",
       "command": "tools.configure"
+     },
+     {
+      "id": "tools.search_status",
+      "label": "Web search service",
+      "kind": "info",
+      "scope": "core",
+      "clients": "both",
+      "note": "The local SearXNG behind web_search: running, stopped, not set up, or unavailable (GET /api/search/service)."
+     },
+     {
+      "id": "tools.search_start",
+      "label": "Start web search",
+      "kind": "action",
+      "scope": "core",
+      "clients": "both",
+      "command": "search.start"
      }
     ]
    },
@@ -844,7 +874,7 @@ export const manifest = {
     "sidebar",
     "menu"
    ],
-   "note": "Opens the inspector page for the current session, or the index with no session."
+   "note": "Opens the native session inspector: timing, conversation, steps, requests and raw diagnostics."
   },
   {
    "id": "app.theme",
@@ -2352,6 +2382,101 @@ export const manifest = {
    ]
   },
   {
+   "id": "project.move_up",
+   "title": "Move project up",
+   "category": "project",
+   "keys": {
+    "tui": "alt+up",
+    "nsh": "alt+up"
+   },
+   "key_context": "sidebar.projects",
+   "when": [
+    "project.can_move_up"
+   ],
+   "unavailable_reason": "It is already first.",
+   "placement": [
+    "row_menu",
+    "palette"
+   ],
+   "note": "Alt+Up in the TUI's project list; drag the rail tile in either client."
+  },
+  {
+   "id": "project.move_down",
+   "title": "Move project down",
+   "category": "project",
+   "keys": {
+    "tui": "alt+down",
+    "nsh": "alt+down"
+   },
+   "key_context": "sidebar.projects",
+   "when": [
+    "project.can_move_down"
+   ],
+   "unavailable_reason": "It is already last.",
+   "placement": [
+    "row_menu",
+    "palette"
+   ],
+   "note": "Alt+Down in the TUI's project list; drag the rail tile in either client."
+  },
+  {
+   "id": "project.status.current",
+   "title": "Make project current",
+   "category": "project",
+   "when": [
+    "has_project",
+    "!project.current"
+   ],
+   "unavailable_reason": "It is already current.",
+   "placement": [
+    "row_menu",
+    "palette"
+   ],
+   "note": "Current projects stay in the rail."
+  },
+  {
+   "id": "project.status.passive",
+   "title": "Make project passive",
+   "category": "project",
+   "when": [
+    "has_project",
+    "!project.passive"
+   ],
+   "unavailable_reason": "It is already passive.",
+   "placement": [
+    "row_menu",
+    "palette"
+   ],
+   "note": "Passive projects stay in the rail, dimmed."
+  },
+  {
+   "id": "project.status.inactive",
+   "title": "Make project inactive",
+   "category": "project",
+   "when": [
+    "has_project",
+    "!project.inactive"
+   ],
+   "unavailable_reason": "It is already inactive.",
+   "placement": [
+    "row_menu",
+    "palette"
+   ],
+   "note": "Inactive projects leave the rail and wait in the projects overview."
+  },
+  {
+   "id": "project.overview",
+   "title": "Projects overview",
+   "category": "project",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette"
+   ],
+   "note": "Saved order, active sessions and archived sessions per project; inactive projects are restored here with r."
+  },
+  {
    "id": "project.remove",
    "title": "Remove project",
    "category": "project",
@@ -2363,7 +2488,7 @@ export const manifest = {
     "palette",
     "row_menu"
    ],
-   "note": "Confirm; its sessions go with it."
+   "note": "Confirm; its Nexus sessions and history are deleted. Files on disk stay."
   },
   {
    "id": "sidebar.row_menu",
@@ -2380,7 +2505,7 @@ export const manifest = {
    "placement": [
     "sidebar"
    ],
-   "note": "Right-click on a row opens the same menu. Sessions: rename, archive, delete, export, copy id, inspector. Projects: remove."
+   "note": "Right-click on a row opens the same menu. Sessions: rename, archive, delete, export, copy id, inspector. Projects: move, status, remove."
   },
   {
    "id": "project.open",
@@ -2557,6 +2682,19 @@ export const manifest = {
    "placement": [
     "composer"
    ]
+  },
+  {
+   "id": "search.start",
+   "title": "Start web search",
+   "category": "tools",
+   "when": [
+    "always"
+   ],
+   "unavailable_reason": "The search service is managed by Core.",
+   "placement": [
+    "palette"
+   ],
+   "note": "POST /api/search/service/start: starts the local SearXNG (Apple container or Docker) and waits until it answers."
   },
   {
    "id": "voice.download_stt",

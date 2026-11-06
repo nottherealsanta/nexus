@@ -585,11 +585,8 @@ fn play_cue_now(kind: &str, wait: bool) -> Result<(), String> {
     let mut samples = vec![0.0; CUE_RATE as usize / 4];
     samples.extend(cue_pcm(kind));
     let task = thread::spawn(move || {
-        let mut sink = rodio::DeviceSinkBuilder::from_default_device()
-            .and_then(|builder| builder.open_sink_or_fallback())
+        let sink = crate::audio_output::open()
             .map_err(|error| format!("Could not open the audio output device: {error:?}"))?;
-        // The default drop notice goes to stderr and would paint over the TUI.
-        sink.log_on_drop(false);
         let player = rodio::Player::connect_new(sink.mixer());
         player.append(rodio::buffer::SamplesBuffer::new(
             NonZero::new(1u16).expect("one channel"),
@@ -816,16 +813,37 @@ where
                 .collect();
             let _ = samples_tx.send(AudioMessage::Samples(samples));
         },
-        move |error| {
-            let _ = errors_tx.send(AudioMessage::Failed(error.to_string()));
+        move |error: cpal::Error| {
+            if stream_error_is_fatal(error.kind()) {
+                let _ = errors_tx.send(AudioMessage::Failed(error.to_string()));
+            }
         },
         None,
+    )
+}
+
+/// Whether a stream error callback means capture has stopped. A buffer xrun, a route
+/// change cpal already followed, or a refused real-time promotion is a glitch at worst:
+/// the stream keeps delivering audio, so dictation must not abort on it.
+fn stream_error_is_fatal(kind: cpal::ErrorKind) -> bool {
+    !matches!(
+        kind,
+        cpal::ErrorKind::Xrun | cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::RealtimeDenied
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_glitches_do_not_abort_capture() {
+        assert!(!stream_error_is_fatal(cpal::ErrorKind::Xrun));
+        assert!(!stream_error_is_fatal(cpal::ErrorKind::DeviceChanged));
+        assert!(!stream_error_is_fatal(cpal::ErrorKind::RealtimeDenied));
+        assert!(stream_error_is_fatal(cpal::ErrorKind::DeviceNotAvailable));
+        assert!(stream_error_is_fatal(cpal::ErrorKind::StreamInvalidated));
+    }
 
     #[test]
     fn resampler_downmixes_stereo_and_resamples_to_16khz() {

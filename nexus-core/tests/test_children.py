@@ -134,6 +134,57 @@ async def test_interrupting_the_parent_stops_a_waiting_child(env):
     assert "interrupted" in tool_output
 
 
+async def _two_turns(rt):
+    for _ in range(100):
+        if len(rt.turns) == 2:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"expected parent and child turns: {list(rt.turns)}")
+
+
+async def test_parent_interrupt_lands_before_a_queued_steer(env):
+    rt, client, providers, workspace = env
+    providers["child"] = Scripted([[Text("never")]], gate=asyncio.Event())
+    providers["parent"].replies = [[_call("c1", agent="helper", prompt="slow")], [Text("should not run")]]
+    parent = (await client.post("/api/session", json={"directory": str(workspace), "agent": "orchestrate"})).json()
+    await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
+    await _two_turns(rt)
+    steered = await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "new idea", "mode": "steer"})
+    assert steered.status_code == 202
+    await client.post(f"/api/session/{parent['id']}/interrupt")
+    await _idle(rt)
+
+    # The interrupt stops the parent where it was: no steer is taken in and no further request goes out.
+    assert len(providers["parent"].requests) == 1
+    texts = await _texts(client, parent["id"])
+    assert [role for role, _ in texts] == ["user", "assistant", "tool"]
+    [child] = (await client.get(f"/api/session/{parent['id']}/children")).json()
+    tool_output = texts[-1][1]
+    assert tool_output.startswith(f"interrupted by the user while sub agent {child['id']} (agent helper) was working")
+    assert f"`message_session` (session {child['id']})" in tool_output
+    events = [e["type"] for e in rt.store.events(parent["id"], limit=5000)]
+    assert "input.delivered" not in events
+    assert events.index("session.error") > max(i for i, t in enumerate(events) if t == "message.added")
+
+
+async def test_interrupted_child_report_points_at_message_session(env):
+    rt, client, providers, workspace = env
+    providers["child"] = Scripted([[Text("never")]], gate=asyncio.Event())
+    providers["parent"].replies = [[_call("c1", agent="helper", prompt="slow")], [Text("noted")]]
+    parent = (await client.post("/api/session", json={"directory": str(workspace), "agent": "orchestrate"})).json()
+    await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
+    await _two_turns(rt)
+    [child] = (await client.get(f"/api/session/{parent['id']}/children")).json()
+    await client.post(f"/api/session/{child['id']}/interrupt")
+    await _idle(rt)
+
+    tool_output = next(t for role, t in await _texts(client, parent["id"]) if role == "tool")
+    assert tool_output.startswith(f"Sub agent {child['id']} (agent helper) was interrupted by the user. It is idle "
+                                  "and keeps its conversation.")
+    assert f"`message_session` (session {child['id']})" in tool_output
+    assert (await _texts(client, parent["id"]))[-1] == ("assistant", "noted")
+
+
 def test_child_model_pool_is_chosen_once_and_explicit_model_wins(env, monkeypatch):
     from nexus.config import ConfigFile
 

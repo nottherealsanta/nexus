@@ -30,7 +30,7 @@ describe("modal recipe (I7)", () => {
     await app.waitFor("id:rail-project-prj_1");
     await app.keyboard.press(`${mod}+,`);
     await app.waitFor("id:settings");
-    for (const id of ["sidebar", "details", "session_scope", "show_archived"]) expect(app.shows(`id:setting-appearance.${id}`)).toBe(true);
+    for (const id of ["sidebar", "details", "session_scope", "show_archived", "scrollbar"]) expect(app.shows(`id:setting-appearance.${id}`)).toBe(true);
     expect(app.shows("id:setting-appearance.monochrome")).toBe(false);
     expect(app.shows("id:right-sidebar")).toBe(false);
   });

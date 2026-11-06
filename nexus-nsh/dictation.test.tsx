@@ -1,5 +1,6 @@
 import { describe, expect, test } from "nsh/test";
 import { appendTranscript, downmixChannels, encodeWav, hasMicrophoneCapture, previewDue, resampleMono, transitionDictation } from "./src/dictation-logic";
+import scenario from "../interface/scenarios/voice-transcript.json";
 
 describe("dictation audio and state logic", () => {
   test("detects whether the client can capture a microphone", () => {
@@ -50,9 +51,11 @@ describe("dictation audio and state logic", () => {
   });
 
   test("appends final speech without replacing or sending the existing draft", () => {
-    expect(appendTranscript("Keep this", " dictated text ")).toBe("Keep this\ndictated text");
-    expect(appendTranscript("", "dictated text")).toBe("dictated text");
+    expect(appendTranscript(scenario.typed, ` ${scenario.transcript} `)).toBe(scenario.message);
+    expect(appendTranscript("", "dictated text")).toBe(`${scenario.notice}\n\ndictated text`);
     expect(appendTranscript("Keep this", "  ")).toBe("Keep this");
-    expect(appendTranscript("Keep this  ", "more")).toBe("Keep this  \nmore");
+    expect(appendTranscript("Keep this  ", "more")).toBe(`${scenario.notice}\n\nKeep this  \nmore`);
+    expect(appendTranscript(scenario.message, "more")).toBe(`${scenario.message}\nmore`);
+    expect(appendTranscript(`${scenario.typed}\n`, scenario.transcript)).toBe(scenario.message);
   });
 });

@@ -69,6 +69,8 @@ pub fn left_width(total: u16, flags: Flags) -> u16 {
 /// Heights the centre column needs, given its width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Heights {
+    /// The viewed session's full-title row, first in the page: 0 or 1.
+    pub heading: u16,
     /// The subagent strip under the tabs: 0 or 1.
     pub strip: u16,
     pub banner: u16,
@@ -91,6 +93,7 @@ pub struct Regions {
     /// A drawer drawn over the centre (narrow layouts), with its side.
     pub drawer: Option<(Side, Rect)>,
     pub centre: Rect,
+    pub heading: Rect,
     pub strip: Rect,
     pub banner: Rect,
     pub timeline: Rect,
@@ -242,12 +245,19 @@ impl Regions {
         let mut h = heights(centre.width);
         let max_extra = centre.height.saturating_sub(3);
         let mut left_rows = max_extra;
-        for v in [&mut h.composer, &mut h.strip, &mut h.banner, &mut h.waiting] {
+        for v in [
+            &mut h.composer,
+            &mut h.heading,
+            &mut h.strip,
+            &mut h.banner,
+            &mut h.waiting,
+        ] {
             *v = (*v).min(left_rows);
             left_rows -= *v;
         }
-        let strip = r(centre.x, centre.y, centre.width, h.strip);
-        let banner = r(centre.x, centre.y + h.strip, centre.width, h.banner);
+        let heading = r(centre.x, centre.y, centre.width, h.heading);
+        let strip = r(centre.x, centre.y + h.heading, centre.width, h.strip);
+        let banner = r(centre.x, strip.y + h.strip, centre.width, h.banner);
         let composer = r(
             centre.x,
             centre.y + centre.height - h.composer,
@@ -310,6 +320,7 @@ impl Regions {
             panel,
             drawer,
             centre,
+            heading,
             strip,
             banner,
             timeline,

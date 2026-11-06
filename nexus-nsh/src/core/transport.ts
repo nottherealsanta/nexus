@@ -16,8 +16,23 @@ export class ApiError extends Error {
   get isUnreachable() { return this.status === 502 || this.status === 0; }
 }
 
-let base = "";
-/** The Core origin requests go to: "" on the web (the host proxies), an absolute URL natively. */
+/**
+ * The web page's origin. The app runs in a realm whose `location` is `about:blank`,
+ * so relative URLs cannot be resolved there (and NSH's test host only answers
+ * absolute HTTP requests). `document.baseURI` carries the real page URL.
+ */
+function webOrigin(): string {
+  if (platform.os !== "web") return "";
+  try {
+    const doc = (globalThis as unknown as { document?: { baseURI?: string } }).document;
+    if (!doc?.baseURI) return "";
+    const url = new URL(doc.baseURI);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : "";
+  } catch { return ""; }
+}
+
+let base = webOrigin();
+/** The Core origin requests go to: the page's origin on the web (the host proxies), an absolute URL natively. */
 export const apiBase = () => base;
 export function setApiBase(url: string) { base = url.trim().replace(/\/+$/, ""); }
 

@@ -5,7 +5,7 @@
 //! layout and appearance across runs:
 //!
 //! ```json
-//! {"ui": {"left_width": 44, "left_rail": false, "left_open": true, "right_open": true},
+//! {"ui": {"left_width": 44, "left_rail": false, "left_open": true, "right_open": true, "scrollbar": true},
 //!  "theme": {"mode": "dark", "monochrome": false, "animations": true},
 //!  "notifications": {"sound": true}}
 //! ```
@@ -34,6 +34,9 @@ pub struct UiPrefs {
     pub left_open: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub right_open: Option<bool>,
+    /// The timeline's scroll bar, shown while scrolling and then hidden.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scrollbar: Option<bool>,
     /// `low`, `medium` or `high`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -119,6 +122,7 @@ pub fn merge_changes(stored: &mut Prefs, seen: &Prefs, now: &Prefs) {
     field!(ui.left_rail);
     field!(ui.left_open);
     field!(ui.right_open);
+    field!(ui.scrollbar);
     field!(ui.detail);
     field!(theme.mode);
     field!(theme.monochrome);
@@ -153,6 +157,7 @@ mod tests {
                 left_rail: Some(false),
                 left_open: Some(true),
                 right_open: Some(false),
+                scrollbar: Some(false),
                 detail: Some("high".into()),
             },
             theme: ThemePrefs {

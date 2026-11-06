@@ -158,7 +158,7 @@ class NotFound(Exception):
 
 def project_json(p: Project) -> dict[str, Any]:
     return {"id": p.id, "path": p.path, "name": p.name, "created": p.created, "updated": p.updated,
-            "revision": p.revision}
+            "revision": p.revision, "position": p.position, "status": p.status}
 
 
 def message_json(m: StoredMessage) -> dict[str, Any]:
@@ -403,9 +403,11 @@ class Runtime:
         manager.emit("mcp.changed", {"file": manager.definition().file})
         return row
 
-    def rename_project(self, project_id: str, name: str, *, expected_revision: int | None = None) -> Project:
+    def update_project(self, project_id: str, *, name: str | None = None, status: str | None = None,
+                       expected_revision: int | None = None) -> Project:
         self.project(project_id)
-        project = self.store.update_project(project_id, name=name, expected_revision=expected_revision)
+        project = self.store.update_project(project_id, name=name, status=status,
+                                            expected_revision=expected_revision)
         if project is None:
             latest = self.project(project_id)
             raise RevisionConflict(
@@ -413,6 +415,16 @@ class Runtime:
                 current=latest.revision, resource=project_id)
         self.bus.publish("project.updated", project_json(project))
         return project
+
+    def rename_project(self, project_id: str, name: str, *, expected_revision: int | None = None) -> Project:
+        return self.update_project(project_id, name=name, expected_revision=expected_revision)
+
+    def move_project(self, project_id: str, *, before: str | None = None, after: str | None = None,
+                     use_before: bool = True) -> list[Project]:
+        self.project(project_id)
+        projects = self.store.reorder_project(project_id, before=before, after=after, use_before=use_before)
+        self.bus.publish("project.reordered", {"order": [p.id for p in projects]})
+        return projects
 
     async def delete_project(self, project_id: str) -> None:
         sessions = self.store.sessions(project_id)
@@ -2454,11 +2466,27 @@ class Runtime:
                 "(then send the child a follow-up with `message_session`), and ask the user for anything only they "
                 "can decide. The child does not wait for an answer.\n" + "\n".join(f"- {b}" for b in blocks))
 
+    def _child_for_call(self, parent_id: str, call_id: str) -> Session | None:
+        """The sub agent that the parent's `session` call `call_id` launched, if any."""
+        return next((c for c in self.store.children(parent_id) if c.parent_call_id == call_id), None)
+
+    def _resume_hint(self, parent_id: str | None, child_id: str) -> str:
+        """Tell a parent that a stopped child can be continued, when it has `message_session`."""
+        parent = self.store.session(parent_id) if parent_id else None
+        if parent is None or agent_files.MESSAGE_TOOL not in self.snapshot_for(parent).get("tools", ()):
+            return ""
+        return (f" It is idle and keeps its conversation. To resume or redirect this work, send it a message "
+                f"with `message_session` (session {child_id}) instead of starting a new sub agent; drop the work "
+                "only if the user says so.")
+
     def _child_report(self, child_id: str) -> str:
         child = self.session(child_id)
         if child_id in self.errors:
-            return (f"Sub agent {child_id} (agent {child.agent}) failed: {self.errors[child_id]}"
-                    + self._attention(child_id))
+            error = self.errors[child_id]
+            outcome = ("was interrupted by the user" if error == "interrupted by the user"
+                       else f"failed: {error.rstrip('.')}")
+            return (f"Sub agent {child_id} (agent {child.agent}) {outcome}."
+                    + self._resume_hint(child.parent_id, child_id) + self._attention(child_id))
         answer = ""
         for stored in reversed(self.store.messages(child_id)):
             if stored.message.role == "assistant":
@@ -2958,6 +2986,14 @@ class Runtime:
                     "interrupted by the user while this call was waiting for approval; it did not run",
                     is_error=True,
                 ))
+            elif call.id in started and call.name == "session" and (child := self._child_for_call(session_id, call.id)):
+                results.append(ToolResult(
+                    call.id,
+                    f"interrupted by the user while sub agent {child.id} (agent {child.agent}) was working; the "
+                    "sub agent was interrupted too and may have changed the workspace."
+                    + self._resume_hint(session_id, child.id),
+                    is_error=True,
+                ))
             elif call.id in started:
                 results.append(ToolResult(
                     call.id,
@@ -2972,15 +3008,19 @@ class Runtime:
         self._publish_message(session_id, stored)
 
     async def interrupt(self, session_id: str, *, reason: str = "the turn was interrupted") -> bool:
-        stopped = False
         descendants = self.store.descendants(session_id)
         # Closing a pending question before cancelling its turn publishes one cancellation outcome,
         # so a reply racing with the interrupt cannot also resolve it.
         self.close_questions({session_id, *(child.id for child in descendants)}, reason)
         for child in descendants:
             self.notify.pop(child.id, None)  # an interrupted parent is not woken by its children
+        # The session stops first. Cancelling a waiting child first would hand the parent the
+        # child's "interrupted" report as an ordinary result, and the parent would take queued
+        # steers and start another model request before its own cancel landed.
+        stopped = await self._cancel(session_id)
+        for child in descendants:
             stopped = await self._cancel(child.id) or stopped
-        return await self._cancel(session_id) or stopped
+        return stopped
 
     async def _cancel(self, session_id: str) -> bool:
         task = self.turns.get(session_id)

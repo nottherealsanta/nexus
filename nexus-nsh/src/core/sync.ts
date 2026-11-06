@@ -1,6 +1,6 @@
 // Connection supervisor: handshake, snapshot, SSE with durable cursors, reconnect with backoff,
 // resync, daemon-restart detection. Mirrors nexus-tui/src/sync.rs.
-import { ApiError, Backoff, eventStream, request, sleep } from "./transport";
+import { ApiError, Backoff, apiBase, eventStream, request, sleep } from "./transport";
 import { Compat, CoreEvent, Info, Snapshot, TurnPage, TurnSummary, checkCompat, parseApiVersion } from "./api";
 import { Model } from "./reduce";
 
@@ -93,6 +93,12 @@ export class Sync {
   private everLive = false;
   private startedOnce = false;
   private incompatibleKey = "";
+  /** The stream id of the last `server.connected` (null from a Core that issues none). */
+  private lastStreamId: string | null = null;
+  /** The first stream has connected, so the next one can tell whether it is a new stream. */
+  private streamSeen = false;
+  /** The daemon restarted or a resync was needed: the next connection must reload the selected history. */
+  private reloadOnConnect = false;
   /** Bumped by `start`/`stop`: a loop from an earlier address exits instead of racing the new one. */
   private epoch = 0;
 
@@ -125,7 +131,12 @@ export class Sync {
     while (!this.stopped && epoch === this.epoch) {
       try {
         await this.session(epoch);
-        throw new ApiError(0, "event stream closed");
+        // A stream that ends without an error (Core restarting, or a proxy
+        // closing an idle stream) is reopened at once and quietly: the view
+        // stays live instead of flashing "reconnecting" between two streams.
+        if (this.stopped || epoch !== this.epoch) return;
+        await this.pause(500);
+        continue;
       } catch (err) {
         if (this.stopped || epoch !== this.epoch) return;
         const e = err instanceof ApiError ? err : new ApiError(0, String((err as Error)?.message ?? err));
@@ -144,7 +155,7 @@ export class Sync {
         if (noDaemon && !this.startedOnce && h.canStart && !this.everLive) {
           this.startedOnce = true;
           h.setConnection({ kind: "starting" });
-          try { await fetch("/__nexus/start", { method: "POST" }); } catch {}
+          try { await fetch(`${apiBase()}/__nexus/start`, { method: "POST" }); } catch {}
           continue;
         }
         const delay = this.backoff.next();
@@ -194,7 +205,9 @@ export class Sync {
       h.snapshotApplied?.();
       h.changed();
       // The snapshot's messages are bounded and carry no diagnostics: reload the full
-      // history (it merges with whatever the stream applies meanwhile).
+      // history (it merges with whatever the stream applies meanwhile). The next
+      // `server.connected` must not read it a second time as well.
+      this.reloadOnConnect = false;
       if (m.selected) void this.loadSelected().catch(() => {});
     }
     if (epoch !== this.epoch) throw new ApiError(0, "superseded");
@@ -259,7 +272,13 @@ export class Sync {
           streamId = id;
           h.streamConnected?.(id);
           // Fetch after subscription registration; queued live deltas merge by request seq.
-          if (m.selected) void this.loadSelected().catch(() => {});
+          // A stream that ends cleanly reconnects immediately: reload only for a new stream
+          // (a real reconnect, a restart or a resync), not for those back-to-back reopens.
+          const newStream = this.streamSeen && (id !== this.lastStreamId || this.reloadOnConnect);
+          this.streamSeen = true;
+          this.lastStreamId = id;
+          this.reloadOnConnect = false;
+          if (m.selected && newStream) void this.loadSelected().catch(() => {});
           continue;
         }
         if (f.event === "bus.overflow") { this.needSnapshot = true; throw new ApiError(0, "event stream overflow", "overflow"); }

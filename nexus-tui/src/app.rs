@@ -155,6 +155,7 @@ pub const WIRED: &[&str] = &[
     "manager.field_open",
     "manager.card_pick",
     "voice.dictate",
+    "search.start",
     "voice.download_stt",
     "voice.remove_stt",
     "voice.download_tts",
@@ -174,6 +175,7 @@ pub const WIRED: &[&str] = &[
     "session.jump_latest",
     "session.copy_id",
     "session.open_inspector",
+    "app.open_inspector",
     "session.child.open",
     "sessions.scope_toggle",
     "sessions.archived_filter",
@@ -229,6 +231,7 @@ const MUTATING: &[&str] = &[
     "session.handoff",
     "session.btw",
     "voice.dictate",
+    "search.start",
     "voice.download_stt",
     "voice.remove_stt",
     "voice.download_tts",
@@ -252,6 +255,10 @@ const NOT_WIRED: &str = "Not available yet.";
 pub(crate) const READ_ONLY: &str = "Read-only until Core is connected again.";
 /// A second Ctrl+C this soon after the first quits the TUI.
 const CTRL_C_QUIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+/// The timeline scroll bar stays at full strength this long after a scroll…
+pub const SCROLLBAR_VISIBLE: std::time::Duration = std::time::Duration::from_millis(1000);
+/// …then dims for this long before it disappears.
+pub const SCROLLBAR_FADE: std::time::Duration = std::time::Duration::from_millis(400);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WaitKind {
@@ -698,6 +705,17 @@ pub struct ProjectInventory {
     pub project_mcp_duplicates: usize,
 }
 
+/// One row of the projects overview.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OverviewRow {
+    Group(&'static str),
+    Project(String),
+    /// A project with no active root session.
+    Empty(String),
+    Session(String, bool),
+    ArchivedToggle(String, usize),
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingFirstPrompt {
     pub text: String,
@@ -721,6 +739,8 @@ pub struct Ui {
     pub left_width: u16,
     /// A drag of the left sidebar's edge is in progress.
     pub left_drag: bool,
+    /// A project tile drag in progress.
+    pub rail_drag: Option<crate::ui::RailDrag>,
     pub right_open: bool,
     /// The user (or a saved preference) chose the right sidebar's state, so a
     /// size change no longer picks it (D17: closed by default at 100-119).
@@ -787,10 +807,18 @@ pub struct Ui {
     pub voice_status_error: Option<String>,
     pub voice_status_generation: u64,
     pub voice_status_loading: bool,
+    /// Last `/api/search/service` response, its error, and a start in flight.
+    pub search_service: Option<Value>,
+    pub search_service_error: Option<String>,
+    pub search_starting: bool,
     pub edit: Option<TextEdit>,
     pub alerts: Alerts,
     pub scroll: Scroll,
     pub scrolls: HashMap<String, Scroll>,
+    /// Show a subdued timeline scroll bar while the user scrolls (`appearance.scrollbar`).
+    pub scrollbar: bool,
+    /// When the timeline was last scrolled, for the bar's short idle timeout.
+    pub scroll_mark: Option<Instant>,
     pub drafts: HashMap<String, Composer>,
     pub image_pasting: HashSet<String>,
     /// The `/learn` source waiting for its project-or-global answer.
@@ -990,6 +1018,7 @@ impl App {
                 last_project_session: HashMap::new(),
                 left_width: 0,
                 left_drag: false,
+                rail_drag: None,
                 right_open: false,
                 right_chosen: false,
                 sized: false,
@@ -1037,10 +1066,15 @@ impl App {
                 voice_status_error: None,
                 voice_status_generation: 0,
                 voice_status_loading: false,
+                search_service: None,
+                search_service_error: None,
+                search_starting: false,
                 edit: None,
                 alerts: Alerts::default(),
                 scroll: Scroll::default(),
                 scrolls: HashMap::new(),
+                scrollbar: true,
+                scroll_mark: None,
                 completion: CompletionState::default(),
                 drafts: HashMap::new(),
                 image_pasting: HashSet::new(),
@@ -2652,23 +2686,96 @@ impl App {
     }
 
     pub fn project_ids(&self) -> Vec<String> {
-        let mut v: Vec<_> = self.state.model.projects.values().collect();
-        v.sort_by(|a, b| {
-            b.updated
-                .total_cmp(&a.updated)
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        v.into_iter().map(|p| p.id.clone()).collect()
+        self.ordered_projects()
+            .into_iter()
+            .map(|p| p.id.clone())
+            .collect()
     }
 
     pub fn rail_project_ids(&self) -> Vec<String> {
-        let mut projects: Vec<_> = self.state.model.projects.values().collect();
-        projects.sort_by(|a, b| {
+        self.ordered_projects()
+            .into_iter()
+            .filter(|p| self.project_status(&p.id) != "inactive")
+            .map(|p| p.id.clone())
+            .collect()
+    }
+
+    /// Every user project in Core's saved order (`position`, with creation
+    /// order as the fallback for an older Core that has no field).
+    fn ordered_projects(&self) -> Vec<&crate::api::Project> {
+        let mut v: Vec<_> = self.state.model.projects.values().collect();
+        v.sort_by(|a, b| {
+            (a.position.is_none(), a.position.unwrap_or(0))
+                .cmp(&(b.position.is_none(), b.position.unwrap_or(0)))
+                .then_with(|| a.created.total_cmp(&b.created))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        v
+    }
+
+    /// `current`, `passive` or `inactive`; an older Core means current.
+    pub fn project_status(&self, id: &str) -> &'static str {
+        match self
+            .state
+            .model
+            .projects
+            .get(id)
+            .and_then(|p| p.status.as_deref())
+        {
+            Some("passive") => "passive",
+            Some("inactive") => "inactive",
+            _ => "current",
+        }
+    }
+
+    /// Rail initials are assigned in creation order, so moving a project never
+    /// changes any project's label.
+    pub(crate) fn rail_label_map(&self) -> HashMap<String, String> {
+        let mut creation: Vec<_> = self.state.model.projects.values().collect();
+        creation.sort_by(|a, b| {
             a.created
                 .total_cmp(&b.created)
                 .then_with(|| a.id.cmp(&b.id))
         });
-        projects.into_iter().map(|p| p.id.clone()).collect()
+        let labels = crate::render::rail_labels(creation.iter().map(|p| p.name.clone()));
+        creation
+            .into_iter()
+            .map(|p| p.id.clone())
+            .zip(labels)
+            .collect()
+    }
+
+    /// Move a project one place in Core's saved order. `delta` is -1 or 1.
+    pub fn move_project_step(&mut self, project: &str, delta: isize) {
+        let ids = self.project_ids();
+        let Some(index) = ids.iter().position(|id| id == project) else {
+            return;
+        };
+        let target = index as isize + delta;
+        if target < 0 || target >= ids.len() as isize {
+            return;
+        }
+        let neighbour = &ids[target as usize];
+        let (before, after) = if delta < 0 {
+            (Some(neighbour.clone()), None)
+        } else {
+            (None, Some(neighbour.clone()))
+        };
+        self.api(ApiCall::MoveProject {
+            project: project.to_owned(),
+            before,
+            after,
+        });
+    }
+
+    pub fn set_project_status(&mut self, project: &str, status: &str) {
+        if self.project_status(project) == status {
+            return;
+        }
+        self.api(ApiCall::SetProjectStatus {
+            project: project.to_owned(),
+            status: status.to_owned(),
+        });
     }
 
     fn list_len(&self, tab: Tab) -> usize {
@@ -2698,6 +2805,23 @@ impl App {
         Some(match name {
             "always" => true,
             "has_project" => self.current_project().is_some(),
+            "project.current" => self
+                .current_project()
+                .is_some_and(|id| self.project_status(&id) == "current"),
+            "project.passive" => self
+                .current_project()
+                .is_some_and(|id| self.project_status(&id) == "passive"),
+            "project.inactive" => self
+                .current_project()
+                .is_some_and(|id| self.project_status(&id) == "inactive"),
+            "project.can_move_up" => self.current_project().is_some_and(|id| {
+                self.project_ids().first().is_some_and(|first| *first != id)
+                    && self.project_ids().iter().any(|p| *p == id)
+            }),
+            "project.can_move_down" => self.current_project().is_some_and(|id| {
+                self.project_ids().last().is_some_and(|last| *last != id)
+                    && self.project_ids().iter().any(|p| *p == id)
+            }),
             "has_session" => has_session,
             "has_turns" => self.messages().iter().any(|m| m.role == "user"),
             "session.idle" => has_session && !busy,
@@ -3612,6 +3736,7 @@ impl App {
                     || self.ui.draft.model.clone().unwrap_or_default(),
                     |s| s.model.clone().unwrap_or_default(),
                 );
+                let favorites = self.favorite_models();
                 for (i, m) in self.state.models.iter().enumerate() {
                     let r = m["ref"].as_str().unwrap_or_default();
                     let label = m["name"]
@@ -3623,12 +3748,21 @@ impl App {
                         continue;
                     };
                     let provider = r.split_once('/').map_or("", |(provider, _)| provider);
+                    let favorite = favorites.iter().any(|f| f == r);
                     scored.push((
                         score,
-                        i,
+                        if favorite {
+                            i
+                        } else {
+                            i + self.state.models.len()
+                        },
                         PaletteItem {
                             kind: PaletteKind::Model(r.to_owned()),
-                            label,
+                            label: if favorite {
+                                format!("★ {label}")
+                            } else {
+                                label
+                            },
                             hint: provider.to_owned(),
                             category: if r == current { "current" } else { "model" }.into(),
                             reason: None,
@@ -3833,7 +3967,11 @@ impl App {
                 }
             }
         }
-        if q.is_empty() {
+        if p.mode == PaletteMode::Models {
+            // favorites first, then newest first, as Core lists them; the
+            // filter only removes rows
+            scored.sort_by_key(|(_, i, _)| *i);
+        } else if q.is_empty() {
             // manifest order, enabled commands first; the command palette is
             // grouped (D13), each group in its fixed place
             let grouped = p.mode == PaletteMode::Commands;
@@ -3893,6 +4031,63 @@ impl App {
                 (p.selected as isize + delta).clamp(0, n as isize - 1) as usize
             };
         }
+    }
+
+    fn favorite_models(&self) -> Vec<String> {
+        self.state.config.as_ref().map_or_else(Vec::new, |c| {
+            c["values"]["ui"]["favorite_models"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+    }
+
+    /// Star or unstar the highlighted model in the picker (`ui.favorite_models`).
+    fn toggle_favorite_model(&mut self) {
+        let Some(sel) = (match &self.ui.overlay {
+            Some(Overlay {
+                kind: OverlayKind::Palette(p),
+                ..
+            }) => Some(p.selected),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(PaletteKind::Model(r)) = self.palette_items().get(sel).map(|i| i.kind.clone())
+        else {
+            return;
+        };
+        let Some(revision) = self
+            .state
+            .config
+            .as_ref()
+            .and_then(|c| c["revision"].as_str().map(str::to_owned))
+        else {
+            return;
+        };
+        if r.is_empty() {
+            return;
+        }
+        let mut favorites = self.favorite_models();
+        if let Some(at) = favorites.iter().position(|f| *f == r) {
+            favorites.remove(at);
+        } else {
+            favorites.push(r);
+        }
+        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+            revision,
+            path: "ui.favorite_models".into(),
+            value: serde_json::Value::Array(
+                favorites
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        }));
     }
 
     fn palette_activate(&mut self, index: Option<usize>) {
@@ -4239,7 +4434,93 @@ impl App {
     }
 
     fn voice_command_disabled_reason(&self, command: &str) -> Option<String> {
+        if command == "search.start" {
+            return self.search_start_reason();
+        }
         self.voice_action_reason(command)
+    }
+
+    fn refresh_search_service(&mut self) {
+        self.api(ApiCall::SearchServiceStatus);
+    }
+
+    /// Why the search service cannot be started now. Settings and the palette share it.
+    pub fn search_start_reason(&self) -> Option<String> {
+        if self.ui.search_starting {
+            return Some("The search service is starting.".into());
+        }
+        let status = self.ui.search_service.as_ref()?;
+        match status["state"].as_str() {
+            Some("running") => Some("The search service is already running.".into()),
+            Some("unavailable") => Some(
+                status["detail"]
+                    .as_str()
+                    .unwrap_or("The search service cannot be started here.")
+                    .to_owned(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// Lines for the search status row: state, address, detail, runtime.
+    pub fn search_status_lines(&self) -> Vec<String> {
+        let Some(status) = self.ui.search_service.as_ref() else {
+            return vec![if self.ui.search_service_error.is_some() {
+                "status unavailable".into()
+            } else {
+                "loading status…".into()
+            }];
+        };
+        let url = status["url"].as_str().unwrap_or("").to_owned();
+        if self.ui.search_starting {
+            return vec!["starting…".into(), url];
+        }
+        let label = match status["state"].as_str() {
+            Some("running") => "running",
+            Some("stopped") => "stopped",
+            Some("absent") => "not set up",
+            _ => "unavailable",
+        };
+        let mut lines = vec![label.to_owned(), url];
+        if let Some(detail) = status["detail"].as_str() {
+            lines.push(detail.to_owned());
+        }
+        if let Some(runtime) = status["runtime"].as_str() {
+            lines.push(format!("runtime {runtime}"));
+        }
+        lines
+    }
+
+    fn apply_search_service(&mut self, call: ApiCall, result: Result<Done, String>) {
+        let starting = call == ApiCall::SearchServiceStart;
+        if starting {
+            self.ui.search_starting = false;
+        }
+        match result {
+            Ok(done) => {
+                self.ui.search_service = done.search_service;
+                self.ui.search_service_error = None;
+                if starting {
+                    self.toast(Level::Success, "Web search is running");
+                }
+            }
+            Err(error) => {
+                self.ui.search_service_error = Some(error.clone());
+                if starting {
+                    self.toast(Level::Error, format!("Web search did not start: {error}"));
+                    self.refresh_search_service();
+                }
+            }
+        }
+    }
+
+    fn start_search_service(&mut self) {
+        if let Some(reason) = self.search_start_reason() {
+            self.toast(Level::Warning, reason);
+            return;
+        }
+        self.ui.search_starting = true;
+        self.api(ApiCall::SearchServiceStart);
     }
 
     /// Compact status shown on the voice model's Settings row.
@@ -4981,6 +5262,259 @@ impl App {
         }
     }
 
+    /// One row of the projects overview.
+    pub fn open_projects_overview(&mut self) {
+        if self.edit_blocks() {
+            return;
+        }
+        self.ui.left_open = true;
+        self.ui.tab = Tab::Projects;
+        self.ui.focus = Focus::Sidebar;
+        self.open_overlay(OverlayKind::Projects(crate::ui::ProjectsOverview::default()));
+    }
+
+    /// The overview's rows in Core's saved order: a project, its active root
+    /// sessions, then its archived toggle (and expanded archived sessions).
+    pub fn overview_rows(&self, o: &crate::ui::ProjectsOverview) -> Vec<OverviewRow> {
+        let mut rows = Vec::new();
+        let all = self.project_ids();
+        let mut inactive = Vec::new();
+        for id in all {
+            if self.project_status(&id) == "inactive" {
+                inactive.push(id);
+            } else {
+                self.overview_project_rows(&mut rows, o, &id);
+            }
+        }
+        if !inactive.is_empty() {
+            rows.push(OverviewRow::Group("INACTIVE"));
+            for id in inactive {
+                self.overview_project_rows(&mut rows, o, &id);
+            }
+        }
+        rows
+    }
+
+    fn overview_project_rows(
+        &self,
+        rows: &mut Vec<OverviewRow>,
+        o: &crate::ui::ProjectsOverview,
+        id: &str,
+    ) {
+        rows.push(OverviewRow::Project(id.to_owned()));
+        let mut sessions: Vec<_> = self
+            .state
+            .model
+            .sessions
+            .values()
+            .filter(|s| s.project_id == id && s.parent_id.is_none())
+            .collect();
+        sessions.sort_by(|a, b| {
+            b.updated
+                .total_cmp(&a.updated)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let active: Vec<_> = sessions.iter().filter(|s| !s.archived).collect();
+        let archived: Vec<_> = sessions.iter().filter(|s| s.archived).collect();
+        if active.is_empty() {
+            rows.push(OverviewRow::Empty(id.to_owned()));
+        }
+        for s in active {
+            rows.push(OverviewRow::Session(s.id.clone(), false));
+        }
+        if !archived.is_empty() {
+            rows.push(OverviewRow::ArchivedToggle(id.to_owned(), archived.len()));
+            if o.archived.contains(id) {
+                for s in archived {
+                    rows.push(OverviewRow::Session(s.id.clone(), true));
+                }
+            }
+        }
+    }
+
+    /// The project a row belongs to (for status and archived actions).
+    fn overview_row_project(
+        &self,
+        o: &crate::ui::ProjectsOverview,
+        index: usize,
+    ) -> Option<String> {
+        let rows = self.overview_rows(o);
+        let row = rows.get(index)?;
+        match row {
+            OverviewRow::Project(id)
+            | OverviewRow::Empty(id)
+            | OverviewRow::ArchivedToggle(id, _) => Some(id.clone()),
+            OverviewRow::Session(id, _) => self
+                .state
+                .model
+                .sessions
+                .get(id)
+                .map(|s| s.project_id.clone()),
+            OverviewRow::Group(_) => None,
+        }
+    }
+
+    fn overview_move(&mut self, delta: isize) {
+        let Some(Overlay {
+            kind: OverlayKind::Projects(o),
+            ..
+        }) = self.ui.overlay.as_ref()
+        else {
+            return;
+        };
+        let rows = self.overview_rows(o);
+        let (cursor, top) = (o.cursor, o.top);
+        if rows.is_empty() {
+            return;
+        }
+        let mut next = cursor as isize + delta;
+        while next >= 0
+            && (next as usize) < rows.len()
+            && matches!(rows[next as usize], OverviewRow::Group(_))
+        {
+            next += delta.signum();
+        }
+        if next < 0 || (next as usize) >= rows.len() {
+            return;
+        }
+        let next = next as usize;
+        if let Some(Overlay {
+            kind: OverlayKind::Projects(o),
+            ..
+        }) = self.ui.overlay.as_mut()
+        {
+            o.cursor = next;
+            let height = 16usize;
+            if o.cursor < top {
+                o.top = o.cursor;
+            } else if o.cursor >= o.top + height {
+                o.top = o.cursor + 1 - height;
+            }
+        }
+    }
+
+    fn overview_toggle_archived(&mut self) {
+        let id = self.ui.overlay.as_ref().and_then(|overlay| {
+            let OverlayKind::Projects(o) = &overlay.kind else {
+                return None;
+            };
+            self.overview_row_project(o, o.cursor)
+        });
+        let Some(id) = id else {
+            return;
+        };
+        if let Some(Overlay {
+            kind: OverlayKind::Projects(o),
+            ..
+        }) = self.ui.overlay.as_mut()
+        {
+            if !o.archived.remove(&id) {
+                o.archived.insert(id);
+            }
+        }
+    }
+
+    fn overview_status(&mut self, status: &str) {
+        let Some(Overlay {
+            kind: OverlayKind::Projects(o),
+            ..
+        }) = self.ui.overlay.as_ref()
+        else {
+            return;
+        };
+        if let Some(id) = self.overview_row_project(o, o.cursor) {
+            self.set_project_status(&id, status);
+        }
+    }
+
+    fn overview_activate(&mut self) {
+        let Some(Overlay {
+            kind: OverlayKind::Projects(o),
+            ..
+        }) = self.ui.overlay.as_ref()
+        else {
+            return;
+        };
+        let Some(row) = self.overview_rows(o).get(o.cursor).cloned() else {
+            return;
+        };
+        match row {
+            OverviewRow::Session(id, _) => {
+                self.close_overlay();
+                self.open_session(&id);
+            }
+            OverviewRow::Project(id) | OverviewRow::Empty(id) => {
+                self.close_overlay();
+                self.select_project_quietly(&id);
+                self.show_new_session();
+                self.after_open();
+                self.ui.tab = Tab::Sessions;
+                self.ui.focus = Focus::Composer;
+            }
+            OverviewRow::ArchivedToggle(_, _) => self.overview_toggle_archived(),
+            OverviewRow::Group(_) => {}
+        }
+    }
+
+    /// Keys while the projects overview is open. Returns false for a key it
+    /// does not use, so the ordinary overlay handling sees it.
+    fn projects_overview_key(&mut self, name: &str) -> bool {
+        match name {
+            "up" | "k" => self.overview_move(-1),
+            "down" | "j" => self.overview_move(1),
+            "home" => {
+                let first = self.ui.overlay.as_ref().and_then(|overlay| {
+                    let OverlayKind::Projects(o) = &overlay.kind else {
+                        return None;
+                    };
+                    self.overview_rows(o)
+                        .iter()
+                        .position(|r| !matches!(r, OverviewRow::Group(_)))
+                });
+                if let (
+                    Some(first),
+                    Some(Overlay {
+                        kind: OverlayKind::Projects(o),
+                        ..
+                    }),
+                ) = (first, self.ui.overlay.as_mut())
+                {
+                    o.cursor = first;
+                    o.top = 0;
+                }
+            }
+            "end" => {
+                let last = self.ui.overlay.as_ref().and_then(|overlay| {
+                    let OverlayKind::Projects(o) = &overlay.kind else {
+                        return None;
+                    };
+                    self.overview_rows(o)
+                        .iter()
+                        .rposition(|r| !matches!(r, OverviewRow::Group(_)))
+                });
+                if let (
+                    Some(last),
+                    Some(Overlay {
+                        kind: OverlayKind::Projects(o),
+                        ..
+                    }),
+                ) = (last, self.ui.overlay.as_mut())
+                {
+                    o.cursor = last;
+                }
+            }
+            "enter" | "space" => self.overview_activate(),
+            "a" => self.overview_toggle_archived(),
+            "1" => self.overview_status("current"),
+            "2" => self.overview_status("passive"),
+            "3" => self.overview_status("inactive"),
+            "r" => self.overview_status("current"),
+            "right" | "l" => self.close_overlay(),
+            _ => return false,
+        }
+        true
+    }
+
     /// Switch to a rail project: its remembered session, or its newest root
     /// session the first time, or an empty new-session view.
     pub(crate) fn rail_activate(&mut self, index: usize) {
@@ -5128,6 +5662,7 @@ impl App {
                     self.effects
                         .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
                     self.refresh_voice_settings_status();
+                    self.refresh_search_service();
                     self.ui.view = View::Settings;
                     self.ui.settings_search = Composer::new();
                     self.ui.settings_row = 0;
@@ -5239,6 +5774,32 @@ impl App {
                 });
             }
             "project.remove" => self.ask_remove_project(),
+            "project.move_up" => {
+                if let Some(id) = self.menu_project() {
+                    self.move_project_step(&id, -1);
+                }
+            }
+            "project.move_down" => {
+                if let Some(id) = self.menu_project() {
+                    self.move_project_step(&id, 1);
+                }
+            }
+            "project.status.current" => {
+                if let Some(id) = self.menu_project() {
+                    self.set_project_status(&id, "current");
+                }
+            }
+            "project.status.passive" => {
+                if let Some(id) = self.menu_project() {
+                    self.set_project_status(&id, "passive");
+                }
+            }
+            "project.status.inactive" => {
+                if let Some(id) = self.menu_project() {
+                    self.set_project_status(&id, "inactive");
+                }
+            }
+            "project.overview" => self.open_projects_overview(),
             "sidebar.row_menu" => {
                 self.open_palette(PaletteMode::RowMenu);
             }
@@ -5290,6 +5851,10 @@ impl App {
             }
             "session.archive" | "session.unarchive" => {
                 if let Some(sid) = self.viewed_id().map(str::to_owned) {
+                    if id == "session.unarchive" {
+                        self.ask_resume(Confirmed::Unarchive(sid));
+                        return;
+                    }
                     self.api(ApiCall::Archive {
                         session: sid,
                         archived: id == "session.archive",
@@ -5339,6 +5904,7 @@ impl App {
             }
             id if id.starts_with("manager.") => self.manager_execute(id),
             "voice.dictate" => self.begin_dictation(),
+            "search.start" => self.start_search_service(),
             "voice.download_stt" => self.ask_voice_model_download(VoiceTarget::Stt),
             "voice.download_tts" => self.ask_voice_model_download(VoiceTarget::Tts),
             "voice.remove_stt" => self.ask_voice_model_remove(VoiceTarget::Stt),
@@ -5421,7 +5987,9 @@ impl App {
                     }
                 }
             }
-            "session.open_inspector" | "tool.open_inspector" => self.open_inspector(),
+            "app.open_inspector" | "session.open_inspector" | "tool.open_inspector" => {
+                self.open_inspector()
+            }
             "copy.final_message"
             | "copy.tool_output"
             | "copy.user_message"
@@ -5680,7 +6248,7 @@ impl App {
             .filter(|s| s.project_id == id)
             .count();
         let mut body = vec![format!(
-            "Remove \"{}\"{}?",
+            "Remove \"{}\"{} from Nexus?",
             p.name,
             if sessions > 0 {
                 format!(" and its {sessions} session(s)")
@@ -5688,7 +6256,8 @@ impl App {
                 String::new()
             }
         )];
-        body.push("The directory and its files stay. This cannot be undone.".into());
+        body.push("Its sessions and history are deleted. The directory and its files stay.".into());
+        body.push("This cannot be undone.".into());
         let restore = self.restore_point();
         self.ui.dialog = Some(Dialog {
             title: "Remove project".into(),
@@ -5763,6 +6332,21 @@ impl App {
         self.apply_restore(d.restore);
         if yes {
             match d.action {
+                Confirmed::ResumeArchived { session, mode } => {
+                    if self.viewed_id() == Some(session.as_str()) {
+                        self.send_mode_confirmed(mode.as_deref(), true);
+                    }
+                }
+                Confirmed::Unarchive(session) => {
+                    if self.writable() {
+                        if let Some(root) = self.root_session(&session) {
+                            self.api(ApiCall::Archive {
+                                session: root,
+                                archived: false,
+                            });
+                        }
+                    }
+                }
                 switch @ Confirmed::Switch { .. } => self.do_switch(switch),
                 Confirmed::DiscardEdit => self.ui.file_edit = None,
                 Confirmed::ReloadEdit => self.reload_file(),
@@ -5837,6 +6421,24 @@ impl App {
     }
 
     fn send_mode(&mut self, requested: Option<&str>) {
+        self.send_mode_confirmed(requested, false);
+    }
+
+    fn ask_resume(&mut self, action: Confirmed) {
+        let restore = self.restore_point();
+        self.ui.dialog = Some(Dialog {
+            title: "Resume archived session".into(),
+            body: vec!["This moves the session and its children out of the archive. The next request may start with an uncached large context, which can be slower and cost more. Archived code kernels restart with fresh state.".into()],
+            cancel: "Cancel".into(),
+            confirm: "Resume".into(),
+            danger: false,
+            action,
+            button: 0,
+            restore,
+        });
+    }
+
+    fn send_mode_confirmed(&mut self, requested: Option<&str>, resume: bool) {
         if self.ui.image_pasting.contains(&self.draft_key()) {
             self.toast(Level::Info, "Preparing clipboard image…");
             return;
@@ -5941,6 +6543,19 @@ impl App {
         }
         match self.viewed_id().map(str::to_owned) {
             Some(id) => {
+                let archived = self.viewed().is_some_and(|s| s.archived);
+                if archived && !resume {
+                    self.ask_resume(Confirmed::ResumeArchived {
+                        session: id,
+                        mode: requested.map(str::to_owned),
+                    });
+                    return;
+                }
+                let unarchive = if archived {
+                    self.root_session(&id)
+                } else {
+                    None
+                };
                 let mode = requested
                     .unwrap_or(if self.is_busy(&id) { "steer" } else { "send" })
                     .to_owned();
@@ -5954,6 +6569,7 @@ impl App {
                 let images = std::mem::take(&mut self.composer().images);
                 self.api(ApiCall::Prompt {
                     session: id,
+                    unarchive,
                     text,
                     images,
                     pastes,
@@ -6337,8 +6953,8 @@ impl App {
             SyncMsg::Event(event) => event
                 .session_id
                 .as_deref()
-                .and_then(|id| self.root_session(id))
-                .map(|root| (root, event.kind.clone(), event.data.clone())),
+                .and_then(|id| Some((self.root_session(id)?, id.to_owned())))
+                .map(|(root, sid)| (root, sid, event.kind.clone(), event.data.clone())),
             _ => None,
         };
         let preserve_side = matches!(&msg, SyncMsg::Snapshot { .. })
@@ -6488,14 +7104,17 @@ impl App {
                     _ => {}
                 }
             }
-            if let Some((root, kind, data)) = attention {
+            if let Some((root, sid, kind, data)) = attention {
                 let viewed_root = self.viewed_id().and_then(|id| self.root_session(id));
-                // A stop the user asked for is not a failure.
+                // A failure belongs to the session whose turn failed, not its root: a
+                // child's error already reaches the parent's model as a tool result, and
+                // the parent answering it is not a failed session. A stop the user asked
+                // for is not a failure.
                 if kind == "session.error" && data["kind"] != "interrupted" {
-                    self.ui.failed_sessions.insert(root.clone());
+                    self.ui.failed_sessions.insert(sid.clone());
                 }
                 if kind == "session.status" && data["status"] == "busy" {
-                    self.ui.failed_sessions.remove(&root);
+                    self.ui.failed_sessions.remove(&sid);
                 }
                 if viewed_root.as_deref() != Some(root.as_str()) {
                     if let Some(text) = self.notice(&root, &kind) {
@@ -6595,6 +7214,10 @@ impl App {
             }
             ApiCall::VoiceSettingsStatus { generation } => {
                 self.apply_voice_settings_status(generation, done.result);
+                return;
+            }
+            call @ (ApiCall::SearchServiceStatus | ApiCall::SearchServiceStart) => {
+                self.apply_search_service(call, done.result);
                 return;
             }
             ApiCall::VoiceDownload { generation } => {
@@ -6716,6 +7339,18 @@ impl App {
                     self.toast(Level::Success, "Saved");
                 }
                 Err(error) => self.toast(Level::Error, format!("Save failed: {error}")),
+            }
+            return;
+        }
+        if let ApiCall::Inspector { generation, .. } = &done.call {
+            if let Some(OverlayKind::Inspector(i)) = self.ui.overlay.as_mut().map(|o| &mut o.kind) {
+                if i.generation == *generation {
+                    i.loading = false;
+                    match done.result {
+                        Ok(r) => i.data = r.inspection.unwrap_or_default(),
+                        Err(e) => i.error = e,
+                    }
+                }
             }
             return;
         }
@@ -6911,6 +7546,7 @@ impl App {
                         }
                         self.api(ApiCall::Prompt {
                             session: id.clone(),
+                            unarchive: None,
                             text: text.clone(),
                             images: images.clone(),
                             pastes: pastes.clone(),
@@ -7222,7 +7858,11 @@ impl App {
                 if let Some(text) = done.transcript.filter(|text| !text.trim().is_empty()) {
                     let key = self.ui.dictation.draft_key.clone();
                     let at = self.ui.dictation.anchor;
-                    self.ui.drafts.entry(key).or_default().insert_at(at, &text);
+                    self.ui
+                        .drafts
+                        .entry(key)
+                        .or_default()
+                        .insert_transcript(at, &text);
                 } else {
                     self.toast(Level::Info, "No speech was recognized");
                 }
@@ -7487,6 +8127,13 @@ impl App {
     pub fn tick(&mut self, now: Instant) -> bool {
         self.clock = now;
         let mut changed = false;
+        // The scroll bar fades out on the shared tick, then erases itself.
+        if self.ui.scroll_mark.is_some() {
+            changed = true;
+            if self.scrollbar_phase(now).is_none() {
+                self.ui.scroll_mark = None;
+            }
+        }
         // A running session shows everything: its older pages load without Enter.
         let auto_older = self.state.model.selected.as_ref().is_some_and(|v| {
             v.messages_more
@@ -8071,6 +8718,13 @@ impl App {
         if name != "ctrl+c" {
             self.ctrl_c = None;
         }
+        if self.ui.rail_drag.is_some() {
+            if name == "esc" {
+                self.ui.rail_drag = None;
+                return;
+            }
+            self.ui.rail_drag = None;
+        }
         // The Manager's shortcuts always, its other keys only while it is engaged.
         if self.manager_key(&ev, &name) {
             return;
@@ -8510,6 +9164,20 @@ impl App {
     }
 
     fn overlay_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
+        if matches!(
+            self.ui.overlay.as_ref().map(|o| &o.kind),
+            Some(OverlayKind::Inspector(_))
+        ) && name != "esc"
+        {
+            self.inspector_key(name);
+            return true;
+        }
+        if matches!(
+            self.ui.overlay.as_ref().map(|o| &o.kind),
+            Some(OverlayKind::Projects(_))
+        ) {
+            return self.projects_overview_key(name);
+        }
         if self.annotation_mut().is_some() {
             self.annotate_key(name);
             return true;
@@ -8591,6 +9259,20 @@ impl App {
                     p.top = 0;
                 }
                 self.ask_search();
+            }
+            "tab"
+                if matches!(
+                    self.ui.overlay,
+                    Some(Overlay {
+                        kind: OverlayKind::Palette(Palette {
+                            mode: PaletteMode::Models,
+                            ..
+                        }),
+                        ..
+                    })
+                ) =>
+            {
+                self.toggle_favorite_model();
             }
             "m" if matches!(
                 self.ui.overlay,
@@ -8720,6 +9402,7 @@ impl App {
             }
             Some(
                 OverlayKind::Help { top }
+                | OverlayKind::Inspector(crate::inspector::Inspector { top, .. })
                 | OverlayKind::AlertDetail { top, .. }
                 | OverlayKind::Resources { top },
             ) => {
@@ -8774,6 +9457,7 @@ impl App {
             }
             Some(OverlayKind::Usage { .. })
             | Some(OverlayKind::ImagePreview { .. })
+            | Some(OverlayKind::Projects(_))
             | Some(OverlayKind::Annotate(_))
             | None => {}
         }
@@ -8974,6 +9658,23 @@ impl App {
             }
         }
         match name {
+            "left"
+                if self.composer_ref().is_empty()
+                    && self.composer_ref().images.is_empty()
+                    && self.ui.view == View::Session
+                    && self.ui.overlay.is_none()
+                    && self.ui.dialog.is_none()
+                    && self.ui.edit.is_none() =>
+            {
+                // From an empty composer: sessions -> projects -> overview.
+                if self.narrow() {
+                    self.ui.drawer = Some(Side::Left);
+                } else {
+                    self.ui.left_open = true;
+                }
+                self.ui.tab = Tab::Sessions;
+                self.ui.focus = Focus::Sidebar;
+            }
             "ctrl+j" => self.composer().newline(),
             "up" | "down" => {
                 let down = name == "down";
@@ -9023,6 +9724,7 @@ impl App {
         let Some(b) = self.ui.timeline_blocks.get(idx) else {
             return;
         };
+        let before = self.ui.scroll;
         let start = b.start;
         let end = b.end;
         self.ui.timeline_sel = Some(idx);
@@ -9052,6 +9754,9 @@ impl App {
             follow: top >= max_top,
             top,
         };
+        if self.ui.scroll != before {
+            self.note_scroll();
+        }
     }
 
     fn move_block(&mut self, delta: isize) {
@@ -9403,16 +10108,109 @@ impl App {
     }
 
     fn open_inspector(&mut self) {
-        let Some(info) = self.state.core.as_ref() else {
-            self.toast(Level::Info, "Not connected to Core");
+        let Some(sid) = self
+            .viewed_id()
+            .map(str::to_owned)
+            .or_else(|| self.state.model.sessions.keys().next().cloned())
+        else {
+            self.toast(Level::Info, "Select a session to inspect");
             return;
         };
-        let sid = self.viewed_id().unwrap_or_default();
-        let mut url = format!("{}/inspector", info.url.trim_end_matches('/'));
-        if !sid.is_empty() {
-            url.push_str(&format!("#{sid}"));
+        self.open_overlay(OverlayKind::Inspector(crate::inspector::Inspector::new(
+            sid,
+        )));
+        self.refresh_inspector();
+    }
+
+    fn refresh_inspector(&mut self) {
+        let Some(OverlayKind::Inspector(i)) = self.ui.overlay.as_mut().map(|o| &mut o.kind) else {
+            return;
+        };
+        i.generation = crate::inspector::generation();
+        i.loading = true;
+        i.error.clear();
+        let call = ApiCall::Inspector {
+            session: i.session.clone(),
+            view: i.view,
+            page: i.page,
+            generation: i.generation,
+        };
+        self.api(call);
+    }
+
+    fn inspector_key(&mut self, name: &str) {
+        let Some(OverlayKind::Inspector(i)) = self.ui.overlay.as_mut().map(|o| &mut o.kind) else {
+            return;
+        };
+        let mut refresh = false;
+        match name {
+            "1" | "2" | "3" | "4" | "5" => {
+                i.view = name.parse::<usize>().unwrap() - 1;
+                i.page = 0;
+                i.top = 0;
+                i.data = Value::Null;
+                i.cursor = 0;
+                i.details = false;
+                i.zoom = 1;
+                i.pan = 0;
+                refresh = true;
+            }
+            "r" => refresh = true,
+            "i" => i.info = !i.info,
+            "n" if i.data["more"] == true => {
+                i.page += 1;
+                i.top = 0;
+                i.cursor = 0;
+                i.details = false;
+                i.zoom = 1;
+                i.pan = 0;
+                refresh = true;
+            }
+            "p" if i.page > 0 => {
+                i.page -= 1;
+                i.top = 0;
+                i.cursor = 0;
+                i.details = false;
+                i.zoom = 1;
+                i.pan = 0;
+                refresh = true;
+            }
+            "c" => {
+                let text = if i.details && i.view == 0 {
+                    i.data["lanes"][i.cursor]["detail"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned()
+                } else if i.view == 0 {
+                    serde_json::to_string_pretty(&i.data).unwrap_or_default()
+                } else {
+                    i.data["text"].as_str().unwrap_or("").to_owned()
+                };
+                self.effects.push(Effect::Copy(text));
+            }
+            "+" | "=" => i.zoom = (i.zoom * 2).min(64),
+            "-" => i.zoom = (i.zoom / 2).max(1),
+            "h" => i.pan = i.pan.saturating_sub(1),
+            "l" => i.pan = (i.pan + 1).min(10),
+            "j" => {
+                i.cursor = (i.cursor + 1).min(
+                    i.data["lanes"]
+                        .as_array()
+                        .map_or(0, |l| l.len().saturating_sub(1)),
+                )
+            }
+            "k" => i.cursor = i.cursor.saturating_sub(1),
+            "enter" => i.details = !i.details,
+            "up" => i.top = i.top.saturating_sub(1),
+            "down" => i.top += 1,
+            "pageup" => i.top = i.top.saturating_sub(8),
+            "pagedown" => i.top += 8,
+            "home" => i.top = 0,
+            _ => {}
         }
-        self.effects.push(Effect::OpenUrl(url));
+        if refresh {
+            self.refresh_inspector();
+        }
     }
 
     fn timeline_key(&mut self, name: &str) {
@@ -9434,6 +10232,7 @@ impl App {
                         follow: false,
                         top: 0,
                     };
+                    self.note_scroll();
                 } else {
                     self.select_block(0);
                 }
@@ -9452,6 +10251,7 @@ impl App {
                     } else {
                         self.ui.scroll = Scroll::default();
                     }
+                    self.note_scroll();
                 } else {
                     self.select_block(n - 1);
                 }
@@ -9526,6 +10326,27 @@ impl App {
             follow: !preview && top >= max_top,
             top,
         };
+        self.note_scroll();
+    }
+
+    /// Show the timeline scroll bar for a moment after the user scrolls.
+    pub fn note_scroll(&mut self) {
+        if self.ui.scrollbar {
+            self.ui.scroll_mark = Some(self.clock);
+        }
+    }
+
+    /// The bar's state after `now`: full, fading, or hidden (`None`).
+    pub fn scrollbar_phase(&self, now: Instant) -> Option<bool> {
+        let at = self.ui.scroll_mark?;
+        let age = now.saturating_duration_since(at);
+        if age < SCROLLBAR_VISIBLE {
+            Some(false)
+        } else if age < SCROLLBAR_VISIBLE + SCROLLBAR_FADE {
+            Some(true)
+        } else {
+            None
+        }
     }
 
     fn sidebar_key(&mut self, name: &str) {
@@ -9545,16 +10366,12 @@ impl App {
             "pagedown" => set(self, c + 8),
             "left" | "h" if self.ui.tab == Tab::Files => self.files_up(),
             "right" | "l" if self.ui.tab == Tab::Files => self.files_expand(),
-            "left" | "h" => {
-                let t = match self.ui.tab {
-                    Tab::Sessions | Tab::Files => Tab::Sessions,
-                    Tab::Projects => Tab::Files,
-                };
-                self.set_tab(t);
-            }
-            "right" | "l" => {
-                self.set_tab(Tab::Files);
-            }
+            "left" | "h" if self.ui.tab == Tab::Sessions => self.set_tab(Tab::Projects),
+            "left" | "h" if self.ui.tab == Tab::Projects => self.open_projects_overview(),
+            "right" | "l" if self.ui.tab == Tab::Projects => self.set_tab(Tab::Sessions),
+            "right" | "l" if self.ui.tab == Tab::Sessions => self.ui.focus = Focus::Composer,
+            "left" | "h" => self.set_tab(Tab::Sessions),
+            "right" | "l" => self.set_tab(Tab::Files),
             "tab" => self.cycle_focus(false),
             "shift+tab" => self.cycle_focus(true),
             _ => {
@@ -9825,7 +10642,9 @@ impl App {
         if self.ui.provider_detail.is_some() {
             return self.provider_detail_key(name, code);
         }
-        if name == self.manifest.settings.navigation.section_key {
+        if name == self.manifest.settings.navigation.section_key
+            && (self.ui.settings_nav_focus || self.settings_open_page().is_some())
+        {
             self.ui.settings_nav_focus = true;
             return true;
         }
@@ -9906,8 +10725,16 @@ impl App {
             "pagedown" => self.ui.settings_row = (sel + 8).min(last),
             "home" => self.ui.settings_row = 0,
             "end" => self.ui.settings_row = last,
-            "left" => self.ui.settings_nav_focus = true,
-            "right" => self.settings_change(sel, 1),
+            "left" => {
+                if self.settings_selected_has_value(sel) {
+                    self.settings_change(sel, -1);
+                }
+            }
+            "right" => {
+                if self.settings_selected_has_value(sel) {
+                    self.settings_change(sel, 1);
+                }
+            }
             "enter" => self.settings_activate(sel),
             "backspace" => {
                 self.ui.settings_search.backspace();
@@ -9933,6 +10760,8 @@ impl App {
                 | "agents.default_root"
                 | "tools.default_permission"
                 | "tools.defaults"
+                | "tools.search_status"
+                | "tools.search_start"
                 | "appearance.theme"
                 | "appearance.monochrome"
                 | "appearance.animations"
@@ -9941,6 +10770,7 @@ impl App {
                 | "appearance.sidebar"
                 | "appearance.details"
                 | "appearance.timeline_detail"
+                | "appearance.scrollbar"
                 | "appearance.session_scope"
                 | "appearance.show_archived"
                 | "mcp.full_definitions"
@@ -9985,6 +10815,205 @@ impl App {
         Some(*row)
     }
 
+    /// The segmented options of a Settings value, and its current option: the
+    /// same control NSH draws. `None` for rows that are not a choice or switch.
+    pub fn settings_segments(
+        &self,
+        row: &crate::manifest::Row,
+    ) -> Option<(Vec<&'static str>, String)> {
+        let values = self.state.config.as_ref().map(|c| &c["values"]);
+        let on_off = |on: bool| if on { "on" } else { "off" }.to_owned();
+        let pair = |options: &[&'static str], current: String| Some((options.to_vec(), current));
+        match row.id.as_str() {
+            "appearance.theme" => pair(
+                &["light", "dark"],
+                match self.theme.opts.mode {
+                    Mode::Dark => "dark",
+                    Mode::Light => "light",
+                }
+                .to_owned(),
+            ),
+            "appearance.monochrome" => pair(&["off", "on"], on_off(self.theme.mono())),
+            "appearance.animations" => {
+                pair(&["on", "off"], on_off(!self.theme.opts.reduced_motion))
+            }
+            "appearance.sidebar" => pair(
+                &["full", "rail"],
+                if self.ui.left_open { "full" } else { "rail" }.to_owned(),
+            ),
+            "appearance.details" => pair(&["off", "on"], on_off(self.ui.right_open)),
+            "appearance.session_scope" => pair(
+                &["this project", "all projects"],
+                if self.ui.scope_all {
+                    "all projects"
+                } else {
+                    "this project"
+                }
+                .to_owned(),
+            ),
+            "appearance.show_archived" => pair(&["off", "on"], on_off(self.ui.show_archived)),
+            "appearance.timeline_detail" => pair(
+                &["low", "medium", "high"],
+                self.ui.detail.label().to_owned(),
+            ),
+            "appearance.scrollbar" => pair(&["off", "on"], on_off(self.ui.scrollbar)),
+            "notifications.sound" => pair(&["off", "on"], on_off(self.ui.sound)),
+            "notifications.terminal" => pair(
+                &["off", "waiting", "all"],
+                match self.ui.notify {
+                    Notify::Off => "off",
+                    Notify::Waiting => "waiting",
+                    Notify::All => "all",
+                }
+                .to_owned(),
+            ),
+            "mcp.full_definitions" => pair(
+                &["off", "on"],
+                on_off(
+                    values
+                        .and_then(|v| v["mcp"]["full_definitions"].as_bool())
+                        .unwrap_or(false),
+                ),
+            ),
+            "tools.default_permission" => pair(
+                &["allow", "ask"],
+                values
+                    .and_then(|v| v["defaults"]["permission"].as_str())
+                    .unwrap_or("allow")
+                    .to_owned(),
+            ),
+            "manager.enabled" => pair(
+                &["off", "on"],
+                self.manager_setting_value("manager.enabled")?.to_owned(),
+            ),
+            "manager.mode" => pair(
+                &["pipeline", "live"],
+                self.manager_setting_value("manager.mode")?.to_owned(),
+            ),
+            "manager.proactive" => pair(
+                &["off", "attention", "all"],
+                self.manager_setting_value("manager.proactive")?.to_owned(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// Pick an option of a segmented Settings row, as clicking it in NSH does.
+    fn settings_choose(&mut self, index: usize, option: usize) {
+        let Some(row) = self.settings_row_at(index) else {
+            return;
+        };
+        let Some((options, current)) = self.settings_segments(&row) else {
+            return;
+        };
+        let Some(&chosen) = options.get(option) else {
+            return;
+        };
+        if chosen == current {
+            return;
+        }
+        self.settings_apply_row(&row, chosen);
+    }
+
+    /// Apply exactly one option of a segmented row.
+    fn settings_apply_row(&mut self, row: &crate::manifest::Row, chosen: &str) {
+        match row.id.as_str() {
+            "appearance.theme" => {
+                let mut options = self.theme.opts;
+                options.mode = match chosen {
+                    "light" => Mode::Light,
+                    _ => Mode::Dark,
+                };
+                self.theme = self.theme.with(options);
+            }
+            "appearance.monochrome" => {
+                if self.theme.mono() != (chosen == "on") {
+                    self.toggle_monochrome();
+                }
+            }
+            "appearance.animations" => {
+                let reduced = chosen == "off";
+                if self.theme.opts.reduced_motion != reduced {
+                    let mut options = self.theme.opts;
+                    options.reduced_motion = reduced;
+                    self.theme = self.theme.with(options);
+                }
+            }
+            "appearance.sidebar" => self.ui.left_open = chosen == "full",
+            "appearance.details" => {
+                self.ui.right_open = chosen == "on";
+                self.ui.right_chosen = true;
+            }
+            "appearance.session_scope" => {
+                if self.ui.scope_all != (chosen == "all projects") {
+                    self.run_command("sessions.scope_toggle");
+                }
+            }
+            "appearance.show_archived" => {
+                if self.ui.show_archived != (chosen == "on") {
+                    self.run_command("sessions.archived_filter");
+                }
+            }
+            "appearance.timeline_detail" => {
+                if let Some(detail) = crate::ui::Detail::from_label(chosen) {
+                    self.set_detail(detail);
+                }
+            }
+            "appearance.scrollbar" => {
+                self.ui.scrollbar = chosen == "on";
+                if !self.ui.scrollbar {
+                    self.ui.scroll_mark = None;
+                }
+            }
+            "notifications.sound" => self.ui.sound = chosen == "on",
+            "notifications.terminal" => {
+                self.ui.notify = match chosen {
+                    "off" => Notify::Off,
+                    "all" => Notify::All,
+                    _ => Notify::Waiting,
+                };
+            }
+            "mcp.full_definitions" => {
+                self.patch_config_value("mcp.full_definitions", json!(chosen == "on"))
+            }
+            "tools.default_permission" => {
+                self.patch_config_value("defaults.permission", json!(chosen))
+            }
+            "manager.enabled" => self.patch_manager_value("manager.enabled", json!(chosen == "on")),
+            "manager.mode" => self.patch_manager_value("manager.mode", json!(chosen)),
+            "manager.proactive" => self.patch_manager_value("manager.proactive", json!(chosen)),
+            _ => {}
+        }
+    }
+
+    /// Patch one Core config value, when the configuration is loaded.
+    fn patch_config_value(&mut self, path: &str, value: Value) {
+        let Some(config) = &self.state.config else {
+            self.toast(Level::Warning, "Configuration is not loaded");
+            return;
+        };
+        let Some(revision) = config["revision"].as_str().map(str::to_owned) else {
+            return;
+        };
+        self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
+            revision,
+            path: path.to_owned(),
+            value,
+        }));
+    }
+
+    /// Patch one Manager config value, respecting Core's read-only state.
+    fn patch_manager_value(&mut self, path: &str, value: Value) {
+        let Some(config) = &self.state.config else {
+            self.toast(Level::Warning, "Configuration is not loaded");
+            return;
+        };
+        let Some(revision) = config["revision"].as_str().map(str::to_owned) else {
+            return;
+        };
+        self.manager_set_config(revision, path, value);
+    }
+
     /// Disabled reason shared by the Settings renderer and its key handlers.
     pub fn settings_reason(
         &self,
@@ -9996,6 +11025,9 @@ impl App {
         }
         if !Self::settings_wired(&row.id) {
             return Some(NOT_WIRED.into());
+        }
+        if row.id == "tools.search_start" {
+            return self.search_start_reason();
         }
         self.voice_action_reason(&row.id)
     }
@@ -10012,6 +11044,11 @@ impl App {
         }
         match row.id.as_str() {
             "tools.defaults" => self.tools_grid_lines(),
+            "tools.search_status" => self.search_status_lines(),
+            "tools.search_start" => vec![
+                "Starts the local SearXNG that web_search uses (Apple container, else Docker)."
+                    .into(),
+            ],
             "dictation.stt_model" => self.voice_info_details(VoiceTarget::Stt),
             "dictation.tts_model" => self.voice_info_details(VoiceTarget::Tts),
             "dictation.stt_download" => {
@@ -10035,7 +11072,44 @@ impl App {
         self.settings_change_row(row, step);
     }
 
+    /// Whether the selected row has a value the arrow keys can move (a segment
+    /// or a stepper). Actions and information rows ignore Left/Right.
+    fn settings_selected_has_value(&self, index: usize) -> bool {
+        let items = self.settings_items();
+        let Some(at) = self.settings_rows().get(index).copied() else {
+            return false;
+        };
+        let Some(SettingsItem::Row { row, .. }) = items.get(at) else {
+            return false;
+        };
+        self.settings_segments(row).is_some()
+            || matches!(
+                row.id.as_str(),
+                "agents.default_effort"
+                    | "agents.default_root"
+                    | "tools.defaults"
+                    | "context.usage_refresh_minutes"
+                    | "context.handoff_percent"
+                    | "mcp.max_listed_tools"
+            )
+    }
+
     fn settings_change_row(&mut self, row: crate::manifest::Row, step: isize) {
+        // A segmented value moves one option per arrow, wrapping at the ends so
+        // Enter still cycles a two-option switch.
+        if let Some((options, current)) = self.settings_segments(&row) {
+            if !options.is_empty() {
+                let at = options
+                    .iter()
+                    .position(|option| *option == current)
+                    .unwrap_or(0) as isize;
+                let next = (at + step.signum()).rem_euclid(options.len() as isize) as usize;
+                if options[next] != current {
+                    self.settings_apply_row(&row, options[next]);
+                }
+                return;
+            }
+        }
         match row.id.as_str() {
             "tools.defaults" => {
                 let len = TOOLS.len() as isize;
@@ -10096,6 +11170,13 @@ impl App {
                 self.ui.notify = modes[(now + step).rem_euclid(3) as usize];
             }
             "notifications.sound" => self.ui.sound = !self.ui.sound,
+            "appearance.scrollbar" => {
+                let _ = step;
+                self.ui.scrollbar = !self.ui.scrollbar;
+                if !self.ui.scrollbar {
+                    self.ui.scroll_mark = None;
+                }
+            }
             "manager.enabled" | "manager.mode" | "manager.proactive" => {
                 self.manager_setting_change(&row.id, step)
             }
@@ -10309,7 +11390,8 @@ impl App {
             | "appearance.sidebar"
             | "notifications.sound"
             | "notifications.terminal"
-            | "appearance.timeline_detail" => self.settings_change_row(row, 1),
+            | "appearance.timeline_detail"
+            | "appearance.scrollbar" => self.settings_change_row(row, 1),
             "mcp.full_definitions"
             | "mcp.max_listed_tools"
             | "context.handoff_percent"
@@ -10319,6 +11401,7 @@ impl App {
                 self.settings_change_row(row, 1)
             }
             "manager.model" => self.manager_edit_model(),
+            "tools.search_start" => self.run_command("search.start"),
             "dictation.stt_download" => self.run_command("voice.download_stt"),
             "dictation.stt_remove" => self.run_command("voice.remove_stt"),
             "dictation.tts_download" => self.run_command("voice.download_tts"),
@@ -11295,6 +12378,7 @@ impl App {
                 left_rail: None,
                 left_open: Some(self.ui.left_open),
                 right_open: Some(self.ui.right_open),
+                scrollbar: Some(self.ui.scrollbar),
                 detail: Some(self.ui.detail.label().to_owned()),
             },
             theme: ThemePrefs {
@@ -11336,6 +12420,9 @@ impl App {
         if let Some(v) = prefs.ui.right_open {
             self.ui.right_chosen = true;
             self.ui.right_open = v;
+        }
+        if let Some(v) = prefs.ui.scrollbar {
+            self.ui.scrollbar = v;
         }
         if let Some(d) = prefs
             .ui
@@ -11578,6 +12665,22 @@ impl App {
                         return;
                     }
                 }
+                if self.ui.overlay.is_none()
+                    && self.ui.dialog.is_none()
+                    && self.ui.edit.is_none()
+                    && self.ui.view == View::Session
+                {
+                    if let Some(Target::RailProject(i)) = self.hits.at(ev.column, ev.row).cloned() {
+                        self.ui.rail_drag = Some(crate::ui::RailDrag {
+                            from: i,
+                            to: i,
+                            start_row: ev.row,
+                            active: false,
+                            cancelled: false,
+                        });
+                        return;
+                    }
+                }
                 let inner = Self::composer_text_inner(
                     crate::render::composer_without_pending(
                         self.regions.composer,
@@ -11649,6 +12752,39 @@ impl App {
                     self.execute("sidebar.row_menu");
                 }
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.ui.rail_drag.is_some() => {
+                let mut drag = self.ui.rail_drag.unwrap();
+                if ev.row != drag.start_row {
+                    drag.active = true;
+                }
+                if drag.active {
+                    if let Some(rail) = self.regions.rail {
+                        if !contains(rail, ev.column, ev.row) {
+                            drag.cancelled = true;
+                        } else {
+                            drag.cancelled = false;
+                            let bands: Vec<(usize, ratatui::layout::Rect)> =
+                                crate::render::rail_layout(self, rail)
+                                    .into_iter()
+                                    .filter_map(|(item, band)| match item {
+                                        crate::render::RailItem::Project(i) => Some((i, band)),
+                                        _ => None,
+                                    })
+                                    .collect();
+                            drag.to = bands
+                                .iter()
+                                .find(|(_, band)| band.y <= ev.row && ev.row < band.bottom())
+                                .map(|(i, _)| *i)
+                                .or_else(|| {
+                                    let last = bands.last()?;
+                                    (ev.row >= last.1.bottom()).then_some(last.0)
+                                })
+                                .unwrap_or(drag.to);
+                        }
+                    }
+                }
+                self.ui.rail_drag = Some(drag);
+            }
             MouseEventKind::Drag(MouseButton::Left) if self.ui.left_drag => {
                 let x0 = self.regions.left.map_or(0, |l| l.x);
                 let want = ev.column.saturating_sub(x0) + 1;
@@ -11689,6 +12825,27 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if let Some(drag) = self.ui.rail_drag.take() {
+                    let ids = self.rail_project_ids();
+                    if drag.active && !drag.cancelled && drag.to != drag.from {
+                        if let (Some(source), Some(target)) = (ids.get(drag.from), ids.get(drag.to))
+                        {
+                            let (before, after) = if drag.to < drag.from {
+                                (Some(target.clone()), None)
+                            } else {
+                                (None, Some(target.clone()))
+                            };
+                            self.api(ApiCall::MoveProject {
+                                project: source.clone(),
+                                before,
+                                after,
+                            });
+                        }
+                    } else if !drag.active {
+                        self.rail_activate(drag.from);
+                    }
+                    return;
+                }
                 if let Some((mut selection, target)) = self.timeline_drag.take() {
                     selection.set_end(ev.column, ev.row);
                     if selection.dragged() {
@@ -11788,6 +12945,15 @@ impl App {
             | Target::ManagerScrim
             | Target::ManagerCard
             | Target::ManagerRow(_) => {}
+            Target::OverviewRow(index) => {
+                if let Some(Overlay {
+                    kind: OverlayKind::Projects(o),
+                    ..
+                }) = self.ui.overlay.as_mut()
+                {
+                    o.cursor = index;
+                }
+            }
             Target::Scrim => {
                 if self.ui.provider_detail.is_some() {
                     self.ui.provider_detail = None;
@@ -12047,6 +13213,11 @@ impl App {
                 self.ui.settings_nav_focus = false;
                 self.ui.settings_row = i;
                 self.settings_activate(i);
+            }
+            Target::SettingsSegment { row, option } => {
+                self.ui.settings_nav_focus = false;
+                self.ui.settings_row = row;
+                self.settings_choose(row, option);
             }
             Target::SettingsSection(i) => {
                 self.select_settings_section(i);
@@ -12394,6 +13565,8 @@ impl ActionDone {
             ApiCall::VoiceStatus { .. } => "Voice status failed",
             ApiCall::VoicePrepare { .. } => "Voice model loading failed",
             ApiCall::VoiceSettingsStatus { .. } => "Voice status failed",
+            ApiCall::SearchServiceStatus => "Search status failed",
+            ApiCall::SearchServiceStart => "Web search did not start",
             ApiCall::VoiceDownload { .. } => "Voice model download failed",
             ApiCall::VoiceModel { operation, .. } => match operation {
                 VoiceOperation::Download => "Voice model download failed",
@@ -12420,10 +13593,13 @@ impl ActionDone {
             ApiCall::ChangeDirectory { .. } => "Directory change failed",
             ApiCall::AddProject { .. } => "Add project failed",
             ApiCall::DeleteProject { .. } => "Remove project failed",
+            ApiCall::MoveProject { .. } => "Move project failed",
+            ApiCall::SetProjectStatus { .. } => "Project status change failed",
             ApiCall::Prompts { .. } | ApiCall::Search { .. } => "",
             ApiCall::OlderMessages { .. } => "Older messages failed to load",
             ApiCall::SwitchCost { .. } => "",
             ApiCall::Usage | ApiCall::RefreshUsage => "Provider usage failed to load",
+            ApiCall::Inspector { .. } => "Inspector failed to load",
             ApiCall::SaveFile { .. } => "Save failed",
             ApiCall::Shell { .. } => "Shell command failed",
         }

@@ -500,14 +500,13 @@ fn devices(
             return;
         }
     };
-    let mut sink = match rodio::DeviceSinkBuilder::open_default_sink() {
+    let sink = match crate::audio_output::open() {
         Ok(s) => s,
         Err(e) => {
             let _ = ready.send(Err(format!("No audio output: {e}")));
             return;
         }
     };
-    sink.log_on_drop(false);
     let player = rodio::Player::connect_new(sink.mixer());
     let Some(mut resampler) = Resampler::to_rate(rate, channels, RATE) else {
         let _ = ready.send(Err("The microphone reported no usable format".into()));
@@ -628,7 +627,10 @@ mod tests {
         let out = drain(&mut buffer, 2880 + FADE_SAMPLES + 5, now);
         assert_eq!(out[2879], 0.5);
         assert!(out[2880] < 0.5 && out[2880] > 0.45); // ramps down from the last sample
-        assert!(out[2880..].windows(2).take(FADE_SAMPLES - 1).all(|w| w[1] < w[0]));
+        assert!(out[2880..]
+            .windows(2)
+            .take(FADE_SAMPLES - 1)
+            .all(|w| w[1] < w[0]));
         assert_eq!(out[2880 + FADE_SAMPLES], 0.0);
     }
 

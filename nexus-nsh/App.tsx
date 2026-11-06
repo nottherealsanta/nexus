@@ -11,6 +11,7 @@ import { FilePanel } from "./src/ui/editor";
 import { ContextDetailModal } from "./src/ui/newsession";
 import { ManagerContextModal } from "./src/ui/manager/context-modal";
 import { ResourcesModal } from "./src/ui/resources";
+import { InspectorModal } from "./src/ui/inspector";
 import { AlertDetail } from "./src/ui/alerts";
 import { UsageDialog } from "./src/ui/usage";
 import { ImagePreview } from "./src/ui/image-preview";
@@ -90,6 +91,7 @@ function App() {
         </>}><PhoneShell /></If>
         <ContextDetailModal />
         <ResourcesModal />
+        <InspectorModal />
         <Palette />
         <SessionSwitcher />
         <Picker />

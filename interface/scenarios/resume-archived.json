@@ -1,0 +1,5 @@
+{
+  "title": "Resume archived session",
+  "body": "This moves the session and its children out of the archive. The next request may start with an uncached large context, which can be slower and cost more. Archived code kernels restart with fresh state.",
+  "prompt": "Continue this work"
+}

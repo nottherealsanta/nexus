@@ -2,7 +2,7 @@ import { Image, Scroll, Text, View, effect, keymap, platform, safeArea, signal, 
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Shimmer, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
-import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, restorePendingParts, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
+import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
@@ -154,12 +154,11 @@ function EditableComposer() {
     const c = connection();
     if (c.kind !== "live") return c.kind === "reconnecting" ? "Reconnecting to Core: read-only" : c.kind === "offline" ? "Core is offline: read-only" : c.kind === "auth_failed" ? "Authentication failed: read-only" : c.kind === "incompatible" ? "Incompatible API: blocked" : "Connecting to Core…";
     if (!currentProject() && centre() === "new_session") return "Add or choose a project first";
-    if (ses()?.archived) return "This session is archived: unarchive it to continue";
     return null;
   };
   const canSend = () => dictationPhase() === "idle" && !reason() && !pasting() && (text().trim().length > 0 || images().length > 0);
   const canDictate = () => live() && !ses()?.archived;
-  const send = async (mode: "send" | "steer" | "queue" = busy() ? "steer" : "send") => {
+  const send = async (mode: "send" | "steer" | "queue" = busy() ? "steer" : "send", resumed = false) => {
     const t = text().trim();
     if (t && !images().length && runSlashCommand(t)) {
       draft.update((d) => ({ ...d, [key()]: "" }));
@@ -167,6 +166,10 @@ function EditableComposer() {
       return;
     }
     if (!canSend()) { const r = reason(); if (r) toast("info", r); return; }
+    if (ses()?.archived && !resumed) {
+      resumeArchived(ses()!.id, () => send(mode, true));
+      return;
+    }
     const target = key();
     const sent = images();
     const ok = await sendPrompt(t, sent, mode);
@@ -429,7 +432,7 @@ function EditableComposer() {
             pasteBehavior="report"
             ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
             placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : "Type a message…")}
-            readonly={!live() || !!ses()?.archived}
+            readonly={!live()}
             submitBehavior="submit" onSubmit={() => {
               if (dictationPhase() === "recording") { void stopDictation(); return; }
               if (dictationPhase() !== "idle") return;

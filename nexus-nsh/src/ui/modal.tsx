@@ -17,7 +17,7 @@ export const modalBodyHeight = (extra = 0) => Math.max(48, Math.floor(windowSize
 export function Modal(p: {
   size?: "small" | "medium" | "large"; testID?: string; label: string; scrim?: string;
   onCancel: () => void; onOpenChange?: (open: boolean) => void; closeOnBackdropPress?: boolean;
-  padded?: boolean; children?: JSX.Element;
+  padded?: boolean; tall?: boolean; children?: JSX.Element;
 }) {
   return (
     <Dialog
@@ -27,7 +27,7 @@ export function Modal(p: {
     >
       <View testID={p.testID ? `${p.testID}-shell` : undefined}
         style={{ boxShadow: SHADOW, width: isNarrow() ? "100%" : WIDTH[p.size ?? "medium"], maxWidth: "100%", pointerEvents: "auto" }}
-        class={`max-h-[70%] rounded-none bg-popover overflow-hidden ${p.padded === false ? "" : "p-6"}`}>
+        class={`${p.tall ? "max-h-[90%]" : "max-h-[70%]"} rounded-none bg-popover overflow-hidden ${p.padded === false ? "" : "p-6"}`}>
         <View accessibilityLabel={p.label} testID={p.testID} class="min-h-0">
           {p.children}
         </View>
@@ -45,11 +45,21 @@ export function ModalTitle(p: { title: string }) {
   );
 }
 
-/** The last row: key hints on the left, an optional count on the right. */
-export function ModalFooter(p: { hints: string; right?: string }) {
+/**
+ * The last row: key hints on the left, an optional count on the right. A hint
+ * given as segments is drawn as the TUI's hint row is: each part on its own,
+ * separated by `·`, so every key/verb pair keeps its own weight and name.
+ */
+export function ModalFooter(p: { hints: string | readonly string[]; right?: string }) {
+  const parts = () => typeof p.hints === "string" ? [p.hints] : p.hints;
   return (
     <View class="flex-row items-center gap-3 pt-3">
-      <Text class={`flex-1 ${T.meta}`}>{p.hints}</Text>
+      <View class={`flex-1 flex-row flex-wrap items-center gap-x-2 gap-y-1 ${T.meta}`}>
+        {() => parts().map((hint, i) => (<>
+          <If when={i > 0}><Text class={T.meta}>·</Text></If>
+          <Text class={T.meta}>{hint}</Text>
+        </>))}
+      </View>
       <If when={!!p.right}><Text class={T.meta}>{p.right!}</Text></If>
     </View>
   );

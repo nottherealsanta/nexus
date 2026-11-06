@@ -137,6 +137,9 @@ def main(path, overlay=None):
                           1.1 if role["rail"].startswith("border.") else nmin)  # hairline rails are decorative
         check(f"{tn} border.default vs canvas (informational >=1.1)", c["border.default"], c["surface.canvas"], 1.1)
         check(f"{tn} border.strong vs canvas (decorative, informational >=1.1)", c["border.strong"], c["surface.canvas"], 1.1)
+        # The timeline scroll bar is deliberately quiet: a decorative cue, not a
+        # control, so it is held to presence rather than the mark floor.
+        check(f"{tn} interactive.scrollbar vs canvas (decorative, informational >=1.1)", c["interactive.scrollbar"], c["surface.canvas"], 1.1)
 
     slots = set(data["dark"]["agent"])
     if slots != set(data["light"]["agent"]):

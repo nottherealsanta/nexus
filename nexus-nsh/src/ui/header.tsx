@@ -5,7 +5,7 @@ import { Icon, IconButton, Spinner, Status, FOCUS, TONE, TS } from "./kit";
 import { RAIL_PX, SidebarTabs, attention, leftSidebarWidth } from "./sidebar";
 import { byId, closeTab, keyLabel, run, rightIsOpen, rightWidthHint, tabIds, waitItems } from "../commands";
 import { attention as attentionGlyph, statusGlyphs } from "../gen/theme";
-import { centre, connection, coreUrl, drawer, isNarrow, leftOpen, m, model, native, railShown, touch, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
+import { centre, config, connection, coreUrl, drawer, isNarrow, leftOpen, m, model, native, railShown, touch, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
 import { agentColor } from "../agent-color";
 import { ManagerHeaderIndicator, managerHeaderIndicatorVisible } from "./manager/stage";
 import { call } from "../core/manager";
@@ -56,7 +56,7 @@ function SessionTab(p: { id: string }) {
   };
   return (
     <View
-      style={{ width: tabWidth() }} class={`group/tab min-w-0 overflow-hidden ${tabBox()} ${active() ? "bg-background" : "hover:bg-accent"}`}
+      style={{ width: tabWidth() }} class={`group/tab flex-row min-w-0 overflow-hidden ${tabBox()} ${active() ? "bg-background" : "hover:bg-accent"}`}
     >
       <Button
         onPress={activate} selected={active()} accessibilityLabel={`${onViewedSession() ? "Rename" : "Open"} ${title()}, ${status().label}`}
@@ -98,6 +98,19 @@ function WorkspaceTabs() {
       </Scroll>
       </If>
     </View>
+  );
+}
+
+/** The first row of an open session's page: the full title of its tab on the black page surface. */
+export function SessionHeading() {
+  const title = () => { m(); return model.sessions.get(rootOf(viewed()?.id) ?? "")?.title || "Untitled"; };
+  const shown = () => !isNarrow() && centre() === "session" && !!viewed();
+  return (
+    <If when={shown()}>
+      <View class="w-full h-7 shrink-0 justify-center bg-background px-3" testID="session-heading">
+        <Text style={{ numberOfLines: 1 }} class={`${TS.base} text-foreground-secondary`}>{title()}</Text>
+      </View>
+    </If>
   );
 }
 
@@ -242,6 +255,7 @@ export function Header() {
             <Text class={`${TS.base} text-info`}>{`${attentionGlyph.unread.unicode} ${unread()}`}</Text>
           </Button>
         </If>
+        <If when={config()?.values?.manager?.enabled !== false}>
         <If when={!managerHeaderIndicatorVisible()}>
         <Button onPress={() => void run("manager.header")}  accessibilityLabel="Manager" testID="open-manager-context"
           tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{"Manager: messages, cards and session"}</Text>}
@@ -250,6 +264,7 @@ export function Header() {
         </Button>
         </If>
         <ManagerHeaderIndicator />
+        </If>
         <IconButton icon="panel-right" label="Toggle right sidebar" testID="toggle-right" selected={isNarrow() ? drawer() === "right" : rightIsOpen(width())} onPress={() => { rightWidthHint.w = width(); void run("sidebar.right.toggle"); }} reason={key("sidebar.right.toggle") ?? undefined} />
       </View>
     </View>

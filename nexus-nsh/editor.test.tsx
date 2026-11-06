@@ -1,5 +1,6 @@
 // PLAN K10: the built-in editor over a project file.
 import { describe, expect, open, test } from "nsh/test";
+import { fileRows } from "./src/file-tree";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -192,5 +193,52 @@ describe("Built-in editor (K10)", () => {
     expect(app.shows("id:file-editor")).toBe(true);
     await app.press("id:file-edit");
     await app.waitFor("id:file-save", { timeout: 15000 });
+  });
+});
+
+describe("Files tree", () => {
+  test("folders expand in place and keep their expanded state across tabs", async () => {
+    const app = await open("./App.tsx", {
+      storage: { "nexus.core": "http://core.test" },
+      network: {
+        ...network,
+        "GET */api/project/prj_1/files*": (r: { url: string }) => ({
+          body: r.url.includes("path=src")
+            ? { path: "src", entries: [{ name: "main.rs", kind: "file", ignored: false }, { name: "lib.rs", kind: "file", ignored: false }] }
+            : { path: "", entries: [{ name: "src", kind: "directory", ignored: false }, { name: ".git", kind: "directory", ignored: false }, { name: "README.md", kind: "file", ignored: false }] },
+        }),
+      },
+      width: 1500, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.press("id:tab-files");
+    await app.waitFor("id:file-entry-src");
+    expect(app.shows("id:file-entry-.git")).toBe(false); // never listed, as in the TUI
+    expect(app.shows("id:file-entry-src/main.rs")).toBe(false);
+    await app.press("id:file-entry-src");
+    await app.waitFor("id:file-entry-src/main.rs");
+    expect(app.shows("id:file-entry-README.md")).toBe(true); // the root stays visible
+    await app.press("id:tab-sessions");
+    await app.press("id:tab-files");
+    await app.waitFor("id:file-entry-src/main.rs"); // still expanded
+    await app.press("id:file-entry-src");
+    await app.waitFor("id:file-entry-src/main.rs", { state: "gone" });
+    expect(app.shows("id:file-entry-src")).toBe(true);
+  });
+
+  test("rows are depth-first, indented, and hide .git", () => {
+    const dirs = {
+      "": { entries: [{ name: "src", kind: "directory", ignored: false }, { name: ".git", kind: "directory", ignored: false }, { name: "a.txt", kind: "file", ignored: false }] },
+      src: { entries: [{ name: "nested", kind: "directory", ignored: false }, { name: "main.rs", kind: "file", ignored: false }] },
+      "src/nested": { entries: [{ name: "deep.rs", kind: "file", ignored: false }] },
+    };
+    expect(fileRows(dirs, new Set())).toEqual([
+      { path: "src", name: "src", kind: "directory", depth: 0, expanded: false, git_status: undefined, ignored: false },
+      { path: "a.txt", name: "a.txt", kind: "file", depth: 0, expanded: false, git_status: undefined, ignored: false },
+    ]);
+    expect(fileRows(dirs, new Set(["src"])).map((r) => [r.path, r.depth, r.expanded])).toEqual([
+      ["src", 0, true], ["src/nested", 1, false], ["src/main.rs", 1, false], ["a.txt", 0, false],
+    ]);
   });
 });

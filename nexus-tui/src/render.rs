@@ -226,6 +226,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
             );
             draw_sidebar_edge(&cx, buf, r.x, r);
         }
+        draw_heading(&cx, buf, regions.heading);
         draw_subagents(&cx, buf, regions.strip, &mut hits);
         draw_banner(&cx, buf, regions.banner, &mut hits);
         // The session stays drawn under the settings modal and under a narrow panel.
@@ -823,6 +824,9 @@ fn heights(app: &App, w: u16) -> Heights {
             ),
     );
     Heights {
+        heading: u16::from(
+            !app.narrow() && app.ui.view != View::Settings && app.viewed_root().is_some(),
+        ),
         banner,
         waiting,
         composer,
@@ -944,7 +948,9 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     }
 
     // The Manager button, left of the right toggle: the hidden context modal.
-    if g.manager.width > 0 {
+    if g.manager.width > 0
+        && cx.app.manager_setting_value("manager.enabled").as_deref() == Some("on")
+    {
         let m = &cx.app.ui.manager;
         let label = if m.dropdown_open || m.call.is_some() || m.starting || m.indicator.visible() {
             ""
@@ -1303,6 +1309,36 @@ fn header_status(cx: &Cx) -> Option<(String, Style)> {
 // ============================================================================
 // banner and toasts
 // ============================================================================
+
+/// The first row of an open session's page: the full title of its tab on the
+/// black page surface, ellipsised only when the page is too narrow for it.
+fn draw_heading(cx: &Cx, buf: &mut Buffer, r: Rect) {
+    if r.height == 0 {
+        return;
+    }
+    let Some(root) = cx.app.viewed_root() else {
+        return;
+    };
+    let title = cx
+        .app
+        .state
+        .model
+        .sessions
+        .get(&root)
+        .map_or("", |s| s.title.as_str());
+    let title = if title.is_empty() { "Untitled" } else { title };
+    let style = cx.st(SECONDARY, CANVAS);
+    clear(buf, r, style);
+    let room = r.width.saturating_sub(2) as usize;
+    put(
+        buf,
+        r.x + 1,
+        r.y,
+        &truncate(title, room, cx.ell()),
+        style,
+        r.width.saturating_sub(1),
+    );
+}
 
 /// The subagent strip under the tabs (shown only while a child is viewed): the
 /// path above it as equal parent tabs, a rail, then the root's other sessions
@@ -1817,7 +1853,7 @@ fn draw_tab_icons(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
 /// One rail entry: a project, the add-project control, or Settings while the
 /// sidebar with its own Settings row is closed.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum RailItem {
+pub(crate) enum RailItem {
     Project(usize),
     Add,
     Settings,
@@ -1826,8 +1862,7 @@ enum RailItem {
 /// The corner counters and the label between them, and a separating row.
 const RAIL_ITEM: u16 = 4;
 
-fn rail_layout(cx: &Cx, r: Rect) -> Vec<(RailItem, Rect)> {
-    let a = cx.app;
+pub(crate) fn rail_layout(a: &App, r: Rect) -> Vec<(RailItem, Rect)> {
     let entries = a.rail_project_ids();
     let settings = !a.ui.left_open;
     let room = r.height.saturating_sub(4 + if settings { 4 } else { 0 });
@@ -1856,7 +1891,7 @@ fn rail_layout(cx: &Cx, r: Rect) -> Vec<(RailItem, Rect)> {
     out
 }
 
-fn rail_labels(names: impl IntoIterator<Item = String>) -> Vec<String> {
+pub(crate) fn rail_labels(names: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut used = std::collections::HashSet::new();
     names
         .into_iter()
@@ -1936,14 +1971,10 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     clear(buf, r, cx.st(SECONDARY, SIDEBAR));
     hits.add(r, Target::Swallow);
     let entries = a.rail_project_ids();
-    let labels = rail_labels(
-        entries
-            .iter()
-            .map(|id| a.state.model.projects[id].name.clone()),
-    );
+    let labels = a.rail_label_map();
     let inner = r.width;
     let centre = r.x + inner.saturating_sub(1) / 2;
-    for (item, band) in rail_layout(cx, r) {
+    for (item, band) in rail_layout(a, r) {
         let hovered = cx.hovered(band);
         match item {
             RailItem::Add => {
@@ -1962,6 +1993,10 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     continue;
                 };
                 let selected = a.current_project().as_deref() == Some(p.id.as_str());
+                let dragging = a.ui.rail_drag;
+                let is_source = dragging.is_some_and(|d| d.active && d.from == i);
+                let is_target = dragging.is_some_and(|d| d.active && !d.cancelled && d.to == i);
+                let passive = a.project_status(&p.id) == "passive";
                 let (running, latest) = rail_activity(a, &p.id);
                 let token = if running > 0 || (latest > 0.0 && now_secs() - latest < 3600.0) {
                     SECONDARY
@@ -1975,13 +2010,19 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     clear(buf, tile, cx.st(PRIMARY, RAISED));
                 }
                 let mut style = cx.st(token, bg);
-                if token == MUTED {
+                if token == MUTED || passive || is_source {
                     style = style.add_modifier(Modifier::DIM);
+                }
+                if is_target {
+                    style = cx
+                        .st("interactive.focus", RAISED)
+                        .add_modifier(Modifier::BOLD);
                 }
                 if selected {
                     style = cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD);
                 }
-                let label = &labels[i];
+                let label = labels.get(&p.id).cloned().unwrap_or_default();
+                let label = &label;
                 let label_width = width(label) as u16;
                 let label_x = tile.x + tile.width.saturating_sub(label_width) / 2;
                 put(buf, label_x, band.y + 1, label, style, label_width);
@@ -2034,6 +2075,17 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                         }
                     }
                 }
+                if is_target && dragging.is_some_and(|d| d.from != d.to) {
+                    let glyph = if cx.t.opts.ascii { "-" } else { "▔" };
+                    put(
+                        buf,
+                        band.x,
+                        band.y,
+                        &glyph.repeat(band.width as usize),
+                        cx.st("interactive.focus", SIDEBAR),
+                        band.width,
+                    );
+                }
                 hits.add(band, Target::RailProject(i));
             }
         }
@@ -2045,7 +2097,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
 fn draw_rail_popup(cx: &Cx, buf: &mut Buffer, r: Rect, limit: Rect) {
     let a = cx.app;
     let entries = a.rail_project_ids();
-    let Some((RailItem::Project(i), band)) = rail_layout(cx, r)
+    let Some((RailItem::Project(i), band)) = rail_layout(a, r)
         .into_iter()
         .find(|(item, band)| matches!(item, RailItem::Project(_)) && cx.hovered(*band))
     else {
@@ -2941,7 +2993,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     } else {
         cx.st(MUTED, SIDEBAR)
     };
-    let icon = if cx.t.opts.ascii { "A" } else { "▣" };
+    let icon = cx.t.control("archive");
     put(
         buf,
         toggle.x + toggle.width / 2,
@@ -2957,7 +3009,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         style = style.patch(cx.st(PRIMARY, SIDEBAR));
         clear(buf, search, style);
     }
-    let glyph = if cx.t.opts.ascii { "/" } else { "⌕" };
+    let glyph = cx.t.control("search");
     put(buf, r.x + 1, search.y, glyph, style, 1);
     let key = a
         .manifest
@@ -4797,6 +4849,7 @@ fn draw_timeline(
             1,
         );
     }
+    draw_scroll_bar(cx, buf, r, top, total, h);
     // Blocks wholly below the viewport count for the jump pill, which is
     // drawn on the composer's live row, never over the timeline.
     let behind = (top < max_top).then(|| {
@@ -4807,6 +4860,40 @@ fn draw_timeline(
             .count()
     });
     (total, h, behind)
+}
+
+/// The timeline's scroll bar: one quiet cell in the right gutter, shown only
+/// while the reader scrolls and then fading out. It never takes a column from
+/// the content or a click from the page.
+fn draw_scroll_bar(cx: &Cx, buf: &mut Buffer, r: Rect, top: usize, total: usize, h: usize) {
+    let a = cx.app;
+    if !a.ui.scrollbar || total <= h || r.width == 0 || r.height == 0 {
+        return;
+    }
+    let Some(fading) = a.scrollbar_phase(a.clock) else {
+        return;
+    };
+    let track = h as u32;
+    let thumb = ((track * track + total as u32 - 1) / total as u32)
+        .max(1)
+        .min(track) as u16;
+    let max_top = (total - h).max(1) as u32;
+    let travel = track.saturating_sub(thumb as u32);
+    let offset = ((top as u32) * travel / max_top) as u16;
+    let mut style = cx.st("interactive.scrollbar", CANVAS);
+    if fading {
+        style = style.add_modifier(Modifier::DIM);
+    }
+    for y in r.y + offset..r.y + offset + thumb {
+        put(
+            buf,
+            r.right() - 1,
+            y,
+            cx.t.structure("rail_heavy"),
+            style,
+            1,
+        );
+    }
 }
 
 /// The jump-to-latest pill (D15): raised, right-aligned on the live row above
@@ -6136,7 +6223,13 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     );
     clear(buf, panel, base);
     hits.add(panel, Target::Composer);
-    card_edge(cx, buf, panel, panel.bottom() - 1, cx.t.structure("card_bottom"));
+    card_edge(
+        cx,
+        buf,
+        panel,
+        panel.bottom() - 1,
+        cx.t.structure("card_bottom"),
+    );
     let inner = composer_inner_with(full_r, comp.images.len(), pastes.len());
     let input_height = inner.height as usize;
     let cy = r.bottom() - 3;
@@ -6903,6 +6996,79 @@ fn on_off(on: bool) -> String {
     if on { "on" } else { "off" }.into()
 }
 
+/// One segmented Settings value, fitted to the cells left of the row's label.
+struct Segments {
+    labels: Vec<String>,
+    selected: usize,
+    total: u16,
+}
+
+/// The row's segmented control, or `None` when it is not a choice/switch or the
+/// options cannot fit. Padded options are preferred; bare ones keep small
+/// terminals usable.
+fn segment_view(cx: &Cx, row: &crate::manifest::Row, room: u16) -> Option<Segments> {
+    let (options, current) = cx.app.settings_segments(row)?;
+    if options.len() < 2 {
+        return None;
+    }
+    let selected = options
+        .iter()
+        .position(|option| *option == current)
+        .unwrap_or(0);
+    for padded in [true, false] {
+        let labels: Vec<String> = options
+            .iter()
+            .map(|option| {
+                if padded {
+                    format!(" {option} ")
+                } else {
+                    (*option).to_owned()
+                }
+            })
+            .collect();
+        let total: usize = labels.iter().map(|label| width(label)).sum();
+        if total <= room as usize {
+            return Some(Segments {
+                labels,
+                selected,
+                total: total as u16,
+            });
+        }
+    }
+    None
+}
+
+/// Draw the segments, selected one on the NSH selection band, one click per option.
+fn draw_segments(
+    cx: &Cx,
+    buf: &mut Buffer,
+    x: u16,
+    y: u16,
+    seg: &Segments,
+    row: usize,
+    hits: &mut HitMap,
+) {
+    let mut x = x;
+    for (option, label) in seg.labels.iter().enumerate() {
+        let w = width(label) as u16;
+        let (token, bg) = if option == seg.selected {
+            (PRIMARY, "interactive.selection")
+        } else {
+            (SECONDARY, PANEL)
+        };
+        let mut style = cx.st(token, bg);
+        if option == seg.selected {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        put(buf, x, y, label, style, w);
+        hits.add(
+            Rect::new(x, y, w, 1),
+            Target::SettingsSegment { row, option },
+        );
+        x = x.saturating_add(w);
+    }
+}
+
 /// The value shown for a settings row, and whether it is live (wired).
 fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
     let a = cx.app;
@@ -6925,6 +7091,8 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
                 format!("{off} off")
             })
         }
+        "tools.search_status" => a.search_status_lines().into_iter().next(),
+        "tools.search_start" => Some("enter".into()),
         "manager.enabled" | "manager.mode" | "manager.model" | "manager.proactive" => {
             a.manager_setting_value(&row.id)
         }
@@ -6940,6 +7108,7 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
         "notifications.sound" => Some(on_off(a.ui.sound)),
         "notifications.terminal" => Some(a.ui.notify.label().into()),
         "appearance.sidebar" => Some(if a.ui.left_open { "full" } else { "rail" }.into()),
+        "appearance.scrollbar" => Some(on_off(a.ui.scrollbar)),
         "appearance.details" => Some(on_off(a.ui.right_open)),
         "appearance.timeline_detail" => Some(a.ui.detail.label().into()),
         "appearance.session_scope" => Some(
@@ -7451,44 +7620,72 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                     } else {
                         cx.st(token, RAISED)
                     };
-                    let mut vstyle = cx.st(
-                        if wired && !disabled { SECONDARY } else { MUTED },
-                        if selected {
-                            "interactive.settings_selection"
-                        } else {
-                            RAISED
-                        },
-                    );
-                    if selected {
-                        vstyle = vstyle.add_modifier(Modifier::BOLD);
-                    }
-                    let value = if disabled {
-                        "unavailable".to_owned()
-                    } else {
-                        value
-                    };
                     let lw = content_w.saturating_sub(2);
-                    let vw = (width(&value) as u16).min(lw.saturating_sub(12));
-                    put(
-                        buf,
-                        content_x + 2,
-                        y,
-                        &truncate(&row.label, (lw - vw).saturating_sub(2) as usize, cx.ell()),
-                        style,
-                        (lw - vw).saturating_sub(2),
-                    );
-                    put(
-                        buf,
-                        content_x + content_w - vw,
-                        y,
-                        &truncate(&value, vw as usize, cx.ell()),
-                        vstyle,
-                        vw,
-                    );
+                    // The whole row takes a click first; a segment drawn after
+                    // it wins over its own cells.
                     hits.add(
                         Rect::new(content_x, y, content_w, 1),
                         Target::SettingsRow(position),
                     );
+                    let segments = if disabled {
+                        None
+                    } else {
+                        segment_view(cx, row, lw)
+                    };
+                    if let Some(seg) = segments {
+                        let label_room = lw.saturating_sub(seg.total + 2);
+                        put(
+                            buf,
+                            content_x + 2,
+                            y,
+                            &truncate(&row.label, label_room as usize, cx.ell()),
+                            style,
+                            label_room,
+                        );
+                        draw_segments(
+                            cx,
+                            buf,
+                            content_x + content_w - seg.total,
+                            y,
+                            &seg,
+                            position,
+                            hits,
+                        );
+                    } else {
+                        let mut vstyle = cx.st(
+                            if wired && !disabled { SECONDARY } else { MUTED },
+                            if selected {
+                                "interactive.settings_selection"
+                            } else {
+                                RAISED
+                            },
+                        );
+                        if selected {
+                            vstyle = vstyle.add_modifier(Modifier::BOLD);
+                        }
+                        let value = if disabled {
+                            "unavailable".to_owned()
+                        } else {
+                            value
+                        };
+                        let vw = (width(&value) as u16).min(lw.saturating_sub(12));
+                        put(
+                            buf,
+                            content_x + 2,
+                            y,
+                            &truncate(&row.label, (lw - vw).saturating_sub(2) as usize, cx.ell()),
+                            style,
+                            (lw - vw).saturating_sub(2),
+                        );
+                        put(
+                            buf,
+                            content_x + content_w - vw,
+                            y,
+                            &truncate(&value, vw as usize, cx.ell()),
+                            vstyle,
+                            vw,
+                        );
+                    }
                 }
             }
         }
@@ -7505,6 +7702,11 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
         );
     }
     let arrows = if cx.t.opts.ascii { ">" } else { "\u{2192}" };
+    let both = if cx.t.opts.ascii {
+        "<>"
+    } else {
+        "\u{2190}\u{2192}"
+    };
     let left = if cx.t.opts.ascii { "<" } else { "\u{2190}" };
     let hints: Vec<(&str, &str)> = if a.ui.settings_nav_focus {
         vec![(updown(cx), "section"), ("enter", "open"), ("esc", "close")]
@@ -7526,12 +7728,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
             vec![("enter", "select"), ("esc", "back")]
         }
     } else {
-        vec![
-            (arrows, "change"),
-            ("enter", "select"),
-            (left, "sections"),
-            ("esc", "back"),
-        ]
+        vec![("enter", "select"), (both, "value"), ("esc", "back")]
     };
     hint_row(cx, buf, &m, &hints);
     let count = format!("{} sections", sections.len());
@@ -7877,6 +8074,18 @@ fn boxed(cx: &Cx, buf: &mut Buffer, r: Rect, title: &str, bg: &str) {
 fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut HitMap) {
     hits.add(area, Target::Scrim);
     match &o.kind {
+        OverlayKind::Inspector(i) => {
+            let width = modal_box(area, MODAL_LARGE, 10).width.saturating_sub(4) as usize;
+            draw_context_detail(
+                cx,
+                buf,
+                area,
+                "Session inspector",
+                &i.text(width),
+                i.top,
+                hits,
+            );
+        }
         OverlayKind::Palette(p) => {
             let anchor = (p.mode == PaletteMode::RowMenu)
                 .then(|| hits.rect_of(&Target::SideRow(cx.app.cursor(cx.app.ui.tab))))
@@ -7915,7 +8124,149 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
         }
         OverlayKind::Usage { rows } => draw_usage(cx, buf, area, rows, hits),
         OverlayKind::Resources { top } => draw_resources(cx, buf, area, *top, hits),
+        OverlayKind::Projects(o) => draw_projects_overview(cx, buf, area, o, hits),
     }
+}
+
+/// The projects overview: every project in its saved order, with its active
+/// sessions as a tree, an archived toggle per project, and inactive projects
+/// in their own group.
+fn draw_projects_overview(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    o: &crate::ui::ProjectsOverview,
+    hits: &mut HitMap,
+) {
+    use crate::app::OverviewRow;
+    let a = cx.app;
+    let rows = a.overview_rows(o);
+    let b = modal_box(area, MODAL_LARGE, area.height.saturating_sub(4).min(44));
+    let m = modal(cx, buf, area, b, "Projects", hits);
+    let height = m.body.height as usize;
+    let top = o.top.min(rows.len().saturating_sub(height));
+    let muted = cx.st(MUTED, RAISED);
+    let secondary = cx.st(SECONDARY, RAISED);
+    let bold = cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD);
+    let branch = if cx.t.opts.ascii { "|-" } else { "├" };
+    let last = if cx.t.opts.ascii { "`-" } else { "└" };
+    let open = if cx.t.opts.ascii { "v" } else { "▾" };
+    let closed = if cx.t.opts.ascii { ">" } else { "▸" };
+    for (offset, row) in rows.iter().skip(top).take(height).enumerate() {
+        let index = top + offset;
+        let y = m.body.y + offset as u16;
+        let rect = Rect::new(m.r.x + 1, y, m.r.width.saturating_sub(2), 1);
+        let selected = index == o.cursor;
+        let mut line: Vec<Span<'static>> = Vec::new();
+        match row {
+            OverviewRow::Group(title) => {
+                line.push(Span::styled(
+                    title.to_string(),
+                    cx.st(MUTED, RAISED).add_modifier(Modifier::BOLD),
+                ));
+            }
+            OverviewRow::Project(id) => {
+                let name = a
+                    .state
+                    .model
+                    .projects
+                    .get(id)
+                    .map_or(id.as_str(), |p| p.name.as_str())
+                    .to_owned();
+                let status = a.project_status(id);
+                let label = match status {
+                    "passive" => "Passive",
+                    "inactive" => "Inactive",
+                    _ => "Current",
+                };
+                let tone = if status == "passive" { muted } else { bold };
+                line.push(Span::styled(name, tone));
+                line.push(Span::styled(format!("  · {label}"), muted));
+                if status == "inactive" {
+                    line.push(Span::styled("  · r restore", secondary));
+                }
+            }
+            OverviewRow::Empty(_) => {
+                line.push(Span::styled(format!("  {last} No active sessions"), muted));
+            }
+            OverviewRow::Session(id, archived) => {
+                let is_last = rows
+                    .iter()
+                    .skip(index + 1)
+                    .take_while(|r| !matches!(r, OverviewRow::Project(_) | OverviewRow::Group(_)))
+                    .next()
+                    .is_none();
+                let title = a
+                    .state
+                    .model
+                    .sessions
+                    .get(id)
+                    .map_or(id.as_str(), |s| s.title.as_str())
+                    .to_owned();
+                let state = if *archived {
+                    "archived"
+                } else {
+                    a.session_state(id)
+                };
+                let state_tone = match state {
+                    "running" => cx.st("status.info", RAISED),
+                    "needs input" => cx.st(MULTI, RAISED),
+                    "failed" => cx.st("status.error", RAISED),
+                    "finished" => cx.st("status.success", RAISED),
+                    "archived" => muted,
+                    _ => secondary,
+                };
+                line.push(Span::styled(
+                    if is_last {
+                        format!("  {last} ")
+                    } else {
+                        format!("  {branch} ")
+                    },
+                    muted,
+                ));
+                line.push(Span::styled(title, if *archived { muted } else { bold }));
+                line.push(Span::styled(format!(" · {state}"), state_tone));
+            }
+            OverviewRow::ArchivedToggle(id, count) => {
+                let expanded = o.archived.contains(id);
+                line.push(Span::styled(
+                    format!(
+                        "  {branch} {} {count} archived",
+                        if expanded { open } else { closed }
+                    ),
+                    muted,
+                ));
+            }
+        }
+        if selected {
+            clear(buf, rect, cx.st(PRIMARY, RAISED));
+            put(
+                buf,
+                rect.x,
+                y,
+                cx.t.structure("focus_bar"),
+                cx.st("interactive.focus", RAISED),
+                1,
+            );
+            for span in line.iter_mut() {
+                span.style = span.style.add_modifier(Modifier::BOLD);
+            }
+        }
+        draw_spans(cx, buf, m.x, y, &line, m.w);
+        hits.add(rect, Target::OverviewRow(index));
+    }
+    if rows.is_empty() {
+        put(buf, m.x, m.body.y, "No projects yet.", muted, m.w);
+    }
+    let hints = [
+        (updown(cx), "select"),
+        ("a", "archived"),
+        ("1/2/3", "current/passive/inactive"),
+        ("r", "restore"),
+        ("enter", "open"),
+        ("esc", "back"),
+    ];
+    hint_row(cx, buf, &m, &hints);
 }
 
 /// `/usage`: a heading per connected provider, then one row per limit window as
@@ -8486,6 +8837,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
     let mut hints = vec![];
     if p.mode == PaletteMode::Models {
         hints.push(("m", "info"));
+        hints.push(("tab", "favorite"));
     }
     if p.mode == PaletteMode::Sessions {
         hints.push(("tab", "scope"));

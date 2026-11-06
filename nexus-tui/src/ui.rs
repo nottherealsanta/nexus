@@ -188,6 +188,7 @@ pub struct ContextEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverlayKind {
+    Inspector(crate::inspector::Inspector),
     Palette(Palette),
     LearnChecklist(LearnChecklist),
     Notifications {
@@ -240,6 +241,29 @@ pub enum OverlayKind {
         top: usize,
         back: Option<usize>,
     },
+    /// Every project in its saved order, with active sessions and an archived
+    /// toggle per project. Inactive projects sit in their own group.
+    Projects(ProjectsOverview),
+}
+
+/// Selection and expansion of the projects overview.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProjectsOverview {
+    /// Index into `App::overview_rows`.
+    pub cursor: usize,
+    pub top: usize,
+    /// Projects whose archived sessions are expanded.
+    pub archived: std::collections::HashSet<String>,
+}
+
+/// A rail drag in progress: its source and current insertion target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RailDrag {
+    pub from: usize,
+    pub to: usize,
+    pub start_row: u16,
+    pub active: bool,
+    pub cancelled: bool,
 }
 
 /// One candidate returned by `/api/skill/preview`.
@@ -293,6 +317,11 @@ impl FileEdit {
 /// A deferred action that a confirm dialog performs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Confirmed {
+    ResumeArchived {
+        session: String,
+        mode: Option<String>,
+    },
+    Unarchive(String),
     /// Leave the editor and drop its unsaved text (K10).
     DiscardEdit,
     /// Read the file again and drop the unsaved text.
@@ -639,6 +668,11 @@ pub enum Target {
     CompletionRow(usize),
     /// A row of the settings list, by index into `App::settings_items`.
     SettingsRow(usize),
+    /// One option of a segmented Settings row, by row index and option position.
+    SettingsSegment {
+        row: usize,
+        option: usize,
+    },
     /// A section in Settings' left rail, by index into `App::settings_sections`.
     SettingsSection(usize),
     /// A selectable item on a Settings page, by position among the page's items.
@@ -657,6 +691,8 @@ pub enum Target {
     ManagerScrim,
     /// An unfocused Manager card: a click focuses it.
     ManagerCard,
+    /// One row of the projects overview.
+    OverviewRow(usize),
     /// Row `n` of a focused Manager card: a click opens the session.
     ManagerRow(usize),
 }

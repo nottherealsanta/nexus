@@ -72,8 +72,8 @@ describe("waiting card (D14)", () => {
     expect(app.shows("id:waiting-rail")).toBe(true);
     for (const id of ["allow-once", "allow-session", "deny", "deny-note"]) expect(app.shows(`id:${id}`)).toBe(true);
     expect(app.texts().includes("not offered by Core yet")).toBe(false);
-    // The harness cannot hold the event stream open, so Core reads as disconnected: the offered choices say so too.
-    expect(app.texts().filter((t) => t === "Core is not connected").length).toBeGreaterThan(0);
+    // The event stream reopens quietly, so Core stays live and the choices are offered normally.
+    expect(app.texts().filter((t) => t === "Core is not connected").length).toBe(0);
   });
 
   test("an edit approval shows a capped diff with the rest counted", async () => {
@@ -113,6 +113,8 @@ describe("alerts (D15)", () => {
   /** A palette command Core cannot do yet answers with a toast carrying its reason; the palette stays open, so a press repeats it. */
   const fire = async (app: any, id: string, times = 1) => {
     await app.keyboard.press("mod+p");
+    // Filter first: the unfiltered palette is longer than its viewport, and `waitFor` means visible.
+    await app.type("id:palette-input", id.split(".").pop()!.replace(/_/g, " "));
     await app.waitFor(`id:cmd-${id}`);
     for (let i = 0; i < times; i++) await app.press(`id:cmd-${id}`);
     await app.keyboard.press("escape");
@@ -122,13 +124,13 @@ describe("alerts (D15)", () => {
   test("toasts stack three high with +N more; clicking one opens the full text, Esc closes it", async () => {
     const app = await view(snapshot());
     await app.waitFor("id:rail-project-prj_1");
-    await fire(app, "app.sign_in", 4);
+    await fire(app, "composer.attach", 4);
     await app.waitFor("id:toasts-more");
     expect(app.count("id:toast")).toBe(3);
     expect(app.texts().includes("+1 more")).toBe(true);
     await app.press("id:toast-open >> nth=0");
     await app.waitFor("id:alert-detail");
-    expect(app.texts().some((t) => t.startsWith("Sign in to a provider:") && t.includes("use `nexus login` in a terminal."))).toBe(true);
+    expect(app.texts().some((t) => t.startsWith("Attach file or image:") && t.includes("Open a session first."))).toBe(true);
     expect(app.texts().includes("c copy · esc close")).toBe(true);
     await app.keyboard.press("escape");
     expect(app.shows("id:alert-detail")).toBe(false);
@@ -137,12 +139,12 @@ describe("alerts (D15)", () => {
   test("the notifications drawer opens the same dialog for an entry", async () => {
     const app = await view(snapshot());
     await app.waitFor("id:rail-project-prj_1");
-    await fire(app, "app.sign_out");
+    await fire(app, "composer.attach");
     await app.press("id:open-notifications");
     await app.waitFor("id:notification-open");
     await app.press("id:notification-open");
     await app.waitFor("id:alert-detail");
-    expect(app.texts().some((t) => t.includes("Sign-out over the API is not in Core yet."))).toBe(true);
+    expect(app.texts().some((t) => t.includes("Open a session first."))).toBe(true);
   });
 
   test("the banner is one 36 px strip with its action and the full text in its label", async () => {

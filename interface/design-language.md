@@ -25,10 +25,12 @@ NSH `ModalFooter`; input dialogs use the same footer as other modals. Settings s
 whole section or setting row (including its value). A white left bar marks the focused
 pane (a dark bar in the light theme); inactive selections retain their gray background. NSH uses
 the same fill for selected sections and hovered or keyboard-focused setting rows.
-Left returns focus from a setting or detail page to its section heading without
-changing the value; Up/Down then move among sections. Right changes values and Shift+Right steps backward, cycling
-model effort back to default after the final level. The search field retains normal
-caret movement. Settings uses a compact section rail with no empty rows between sections and keeps
+Settings values are segmented controls, as NSH draws them: the options sit in a quiet
+well at the row's end, with the current one on `interactive.selection`. In the TUI
+Left/Right move the focused segment (wrapping at the ends, as the old cycling did) and
+Tab or Esc returns focus to the section heading; in a detail page Left still returns to
+its heading. Shift+Right also steps a value backward, and model effort cycles back to
+default after the final level. The search field retains normal caret movement. Settings uses a compact section rail with no empty rows between sections and keeps
 its search and section rail visible while its rows scroll. This first pass establishes
 the shared geometry; a complete footer, focus and provider/tool-grid review is still
 tracked in PLAN.md 8.0.

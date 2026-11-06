@@ -223,7 +223,7 @@ describe("shell", () => {
     await app.press("id:session-ses_2");
     await app.waitFor("id:session-tab-ses_1");
     await app.waitFor("id:session-tab-ses_2");
-    await app.press("id:session-tab-ses_2");
+    // ses_2 is already viewed: pressing its title would rename it, as in the TUI.
     await app.press("id:tab-close-ses_2");
     expect(app.shows("id:session-tab-ses_2")).toBe(false);
     expect(app.shows("id:session-ses_2")).toBe(true);
@@ -271,7 +271,7 @@ describe("shell", () => {
     await app.press("id:send");
     await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/api/session")));
     const request = app.requests().find((r) => r.method === "POST" && r.url.endsWith("/api/session")) as any;
-    expect(request.body).toEqual({ project: "prj_1", agent: "review", model: "codex/gpt-5", effort: "high" });
+    expect(JSON.parse(request.body)).toEqual({ project: "prj_1", agent: "review", model: "codex/gpt-5", effort: "high" });
     // The created session's tab replaces the New session tab at once; it does not wait for
     // the session's event or detail read (which would flash the header back to New session).
     await app.waitFor("id:session-tab-ses_new");
@@ -284,7 +284,9 @@ describe("shell", () => {
     await app.waitFor("id:settings");
     const expected = (manifest.settings.section as readonly { id: string; label: string }[]).filter((s) => s.id !== "models").map((s) => s.label);
     const shown = app.texts().filter((t) => expected.includes(t));
-    expect(shown.slice(0, expected.length)).toEqual(expected);
+    // The header's Manager button shares its label with the Manager section: start at the rail.
+    const rail = shown.slice(shown.indexOf("Appearance"));
+    expect(rail.slice(0, expected.length)).toEqual(expected);
     expect(expected[0]).toBe("Appearance");
     expect(expected[expected.length - 1]).toBe("About");
   });
@@ -1076,15 +1078,20 @@ describe("sidebar row menus", () => {
 
   test("project row menu confirms removal with its session count; a disconnected Core blocks the delete", async () => {
     const child = { ...snapshot.sessions[0], id: "ses_child", title: "Child", parent_id: "ses_1", parent_call_id: "call_1" };
+    let info = 0;
     const app = await open("./App.tsx", {
       network: {
         ...core(),
+        // The first handshake answers; the stream ends and every reconnect is refused, so the view
+        // goes read-only while the project row is still there.
+        "GET */api/info": () => info++ === 0 ? { body: { name: "nexus", version: "0.10.0.dev0", pid: 1 } } : { status: 502, body: { error: "Core went away" } },
         "GET */api/snapshot*": { body: { ...snapshot, sessions: [snapshot.sessions[0], child] } },
         "DELETE */api/project/prj_1": { status: 204, body: null },
       },
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("id:rail-project-prj_1");
+    await app.waitUntil(() => app.texts().join(" ").includes("Disconnected from Core"));
     await app.keyboard.press("mod+3");
     await app.waitFor("id:project-prj_1");
     expect(app.shows("id:add-project")).toBe(true);
@@ -1135,6 +1142,10 @@ describe("Core-backed settings values", () => {
     expect(text().includes("Sign in with browser") && text().includes("Sign in with a device code")).toBe(true);
     expect(app.shows("id:provider-detail-browser") && app.shows("id:provider-detail-device")).toBe(true);
     await app.keyboard.press("escape");
+    // On the provider page the first Esc steps back to the section rail, then closes.
+    expect(app.texts().includes("esc back")).toBe(true);
+    await app.keyboard.press("escape");
+    expect(app.shows("id:settings")).toBe(true);
     expect(app.texts().includes("esc close")).toBe(true);
     await app.keyboard.press("escape");
     await app.waitUntil(() => !app.shows("id:settings"));
@@ -1159,6 +1170,8 @@ describe("Core-backed settings values", () => {
     expect(text().includes("←/→ sets this model's effort")).toBe(true);
     await app.keyboard.press("escape"); // back to the Agents list
     await app.waitFor("id:agent-row-plan");
+    await app.keyboard.press("escape"); // back to the section rail
+    expect(app.shows("id:settings")).toBe(true);
     await app.keyboard.press("escape"); // close Settings
     await app.waitUntil(() => !app.shows("id:settings"));
   });
@@ -1189,7 +1202,8 @@ describe("image paste and background shell context", () => {
     await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/prompt")));
     const req = app.requests().find((r) => r.method === "POST" && r.url.endsWith("/prompt"))!;
     const body = JSON.parse(req.body!);
-    expect(body.text).toBe("");
+    // The composer keeps the TUI's `[Image A]` marker in the text it sends; Core labels the image too.
+    expect(body.text).toBe("[Image A]");
     expect(body.images.length).toBe(1);
     expect(body.images[0].data_url.startsWith("data:image/png;base64,")).toBe(true);
     await app.waitUntil(() => !app.shows("id:image-previews"));

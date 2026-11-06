@@ -237,6 +237,10 @@ export async function loadDraftContext(project: string, force = false) {
 export const waitIndex = signal(0);
 export const tick = signal(Date.now());
 export const settingsSection = signal<string | null>(null);
+/** Whether the Settings section rail has focus (the pane is entered with Enter or a section press). */
+export const settingsNavFocused = signal(true);
+/** Whether a page section (Providers, Agents) is open in the pane; Esc from it returns to the rail. */
+export const settingsPageOpen = signal(false);
 /** The Settings search text; it filters the section rail and the selected pane. */
 export const settingsQuery = signal("");
 /** The agent detail page drilled into (`agents/<name>`); the section rail and page content come from `settingsSection`. */
@@ -251,6 +255,8 @@ export const themeChoice = signal<"system" | "light" | "dark">("system");
 export const prefs = signal<Record<string, boolean | number | string>>({});
 export type TimelineDetail = "low" | "medium" | "high";
 export const timelineDetail = signal<TimelineDetail>("medium");
+/** The timeline shows a subdued scroll bar while scrolling (`appearance.scrollbar`). */
+export const scrollBarOn = signal(true);
 /** Explicit open/closed state for timeline groups and tool details. */
 export const timelineOpen = signal<Record<string, boolean>>({});
 export const scrolledUp = signal(false);
@@ -358,11 +364,12 @@ export async function loadPrefs() {
       if (p.leftTab) leftTab.set(p.leftTab);
       const detail = p.timelineDetail ?? p.prefs?.["appearance.timeline_detail"];
       if (detail === "low" || detail === "medium" || detail === "high") timelineDetail.set(detail);
+      if (typeof p.scrollBar === "boolean") scrollBarOn.set(p.scrollBar);
     }
   } catch {}
 }
 export function savePrefs() {
-  try { void Storage.setItem("nexus.prefs", JSON.stringify({ prefs: prefs(), theme: themeChoice(), leftOpen: leftOpen(), rightOpen: rightOpen(), leftTab: leftTab(), timelineDetail: timelineDetail() })); } catch {}
+  try { void Storage.setItem("nexus.prefs", JSON.stringify({ prefs: prefs(), theme: themeChoice(), leftOpen: leftOpen(), rightOpen: rightOpen(), leftTab: leftTab(), timelineDetail: timelineDetail(), scrollBar: scrollBarOn() })); } catch {}
 }
 
 /** Notification sounds are on unless Settings turned them off. */
@@ -371,6 +378,11 @@ export function notificationSoundsOn(): boolean {
 }
 export function setNotificationSounds(on: boolean) {
   prefs.update((p) => ({ ...p, "notifications.sound": on }));
+  savePrefs();
+}
+
+export function setScrollBar(on: boolean) {
+  scrollBarOn.set(on);
   savePrefs();
 }
 
@@ -709,7 +721,7 @@ export function startApp() {
       loadComposerData();
     });
   } else {
-    void fetch("/__nexus/host").then((r) => r.json()).then((h) => {
+    void fetch(`${apiBase()}/__nexus/host`).then((r) => r.json()).then((h) => {
       host.canStart = !!h.canStart;
       if (typeof h.userHome === "string") userHome.set(h.userHome);
     }).catch(() => {});
@@ -790,7 +802,11 @@ function handleGlobalEvent(e: import("./core/api").CoreEvent) {
 }
 
 export type FileEntry = { name: string; kind: string; git_status?: string | null; ignored: boolean };
-export const fileListing = signal<{ path: string; entries: FileEntry[]; error?: string } | null>(null);
+/** One directory of the Files tree, read from Core; `""` is the project root. */
+export type FileDir = { entries: FileEntry[]; error?: string; loading?: boolean };
+export const fileTree = signal<{ project: string | null; dirs: Record<string, FileDir> }>({ project: null, dirs: {} });
+/** Expanded directories of the Files tree, by project-relative path. Kept while the tab is open. */
+export const filesExpanded = signal<ReadonlySet<string>>(new Set());
 /** The open project file. `draft` is set while editing (K10): the text in the editor, against `revision` as read. */
 export type OpenFile = { path: string; content?: string; revision?: string; error?: string; draft?: string; saving?: boolean; stale?: boolean; project?: string; session?: string };
 export const openFile = signal<OpenFile | null>(null);
@@ -805,26 +821,40 @@ export const isMarkdownPath = (path?: string) => !!path && /\.(md|markdown)$/i.t
 export const markdownFile = () => isMarkdownPath(openFile()?.path);
 export const fileDirty = () => { const f = openFile(); return !!f && f.draft !== undefined && f.draft !== f.content; };
 export const gitStatus = signal<{ session: string; data?: any; error?: string } | null>(null);
-let filesRequest = 0;
+const fileRequests = new Map<string, number>();
+/** Read one directory of the Files tree; expanding a folder keeps the ones already read. */
 export async function loadFiles(path = "") {
   const project = currentProject(), session = undefined;
-  if (!project) { fileListing.set(null); return; }
-  const seq = ++filesRequest;
-  fileListing.set(null);
+  if (!project) { fileTree.set({ project: null, dirs: {} }); filesExpanded.set(new Set()); return; }
+  if (fileTree().project !== project) { fileTree.set({ project, dirs: {} }); filesExpanded.set(new Set()); }
+  const seq = (fileRequests.get(path) ?? 0) + 1;
+  fileRequests.set(path, seq);
+  const put = (dir: FileDir) => {
+    if (currentProject() !== project || fileRequests.get(path) !== seq) return;
+    fileTree.update((tree) => ({ project, dirs: { ...tree.dirs, [path]: dir } }));
+  };
   try {
     const data = await request<{ path: string; entries: FileEntry[] }>("GET", `/api/project/${project}/files`, { query: { path, session } });
-    if (seq === filesRequest) fileListing.set(data);
-  } catch (e) { if (seq === filesRequest) fileListing.set({ path, entries: [], error: String(e) }); }
+    put({ entries: data.entries ?? [] });
+  } catch (e) { put({ entries: [], error: e instanceof Error ? e.message : String(e) }); }
 }
+/** Expand or collapse one Files tree folder; expanding reads it the first time. */
+export function toggleFileDir(path: string) {
+  const open = filesExpanded();
+  if (open.has(path)) { filesExpanded.set(new Set([...open].filter((p) => p !== path))); return; }
+  filesExpanded.set(new Set([...open, path]));
+  if (!fileTree().dirs[path]) void loadFiles(path);
+}
+let fileOpenRequest = 0;
 export async function showFile(path: string) {
   const project = currentProject(), session = undefined;
   if (!project) return;
-  const seq = ++filesRequest;
+  const seq = ++fileOpenRequest;
   openFile.set({ path, project, session }); centre.set("file"); drawer.set(null); fileFindOpen.set(false); fileSource.set(false);
   try {
     const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${project}/file`, { query: { path, session } });
-    if (seq === filesRequest) openFile.set({ path, project, session, content: data.content, revision: data.revision });
-  } catch (e) { if (seq === filesRequest) openFile.set({ path, project, session, error: String(e) }); }
+    if (seq === fileOpenRequest) openFile.set({ path, project, session, content: data.content, revision: data.revision });
+  } catch (e) { if (seq === fileOpenRequest) openFile.set({ path, project, session, error: String(e) }); }
 }
 /** Read the open file again; `keepEdit` leaves the editor open on the fresh text (reload), else a clean editor follows the file. */
 export async function reloadFile() {

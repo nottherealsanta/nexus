@@ -86,7 +86,8 @@ serialized, preserve comments, and replace the file atomically using a private
 temporary file. `config.changed` announces writes and outside edits detected
 by the daemon's two-second poll. Both clients reload Settings on that event.
 Shared `ui.detail` (`low`, `medium`, `high`) and `ui.reduced_motion` are
-read and written by both clients. Client layout preferences remain local.
+read and written by both clients. `ui.favorite_models` (list of `provider/model`) holds the
+model picker's favorites, which both pickers list first, even while filtering. Client layout preferences remain local.
 
 `[tools.permission]` holds permission rules, `"bash(git push*)" = "deny"`; see
 [tools.md](tools.md#permission-rules). Rules that do not parse are listed in `errors`
@@ -154,6 +155,14 @@ The Manager ([manager.md](manager.md)) is off until its soak passes.
 | `talk` | `"tap"` | tap to talk; hands-free comes later |
 
 There is no `stage` setting. The Manager's prompt and tool catalog are code and cannot be extended from a file.
+
+## `[web]`
+
+`search_url` is the SearXNG endpoint `web_search` calls (default
+`http://127.0.0.1:18765/search`). Settings → Tools shows whether it answers and can
+start the local service from `nexus-search/` when the URL is a local address
+(`GET /api/search/service`, `POST /api/search/service/start`). Core never starts it
+on its own.
 
 ## `[voice]` and `[speech]`
 

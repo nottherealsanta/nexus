@@ -123,6 +123,19 @@ sounds is the per-client switch; it is on by default. The TUI plays them through
 `rodio` in `nexus-tui/src/dictation.rs`; NSH uses Web Audio oscillators in
 `nexus-nsh/src/cues.ts`.
 
+## Transcript provenance
+
+When Nexus inserts a nonempty final dictation result, both clients prepend
+`[Voice transcript — may contain errors.]` to the draft, once per message. The
+note is visible and editable in the composer and remains ordinary message text
+in the context timeline and the model's input. It covers mixed typed/dictated
+messages too; empty, cancelled and failed transcriptions do not add it. Sending,
+queueing, retrying and recalling the message preserve the same note, without
+hidden model-only instructions. Clearing the draft clears the note.
+
+OS keyboard dictation usually arrives as ordinary text with no provenance flag,
+so Nexus cannot automatically identify it. Users can add the same note manually.
+
 ## TUI
 
 `/speak` (command `session.speak`, palette) plays the viewed session's latest answer:

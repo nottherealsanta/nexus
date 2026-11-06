@@ -1,0 +1,16 @@
+{
+  "session_id": "ses_inspector",
+  "view": "Timing",
+  "page": 0,
+  "more": true,
+  "generated": 110,
+  "cache": {"input": 1000, "cached": 750, "uncached": 250, "hit_percent": 75, "write": null, "models": {}},
+  "notes": ["Cache: selected session's lifetime provider reports; not a prediction of the next cache hit.", "Cache writes: unknown (not retained separately)."],
+  "text": "Retained request details",
+  "lanes": [
+    {"id": "root-turn", "session_id": "ses_inspector", "session": "Review", "kind": "turn", "label": "turn", "start": 100, "end": 110, "running": false, "status": "completed", "detail": "Root turn details"},
+    {"id": "root-model", "session_id": "ses_inspector", "session": "Review", "kind": "model", "label": "scripted/m", "start": 100, "end": 102, "running": false, "status": "completed", "detail": "Model request: 1000 input, 750 cached"},
+    {"id": "root-tool", "session_id": "ses_inspector", "session": "Review", "kind": "tool", "label": "bash", "start": 102, "end": 108, "running": false, "status": "error", "detail": "Tool failure details"},
+    {"id": "child-model", "session_id": "ses_child", "session": "Scout", "kind": "model", "label": "scripted/m", "start": 103, "end": 109, "running": true, "status": "started", "detail": "Parallel child request details"}
+  ]
+}

@@ -68,7 +68,9 @@ create table if not exists project (
   created real not null,
   updated real not null,
   revision integer not null default 1,
-  hidden integer not null default 0
+  hidden integer not null default 0,
+  position integer not null default 0,
+  status text not null default 'current'
 );
 create table if not exists session (
   id text primary key,
@@ -647,6 +649,8 @@ class Project:
     updated: float
     revision: int = 1
     hidden: int = 0  # 1 = the Manager's project; never listed (nexus/manager)
+    position: int = 0  # user-defined display order among the user's projects
+    status: str = "current"  # "current" | "passive" | "inactive"
 
 
 @dataclass(frozen=True, slots=True)
@@ -817,12 +821,27 @@ class Store:
                         "topic_seq": "integer not null default 0"},
             "message": {"origin": "text"},
         }
+        project_columns = {row["name"] for row in self.db.execute("pragma table_info(project)")}
+        added_order = "position" not in project_columns
         with self.db:
             for table, columns in wanted.items():
                 present = {row["name"] for row in self.db.execute(f"pragma table_info({table})")}
                 for name, definition in columns.items():
                     if name not in present:
                         self.db.execute(f"alter table {table} add column {name} {definition}")
+            project_columns = {row["name"] for row in self.db.execute("pragma table_info(project)")}
+            for name, definition in {
+                "position": "integer not null default 0",
+                "status": "text not null default 'current'",
+            }.items():
+                if name not in project_columns:
+                    self.db.execute(f"alter table project add column {name} {definition}")
+            if added_order:
+                # Existing projects keep their creation order as the initial order.
+                rows = self.db.execute(
+                    "select id from project where hidden = 0 order by created, id").fetchall()
+                for index, row in enumerate(rows):
+                    self.db.execute("update project set position = ? where id = ?", (index, row["id"]))
 
     def _recompute_storage_metrics(self) -> None:
         """Full reconciliation, reserved for a repair of an already-measured database."""
@@ -1044,35 +1063,82 @@ class Store:
         if row:
             return Project(**row), False
         now = time.time()
-        project = Project(new_id("prj"), resolved, name or Path(resolved).name or resolved, now, now, 1, int(hidden))
+        position = self.db.execute(
+            "select coalesce(max(position), -1) + 1 from project where hidden = 0").fetchone()[0]
+        project = Project(new_id("prj"), resolved, name or Path(resolved).name or resolved, now, now, 1,
+                          int(hidden), position, "current")
         with self.db:
-            self.db.execute("insert into project (id, path, name, created, updated, revision, hidden)"
-                            " values (?, ?, ?, ?, ?, 1, ?)",
-                            (project.id, project.path, project.name, now, now, int(hidden)))
+            self.db.execute(
+                "insert into project (id, path, name, created, updated, revision, hidden, position, status)"
+                " values (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+                (project.id, project.path, project.name, now, now, int(hidden), position, "current"))
         return project, True
 
     def projects(self, *, hidden: bool = False) -> list[Project]:
-        """The user's projects, newest first. `hidden=True` also returns the Manager's own project."""
+        """The user's projects in their saved order. `hidden=True` also returns the Manager's own project."""
         clause = "" if hidden else " where hidden = 0"
-        return [Project(**r) for r in self.db.execute(f"select * from project{clause} order by updated desc")]
+        return [Project(**r) for r in self.db.execute(
+            f"select * from project{clause} order by position, created, id")]
 
     def project(self, project_id: str) -> Project | None:
         row = self.db.execute("select * from project where id = ?", (project_id,)).fetchone()
         return Project(**row) if row else None
 
-    def update_project(self, project_id: str, *, name: str, expected_revision: int | None = None) -> Project | None:
+    def update_project(self, project_id: str, *, name: str | None = None, status: str | None = None,
+                       expected_revision: int | None = None) -> Project | None:
+        if name is None and status is None:
+            return self.project(project_id)
+        if status is not None and status not in ("current", "passive", "inactive"):
+            raise ValueError("project status must be 'current', 'passive' or 'inactive'")
+        fields, values = [], []
+        if name is not None:
+            fields.append("name = ?")
+            values.append(name)
+        if status is not None:
+            fields.append("status = ?")
+            values.append(status)
+        fields.append("updated = ?")
+        values.append(time.time())
+        fields.append("revision = revision + 1")
         with self.db:
             if expected_revision is not None:
                 row = self.db.execute(
-                    "update project set name = ?, updated = ?, revision = revision + 1"
-                    " where id = ? and revision = ?", (name, time.time(), project_id, expected_revision))
+                    f"update project set {', '.join(fields)} where id = ? and revision = ?",
+                    (*values, project_id, expected_revision))
             else:
                 row = self.db.execute(
-                    "update project set name = ?, updated = ?, revision = revision + 1 where id = ?",
-                    (name, time.time(), project_id))
+                    f"update project set {', '.join(fields)} where id = ?", (*values, project_id))
             if row.rowcount == 0:
                 return None
         return self.project(project_id)
+
+    def reorder_project(self, project_id: str, *, before: str | None = None, after: str | None = None,
+                        use_before: bool = True) -> list[Project]:
+        """Move one visible project before or after another, or to an end.
+
+        `use_before` says which key the caller supplied: `before=None` means the
+        end and `after=None` means the start. The order is applied against the
+        current rows, never a stale list from a client, and every visible project
+        is renumbered in one transaction.
+        """
+        with self.db:
+            rows = self.db.execute(
+                "select id from project where hidden = 0 order by position, created, id").fetchall()
+            ids = [row["id"] for row in rows]
+            if project_id not in ids:
+                raise ValueError(f"no project {project_id}")
+            neighbour = before if use_before else after
+            if neighbour is not None and neighbour not in ids:
+                raise ValueError(f"no project {neighbour}")
+            ids.remove(project_id)
+            if use_before:
+                index = len(ids) if before is None else ids.index(before)
+            else:
+                index = 0 if after is None else ids.index(after) + 1
+            ids.insert(index, project_id)
+            for position, id in enumerate(ids):
+                self.db.execute("update project set position = ? where id = ?", (position, id))
+        return self.projects()
 
     def delete_project(self, project_id: str) -> bool:
         with self.db:
@@ -2955,7 +3021,7 @@ class Store:
             floor = self.log_floor()
             generation = self.log_generation()
             projects = [dict(row) for row in self.db.execute(
-                "select * from project where hidden = 0 order by updated desc")]
+                "select * from project where hidden = 0 order by position, created, id")]
             sessions = [dict(row) for row in self.db.execute(
                 "select * from session where kind = 'user' order by updated desc")]
             out: dict[str, Any] = {

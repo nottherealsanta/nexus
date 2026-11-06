@@ -5,11 +5,12 @@ import { Heading, Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./moda
 import type { JSX } from "nsh";
 import { Btn, Empty, IconButton, T, TS, FOCUS } from "./kit";
 import { availability, closeLearnChecklist, commands, escape, installLearnChecklist, keyLabel, renameSession, run, Cmd } from "../commands";
-import { addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, notifications, paletteOpen, picker, selectProject, toast, unread, renaming, viewed } from "../store";
+import { patchConfig, config, addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, notifications, paletteOpen, picker, selectProject, toast, unread, renaming, viewed } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { LeftSidebar } from "./sidebar";
 import { RightSidebar } from "./right";
 import { defaultSkillSelection, selectedSkillCounts } from "../skills-mcp";
+import { structure } from "../gen/theme";
 
 // --- command palette ---------------------------------------------------------------------------
 export function Palette() {
@@ -63,6 +64,7 @@ function PaletteBody() {
                     <If when={heading()}><Text class={`px-3 ${TS.base} font-semibold uppercase text-muted-foreground ${i() === 0 ? "pb-1" : "pt-3 pb-1"}`} testID={`palette-group-${paletteGroup(c().category)}`}>{paletteGroup(c().category)}</Text></If>
                     <Button onPress={() => pick(c())} selected={idx() === i()} accessibilityLabel={`${c().title}${dis() ? `, unavailable: ${it().a.reason}` : ""}`} testID={`cmd-${c().id}`}
                       class={`group/row relative rounded-none px-3 py-0.5 min-h-7 justify-center hover:bg-accent ${idx() === i() ? "bg-selection" : ""} ${FOCUS}`}>
+                      <If when={idx() === i()}><Text class={`absolute left-0 ${TS.base} text-foreground`} accessible={false}>{structure.focus_bar.unicode}</Text></If>
                       <View class="flex-row items-center gap-3">
                         <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${dis() ? "text-muted-foreground" : "text-popover-foreground"}`}>{dis() ? `${c().title} · ${it().a.reason}` : c().title}</Text>
                         <Text class={T.meta}>{keyLabel(c()) ?? ""}</Text>
@@ -99,9 +101,20 @@ function PickerBody() {
   const p = () => picker()!;
   const query = signal("");
   const idx = signal(0);
+  const isModels = () => p().title === "Change model";
+  const favorites = () => (isModels() ? ((config()?.values?.ui?.favorite_models ?? []) as string[]) : []);
   const filtered = () => {
     const q = query();
-    return p().items.filter((it) => fuzzyMatch(q, it.label) || fuzzyMatch(q, it.id) || fuzzyMatch(q, it.hint ?? ""));
+    const rows = p().items.filter((it) => fuzzyMatch(q, it.label) || fuzzyMatch(q, it.id) || fuzzyMatch(q, it.hint ?? ""));
+    if (!isModels()) return rows;
+    const fav = favorites();
+    return [...rows.filter((it) => fav.includes(it.id)), ...rows.filter((it) => !fav.includes(it.id))];
+  };
+  const toggleFavorite = () => {
+    const id = chosen()?.id;
+    if (!isModels() || !id) return;
+    const fav = favorites();
+    void patchConfig("ui.favorite_models", fav.includes(id) ? fav.filter((f) => f !== id) : [...fav, id]);
   };
   const clamp = (n: number) => Math.max(0, Math.min(filtered().length - 1, n));
   const chosen = () => filtered()[clamp(idx())];
@@ -115,6 +128,7 @@ function PickerBody() {
   const keys = [
     keymap.bind("down", () => idx.set(clamp(idx() + 1)), { when: "always" }),
     keymap.bind("up", () => idx.set(clamp(idx() - 1)), { when: "always" }),
+    ...(p().title === "Change model" ? [keymap.bind("tab", toggleFavorite, { when: "always" })] : []),
   ];
   void keys;
   return (
@@ -135,7 +149,7 @@ function PickerBody() {
                   <Button onPress={() => choose(it())} selected={idx() === clamp(i())} accessibilityLabel={it().label} testID={`pick-${i()}`}
                     class={`group/row relative rounded-none px-3 min-h-8 justify-center hover:bg-accent ${idx() === clamp(i()) ? "bg-selection" : ""} ${FOCUS}`}>
                     <View class="flex-row items-center gap-3">
-                      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{it().label}</Text>
+                      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{favorites().includes(it().id) ? `★ ${it().label}` : it().label}</Text>
                       <If when={!!it().hint}><Text style={{ numberOfLines: 1 }} class={`${TS.base} text-muted-foreground tabular-nums`}>{it().hint}</Text></If>
                     </View>
                   </Button>
@@ -153,7 +167,7 @@ function PickerBody() {
             </Each>
           </View>
         </If>
-        <ModalFooter hints="↑↓ move · enter choose · esc close" right={filtered().length ? `${clamp(idx()) + 1} of ${filtered().length}` : undefined} />
+        <ModalFooter hints={isModels() ? "↑↓ move · tab favorite · enter choose · esc close" : "↑↓ move · enter choose · esc close"} right={filtered().length ? `${clamp(idx()) + 1} of ${filtered().length}` : undefined} />
       </View>
     </Modal>
   );
@@ -323,7 +337,7 @@ function AddProjectBody() {
 // --- drawers (narrow layout) -------------------------------------------------------------------------
 /** Narrow layouts: a sidebar is a drawer over the centre column. It starts below the header, so both toggles (the
  * navigation anchors) stay visible and usable; Esc closes it through the manifest's escape chain (rule `drawer`).
- * Built from plain views because NSH 0.3.0's `Sheet` breaks Escape routing for dialogs opened after it (README "Gaps"),
+ * Built from plain views because NSH's `Sheet` breaks Escape routing for dialogs opened after it (README "Gaps"),
  * and a `Dialog` would cover the header. */
 function EdgeDrawer(p: { side: "left" | "right"; width: number; label: string; children?: JSX.Element }) {
   return (

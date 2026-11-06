@@ -4,10 +4,11 @@ import { Button, ContextMenu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/ba
 import { Btn, Empty, Icon, IconButton, Status, AttentionMark, T, TS, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
 import { manifest } from "../gen/manifest";
 import { availability, byId, commands, keyLabel, newSession, run, toggleLeft } from "../commands";
-import { archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, phone, phonePage, width } from "../store";
+import { archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
-import { fileListing, loadFiles, openFile, showFile } from "../store";
+import { fileTree, filesExpanded, loadFiles, openFile, showFile, toggleFileDir } from "../store";
+import { fileRows } from "../file-tree";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
 import { ProjectMcpPanel } from "./project-mcp";
@@ -69,7 +70,6 @@ export function LeftSidebar(p: { drawer?: boolean }) {
           onPress={() => run("app.settings")} testID="open-settings" accessibilityLabel="Settings" selected={centre() === "settings"}
           class={`flex-row items-center gap-2 rounded-(--radius) px-2 hover:bg-accent ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}
         >
-          <Icon name="settings" />
           <Text class={`flex-1 ${TS.base} text-foreground`}>Settings</Text>
           <Text class={T.meta}>{hint("app.settings") ?? ""}</Text>
         </Button>
@@ -261,7 +261,7 @@ export function SessionsTab() {
         </View>
         <View class={`w-full flex-row items-center gap-2 px-2 ${phone ? "h-11 bg-raised" : "h-8 bg-hover"}`}>
           <Icon name="search" size={14} class="tint-muted-foreground" />
-          <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`h-full flex-1 min-w-0 rounded-none px-0 ${TS.base} text-foreground placeholder:text-muted-foreground ${phone ? "bg-raised" : "bg-hover"}`} />
+          <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder={leftSidebarWidth() < 220 ? "Search" : "Search sessions"} accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`h-full flex-1 min-w-0 rounded-none px-0 ${TS.base} text-foreground placeholder:text-muted-foreground ${phone ? "bg-raised" : "bg-hover"}`} />
           <If when={!!hint("session.switch") && !phone}>
             <View class="shrink-0 items-center justify-center" style={{ pointerEvents: "none" }} accessible={false}>
               <Text class={T.meta} testID="session-search-key">{hint("session.switch")!}</Text>
@@ -325,6 +325,8 @@ function SessionRow(p: { s: () => Session }) {
   // Under a project heading the name is already above the row: show the branch, as the project scope does.
   const place = () => {
     const tree = worktreeForDirectory(s().directory, projectWorktrees()[s().project_id]);
+    // The branch where Core reports one, else the linked checkout's folder; all-projects rows
+    // sit under a project heading, so the project is never repeated here.
     return tree?.branch ? `⌥ ${tree.branch}` : (tree?.path && tree.main === false ? tree.path.replace(/\/$/, "").split("/").pop() : "") || "";
   };
   const ref = () => ({ kind: "session" as const, id: s().id });
@@ -415,44 +417,35 @@ function RowMenuItems(p: { row: () => SidebarRowTarget }) {
 
 const GIT_TONE: Record<string, string> = { M: "text-warning", A: "text-success", D: "text-error", "?": "text-muted-foreground" };
 function FilesTab() {
-  const currentPath = () => {
-    const path = fileListing()?.path ?? "";
-    return path;
-  };
+  effect(() => { const p = currentProject(); if (p && fileTree().project !== p) void loadFiles(); });
+  const rows = () => fileRows(fileTree().dirs, filesExpanded());
+  const root = () => fileTree().dirs[""];
   const isOpen = (path: string) => { m(); return openFile()?.path === path; };
+  const branch = () => currentWorktree()?.branch ?? "";
   return <Scroll class="flex-1">
-    <If when={fileListing()} else={<Text class={`${T.sec} p-4`}>Loading files…</Text>}>
+    <If when={root() || fileTree().project} else={<Text class={`${T.sec} p-4`}>Loading files…</Text>}>
       {() => <View class="p-2">
         <View class="flex-row items-center gap-2 px-2 pb-2" testID="files-header">
           <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} font-medium text-foreground`}>{currentProject() ? projectName(currentProject()!) : "Files"}</Text>
+          <If when={!!branch()}><Text style={{ numberOfLines: 1 }} class={T.meta}>{`⌥ ${branch()}`}</Text></If>
         </View>
-        <If when={fileListing()!.path}>
-          <Button onPress={() => void loadFiles(currentPath().split("/").slice(0, -1).join("/"))} accessibilityLabel="Parent directory" testID="file-parent"
-            class={`flex-row items-center gap-1.5 h-7 rounded-(--radius) px-2 hover:bg-accent ${FOCUS}`}>
-            <Icon name="arrow-left" size={12} class="tint-muted-foreground" />
-            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.meta}`}>{currentPath()}</Text>
-          </Button>
-        </If>
-        <If when={fileListing()!.error}><Text class={`${T.sec} px-2`}>{fileListing()!.error}</Text></If>
-        <If when={!fileListing()!.error && fileListing()!.entries.length === 0}><Text class={`${T.sec} px-2 pt-1`} testID="files-empty">This folder is empty.</Text></If>
-        <Each of={fileListing()!.entries} key={(entry) => entry.name}>{(entry) =>
-          <Button onPress={() => { const path = [fileListing()!.path, entry().name].filter(Boolean).join("/"); if (entry().kind === "directory") void loadFiles(path); else if (entry().kind === "file") void showFile(path); }}
-            accessibilityLabel={entry().name} testID={`file-entry-${entry().name}`}
-            class={`flex-row items-center gap-1.5 h-7 rounded-(--radius) px-2 hover:bg-accent ${isOpen([fileListing()!.path, entry().name].filter(Boolean).join("/")) ? "bg-selection" : ""} ${FOCUS}`}>
+        <If when={root()?.error}><Text class={`${T.sec} px-2`}>{root()!.error!}</Text></If>
+        <If when={!root()?.error && rows().length === 0}><Text class={`${T.sec} px-2 pt-1`} testID="files-empty">This folder is empty.</Text></If>
+        <Each of={rows()} key={(row) => row.path}>{(row) =>
+          <View style={{ paddingLeft: 8 + row().depth * 16 }}>
+          <Button onPress={() => { const r = row(); if (r.kind === "directory") toggleFileDir(r.path); else if (r.kind === "file") void showFile(r.path); }}
+            accessibilityLabel={row().name} testID={`file-entry-${row().path}`}
+            class={`flex-row items-center gap-1.5 h-7 rounded-(--radius) pr-2 hover:bg-accent ${isOpen(row().path) ? "bg-selection" : ""} ${FOCUS}`}>
             <View class="w-3.5 shrink-0 items-center justify-center">
-              <If when={entry().kind === "directory"}><Icon name="chevron-right" size={14} class="tint-muted-foreground" /></If>
+              <If when={row().kind === "directory"}><Text class={`${TS.base} text-muted-foreground`}>{row().expanded ? fold.open.unicode : fold.closed.unicode}</Text></If>
+              <If when={row().kind === "error"}><Text class={`${TS.base} text-error`}>✕</Text></If>
             </View>
-            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${entry().ignored ? "text-faint" : "text-foreground"}`}>{entry().name}</Text>
+            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${row().kind === "directory" ? `${TS.base} font-medium text-foreground` : row().ignored ? `${TS.base} text-faint` : `${TS.base} text-foreground`}`}>{row().name}</Text>
             <View class="w-4 shrink-0 items-center justify-end">
-              <If when={!!entry().git_status}>
-                <If when={entry().kind === "directory"} else={
-                  <Text class={`${TS.base} font-medium ${GIT_TONE[(entry().git_status ?? "").trim().slice(-1)] ?? "text-muted-foreground"}`}>{(entry().git_status ?? "").trim().slice(-1)}</Text>
-                }>
-                  <View class="size-1.5 rounded-full bg-warning" accessibilityLabel="changed" />
-                </If>
-              </If>
+              <If when={!!row().git_status && row().kind !== "directory"}><Text class={`${TS.base} font-medium ${GIT_TONE[(row().git_status ?? "").trim().slice(-1)] ?? "text-muted-foreground"}`}>{(row().git_status ?? "").trim().slice(-1)}</Text></If>
             </View>
           </Button>
+          </View>
         }</Each>
       </View>}
     </If>

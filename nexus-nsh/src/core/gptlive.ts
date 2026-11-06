@@ -116,6 +116,11 @@ export class Jitter {
   reset() { this.nextStart = 0; }
 }
 
+/** A binary audio frame; a test realm's (or a WebView's) `ArrayBuffer` is not `instanceof` this realm's. */
+function isBinary(data: unknown): data is ArrayBuffer {
+  return data instanceof ArrayBuffer || Object.prototype.toString.call(data) === "[object ArrayBuffer]";
+}
+
 function play(c: Call, data: ArrayBuffer) {
   const pcm = new Int16Array(data, 0, Math.floor(data.byteLength / 2));
   if (!pcm.length) return;
@@ -175,8 +180,8 @@ export async function startGptLive(streamId: string, onLost: (why: string) => vo
     const next: Call = { socket: ws, stream, context, capture, inLevel, outLevel, sources: new Set(), jitter: new Jitter(), muted: false,
       samples: { in: new Float32Array(inLevel.fftSize), out: new Float32Array(outLevel.fftSize) } };
     call = next;
-    capture.port!.onmessage = (m) => { if (!next.muted && ws.readyState === 1 && m.data instanceof ArrayBuffer) ws.send(m.data); };
-    ws.onmessage = (m) => { if (m.data instanceof ArrayBuffer) play(next, m.data); };
+    capture.port!.onmessage = (m) => { if (!next.muted && ws.readyState === 1 && isBinary(m.data)) ws.send(m.data); };
+    ws.onmessage = (m) => { if (isBinary(m.data)) play(next, m.data); };
     ws.onerror = null;
     ws.onclose = () => { if (call === next) { stopGptLive(); onLost("The voice connection to Core closed."); } };
   } catch (error) {

@@ -12,12 +12,28 @@ sidebar/fold/tool glyphs, a monospace interface and compact full-width reading
 gutters on terminal, web and native targets. This does not change the Rust client's
 existing layout or controls.
 
+**Open inspector** now opens the native inspector modal, shared with NSH,
+instead of a browser. Views: `1` Timing (Gantt with parallel descendants), `2`
+Conversation, `3` Steps, `4` Requests, `5` Raw. The header shows the selected
+session's lifetime input/cached/uncached tokens and cache-hit percentage;
+unreported usage and cache writes say unknown. `r` refreshes the snapshot,
+`n`/`p` page older/newer, `+`/`-` zoom, `h`/`l` pan, `j`/`k` select a timing
+lane, Enter toggles its retained JSON, `c` copies, arrows/Page Up/Page Down
+scroll, Esc closes without changing the session or draft.
+See [the inspector guide](../docs/inspector.md).
+
 A new session's first message appears immediately below its context preview as
 `You · Sending…`, without waiting for MCP startup. The chosen agent/model/tool
 settings remain visible until Core's message and starting history arrive, avoiding
 a default-header flash. Pending text is local submission state, not model context;
 failed creation restores the new-session draft, and failed submission after creation
 restores it in the created session. Creation opens the tab before prompt submission.
+
+Final dictation adds the editable note `[Voice transcript — may contain errors.]`
+at the top of the composer, once per message (including mixed typed/dictated
+drafts). The same note stays in the sent context and model input. Empty or
+cancelled dictation does not mark a draft; OS keyboard dictation cannot be
+identified automatically. See [Voice](../docs/voice.md#transcript-provenance).
 
 **Status (PLAN.md Steps 12.3 and most of 12.4):** the keyboard-first shell is
 usable against a real Core: workspace header, both sidebars, session view, waiting
@@ -55,6 +71,10 @@ selection it falls back to its newest unarchived root session or an empty new-se
 view. New-session composer text and images are kept separately per project, for the
 client process. The left sidebar (D03) lists the current project only (`ctrl+k` opens
 the switcher). Its archive icon above the search shortcut includes archived sessions alongside active sessions when enabled.
+You can type and send in an archived session: **Resume archived session** warns
+that a large uncached context may be slower and cost more, and that code kernels
+restart fresh. Cancel keeps the draft; Resume unarchives the whole tree before
+sending. Explicit Unarchive shows the same warning without sending a message.
 The list has `⌥ branch  ~/…/dir`
 sub-groups for linked worktrees, and two-line rows (mark slot, title, time;
 `⌥ branch`, `2 ↳`) ending with `+ New session`, whose label starts on the session titles' text edge; `Settings` is pinned at the bottom.
@@ -143,9 +163,11 @@ shared rules.
 Settings is that modal, 88 cells wide, with a search field and two panes. The
 left rail lists every section on consecutive rows; the right pane shows the selected section, a
 provider list or an agent page. ↑/↓ stays inside the focused pane, Enter or →
-leaves the rail, Right changes a value, Left returns to the section heading, Tab swaps panes and Esc steps back to the
-rail and then closes. Typing filters both the rail and the rows. Rows that
-cannot be changed are not shipped rather than shown disabled.
+leaves the rail, Tab swaps panes and Esc steps back to the rail and then closes.
+Choice and switch rows draw the same segmented control as NSH; ←/→ move the
+focused segment (wrapping at the ends, so Enter still cycles a switch). Typing
+filters both the rail and the rows. Rows that cannot be changed are not shipped
+rather than shown disabled.
 `/login` opens Providers. Providers: Enter opens that provider's detail modal;
 its connection actions live there, one row per method Core lists (`Sign in with
 browser`, `Sign in with a device code`, the provider's CLI or local server). A
@@ -347,7 +369,10 @@ its text has scrolled off the top, `sticky.rs` pins a copy under
 the header (three rows at most, a `░` shade row with `↑ N lines of this turn
 above`); the next band pushes it up and a click scrolls back. The timeline keeps one
 scroll per session and adopts it after a sync-driven selection, so a root's pinned
-band never appears over a child. The turn footer is
+band never appears over a child. While the reader scrolls, a subdued
+`interactive.scrollbar` bar shows in the timeline's right gutter and fades out after
+about a second; Settings → Appearance → Scroll bar turns it off. It never takes
+content space or shifts the layout. The turn footer is
 the right-aligned `▪ Agent · models · effort · tools · duration · tokens · cost`
 row with no end status or continue hint: a failed turn puts its first error line
 (`✕`) above, and the usage units (`i`, `o`, `r`, `c`) are fainter than their
@@ -508,6 +533,12 @@ the words in the draft (Esc again while transcribing discards them); typing any
 key stops the capture and the key still applies. The final transcript replaces
 the preview at the position where recording began, ahead of anything typed
 since. Capture is capped at 120 seconds.
+
+Settings → **Tools** shows the **Web search service** (the local SearXNG behind
+`web_search`: running, stopped, not set up or unavailable, with its address and
+runtime) and a **Start web search** row, also in the palette as `search.start`.
+Starting calls `POST /api/search/service/start` (Apple `container`, else Docker)
+and waits until it answers. The status refreshes when Settings opens.
 
 Settings → **Voice and speech** reads both model statuses from Core, including
 the state, Hugging Face repository, human-readable size, cache path and any
@@ -802,8 +833,8 @@ with a brighter highlight over secondary text. Reduced motion keeps the label st
 
 Settings sections have no gaps between rows. Selected sections and setting rows use a
 neutral gray highlight across the entire row, including its value. A white left bar marks the focused pane (dark in the light theme);
-Left returns focus to the section heading without changing the setting. Shift+Right
-steps a value backward; Right advances it.
+←/→ move the focused segment; Tab returns focus to the section heading without
+changing the setting. Shift+Right steps a value backward; Right advances it.
 
 Live starts the microphone before reporting audio ready. Its echo guard follows audible playback and a short echo tail; continuous silent output does not mute capture. Expected speaker shutdown is quiet.
 

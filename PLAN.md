@@ -28,16 +28,18 @@ was only reviewed statically, or only tested offline, says so.
 | Area | State | Next |
 | --- | --- | --- |
 | Release 0.10.0 | Published 2026-10-30 | Release PR #98 (`release 0.11.0`) is open; see [1](#1-release-and-installation) |
-| **Tests and lint** | **Red locally:** 7 TUI and 3 Core tests fail, TUI fmt and clippy fail, 5 NSH browser tests fail | [0](#0-make-the-tests-green) first |
+| **Tests and lint** | **Red locally:** 7 TUI and 3 Core tests fail, TUI fmt and clippy fail, 2 NSH browser tests fail (11-06: 277/279 pass) | [0](#0-make-the-tests-green) first |
 | CI | Red on `main`, NSH not in CI. **Deferred by the user (2026-11-04): do not work on CI for now** | [Deferred](#deferred-ci-user-decision-2026-11-04) |
 | Turn summaries | Steps 0–6, 8 and 9 done; 7 partly done. Live partials verified with two TUI joins and shared client tests | Remaining step 7 verification and full NSH app checks — [5](#5-turn-summaries) |
 | TUI render performance | Phases 1–3 done, phase 4 partly | Only if a profile asks for it — [6](#6-tui-render-performance-and-launch-time) |
 | NSH Void design | Mostly complete; both passes done, since made square (radius 0) | Two open questions — [8.4](#84-nsh-void-design-leftovers) |
 | Polish | Modal first pass, compact Settings navigation/focus and brighter Working shimmer done in both clients | Finish modal audit; scroll model, tab/subagent spinners, group fold, iOS — [8.0](#80-polish-user-review-2026-11-04) |
-| Editor, explorer, Git page | Steps 0–1 done, step 2 in progress. The TUI app still edits in the plain `Composer` buffer; the vendored editor is used only by `examples/editor_demo.rs`. NSH's Files tab is one directory at a time; no Git tab in either client | Wire the vendored editor into the TUI — [4](#4-file-explorer-file-editor-and-git-page) |
+| Editor, explorer, Git page | Steps 0–1 done, step 2 in progress. The TUI app still edits in the plain `Composer` buffer; the vendored editor is used only by `examples/editor_demo.rs`. NSH's Files tab is now the TUI's expanding tree; no Git tab in either client | Wire the vendored editor into the TUI — [4](#4-file-explorer-file-editor-and-git-page) |
+| NSH terminal (`nexus nsh tui`) | Launcher, NSH 0.4.0 CLI, parity pass and the 0.4.0 test-host fixes done; the web suite is green except the documented matcher gaps | Remaining visual differences listed in [8.2](#82-nsh) |
+| Inspector follow-up, integrated terminal and browser (11-06) | Native inspector first pass landed; terminal/browser are planned, not built | Local baseline → inspector hardening → shared resource contract → interactive terminal → browser; scope/security/rendering gates in [14](#14-inspector-hardening-integrated-terminal-and-browser) |
 | Manager | M1–M5 implemented; a real TUI GPT-Live conversation with delegated search/read tools worked (11-04). Audio/context polish built; the header indicator is a gray braille wave field with Stop-on-hover for Live and a dimmed app behind the panel (11-05); latest sound quality not yet listening-verified | Remaining spikes, real-model evals, native/iOS audio, long-call reliability and hands-free — [3](#3-manager) |
 | Mermaid (Manager step 0) | Done in both clients | Real terminal image-protocol check, screenshots — [3.2](#32-mermaid-verification) |
-| Settings | Compact two-pane dialog; gray selections, white active-pane bar, Left returns to headings; focused checks and screenshots done | Real sign-ins, provider/tool-grid review, native/full browser coverage — [8.3](#83-settings) |
+| Settings | Compact two-pane dialog; gray selections, white active-pane bar, segmented values (←/→ in the TUI, Tab/Esc to headings); focused checks and screenshots done | Real sign-ins, provider/tool-grid review, native/full browser coverage — [8.3](#83-settings) |
 | Providers | Codex, Copilot, Grok, OpenCode, Claude (Agent SDK) work | OpenAI and Ollama real calls; Anthropic Messages, Gemini — [10](#10-providers) |
 | Event storage | Shared request components, live-only deltas with client checkpoints, finished-session compaction and incremental reclamation implemented; offline scratch copy 178.2 MB → 2.37 MB | Deployment and any real-home compaction remain explicit follow-up — [13](#13-event-storage-harden-finished-sessions-into-messages-and-flush-their-events) |
 
@@ -64,11 +66,51 @@ merge (comments and docs). Repeat this table when the tree is green again.
 
 Local machine problems found on the way (not repo bugs): Homebrew `node` failed to load `libuv.1.dylib` (fixed by
 the user, 2026-11-04); Homebrew Python 3.14.7 cannot import `sqlite3` (missing `libsqlite3.dylib`), so `uv run pytest` errors at collection
-with that interpreter (python.org 3.14.5 works); `~/.nsh/bin/nsh` is 0.2.0 while NSH needs the 0.3.0 source build at
-`09c1632`; the wasm test build needs `llvm-ar` (`rustup component add llvm-tools`, `AR_wasm32_unknown_unknown`),
+with that interpreter (python.org 3.14.5 works); `~/.nsh/bin/nsh` was 0.2.0 and is now the NSH 0.4.0 source build at
+`3789a45` (`nsh --version` prints `0.4.0 (3789a45)`); the wasm test build needs `llvm-ar` (`rustup component add llvm-tools`, `AR_wasm32_unknown_unknown`),
 because Apple's `ar` produces a broken archive.
 
 ## Landed
+
+- **Interrupt order and resuming sub agents (11-06).** Seen in `ses_1a1ae77940ddcbfb915`. (1) `Runtime.interrupt` cancelled descendants before the session itself, so a parent waiting on `session` got the child's "interrupted" report as an ordinary result, took in a steer that had been queued an hour earlier, and sent another request before its own cancel landed. Its timeline read tool result → steer → `interrupted`. The session is now cancelled first: the parent stops inside the call, the steer stays queued, and the dangling `session` result names the interrupted child. (2) The orchestrator started a new build child instead of resuming the interrupted one, and shelved the old task. An interrupted or failed child's report, and the parent-interrupt result, now say the child is idle with its conversation and should be continued with `message_session`, and `orchestrate.md` prefers continuing a child whose task the work belongs to, and treats an interrupted task as unfinished. Two regression tests in `tests/test_children.py`; the ordering test fails on the old order with a second parent request. Core suite: 1190 passed.
+
+- **Voice transcript provenance (11-06).** Both clients add the editable note `[Voice transcript — may contain errors.]` once when inserting nonempty final dictation. It is visible in the composer and retained verbatim in the context timeline and model input, including mixed typed/dictated messages. Empty results do not mark drafts; OS keyboard dictation cannot be identified automatically. Shared scenario: two TUI integration checks and eight NSH browser checks pass; composer/timeline screenshots compared in `reports/voice-transcript/`. Full TUI run retains 14 failures in Markdown, Manager, shell and timeline amid concurrent UI work; NSH type check retains the known `app.clock` and `Button.onFocus` errors. No real microphone or provider call was used.
+
+- **Settings segmented values, the shared scroll bar, and the approved composer difference (11-06).** The user decided the three remaining NSH-vs-TUI differences. (1) NSH keeps its composer voice and send buttons; the TUI has none. This is a client-specific difference approved on 11-06 and recorded in the porting ledger. (2) Both clients now have a shared **Scroll bar** option (Settings › Appearance, default on, client scope in the shared manifest): a subdued `interactive.scrollbar` thumb appears in the timeline's right gutter only while the reader scrolls, dims, and hides after about a second. It is overlay drawing, so it takes no content space and does not shift layout. The TUI uses `SCROLLBAR_VISIBLE`/`SCROLLBAR_FADE` on its shared tick and skips programmatic settling; NSH ignores opening/auto-follow/restored offsets and suppresses the first 300 ms of layout settling. The colour is in `interface/theme.toml` with 256/ANSI-16/monochrome fallbacks and a `check_theme.py` presence check. (3) The TUI's Settings choice/toggle rows now draw NSH's segmented control instead of a right-aligned value; ←/→ move the focused segment (wrapping, so Enter still cycles a switch), Tab/Esc return to the rail, and the existing Esc page → rail → close stepping is unchanged. The old cycling-difference row is gone from 8.2 and the NSH README. Validation: TUI shell tests for the scroll bar and segmented controls pass; NSH `timeline-scroll.test.tsx` is 6/6 and `timeline-layout`, `terminal-parity` and `i7` pass except the pre-existing picker-footer wording check. `nsh check` retains only the known `app.clock` and `Button.onFocus` errors; shared manifest/theme checks pass. Total coverage depends on the full suites in the report. Remaining open decision: upstream-framed modals.
+
+- **Native inspector, prompt-cache metrics and execution Gantt (11-06).** Both clients' inspector actions now open a read-only native modal over the existing authenticated API, with Timing, Conversation, Steps, Requests and Raw views. The Gantt shares an absolute axis across turns, model requests, tools, attempts and descendants; zoom, pan, selection/details, copy, refresh and older/newer pages are available in both. Cache counts come from the selected session's durable ledger, with input/cached/uncached and hit percentage; writes and unreported values explicitly say unknown. Shared scenario: 37 focused Core checks, two Rust inspector checks and four NSH browser checks pass; NSH web packaging and shared manifest/theme checks pass. Screenshots compared in `reports/inspector/`. Full Rust run has 15 failures outside inspector (Markdown, Manager, shell and timeline; concurrent UI work was present); NSH check retains the existing `app.clock` and `Button.onFocus` errors. These are refreshable snapshots, not auto-updating timelines; standalone browser Questions/kernel/live controls remain available. No real-home migration, provider calls or Core restart.
+
+- **TUI Manager audio-output startup (11-06).** Live, pipeline speech and notification cues now share a system-buffer output opener, with format fallback restricted to the selected device. Reproduced the screenshot's failure on real hardware: Rodio requested 2,048 frames against a supported 15–960 range; the patched opener succeeds at 48 kHz stereo. Hardware regression check and 24 focused Live/speech/dictation tests pass (two other device tests remain ignored). No provider call or listening-quality verification; NSH's Web Audio path is unchanged.
+
+- **NSH 0.4.0 test host, Settings Esc, Files tree and the scroll model (11-06).** The NSH suite is green except two
+  documented tests. Root causes and fixes: (1) the app realm's `location` is `about:blank`, so `open`'s network
+  stubs never saw the app's relative URLs and the browser hit the dev server's 404; the web `apiBase()` is now
+  `document.baseURI`'s origin and the bare host/start fetches are absolute. (2) `src/dictation.ts` imported
+  `Microphone` statically, so tests importing `src/` could not load `nexus/native`; it now looks the module up at
+  call time (`nativeModule`), as Mermaid does. (3) A cleanly ended event stream reopened with a "Disconnected"
+  flash and reloaded the selected history on every reconnect; it now reopens quietly at once, keeps the view live,
+  and reloads history only for a genuinely new stream, a restart or a resync. Settings Esc now steps back one level
+  at a time (provider/agent detail → page → section rail → close) with the TUI's segmented hint row. The Files tab
+  is the TUI's expanding tree (`src/file-tree.ts`, kept expanded state, `.git` hidden, branch/project header). The
+  timeline keeps per-session offsets and viewport height, restores a session where it was left, never yanks a
+  reader who scrolled up (`src/scroll-follow.ts`), and anchors the first visible row when heights above it change.
+  Also: the TUI's `▣` archived-filter glyph is shared in `theme.toml`, sidebar rows show the branch or linked
+  checkout folder, the session-tab wrapper is explicitly `flex-row`, and the right sidebar's context bar falls back
+  to the newest request and the catalog window like the TUI's composer. Tests updated for 0.4.0 semantics (body
+  strings, missing `toBeCloseTo`, off-screen palette `waitFor`, live Core in the approval card, the TUI's image
+  markers, stale tab/rename and model-picker fixtures). Validation: web suite **279 tests, 277 passed, 2 failed
+  (9m 42s)** against 206/120/86 before; remaining failures are `child-navigation-parity.test.tsx` "choosing a
+  sibling in the strip" (the sibling tab's press does not reach the app) and `void-second-pass.test.tsx` "the
+  working row steps aside while this session waits" (pressing a busy session row in that multi-session fixture
+  leaves no selection). File-tree and scroll tests pass; `nsh check` reports only the known `app.clock` and
+  `Button.onFocus` errors; shared manifest/theme checks pass; the TUI builds and terminal cell frames were compared
+  with `--dump-frame` at 120×36 and 80×24. No `nexus migrate`; all Cores used scratch `NEXUS10_HOME`s. The
+  items that need a user decision (composer voice/send buttons, upstream-framed modals and the timeline scroll bar,
+  Settings segmented controls) were left alone.
+
+- **Resume archived sessions (11-06).** Both clients accept a draft while archived and ask **Resume archived session**, warning about slower, more expensive uncached large context and fresh code kernels. Cancel preserves the draft; Resume unarchives the root tree before sending. Explicit Unarchive also warns without sending. Shared scenario and focused client tests cover cancellation, ordered resume and tree targeting; screenshots compared in `reports/resume-archived/`. Full TUI and NSH type checks retain unrelated failures (see the report).
+
+- **NSH 0.4.0 About and terminal parity (11-05).** The installed source CLI was still 0.3.0 at `09c1632` (`nsh --version`), so the pinned 0.4.0 revision `3789a45` was fetched and built; About now reads `NSH 0.4.0` and `settings-about.test.tsx` covers it. In the terminal backend the sidebar uses the shared `⌕` search control glyph from `theme.toml` (the TUI now reads that glyph there instead of hardcoding it), key hints use the TUI spellings (`ctrl+k`, `ctrl+,`) and the manifest's `keys.tui` bindings are live next to `keys.nsh`, the sidebar footer drops its decorative gear, the Settings active-pane marker is the `▌` cell glyph where a 2 px bar cannot be drawn, and the command palette's selected row carries the same `▌` focus bar as the TUI. `terminal-parity.test.tsx` checks the glyph, labels, the `ctrl+k` switcher and `ctrl+,` Settings bindings, and the footer. Validation: both new tests pass under `--target tui` and `--target web`; `timeline-layout`, `parity`, `chrome-polish` and the Rust shell/theme/palette tests pass (their documented pre-existing failures unchanged); the Core launcher tests pass; `nsh check` reports only the known `app.clock`, `toBeCloseTo` and `Button.onFocus` errors; shared manifest/theme checks pass. Terminal cell frames and matching Rust frames are in `reports/nsh-tui-parity/`. Full web suite: see the 83-failure note in 8.2 (mock request stubs return HTTP 404 under the 0.4.0 test host; `thought.test.tsx` fails the same way alone). No separate terminal layout was added; remaining visual differences are listed in 8.2.
 
 - **Shared NSH terminal-style UI (11-05).** All NSH targets now use Unicode text control icons (sidebar/fold/tool glyphs generated from the shared theme), Monaspace Argon, full-width reading columns with fixed 8 px outer/inner gutters, and a tighter composer. Session search uses an ordinary row instead of overlapping absolute elements. Narrow web/desktop headers use one flexible title, like the Rust TUI, and no longer lose half their width to a redundant spacer. Phone navigation, touch sizes and mobile exclusions remain unchanged. Validation: six focused terminal-backend tests pass; web packaging and shared manifest/theme checks pass. Fresh NSH terminal preview launched on port 8795 and inspected without sending a prompt. Rust TUI suite: 772 passed, seven documented pre-existing failures, seven ignored. Web-target layout tests: three pure checks and the narrow-header check pass; two app checks fail with the existing HTTP 404 network-stub issue. Normal headless attempt timed out during startup. `nsh check` retains the existing `Button.onFocus` and test typing errors. Screenshots compared in `reports/nsh-tui-parity/`: Rust new-session, NSH terminal-cell rendering, wide/narrow packaged web. Native macOS/iOS not rebuilt or device-tested in this pass. No separate terminal-only NSH layout was introduced.
 
@@ -178,6 +220,25 @@ The record of what is done, newest first. Details are in the docs and the ledger
 ## TODO
 
 Items are grouped by area. Each says what "done" means where it is not obvious.
+
+**Next implementation sequence (2026-11-06, user request):** stabilize the local baseline (0), finish the
+native inspector as a usable diagnostic surface (14.1), then build a real interactive terminal (14.3)
+and an integrated browser (14.4) on a shared resource contract (14.2). This is a plan, not approval to
+restart the running Core, install browser engines, expose remote shells or change mobile scope.
+
+| Order | Deliverable | Exit gate |
+| --- | --- | --- |
+| 0 | Local baseline and short renderer spikes | Failures classified/fixed under section 0; browser/terminal rendering and security decisions recorded before committing to a backend |
+| 1 | Inspector hardening | Live refresh without losing position, readable diagnostics, trustworthy cache/timing evidence and bounded loading in both clients |
+| 2 | Shared workspace resource contract | Ownership, access, lifecycle, reconnect, input arbitration and model-context rules tested in Core |
+| 3 | Interactive terminal MVP | Open a shell in the chosen workspace, run an interactive program, resize, detach/reconnect and explicitly terminate it in both clients |
+| 4 | Integrated browser MVP | Both clients view and operate the same Core-owned page, including a local development server, without sharing a personal browser profile |
+| 5 | Agent handoff and cross-tool polish | Explicit evidence capture and approved agent actions; inspector traces and resource cleanup verified end to end |
+
+The terminal precedes the browser implementation because it establishes resource ownership and streaming
+with fewer browser-specific uncertainties. Run the browser feasibility spike early; do not discover an
+unworkable TUI or NSH rendering path after building its backend. Detailed tasks and acceptance checks are
+in [14](#14-inspector-hardening-integrated-terminal-and-browser).
 
 ### 0. Make the tests green
 
@@ -398,8 +459,11 @@ the model: no timeline notices and no new agent tools. No new auth.
 
 **Step 3, explorer and live updates:**
 
-- [ ] NSH's Files tab becomes the TUI's expanding tree, keeping expanded state. Checked 2026-11-04: `FilesTab`
-  (`sidebar.tsx:421`) lists one path with a Parent button and the same chevron on every folder.
+- [x] NSH's Files tab is the TUI's expanding tree, keeping expanded state (2026-11-06): `src/file-tree.ts`
+  flattens depth-first through expanded folders and skips `.git`, as `App::file_rows` does; `loadFiles` keeps one
+  Core listing per directory and `toggleFileDir` expands or collapses in place. The project name and current branch
+  head the pane, folders carry the shared fold glyphs and indent two cells per depth, ignored files stay faint, and
+  a file's Git letter sits at the row's end. Expanded folders survive tab switches and reset on a project change.
 - [ ] Sidebar tabs: the manifest (`interface/manifest.toml:187–196`) lists only Sessions and Files, while NSH's
   `leftTab` also has `projects`; the manifest already names `sidebar.git`, `focus.git_file` and `git.open_diff` with
   no UI behind them. Make the manifest and both clients agree when the Git tab lands.
@@ -606,6 +670,12 @@ The Void design is mostly complete. What the user called out next (2026-11-04): 
 interaction model, scrolling (the sent message at the top; NSH must stop yanking the reader), new spinners, the
 old Nexus tool-group fold, pending steer/queue rows, a general polish pass, and the iOS app.
 
+##### Session heading row (2026-11-06)
+
+- [x] TUI and NSH: an open session's page starts with a black one-row heading with the full title of its tab
+  (wide layouts, root of the viewed session; not Settings or New session). TUI verified in a frame; NSH written
+  but not yet run (no browser for `nsh test`). Ledger row added.
+
 ##### Modals and Settings: first pass done in both clients (2026-11-04)
 
 Completed:
@@ -621,9 +691,15 @@ Completed:
 - [x] Keep the current section and setting selected with a neutral gray background across
   the whole row, including the right-aligned value. A **white left bar identifies the
   focused pane**; the inactive selection keeps its gray fill. Light mode uses a dark bar.
-- [x] **Left returns focus to the section heading without changing a value.** Up/Down then
-  navigate sections. Right changes values; Shift+Right steps backward. Model effort can
-  cycle from the last level back to default. Keys and colors live in the shared manifest/theme.
+- [x] **Value rows are segmented controls, as NSH draws them** (2026-11-06; supersedes the
+  2026-11-04 Left-returns rule). ←/→ move the focused segment in the TUI (wrapping, so
+  Enter still cycles a switch); Tab or Esc returns to the section rail without changing a
+  value, and Esc steps page → rail → close. Detail pages still reserve Left for their
+  heading. Shift+Right steps a value backward, and model effort can cycle from the last
+  level back to default. Keys and colors live in the shared manifest/theme.
+- [x] **A shared auto-hiding timeline scroll bar** (2026-11-06): `interactive.scrollbar`,
+  Settings › Appearance › Scroll bar (default on), shown only while scrolling and hidden
+  after about a second in both clients.
 - [x] Record the shared rules in `interface/design-language.md`, update both client READMEs
   and the porting ledger, and add `interface/scenarios/settings-focus.json` plus the
   browser regression check `nexus-nsh/e2e/modal-layout.mjs`.
@@ -775,9 +851,12 @@ Likely causes of report 1 in NSH (`nexus-nsh/src/ui/timeline.tsx`), from the 11-
 - The sticky band's geometry (~1118–1160) uses estimated heights for unmeasured rows, so the band can jump.
 - `scrollEventThrottle={64}` (~1476) delays follow transitions.
 
-- [ ] Implement the model in NSH: replace the `keepEnd` on every `rows()`/`rowHeights()` change with explicit
-  follow state; anchor on the first visible row when heights change; make `viewH` per session; restore the per-session
-  offset on a switch; pin on send with the spacer.
+- [x] Implement the model in NSH (2026-11-06): one follow decision (`src/scroll-follow.ts`) leaves follow on any
+  upward scroll above the end, so streaming content never yanks a reader; only scrolling back to the end or the jump
+  resumes it. Viewport height and end-of-list state are per session; a session opens at its end the first time and at
+  its saved offset afterwards (applied again as rows measure). Height changes above the viewport keep the first
+  visible row anchored. Tests: `timeline-scroll.test.tsx` covers scrolled-away restore, the no-yank rule and the
+  pure follow decision. The first-send pin with a spacer is still to do.
 - [ ] Implement the same model in the TUI (`sticky.rs`, `layout.rs` follow/anchor, the jump pill) and check its
   current behaviour against it.
 - [ ] Tests in both clients: stream while scrolled up (the view must not move); stop just short of the end; send
@@ -945,19 +1024,38 @@ rename, confirm, usage, alerts, image preview, annotate, Manager stage, edge dra
 
 #### 8.2 NSH
 
-- [ ] **NSH tests that import `src/` directly** (`App`, `i8`, `context-header`, `voice-settings`; `editor` now
+- [x] **NSH tests that import `src/` directly** (`App`, `i8`, `context-header`, `voice-settings`; `editor` now
   loads) cannot load `nexus/native` under `nsh test`, because `commands` reaches the statically imported microphone
-  module. Fix
-  that (lazy native lookup, as Mermaid now does) before relying on them.
-- [ ] **Browser suite:** fix the mock event stream ending and forcing the app into reconnecting state (confirmed
-  2026-11-04: many tests show "Disconnected from Core · reconnecting in 1 s" yet pass). The 2026-11-04 run: 157
-  tests, 152 passed, 5 failed (the four load failures above and `i7.test.tsx`, item 0); 6 min 09 s. `nsh test --target web` needs an explicit Playwright
-  Chromium path on this machine (`--browser <path>`). Then add coverage for: Enter/Tab steer and queue and the
-  pending-input stack, steer numbering, new-session skills/MCP rows, the usage modal, Settings search, key entry,
-  link/code rows and Agents edits, child-session picker navigation, project tab isolation.
-- [ ] **Design parity:** new-session view, files, narrow layouts and states; sidebar search handling and live
-  shimmer; sidebar rows show project or branch where available; verify Monaspace Argon prose rendering natively.
-  Then build the macOS desktop bundle and complete files, Git and worktree UI (section 4).
+  module. Fixed 2026-11-06: `src/dictation.ts` looks the microphone up with `nativeModule("nexus/native")` at call
+  time (as Mermaid does) and treats a missing module as no capture, so the tests that import `src/` load.
+- [x] **Browser suite:** fixed 2026-11-06. The 0.4.0 web test host did not answer `open`'s routes for the app's
+  requests: the app realm's `location` is `about:blank`, so relative URLs could not be resolved by the test's
+  network shim and went to the browser, which returned the dev server's `HTTP 404`. `apiBase()` now uses
+  `document.baseURI`'s origin on the web, and the bare host/start fetches are absolute too. A stream that ends
+  without an error reconnects quietly instead of flashing the read-only state between two streams, and a
+  reconnect only reloads the selected history for a genuinely new stream. `nsh test --target web` still needs an
+  explicit Playwright Chromium path on this machine (`--browser <path>`). Before the fix (11-06, 0.4.0): 206
+  tests, 120 passed, 86 failed (8 min 45 s); the count and the remaining failures are in the Landed entry.
+  Remaining coverage to add: Enter/Tab steer
+  and queue and the pending-input stack, steer numbering, new-session skills/MCP rows, the usage modal, Settings
+  search, key entry, link/code rows and Agents edits, child-session picker navigation, project tab isolation.
+- [ ] **Design parity:** files (done: expanding tree, kept expanded state), sidebar rows now show the branch, the
+  linked checkout's folder, or the project name in the one-project list. Left: new-session view and narrow-layout
+  states in the terminal compared frame by frame; sidebar search handling and live shimmer; verify Monaspace Argon
+  prose rendering natively. Then build the macOS desktop bundle and complete files, Git and worktree UI (section 4).
+- [ ] **Terminal-backend parity (`nexus nsh tui`).** Done in the 11-05 pass: the shared `⌕` search control glyph
+  (the TUI no longer hardcodes it), TUI key spellings in the terminal (`ctrl+k`, `ctrl+,`), the TUI keys bound
+  alongside the NSH ones, the sidebar footer without a decorative gear, the Settings focus bar as `▌` cells, and the palette's selected row with the shared `▌` bar. Done in the 11-06 pass: the Files tree, the TUI's
+  `▣` archived-filter glyph (now shared in `theme.toml` and read by the TUI too), branch/project labels in the
+  sidebar rows, Settings Esc stepping back one level at a time (page → rail → close, with the TUI's segmented hint
+  row), the timeline's per-session scroll restore with no yank while streaming, the shared auto-hiding timeline
+  scroll bar, and Settings value controls that are segmented in both clients.
+  Remaining visual differences: (a) the composer keeps the voice and send buttons where `nexus tui` has none —
+  client-specific and approved by the user 2026-11-06 (ledger row), with the buttons kept in NSH; (b) upstream
+  frames modals, which still needs a decision. The scroll bar and Settings segmented-control differences are
+  resolved. A live run against a scratch `NEXUS10_HOME` is still blocked by NSH's native discovery (it reads
+  `~/.nexus/daemon.json` and its FS grant is bound to the real home); the terminal frames came from
+  `nsh test --target tui` screenshots.
 - [ ] Make NSH tool-result images zoomable.
 - [ ] Native mic: in-app capture stays web/TUI until the NSH runtime gains audio input; the mic button points to
   iOS keyboard dictation meanwhile.
@@ -1228,12 +1326,201 @@ an explicit `events_compacted` marker and only retained events; old clients reco
 validity non-contiguous, so the floor and compaction semantics must be documented; 13.3 changes the stored wire
 format, so readers must handle both during the transition.
 
+### 14. Inspector hardening, integrated terminal and browser
+
+**Status:** planning only, except the native inspector first pass already recorded in Landed.
+User requested a starting plan and an integrated browser and terminal (2026-11-06). Here **terminal**
+means a real interactive shell inside Nexus, not the existing `nexus nsh tui` launcher or a list of bash
+jobs. **Browser** means viewing and interacting with actual pages inside Nexus, not another web-search
+tool or merely opening a URL in an external browser. These interpretations are working assumptions;
+confirm them at the first design review.
+
+#### 14.0 Boundaries and first review
+
+- [ ] **Inventory and baseline.** Recheck the current tree rather than relying on the dated health table.
+  Run focused inspector tests, local Core/TUI/NSH checks and section 0's failing suites; record which
+  failures are pre-existing, concurrent or introduced. Fix the relevant blockers before implementation;
+  keep CI deferred. Use scratch homes and scripted providers, never a migration of the real home.
+- [ ] **Read/reuse deliberately.** Start with `docs/inspector.md`, `docs/api.md`, `docs/daemon.md`,
+  `docs/tools.md`, `docs/mcp.md`, `nexus-core/nexus/bash_jobs.py` and `nexus-browser/README.md`.
+  Review `ZMX_plan.md`: its external-CLI subagent workers may reuse PTY primitives, but this terminal
+  does not enable ZMX mode, change vendor permissions or turn a user shell into an agent backend.
+  Preserve the current bash-job and MCP browser-use contracts.
+- [ ] **Rendering spikes before architecture lock-in.** Prove a PTY running an alternate-screen program
+  in both clients, and a real browser page with scrolling, typing and a click in both clients. Evaluate
+  maintained terminal parsers/renderers and Chromium automation/streaming; measure whether NSH's actual
+  renderer/native bridge can host them, rather than assuming DOM widgets work in TSX. Record dependency,
+  licensing, packaging and platform constraints; do not write a terminal emulator or browser engine.
+- [ ] **Approve scope and differences.** Both TUI and NSH must provide the same operations and resource
+  state. NSH web/macOS are the proposed first targets alongside the Rust TUI; mobile inclusion or
+  deferral is still a user decision, not an inherited file-editor exclusion. Prove terminal graphics
+  browser rendering and define a usable non-graphics-terminal path. If a TUI text/screenshot fallback
+  loses capabilities, stop for explicit approval and a ledger row before implementing that difference.
+
+#### 14.1 Make the inspector dependable first
+
+The current modal is a read-only, manually refreshed projection. Keep it working while improving it;
+do not remove the standalone browser inspector until its useful functions have native equivalents.
+
+- [ ] **Shared navigation and readable views.** Preserve selection, zoom, expanded details and scroll
+  while refreshing or switching back. Add a session/tree selector and search/filter by request, tool,
+  status and event type. Render structured summaries with expandable exact JSON rather than making
+  long JSON dumps the only way to understand Conversation, Steps or Requests. Bring pending/replied
+  Questions and links to existing kernel/job details into the native inspector. Keep canonical model
+  context distinct from diagnostic partials and resource views.
+- [ ] **Incremental live data.** Use existing session events to invalidate only affected inspector data;
+  coalesce refreshes and cancel/ignore stale requests on navigation or close. Reuse durable cursors and
+  explicit snapshot resync on overflow/retention changes. No second unbounded event log, no repeated
+  full-tree fetch per token, and no background refresh while the inspector is closed. Keep a visible
+  paused/live/disconnected state and manual Refresh; an offline view must not look current.
+- [ ] **Stable, bounded loading.** Replace offset-only paging with documented stable boundaries/cursors
+  so new turns cannot duplicate or skip older pages. Bound server queries and response bytes, avoid
+  loading every message to show one page, virtualize long client lists and load large JSON on demand.
+  Announce omitted sessions/lanes/bytes and expired diagnostics; provide a way to inspect the omitted
+  records, not just a permanent truncation notice. Profile a large seeded session/tree before choosing
+  budgets, then commit repeatable request-count, memory and render-latency regression checks.
+- [ ] **Cache accounting.** Keep lifetime/session, selected-call and displayed-range totals separately
+  labelled. Show per-model breakdowns, explicit unknown/partial coverage and the exact hit-rate
+  denominator; do not double-count retries, child sessions or cumulative provider updates. Investigate
+  provider-reported cache-read/cache-write fields end to end before adding storage. Only show cache
+  writes, TTL/expiry or cost savings when actually measured/supported; otherwise retain unknown, and
+  never infer provider cache validity from a recent request timestamp. Version any codec/storage change
+  and keep old sessions readable.
+- [ ] **Gantt v2.** Retain one shared axis and stable session/request/call IDs. Add useful lane grouping,
+  collapse/filter, fit-to-range, a clear ruler, selected-range zoom and details linking back to the exact
+  request or tool. Show retries, waiting intervals and TTFB markers only where recorded; label unknown
+  spans. Capture nested `code` call timings prospectively if feasible, with monotonic duration and wall
+  timestamps, not reconstructed guesses. Preserve selection as new rows arrive. Verify overlapping
+  subagents, zero-length operations, failures, interruptions, long idle gaps and clock changes.
+- [ ] **Exit gate.** Shared scenarios and Core/client tests cover refresh races, pagination under writes,
+  retention/resync, cache totals and truthful timing. Compare screenshots and keyboard/mouse behavior
+  in both clients, including narrow layouts and large histories. Run a real local Core smoke test only
+  in an isolated home; no provider call is required. Update both READMEs and the inspector/API docs.
+
+#### 14.2 Shared workspace resource contract
+
+- [ ] **Resource model and authority.** Define Core-owned terminal/browser resources with opaque IDs,
+  project/workspace identity, creator, optional session association, status, timestamps and explicit
+  create/attach/detach/close actions. Clients are viewers/controllers, not process owners. A session
+  changing directory must not silently move an existing shell or browser; new resources use the chosen
+  workspace and existing ones show their actual location/association.
+- [ ] **API and streaming design.** Specify authenticated resource metadata/control endpoints and a
+  versioned data stream, separately from the conversation SSE log. Include sequence numbers, bounded
+  replay/checkpoints, explicit gap/resync messages, backpressure and read-only attachment. Keep raw
+  PTY output and browser frames out of durable session-event rows. Input actions need IDs/acknowledgments
+  so reconnect/retry never repeats a command, click or form submission.
+- [ ] **One active writer.** Allow multiple viewers but give only one user/client/agent explicit control
+  at a time. Show who owns control; handoff/revocation is explicit and auditable. Reject stale resize,
+  pointer and keyboard input from an old attachment. A disconnect releases control according to the
+  documented lease policy; it never silently transfers control to an agent.
+- [ ] **Lifecycle, limits and security.** Decide idle limits, concurrent-resource limits, archive/delete
+  behavior and graceful shutdown before coding. Closing a panel is detach, not kill; explicit Close
+  terminates a resource. For the first version, a Core restart may end processes/contexts but must mark
+  them ended/interrupted, never pretend to resume them. Test orphan cleanup. Guard stream origins,
+  attachment authorization and cross-project access; do not expose a remote shell or authenticated
+  browser over the existing tokenless non-loopback mode without an approved access model.
+- [ ] **Visible context boundary.** A terminal/browser panel is a workspace resource, not another chat
+  timeline. Opening it or viewing its output does not automatically feed the model. Explicitly attached
+  output, page extracts and screenshots become normal visible messages/tool results with provenance,
+  clipping and untrusted-content treatment. Separate UI resource-management APIs/control tools from
+  workspace task actions; do not add task tools that mutate Nexus sessions, models or workspace state.
+- [ ] **Shared shell placement.** Design a shared workspace panel with Terminal/Browser tabs, a resource
+  list, split/expand/collapse and focus return, using the existing file-panel/layout machinery where
+  appropriate. Keep the session composer draft and scroll unchanged when switching. Put commands and
+  shortcuts in `interface/manifest.toml`; arbitrate terminal/browser input versus global shortcuts, IME,
+  mouse, copy/paste and Esc without sending a keystroke to both the resource and Nexus.
+
+#### 14.3 Integrated terminal MVP
+
+- [ ] **Core PTY service.** Add a dedicated resource service (proposed
+  `nexus-core/nexus/terminals.py`) for shell spawning in the selected workspace, terminal dimensions,
+  environment, process groups, binary-safe I/O and resize. Preserve UTF-8 split across chunks and
+  arbitrary terminal control bytes. Set a defined terminal type; support signals, exit codes and
+  graceful-close/force-stop. Do not repurpose `bash_output`'s combined text buffer as a PTY.
+- [ ] **Shared terminal semantics.** Choose a maintained VT parser/screen checkpoint representation
+  and compatible renderers for NSH and Rust. Verify colors, Unicode/wide characters, cursor movement,
+  scrollback, alternate screen, bracketed paste and interactive programs (`less`, an editor, a shell
+  prompt). Bound scrollback and queued bytes; announce discarded history. Disable or gate terminal
+  escape features that write the clipboard, access files, or launch URLs without the user's action.
+- [ ] **User interaction.** Open/list/rename/switch/close terminals; show cwd/workspace, running/exited
+  status and active controller. Support selection/copy/paste, resize, Ctrl+C and focus handoff. Warn
+  before terminating a running shell/process. Detach/reconnect restores a bounded screen checkpoint
+  plus subsequent bytes without replaying input. First version is user-operated; agent raw typing is
+  deferred until the authority model in 14.5 is settled.
+- [ ] **Exit gate.** Tests run real PTYs against an isolated workspace: shell input/output, interactive
+  alternate screen, resize, split byte sequences, high-volume output, two clients, control contention,
+  disconnect/reconnect, exit, close and Core shutdown. Compare both clients' screens and input behavior.
+  A terminal is not done if it only renders line-oriented command output.
+
+#### 14.4 Integrated browser MVP
+
+- [ ] **One actual browser, not two unrelated renderings.** Choose a Core-owned managed Chromium context
+  per workspace/browser resource. Prefer displaying that same page through a bounded frame stream and
+  shared input/navigation API in both clients; investigate NSH native/web embedding only if it preserves
+  the same page identity and automation target. Do not use an arbitrary-site iframe as the architecture:
+  frame restrictions, cookies and cross-origin rules make it an unreliable browser.
+- [ ] **Browser worker and profile isolation.** Keep browser launch/render/automation off Core's main
+  event loop. Use dedicated Nexus profiles with a documented lifetime and user-controlled clearing;
+  never attach a personal Chrome profile or import its cookies by default. Handle engine missing,
+  launch failure, page crash and worker loss visibly. Propose installation/download UX before adding
+  automatic downloads. Keep browser binaries and cache out of session storage.
+- [ ] **Minimum complete navigation.** Address bar, back/forward, reload/stop, tabs, active URL/title,
+  loading/error state, scrolling, click, keyboard/text entry, selection and explicit Open externally.
+  Handle redirects and popups without losing track of the active page. Coordinate input with frame
+  revision/viewport/DPI to prevent stale-frame clicks and show when a frame is out of date. Use a
+  responsive stream rate with idle suspension and bounded queues, not screenshots in the event log.
+- [ ] **Local previews and safe boundaries.** Support a dev server on the Core machine, including when
+  NSH is remote; explain that `localhost` is Core's, not the phone/browser host's. Reuse existing network
+  checks where applicable and explicitly define the separate opt-in policy needed for local/private
+  addresses. Do not weaken `web_fetch`'s public-only policy. Gate file URLs, external protocols, file
+  uploads/download destinations, camera/microphone/location, clipboard and popups; reject access outside
+  the approved policy. Existing authenticated pages may contain private data: attaching their contents
+  to a model is always an explicit, visible action.
+- [ ] **Reuse automation rather than launch a second browser.** Review the pinned browser-use MCP
+  integration in `nexus-browser/`. Establish whether it can target the exact managed context/tab, with
+  stable IDs and explicit control ownership. If it cannot, design an adapter or expose the limitation;
+  do not show one page while tools operate another. Preserve current MCP users and keep any LLM-backed
+  browser helper's model access, data sharing and cost disclosed and opt-in.
+- [ ] **Exit gate.** Use a local fixture website (no external sign-in) with navigation, forms, scrolling,
+  tabs, redirects, downloads and deliberate errors. Verify the exact same page state from NSH, TUI and
+  the automation adapter; test remote-Core localhost access, reconnect, stale-frame input, profile
+  isolation and denied capabilities. Compare screenshots and interaction tests in both clients.
+
+#### 14.5 Agent handoff, inspector links and release gate
+
+- [ ] **Explicit evidence capture first.** Add user actions to attach selected terminal output, a page
+  extract or a screenshot to the current draft. Preview the exact payload, source resource and omitted
+  bytes/lines before sending. The user's normal send commits it into canonical context; live panel
+  refreshes must never silently replace content already sent to a provider.
+- [ ] **Agent control only after policy review.** Classify terminal commands, raw keystrokes, browser
+  navigation/form actions and credential-bearing operations. Prefer existing approved `bash` and MCP
+  paths where they suffice. A raw interactive shell cannot reliably enforce per-command allow patterns;
+  do not present those rules as protection or turn approval of one command into indefinite shell access.
+  Define grant scope/revocation, destructive actions and takeover behavior, with visible tool arguments,
+  outcomes and failures in the ordinary timeline. Browser content and terminal output remain untrusted
+  data, never instructions or implicit permission.
+- [ ] **Diagnostic integration.** Link resource actions and captured evidence to session/turn/tool IDs
+  when they actually belong to one. Add recorded browser/terminal spans to the inspector Gantt without
+  inventing model calls or token usage. Keep full streams private/bounded outside the timeline; retain
+  only the explicit model-visible payload and bounded diagnostic metadata under the existing policies.
+- [ ] **Release gate.** Core store/API/access/lifecycle tests, shared scenarios, TUI tests, NSH browser
+  tests, manifest/theme checks and both builds pass for the changed paths. Run matching screenshots,
+  failure/reconnect tests, high-output/large-page profiling and a cross-client handoff demo. Document
+  unsupported platforms/capabilities and approved differences. Update both client READMEs, API/daemon/
+  tools/inspector/MCP docs and the ledger where behavior changes. Land in vertical slices, each with a
+  usable backend and both clients; no mock terminal/browser can be marked MVP complete.
+
+**First implementation slice:** after section 0 and the scope/security review, harden inspector refresh
+and stable paging with one seeded long-running tree. In parallel, run disposable PTY/browser rendering
+spikes. Then land resource metadata/access/lifecycle tests before adding shell or browser input. Do not
+bundle the entire roadmap into one unreviewable change or block the terminal MVP on optional agent control.
+
 ## Decisions made (2026-11-04, user)
 
 | Decision | Answer |
 | --- | --- |
 | Manager interaction (8.0) | **Top-bar dropdown (latest user revision):** keep Manager label, one-row glowing audio orb, notification cards and typed input, one Open Manager session action for the persistent backend session. Audio is independent; Esc closes the dropdown. Supersedes the earlier centred call stage and Esc-ends-call decision |
-| Settings focus (8.0) | **Left returns to section headings without changing a value.** Keep full-row gray selections and restore the left bar in white for the focused pane (dark in light mode); Right advances, Shift+Right steps backward |
+| Settings focus (8.0) | **Value rows are segmented; the TUI moves them with ←/→ and Tab/Esc returns to headings.** Keep full-row gray selections and the left bar in white for the focused pane (dark in light mode) |
 | Scroll pinning (8.0) | **Only a session's first message** goes to the top of the screen; later sends keep the normal behaviour, still without yanking a reader who scrolled up |
 | Pending rows (8.0) | **`S` / `Q`** in primary text, and NSH is aligned with the TUI's pending-row UI |
 | Event compaction (13.5) | **Yes:** a finished (idle or archived) session's events are deleted, announced by a `session.compacted` record; continuing the session later writes new events as usual. Losing the inspector's raw wire, step timings and the export's events section for compacted turns is accepted |
@@ -1249,6 +1536,11 @@ format, so readers must handle both during the transition.
 
 | Decision | Default or recommendation |
 | --- | --- |
+| Browser/terminal product scope (14) | Proposed: actual integrated interactive tools, with Core-owned resources and shared TUI/NSH operations. Confirm at the first design review |
+| Browser/terminal mobile support (14.0) | Proposed first slice: desktop/web NSH and Rust TUI. Mobile deferral needs explicit approval; the file-editor mobile exclusion does not automatically cover these features |
+| Browser rendering in terminals without image support (14.0) | Spike first. Any text/screenshot fallback that loses capabilities requires explicit user approval and a ledger row before implementation |
+| Remote browser/terminal access (14.2) | Require an approved authenticated attachment model; do not enable powerful new resources on a tokenless non-loopback server by default |
+| Browser profile persistence and agent control (14.4–14.5) | Start with isolated profiles and user control. Decide profile lifetime, sensitive-page capture and scoped agent takeover before adding persistent sign-ins or raw agent input |
 | Do the Anthropic Messages and Gemini providers ship in a 0.10.x release? | — |
 | Does `nexus update` install, or only report? | — |
 | Can a parent card steer a child session? | — |

@@ -139,7 +139,8 @@ pub fn draw(
     }
     // The header owns audio; the dropdown owns text, cards and debug navigation.
     let strip = Rect::new(header.x, header.y, header.width, 1).intersection(area);
-    if strip.width > 0 {
+    let enabled = app.manager_setting_value("manager.enabled").as_deref() == Some("on");
+    if strip.width > 0 && enabled {
         hits.add(strip, Target::ManagerIndicator);
         draw_indicator(app, buf, area, strip);
     }
@@ -148,7 +149,7 @@ pub fn draw(
         paint::scrim_by(t, buf, area, DROPDOWN_SCRIM_PERCENT);
     }
     // A hovered indicator that can stop the live voice says so, over the scrim.
-    if strip.width > 0 && m.live_call && hovered(app, strip) {
+    if strip.width > 0 && enabled && m.live_call && hovered(app, strip) {
         draw_stop_label(buf, strip, t);
     }
     if m.dropdown_open {

@@ -977,3 +977,50 @@ async def test_shell_command_and_output_join_context_without_a_turn(setup):
     text = json.dumps(message)
     assert '$ echo hi; exit 3' in text and 'hi' in text and 'exit code 3' in text
     assert (await client.post(f'/api/session/{sid}/shell', json={'command': ' '})).status_code >= 400
+
+
+async def test_project_order_status_and_snapshot_share_one_saved_order(setup):
+    _rt, client, _provider, workspace = setup
+    made = []
+    for name in ("one", "two", "three"):
+        path = workspace.parent / name
+        path.mkdir()
+        made.append((await client.post("/api/project", json={"path": str(path)})).json())
+    assert [p["position"] for p in made] == [0, 1, 2]
+    ids = [p["id"] for p in made]
+    # Move the third before the first, then the first to the end.
+    moved = await client.post(f"/api/project/{ids[2]}/move", json={"before": ids[0]})
+    assert moved.status_code == 200, moved.text
+    assert [p["id"] for p in moved.json()["projects"]] == [ids[2], ids[0], ids[1]]
+    assert [p["position"] for p in moved.json()["projects"]] == [0, 1, 2]
+    end = await client.post(f"/api/project/{ids[2]}/move", json={"before": None})
+    assert [p["id"] for p in end.json()["projects"]] == [ids[0], ids[1], ids[2]]
+    listed = (await client.get("/api/project")).json()
+    assert [p["id"] for p in listed] == [ids[0], ids[1], ids[2]]
+    snapshot = (await client.get("/api/snapshot")).json()
+    assert [p["id"] for p in snapshot["projects"]] == [ids[0], ids[1], ids[2]]
+    # A single before/after key is required, and the neighbour must exist.
+    assert (await client.post(f"/api/project/{ids[0]}/move", json={})).status_code == 400
+    assert (await client.post(f"/api/project/{ids[0]}/move", json={"before": "prj_nope"})).status_code == 400
+    # Status is stored, published on the project object, and validated.
+    patched = await client.patch(f"/api/project/{ids[1]}", json={"status": "passive"})
+    assert patched.status_code == 200 and patched.json()["status"] == "passive"
+    assert patched.json()["name"] == "two" and patched.json()["revision"] == 2
+    inactive = await client.patch(f"/api/project/{ids[2]}", json={"status": "inactive"})
+    assert inactive.json()["status"] == "inactive"
+    assert (await client.patch(f"/api/project/{ids[2]}", json={"status": "hidden"})).status_code == 400
+    assert (await client.patch(f"/api/project/{ids[2]}", json={})).status_code == 400
+    assert [p["status"] for p in (await client.get("/api/project")).json()] == ["current", "passive", "inactive"]
+
+
+async def test_project_order_survives_a_restart(setup):
+    rt, client, _provider, workspace = setup
+    first = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    other = workspace.parent / "other"
+    other.mkdir()
+    second = (await client.post("/api/project", json={"path": str(other)})).json()
+    assert (await client.post(f"/api/project/{second['id']}/move", json={"before": first["id"]})).status_code == 200
+    reopened = Store(rt.store.path)
+    assert [p.id for p in reopened.projects()] == [second["id"], first["id"]]
+    assert [p.position for p in reopened.projects()] == [0, 1]
+    reopened.close()

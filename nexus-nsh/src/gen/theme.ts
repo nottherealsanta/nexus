@@ -272,6 +272,10 @@ export const controlGlyphs = {
     "unicode": "\u2699",
     "ascii": "*"
   },
+  "search": {
+    "unicode": "\u2315",
+    "ascii": "/"
+  },
   "plus": {
     "unicode": "+",
     "ascii": "+"
@@ -305,8 +309,8 @@ export const controlGlyphs = {
     "ascii": "i"
   },
   "archive": {
-    "unicode": "\u2193",
-    "ascii": "v"
+    "unicode": "\u25a3",
+    "ascii": "A"
   },
   "trash": {
     "unicode": "\u00d7",

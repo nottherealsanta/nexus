@@ -295,6 +295,13 @@ log) with the tree ids; repeating the same state publishes nothing.
   directories and tree relationships stay readable. A prompt gets 409 with the
   unarchive command, and a new child in the tree gets 409, until the root is
   unarchived. Unarchive does not start a turn.
+- **Resume in the clients.** Both clients allow composing a message in an archived
+  session. Sending asks **Resume archived session** before changing anything: a
+  large uncached context can make the next request slower and more expensive, and
+  archived code kernels restart with fresh state. Cancel keeps the draft and tree
+  archived. Resume unarchives the root tree first, then sends to the selected
+  session; a failed unarchive never sends the prompt. Explicit Unarchive shows
+  the same warning but does not send a message.
 - **Notifications.** A background job may still finish. Its durable event is
   published as usual, and its model-visible notice is saved as a context
   message without calling the provider. The notice is there when the user
@@ -366,7 +373,13 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   permission and `disabled_tools`, and its own agent, model and messages.
   User-created children may explicitly override the inherited switches.
 - **`wait: true` (default).** The tool returns the child's final answer, or its
-  error.
+  error: `Sub agent ID (agent A) was interrupted by the user.` or `… failed: ERROR.`
+  When the parent has `message_session`, a stopped child's report adds that it is
+  idle, keeps its conversation, and should be resumed or redirected with
+  `message_session` (naming its id) rather than replaced by a new child, and that
+  its work is dropped only if the user says so. The `orchestrate` prompt says the
+  same: continue a child whose task the new work belongs to, and treat an
+  interrupted child's task as unfinished, not cancelled.
 - **`wait: false`.** The tool returns at once. When the child finishes, its
   answer goes to the parent (`session.notified`): it is added before the
   parent's next model call if the parent is busy, or it starts a new parent turn
@@ -398,7 +411,14 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   `disabled_tools`, and it is never bound inside `code`.
 - **Users.** A user can start a child too: `POST /api/session {parent}`.
 - **Interrupt and delete.** Interrupting a session interrupts its descendants'
-  turns, and an interrupted parent is not woken by them. Deleting cascades.
+  turns, and an interrupted parent is not woken by them. The session itself is
+  cancelled first, then its descendants. A parent waiting on a `session` call
+  therefore stops inside that call: it takes in no queued steer and sends no
+  further request, so its timeline reads tool result → `interrupted`, and a steer
+  queued before the interrupt stays queued for the next turn. The dangling call's
+  result names the child, says it was interrupted too, and carries the same
+  `message_session` hint. Interrupting only the child gives the waiting parent the
+  child's interrupted report, and the parent's turn carries on. Deleting cascades.
 
 ## Turns
 
@@ -437,7 +457,7 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   `outcome: "cancelled"`. A late answer gets 409 (404 once the session is
   deleted) and cannot resume the work.
   Each request resolves once ([tools.md](tools.md#ask)).
-- **Interrupt.** Cancels the turn task and its descendants. A tool call left
+- **Interrupt.** Cancels the turn task, then its descendants'. A tool call left
   without a result gets an error result, so the conversation stays valid: "while
   this tool was running; its result is unknown" when it started, "while this call
   was waiting for approval; it did not run" when the approval was still pending,

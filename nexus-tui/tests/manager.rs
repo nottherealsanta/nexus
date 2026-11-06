@@ -65,6 +65,15 @@ fn text(a: &mut App) -> String {
 }
 
 #[test]
+fn header_button_follows_manager_setting() {
+    let mut a = app();
+    a.state.config = Some(json!({"values": {"manager": {"enabled": false}}}));
+    assert!(!text(&mut a).lines().next().unwrap().contains("Manager"));
+    a.state.config = Some(json!({"values": {"manager": {"enabled": true}}}));
+    assert!(text(&mut a).lines().next().unwrap().contains("Manager"));
+}
+
+#[test]
 fn every_card_draws_what_the_scenarios_expect() {
     let file = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
