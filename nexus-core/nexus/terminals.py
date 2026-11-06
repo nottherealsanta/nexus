@@ -327,12 +327,13 @@ class Terminal:
                     os.killpg(self.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-                if foreground > 0 and foreground != self.pid:
-                    try:
-                        os.killpg(foreground, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
                 await self.waiter
+            if foreground > 0 and foreground != self.pid:
+                try:
+                    if os.getsid(foreground) == self.pid:
+                        os.killpg(foreground, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
         if not self._fd_closed:
             self._fd_closed = True
             self.loop.remove_reader(self.fd)

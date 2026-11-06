@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import os
+import shlex
 import signal
 import sqlite3
 import sys
@@ -130,5 +131,40 @@ asyncio.run(main())
         if shell_pid:
             try:
                 os.killpg(shell_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+async def test_close_kills_separately_grouped_foreground_job(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    pidfile = tmp_path / "job.pid"
+    script = tmp_path / "job.py"
+    script.write_text("import os,signal,time\n"
+                      "signal.signal(signal.SIGHUP,signal.SIG_IGN)\n"
+                      "signal.signal(signal.SIGTERM,signal.SIG_IGN)\n"
+                      f"open({str(pidfile)!r},'w').write(str(os.getpid()))\n"
+                      "time.sleep(60)\n")
+    service = TerminalService()
+    term = service.create(project_id="p", workspace=str(tmp_path), creator="c", session_id=None, rows=24, cols=80)
+    aid = term.attach("c")
+    term.attachments[aid].connected = True
+    term.control(aid, "acquire")
+    job_pid = 0
+    try:
+        command = f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}\n".encode()
+        term.input(aid, 1, command)
+        await wait_until(pidfile.exists)
+        job_pid = int(pidfile.read_text())
+        assert os.tcgetpgrp(term.fd) == job_pid and job_pid != term.pid
+        await service.shutdown()
+        with pytest.raises(ProcessLookupError):
+            os.kill(job_pid, 0)
+        job_pid = 0
+    finally:
+        await service.shutdown()
+        if job_pid:
+            try:
+                os.killpg(job_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
