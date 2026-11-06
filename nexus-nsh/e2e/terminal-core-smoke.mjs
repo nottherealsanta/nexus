@@ -7,12 +7,21 @@ const browser = await chromium.launch({headless:true, ...(process.env.PLAYWRIGHT
 try {
   const page = await browser.newPage({viewport:{width:1440,height:900}});
   await page.goto(url);
-  await page.getByRole("button", {name:"Terminal", exact:true}).click({timeout:20000});
+  await page.getByTestId("location-shell").click({timeout:20000});
   const stream = page.waitForResponse(r => r.url().includes("/api/terminal/") && r.url().includes("/stream?") && r.status() === 200);
-  await page.getByRole("button", {name:"New", exact:true}).click();
+  await page.getByRole("button", {name:"New terminal", exact:true}).click();
   await stream;
-  await page.getByRole("button", {name:"Take control"}).click({timeout:10000});
-  await page.getByRole("button", {name:"Release control"}).waitFor();
+  await page.getByRole("button", {name:"Release control"}).waitFor({timeout:10000});
+  let screen;
+  for (let i = 0; i < 100 && !screen; i++) {
+    for (const frame of page.frames()) if (await frame.locator(".xterm-helper-textarea").count()) screen = frame;
+    if (!screen) await page.waitForTimeout(100);
+  }
+  assert(screen, "xterm WebView did not load");
+  await screen.waitForFunction(() => document.activeElement?.classList.contains("xterm-helper-textarea"), null, {timeout:10000});
+  await page.keyboard.type("printf '%s%s' NEXUS_AUTO_ CONTROL");
+  await page.keyboard.press("Enter");
+  await screen.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('NEXUS_AUTO_CONTROL'), null, {timeout:15000});
   await page.getByRole("button", {name:"Rename", exact:true}).click();
   const name = `Terminal smoke ${Date.now()}`;
   await page.getByLabel("Terminal name").locator("input").fill(name);
@@ -22,12 +31,6 @@ try {
   await page.getByRole("button", {name:"Release control"}).click();
   await page.getByRole("button", {name:"Take control"}).click();
   await page.getByRole("button", {name:"Release control"}).waitFor();
-  let screen;
-  for (let i = 0; i < 100 && !screen; i++) {
-    for (const frame of page.frames()) if (await frame.locator(".xterm-helper-textarea").count()) screen = frame;
-    if (!screen) await page.waitForTimeout(100);
-  }
-  assert(screen, "xterm WebView did not load");
   await screen.locator(".xterm-helper-textarea").focus();
   await page.keyboard.type("sleep 30");
   await page.keyboard.press("Enter");

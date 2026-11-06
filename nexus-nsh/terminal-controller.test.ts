@@ -76,7 +76,7 @@ describe("terminal controller", () => {
       screenAck(); await tick();
       expect(screen.filter(m => m.type === "write").length).toBe(1);
       expect(screen.some(m => m.type === "dimensions" && m.rows === 30 && m.cols === 100)).toBe(true);
-      await controlTerminal("acquire"); expect(terminalControlled()).toBe(true);
+      expect(terminalControlled()).toBe(true);
       holdResize = true; resizeTerminal(30, 100); resizeTerminal(40, 110); await tick();
       expect(calls.filter(c => c.path.endsWith("/resize")).map(c => [c.body.rows, c.body.cols])).toEqual([[24,80],[30,100]]);
       releaseResize(reply(resource)); await tick();
