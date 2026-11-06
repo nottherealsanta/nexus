@@ -150,7 +150,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         right_open: app.ui.right_open,
         drawer: app.ui.drawer,
         left_width: app.ui.left_width,
-        panel_open: app.ui.file_open || app.ui.diff_open.is_some(),
+        panel_open: app.terminal_open || app.ui.file_open || app.ui.diff_open.is_some(),
     };
     let regions = {
         let a: &App = app;
@@ -2374,7 +2374,36 @@ fn draw_panel(cx: &Cx, buf: &mut Buffer, r: Rect, area: Rect, hits: &mut HitMap)
     clear(buf, frame, cx.st(PRIMARY, PANEL));
     hits.add(frame, Target::Swallow);
     clear(buf, r, cx.st(PRIMARY, CANVAS));
-    if cx.app.ui.diff_open.is_some() {
+    if cx.app.terminal_open {
+        put(buf, r.x, r.y, "Terminal", cx.st(PRIMARY, CANVAS), r.width);
+        if r.height > 1 {
+            put(
+                buf,
+                r.x,
+                r.y + 1,
+                "New terminal",
+                cx.st(ACCENT, CANVAS),
+                r.width,
+            );
+        }
+        for (i, terminal) in cx.app.terminal_panel.terminals.iter().enumerate() {
+            let y = r.y.saturating_add(2).saturating_add(i as u16);
+            if y >= r.bottom() {
+                break;
+            }
+            put(
+                buf,
+                r.x,
+                y,
+                &format!(
+                    "{}  {}  {}",
+                    terminal.name, terminal.workspace, terminal.status
+                ),
+                cx.st(PRIMARY, CANVAS),
+                r.width,
+            );
+        }
+    } else if cx.app.ui.diff_open.is_some() {
         draw_diff_view(cx, buf, r, true, hits);
     } else if cx.app.ui.file_open {
         draw_file_view(cx, buf, r, true, hits);

@@ -12,6 +12,16 @@ use ratatui::style::Color;
 
 const SIZES: [(u16, u16); 3] = [(80, 24), (120, 36), (160, 48)];
 
+#[test]
+fn terminal_command_opens_a_panel_with_new_action() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(app.terminal_open);
+    assert!(app.regions.panel.is_some());
+    assert!(rows.join("\n").contains("New terminal"));
+}
+
 fn joined(rows: &[String]) -> String {
     rows.join("\n")
 }

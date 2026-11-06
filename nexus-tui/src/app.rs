@@ -86,6 +86,7 @@ impl Notify {
 /// Commands this shell implements against an existing Core API. Everything
 /// else is shown disabled with a reason, never as a control that appears to work.
 pub const WIRED: &[&str] = &[
+    "terminal.open",
     "palette.open",
     "app.help_keys",
     "app.quit",
@@ -915,6 +916,7 @@ pub struct App {
     pub regions: Regions,
     pub effects: Vec<Effect>,
     pub terminal_open: bool,
+    pub terminal_panel: crate::terminal_panel::TerminalPanel,
     pub terminal_selected: bool,
     pub terminal_focused: bool,
     pub terminal_controlled: bool,
@@ -1036,6 +1038,7 @@ impl App {
             theme,
             state,
             terminal_open: false,
+            terminal_panel: crate::terminal_panel::TerminalPanel::default(),
             terminal_selected: false,
             terminal_focused: false,
             terminal_controlled: false,
@@ -5124,6 +5127,10 @@ impl App {
 
     /// Close the file or diff panel. Unsaved text asks first; a search ends first.
     fn close_panel(&mut self) {
+        if self.terminal_open {
+            self.terminal_open = false;
+            return;
+        }
         if self.ui.file_search.take().is_some() {
             return;
         }
@@ -5671,6 +5678,14 @@ impl App {
 
     pub fn execute(&mut self, id: &str) {
         match id {
+            "terminal.open" => {
+                if self.edit_blocks() {
+                    return;
+                }
+                self.terminal_open = true;
+                self.ui.file_open = false;
+                self.ui.diff_open = None;
+            }
             "palette.open" => {
                 if matches!(
                     self.ui.overlay,
@@ -8786,6 +8801,10 @@ impl App {
 
     fn handle_key_inner(&mut self, ev: KeyEvent) {
         let Some(name) = keys::name(&ev) else { return };
+        if self.terminal_open && self.ui.overlay.is_none() && name == "esc" {
+            self.terminal_open = false;
+            return;
+        }
         if name != "ctrl+c" {
             self.ctrl_c = None;
         }
