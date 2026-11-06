@@ -5,15 +5,18 @@ import asyncio
 import base64
 import fcntl
 import hashlib
+import json
 import os
 import secrets
 import signal
+import sqlite3
 import struct
 import subprocess
 import sys
 import termios
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,7 +78,7 @@ class Attachment:
 
 class Terminal:
     def __init__(self, *, project_id: str, workspace: str, creator: str, session_id: str | None,
-                 rows: int, cols: int) -> None:
+                 rows: int, cols: int, persist: Callable[[dict[str, Any]], None] | None = None) -> None:
         self.id = secrets.token_urlsafe(18)
         self.project_id, self.workspace, self.creator, self.session_id = project_id, workspace, creator, session_id
         self.created = time.time()
@@ -92,6 +95,7 @@ class Terminal:
         self.seq = 0
         self.attachments: dict[str, Attachment] = {}
         self.controller: str | None = None
+        self.persist = persist
         self.fd, slave = os.openpty()
         try:
             self._winsize(rows, cols)
@@ -113,6 +117,11 @@ class Terminal:
         self.loop = asyncio.get_running_loop()
         self.loop.add_reader(self.fd, self._read)
         self.waiter = self.loop.create_task(self._wait())
+        self._persist()
+
+    def _persist(self) -> None:
+        if self.persist:
+            self.persist(self.metadata())
 
     def metadata(self) -> dict[str, Any]:
         controller = self.attachments.get(self.controller or "")
@@ -180,6 +189,7 @@ class Terminal:
         else:
             self.signal = -status
         self._emit("exit", status=self.status, exit_code=self.exit_code, signal=self.signal)
+        self._persist()
 
     def attach(self, client_id: str) -> str:
         self.expire()
@@ -262,6 +272,7 @@ class Terminal:
         self.rows, self.cols = rows, cols
         self.screen.resize(lines=rows, columns=cols)
         self._emit("resize", rows=rows, cols=cols)
+        self._persist()
 
     async def close(self) -> None:
         if self.status == "running":
@@ -280,12 +291,21 @@ class Terminal:
             except ProcessLookupError:
                 pass
             try:
+                os.killpg(self.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
                 await asyncio.wait_for(asyncio.shield(self.waiter), 1)
             except TimeoutError:
                 try:
                     os.killpg(self.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+                if foreground > 0 and foreground != self.pid:
+                    try:
+                        os.killpg(foreground, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                 await self.waiter
         self.loop.remove_reader(self.fd)
         try:
@@ -302,8 +322,38 @@ def dimensions(rows: int, cols: int) -> None:
 
 
 class TerminalService:
-    def __init__(self) -> None:
+    def __init__(self, db: sqlite3.Connection | None = None) -> None:
         self.terminals: dict[str, Terminal] = {}
+        self.db = db
+        if db is not None:
+            db.execute("create table if not exists terminal_resource (id text primary key, metadata text not null)")
+            for terminal_id, raw in db.execute("select id, metadata from terminal_resource").fetchall():
+                metadata = json.loads(raw)
+                if metadata["status"] == "running":
+                    metadata.update(status="ended", reason="core_restart", ended=time.time(), controller=None)
+                    db.execute("update terminal_resource set metadata=? where id=?", (json.dumps(metadata), terminal_id))
+            db.commit()
+
+    def save(self, metadata: dict[str, Any]) -> None:
+        if self.db is not None:
+            self.db.execute("insert or replace into terminal_resource values (?, ?)",
+                            (metadata["id"], json.dumps(metadata)))
+            self.db.commit()
+
+    def list(self, project_id: str) -> list[dict[str, Any]]:
+        if self.db is None:
+            return [t.metadata() for t in self.terminals.values() if t.project_id == project_id]
+        return [row for (raw,) in self.db.execute("select metadata from terminal_resource")
+                if (row := json.loads(raw))["project_id"] == project_id]
+
+    def metadata(self, terminal_id: str) -> dict[str, Any]:
+        if terminal_id in self.terminals:
+            return self.terminals[terminal_id].metadata()
+        if self.db is not None:
+            row = self.db.execute("select metadata from terminal_resource where id=?", (terminal_id,)).fetchone()
+            if row:
+                return json.loads(row[0])
+        raise NotFound("unknown terminal")
 
     def create(self, *, project_id: str, workspace: str, creator: str, session_id: str | None,
                rows: int, cols: int) -> Terminal:
@@ -313,7 +363,7 @@ class TerminalService:
         if not Path(workspace).is_dir():
             raise ValueError("workspace does not exist")
         term = Terminal(project_id=project_id, workspace=workspace, creator=creator,
-                        session_id=session_id, rows=rows, cols=cols)
+                        session_id=session_id, rows=rows, cols=cols, persist=self.save)
         self.terminals[term.id] = term
         return term
 

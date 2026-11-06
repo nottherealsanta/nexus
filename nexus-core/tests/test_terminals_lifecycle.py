@@ -2,6 +2,7 @@ import asyncio
 import base64
 import os
 import signal
+import sqlite3
 
 import pytest
 
@@ -73,3 +74,12 @@ async def test_controlling_terminal_and_signalled_exit(tmp_path, monkeypatch):
         assert term.exit_code is None
     finally:
         await service.shutdown()
+
+
+def test_restart_marks_running_metadata_ended():
+    db = sqlite3.connect(":memory:")
+    service = TerminalService(db)
+    service.save({"id": "t", "project_id": "p", "status": "running"})
+    recovered = TerminalService(db).metadata("t")
+    assert recovered["status"] == "ended"
+    assert recovered["reason"] == "core_restart"
