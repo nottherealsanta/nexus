@@ -27,16 +27,16 @@ When an item lands, tick it, add a one-line record under [Landed](#landed) and u
 
 | # | Work | State | First step |
 | --- | --- | --- | --- |
-| 4 | Tests and lints | Core green (1200 passed, 1 skipped, 11-06). **TUI: 12 tests fail, fmt and clippy fail.** NSH: 2 failing tests | [4](#4-fix-all-tests-and-lints), do this first |
+| 4 | Tests and lints | **In progress (11-06).** Core green (1200 passed, 1 skipped); TUI and NSH below | [4](#4-fix-all-tests-and-lints), do this first |
 | 1 | Unmerged work | Local `main` is **34 commits ahead of `origin/main`, unpushed**; PR #100 open; PR #99 looks obsolete | [1](#1-merge-what-is-unmerged) |
-| 5 | Mobile cut-down client | Not started; phone build still renders the full timeline | [5](#5-mobile-cut-down-client-sessions-manager-settings) |
-| 6 | ZMX mode (Claude Code, Antigravity) | Plan only (`ZMX_plan.md`), nothing built; new Settings toggle added | [6](#6-zmx-mode-for-claude-code-and-antigravity) |
+| 5 | Mobile cut-down client | Not started; phone build still renders the full timeline. Decided: mobile can approve and answer anything a client can | [5](#5-mobile-cut-down-client-sessions-manager-settings) |
+| 6 | ZMX mode (Claude Code, Antigravity) | **Later (user, 11-06).** Plan only, nothing built; kept here for reference | [6](#6-zmx-mode-for-claude-code-and-antigravity-later) |
 | 3 | Manager, finished and tested end to end | M1–M5 built; real GPT-Live call worked 11-04; evals, long calls, iOS/native audio and hands-free open | [3](#3-manager-finish-and-test-end-to-end) |
 | 2 | Terminal inside Nexus | Spikes done (`reports/section14/spikes.md`); no product code | [2](#2-terminal-inside-nexus) |
 | 7 | Everything else carried over | Listed, not scheduled | [7](#7-carried-over-not-scheduled) |
 
-Suggested order: 4, then 1 (so the release PR can merge on a green tree), then 5, then 6, 2 and 3 in whatever order the
-user prefers (they do not depend on each other; 3 needs real-model approvals, 6 needs real-CLI approvals).
+Suggested order: 4, then 1 (so the release PR can merge on a green tree), then 5, then 2 and 3 in whatever order the
+user prefers (3 needs real-model approvals). Section 6 (ZMX) is for later.
 
 ## Decisions
 
@@ -47,16 +47,16 @@ Made (user):
 | 2026-11-04 | Manager is a top-bar dropdown; Settings value rows are segmented; only a session's first message pins to the top; pending rows are `S` / `Q`; finished sessions' events are compacted with a `session.compacted` record; CI deferred |
 | 2026-11-05 | Manager header indicator is a gray braille wave field; Stop on hover while Live; an open Manager panel dims the rest |
 | 2026-11-06 | Project remove (unregister) and delete (permanent) both stay. Composer voice/send buttons are an approved NSH-only difference. Scroll bar and segmented Settings are shared |
-| 2026-11-06 | **NSH terminal backend dropped.** `nexus-tui` stays; `nexus nsh tui` is not developed toward replacing it |
+| 2026-11-06 | **NSH terminal backend dropped.** `nexus-tui` stays; `nexus nsh tui` is retired, and its code is kept in the tag `archive/nsh-terminal-backend` (pushed) |
 | 2026-11-06 | **Modals are translucent in the TUI again** (the 50% `paint::scrim` blend), reverting the solid cover of `0452ee80`; NSH is back to its translucent backdrop, so they match |
-| 2026-11-06 | **Mobile = Sessions, Manager and Settings tabs only** (section 5). Supersedes AGENTS.md's "Manager and sessions only" |
-| 2026-11-06 | **ZMX Settings toggle for Claude Code** (section 6): Agent SDK or ZMX, with a hint |
+| 2026-11-06 | **Mobile = Sessions, Manager and Settings tabs only** (section 5). It can approve and answer everything a desktop client can (allow/deny, questions), showing less on the small screen |
+| 2026-11-06 | **ZMX is for later.** Keep `ZMX_plan.md` and section 6 as they are; build nothing now. The Claude Code Agent SDK / ZMX Settings toggle is part of that later work |
 
 Open (each has a default that holds unless the user objects):
 
 | Decision | Default |
 | --- | --- |
-| **Z1. ZMX scope.** `ZMX_plan.md` D1 says subagents only. The new hint ("does not use Nexus agents or tools") reads as if a user would pick ZMX for whole sessions | Keep D1: root sessions always use the SDK; the toggle picks the backend for Claude models a **subagent** uses |
+| **Z1. ZMX scope (when ZMX is picked up).** `ZMX_plan.md` D1 says subagents only. The new hint ("does not use Nexus agents or tools") reads as if a user would pick ZMX for whole sessions | Keep D1: root sessions always use the SDK; the toggle picks the backend for Claude models a **subagent** uses |
 | **Z2. Is the toggle per vendor?** Antigravity has no SDK route | Claude Code: `Agent SDK` / `ZMX`. Antigravity: a plain on/off, shown only in ZMX terms |
 | Browser (old 14.4): still wanted? | Deferred. Only the terminal is in this plan; the browser stays in the archive |
 | Terminal parser strategy, access model, agent typing (section 2) | Defaults in section 2; confirm at the design review |
@@ -96,14 +96,19 @@ State on 2026-11-06 (`git fetch` done). Nothing below has been merged or deleted
 - [ ] Platform matrix: macOS arm64 from a clean home, then Linux x86_64 and aarch64 (install, `nexus doctor`, daemon,
   TUI, NSH web, a scripted turn, a kernel run).
 
-### 1.2 Retire the NSH terminal backend (follows the 11-06 decision)
+### 1.2 Retire `nexus nsh tui`
 
+Decided 2026-11-06: retire it, keep the code somewhere safe. The complete code is in the pushed tag
+`archive/nsh-terminal-backend` (the `main` commit before the removal); restore it with
+`git checkout archive/nsh-terminal-backend -- <path>`.
+
+- [x] Tag the code (`archive/nsh-terminal-backend`, pushed 2026-11-06).
 - [ ] Remove `nexus nsh tui` from `scripts/nexus` and `npm run tui`, and the terminal-only code paths NSH grew for it
-  (the `--target tui` test target, terminal-only glyph/hint branches). Keep everything the web and macOS targets use.
-- [ ] Move `reports/parity-audit/` and the terminal parts of `reports/nsh-tui-parity/` to the archive or delete them;
-  fix `nexus-nsh/README.md` and `docs/development.md` where they describe it.
+  (the `--target tui` test target, terminal-only glyph/hint branches). Keep everything web and macOS use.
+- [ ] Remove `reports/parity-audit/` and the terminal parts of `reports/nsh-tui-parity/` (the tag keeps them); fix
+  `nexus-nsh/README.md` and `docs/development.md` where they describe it. Launcher tests go too.
 - [ ] Keep the shared-parity work that landed (scroll bar, segmented Settings, rail, overview, sidebar highlight).
-- [ ] Ledger: record that the NSH terminal target is not supported.
+- [ ] Ledger: record that the NSH terminal target is retired and where the code is.
 
 ## 2. Terminal inside Nexus
 
@@ -219,9 +224,11 @@ Not started: `phone` in `nexus-nsh/src/store.ts` still renders the full timeline
 - [ ] **Navigation:** a three-tab bar (Sessions, Manager, Settings) replaces the current phone pages; define the Manager
   tab (the header indicator and dropdown become a full tab: caption, cards, typed input, voice; plus the read-only
   backend-session view only if the user wants it).
-- [ ] **Session view:** status, user messages, agent replies, composer. Waiting prompts (approval/question) must still be
-  answerable or the session is stuck: **ask the user** whether the approval/question card counts as "status" or must be
-  answered through the Manager. Default: show it as a status card with allow/deny.
+- [ ] **Session view:** status, user messages, agent replies, composer. **Mobile can approve and answer everything a
+  desktop client can** (user, 2026-11-06): allow once/always/deny, answer a question (options and free text), choose
+  among offered choices, steer/queue/interrupt. It shows less, because the screen is small: a compact card with the
+  command or question and the choices, not the full diff, parameter table or tool group. Define the compact card once
+  and test it at 390 px. Allowed, since an answer is part of "status"; the other tool detail stays out.
 - [ ] **Settings:** decide which sections apply (Providers sign-in, Appearance, Notifications, Voice, About; hide Agents,
   Tools, Skills, MCP, Hooks, Files/Editor, Terminal). List them in the manifest under a `mobile` scope.
 - [ ] **Remove** from the phone build: Files tab, editor, Git, inspector, terminal, browser, overview, project rail
@@ -232,7 +239,9 @@ Not started: `phone` in `nexus-nsh/src/store.ts` still renders the full timeline
 - [ ] Tests on the phone idiom at 390 px, a phone screenshot of each tab, a real simulator run and a signed device build
   (see the `nexus-ios-device` skill); update `nexus-nsh/README.md` and `docs/`.
 
-## 6. ZMX mode for Claude Code and Antigravity
+## 6. ZMX mode for Claude Code and Antigravity (later)
+
+**Parked (user, 2026-11-06): not for now.** Keep the plan and `ZMX_plan.md` as they are; do not start M0 or any code until the user asks.
 
 Full design, lessons, milestones and risks: [ZMX_plan.md](ZMX_plan.md) (written 11-04; nothing built). Summary: a
 subagent runs on the real `claude` (interactive PTY, hooks, transcript) or `agy` (stream-json) CLI, which runs its own

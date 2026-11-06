@@ -21,7 +21,8 @@ for deliberate changes from old Nexus.
   Sessions, Manager and Settings (the user may talk to the Manager, view sessions and change the
   settings that apply). A session view shows the session's status, the
   user's messages and the agent's replies, and nothing else: no tool groups and no
-  context header. Everything else (file explorer, file editor, Git management, the
+  context header. Mobile can still approve and answer everything a desktop client can
+  (allow/deny, questions), through a compact card. Everything else (file explorer, file editor, Git management, the
   integrated terminal and browser, the inspector and the other desktop surfaces) is for
   the TUI and NSH on desktop and web only. The peer rule above applies between the TUI
   and NSH desktop/web. Mobile leaving something out needs no ledger row, but adding
