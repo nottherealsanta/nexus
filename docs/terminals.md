@@ -1,21 +1,25 @@
 # Terminal resources: Core contract
 
 This is the Core terminal slice of [PLAN.md section 2](../PLAN.md#2-terminal-inside-nexus).
-The browser resource and both terminal UIs are separate work. The client behaviour
-below is the shared target, not a claim that either UI is complete. The TUI has
-an initial list, creation, attachment, screen, control, input and resize slice;
-see its README for the current controls and limitations.
+The browser resource is separate work. Both desktop clients expose the shared
+terminal dock, resource list, creation, attachment, screen, control, input and
+resize operations described below; see their READMEs for current limitations.
 
 ## Client behaviour
 
 The desktop workspace has a bottom terminal dock below the composer and activity bar;
-mobile never exposes it. The activity indicator **<n> shell** shows the terminal
-count; clicking it opens or closes the dock, remembering its state. The distinct
+mobile never exposes it. The terminal-shell activity indicator shows the terminal
+count, including linked background jobs once; clicking it opens or closes the dock,
+remembering its state. Legacy pipe-only jobs keep their separate resource indicator. The distinct
 **kernel** indicator has no number (there is exactly one kernel). The dock header
 reads **Terminals (N)**.
 Each terminal has a tab showing a running/exited status dot, its name, and a close
 **×**; **+** creates a terminal. Select a tab to switch, and double-click it or use
-**Rename** to rename. **Take control** / **Release control** are explicit actions.
+the pencil control to rename. The compact toolbar orders New, Rename, Close,
+Take/Release control, Copy output and Hide terminal panel. Controls show descriptive
+hover tooltips in both clients; text actions use square brackets, including
+`[Take control]` / `[Release control]` when terminal-safe lock glyphs are unavailable.
+Taking or releasing control is always explicit.
 Opening or creating a terminal takes control if available and focuses its screen;
 otherwise a read-only banner offers **Take control**. Closing the dock detaches;
 the tab close action terminates. Closing a running terminal first asks
@@ -39,8 +43,9 @@ requested by the application. Mouse interaction is owned by the terminal screen
 when focused and by Nexus otherwise. Applications that request mouse reports receive them; hold Shift to select text instead. Selection and an explicit **Copy** action
 are required before emitting OSC 52. Escape sequences in terminal output never
 write the clipboard or open URLs or files by themselves. Resizing the screen
-resizes the PTY only while this attachment has control. Terminal contents are
-never automatically added to model context.
+resizes the PTY only while this attachment has control. Interactive terminal contents
+are never automatically added to model context; linked background jobs keep their
+existing captured-output and completion-notice paths described below.
 
 ## Resource and authority
 
@@ -54,7 +59,31 @@ the project and any associated session before spawning; reject mismatches.
 List and individual-resource operations must enforce the same project access
 checks as creation. IDs are not authorization credentials.
 
-Terminal bytes are untrusted and are not session events or model context. A
+Daemon background bash jobs use the same PTY resources and appear in the existing
+project list, with the originating session and workspace, a sanitized command
+label, and `background_job_id` linking to the job. Other terminals have a null
+or absent `background_job_id`. The job and terminal share one process: explicit
+terminal control permits input, terminal Close terminates it, and `bash_kill` and
+the job timeout terminate it too. The existing job output limit, tree scope and
+finish notices still apply. PTY output includes terminal echo and escape sequences
+and may differ from pipe output; input echoed by the terminal can therefore appear
+in job output and completion notices. If no terminal service is installed, jobs
+retain the original non-interactive pipe implementation. Terminal capacity errors
+do not silently fall back to a separate process. The service admits at most 16
+running terminals and retains at most 64 PTYs with replay. When that retention
+limit is reached, the oldest finished resource without viewers is evicted from
+memory; its persisted metadata remains listed, but its replay and attachment are
+no longer available. If all retained resources are running or attached, creation
+fails rather than disconnecting viewers.
+
+On forced close Core drains available PTY output before the exit frame, bounded
+to 256 reads of at most 16 KiB each per drain. A detached descendant that keeps
+the PTY open cannot indefinitely block job shutdown: Core closes the master
+after a bounded wait. Such a descendant may survive if it left the job's process
+group, and output it writes after the master is closed is not retained.
+
+Terminal bytes are untrusted. Apart from background job output and notices as
+described above, they are not session events or model context. A
 future explicit user attachment must become a normal visible message with
 provenance and clipping, not a hidden context injection. No agent may attach as
 controller or type in this version.

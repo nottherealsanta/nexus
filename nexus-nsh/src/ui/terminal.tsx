@@ -6,13 +6,23 @@ import { Button, Input } from "nsh/base";
 import { terminalPage } from "../gen/terminal-page";
 import { beginRenameTerminal, closeTerminalPanel, controlTerminal, disconnectTerminal, inputTerminal, newTerminal, renameTerminal, requestTerminalClose, requestTerminalCopy, resizeTerminal, selectTerminal, setTerminalActions, setTerminalSender, terminalControlled, terminalError, terminalFocused, terminalItems, terminalName, terminalNotice, terminalOpen, terminalRename, terminalSelected } from "../terminal-panel";
 import { confirmDialog } from "../store";
-import { Btn, FOCUS, T } from "./kit";
+import { Btn, FOCUS, Icon, T } from "./kit";
+import type { IconName } from "../icons";
+
+function TerminalButton(p: {icon: IconName; label: string; onPress: () => void; disabled?: boolean; testID: string}) {
+  const hovered = signal(false);
+  return <View class="relative" onMouseEnter={() => hovered.set(true)} onMouseLeave={() => hovered.set(false)}><Button onPress={p.onPress} disabled={p.disabled} accessibilityLabel={p.label} testID={p.testID}
+    class={`size-8 items-center justify-center rounded-(--radius) hover:bg-accent active:bg-selection disabled:opacity-50 ${FOCUS}`}>
+    <View testID={`terminal-icon-${p.icon}`}><Icon name={p.icon} /></View>
+  </Button><If when={hovered()}><View style={{width:160}} class="absolute right-0 top-8 z-50 bg-popover rounded-(--radius) px-2 py-1" testID={`${p.testID}-tooltip`}><Text class="text-xs text-popover-foreground" style={{numberOfLines: 1}}>{p.label}</Text></View></If></View>;
+}
 
 const dockHeight = signal(320);
 export function TerminalPanel() {
   let web: WebViewRef | undefined;
   let list: ViewRef | undefined;
   const cursor = signal(0);
+  const tabTip = signal<{id: string; label: string} | null>(null);
   let startHeight = 320;
   const resizeDock = PanResponder.create({
     onStartShouldSetPanResponder: () => true,
@@ -83,34 +93,34 @@ export function TerminalPanel() {
     if (m.type === "selection" && copyPending) { copyPending = false; if (typeof m.data === "string" && m.data) void Clipboard.writeText(m.data); }
   };
   const close = () => { setTerminalSender(null); closeTerminalPanel(); };
-  return <View style={{height:dockHeight()}} class="shrink-0 border-t border-border bg-background overflow-hidden" testID="terminal-panel-shell">
+  return <View style={{height:dockHeight()}} class="shrink-0 border-t border-border bg-background" testID="terminal-panel-shell">
     <View {...resizeDock.panHandlers} class="h-2 bg-border" accessibilityLabel="Resize terminal dock" />
     <View class="flex-1 min-h-0" testID="terminal-panel">
-      <View class="flex-row items-center gap-2 px-3 min-h-11 border-b border-border bg-sidebar">
+      <View class="z-50 flex-row items-center gap-2 px-3 min-h-11 border-b border-border bg-sidebar">
         <Text class={T.title}>{`Terminals (${terminalItems().length})`}</Text>
         <Text class={`flex-1 ${T.meta}`}>{terminalFocused() ? "Ctrl+] tabs" : "Enter open  c take control  r release  Esc close"}</Text>
-        <Btn label="Close panel" onPress={close} testID="terminal-panel-close" />
+        <TerminalButton icon="plus" label="New terminal" onPress={() => void create()} testID="terminal-new" />
+        <TerminalButton icon="pencil" label="Rename terminal" onPress={beginRenameTerminal} disabled={!terminalSelected()} testID="terminal-rename" />
+        <TerminalButton icon="x" label="Close terminal" onPress={() => requestTerminalClose()} disabled={!terminalSelected()} testID="terminal-close" />
+        <TerminalButton icon={terminalControlled() ? "lock" : "unlock"} label={terminalControlled() ? "Release control" : "Take control"} onPress={() => void controlTerminal(terminalControlled() ? "release" : "acquire")} disabled={!terminalSelected()} testID="terminal-control" />
+        <TerminalButton icon="copy" label="Copy output" onPress={requestTerminalCopy} disabled={!terminalSelected()} testID="terminal-copy" />
+        <TerminalButton icon="chevron-down" label="Hide terminal panel" onPress={close} testID="terminal-panel-close" />
+        <If when={tabTip()}>{tip => <View style={{width:320}} class="absolute left-3 -top-7 z-50 bg-popover rounded-(--radius) px-2 py-1" testID={`${tip().id}-tooltip`}><Text class="text-xs text-popover-foreground" style={{numberOfLines:1}}>{tip().label}</Text></View>}</If>
       </View>
       <View class="flex-1 min-h-0">
         <Scroll horizontal ref={r => { list = r; }} focusable class="shrink-0 border-b border-border" testID="terminal-list">
           <View class="flex-row items-center">
           <Each of={terminalItems()} key={t => t.id}>{(t, index) => <View class="flex-row items-center">
-            <Button onPress={() => { cursor.set(index() + 1); void selectTerminal(t().id); }} selected={terminalSelected() === t().id} accessibilityLabel={`${t().name}, ${t().status}`} testID={`terminal-resource-${t().id}`} class={`p-2 ${FOCUS}`}>
+            <View onMouseEnter={() => tabTip.set({id:`terminal-resource-${t().id}`, label:`${t().name}, ${t().status}`})} onMouseLeave={() => tabTip.set(null)}><Button onPress={() => { cursor.set(index() + 1); void selectTerminal(t().id); }} selected={terminalSelected() === t().id} accessibilityLabel={`${t().name}, ${t().status}`} testID={`terminal-resource-${t().id}`} class={`p-2 ${FOCUS}`}>
               <Text class={T.label}>{`${t().status === "running" ? "●" : "○"} ${t().name}`}</Text>
-            </Button>
-            <Button onPress={() => requestTerminalClose(t().id)} accessibilityLabel={`Close ${t().name}`} class={`p-2 ${FOCUS}`}><Text class={T.label}>×</Text></Button>
+            </Button></View>
+            <View onMouseEnter={() => tabTip.set({id:`terminal-tab-close-${t().id}`, label:`Close ${t().name}`})} onMouseLeave={() => tabTip.set(null)}><Button onPress={() => requestTerminalClose(t().id)} accessibilityLabel={`Close ${t().name}`} testID={`terminal-tab-close-${t().id}`} class={`p-2 ${FOCUS}`}><Text class={T.label}>×</Text></Button></View>
           </View>}</Each>
-          <Button onPress={() => void create()} accessibilityLabel="New terminal" testID="terminal-new" class={`p-2 ${FOCUS}`}><Text class={T.label}>+</Text></Button>
           </View>
         </Scroll>
         <View class="flex-1 min-h-0">
-          <View class="flex-row gap-2 p-2 border-b border-border">
-            <Btn label="Rename" onPress={beginRenameTerminal} disabled={!terminalSelected()} />
-            <Btn label="Close" onPress={() => requestTerminalClose()} disabled={!terminalSelected()} />
-            <Btn label={terminalControlled() ? "Release control" : "Take control"} onPress={() => void controlTerminal(terminalControlled() ? "release" : "acquire")} disabled={!terminalSelected()} />
-            <Btn label="Copy" onPress={requestTerminalCopy} disabled={!terminalSelected()} />
-          </View>
-          <If when={terminalRename()}><View class="flex-row gap-2 p-2"><Input value={terminalName()} onChange={({value}) => terminalName.set(value)} onSubmit={() => void renameTerminal()} accessibilityLabel="Terminal name" class="flex-1 bg-background text-foreground" /><Btn label="Rename" onPress={() => void renameTerminal()} /><Btn label="Cancel" onPress={() => terminalRename.set(false)} /></View></If>
+          <If when={terminalRename()}><View class="flex-row gap-2 p-2"><Input value={terminalName()} onChange={({value}) => terminalName.set(value)} onSubmit={() => void renameTerminal()} accessibilityLabel="Terminal name" class="flex-1 bg-background text-foreground" /><Btn label="[Rename]" onPress={() => void renameTerminal()} /><Btn label="[Cancel]" onPress={() => terminalRename.set(false)} /></View></If>
+          <If when={!terminalSelected()}><Text class={`px-3 py-2 ${T.meta}`}>No terminal selected. Use + to create one.</Text></If>
           <If when={!!terminalNotice()}><Text class="p-2 text-warning" testID="terminal-notice">{terminalNotice()}</Text></If>
           <If when={!!terminalError()}><Text class="p-2 text-error" testID="terminal-error">{terminalError()}</Text></If>
           <If when={!!terminalSelected() && !terminalControlled()}><Text class="p-2 text-warning">Read-only — take control to type.</Text></If>

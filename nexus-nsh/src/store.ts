@@ -114,6 +114,7 @@ export const kernels = signal<any[]>([]);
 export const bashJobs = signal<any[]>([]);
 export const resourcesError = signal<string | null>(null);
 export const resourcesOpen = signal(false);
+export const resourcesKind = signal<"kernels" | "shells" | "all">("all");
 let resourcesInFlight = false;
 let resourcesAgain = false;
 let resourcesSeq = 0;
@@ -202,7 +203,7 @@ export const flowStage = signal<null | "sessions" | "projects">(null);
 export const flowSession = signal<string | null>(null);
 export const flowProject = signal<string | null>(null);
 export const picker = signal<null | { title: string; items: PickerItem[]; note?: string }>(null);
-export const confirmDialog = signal<null | { title: string; body: string; confirm: string; destructive: boolean; run: () => Promise<void> | void; busy?: boolean; error?: string }>(null);
+export const confirmDialog = signal<null | { title: string; body: string; confirm: string; destructive: boolean; run: () => Promise<void> | void; busy?: boolean; error?: string; bracketActions?: boolean }>(null);
 export const renaming = signal(false);
 export const addProjectOpen = signal(false);
 /** Choices made before a session exists; consumed by its creation request. */

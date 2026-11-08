@@ -50,6 +50,9 @@ pub struct TLine {
     pub context_items: Vec<(usize, usize, usize, usize)>,
     /// The whole line is a collapsed paste's marker: clicking it opens the text.
     pub paste: Option<Rc<PasteText>>,
+    /// Cells the whole row (band, rail and spans) is drawn in from the page's
+    /// left edge: a fork's expanded inherited messages sit inside their block.
+    pub indent: u16,
 }
 
 /// A collapsed text paste in a user message: the marker shown and the full text.
@@ -112,6 +115,25 @@ pub struct Timeline {
     /// The build baked the wall clock into a live duration (a running tool or a
     /// busy child card), so these lines are only current within one second.
     pub clocked: bool,
+}
+
+/// A fork's open inherited messages sit this far in, so their bands and rows
+/// start under the block's chevron, as a group's members do.
+const FORK_INDENT: usize = ACTIVITY_INDENT;
+
+/// Where the timeline is relative to a fork's inherited messages.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ForkRegion {
+    Before,
+    /// Open: rows from `line` and previews from `preview` are inherited ones;
+    /// `bw` is the width to restore.
+    Open {
+        line: usize,
+        preview: usize,
+        bw: usize,
+    },
+    Folded,
+    After,
 }
 
 /// Frames a finished group's glyph flashes the accent (DESIGN_PLAN.md D06).
@@ -998,6 +1020,7 @@ impl Builder<'_> {
             context_section: None,
             context_items: Vec::new(),
             paste: None,
+            indent: 0,
         }));
     }
     fn blank(&mut self) {
@@ -1325,7 +1348,67 @@ impl Builder<'_> {
         }
         let mut activity = Vec::new();
         let mut background_notices = Vec::new();
+        // A fork's first `inherited` messages were copied from its parent: one
+        // folded `Forked from` group at the top; open, they render as usual
+        // inside it (PLAN 10, F4).
+        let fork = self
+            .app
+            .state
+            .model
+            .sessions
+            .get(&view.session_id)
+            .and_then(|s| s.fork.clone())
+            .filter(|f| f.inherited > 0);
+        let inherited_n = fork.as_ref().map_or(0, |f| f.inherited);
+        // By position when the whole list is loaded, else by sequence (a
+        // session's messages are numbered from 1).
+        let inherited = |item: &Item| match item {
+            Item::Msg(i, m) if inherited_n > 0 => {
+                if view.messages_more {
+                    m.seq >= 1 && (m.seq as usize) <= inherited_n
+                } else {
+                    *i < inherited_n
+                }
+            }
+            _ => false,
+        };
+        let mut region = ForkRegion::Before;
         for (_, _, _, item) in &items {
+            let copied = inherited(item);
+            if copied && region == ForkRegion::Before {
+                self.activity_group(&mut activity, &results, &traces, &waiting, busy, false);
+                self.background_notices(&mut background_notices);
+                region = match &fork {
+                    Some(f) if self.fork_header(&view.session_id, f) => {
+                        let open = ForkRegion::Open {
+                            line: self.out.len(),
+                            preview: self.previews.len(),
+                            bw: self.bw,
+                        };
+                        self.bw = self.bw.saturating_sub(FORK_INDENT).max(8);
+                        open
+                    }
+                    _ => ForkRegion::Folded,
+                };
+            }
+            if !copied && region != ForkRegion::Before && region != ForkRegion::After {
+                if let ForkRegion::Open { line, preview, bw } = region {
+                    self.activity_group(&mut activity, &results, &traces, &waiting, busy, false);
+                    self.background_notices(&mut background_notices);
+                    if turn_open && !folded {
+                        self.turn_footer(turn_no, &turns);
+                        self.blank();
+                    }
+                    self.end_fork(line, preview, bw);
+                }
+                turn_open = false;
+                folded = false;
+                self.turn = None;
+                region = ForkRegion::After;
+            }
+            if copied && region == ForkRegion::Folded {
+                continue;
+            }
             let background = match item {
                 Item::Msg(_, m) if m.role == "user" => is_background_done(&parts_text(m)),
                 _ => false,
@@ -1418,7 +1501,7 @@ impl Builder<'_> {
                             "tool_call" => {
                                 let call_id = json_str(&p["id"]);
                                 let name = json_str(&p["name"]);
-                                if name == "session" || name == "message_session" {
+                                if name == "session" || name == "fork" || name == "message_session" {
                                     self.activity_group(
                                         &mut activity,
                                         &results,
@@ -1427,9 +1510,15 @@ impl Builder<'_> {
                                         busy,
                                         false,
                                     );
+                                    let mut args = json_str(&p["arguments"]);
+                                    if name == "fork" {
+                                        let mut a = arg_json(&args).unwrap_or(Value::Null);
+                                        a["agent"] = Value::from("fork");
+                                        args = a.to_string();
+                                    }
                                     self.child_card(
                                         &call_id,
-                                        &json_str(&p["arguments"]),
+                                        &args,
                                         &results,
                                         name == "message_session",
                                     );
@@ -1495,6 +1584,17 @@ impl Builder<'_> {
             }
         }
         self.background_notices(&mut background_notices);
+        if let ForkRegion::Open { line, preview, bw } = region {
+            // Only inherited messages so far: the open block ends here.
+            self.activity_group(&mut activity, &results, &traces, &waiting, busy, false);
+            if turn_open && !folded {
+                self.turn_footer(turn_no, &turns);
+                self.blank();
+            }
+            self.end_fork(line, preview, bw);
+            turn_open = false;
+            self.turn = None;
+        }
         // Reasoning that is still streaming belongs to the live activity group:
         // it is the newest member until its message arrives (D06/D07).
         let streaming = self.app.state.model.streaming.get(&view.session_id);
@@ -1550,6 +1650,52 @@ impl Builder<'_> {
                 self.blank();
             }
         }
+    }
+
+    /// The folded row standing for a fork's inherited messages:
+    /// `▸ Forked from ‹parent title› · N messages`. Returns whether it is open.
+    fn fork_header(&mut self, session_id: &str, fork: &crate::api::ForkInfo) -> bool {
+        let key = format!("fork:{session_id}");
+        let open = self.is_open(&key, false);
+        let parent = self
+            .app
+            .state
+            .model
+            .sessions
+            .get(&fork.parent_id)
+            .map(|s| s.title.clone())
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| fork.parent_id.clone());
+        let n = fork.inherited;
+        let label = format!(
+            "Forked from {parent}{}{n} message{}",
+            self.sep(),
+            if n == 1 { "" } else { "s" }
+        );
+        self.block(key, BlockKind::Group, None, true, |b| {
+            let marker = Span::styled(
+                format!("{}{} ", " ".repeat(ACTIVITY_INDENT), b.t.fold(open)),
+                b.meta(),
+            );
+            let label = Span::styled(label, b.meta());
+            b.row(vec![marker, label], Vec::new());
+        });
+        if let Some(block) = self.blocks.last_mut() {
+            block.default_open = Some(false);
+        }
+        open
+    }
+
+    /// Close an open fork block: everything drawn since `line` sits
+    /// `FORK_INDENT` cells in, and the full width returns.
+    fn end_fork(&mut self, line: usize, preview: usize, bw: usize) {
+        for l in &mut self.out[line..] {
+            Rc::make_mut(l).indent += FORK_INDENT as u16;
+        }
+        for p in &mut self.previews[preview..] {
+            p.column += FORK_INDENT;
+        }
+        self.bw = bw;
     }
 
     // -- context ---------------------------------------------------------------
@@ -1939,6 +2085,7 @@ impl Builder<'_> {
                 context_section: None,
                 context_items: Vec::new(),
                 paste: None,
+                indent: 0,
             };
             b.out.push(Rc::new(pad()));
             let available = b.bw.saturating_sub(3);
@@ -1969,6 +2116,7 @@ impl Builder<'_> {
                         context_section: None,
                         context_items: Vec::new(),
                         paste: None,
+                        indent: 0,
                     };
                     let prefix = || {
                         vec![
@@ -2007,6 +2155,7 @@ impl Builder<'_> {
                             context_section: None,
                             context_items: Vec::new(),
                             paste: None,
+                            indent: 0,
                         }));
                     }
                     let mut bottom = prefix();
@@ -2040,6 +2189,7 @@ impl Builder<'_> {
                         context_section: None,
                         context_items: Vec::new(),
                         paste: Some(Rc::clone(paste)),
+                        indent: 0,
                     }));
                 }
             }
@@ -2074,6 +2224,7 @@ impl Builder<'_> {
                     context_section: None,
                     context_items: Vec::new(),
                     paste: None,
+                    indent: 0,
                 }));
             }
             if big && !folded {
@@ -2094,6 +2245,7 @@ impl Builder<'_> {
                     context_section: None,
                     context_items: Vec::new(),
                     paste: None,
+                    indent: 0,
                 }));
             }
             b.out.push(Rc::new(pad()));
@@ -2465,6 +2617,7 @@ impl Builder<'_> {
                         context_section: None,
                         context_items: Vec::new(),
                         paste: None,
+                        indent: 0,
                     }));
                 };
                 let width_in = bw.saturating_sub(3);
@@ -2667,7 +2820,7 @@ impl Builder<'_> {
                         "ask" => "question",
                         "web_search" => "search",
                         "web_fetch" => "page",
-                        "session" => "session",
+                        "session" | "fork" => "session",
                         _ => "tool",
                     }
                 }
@@ -3367,6 +3520,13 @@ impl Builder<'_> {
             .as_ref()
             .filter(|_| follow)
             .map_or(agent, |c| c.agent.clone());
+        // A fork is labelled (and coloured as) `fork`, not the parent's agent
+        // it runs as.
+        let agent = if child.as_ref().is_some_and(|c| c.fork.is_some()) {
+            "fork".to_owned()
+        } else {
+            agent
+        };
         // A card is stale once a later `message_session` call shows the child
         // again lower down: it greys out and stops animating.
         let stale = child.as_ref().is_some_and(|c| {
@@ -3499,6 +3659,7 @@ impl Builder<'_> {
             context_section: None,
             context_items: Vec::new(),
             paste: None,
+            indent: 0,
         };
         self.block(
             key.clone(),
@@ -3525,6 +3686,7 @@ impl Builder<'_> {
                     context_section: None,
                     context_items: Vec::new(),
                     paste: None,
+                    indent: 0,
                 }));
                 if !meta.is_empty() {
                     b.out.push(Rc::new(plain(meta.clone(), secondary)));

@@ -9,12 +9,15 @@ export interface Project {
 }
 export interface SessionSkill { name: string; description: string; scope: string; state: "on" | "off"; locked: boolean }
 export interface SessionMcp { server: string; tools: number | null; state: "on" | "off" | "unavailable"; locked: boolean; error: string | null; warnings?: string[] }
+export interface SessionFork { parent_id: string; inherited: number }
 export interface Session {
   id: string; project_id: string; directory: string; title: string; agent: string;
   parent_id: string | null; children?: string[]; model?: string | null; model_source?: string;
   effort?: string | null; tools?: string[]; disabled_tools?: string[]; skills?: SessionSkill[]; mcp?: SessionMcp[]; permission?: string;
   status?: string; revision: number; created: number; updated: number; archived?: boolean;
   continued_from?: string | null; continued_to?: string | null;
+  /** A fork child (the `fork` agent): its parent and how many of its first messages were copied from it. */
+  fork?: SessionFork | null;
   [k: string]: unknown;
 }
 export interface Part { type: string; text?: string; summary?: string; id?: string; name?: string; arguments?: string; call_id?: string; output?: string; is_error?: boolean; [k: string]: unknown }

@@ -15,8 +15,9 @@ def test_builtins_parse_with_their_modes():
         "build": "all", "orchestrate": "primary", "plan": "subagent", "quick": "subagent", "scout": "subagent"}
     assert [a.name for a in found.allowed(child=False)] == ["build", "orchestrate"]
     assert [a.name for a in found.allowed(child=True)] == ["build", "plan", "quick", "scout"]
-    # Only orchestrate can start sessions; scout is read-only.
-    assert {a.name for a in found.agents.values() if a.control} == {"orchestrate"}
+    # Only orchestrate can start sessions, and build can only fork; scout is read-only.
+    assert {a.name: a.control for a in found.agents.values() if a.control} == {
+        "orchestrate": ("session",), "build": ("fork",)}
     assert found.get("scout").tools == ("read", "grep", "glob", "ls", "code") and found.get("build").tools is None
 
 

@@ -163,7 +163,7 @@ pub fn verb_family(tool: &str) -> Option<&'static str> {
         "grep" | "glob" | "search" | "find" => "search",
         "code" => "code",
         "ask" => "ask",
-        "session" => "session",
+        "session" | "fork" => "session",
         "web_search" | "web_fetch" => "web",
         _ => return None,
     })

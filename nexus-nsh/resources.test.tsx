@@ -1,4 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
+import terminalDock from "../interface/scenarios/terminal-dock.json";
 
 const session = {
   id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Resources", model: "", permission: "ask",
@@ -44,20 +45,25 @@ describe("kernels and shells", () => {
     expect(strip).toBe(true);
     const shown = app.texts().join("\n");
     expect(shown).toContain("kernel");
-    expect(shown).toContain("0 shell");
+    expect(shown).toContain("1 shell");
+    expect(app.shows("id:location-background-shell")).toBe(true);
+    expect(shown.includes("0 shell")).toBe(false);
+    expect(app.shows("id:location-shell")).toBe(false);
     expect(shown.includes("1 kernel")).toBe(false);
     await app.press("id:location-resources");
     await app.waitFor("id:resources");
     await app.waitFor("id:resource-kernel-krn_1");
-    await app.waitFor("id:resource-job-job_1");
+    expect(app.shows("id:resource-job-job_1")).toBe(false);
     const details = app.texts().join("\n");
     expect(details).toContain("Kernels (1)");
-    expect(details).toContain("Background shells (1 live, 2 kept)");
-    expect(details).toContain("sleep 30");
-    expect(details).toContain("printf done");
+    expect(details.includes("Background shells (1 live, 2 kept)")).toBe(false);
     expect(details).toContain("answer: int = 42");
     await app.keyboard.press("Escape");
     await app.waitUntil(() => !app.shows("id:resources"));
+    await app.press("id:location-background-shell");
+    await app.waitFor("id:resource-job-job_1");
+    expect(app.shows("id:resource-kernel-krn_1")).toBe(false);
+    expect(app.texts().join("\n")).toContain("Background shells (1 live, 2 kept)");
   });
 
   test("the count is absent when no kernel or running shell exists", async () => {
@@ -69,6 +75,40 @@ describe("kernels and shells", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:location-strip");
     expect(app.shows("id:location-resources")).toBe(false);
+    expect(app.shows("id:location-background-shell")).toBe(false);
+    expect(app.shows("id:location-shell")).toBe(false);
     expect(app.texts().join("\n").includes("kernel ·")).toBe(false);
+  });
+
+  test("background and terminal shells have separate indicators", async () => {
+    const app = await open("./App.tsx", {
+      network: { ...network, "GET */api/terminal*": { body: [{ id: "t1", name: "Shell", project_id: "prj_1", workspace: "/work/demo", status: "running", controller: null, rows: 24, cols: 80 }] } },
+      width: 1280, height: 900, platform: "web",
+    });
+    await app.waitFor("id:session-ses_1");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:location-background-shell");
+    await app.waitFor("id:location-shell");
+    expect(app.texts().join("\n")).toContain("1 shell");
+    expect(app.texts().join("\n")).toContain("1 terminal shell");
+    await app.press("id:location-background-shell");
+    await app.waitFor("id:resource-job-job_1");
+  });
+
+  test("a background job linked to a terminal is counted once and opens the dock", async () => {
+    const app = await open("./App.tsx", {
+      network: { ...network,
+        "GET */api/bash*": { body: [{...terminalDock.background_job, session_id: session.id, root: session.id}] },
+        "GET */api/terminal*": { body: terminalDock.terminals.map(t => ({...t, project_id: project.id, session_id: session.id})) },
+      }, width: 1280, height: 900, platform: "web",
+    });
+    await app.waitFor("id:session-ses_1");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:location-shell");
+    expect(app.shows("id:location-background-shell")).toBe(false);
+    expect(app.texts().join("\n")).toContain("2 terminal shell");
+    await app.press("id:location-shell");
+    await app.waitFor("id:terminal-panel");
+    for (const fact of terminalDock.expect) expect(app.texts().join("\n")).toContain(fact);
   });
 });

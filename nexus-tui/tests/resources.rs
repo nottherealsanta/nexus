@@ -34,15 +34,31 @@ fn with_resources() -> nexus_tui::app::App {
 }
 
 #[test]
+fn indicators_stay_centered_when_working_starts() {
+    let mut app = with_resources();
+    let (_, rows) = draw(&mut app, 160, 50);
+    let line = rows.iter().find(|row| row.contains("1 shell")).unwrap();
+    let start = line[..line.find("kernel").unwrap()].chars().count();
+    let end = line[..line.find("1 shell").unwrap()].chars().count() + "1 shell".len();
+    let center = app.regions.composer.x as usize + app.regions.composer.width as usize / 2;
+    assert!(((start + end) / 2).abs_diff(center) <= 1, "{line}");
+    busy(&mut app);
+    let (_, rows) = draw(&mut app, 160, 50);
+    let line = rows.iter().find(|row| row.contains("1 shell")).unwrap();
+    assert_eq!(line[..line.find("kernel").unwrap()].chars().count(), start);
+}
+
+#[test]
 fn strip_counts_and_modal_list() {
     let mut app = with_resources();
     let (_, rows) = draw(&mut app, 160, 50);
     let strip = rows
         .iter()
-        .find(|row| row.contains("kernel") && row.contains("shell"))
-        .expect("the location strip has kernel and shell counts")
+        .find(|row| row.contains("kernel"))
+        .expect("the location strip has a kernel indicator")
         .clone();
-    assert!(strip.contains("kernel · 0 shell"), "strip: {strip:?}");
+    assert!(strip.contains("1 shell"), "strip: {strip:?}");
+    assert!(app.hits.rect_of(&Target::ComposerTerminals).is_none());
 
     let chip = app
         .hits
@@ -51,20 +67,78 @@ fn strip_counts_and_modal_list() {
     click(&mut app, chip.x + chip.width / 2, chip.y);
     let (_, rows) = draw(&mut app, 160, 50);
     let shown = rows.join("\n");
-    assert!(shown.contains("Kernels and shells"), "{shown}");
+    assert!(!shown.contains("Background shells ("), "{shown}");
     assert!(shown.contains("Kernels (1)"), "{shown}");
     assert!(shown.contains("krn_1"), "{shown}");
     assert!(shown.contains("answer: int = 42"), "{shown}");
-    assert!(
-        shown.contains("Background shells (1 live, 2 kept)"),
-        "{shown}"
-    );
-    assert!(shown.contains("$ sleep 30"), "{shown}");
-    assert!(shown.contains("$ printf done"), "{shown}");
-
     press(&mut app, &["esc"]);
     let (_, rows) = draw(&mut app, 160, 50);
     assert!(!rows.join("\n").contains("Kernels (1)"));
+    let chip = app.hits.rect_of(&Target::ComposerShells).unwrap();
+    click(&mut app, chip.x, chip.y);
+    let shown = draw(&mut app, 160, 50).1.join("\n");
+    assert!(app.terminal_open, "{shown}");
+    assert!(shown.contains("Terminals (0)"), "{shown}");
+    assert!(!shown.contains("Kernels (1)"), "{shown}");
+    app.execute("session.resources");
+    let shown = draw(&mut app, 160, 50).1.join("\n");
+    assert!(shown.contains("Background shells (1 live, 2 kept)"), "{shown}");
+    assert!(shown.contains("$ sleep 30"), "{shown}");
+}
+
+#[test]
+fn background_and_terminal_shells_are_separate_and_clickable() {
+    let mut app = with_resources();
+    app.terminal_panel.terminals.push(
+        serde_json::from_value(json!({
+            "id": "t1", "name": "Shell", "workspace": "/tmp", "status": "running",
+            "controller": null, "rows": 24, "cols": 80
+        }))
+        .unwrap(),
+    );
+    let (_, rows) = draw(&mut app, 160, 50);
+    let shown = rows.join("\n");
+    assert!(shown.contains("1 shell"), "{shown}");
+    assert!(shown.contains("1 terminal shell"), "{shown}");
+    assert!(app.hits.rect_of(&Target::ComposerResources).is_some());
+    assert!(app.hits.rect_of(&Target::ComposerTerminals).is_some());
+}
+
+#[test]
+fn background_shell_opens_the_terminal_dock_without_a_kernel() {
+    let mut app = with_resources();
+    app.state.kernels.clear();
+    let (_, rows) = draw(&mut app, 160, 50);
+    assert!(rows.join("\n").contains("1 shell"));
+    let chip = app.hits.rect_of(&Target::ComposerShells).unwrap();
+    click(&mut app, chip.x, chip.y);
+    assert!(app.terminal_open);
+    assert!(draw(&mut app, 160, 50)
+        .1
+        .join("\n")
+        .contains("Terminals (0)"));
+}
+
+#[test]
+fn a_linked_background_job_is_counted_once() {
+    let mut app = with_resources();
+    app.state.jobs[0]["terminal_id"] = json!("t1");
+    app.terminal_panel.terminals.push(
+        serde_json::from_value(json!({
+            "id":"t1", "name":"sleep 30", "workspace":"/tmp", "status":"running",
+            "controller":null, "rows":24, "cols":80, "background_job_id":"job_1"
+        }))
+        .unwrap(),
+    );
+    assert_eq!(app.resource_counts().1, 0);
+    assert_eq!(app.terminal_shell_count(), 1);
+    let (_, rows) = draw(&mut app, 160, 50);
+    let shown = rows.join("\n");
+    assert!(shown.contains("1 terminal shell"), "{shown}");
+    assert!(!shown.contains("1 shell"), "{shown}");
+    let chip = app.hits.rect_of(&Target::ComposerTerminals).unwrap();
+    click(&mut app, chip.x, chip.y);
+    assert!(app.terminal_open);
 }
 
 #[test]
@@ -73,5 +147,7 @@ fn no_kernel_or_shell_leaves_the_strip_unmarked() {
     app.open_session(SESSION);
     let (_, rows) = draw(&mut app, 160, 50);
     assert!(!rows.join("\n").contains("kernel"));
+    assert!(!rows.join("\n").contains("0 shell"));
     assert!(app.hits.rect_of(&Target::ComposerResources).is_none());
+    assert!(app.hits.rect_of(&Target::ComposerTerminals).is_none());
 }

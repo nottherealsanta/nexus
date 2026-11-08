@@ -1,6 +1,6 @@
 """Running Nexus Core as a daemon, and finding it.
 
-One daemon per Nexus home. `serve()` runs it in the foreground on 127.0.0.1 (or
+One daemon per Nexus home. `serve()` runs it in the foreground on 0.0.0.0 (or
 the address `$NEXUS_HOST` names) and writes `<home>/daemon.json` (`url`, `pid`,
 `token`; mode 0600) while it runs. Clients read that file (`discover()`), and
 `ensure()` starts the daemon in the background when none answers. The port is
@@ -37,7 +37,7 @@ import httpx
 from .paths import home
 
 DEFAULT_PORT = 4747
-DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = "0.0.0.0"
 START_TIMEOUT_S = 15.0
 STOP_TIMEOUT_S = 10.0
 KILL_TIMEOUT_S = 2.0
@@ -75,7 +75,7 @@ def _port() -> int:
 
 
 def _host(explicit: str | None = None) -> str:
-    """The interface to bind: `--host`, then `$NEXUS_HOST`, then loopback."""
+    """The interface to bind: `--host`, then `$NEXUS_HOST`, then all IPv4 interfaces."""
     return (explicit or os.environ.get("NEXUS_HOST") or DEFAULT_HOST).strip() or DEFAULT_HOST
 
 

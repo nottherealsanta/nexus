@@ -134,7 +134,8 @@ TOOL = Tool(
         name="bash",
         description=(
             "Run a bash command. It starts in the workspace directory, so do not `cd` there first. stdout and "
-            "stderr are combined; there is no stdin. Use it for git, tests, linters and builds, and for "
+            "stderr are combined; foreground commands have no stdin. Users can control background PTYs. "
+            "Use it for git, tests, linters and builds, and for "
             "anything the other tools cannot do; use `read`, `grep`, `glob`, `ls`, `edit` and `patch` rather than "
             "cat, sed, rg, find or redirects. There is no default time limit; pass timeout (seconds) to bound it. "
             "background=true returns a job id immediately; read it with bash_output and stop it with bash_kill."

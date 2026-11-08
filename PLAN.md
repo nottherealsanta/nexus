@@ -59,6 +59,7 @@ consolidation commit.
 | 2 | Terminal inside Nexus | Core PTY and HTTP/SSE slice; initial TUI terminal panel, not feature-complete | [2](#2-terminal-inside-nexus) |
 | 7 | Everything else carried over | Full backlog in section 9, not scheduled | [7](#7-carried-over-not-scheduled) |
 | 8 | Provider usage panel (table) | Landed and visually compared in both clients | [8](#8-provider-usage-panel-usage-table) |
+| 10 | Fork subagent | **Core built (11-08):** the `fork` tool (granted to `build`), API `fork` field, mock `fork_subagent`; Client UI in both (tests only, no screenshots); cache hit verified on Codex, Copilot, OpenCode, Grok | [10](#10-fork-subagent) |
 
 Suggested order: 4, then 1 (so the release PR can merge on a green tree), then 5, then 2 and 3 in whatever order the
 user prefers (3 needs real-model approvals). Section 6 (ZMX) is for later. Section 8 (the usage panel) is small, self-contained and can go any time after 4.
@@ -146,22 +147,28 @@ Decided 2026-11-06: retire it, keep the code somewhere safe. The complete code i
 
 ## 2. Terminal inside Nexus
 
+Side job (user, 2026-11-08): make every question fully readable in both clients.
+Remove the TUI's two-line prompt truncation and single-line option clipping; retain
+complete option previews and a practical scroll path at narrow/short sizes. Paired
+implementation, interaction tests and screenshots are in progress.
+
 Goal (user, 2026-11-06): a real interactive terminal in Nexus, in the TUI and in NSH (desktop and web, never mobile),
 with the same operations in both. Not the old `nexus nsh tui` launcher and not a list of bash jobs. Design inputs:
 [reports/section14/spikes.md](reports/section14/spikes.md) (PTY + pyte, `vt100`, `@xterm/headless` all proven in
 spikes) and the archived 14.2/14.3.
 
+Decision (user, 2026-11-08): running background bash jobs appear in the terminal dock and allow interactive input, rather than being a separate shell indicator. **Core integration implemented:** project-backed jobs share one PTY with the terminal service, preserving `bash_output`, `bash_kill`, output limits, completion notices and explicit single-writer control. Job metadata links `terminal_id`; terminal metadata links `background_job_id`. Without a terminal service/project, the legacy non-interactive pipe fallback remains. PTY echo/CRLF/escape bytes may appear in captured job output. Focused Core terminal/job tests: **26 passed**. Paired client polish and screenshot verification are in progress; the previously reported TUI 404 has not been independently reproduced.
+
 Defaults to confirm at the first design review (change any of them freely):
 
 - **Core owns the PTY** (`nexus-core/nexus/terminals.py`): clients are viewers/controllers, never process owners.
-  Resources have opaque ids, a project/workspace, a creator, status and timestamps. Do not reuse `bash_jobs`.
+  Resources have opaque ids, a project/workspace, a creator, status and timestamps. Background jobs use the same resources, linked by job and terminal ids.
 - **Parser strategy:** Core keeps a bounded raw ring; clients parse it locally (`vt100` in the TUI, xterm.js in NSH).
   Replay after discard resets the parser and announces the gap; it cannot restore state lost with discarded bytes.
   pyte is an optional text snapshot, not a reconnect checkpoint (user decision).
 - **One active writer;** many viewers. Control is explicit, shown, and released on disconnect, never handed to an agent.
 - **Closing a panel detaches; Close terminates.** A Core restart marks terminals ended, never "resumed".
-- **Not in the model's context** unless the user attaches output explicitly (a normal visible message with provenance).
-  No agent typing in the first version.
+- **Interactive terminal output is not in model context** unless the user attaches it explicitly (a normal visible message with provenance). Background-job output retains its existing `bash_output` and completion-notice paths into context, including echoed user input. No agent typing in the first version.
 - **Access:** loopback or authenticated only. No remote shell over the tokenless non-loopback mode. Escape sequences
   that write the clipboard, open files or launch URLs are gated behind a user action.
 
@@ -1083,8 +1090,61 @@ Terminal evidence capture and agent-control policy apply to section 2 as well.
   tools/inspector/MCP docs and the ledger where behavior changes. Land in vertical slices, each with a
   usable backend and both clients; no mock terminal/browser can be marked MVP complete.
 
+## 10. Fork subagent
+
+**Proposed (user, 2026-11-08); Core built 2026-11-08, clients in progress.** A subagent that forks the calling session: it starts with the
+parent's exact system prompt, tools, model, effort and history, gets one task appended, runs, and returns only its
+final report to the parent. Named subagents (`quick`, `scout`, `plan`) start from a fresh brief instead.
+
+Why: no briefing loss (the fork already knows what the parent knows), the parent's context stays clean (only the
+report comes back), and an identical request prefix makes the fork a prompt-cache hit. Prior art: Claude Code's
+Agent tool `subagent_type: "fork"`, Qwen Code's
+[fork-subagent design](https://qwenlm.github.io/qwen-code-docs/en/design/fork-subagent/fork-subagent-design/),
+pi-subagents' fork spec. No peer-reviewed work on the pattern found.
+
+| Decision | Decided (2026-11-08) |
+| --- | --- |
+| **F1. Name** | `fork`, the term the other harnesses use. **Changed:** a tool, not an agent file or `session` enum value (a file brings its own prompt and breaks the prefix); no agent file may be named `fork` |
+| **F2. How it is launched** | The control-plane `fork` tool (its own tool, granted by `control: [fork]`, in `build`), never a task tool. Same `message_session` follow-ups as other children |
+| **F3. What it inherits** | The parent's request prefix byte for byte: system prompt, tool definitions, model, effort/thinking settings, canonical history. No model or effort override (any change breaks the cache hit) |
+| **F4. Timeline** | Client side. The fork's timeline must show what the model receives: a collapsed, labelled "Forked from ‹parent› at ‹message›" block for the inherited prefix (expandable, not copied into the UI as new items), then the fork marker and its own work. Same in both clients. Core gives `fork: {parent_id, inherited}`; the first `inherited` messages are the copied ones |
+| **F5. Recursion** | A fork cannot launch any subagent or fork (told in the marker; hard refusal in the control plane with a clear error) |
+
+- [x] **Decide F1–F5** (2026-11-08; F1 changed as above, F4 is the clients').
+- [x] **Core:** the fork's snapshot is a copy of the parent's (tool definitions with `session` itself), with the
+  parent's resolved model/effort, permission and switches, and its prompt-cache key is the parent's id. Its first
+  messages are the parent's longest settled prefix (the pending `session` call is left out), then a user message
+  that starts with the constant `runtime.FORK_MARKER` (`[Nexus fork] You are a fork of session ‹id›: … Task: ‹prompt›`).
+  F5: a fork's `session` and `message_session` calls are refused in the control plane. Claude Code has an open bug
+  where forks resume the parent's orchestration ([#89101](https://claudeissues.com/issue/89101-forked-subagents-resume-the-parents-orchestration-they-bypass-the-nested-fork-bl)),
+  so the marker and the F5 guard are both present. Session JSON/events carry `fork: {parent_id, inherited}`
+  (session column, migrated in place). Mock scenario `fork_subagent`. Verified offline only (`tests/test_fork.py`:
+  the fork's first request has the parent's instructions, tools, model, effort and settled messages).
+- [x] **Cache:** verified 2026-11-08 with one real run each: the fork's first request read 96–100% of the
+  reusable prefix from cache on `codex/gpt-6-luna`, `copilot/gpt-6-luna`, `opencode/deepseek-v4.1-flash` and
+  `grok/grok-4.7` ([reports/fork-cache](reports/fork-cache/README.md)). Claude provider not checked (user).
+- [ ] **Grok rejects the `edit` tool schema** (`invalid_client_tool_schema`: root is anyOf/oneOf, must be an
+  object). Every Grok session with `edit` on fails on its first request; found by the fork cache check.
+- [x] **Context size:** refused (tool error suggesting a named sub agent) when the parent's context leaves under 10%
+  of the window; skipped when the window is unknown.
+- [x] **Parallel writes:** decided: forks get the parent's tools and workspace, no read-only restriction and no
+  worktree; the conflict risk is documented in docs/agents.md.
+- [x] **UI (both clients):** child card and strip labelled `Fork`; the fork's timeline opens with one collapsed
+  `Forked from ‹parent› · N messages` group (key `fork:<sid>`, existing group fold), inherited rows indented when
+  open; phone keeps the folded row. TUI and NSH tests pass (11-08).
+- [ ] **UI verification:** side-by-side TUI/NSH screenshots from mock `fork_subagent` (not taken). Open questions:
+  the right sidebar's Agent row still shows the parent's agent in both clients; NSH draws no tree lines beside the
+  open block's rows (compare with the TUI).
+- [x] **Docs and ledger:** docs/agents.md (`fork`), docs/daemon.md (session trees), docs/api.md (`fork` field),
+  docs/llm-providers.md (mock scenario) and a porting-ledger row. Client docs belong with the UI item.
+
+When to prefer a fresh `scout` instead: an independent second opinion, since a fork inherits the parent's assumptions
+and mistakes.
+
 
 ## Landed
+
+- **Core network default (11-08).** Core now binds `0.0.0.0` by default for LAN/Tailscale clients; explicit host overrides remain. Native discovery accepts the empty token written for network binds. The default is tokenless: trusted networks/firewall only; loopback opt-in retains token protection. Focused checks: Core daemon 7 passed, native discovery 4 passed, Ruff passed; device connectivity not verified.
 
 - **Consolidation checkpoint (11-08).** Current work collected on main at the user's request; incomplete editor/Git UI and verification gates remain explicitly open. No new feature work continues after this checkpoint.
 

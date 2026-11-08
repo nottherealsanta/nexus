@@ -71,6 +71,35 @@ async def test_shell_io_control_resize_and_close(tmp_path, monkeypatch):
         os.kill(term.pid, 0)
 
 
+async def test_command_terminal_accepts_interactive_input(tmp_path):
+    service = TerminalService()
+    term = service.create(project_id="p", workspace=str(tmp_path), creator="job", session_id="s",
+                          rows=24, cols=80, command="read value; printf 'received:%s\\n' \"$value\"")
+    aid = term.attach("viewer")
+    term.attachments[aid].connected = True
+    try:
+        term.control(aid, "acquire")
+        term.input(aid, 1, b"hello\n")
+        await wait_for(lambda: b"received:hello" in output(term))
+        await term.waiter
+        assert term.exit_code == 0
+    finally:
+        await service.shutdown()
+
+
+async def test_output_frames_precede_exit_for_large_fast_output(tmp_path):
+    service = TerminalService()
+    term = service.create(project_id="p", workspace=str(tmp_path), creator="job", session_id="s",
+                          rows=24, cols=80, command="head -c 50000 /dev/zero | tr '\\0' X")
+    try:
+        await asyncio.wait_for(term.waiter, 5)
+        frames = [frame for frame, _ in term.frames]
+        assert len(output(term)) == 50000
+        assert frames[-1]["type"] == "exit"
+    finally:
+        await service.shutdown()
+
+
 def test_screen_split_utf8_and_alt_screen():
     import pyte
 

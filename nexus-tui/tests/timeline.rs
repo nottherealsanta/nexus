@@ -2725,3 +2725,208 @@ fn a_delivered_steer_is_tagged_and_does_not_open_a_turn() {
     assert!(text.contains("steer"), "{text}");
     assert!(!text.contains("#2"), "{text}");
 }
+
+// ---- forks (PLAN 10, F4) -----------------------------------------------------
+
+/// The fixture session as a fork of `Root task` whose first `inherited`
+/// messages came from the parent, then its `[Nexus fork]` task and reply.
+fn forked(inherited: usize) -> nexus_tui::app::App {
+    let mut a = app();
+    let mut parent = a.state.model.sessions[SESSION].clone();
+    parent.id = "ses_parent".into();
+    parent.title = "Root task".into();
+    parent.parent_id = None;
+    a.state.model.sessions.insert(parent.id.clone(), parent);
+    {
+        let s = a.state.model.sessions.get_mut(SESSION).unwrap();
+        s.parent_id = Some("ses_parent".into());
+        s.fork = Some(nexus_tui::api::ForkInfo {
+            parent_id: "ses_parent".into(),
+            inherited,
+        });
+    }
+    let msgs = serde_json::json!([
+        {"id":"p1", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"parent prompt"}]},
+        {"id":"p2", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":[{"type":"text","text":"parent reply"}]},
+        {"id":"p3", "session_id":SESSION, "seq":3, "created":3.0, "role":"assistant", "parts":[{"type":"text","text":"parent second reply"}]},
+        {"id":"f1", "session_id":SESSION, "seq":4, "created":4.0, "role":"user", "parts":[{"type":"text","text":"[Nexus fork] check the tests"}]},
+        {"id":"f2", "session_id":SESSION, "seq":5, "created":5.0, "role":"assistant", "parts":[{"type":"text","text":"fork reply"}]}
+    ]);
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.messages = serde_json::from_value(msgs).unwrap();
+    view.scratch.clear();
+    view.turns.clear();
+    a
+}
+
+fn all_text(t: &nexus_tui::timeline::Timeline) -> String {
+    t.lines
+        .iter()
+        .map(|l| line_text(l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn a_fork_folds_its_inherited_messages_into_one_row_and_shows_its_task() {
+    use nexus_tui::timeline::{build, BlockKind};
+    let a = forked(3);
+    let t = build(&a, &a.theme, 0, 100);
+    let fork = t
+        .blocks
+        .iter()
+        .find(|b| b.key == format!("fork:{SESSION}"))
+        .expect("the fork block");
+    assert_eq!(fork.kind, BlockKind::Group);
+    assert!(fork.toggle);
+    assert_eq!(fork.end - fork.start, 1, "one row");
+    assert_eq!(
+        line_text(&t.lines[fork.start]).trim_end(),
+        format!(
+            "   {} Forked from Root task · 3 messages",
+            a.theme.fold(false)
+        )
+    );
+    let text = all_text(&t);
+    assert!(
+        !text.contains("parent prompt") && !text.contains("parent reply"),
+        "{text}"
+    );
+    // The task message is the user message the model received, unchanged.
+    assert!(text.contains("[Nexus fork] check the tests"), "{text}");
+    assert!(text.contains("fork reply"), "{text}");
+    // It is the first block after the context: nothing inherited sits above it.
+    let first_turn = t
+        .blocks
+        .iter()
+        .position(|b| b.kind == BlockKind::Turn)
+        .unwrap();
+    let at = t.blocks.iter().position(|b| b.key == fork.key).unwrap();
+    assert!(at < first_turn);
+}
+
+#[test]
+fn an_open_fork_block_renders_inherited_messages_inside_it() {
+    use nexus_tui::timeline::build;
+    let mut a = forked(3);
+    a.ui.timeline_open.insert(format!("fork:{SESSION}"), true);
+    let t = build(&a, &a.theme, 0, 100);
+    let fork = t
+        .blocks
+        .iter()
+        .find(|b| b.key == format!("fork:{SESSION}"))
+        .unwrap();
+    assert!(line_text(&t.lines[fork.start]).contains(a.theme.fold(true)));
+    let row = |needle: &str| {
+        t.lines
+            .iter()
+            .find(|l| line_text(l).contains(needle))
+            .unwrap_or_else(|| panic!("{needle}: {}", all_text(&t)))
+    };
+    // Inherited rows (band and reply) sit three cells in; the fork's own do not.
+    assert_eq!(row("parent prompt").indent, 3);
+    assert!(row("parent prompt").rail.is_some(), "a normal user band");
+    assert_eq!(row("parent second reply").indent, 3);
+    assert_eq!(row("[Nexus fork] check the tests").indent, 0);
+    assert_eq!(row("fork reply").indent, 0);
+    let order: Vec<usize> = [
+        "Forked from",
+        "parent prompt",
+        "parent reply",
+        "[Nexus fork]",
+        "fork reply",
+    ]
+    .iter()
+    .map(|n| {
+        t.lines
+            .iter()
+            .position(|l| line_text(l).contains(n))
+            .unwrap()
+    })
+    .collect();
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
+}
+
+#[test]
+fn the_fork_block_toggles_like_a_group_and_counts_one_message() {
+    let mut a = forked(1);
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("Forked from Root task · 1 message"), "{text}");
+    assert!(!text.contains("1 messages"), "{text}");
+    let at = a
+        .blocks()
+        .iter()
+        .position(|b| b.key == format!("fork:{SESSION}"))
+        .unwrap();
+    a.ui.focus = Focus::Timeline;
+    a.ui.timeline_sel = Some(at);
+    press(&mut a, &["enter"]);
+    assert!(rows(&mut a).join("\n").contains("parent prompt"));
+    press(&mut a, &["left"]);
+    assert!(!rows(&mut a).join("\n").contains("parent prompt"));
+    press(&mut a, &["right"]);
+    assert!(rows(&mut a).join("\n").contains("parent prompt"));
+}
+
+#[test]
+fn a_fork_with_an_unknown_parent_names_the_parent_id() {
+    let mut a = forked(2);
+    a.state.model.sessions.remove("ses_parent");
+    let text = rows(&mut a).join("\n");
+    assert!(
+        text.contains("Forked from ses_parent · 2 messages"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_session_without_fork_has_no_fork_block_and_old_json_still_reads() {
+    let s: nexus_tui::api::Session =
+        serde_json::from_value(serde_json::json!({"id": "ses_x", "agent": "build"})).unwrap();
+    assert_eq!(s.fork, None);
+    assert_eq!(s.agent_label(), "build");
+    let s: nexus_tui::api::Session = serde_json::from_value(serde_json::json!({
+        "id": "ses_y", "agent": "build", "fork": {"parent_id": "ses_x", "inherited": 4}
+    }))
+    .unwrap();
+    assert_eq!(s.fork.as_ref().map(|f| f.inherited), Some(4));
+    assert_eq!(s.agent_label(), "fork");
+    let mut a = forked(3);
+    a.state.model.sessions.get_mut(SESSION).unwrap().fork = None;
+    let t = nexus_tui::timeline::build(&a, &a.theme, 0, 100);
+    assert!(!t.blocks.iter().any(|b| b.key.starts_with("fork:")));
+    assert!(all_text(&t).contains("parent prompt"));
+}
+
+#[test]
+fn a_child_card_for_a_fork_reads_fork() {
+    use nexus_tui::timeline::{build, BlockKind};
+    let mut a = app();
+    let msgs = serde_json::json!([
+        {"id":"u", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"start"}]},
+        {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":[
+            {"type":"tool_call","id":"call_fork","name":"session","arguments":"{\"agent\":\"fork\",\"title\":\"Check tests\",\"prompt\":\"check\"}"}
+        ]}
+    ]);
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.messages = serde_json::from_value(msgs).unwrap();
+    view.scratch.clear();
+    let mut child = a.state.model.sessions[SESSION].clone();
+    child.id = "ses_fork".into();
+    child.parent_id = Some(SESSION.into());
+    child.parent_call_id = Some("call_fork".into());
+    child.title = "Check tests".into();
+    child.fork = Some(nexus_tui::api::ForkInfo {
+        parent_id: SESSION.into(),
+        inherited: 2,
+    });
+    a.state.model.sessions.insert(child.id.clone(), child);
+    let t = build(&a, &a.theme, 0, 100);
+    let card = t
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Child)
+        .unwrap();
+    let head = line_text(&t.lines[card.start]);
+    assert!(head.contains("Fork Check tests"), "{head}");
+}

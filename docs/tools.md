@@ -117,7 +117,7 @@ sees, never silent.
 
 **Approval.** Tools do not ask for permission. The loop calls an `approve` callback before each
 call ([loop.md](loop.md#approval)). The daemon auto-approves `read`, `bash_output`,
-`bash_kill`, `ask`, `edit`, `write`, the outer `code` call, the `session` and
+`bash_kill`, `ask`, `edit`, `write`, the outer `code` call, the `session`, `fork`,
 `message_session` and `escalate` control tools and every workspace control tool; `edit` and `write`
 are approval-free inside the session directory by fixed policy, with no setting
 to change that. `bash` (including `background`) still asks unless the session's
@@ -191,7 +191,7 @@ never ask for approval or an `ask` question.
 - `disabled_tools` can switch any of the three off individually. Activation
   never re-enables a disabled tool.
 - The control tools are never bound inside `code`: a cell can call only the
-  caller's task tools. `session`, `message_session`, `expose_workspace_tools`,
+  caller's task tools. `session`, `fork`, `message_session`, `expose_workspace_tools`,
   `change_session_directory` and `worktree` are all excluded
   (`agents.NEXUS_CONTROL_TOOLS`).
 
@@ -410,7 +410,8 @@ Run a command with `/bin/bash -c` in the workspace.
 | `timeout` | number | none | Optional seconds; omitted means no time limit |
 | `background` | boolean | false | Return a job id at once instead of waiting |
 
-* stdout and stderr are combined; stdin is `/dev/null`.
+* stdout and stderr are combined. Foreground stdin is `/dev/null`; daemon
+  background jobs normally use a PTY with explicit user-controlled input.
 * There is **no default time limit**. A foreground call waits until the command
   exits, the caller passes `timeout`, or the call is cancelled. Cancelling it
   (an interrupted turn, or a code cell's `timeout_s`) sends SIGKILL to the whole
@@ -431,6 +432,15 @@ independent of the turn and of any code cell. It is owned by the session tree
 that started it: inside a sub agent, `bash_output` and `bash_kill` see the
 tree's jobs, not another tree's.
 
+When the daemon terminal service is available, the job is also an ordinary
+terminal resource in the originating project, session and workspace. Its
+`background_job_id` identifies the job, and the job JSON includes `terminal_id`.
+Viewing is read-only until a client explicitly acquires terminal control. Closing
+the terminal, killing the job and timing it out all affect the same process.
+PTY output can contain terminal echo, CRLF line endings and control sequences; echoed user input
+is included in job output and can appear in the completion notice. Without a
+terminal service, background jobs retain the non-interactive pipe behavior.
+
 * `bash_output {job_id, offset?, limit?}` returns status (`running`, `done`,
   `timeout`, `killed`, `error`), exit code, duration and output. `offset` and
   `limit` page through it; `limit` defaults to and is capped at 30,000
@@ -450,8 +460,8 @@ tree's jobs, not another tree's.
 * Concurrent launches share one admission lock, so they cannot exceed the live
   limit; shutdown waits for an in-flight launch before collecting processes.
   Explicit timeouts kill the process group even if the shell has exited while
-  a descendant still holds its output pipe. Output decoding preserves UTF-8
-  characters split across pipe reads.
+  a descendant still holds its output open. Output decoding preserves UTF-8
+  characters split across reads, independently of the terminal replay ring.
 * At most 16 jobs run at once and 64 are retained (running plus finished) for
   output; the oldest finished job is evicted first. They do not survive a
   daemon restart. Deleting a session or project kills its jobs; interrupting a
@@ -564,8 +574,11 @@ that appears while a create is in progress is refused. No approval is requested.
 
 `ask {questions: [...]}` asks the user one or more questions and waits for the
 answers. It is a task tool, not a control tool and not an approval. A request
-carries 1-5 questions. In the TUI they are pages and the question wraps to at
-most two lines. Every page has a custom answer field in the card: type there to
+carries 1-5 questions. In the TUI they are pages; questions, option labels and
+optional previews wrap without a line limit. Focus the card with `alt+w` and use
+Page Up/Page Down to scroll its content when it does not fit. NSH shows the
+questions in one scrollable card. The answer fields and submit controls can be
+reached by scrolling; drafts stay with their questions. Every TUI page has a custom answer field in the card: type there to
 answer in your own words, or to add context to a selected option. With options,
 Up/Down moves, Space ticks a multi-select option and a number picks one;
 `alt+a` moves between the option list and the field. Enter locks the answer and

@@ -67,7 +67,8 @@ fn discover(custom: Option<&Path>, home: Option<&Path>) -> Option<DaemonLocation
         let Some(token) = value["token"].as_str() else {
             continue;
         };
-        if !url.is_empty() && url.len() <= 2048 && !token.is_empty() && token.len() <= 4096 {
+        // Network-bound Core records an empty token, including the default wildcard bind.
+        if !url.is_empty() && url.len() <= 2048 && token.len() <= 4096 {
             return Some(DaemonLocation {
                 url: url.trim_end_matches('/').to_owned(),
                 token: token.to_owned(),
@@ -129,6 +130,19 @@ mod tests {
             discover(None, Some(&root)).unwrap().url,
             "http://127.0.0.1:1"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn tokenless_network_core_is_discovered() {
+        let root = root("tokenless");
+        std::fs::write(
+            root.join("daemon.json"),
+            serde_json::json!({"url": "http://127.0.0.1:4747", "token": ""}).to_string(),
+        )
+        .unwrap();
+        let location = discover(Some(&root), None).unwrap();
+        assert_eq!(location.url, "http://127.0.0.1:4747");
+        assert!(location.token.is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

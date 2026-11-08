@@ -118,3 +118,41 @@ asyncio.run(main())
     env.update(NEXUS10_DEV="1", NEXUS10_HOME=str(home), WORKSPACE=str(workspace))
     result = subprocess.run([sys.executable, "-c", script], check=False, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_fork_subagent_scenario_runs_two_forks(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("demo\n")
+    script = """
+import asyncio, json, os
+from nexus.bus import Bus
+from nexus.runtime import Runtime
+from nexus.store import Store
+async def main():
+    store=Store()
+    runtime=Runtime(store,Bus())
+    project=runtime.open_project(os.environ["WORKSPACE"])
+    session=runtime.create_session(project,title=None,model="mock/fork_subagent",permission="allow",agent="build")
+    runtime.prompt(session.id,"Exercise fork sub agents.")
+    await runtime.turns[session.id]
+    messages=store.messages(session.id)
+    assert any("mock verdict — fork-subagent: 2/2 checks passed" in "".join(p.text for p in item.message.parts if hasattr(p,"text")) for item in messages if item.message.role=="assistant")
+    children=store.children(session.id)
+    assert len(children) == 2 and all(c.fork_info() == {"parent_id": session.id, "inherited": 3} for c in children)
+    for child in children:
+        texts=["".join(p.text for p in m.message.parts if hasattr(p,"text")) for m in store.messages(child.id)]
+        assert texts[-1].startswith("Fork report"), texts
+    await runtime.shutdown()
+asyncio.run(main())
+"""
+    env = os.environ.copy()
+    env.update(NEXUS10_DEV="1", NEXUS10_HOME=str(home), WORKSPACE=str(workspace))
+    result = subprocess.run([sys.executable, "-c", script], check=False, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr

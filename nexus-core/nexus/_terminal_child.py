@@ -8,6 +8,8 @@ import termios
 def main() -> None:
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
     shell = sys.argv[1]
+    if len(sys.argv) > 2:
+        os.execl(shell, shell, "-c", sys.argv[2])
     os.execl(shell, shell, "-i")
 
 

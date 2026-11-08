@@ -41,12 +41,16 @@ the latest GitHub release and never installs.
   with `{url, pid, token, started}` and removes it on exit. It binds the port
   *before* writing the file, so a second daemon that cannot get the port exits
   without touching the running daemon's registration. A client trusts the file
-  only after `GET /api/info` answers with the token.
-- **Token.** A new random token is made on each start. It keeps other local
-  users and web pages off the loopback port.
+  only after `GET /api/info` answers (with the token when one is required).
+- **Token.** An explicit loopback bind makes a new random token on each start.
+  It keeps other local users and web pages off the loopback port. Network binds,
+  including the default, record an empty token.
 - **Port and address.** `$NEXUS_PORT` (default 4747) on `$NEXUS_HOST` (default
-  `127.0.0.1`; `nexus serve --host` overrides it). `0.0.0.0` serves the whole
-  network; `daemon.json` still names the loopback URL for local clients.
+  `0.0.0.0`; `nexus serve --host` overrides it). This listens on all IPv4
+  interfaces; `daemon.json` still names the loopback URL for local clients.
+  **The default exposes the API without authentication: use only trusted networks
+  or restrict access with a firewall.** Set `NEXUS_HOST=127.0.0.1` (or
+  `nexus serve --host 127.0.0.1`) for local-only, token-protected access.
 - **Remote clients.** A non-loopback bind serves `/api/*` without a token, so a
   phone on the same LAN or Tailscale network connects to `http://<host>:<port>`
   by address alone (the iOS NSH app asks for it once). Only bind on a trusted
@@ -423,6 +427,16 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   call returns at once and the child's answer comes back as a `session.notified`
   notification, as for `wait: false`. It can be switched off in
   `disabled_tools`, and it is never bound inside `code`.
+- **Forks.** the `fork` tool starts a child that copies the parent's request
+  prefix: its snapshot, resolved model and effort, permission, switches and
+  settled history (see [agents.md](agents.md#fork)). The session row records
+  `fork = {parent_id, inherited}` (a JSON column, added in place to existing
+  databases); `inherited` counts the leading messages copied from the parent,
+  which keep their original timestamps and are published as `message.added`
+  after `session.created`. Everything else (`parent_id`, `parent_call_id`,
+  `launched_by: "agent"`, `wait`, notifications, `message_session` from the
+  parent) is as for any child; reports name it `(fork)` instead of
+  `(agent A)`. The daemon refuses every `session`, `fork` and `message_session` call a fork makes, with an explanatory error; only roots can fork.
 - **Users.** A user can start a child too: `POST /api/session {parent}`.
 - **Interrupt and delete.** Interrupting a session interrupts its descendants'
   turns, and an interrupted parent is not woken by them. The session itself is
@@ -444,7 +458,7 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   tool switches) and the saved messages. It does not reload agent files or
   `AGENTS.md`, so edits affect new sessions only. It runs in
   `session.directory` with the session's model, using the session id as the
-  prompt-cache key.
+  prompt-cache key (a fork uses its parent's id).
 - A running call keeps the configuration it started with. Explicit model,
   effort, agent or tool-switch changes through the API apply before subsequent
   model/tool calls, including within a turn. Tool/agent notices enter context

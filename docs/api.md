@@ -28,10 +28,13 @@ including cursors whose rows remain in another interleaved session.
 
 ## Basics
 
-- **Base URL.** `http://127.0.0.1:4747` (`$NEXUS_PORT`), loopback by default.
-  `$NEXUS_HOST` (or `nexus serve --host`) binds another address, such as
-  `0.0.0.0` for the LAN or a Tailscale/private network.
-- **Auth.** `Authorization: Bearer <token>`, with the token read from
+- **Base URL.** `http://127.0.0.1:4747` for local clients (`$NEXUS_PORT`). Core
+  binds `0.0.0.0` (all IPv4 interfaces) by default. `$NEXUS_HOST` overrides the
+  default; `nexus serve --host` takes precedence over both.
+- **Auth.** **The default network bind has no authentication: anyone who can
+  reach Core can use its API. Use only trusted networks or a firewall.** For
+  local-only, token-protected access, set `NEXUS_HOST=127.0.0.1` or pass
+  `--host 127.0.0.1`. Loopback binds require `Authorization: Bearer <token>`, read from
   `~/.nexus/daemon.json` (mode 0600). `GET /api/event` also accepts
   `?token=` for browser `EventSource`. A missing or wrong token gets 401.
   A non-loopback bind serves without a token, so a phone can connect to
@@ -85,7 +88,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 
 | Method | Path | Body / query | Returns |
 | --- | --- | --- | --- |
-| GET | `/api/bash` | | Background bash jobs (metadata: status, command, exit code, counts) |
+| GET | `/api/bash` | | Background bash jobs (metadata: status, command, exit code, counts, optional `terminal_id` linking a PTY-backed job to the terminal dock; see [Terminal resources](terminals.md)) |
 | GET | `/api/bash/{id}` | | One job with its retained output (404 if missing) |
 | DELETE | `/api/bash/{id}` | | 204; kills it (a finished job is unchanged) |
 | GET | `/api/kernel` | `?summary=1` | Live kernels, metadata, retained cells and variable previews; `summary` omits the retained cell bodies |
@@ -223,6 +226,7 @@ Configuration patch paths and polling behavior are described in [config.md](conf
 // Session
 {"id": "ses_…", "project_id": "prj_…", "directory": "/abs/path", "title": "…", "agent": "build",
  "parent_id": null, "parent_call_id": null, "launched_by": "user", "children": ["ses_…"],  // who launched whom; a child row also has "tokens" (input + output spent)
+ "fork": null,  // a fork child: {"parent_id": "ses_…", "inherited": 12}; its first `inherited` messages are copied from the parent, in order
  "model": "codex/gpt-6.1-terra", "model_source": "session",   // session | agent | parent | none (default: only before models were remembered)
  "effort": "high", "effort_source": "agent",                    // session | agent | provider
  "tools": ["read", "edit", "write", "ask", "code", "expose_workspace_tools"], "disabled_tools": ["bash"],
@@ -761,8 +765,8 @@ one.
     "session": {"id": "ses_…", "project_id": "prj_…", "directory": "/abs/path",
                 "title": "…", "model": null, "permission": "ask", "effort": null,
                 "agent": "build", "parent_id": null, "parent_call_id": null,
-                "launched_by": "user", "disabled_tools": [], "archived": false,
-                "created": 1793…, "updated": 1793…},   // model/effort null = not chosen
+                "launched_by": "user", "fork": null, "disabled_tools": [], "archived": false,
+                "created": 1793…, "updated": 1793…},   // model/effort null = not chosen; fork as in Session
     "tree": {"depth": 0, "in_export": true, "parent_in_export": false,
              "children": ["ses_…"], "children_in_export": ["ses_…"]},
     "snapshot": { …full stored session_snapshot, or null… },

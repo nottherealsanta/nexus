@@ -15,6 +15,13 @@ pub struct TerminalResource {
     pub controller: Option<String>,
     pub rows: u16,
     pub cols: u16,
+    /// Set when Core created this PTY for a background bash job. The job's
+    /// `terminal_id` points back here; the strip counts the pair once.
+    #[serde(default)]
+    pub background_job_id: Option<String>,
+    /// The session the terminal was created for, when any.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 #[derive(Clone)]

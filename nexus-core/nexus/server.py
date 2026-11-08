@@ -1,9 +1,10 @@
 r"""The daemon's HTTP API, modelled on OpenCode's `/api/*` (opencode.ai/v2/docs/api).
 
-Loopback only by default. Every request needs `Authorization: Bearer <token>` (the
-token is in `<home>/daemon.json`, mode 0600). `GET /api/event` also accepts
-`?token=` so a browser `EventSource` can connect. A non-loopback bind
-(`NEXUS_HOST`) serves the network without a token. Errors are `{"error": "..."}`
+All IPv4 interfaces by default, without a token: trusted networks only. An explicit
+loopback bind (`NEXUS_HOST=127.0.0.1` or `--host 127.0.0.1`) requires
+`Authorization: Bearer <token>` (in `<home>/daemon.json`, mode 0600).
+`GET /api/event` also accepts `?token=` for browser `EventSource`.
+Errors are `{"error": "..."}`
 with 400, 401, 404, 409, 410, 413, 422 or 502. The table is not the whole API:
 files, git, pending inputs, draft context, provider login and the rest of voice
 are in docs/api.md.
@@ -423,6 +424,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     client_views = ClientViews()
     runtime.manager.attach_views(client_views)
     terminal_service = TerminalService(runtime.store.db)
+    runtime.jobs.terminal_service = terminal_service
     from .file_watch import FileWatches
 
     file_watches = FileWatches(runtime.bus.publish)
@@ -1991,8 +1993,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 await watcher
             await voice.close()
             await file_watches.close()
-            await terminal_service.shutdown()
             await runtime.shutdown()
+            await terminal_service.shutdown()
 
     app = Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(GZipMiddleware)])
     # Raw per-stream registry for the future Manager; it does not choose a call holder.

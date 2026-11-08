@@ -157,6 +157,13 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         let a: &App = app;
         Regions::compute(area, flags, |w| heights(a, w))
     };
+    if let Some(item) = app.wait_focused().filter(|w| w.kind == WaitKind::Question) {
+        let rows = wait_rows(app, regions.waiting.width, usize::MAX, "…").len();
+        let available = (regions.waiting.height as usize).saturating_sub(1);
+        let draft = app.ui.asks.entry(item.id).or_default();
+        draft.scroll_max = rows.saturating_sub(2).saturating_sub(available);
+        draft.scroll = draft.scroll.min(draft.scroll_max);
+    }
     let mut hits = HitMap::default();
     let mut timeline_screen = None;
     let mut metrics = (0usize, 0usize, None::<usize>);
@@ -857,7 +864,7 @@ fn heights(app: &App, w: u16) -> Heights {
     let banner = u16::from(!app.banners().is_empty());
     let inner_w = w.saturating_sub(10) as usize;
     let rows = app.composer_view().layout(inner_w).0.len().clamp(1, 8) as u16;
-    let (waiting, composer) = (
+    let (waiting, mut composer) = (
         waiting_height(app, w),
         rows + 7
             + if app.pending_inputs().is_empty() {
@@ -871,6 +878,9 @@ fn heights(app: &App, w: u16) -> Heights {
                 app.composer_ref().pastes().len(),
             ),
     );
+    if app.ask_current().is_some() && app.size.1 < 20 {
+        composer = composer.min(3);
+    }
     Heights {
         heading: u16::from(
             !app.narrow() && app.ui.view != View::Settings && app.viewed_root().is_some(),
@@ -886,7 +896,6 @@ fn heights(app: &App, w: u16) -> Heights {
 }
 
 /// Option rows the question card shows at most; the cursor scrolls the rest.
-const ASK_ROWS: usize = 5;
 /// Rows the custom answer field shows at most; it scrolls with the cursor.
 const ASK_INPUT_ROWS: usize = 3;
 
@@ -1415,7 +1424,7 @@ fn draw_subagents(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let title_w = |s: &&crate::api::Session| width(&s.title).min(28);
     let natural = |s: &&crate::api::Session, child: bool| {
         if child {
-            4 + width(&crate::text::capitalize(&s.agent)) + title_w(s)
+            4 + width(&crate::text::capitalize(s.agent_label())) + title_w(s)
         } else {
             title_w(s)
         }
@@ -1488,13 +1497,14 @@ fn draw_subagents(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         clear(buf, rect, base);
         let (glyph, style) = session_glyph(cx, &s.id, bg);
         let mut tx = put(buf, x + 1, r.y, &glyph, style, 1) + 1;
-        let agent = crate::text::capitalize(&s.agent);
+        // A fork reads `Fork`, coloured as that name (as in NSH).
+        let agent = crate::text::capitalize(s.agent_label());
         tx = put(
             buf,
             tx,
             r.y,
             &agent,
-            cx.st(PRIMARY, bg).patch(cx.t.agent_style(&s.agent)),
+            cx.st(PRIMARY, bg).patch(cx.t.agent_style(s.agent_label())),
             rect.right().saturating_sub(tx),
         ) + 1;
         put(
@@ -2496,134 +2506,332 @@ fn git_marker(code: &str) -> Option<(char, &'static str)> {
 
 fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     clear(buf, r, cx.st(PRIMARY, CANVAS));
-    let header = format!("Terminals ({})", cx.app.terminal_panel.terminals.len());
-    put(buf, r.x, r.y, &header, cx.st(PRIMARY, CANVAS), r.width);
-    let hint = if cx.app.terminal_focused {
+    let a = cx.app;
+    let ascii = cx.t.opts.ascii;
+    let terminals = &a.terminal_panel.terminals;
+    let selected = a
+        .terminal_panel
+        .selected
+        .as_ref()
+        .and_then(|id| terminals.iter().position(|t| &t.id == id));
+    let control = if a.terminal_controlled {
+        ("[Release control]", "Release control", Target::TerminalReleaseControl)
+    } else {
+        ("[Take control]", "Take control", Target::TerminalTakeControl)
+    };
+    let (rename, copy, hide) = if ascii {
+        ("[r]", "=", "v")
+    } else {
+        ("\u{270e}", cx.t.control("copy"), cx.t.fold(true))
+    };
+    // The shared toolbar order: New, Rename, Close, Control, Copy, Hide.
+    let actions: Vec<(String, &str, Target, bool)> = vec![
+        (
+            cx.t.control("plus").to_owned(),
+            "New terminal",
+            Target::TerminalNew,
+            true,
+        ),
+        (
+            rename.to_owned(),
+            "Rename terminal",
+            Target::TerminalRename,
+            selected.is_some(),
+        ),
+        (
+            cx.t.structure("close").to_owned(),
+            "Close terminal",
+            Target::TerminalCloseSelected,
+            selected.is_some(),
+        ),
+        (
+            control.0.to_owned(),
+            control.1,
+            control.2,
+            selected.is_some(),
+        ),
+        (
+            copy.to_owned(),
+            "Copy output",
+            Target::TerminalCopy,
+            selected.is_some(),
+        ),
+        (
+            hide.to_owned(),
+            "Hide terminal panel",
+            Target::TerminalPanelClose,
+            true,
+        ),
+    ];
+    let widths: Vec<u16> = actions
+        .iter()
+        .map(|(label, ..)| width(label) as u16 + 2)
+        .collect();
+    let total: u16 = widths.iter().sum();
+    let icons_start = r.right().saturating_sub(total).max(r.x);
+    let header = format!("Terminals ({})", terminals.len());
+    let title_room = icons_start.saturating_sub(r.x).max(1);
+    let title = truncate(&header, title_room as usize, cx.ell());
+    put(buf, r.x, r.y, &title, cx.st(PRIMARY, CANVAS), title_room);
+    let hint = if a.terminal_focused {
         "Ctrl+] tabs"
     } else {
         "Enter open  c take control  r release  Esc close"
     };
-    let hint_x = r.x.saturating_add(width(&header) as u16 + 2);
-    put(
-        buf,
-        hint_x,
-        r.y,
-        hint,
-        cx.st(MUTED, CANVAS),
-        r.right().saturating_sub(hint_x),
-    );
-    let close = "Close panel";
-    if r.width >= width(close) as u16 {
-        let x = r.right() - width(close) as u16;
-        put(buf, x, r.y, close, cx.st(ACCENT, CANVAS), r.right() - x);
-        hits.add(
-            Rect::new(x, r.y, width(close) as u16, 1),
-            Target::TerminalPanelClose,
+    let hint_x = r.x.saturating_add(width(&title) as u16 + 2);
+    let hint_room = icons_start.saturating_sub(hint_x.saturating_add(2));
+    if hint_room >= 8 {
+        put(
+            buf,
+            hint_x,
+            r.y,
+            &truncate(hint, hint_room as usize, cx.ell()),
+            cx.st(MUTED, CANVAS),
+            hint_room,
         );
     }
-    if r.height < 3 {
+    // Pointer tooltips are collected while drawing and painted last.
+    let mut tips: Vec<(Rect, String)> = Vec::new();
+    let mut x = icons_start;
+    for ((label, tip, target, enabled), width) in actions.into_iter().zip(widths) {
+        if x >= r.right() {
+            break;
+        }
+        let width = width.min(r.right().saturating_sub(x));
+        let rect = Rect::new(x, r.y, width, 1);
+        let hot = cx.hovered(rect);
+        let style = if !enabled {
+            cx.st(MUTED, CANVAS)
+        } else if hot {
+            cx.st(PRIMARY, RAISED)
+        } else {
+            cx.st(ACCENT, CANVAS)
+        };
+        if hot {
+            clear(buf, rect, style);
+        }
+        put(buf, x, r.y, &format!(" {label} "), style, width);
+        hits.add(rect, target);
+        tips.push((rect, tip.to_owned()));
+        x = x.saturating_add(width);
+    }
+    if r.height < 2 {
         return;
     }
-    let mut x = r.x;
     let tab_y = r.y + 1;
-    for (index, terminal) in cx.app.terminal_panel.terminals.iter().enumerate() {
-        let label = format!(
-            "{} {} ",
-            if terminal.status == "running" {
-                "●"
-            } else {
-                "○"
-            },
-            terminal.name
-        );
-        let remaining = r.right().saturating_sub(x);
-        put(buf, x, tab_y, &label, cx.st(PRIMARY, CANVAS), remaining);
-        hits.add(
-            Rect::new(x, tab_y, (width(&label) as u16).min(remaining), 1),
-            Target::TerminalTab(index),
-        );
-        x = x.saturating_add(width(&label) as u16).min(r.right());
-        if x < r.right() {
-            put(buf, x, tab_y, "×", cx.st(MUTED, CANVAS), 1);
-            hits.add(Rect::new(x, tab_y, 1, 1), Target::TerminalClose(index));
-            x = (x + 2).min(r.right());
+    // Keep the names readable, then shrink them before scrolling to the
+    // selected tab. A `…` marks tabs scrolled off either side.
+    let tab_width = |terminal: &crate::terminal_api::TerminalResource, name_max: usize| {
+        let dot = if terminal.status == "running" { "●" } else { "○" };
+        width(dot) as u16 + 1 + width(&truncate(&terminal.name, name_max, cx.ell())) as u16 + 4
+    };
+    let name_cap = if terminals.is_empty() {
+        6
+    } else {
+        (r.width as usize / terminals.len()).saturating_sub(8).clamp(6, 48)
+    };
+    let mut name_max = name_cap;
+    let total = |max: usize| -> u16 {
+        terminals
+            .iter()
+            .map(|terminal| tab_width(terminal, max) + 1)
+            .sum()
+    };
+    while name_max > 6 && total(name_max) > r.width {
+        name_max -= 2;
+    }
+    let mut start = 0usize;
+    if let Some(selected) = selected {
+        while start < selected {
+            let span: u16 = terminals[start..=selected]
+                .iter()
+                .map(|terminal| tab_width(terminal, name_max) + 1)
+                .sum();
+            if span <= r.width {
+                break;
+            }
+            start += 1;
         }
     }
-    put(
-        buf,
-        x,
-        tab_y,
-        "+",
-        cx.st(ACCENT, CANVAS),
-        r.right().saturating_sub(x),
-    );
-    hits.add(
-        Rect::new(x, tab_y, r.right().saturating_sub(x).min(1), 1),
-        Target::TerminalNew,
-    );
     let mut x = r.x;
-    let action_y = r.y + 2;
-    for (label, target) in [
-        ("Rename", Target::TerminalRename),
-        ("Close", Target::TerminalCloseSelected),
-        (
-            if cx.app.terminal_controlled {
-                "Release control"
-            } else {
-                "Take control"
-            },
-            if cx.app.terminal_controlled {
-                Target::TerminalReleaseControl
-            } else {
-                Target::TerminalTakeControl
-            },
-        ),
-        ("Copy", Target::TerminalCopy),
-    ] {
-        let remaining = r.right().saturating_sub(x);
-        put(buf, x, action_y, label, cx.st(ACCENT, CANVAS), remaining);
-        hits.add(
-            Rect::new(x, action_y, (width(label) as u16).min(remaining), 1),
-            target,
-        );
-        x = x.saturating_add(width(label) as u16 + 2).min(r.right());
+    if start > 0 {
+        x = put(buf, x, tab_y, cx.ell(), cx.st(MUTED, CANVAS), r.width) + 1;
     }
-    if cx.app.terminal_panel.selected.is_some() && r.height > 3 {
-        let read_only = !cx.app.terminal_controlled && cx.app.terminal_panel.selected.is_some();
-        let screen =
-            crate::terminal_panel::screen_area(r, read_only, cx.app.terminal_panel.screen.gap);
-        cx.app.terminal_panel.screen.render(screen, buf);
-        if let Some(selection) = &cx.app.terminal_panel.selection {
+    let mut shown = start;
+    for (index, terminal) in terminals.iter().enumerate().skip(start) {
+        let tab_w = tab_width(terminal, name_max);
+        if x.saturating_add(tab_w) > r.right() {
+            break;
+        }
+        let rect = Rect::new(x, tab_y, tab_w, 1);
+        let active = selected == Some(index);
+        let background = if active { RAISED } else { CANVAS };
+        let base = cx.st(if active { PRIMARY } else { SECONDARY }, background)
+            .add_modifier(if active {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            });
+        clear(buf, rect, base);
+        let dot = if terminal.status == "running" { "●" } else { "○" };
+        let dot_style = cx.st(if terminal.status == "running" { PRIMARY } else { MUTED }, background);
+        put(buf, x + 1, tab_y, dot, dot_style, 1);
+        let name = truncate(&terminal.name, name_max, cx.ell());
+        put(
+            buf,
+            x + 1 + width(dot) as u16 + 1,
+            tab_y,
+            &name,
+            base,
+            rect.right().saturating_sub(x + 2 + width(dot) as u16),
+        );
+        let hit = Rect::new(x, tab_y, tab_w.saturating_sub(2), 1);
+        hits.add(hit, Target::TerminalTab(index));
+        let close = Rect::new(x + tab_w.saturating_sub(2), tab_y, 1, 1);
+        let close_hot = cx.hovered(close);
+        let close_style = if close_hot {
+            cx.st("status.error", background)
+        } else {
+            cx.st(MUTED, background)
+        };
+        put(buf, close.x, tab_y, cx.t.structure("close"), close_style, 1);
+        hits.add(close, Target::TerminalClose(index));
+        tips.push((hit, format!("{}, {}", terminal.name, terminal.status)));
+        tips.push((close, format!("Close {}", terminal.name)));
+        x = x.saturating_add(tab_w + 1);
+        shown = index + 1;
+    }
+    if shown < terminals.len() {
+        let label = format!("{} {} more", cx.ell(), terminals.len() - shown);
+        if x < r.right() {
+            put(
+                buf,
+                x,
+                tab_y,
+                &truncate(&label, r.right().saturating_sub(x) as usize, cx.ell()),
+                cx.st(MUTED, CANVAS),
+                r.right().saturating_sub(x),
+            );
+        }
+    }
+    let read_only = selected.is_some() && !a.terminal_controlled;
+    if selected.is_some() && r.height > 2 {
+        let screen = crate::terminal_panel::screen_area(r, read_only, a.terminal_panel.screen.gap);
+        a.terminal_panel.screen.render(screen, buf);
+        if let Some(selection) = &a.terminal_panel.selection {
             if selection.dragged() && selection.area == screen {
                 selection.highlight(buf);
             }
         }
         if read_only {
-            let label = "Read-only — take control to type.";
+            let label = "Read-only — [Take control] to type.";
             put(
                 buf,
                 r.x,
-                r.y + 3,
+                r.y + 2,
                 label,
                 cx.st("status.warning", CANVAS),
                 screen.width,
             );
-            hits.add(
-                Rect::new(r.x, r.y + 3, (width(label) as u16).min(r.width), 1),
-                Target::TerminalTakeControl,
-            );
+            let rect = Rect::new(r.x, r.y + 2, (width(label) as u16).min(r.width), 1);
+            hits.add(rect, Target::TerminalTakeControl);
+            tips.push((rect, "Take control".to_owned()));
         }
-        if cx.app.terminal_panel.screen.gap {
+        if a.terminal_panel.screen.gap {
             put(
                 buf,
                 r.x,
-                r.y + 3 + u16::from(read_only),
+                r.y + 2 + u16::from(read_only),
                 crate::terminal_screen::GAP_NOTICE,
                 cx.st("status.warning", CANVAS),
                 screen.width,
             );
         }
+    } else if r.height > 2 {
+        if a.terminal_panel.loading {
+            put(
+                buf,
+                r.x,
+                r.y + 2,
+                "Loading terminals…",
+                cx.st(MUTED, CANVAS),
+                r.width,
+            );
+        } else {
+            let prefix = "No terminal selected. Use ";
+            let x = put(buf, r.x, r.y + 2, prefix, cx.st(MUTED, CANVAS), r.width);
+            let plus = cx.t.control("plus");
+            let x = put(buf, x, r.y + 2, plus, cx.st(ACCENT, CANVAS), r.width);
+            put(
+                buf,
+                x,
+                r.y + 2,
+                " to create one.",
+                cx.st(MUTED, CANVAS),
+                r.right().saturating_sub(x),
+            );
+            if x > r.x + width(prefix) as u16 {
+                let rect = Rect::new(x.saturating_sub(1), r.y + 2, 1, 1);
+                hits.add(rect, Target::TerminalNew);
+                tips.push((rect, "New terminal".to_owned()));
+            }
+        }
     }
+    if a.ui.overlay.is_none() && a.ui.dialog.is_none() && a.ui.edit.is_none() {
+        if let Some((mx, my)) = a.mouse {
+            if let Some((anchor, label)) = tips
+                .iter()
+                .rev()
+                .find(|(rect, _)| contains(*rect, mx, my))
+            {
+                draw_tooltip(cx, buf, *anchor, label, hits);
+            }
+        }
+    }
+}
+
+/// A one-row floating tooltip, above the hovered control when the screen has
+/// room. It is painted last and swallows a click so it cannot activate what it
+/// covers.
+fn draw_tooltip(cx: &Cx, buf: &mut Buffer, anchor: Rect, label: &str, hits: &mut HitMap) {
+    let Some((mx, _)) = cx.app.mouse else {
+        return;
+    };
+    let area = buf.area;
+    let width = (width(label) as u16 + 4).min(area.width);
+    if width < 5 || area.height == 0 {
+        return;
+    }
+    let y = if anchor.y > area.y {
+        anchor.y - 1
+    } else {
+        (anchor.y + 1).min(area.bottom().saturating_sub(1))
+    };
+    let x = mx.saturating_sub(width / 2).clamp(
+        area.x,
+        area.right().saturating_sub(width).max(area.x),
+    );
+    let rect = Rect::new(x, y, width, 1);
+    clear(buf, rect, cx.st(PRIMARY, RAISED));
+    let rail = cx.t.structure("rail");
+    put(buf, x, y, rail, cx.st("border.default", RAISED), 1);
+    put(
+        buf,
+        x + 2,
+        y,
+        &truncate(label, width.saturating_sub(4) as usize, cx.ell()),
+        cx.st(PRIMARY, RAISED),
+        width.saturating_sub(4),
+    );
+    put(
+        buf,
+        x + width.saturating_sub(1),
+        y,
+        rail,
+        cx.st("border.default", RAISED),
+        1,
+    );
+    hits.add(rect, Target::Swallow);
 }
 
 /// The file/diff panel. Wide, it sits beside the timeline; narrow, it covers
@@ -4859,10 +5067,11 @@ fn draw_timeline(
         draw_tline(cx, buf, r, inner, r.y + i as u16, line);
         if let Some(paste) = &line.paste {
             let content_width: usize = line.spans.iter().map(|span| width(&span.content)).sum();
+            let x = inner.x + line.indent.min(inner.width);
             let rect = Rect::new(
-                inner.x,
+                x,
                 r.y + i as u16,
-                (content_width as u16).min(inner.width),
+                (content_width as u16).min(inner.right().saturating_sub(x)),
                 1,
             );
             paste_hits.push((rect, Target::TimelinePaste(std::rc::Rc::clone(paste))));
@@ -4963,7 +5172,8 @@ fn draw_timeline(
         // The left edge of a user band is its fold control; hovering it lifts
         // the strip and brightens the rail.
         if b.kind == crate::timeline::BlockKind::Turn {
-            let toggle = Rect::new(inner.x, y0, 3.min(inner.width), y1 - y0);
+            let indent = lines.get(b.start).map_or(0, |l| l.indent).min(inner.width);
+            let toggle = Rect::new(inner.x + indent, y0, 3.min(inner.width - indent), y1 - y0);
             if cx.hovered(toggle) {
                 if let Some(bg) = cx.t.color("interactive.hover") {
                     for y in toggle.y..toggle.bottom() {
@@ -5203,6 +5413,13 @@ fn draw_tline(
     y: u16,
     line: &crate::timeline::TLine,
 ) {
+    let indent = line.indent.min(inner.width);
+    let inner = Rect::new(
+        inner.x + indent,
+        inner.y,
+        inner.width - indent,
+        inner.height,
+    );
     if let Some(bg) = line.bg {
         clear(buf, Rect::new(inner.x, y, inner.width, 1), bg);
     }
@@ -5278,6 +5495,7 @@ fn draw_sticky(
                 context_section: None,
                 context_items: Vec::new(),
                 paste: timeline.lines[pin.first + k].paste.clone(),
+                indent: timeline.lines[pin.first + k].indent,
             };
             if pin.clipped && k + 1 == pin.body {
                 crate::sticky::ellipsize(&mut line.spans, cx.ell());
@@ -5338,7 +5556,7 @@ enum WRow {
     Ask(String),
     /// A review row's answer and whether the question was answered.
     Answer(String, bool),
-    Opt(usize),
+    Opt(usize, String, bool, bool),
     /// One visible row of the custom answer field: its row in the input and
     /// the text on that row.
     Input(usize, String),
@@ -5348,18 +5566,8 @@ enum WRow {
 
 type ApprovalParts = (String, Vec<(String, String)>, Option<crate::diff::Diff>);
 
-/// A question in at most two rows; the second ends with the ellipsis when more
-/// text follows, instead of clipping the whole question to one line.
-fn ask_lines(text: &str, w: usize, ell: &str) -> Vec<String> {
-    let mut lines = text::wrap(&text.replace('\n', " "), w.max(1));
-    if lines.len() > 2 {
-        lines.truncate(2);
-        if let Some(last) = lines.last_mut() {
-            let room = w.max(1).saturating_sub(width(ell));
-            *last = format!("{}{}", truncate(last, room, ""), ell);
-        }
-    }
-    lines
+fn ask_lines(text: &str, w: usize, _ell: &str) -> Vec<String> {
+    text::wrap(&text.replace('\n', " "), w.max(1))
 }
 
 /// The approval's tool, its parameters and, for edit, write and patch, the diff.
@@ -5458,10 +5666,9 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
                         let text = format!("{}. {}", i + 1, json_str(&question["question"]));
                         rows.extend(ask_lines(&text, inner, ell).into_iter().map(WRow::Ask));
                         let answer = c.answer(i);
-                        rows.push(WRow::Answer(
-                            answer.clone().unwrap_or_else(|| "not answered".into()),
-                            answer.is_some(),
-                        ));
+                        for line in ask_lines(&answer.clone().unwrap_or_else(|| "not answered".into()), inner.saturating_sub(4), ell) {
+                            rows.push(WRow::Answer(line, answer.is_some()));
+                        }
                     }
                 } else if let Some(question) = c.question() {
                     rows.extend(
@@ -5469,14 +5676,18 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
                             .into_iter()
                             .map(WRow::Ask),
                     );
-                    let opts = c.options().len();
-                    let shown = opts.min(ASK_ROWS);
-                    let cursor = c.pick().map_or(0, |p| p.cursor);
-                    let top = cursor
-                        .saturating_sub(shown.saturating_sub(1))
-                        .min(opts.saturating_sub(shown));
-                    rows.extend((top..top + shown).map(WRow::Opt));
-                    if opts > 0 {
+                    for (i, option) in c.options().iter().enumerate() {
+                        let label = json_str(&option["label"]);
+                        for (n, line) in ask_lines(&label, inner.saturating_sub(6), ell).into_iter().enumerate() {
+                            rows.push(WRow::Opt(i, line, n == 0, false));
+                        }
+                        if let Some(preview) = option["preview"].as_str() {
+                            for line in ask_lines(preview, inner.saturating_sub(6), ell) {
+                                rows.push(WRow::Opt(i, line, false, true));
+                            }
+                        }
+                    }
+                    if !c.options().is_empty() {
                         rows.push(WRow::Blank);
                     }
                     let field_w = inner.saturating_sub(2);
@@ -5496,6 +5707,16 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
     }
     rows.push(WRow::Hint);
     rows.push(WRow::Pad);
+    if item.kind == WaitKind::Question && limit != usize::MAX {
+        let available = limit.saturating_sub(1);
+        let scroll = app.ui.asks.get(&item.id).map_or(0, |d| d.scroll);
+        let max = rows.len().saturating_sub(2).saturating_sub(available);
+        let start = scroll.min(max);
+        rows.truncate(rows.len().saturating_sub(2));
+        let mut visible: Vec<WRow> = rows.into_iter().skip(start).take(available).collect();
+        visible.push(WRow::Hint);
+        return visible;
+    }
     // Fit: diff first, then blanks, pads, extra answer rows, table rows, option
     // rows, then review answers one at a time. Question headings stay.
     fn drop_last(rows: &mut Vec<WRow>, pick: fn(&WRow) -> bool, keep: usize) -> bool {
@@ -5516,7 +5737,7 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
             || drop_last(&mut rows, |r| matches!(r, WRow::Pad), 0)
             || drop_last(&mut rows, |r| matches!(r, WRow::Input(..)), 1)
             || drop_last(&mut rows, |r| matches!(r, WRow::Table(..)), 1)
-            || drop_last(&mut rows, |r| matches!(r, WRow::Opt(_)), 1)
+            || drop_last(&mut rows, |r| matches!(r, WRow::Opt(..)), 1)
             || {
                 let n = rows
                     .iter()
@@ -5772,13 +5993,9 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     inner_w,
                 );
             }
-            WRow::Opt(i) => {
+            WRow::Opt(i, text, first, preview) => {
                 let Some(c) = a.ask_current() else { continue };
-                let Some(o) = c.options().get(*i) else {
-                    continue;
-                };
                 let on = c.pick().is_some_and(|p| p.chosen.contains(i));
-                let label = json_str(&o["label"]);
                 let tick = if c.multiple() {
                     if on {
                         "[x] "
@@ -5788,16 +6005,21 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 } else {
                     ""
                 };
-                let line = format!("{tick}{} {}", (i + 1) % 10, label.trim_matches('"'));
+                let line = if *first {
+                    format!("{tick}{} {text}", (i + 1) % 10)
+                } else {
+                    format!("      {text}")
+                };
                 let mut st = if c.multiple() && on {
                     cx.st(MULTI, PANEL)
                 } else {
                     cx.st(SECONDARY, PANEL)
                 };
                 if *i == c.pick().map_or(0, |p| p.cursor) {
-                    band_row(buf, y, PRIMARY);
-                    st = cx.st(PRIMARY, PANEL).add_modifier(Modifier::BOLD);
+                    if *first { band_row(buf, y, PRIMARY); }
+                    if !preview { st = cx.st(PRIMARY, PANEL).add_modifier(Modifier::BOLD); }
                 }
+                if *preview { st = cx.st(MUTED, PANEL); }
                 put(
                     buf,
                     x,
@@ -5943,6 +6165,9 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 };
                 let mut hints: Vec<(String, String)> = Vec::new();
                 let mut submit = None;
+                if focused && ask.is_some() && a.ui.asks.get(&w.id).is_some_and(|d| d.scroll_max > 0) {
+                    hints.push(("pgup/dn".into(), "scroll".into()));
+                }
                 match (&w.kind, ask.as_ref()) {
                     (WaitKind::Question, Some(c)) if c.sent => {
                         hints.push((String::new(), "sending the answers...".into()));
@@ -7052,28 +7277,38 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let start = r.x + 2;
     let end = r.right().saturating_sub(2);
     let icon = if cx.t.opts.ascii { "*" } else { "⑂" };
-    // Live kernels and running background shells, centred in the strip. A
-    // kernel chip is absent when no kernel exists; shells appear only while one
-    // is running. Clicking the chip opens the full list.
-    let (kernels, _) = a.resource_counts();
+    // Each indicator is absent when its corresponding resource count is zero.
+    let (kernels, jobs) = a.resource_counts();
+    let shells = a.terminal_shell_count();
     let mut parts = Vec::new();
     if kernels > 0 {
-        parts.push("kernel".to_string());
+        parts.push(("kernel".to_string(), Target::ComposerResources));
     }
-    parts.push(format!("{} shell", a.terminal_panel.terminals.len()));
+    if jobs > 0 {
+        parts.push((format!("{jobs} shell"), Target::ComposerShells));
+    }
+    if shells > 0 {
+        parts.push((
+            format!("{shells} terminal shell"),
+            Target::ComposerTerminals,
+        ));
+    }
     let chip = if parts.is_empty() {
         String::new()
     } else {
-        format!(" {} ", parts.join(&cx.sep()))
+        format!(
+            " {} ",
+            parts
+                .iter()
+                .map(|(label, _)| label.as_str())
+                .collect::<Vec<_>>()
+                .join(&cx.sep())
+        )
     };
     let chip_w = u16::try_from(width(&chip)).unwrap_or(u16::MAX);
     let available = end.saturating_sub(start);
     let show_chip = chip_w > 2 && available > chip_w.saturating_add(8);
-    let chip_x = if a.viewed_id().is_some_and(|id| a.is_busy(id)) {
-        start + available.saturating_sub(chip_w) / 2
-    } else {
-        end.saturating_sub(chip_w)
-    };
+    let chip_x = start + available.saturating_sub(chip_w) / 2;
     let left_end = if show_chip {
         chip_x.saturating_sub(2)
     } else {
@@ -7118,27 +7353,13 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         );
     }
     if show_chip {
-        put(
-            buf,
-            chip_x,
-            y,
-            &chip,
-            cx.st(ACCENT, "interactive.selection")
-                .add_modifier(Modifier::BOLD),
-            chip_w,
-        );
-        let kernel_w = if kernels > 0 {
-            width(&format!(" kernel{}", cx.sep())) as u16
-        } else {
-            1
-        };
-        if kernels > 0 {
-            hits.add(Rect::new(chip_x, y, kernel_w, 1), Target::ComposerResources);
+        put(buf, chip_x, y, &chip, cx.st(SECONDARY, PANEL), chip_w);
+        let mut x = chip_x + 1;
+        for (label, target) in &parts {
+            let w = width(label) as u16;
+            hits.add(Rect::new(x, y, w, 1), target.clone());
+            x += w + width(&cx.sep()) as u16;
         }
-        hits.add(
-            Rect::new(chip_x + kernel_w, y, chip_w.saturating_sub(kernel_w), 1),
-            Target::ComposerTerminals,
-        );
     }
 }
 
@@ -8384,7 +8605,7 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
             draw_alert_detail(cx, buf, area, *id, *top, hits)
         }
         OverlayKind::Usage { rows, top } => draw_usage(cx, buf, area, rows, *top, hits),
-        OverlayKind::Resources { top } => draw_resources(cx, buf, area, *top, hits),
+        OverlayKind::Resources { top, kind } => draw_resources(cx, buf, area, *top, *kind, hits),
         OverlayKind::Projects(o) => draw_projects_overview(cx, buf, area, o, hits),
     }
 }
@@ -9589,7 +9810,15 @@ fn draw_context_detail(
 
 /// Live kernels and background shells of the viewed session tree, newest
 /// state first. One line per fact, scrollable like an alert's full text.
-fn draw_resources(cx: &Cx, buf: &mut Buffer, area: Rect, top: usize, hits: &mut HitMap) {
+fn draw_resources(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    top: usize,
+    kind: crate::ui::ResourceKind,
+    hits: &mut HitMap,
+) {
+    use crate::ui::ResourceKind;
     let wide = MODAL_LARGE;
     let inner = modal_box(area, wide, 10).width.saturating_sub(4) as usize;
     let kernels = cx.app.view_kernels();
@@ -9610,130 +9839,141 @@ fn draw_resources(cx: &Cx, buf: &mut Buffer, area: Rect, top: usize, hits: &mut 
         )]);
         rows.push(Vec::new());
     }
-    rows.push(vec![Span::styled(
-        format!("Kernels ({})", kernels.len()),
-        section,
-    )]);
-    if kernels.is_empty() {
-        rows.push(vec![Span::styled("No live kernels.", quiet)]);
-    }
-    for kernel in &kernels {
-        let id = kernel["id"].as_str().unwrap_or("kernel");
-        let busy = kernel["busy"].as_bool() == Some(true);
-        let cells = kernel["cell_count"].as_u64().unwrap_or(0);
-        let mut head = vec![
-            Span::styled(id.to_owned(), bold),
-            Span::styled(" · ", quiet),
-        ];
-        head.push(Span::styled(
-            if busy { "busy" } else { "idle" }.to_owned(),
-            if busy {
-                cx.st("status.warning", RAISED)
-            } else {
-                quiet
-            },
-        ));
-        head.push(Span::styled(
-            format!(" · {cells} {}", if cells == 1 { "cell" } else { "cells" }),
-            quiet,
-        ));
-        rows.push(head);
-        let owner = kernel["created_by"]
-            .as_str()
-            .map(|id| session_label(cx.app, id))
-            .unwrap_or_else(|| "unknown session".to_owned());
-        let users = kernel["users"].as_array().map_or(0, Vec::len);
-        let age = now_secs() - kernel["created"].as_f64().unwrap_or(0.0);
+    if kind != ResourceKind::Shells {
         rows.push(vec![Span::styled(
-            truncate(
-                &format!(
-                    "  created by {owner} · {users} {} · {} ago",
-                    if users == 1 { "user" } else { "users" },
-                    crate::timeline::fmt_duration(age)
-                ),
-                inner,
-                cx.ell(),
-            ),
-            secondary,
+            format!("Kernels ({})", kernels.len()),
+            section,
         )]);
-        let variables = kernel["variables"].as_array();
-        if let Some(variables) = variables.filter(|variables| !variables.is_empty()) {
-            let text = variables
-                .iter()
-                .map(|variable| {
-                    let name = variable["name"].as_str().unwrap_or("?");
-                    let kind = variable["type"].as_str().unwrap_or("?");
-                    let repr = variable["repr"].as_str().unwrap_or("");
-                    format!("{name}: {kind} = {repr}")
-                })
-                .collect::<Vec<_>>()
-                .join(" · ");
+        if kernels.is_empty() {
+            rows.push(vec![Span::styled("No live kernels.", quiet)]);
+        }
+        for kernel in &kernels {
+            let id = kernel["id"].as_str().unwrap_or("kernel");
+            let busy = kernel["busy"].as_bool() == Some(true);
+            let cells = kernel["cell_count"].as_u64().unwrap_or(0);
+            let mut head = vec![
+                Span::styled(id.to_owned(), bold),
+                Span::styled(" · ", quiet),
+            ];
+            head.push(Span::styled(
+                if busy { "busy" } else { "idle" }.to_owned(),
+                if busy {
+                    cx.st("status.warning", RAISED)
+                } else {
+                    quiet
+                },
+            ));
+            head.push(Span::styled(
+                format!(" · {cells} {}", if cells == 1 { "cell" } else { "cells" }),
+                quiet,
+            ));
+            rows.push(head);
+            let owner = kernel["created_by"]
+                .as_str()
+                .map(|id| session_label(cx.app, id))
+                .unwrap_or_else(|| "unknown session".to_owned());
+            let users = kernel["users"].as_array().map_or(0, Vec::len);
+            let age = now_secs() - kernel["created"].as_f64().unwrap_or(0.0);
             rows.push(vec![Span::styled(
-                truncate(&format!("  {text}"), inner, cx.ell()),
+                truncate(
+                    &format!(
+                        "  created by {owner} · {users} {} · {} ago",
+                        if users == 1 { "user" } else { "users" },
+                        crate::timeline::fmt_duration(age)
+                    ),
+                    inner,
+                    cx.ell(),
+                ),
                 secondary,
             )]);
+            let variables = kernel["variables"].as_array();
+            if let Some(variables) = variables.filter(|variables| !variables.is_empty()) {
+                let text = variables
+                    .iter()
+                    .map(|variable| {
+                        let name = variable["name"].as_str().unwrap_or("?");
+                        let kind = variable["type"].as_str().unwrap_or("?");
+                        let repr = variable["repr"].as_str().unwrap_or("");
+                        format!("{name}: {kind} = {repr}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                rows.push(vec![Span::styled(
+                    truncate(&format!("  {text}"), inner, cx.ell()),
+                    secondary,
+                )]);
+            }
         }
     }
-    rows.push(Vec::new());
-    rows.push(vec![Span::styled(
-        format!("Background shells ({} live, {} kept)", running, jobs.len()),
-        section,
-    )]);
-    if jobs.is_empty() {
-        rows.push(vec![Span::styled("No background shells.", quiet)]);
-    }
-    for job in &jobs {
-        let id = job["id"].as_str().unwrap_or("job");
-        let status = job["status"].as_str().unwrap_or("unknown");
-        let token = match status {
-            "running" => "status.info",
-            "done" => "status.success",
-            "timeout" | "killed" => "status.warning",
-            "error" => "status.error",
-            _ => MUTED,
-        };
-        let mut head = vec![
-            Span::styled(id.to_owned(), bold),
-            Span::styled(" · ", quiet),
-            Span::styled(status.to_owned(), cx.st(token, RAISED)),
-        ];
-        if let Some(exit) = job["exit_code"].as_i64() {
-            head.push(Span::styled(format!(" · exit {exit}"), quiet));
+    if kind != ResourceKind::Kernels {
+        if kind == ResourceKind::All {
+            rows.push(Vec::new());
         }
-        let duration = job["duration_s"].as_f64().unwrap_or(0.0);
-        head.push(Span::styled(
-            format!(" · {}", crate::timeline::fmt_duration(duration)),
-            quiet,
-        ));
-        rows.push(head);
-        let command = job["command"].as_str().unwrap_or("");
         rows.push(vec![Span::styled(
-            truncate(&format!("  $ {command}"), inner, cx.ell()),
-            secondary,
+            format!("Background shells ({} live, {} kept)", running, jobs.len()),
+            section,
         )]);
-        let owner = job["session_id"]
-            .as_str()
-            .map(|id| session_label(cx.app, id))
-            .unwrap_or_else(|| "unknown session".to_owned());
-        let chars = job["output_chars"].as_u64().unwrap_or(0);
-        let dropped = job["dropped_chars"].as_u64().unwrap_or(0);
-        let mut meta = format!(
-            "  {owner} · {chars} {}",
-            if chars == 1 { "char" } else { "chars" }
-        );
-        if dropped > 0 {
-            meta.push_str(&format!(" · {dropped} dropped"));
+        if jobs.is_empty() {
+            rows.push(vec![Span::styled("No background shells.", quiet)]);
         }
-        if let Some(timeout) = job["timeout"].as_f64() {
-            meta.push_str(&format!(
-                " · timeout {}",
-                crate::timeline::fmt_duration(timeout)
+        for job in &jobs {
+            let id = job["id"].as_str().unwrap_or("job");
+            let status = job["status"].as_str().unwrap_or("unknown");
+            let token = match status {
+                "running" => "status.info",
+                "done" => "status.success",
+                "timeout" | "killed" => "status.warning",
+                "error" => "status.error",
+                _ => MUTED,
+            };
+            let mut head = vec![
+                Span::styled(id.to_owned(), bold),
+                Span::styled(" · ", quiet),
+                Span::styled(status.to_owned(), cx.st(token, RAISED)),
+            ];
+            if let Some(exit) = job["exit_code"].as_i64() {
+                head.push(Span::styled(format!(" · exit {exit}"), quiet));
+            }
+            let duration = job["duration_s"].as_f64().unwrap_or(0.0);
+            head.push(Span::styled(
+                format!(" · {}", crate::timeline::fmt_duration(duration)),
+                quiet,
             ));
+            rows.push(head);
+            let command = job["command"].as_str().unwrap_or("");
+            rows.push(vec![Span::styled(
+                truncate(&format!("  $ {command}"), inner, cx.ell()),
+                secondary,
+            )]);
+            let owner = job["session_id"]
+                .as_str()
+                .map(|id| session_label(cx.app, id))
+                .unwrap_or_else(|| "unknown session".to_owned());
+            let chars = job["output_chars"].as_u64().unwrap_or(0);
+            let dropped = job["dropped_chars"].as_u64().unwrap_or(0);
+            let mut meta = format!(
+                "  {owner} · {chars} {}",
+                if chars == 1 { "char" } else { "chars" }
+            );
+            if dropped > 0 {
+                meta.push_str(&format!(" · {dropped} dropped"));
+            }
+            if let Some(timeout) = job["timeout"].as_f64() {
+                meta.push_str(&format!(
+                    " · timeout {}",
+                    crate::timeline::fmt_duration(timeout)
+                ));
+            }
+            rows.push(vec![Span::styled(truncate(&meta, inner, cx.ell()), quiet)]);
         }
-        rows.push(vec![Span::styled(truncate(&meta, inner, cx.ell()), quiet)]);
     }
     let b = modal_box(area, wide, (rows.len() + 6).clamp(10, 40) as u16);
-    let m = modal(cx, buf, area, b, "Kernels and shells", hits);
+    let title = match kind {
+        ResourceKind::Kernels => "Kernels",
+        ResourceKind::Shells => "Shells",
+        ResourceKind::All => "Kernels and shells",
+    };
+    let m = modal(cx, buf, area, b, title, hits);
     let h = m.body.height as usize;
     let top = top.min(rows.len().saturating_sub(h));
     for (i, row) in rows.iter().skip(top).take(h).enumerate() {

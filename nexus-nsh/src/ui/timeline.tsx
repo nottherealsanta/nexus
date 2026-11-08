@@ -33,7 +33,9 @@ const META = `${T.meta}`;
 /** A tappable row: finger-sized on a phone, its desktop height otherwise. */
 const hit = (base: string) => (isNarrow() ? "min-h-11" : base);
 
-type Row =
+/** `inherited`: a row of a fork's open inherited block, indented under its chevron like a group's contents. */
+type Row = RowKind & { inherited?: boolean };
+type RowKind =
   | { key: string; kind: "footer"; segments: { text: string }[]; error?: string; interrupted: boolean }
   | {
       key: string; kind: "user"; delivery?: string | null; origin?: string | null; images?: { name: string; data_url: string }[]; pastes?: { marker: string; text: string }[]; n: number; time: string; text: string; turnKey: string; folded: boolean;
@@ -66,6 +68,8 @@ type Row =
       background: boolean; meta: string; outcome: string;
     }
   | { key: string; kind: "diag"; text: string; label: string; detail?: string; tone: Tone; count?: number }
+  /** A fork's inherited prefix: one foldable row over the messages copied from its parent. */
+  | { key: string; kind: "fork"; parent: string; count: number; open: boolean }
   | { key: string; kind: "older"; text: string; action?: "load-older" }
   | { key: string; kind: "empty" };
 
@@ -518,8 +522,15 @@ function buildStableRows(): Row[] {
 
   let turnAt = 0;
   let foldedTurn = false;
-  for (const msg of sel.messages) {
+  // A fork's first `inherited` messages were copied from its parent: their rows fold under one block.
+  const fork = model.sessions.get(sid)?.fork;
+  const inheritedCount = fork && fork.inherited > 0 ? fork.inherited : 0;
+  const inheritedKeys = new Set<string>();
+  for (const [mi, msg] of sel.messages.entries()) {
     const out: Row[] = [];
+    const before = rows.length;
+    const inherited = inheritedCount > 0 && isInherited(msg, mi, inheritedCount);
+    const mark = () => { if (inherited) for (const x of rows.slice(before)) for (const r of x.r) inheritedKeys.add(r.key); };
     if (msg.role === "user") {
       const body = text(msg);
       if (msg.delivery === "handoff") {
@@ -545,10 +556,10 @@ function buildStableRows(): Row[] {
           tools: meta?.tools ?? 0, duration: meta ? fmtDuration(meta.endTime - meta.startTime) : "",
           status: meta ? statusOf(meta) : "running",
         });
-        if (folded) { rows.push({ t: msg.created, r: out }); continue; }
+        if (folded) { rows.push({ t: msg.created, r: out }); mark(); continue; }
       }
     } else if (msg.role === "assistant") {
-      if (foldedTurn) { rows.push({ t: msg.created, r: out }); continue; }
+      if (foldedTurn) { rows.push({ t: msg.created, r: out }); mark(); continue; }
       msg.parts.forEach((p, i) => {
         const key = `${msg.id}-${i}`;
         if (p.type === "text" && (p.text ?? "").trim()) out.push({ key, kind: "assistant", text: p.text ?? "" });
@@ -557,9 +568,10 @@ function buildStableRows(): Row[] {
           out.push({ key, kind: "reasoning", text: summary, encrypted: !summary.trim(), open: !!summary.trim() && open(`reason:${key}`, false) });
         } else if (p.type === "tool_call") {
           const id = p.id ?? key;
-          if (p.name === "session" || p.name === "message_session") {
+          if (p.name === "session" || p.name === "fork" || p.name === "message_session") {
             let a: any = {};
             try { a = JSON.parse(p.arguments ?? "{}"); } catch {}
+            if (p.name === "fork") a.agent = "fork";
             const follow = p.name === "message_session";
             const child = follow ? model.sessions.get(a.session) : [...model.sessions.values()].find((c) => c.parent_id === sid && c.parent_call_id === id);
             const res = results.get(id);
@@ -574,7 +586,7 @@ function buildStableRows(): Row[] {
             const key = `child:${id}`;
             const title = (follow ? "" : a.title || firstLine(a.prompt ?? "")) || child?.title || "";
             out.push({
-              key, kind: "child", childId: child?.id, agent: follow ? child?.agent ?? a.agent ?? "child" : a.agent ?? "child",
+              key, kind: "child", childId: child?.id, agent: child?.fork || a.agent === "fork" ? "fork" : follow ? child?.agent ?? a.agent ?? "child" : a.agent ?? "child",
               title: title.length > 48 ? `${title.slice(0, 47)}…` : title,
               state: running && !waits && !done ? "running" : done ? "done" : "idle", background: background && !follow, meta,
               outcome: done?.is_error ? (failure ? `failed ${failure.length > 60 ? `${failure.slice(0, 59)}…` : failure}` : "failed") : waits && !done ? "waiting for input" : "",
@@ -662,6 +674,7 @@ function buildStableRows(): Row[] {
         });
       }
     }
+    mark();
   }
   // Closed turns: retries and errors from their summaries. The running turn: live diagnostics
   // (its scratch), replaced by its summary when it closes.
@@ -689,9 +702,49 @@ function buildStableRows(): Row[] {
     const i = flat.findIndex((r) => r.kind === "context");
     if (i > 0) flat.unshift(...flat.splice(i, 1));
   }
+  if (inheritedCount > 0 && fork) foldInherited(flat, inheritedKeys, sid, fork.parent_id, inheritedCount);
   if (sel.messagesMore) flat.unshift({ key: `older-messages:${sid}`, kind: "older", text: "Older messages are not loaded", action: "load-older" });
   if (sel.turnsGap) flat.unshift({ key: `turns-gap:${sid}`, kind: "older", text: `${sel.turnsGap[0].toUpperCase()}${sel.turnsGap.slice(1)}.` });
   return mergeDiagnostics(footersLast(flat));
+}
+
+/** Whether a fork's message was copied from its parent: its sequence (1-based, per session) or, without one, its place. */
+function isInherited(msg: Message, index: number, inherited: number): boolean {
+  return typeof msg.seq === "number" && msg.seq > 0 ? msg.seq <= inherited : index < inherited;
+}
+
+/** The parent's title for a fork's block, or its id while the parent is unknown. */
+function forkParentTitle(parentId: string): string {
+  return model.sessions.get(parentId)?.title || parentId;
+}
+
+/**
+ * A fork's inherited prefix as one row, `Forked from ‹parent› · N messages`, folded by default. It sits where the
+ * first inherited row was (after the starting context); open, the copied messages follow it as ordinary rows.
+ */
+function foldInherited(flat: Row[], inheritedKeys: Set<string>, sid: string, parentId: string, count: number) {
+  const key = `fork:${sid}`;
+  const isOpen = open(key, false);
+  const first = flat.findIndex((r) => inheritedKeys.has(r.key));
+  const afterContext = flat.findIndex((r) => r.kind !== "context");
+  const at = first >= 0 ? first : afterContext < 0 ? flat.length : afterContext;
+  const header: Row = { key, kind: "fork", parent: forkParentTitle(parentId), count, open: isOpen };
+  if (!isOpen) {
+    const kept = flat.filter((r) => !inheritedKeys.has(r.key));
+    flat.length = 0;
+    flat.push(...kept);
+    const pos = Math.min(at, flat.length);
+    flat.splice(pos, 0, header);
+  } else {
+    // Open, the copied rows sit under the block's chevron, indented as a group's members are.
+    for (let i = 0; i < flat.length; i++) if (inheritedKeys.has(flat[i].key)) flat[i] = { ...flat[i], inherited: true };
+    flat.splice(at, 0, header);
+  }
+}
+
+/** The block's wording, shared with the TUI: `Forked from ‹parent› · 1 message` / `· N messages`. */
+export function forkSummary(parent: string, count: number): string {
+  return `Forked from ${parent} · ${count} message${count === 1 ? "" : "s"}`;
 }
 
 /** A turn's diagnostics (its interrupt, error, retries) come before its footer, as in the TUI: the footer closes the turn. */
@@ -770,7 +823,7 @@ function activitySummary(items: ActivityEntry[]): string {
       if (item.editFile !== undefined) editFiles.add(item.editFile);
       noun = ({
         bash: "command", read: "read", edit: "edit", patch: "edit", write: "edit",
-        code: "cell", ask: "question", web_search: "search", web_fetch: "page", session: "session",
+        code: "cell", ask: "question", web_search: "search", web_fetch: "page", session: "session", fork: "session",
       } as Record<string, string>)[item.name] ?? "tool";
     }
     counts.set(noun, (counts.get(noun) ?? 0) + 1);
@@ -798,7 +851,7 @@ function groupActivities(rows: Row[], busy: boolean): Row[] {
     const hidden = running && !waiting && detail !== "high" && !explicit ? Math.max(0, items.length - 5) : 0;
     const diffs = tools.filter((tool) => tool.diff !== undefined);
     result.push({
-      key, kind: "activity", summary: running ? "Working" : activitySummary(items), items: items.slice(hidden),
+      key, kind: "activity", summary: running ? "Working" : activitySummary(items), items: items.slice(hidden), inherited: items[0].inherited,
       open: expanded, defaultOpen, running, hidden,
       denied: tools.filter((tool) => tool.state === "denied").length,
       diff: diffs.length ? diffs.reduce<Diff>((sum, tool) => ({ add: sum.add + (tool.diff?.add ?? 0), del: sum.del + (tool.diff?.del ?? 0) }), { add: 0, del: 0 }) : undefined,
@@ -827,7 +880,7 @@ function RowView(p: { r: () => Row; sid: string }) {
   const r = p.r;
   return (
     <TimelineColumn class="items-center" testID="timeline-row" onLayout={(b: any) => reportHeight(r(), p.sid, b.bounds?.size?.height ?? b.size?.height ?? 72)}>
-      <View class="w-full">
+      <View class={`w-full ${r().inherited ? "pl-4" : ""}`} testID={r().inherited ? "fork-inherited-row" : undefined}>
         <If when={r().kind === "context"}>
           {() => {
             const c = r() as Extract<Row, { kind: "context" }>;
@@ -881,6 +934,9 @@ function RowView(p: { r: () => Row; sid: string }) {
         </If>
         <If when={r().kind === "activity"}>
           <ActivityRow r={r as () => Extract<Row, { kind: "activity" }>} />
+        </If>
+        <If when={r().kind === "fork"}>
+          <ForkRow r={r as () => Extract<Row, { kind: "fork" }>} />
         </If>
         <If when={r().kind === "tool"}>
           <ToolRow r={r as () => Extract<Row, { kind: "tool" }>} />
@@ -1215,7 +1271,7 @@ function verbIcon(name: string): IconName {
   if (name.startsWith("web_")) return "web";
   if (name === "grep" || name === "glob" || name === "search") return "search";
   if (name === "ask") return "ask";
-  if (name === "session") return "session";
+  if (name === "session" || name === "fork") return "session";
   return "code";
 }
 
@@ -1254,6 +1310,21 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
           </Each>
         </View>
       </If>
+    </View>
+  );
+}
+
+/** A fork's inherited block: the activity group's chevron row, folding the messages copied from the parent. */
+function ForkRow(p: { r: () => Extract<Row, { kind: "fork" }> }) {
+  const r = p.r;
+  const summary = () => forkSummary(r().parent, r().count);
+  return (
+    <View class={`py-0.5 ${TEXT_INDENT}`}>
+      <Button onPress={() => toggle(r().key, false)} testID="fork-inherited" accessibilityLabel={`${summary()}, ${r().open ? "collapse" : "expand"}`}
+        class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
+        <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>
+        <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-foreground-secondary`}>{summary()}</Text>
+      </Button>
     </View>
   );
 }

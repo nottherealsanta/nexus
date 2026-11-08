@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import hashlib
 import json
 import secrets
@@ -120,13 +121,21 @@ from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError, 
 from .tools import bash as bash_tool
 from .tools.base import clip
 
-AUTO_APPROVED = {"read", "grep", "glob", "ls", "patch", skill_files.SKILL_TOOL, mcp_files.MCP_SEARCH, "bash_output", "bash_kill", "session", agent_files.MESSAGE_TOOL,
+AUTO_APPROVED = {"read", "grep", "glob", "ls", "patch", skill_files.SKILL_TOOL, mcp_files.MCP_SEARCH, "bash_output", "bash_kill", "session", agent_files.FORK_TOOL, agent_files.MESSAGE_TOOL,
                  agent_files.ESCALATE_TOOL, "code", "ask", "edit", "write",
                  *workspace_control.CONTROL_NAMES}
 CHILD_RESULT_CHARS = 30_000
 MAX_ESCALATIONS = 5  # blocks one child can report before its parent reads them
 MAX_ESCALATION_FIELD = 600
 TITLE_CHARS = 60
+# A fork's task message starts with this fixed text (only the parent id varies), so forks taken from the same point
+# share their request prefix up to the task itself.
+FORK_MARKER = (
+    "[Nexus fork] You are a fork of session {parent}: you have its context up to here. Do only the task below, then "
+    "reply with your report and stop. Do not continue the parent's own work. You cannot launch subagents or forks: "
+    "your `session`, `fork` and `message_session` calls are refused, so do the task yourself.\n\nTask: "
+)
+FORK_MIN_FREE = 0.10  # a fork needs this share of the model's context window left for its task
 TITLE_TIMEOUT_S = 20
 MAX_RESOLVED_QUESTIONS = 256  # tombstones so a late or duplicate reply gets 409, not a second event
 
@@ -513,6 +522,7 @@ class Runtime:
         return {
             "id": s.id, "project_id": s.project_id, "directory": s.directory, "title": s.title, "agent": s.agent,
             "parent_id": s.parent_id, "parent_call_id": s.parent_call_id, "launched_by": s.launched_by,
+            "fork": s.fork_info(),
             "children": [c.id for c in self.store.children(s.id)],
             "model": model, "model_source": model_source, "effort": effort, "effort_source": effort_source,
             "tools": tools, "disabled_tools": sorted(s.disabled()), "snapshot": snapshot_info,
@@ -717,8 +727,9 @@ class Runtime:
                 if name not in names and name not in disabled:
                     names.insert(at, name)
                     at += 1
-        if not child and "session" in control and "session" not in disabled:
-            names.append("session")
+        for name in ("session", agent_files.FORK_TOOL):
+            if not child and name in control and name not in disabled:
+                names.append(name)
         return names
 
     @staticmethod
@@ -735,7 +746,8 @@ class Runtime:
                 if name not in disabled and name not in names:
                     names.append(name)
         # Exposed by the first `session` call; it needs `session` itself to be available.
-        if (messaging or {}).get("activated") and "session" in names and agent_files.MESSAGE_TOOL not in disabled:
+        if ((messaging or {}).get("activated") and ("session" in names or agent_files.FORK_TOOL in names)
+                and agent_files.MESSAGE_TOOL not in disabled):
             names.append(agent_files.MESSAGE_TOOL)
         # Children report a block to their parent. Snapshots from before `escalate` existed lack the flag.
         if child and escalation and agent_files.ESCALATE_TOOL not in disabled:
@@ -746,25 +758,33 @@ class Runtime:
     def effective_tool_names(snapshot: dict[str, Any], session: Session) -> list[str]:
         """Enabled tools in request order, from the snapshot's grants and the session's switches."""
         return Runtime.enabled_names(
-            snapshot["granted_tools"], snapshot["control"], session.disabled(), session.parent_id is not None,
+            snapshot["granted_tools"], snapshot["control"], session.disabled(), Runtime.is_child(session),
             snapshot.get("workspace"), snapshot.get("messaging"), bool(snapshot.get("escalation")))
+
+    @staticmethod
+    def is_child(session: Session) -> bool:
+        """Whether the session gets a sub agent's tool list. A fork keeps its parent's list byte for byte (the
+        `fork` tool included, though calling it is refused), so its requests share the parent's prompt cache."""
+        return session.parent_id is not None and not session.fork
 
     def _session_spec(self, child_agents: list[dict[str, Any]]) -> ToolSpec:
         return ToolSpec(
             name="session",
             description=(
                 "Launch a subagent: another agent works on a prompt in this directory, in a sub agent the user can "
-                "open. It does not see this conversation, so give it a complete prompt. wait=true (default) returns "
-                "its answer; wait=false returns at once and the answer arrives as a message when it finishes; you may "
-                "end your turn then, and you are called again when it does, so never sleep or poll to wait. The "
-                "first successful call also exposes the `message_session` tool, which sends a further message to a "
-                "child you launched: a steer while it works, or a follow-up after it has answered. Agents:\n"
+                "open. A named agent does not see this conversation, so give it a complete prompt. wait=true "
+                "(default) returns its answer; wait=false returns at once and the answer arrives as a message when it "
+                "finishes; you may end your turn then, and you are called again when it does, so never sleep or poll "
+                "to wait. The first successful call also exposes the `message_session` tool, which sends a further "
+                "message to a child you launched: a steer while it works, or a follow-up after it has answered. "
+                "Agents:\n"
                 + "\n".join(f"  - `{a['name']}`: {a['description']}" for a in child_agents)
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "agent": {"type": "string", "enum": [a["name"] for a in child_agents], "description": "Which agent runs the child"},
+                    "agent": {"type": "string", "enum": [a["name"] for a in child_agents],
+                              "description": "Which agent runs the child"},
                     "prompt": {"type": "string", "description": "The complete task for the child"},
                     "wait": {"type": "boolean", "description": "Block until the child answers (default true)"},
                     "title": {"type": "string", "description": "Short title for the sub agent"},
@@ -774,11 +794,37 @@ class Runtime:
         )
 
     @staticmethod
+    def _fork_definition() -> dict[str, Any]:
+        return {
+            "name": agent_files.FORK_TOOL,
+            "description": (
+                "Fork yourself: a copy of you with your full context so far does one task in a sub agent the user can "
+                "open, then reports back. Cheap (it shares your prompt cache), and it needs no briefing beyond the "
+                "task. Prefer `session` with a named agent for an independent opinion, since a fork inherits your "
+                "assumptions. A fork cannot launch subagents or forks itself. wait=true (default) returns its report; "
+                "wait=false returns at once and the report arrives as a message when it finishes; you may end your "
+                "turn then, and you are called again when it does, so never sleep or poll to wait. The first "
+                "successful call also exposes the `message_session` tool, which sends a further message to a child you "
+                "launched."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "The task for the fork"},
+                    "wait": {"type": "boolean", "description": "Block until the fork reports (default true)"},
+                    "title": {"type": "string", "description": "Short title for the fork"},
+                },
+                "required": ["prompt"],
+                "additionalProperties": False,
+            },
+        }
+
+    @staticmethod
     def _message_definition() -> dict[str, Any]:
         return {
             "name": agent_files.MESSAGE_TOOL,
             "description": (
-                "Send a message to a sub agent you launched with `session`. If the child is working, the message "
+                "Send a message to a sub agent you launched with `session` or `fork`. If the child is working, the message "
                 "reaches it before its next model call (a steer). If it is idle, the message starts a new turn on its "
                 "existing conversation. Returns at once; the child's answer arrives as a message when it finishes."
             ),
@@ -825,6 +871,8 @@ class Runtime:
         if name == "session":
             spec = self._session_spec(child_agents)
             return {"name": "session", "description": spec.description, "parameters": spec.parameters}
+        if name == agent_files.FORK_TOOL:
+            return self._fork_definition()
         if name == agent_files.MESSAGE_TOOL:
             return self._message_definition()
         if name == agent_files.ESCALATE_TOOL:
@@ -1236,6 +1284,8 @@ class Runtime:
                 current=current.revision, resource=session_id)
         new_agent: agent_files.AgentDef | None = None
         found: agent_files.AgentSet | None = None
+        if fields.get("agent") and current.fork and fields["agent"] != current.agent:
+            raise ValueError("a fork keeps its parent's agent; it cannot switch agents")
         if fields.get("agent"):
             found = self.agents(self.project(current.project_id).path)
             candidate = found.get(fields["agent"], child=current.parent_id is not None)
@@ -1262,7 +1312,7 @@ class Runtime:
         if before_snapshot is not None and new_disabled is not None:
             target = self.enabled_names(
                 before_snapshot["granted_tools"], before_snapshot["control"], set(new_disabled),
-                current.parent_id is not None, before_snapshot.get("workspace"), before_snapshot.get("messaging"),
+                self.is_child(current), before_snapshot.get("workspace"), before_snapshot.get("messaging"),
                 bool(before_snapshot.get("escalation")))
             registry = self._registry()
             unknown_exec = [n for n in target if n not in registry and n not in agent_files.NEXUS_CONTROL_TOOLS
@@ -2040,7 +2090,7 @@ class Runtime:
         if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
             raise ValueError("disabled_tools must be a list of tool names")
         known = ([t.spec.name for t in DEFAULT_TOOLS + BASH_JOB_TOOLS] + list(agent_files.CONTROL_TOOLS)
-                 + [agent_files.MESSAGE_TOOL, agent_files.ESCALATE_TOOL, skill_files.SKILL_TOOL, *mcp_files.MCP_TOOLS] + list(workspace_control.CONTROL_NAMES)
+                 + [agent_files.FORK_TOOL, agent_files.MESSAGE_TOOL, agent_files.ESCALATE_TOOL, skill_files.SKILL_TOOL, *mcp_files.MCP_TOOLS] + list(workspace_control.CONTROL_NAMES)
                  + list(extra))
         unknown = [n for n in names if n not in known]
         if unknown:
@@ -2058,8 +2108,12 @@ class Runtime:
         if not isinstance(command, str) or not command.strip():
             raise ToolError("command must be a non-empty string")
         timeout = bash_tool.timeout_value(args.get("timeout"))
-        job = await self.jobs.start(session_id=session.id, root=root.id, command=command,
-                                    directory=ctx.workspace, timeout=timeout, on_finish=self._job_finished)
+        try:
+            job = await self.jobs.start(session_id=session.id, root=root.id, command=command,
+                                        directory=ctx.workspace, timeout=timeout, on_finish=self._job_finished,
+                                        project_id=session.project_id)
+        except Conflict as exc:
+            raise ToolError(str(exc)) from exc
         self.bus.publish("bash.started", job.json(), session_id=session.id)
         return bash_tool.started(job)
 
@@ -2146,7 +2200,12 @@ class Runtime:
             return bash_tool.killed(await self.jobs.kill(job_id, root=root.id))
 
         async def run_session(args: dict[str, Any], ctx: ToolContext) -> str:
+            if args.get("agent") == agent_files.FORK_AGENT:
+                raise ToolError("`session` launches named agents; to fork yourself use the `fork` tool")
             return await self._launch(session.id, args, ctx.call_id)
+
+        async def run_fork(args: dict[str, Any], ctx: ToolContext) -> str:
+            return await self._launch(session.id, {**args, "agent": agent_files.FORK_AGENT}, ctx.call_id)
 
         async def run_message(args: dict[str, Any], ctx: ToolContext) -> str:
             return self._message_child(session.id, args)
@@ -2191,7 +2250,7 @@ class Runtime:
 
         bound = {mcp_files.MCP_SEARCH: run_mcp_search, mcp_files.MCP_CALL: run_mcp_call,
                  skill_files.SKILL_TOOL: run_skill, "bash": run_bash, "bash_output": run_bash_output, "bash_kill": run_bash_kill,
-                 "session": run_session, agent_files.MESSAGE_TOOL: run_message, agent_files.ESCALATE_TOOL: run_escalate,
+                 "session": run_session, agent_files.FORK_TOOL: run_fork, agent_files.MESSAGE_TOOL: run_message, agent_files.ESCALATE_TOOL: run_escalate,
                  "ask": run_ask,
                  workspace_control.EXPOSE: run_expose,
                  workspace_control.CHANGE_DIRECTORY: run_change_directory,
@@ -2230,7 +2289,9 @@ class Runtime:
             reasoning_effort=self.resolve_effort(session, snapshot, ref)[0], max_steps=spec["steps"] or MAX_STEPS,
             model_efforts={item: self.resolve_effort(session, snapshot, item)[0] for item, *_ in fallback_models},
             messages=[m.message for m in self.store.messages(session.id)],
-            conversation_id=session.id, approve=lambda call, args: self._approve(session.id, call, args),
+            # A fork keys its prompt cache like its parent, whose prefix it repeats.
+            conversation_id=(session.parent_id if session.fork else session.id),
+            approve=lambda call, args: self._approve(session.id, call, args),
             inbox=lambda: self.inboxes.pop(session.id, []),
             steering=lambda: [(item["id"], self.inputs.message(item)) for item in self.inputs.list(session.id, "steer")],
             refresh=(lambda active: self._refresh_call(active, session.id)) if refresh else None,
@@ -2417,6 +2478,10 @@ class Runtime:
 
     async def _launch(self, parent_id: str, args: dict[str, Any], call_id: str | None) -> str:
         parent = self.session(parent_id)
+        if parent.fork:
+            raise ToolError(
+                "refused: a fork cannot launch subagents or forks (`session` and `fork` are unavailable inside a "
+                "fork). Do the task yourself with your own tools and report back to the session that forked you.")
         if parent.parent_id is not None:
             raise ToolError("sub agents cannot start sessions")
         prompt = args.get("prompt")
@@ -2426,20 +2491,23 @@ class Runtime:
         if not isinstance(agent, str) or not agent:
             raise ToolError("agent must be a non-empty string; choose one of the child agents in the tool schema")
         try:
-            child = self.create_session(
-                self.project(parent.project_id), title=args.get("title") or None, model=None, permission=parent.permission,
-                agent=agent, parent=parent, parent_call_id=call_id, launched_by="agent",
-                disabled_tools=sorted(parent.disabled()),
-            )
+            if agent == agent_files.FORK_AGENT:
+                child = await self._fork(parent, prompt, title=args.get("title") or None, call_id=call_id)
+            else:
+                child = self.create_session(
+                    self.project(parent.project_id), title=args.get("title") or None, model=None,
+                    permission=parent.permission, agent=agent, parent=parent, parent_call_id=call_id,
+                    launched_by="agent", disabled_tools=sorted(parent.disabled()),
+                )
         except (ValueError, Conflict) as exc:
             raise ToolError(str(exc)) from exc
         exposed = self._expose_messaging(parent.id)
         wait = args.get("wait", True) is not False
         if not wait:
             self.notify[child.id] = parent.id
-        self.prompt(child.id, prompt)
+        self.prompt(child.id, FORK_MARKER.format(parent=parent.id) + prompt if child.fork else prompt)
         if not wait:
-            return (f"Started sub agent {child.id} (agent {child.agent}). Its answer will arrive as a message when it "
+            return (f"Started sub agent {child.id} ({self._child_label(child)}). Its answer will arrive as a message when it "
                     "finishes and starts a new turn for you; continue with other work, or end your turn if there is none "
                     "(do not sleep or poll)." + exposed)
         task = self.turns[child.id]
@@ -2449,6 +2517,44 @@ class Runtime:
             await self.interrupt(child.id)
             raise
         return self._child_report(child.id) + exposed
+
+    async def _fork(self, parent: Session, prompt: str, *, title: str | None, call_id: str | None) -> Session:
+        """A child that repeats the parent's request prefix: a copy of its snapshot (prompt, tool definitions with
+        `fork` itself, skills, MCP), its resolved model and effort, permission, switches, and its settled history.
+
+        The parent is inside its `session` call, so its last assistant message (that call) is unfinished and is left
+        out: the copy is the longest prefix in which every tool call has its result. Raises ToolError when the
+        parent's context leaves less than `FORK_MIN_FREE` of the window.
+        """
+        parent = self.session(parent.id)
+        if parent.archived:
+            raise Conflict(f"session {parent.id} is archived; unarchive it before creating a sub agent")
+        snapshot = copy.deepcopy(self.snapshot_for(parent))
+        model = self.resolve_model(parent, snapshot["agent"])[0]
+        if not model:
+            raise ValueError("no model selected; choose one first")
+        effort = self.resolve_effort(parent, snapshot, model)[0]
+        window = await self.window_for(model)
+        if window:
+            used = budget(self.context(parent.id), window, self.measured_input(parent.id, model))["used"]
+            if window - used < window * FORK_MIN_FREE:
+                raise ToolError(
+                    f"cannot fork: this session's context is about {used:,} of {window:,} tokens, which leaves less "
+                    f"than {FORK_MIN_FREE:.0%} of the window for the fork's task. Launch a named sub agent with a "
+                    "complete brief instead.")
+        stored = self.store.messages(parent.id)
+        inherited = stored[:len(oneshot.settled([m.message for m in stored]))]
+        snapshot["origin"] = "fork"
+        snapshot["created"] = time.time()
+        child = self.store.create_session(
+            self.project(parent.project_id), title=title or " ".join(prompt.split())[:TITLE_CHARS],
+            agent=parent.agent, model=model, permission=parent.permission, effort=effort, parent=parent,
+            parent_call_id=call_id, launched_by="agent", disabled_tools=sorted(parent.disabled()), snapshot=snapshot,
+            fork={"parent_id": parent.id, "inherited": len(inherited)}, inherit=inherited)
+        self.bus.publish("session.created", self.session_json(child), session_id=child.id)
+        for item in self.store.messages(child.id)[:len(inherited)]:
+            self._publish_message(child.id, item)
+        return child
 
     def _expose_messaging(self, session_id: str) -> str:
         """Expose `message_session` on the first `session` call; once per session, persisted in the snapshot.
@@ -2482,6 +2588,10 @@ class Runtime:
         child_id = args.get("session")
         if not isinstance(child_id, str) or not child_id:
             raise ToolError("session must be the id of a sub agent you launched")
+        if self.session(parent_id).fork:
+            raise ToolError(
+                "refused: a fork cannot message other sessions. Do the task yourself and report back to the "
+                "session that forked you.")
         child = self.store.session(child_id)
         if child is None or child.parent_id != parent_id:
             raise ToolError(f"{child_id} is not a sub agent of this session; message only children you launched")
@@ -2489,7 +2599,7 @@ class Runtime:
         if child_id in self.turns:
             self.notify[child_id] = parent_id
             self.inboxes.setdefault(child_id, []).append(message)
-            return (f"Message queued for sub agent {child_id} (agent {child.agent}), which is working; it sees it "
+            return (f"Message queued for sub agent {child_id} ({self._child_label(child)}), which is working; it sees it "
                     "before its next model call. Its answer will arrive as a message when it finishes.")
         try:
             self._check_turn_start(child)
@@ -2497,7 +2607,7 @@ class Runtime:
             raise ToolError(str(exc)) from exc
         self.notify[child_id] = parent_id
         self.prompt(child_id, message)
-        return (f"Sub agent {child_id} (agent {child.agent}) was idle; started a new turn with your message. Its "
+        return (f"Sub agent {child_id} ({self._child_label(child)}) was idle; started a new turn with your message. Its "
                 "answer will arrive as a message when it finishes.")
 
     def _escalate(self, child: Session, args: dict[str, Any]) -> str:
@@ -2526,6 +2636,11 @@ class Runtime:
                 "(then send the child a follow-up with `message_session`), and ask the user for anything only they "
                 "can decide. The child does not wait for an answer.\n" + "\n".join(f"- {b}" for b in blocks))
 
+    @staticmethod
+    def _child_label(child: Session) -> str:
+        """How a parent's tool results name a child: `fork` or `agent <name>`."""
+        return agent_files.FORK_AGENT if child.fork else f"agent {child.agent}"
+
     def _child_for_call(self, parent_id: str, call_id: str) -> Session | None:
         """The sub agent that the parent's `session` call `call_id` launched, if any."""
         return next((c for c in self.store.children(parent_id) if c.parent_call_id == call_id), None)
@@ -2545,7 +2660,7 @@ class Runtime:
             error = self.errors[child_id]
             outcome = ("was interrupted by the user" if error == "interrupted by the user"
                        else f"failed: {error.rstrip('.')}")
-            return (f"Sub agent {child_id} (agent {child.agent}) {outcome}."
+            return (f"Sub agent {child_id} ({self._child_label(child)}) {outcome}."
                     + self._resume_hint(child.parent_id, child_id) + self._attention(child_id))
         answer = ""
         for stored in reversed(self.store.messages(child_id)):
@@ -2555,7 +2670,7 @@ class Runtime:
                     break
         if len(answer) > CHILD_RESULT_CHARS:
             answer = answer[:CHILD_RESULT_CHARS] + f"\n[… answer clipped at {CHILD_RESULT_CHARS} of {len(answer)} characters]"
-        return (f"Sub agent {child_id} (agent {child.agent}) finished.\n\n{answer or '(no text answer)'}"
+        return (f"Sub agent {child_id} ({self._child_label(child)}) finished.\n\n{answer or '(no text answer)'}"
                 + self._attention(child_id))
 
     def _deliver(self, child_id: str) -> None:
@@ -3046,10 +3161,10 @@ class Runtime:
                     "interrupted by the user while this call was waiting for approval; it did not run",
                     is_error=True,
                 ))
-            elif call.id in started and call.name == "session" and (child := self._child_for_call(session_id, call.id)):
+            elif call.id in started and call.name in ("session", agent_files.FORK_TOOL) and (child := self._child_for_call(session_id, call.id)):
                 results.append(ToolResult(
                     call.id,
-                    f"interrupted by the user while sub agent {child.id} (agent {child.agent}) was working; the "
+                    f"interrupted by the user while sub agent {child.id} ({self._child_label(child)}) was working; the "
                     "sub agent was interrupted too and may have changed the workspace."
                     + self._resume_hint(session_id, child.id),
                     is_error=True,

@@ -9,7 +9,7 @@ import { compactApproval } from "../mobile";
 import {
   agentCatalog, contextBudget, contextDetail, draftContext, draftContextKey, draftPlanContext, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
   phone, projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast, annotating,
-  loadResources, resourceCounts, resourcesOpen, composerFocused, flowStage, flowProject,
+  bashJobs, loadResources, resourceCounts, viewResources, resourcesOpen, resourcesKind, composerFocused, flowStage, flowProject,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question } from "../core/api";
@@ -736,7 +736,11 @@ function LocationStrip(p: { working: boolean }) {
   // narrow column and truncates needlessly in a wide one.
   const stripWidth = signal(0);
   const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
-  effect(() => { if (terminalAvailable && currentProject()) { void refreshTerminals(); void restoreTerminalDock(); } });
+  effect(() => { bashJobs(); if (terminalAvailable && currentProject()) { void refreshTerminals(); void restoreTerminalDock(); } });
+  const legacyShells = () => {
+    const terminals = terminalItems();
+    return viewResources().jobs.filter(j => j.status === "running" && !terminals.some(t => t.id === j.terminal_id || t.background_job_id === j.id)).length;
+  };
   const session = () => { m(); return viewed(); };
   const directory = () => session()?.directory ?? project()?.path ?? "";
   const selectedTree = () => {
@@ -756,10 +760,10 @@ function LocationStrip(p: { working: boolean }) {
     const w = stripWidth();
     if (!w) return isNarrow() ? 24 : 54;
     const c = resourceCounts();
-    const chip = c.kernels || c.shells ? 120 : 0;
+    const chip = (c.kernels ? 70 : 0) + (legacyShells() ? 70 : 0) + (terminalItems().length ? 140 : 0);
     const unit = 9.6;
-    const reserved = 16 + (branch() ? (Array.from(branch()!).length + 3) * unit : 0) + (p.working ? 190 : 0) + chip + (linked() ? 16 : 0);
-    return Math.max(12, Math.floor((w - reserved) / unit));
+    const reserved = 16 + (branch() ? (Array.from(branch()!).length + 3) * unit : 0) + (linked() ? 16 : 0);
+    return Math.max(0, Math.floor(((w - chip) / 2 - reserved) / unit));
   };
   // A kernel appears while a code cell runs, and a shell finishes between turns:
   // refresh while the tree is busy or this list is open.
@@ -781,7 +785,8 @@ function LocationStrip(p: { working: boolean }) {
     return c ? availability(c) : { ok: false, reason: "Worktree controls are not available in NSH." };
   };
   const tooltip = (text: string) => <Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{text}</Text>;
-  const openResources = () => {
+  const openResources = (kind: "kernels" | "shells") => {
+    resourcesKind.set(kind);
     resourcesOpen.set(true);
     void loadResources();
   };
@@ -790,7 +795,7 @@ function LocationStrip(p: { working: boolean }) {
       <View class="w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 pb-1.5" testID="location-strip"
         onLayout={(b: any) => stripWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
         {/* A phone keeps only the working status here: directory, branch, kernel and shell are desktop surfaces. */}
-        <View class={phone ? "flex-1 w-0 overflow-hidden opacity-0" : "flex-1 min-w-0 flex-row items-center gap-2"} accessible={!phone}>
+        <View class={phone ? "flex-1 w-0 overflow-hidden opacity-0" : "flex-1 w-0 min-w-0 overflow-hidden flex-row items-center gap-2"} accessible={!phone}>
           <If when={!!session()}>
             <Button
               disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
@@ -812,14 +817,17 @@ function LocationStrip(p: { working: boolean }) {
           </If>
           <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={T.mono}>⑂</Text></If>
         </View>
+        <View class="shrink-0 flex-row items-center gap-2" testID="location-indicators">
         <If when={resourceCounts().kernels > 0 && !phone}>
-          <Button onPress={openResources} accessibilityLabel="kernel" testID="location-resources"
-            class={`rounded-(--radius) bg-selection px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}>
-            <Text style={{ numberOfLines: 1 }} class="text-xs leading-4 font-semibold text-primary">kernel</Text>
+          <Button onPress={() => openResources("kernels")} accessibilityLabel="kernel" testID="location-resources"
+            class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}>
+            <Text style={{ numberOfLines: 1 }} class="text-xs leading-4 text-foreground-secondary">kernel</Text>
           </Button>
         </If>
-        <If when={terminalAvailable && !phone}><Button onPress={() => void openTerminal()} selected={terminalOpen()} accessibilityLabel={`${terminalItems().length} shell`} testID="location-shell" class={`rounded-(--radius) bg-selection px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}><Text class="text-xs leading-4 font-semibold text-primary tabular-nums">{`${terminalItems().length} shell`}</Text></Button></If>
-        <If when={p.working}><View class="shrink-0 min-w-0 flex-row items-center justify-end"><WorkingRow /></View></If>
+        <If when={legacyShells() > 0 && !phone}><Button onPress={() => openResources("shells")} accessibilityLabel={`${legacyShells()} shell`} testID="location-background-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="text-xs leading-4 text-foreground-secondary tabular-nums">{`${legacyShells()} shell`}</Text></Button></If>
+        <If when={terminalAvailable && terminalItems().length > 0 && !phone}><Button onPress={() => void openTerminal()} selected={terminalOpen()} accessibilityLabel={`${terminalItems().length} terminal shell`} testID="location-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="text-xs leading-4 text-foreground-secondary tabular-nums">{`${terminalItems().length} terminal shell`}</Text></Button></If>
+        </View>
+        <View class="flex-1 w-0 min-w-0 flex-row items-center justify-end overflow-hidden"><If when={p.working}><WorkingRow /></If></View>
       </View>
     </If>
   );
@@ -933,9 +941,10 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
   });
   const multi = () => question()?.questions.some((x) => x.multiple) ?? false;
   return (
-    <View ref={(n: any) => { focusWaiting.fn = () => { try { n?.focus(); } catch { /* not focusable here */ } }; }} focusable class="relative w-full mb-2 rounded-(--radius-card) bg-raised" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
+    <View class="relative w-full mb-2 rounded-(--radius-card) bg-raised" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
       <StatusRail color={multi() ? "bg-multi" : "bg-primary"} testID="waiting-rail" />
-      <Scroll style={{ maxHeight: Math.round(windowSize().height * 0.6) }}>
+      <If when={question()}><Text class={`${T.meta} pl-4 pr-4 pt-2`}>Scroll or Page Up/Down to read questions and choices</Text></If>
+      <Scroll focusable ref={(n: any) => { focusWaiting.fn = () => { try { n?.focus(); } catch { /* not focusable here */ } }; }} testID="waiting-scroll" style={{ maxHeight: Math.round(windowSize().height * 0.6) }}>
         <View class="pl-4 pr-4 py-3 gap-2.5">
           <View>
           <View class="flex-row items-center gap-2 min-h-6">
@@ -1058,15 +1067,18 @@ function QuestionBody(p: { q: Question }) {
               <Text class="text-[16px] leading-6 font-medium text-foreground">{qq().question}</Text>
               <Each of={qq().options} key={(o) => o.id}>
                 {(o, n) => (
-                  <Button role={qq().multiple ? "checkbox" : "radio"} selected={sel(o().id)} accessibilityLabel={o().label}
+                  <Button role={qq().multiple ? "checkbox" : "radio"} selected={sel(o().id)} accessibilityLabel={[o().label, o().preview].filter(Boolean).join('. ')}
                     onPress={() => upd(id(), (a) => ({ ...a, selected: qq().multiple ? (a.selected.includes(o().id) ? a.selected.filter((x) => x !== o().id) : [...a.selected, o().id]) : [o().id] }))}
                     class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 ${phone ? "min-h-11" : "min-h-8"} hover:bg-accent ${sel(o().id) ? "bg-selection" : ""} ${FOCUS}`}>
                     <If when={qq().multiple} else={<Text testID={`choice-mark-${o().id}`} class={`shrink-0 w-3.5 text-center text-[16px] leading-6 ${sel(o().id) ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>}><CheckMark on={sel(o().id)} testID={`choice-mark-${o().id}`} /></If>
-                    <Text class={`flex-1 text-[16px] leading-6 ${sel(o().id) ? "font-semibold text-foreground" : "text-foreground"}`}>{o().label}</Text>
+                    <View class="flex-1 min-w-0 py-1">
+                      <Text class={`text-[16px] leading-6 ${sel(o().id) ? "font-semibold text-foreground" : "text-foreground"}`}>{o().label}</Text>
+                      <If when={o().preview}><Text class={`${T.sec} text-muted-foreground`}>{o().preview}</Text></If>
+                    </View>
                   </Button>
                 )}
               </Each>
-              <Input placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class={`rounded-(--radius) bg-background px-2.5 ${phone ? "h-11" : "h-8"} text-[16px] text-foreground`} />
+              <Input value={answers()[id()]?.text ?? ""} placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class={`rounded-(--radius) bg-background px-2.5 ${phone ? "h-11" : "h-8"} text-[16px] text-foreground`} />
             </View>
           );
         }}

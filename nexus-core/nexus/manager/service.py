@@ -888,7 +888,7 @@ class ManagerService:
     def session_json(self, session: Session) -> dict[str, Any]:
         """A minimal, honest description of a Manager episode (it is never listed to clients)."""
         return {"id": session.id, "project_id": session.project_id, "directory": session.directory,
-                "title": session.title, "agent": session.agent, "kind": session.kind, "parent_id": None,
+                "title": session.title, "agent": session.agent, "kind": session.kind, "parent_id": None, "fork": None,
                 "model": session.model, "model_source": "session", "effort": session.effort,
                 "effort_source": "session" if session.effort else "provider", "tools": self._tool_names(),
                 "disabled_tools": [], "status": "busy" if session.id in self.runtime.turns else "idle",

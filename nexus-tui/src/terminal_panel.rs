@@ -50,7 +50,8 @@ pub fn screen_area(
     read_only: bool,
     gap: bool,
 ) -> ratatui::layout::Rect {
-    let top = (3 + u16::from(read_only) + u16::from(gap)).min(dock.height);
+    // One header row (title, hint and actions) and one tab row above the screen.
+    let top = (2 + u16::from(read_only) + u16::from(gap)).min(dock.height);
     ratatui::layout::Rect::new(dock.x, dock.y + top, dock.width, dock.height - top)
 }
 

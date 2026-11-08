@@ -463,9 +463,12 @@ summaries and clients in the path while scripts make outcomes repeatable.
 
 Scenarios are in `nexus/mock/scenarios/`; the catalogue contains `hello`,
 `bash_wait`, `cancel`, `parallel_tools`, `question`, `streaming_rich`, `stress`,
-`tool_marathon`, `provider_failure`, `parallel_subagents` and `context_pressure`.
-`parallel_subagents` requires the `orchestrate` agent, which has the `session`
-control tool; sub agents receive their own scripted reply. Tools run through
+`tool_marathon`, `provider_failure`, `parallel_subagents`, `fork_subagent` and
+`context_pressure`. `parallel_subagents` and `fork_subagent` require the
+`orchestrate` agent, which has the `session` control tool; sub agents receive
+their own scripted reply. `fork_subagent` lists the workspace, then forks twice
+from that point; a request whose user message starts with `[Nexus fork]` plays
+the scenario's `fork` actor, counting its steps from that message. Tools run through
 the normal workspace tool layer. `tool_marathon` creates and
 edits `mock-output.md` in the selected workspace, so run it in a disposable
 workspace. `provider_failure` exercises the normal retry path; `cancel` parks

@@ -3287,6 +3287,40 @@ export const manifest = {
    ]
   },
   {
+   "id": "waiting.scroll_up",
+   "title": "Scroll question up",
+   "category": "waiting",
+   "keys": {
+    "tui": "pageup",
+    "nsh": "pageup"
+   },
+   "key_context": "waiting",
+   "when": [
+    "waiting.question"
+   ],
+   "unavailable_reason": "No question is waiting.",
+   "placement": [
+    "card"
+   ]
+  },
+  {
+   "id": "waiting.scroll_down",
+   "title": "Scroll question down",
+   "category": "waiting",
+   "keys": {
+    "tui": "pagedown",
+    "nsh": "pagedown"
+   },
+   "key_context": "waiting",
+   "when": [
+    "waiting.question"
+   ],
+   "unavailable_reason": "No question is waiting.",
+   "placement": [
+    "card"
+   ]
+  },
+  {
    "id": "waiting.custom",
    "title": "Custom answer",
    "category": "waiting",

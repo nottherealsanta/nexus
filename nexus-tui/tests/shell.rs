@@ -22,11 +22,102 @@ fn terminal_command_opens_a_bottom_dock() {
     let dock = app.regions.terminal.unwrap();
     assert_eq!(dock.y, app.regions.composer.bottom());
     assert!(rows[dock.y as usize].contains("Terminals (0)"));
-    assert!(rows[(dock.y + 1) as usize].contains('+'));
-    let actions = &rows[(dock.y + 2) as usize];
-    for label in ["Rename", "Close", "Take control", "Copy"] {
-        assert!(actions.contains(label), "missing {label}");
+    let toolbar = &rows[dock.y as usize];
+    for glyph in ["+", "✎", "×", "[Take control]", "⧉", "▾"] {
+        assert!(toolbar.contains(glyph), "missing {glyph} in {toolbar:?}");
     }
+    assert!(!toolbar.contains("Close panel"), "{toolbar:?}");
+    assert!(rows[(dock.y + 2) as usize].contains("Loading terminals…"));
+    app.terminal_panel.loading = false;
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(rows[(dock.y + 2) as usize]
+        .contains("No terminal selected. Use + to create one."));
+}
+
+#[test]
+fn terminal_toolbar_tooltips_follow_the_pointer() {
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.terminals.push(
+        serde_json::from_value(serde_json::json!({
+            "id":"t1", "name":"Build", "workspace":"/tmp", "status":"running",
+            "controller":null, "rows":24, "cols":80
+        }))
+        .unwrap(),
+    );
+    app.terminal_panel.selected = Some("t1".into());
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(!rows.join("\n").contains("New terminal"));
+
+    for (target, label) in [
+        (Target::TerminalNew, "New terminal"),
+        (Target::TerminalRename, "Rename terminal"),
+        (Target::TerminalCloseSelected, "Close terminal"),
+        (Target::TerminalTakeControl, "Take control"),
+        (Target::TerminalCopy, "Copy output"),
+        (Target::TerminalPanelClose, "Hide terminal panel"),
+        (Target::TerminalTab(0), "Build, running"),
+        (Target::TerminalClose(0), "Close Build"),
+    ] {
+        let rect = app
+            .hits
+            .rect_of(&target)
+            .unwrap_or_else(|| panic!("missing {target:?}"));
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rect.x + rect.width / 2,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        let shown = draw(&mut app, 120, 36).1.join("\n");
+        assert!(shown.contains(label), "missing tooltip {label:?} in:\n{shown}");
+    }
+
+    let rect = app.hits.rect_of(&Target::TerminalTakeControl).unwrap();
+    app.terminal_controlled = true;
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: rect.x + rect.width / 2,
+        row: rect.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    let shown = draw(&mut app, 120, 36).1.join("\n");
+    assert!(shown.contains("[Release control]"), "{shown}");
+}
+
+#[test]
+fn terminal_dock_matches_the_shared_scenario() {
+    let scenario: serde_json::Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/terminal-dock.json"
+    ))
+    .unwrap();
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
+    app.execute("terminal.open");
+    app.terminal_panel.loading = false;
+    for terminal in scenario["terminals"].as_array().unwrap() {
+        app.terminal_panel
+            .terminals
+            .push(serde_json::from_value(terminal.clone()).unwrap());
+    }
+    app.terminal_panel.selected = app.terminal_panel.terminals.first().map(|t| t.id.clone());
+    let shown = draw(&mut app, 160, 48).1.join("\n");
+    for fact in scenario["expect"].as_array().unwrap() {
+        let fact = fact.as_str().unwrap();
+        assert!(shown.contains(fact), "missing {fact:?} in:\n{shown}");
+    }
+    for fact in scenario["absent"].as_array().unwrap() {
+        let fact = fact.as_str().unwrap();
+        assert!(!shown.contains(fact), "unexpected {fact:?} in:\n{shown}");
+    }
+    let job = &scenario["background_job"];
+    let linked = app
+        .terminal_panel
+        .terminals
+        .iter()
+        .find(|terminal| terminal.background_job_id.as_deref() == job["id"].as_str())
+        .expect("the linked background job's terminal");
+    assert_eq!(linked.id, job["terminal_id"].as_str().unwrap());
 }
 
 #[test]
@@ -158,10 +249,11 @@ fn terminal_copy_requires_selection_and_explicit_action() {
     app.terminal_event(TerminalEvent::Frame { generation, frame: serde_json::json!({"version":1,"seq":1,"type":"output","data":"SGVsbG8bXTUyO2M7YzJWamNtVjAHRQ=="}) });
     draw(&mut app, 120, 36);
     let dock = app.regions.terminal.unwrap();
+    let screen = nexus_tui::terminal_panel::screen_area(dock, true, false);
     let mouse = |kind, column| MouseEvent {
         kind,
         column,
-        row: dock.y + 4,
+        row: screen.y,
         modifiers: KeyModifiers::NONE,
     };
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), dock.x));
@@ -2100,24 +2192,45 @@ fn question_card_shows_options_and_a_number_key_answers() {
 }
 
 #[test]
-fn a_long_question_wraps_to_two_lines_with_an_inline_answer_field() {
-    let question = format!("LONGQUESTION {}", "word ".repeat(200));
-    let q = serde_json::json!({"id": "long", "question": question});
-    let mut app = asking(&format!("[{q}]"), (120, 36));
+fn long_question_content_scrolls_and_drafts_survive_pages() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("../../interface/scenarios/question-readability.json")).unwrap();
+    let mut app = asking(&fixture["questions"].to_string(), (80, 24));
+    press(&mut app, &["alt+w", "1", "enter"]);
+    let mut seen = String::new();
+    for _ in 0..100 {
+        seen.push_str(&joined(&draw(&mut app, 80, 24).1));
+        press(&mut app, &["pagedown"]);
+    }
+    for text in ["For the second question", "review the state?", "Automatically roll back", "previous service configuration", "rollback includes", "sequence afterward", "Pause and wait", "explicit decision", "Add context"] {
+        assert!(seen.contains(text), "missing {text}: {seen}");
+    }
+    press(&mut app, &["alt+a"]);
+    typing(&mut app, "my draft");
+    press(&mut app, &["alt+left", "alt+right"]);
+    assert_eq!(app.ask_current().unwrap().pick().unwrap().input.expanded_text(), "my draft");
+    press(&mut app, &["enter"]);
+    let mut review = String::new();
+    for _ in 0..100 {
+        review.push_str(&joined(&draw(&mut app, 80, 24).1));
+        press(&mut app, &["pagedown"]);
+    }
+    assert!(review.contains("operator to review the state"), "{review}");
+    assert!(review.contains("my draft"), "{review}");
+}
+
+#[test]
+fn question_card_can_scroll_on_a_short_terminal() {
+    let q = serde_json::json!({"id":"short", "question":"Start of question. This question is long enough to wrap on a short terminal. End of question.", "options":[{"id":"a", "label":"An option with a long enough label to wrap", "preview":"A preview that ends with the final sentinel."}]});
+    let mut app = asking(&format!("[{q}]"), (50, 16));
     press(&mut app, &["alt+w"]);
-    let (_, rows) = draw(&mut app, 120, 36);
-    let question_rows: Vec<&String> = rows
-        .iter()
-        .filter(|row| row.contains("LONGQUESTION") || row.contains("word"))
-        .collect();
-    assert_eq!(question_rows.len(), 2, "{rows:#?}");
-    assert!(
-        question_rows[1].contains('…'),
-        "the second line announces the rest: {question_rows:?}"
-    );
-    let all = joined(&rows);
-    assert!(all.contains("Type your answer"), "{all}");
-    assert!(!all.contains("composer below"), "{all}");
+    let mut seen = String::new();
+    for _ in 0..100 {
+        seen.push_str(&joined(&draw(&mut app, 50, 16).1));
+        press(&mut app, &["pagedown"]);
+    }
+    assert!(seen.contains("of question."), "{seen}");
+    assert!(seen.contains("sentinel."), "{seen}");
+    assert!(seen.contains("Add context"), "{seen}");
 }
 
 #[test]
@@ -3162,6 +3275,30 @@ fn a_viewed_subagent_keeps_the_root_tab_and_names_itself_below() {
     let (_, rows) = draw(&mut app, 160, 40);
     assert!(!rows[2].contains("Scout"), "{:?}", rows[2]);
     assert_eq!(app.regions.strip.height, 0);
+}
+
+#[test]
+fn a_viewed_fork_is_named_fork_in_the_subagent_row() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
+    let mut parent = app.state.model.sessions[SESSION].clone();
+    parent.id = "ses_parent".into();
+    parent.title = "Root task".into();
+    parent.parent_id = None;
+    app.state.model.sessions.insert(parent.id.clone(), parent);
+    {
+        let child = app.state.model.sessions.get_mut(SESSION).unwrap();
+        child.parent_id = Some("ses_parent".into());
+        // A fork runs as its parent's agent but is labelled `fork`.
+        child.agent = "build".into();
+        child.title = "Child task".into();
+        child.fork = Some(nexus_tui::api::ForkInfo {
+            parent_id: "ses_parent".into(),
+            inherited: 0,
+        });
+    }
+    let (_, rows) = draw(&mut app, 160, 40);
+    assert!(rows[2].contains("Fork Child task"), "{:?}", rows[2]);
+    assert!(!rows[2].contains("Build"), "{:?}", rows[2]);
 }
 
 // ---- the composer card (DESIGN_PLAN.md D11) ---------------------------------

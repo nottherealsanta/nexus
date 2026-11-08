@@ -3,10 +3,12 @@ import { TerminalPanel } from "./src/ui/terminal";
 import { terminalItems, terminalOpen, terminalSelected } from "./src/terminal-panel";
 import { confirmDialog } from "./src/store";
 import { Confirm } from "./src/ui/overlays";
+import scenario from "../interface/scenarios/terminal-dock.json";
+import type { TerminalResource } from "./src/core/terminal";
 
-terminalItems.set([{id:"term_test",name:"Shell",project_id:"p",workspace:"/work/demo",session_id:null,creator:"test",status:"running",created:1,ended:null,rows:24,cols:80,exit_code:null,signal:null,controller:null}]);
+terminalItems.set(scenario.terminals.map(t => ({...t, status:t.status as TerminalResource["status"], created:1, ended:null, exit_code:null, signal:null})));
 terminalOpen.set(true);
-terminalSelected.set("term_test");
+terminalSelected.set(scenario.terminals[0].id);
 confirmDialog.set(null);
 const shortcuts = signal(0);
 function Fixture() {

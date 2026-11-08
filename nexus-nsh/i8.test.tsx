@@ -3,6 +3,7 @@ import { describe, expect, open, test } from "nsh/test";
 import { splitAlert } from "./src/store";
 import { approvalParts, clock } from "./src/ui/composer";
 import { detailOf } from "./src/ui/timeline";
+import readability from "../interface/scenarios/question-readability.json";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -100,6 +101,21 @@ describe("waiting card (D14)", () => {
     expect(app.texts().includes("( )")).toBe(false);
     expect(app.texts().includes("[ ]")).toBe(false);
     expect(app.texts().some((t) => t.includes("submit · tab next question"))).toBe(true);
+  });
+
+  test("long questions, option labels and previews remain in the scrollable card", async () => {
+    const app = await view(snapshot({ questions: [readability] }));
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:waiting-scroll");
+    for (const item of readability.questions) {
+      expect(app.texts().includes(item.question)).toBe(true);
+      for (const option of item.options) {
+        expect(app.texts().includes(option.label)).toBe(true);
+        expect(app.texts().includes(option.preview)).toBe(true);
+      }
+    }
+    expect(app.texts().includes("Scroll or Page Up/Down to read questions and choices")).toBe(true);
   });
 });
 

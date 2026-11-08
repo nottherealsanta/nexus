@@ -92,7 +92,8 @@ create table if not exists session (
   continued_from text,
   kind text not null default 'user',
   topic text,
-  topic_seq integer not null default 0
+  topic_seq integer not null default 0,
+  fork text
 );
 create table if not exists event (
   id integer primary key autoincrement,
@@ -678,9 +679,14 @@ class Session:
     kind: str = "user"  # "user" | "manager": a Manager episode is hidden from every default list
     topic: str | None = None  # one sentence about what the session is for, written lazily (nexus/manager/topics.py)
     topic_seq: int = 0  # the message sequence the topic was written from
+    fork: str | None = None  # JSON {"parent_id", "inherited"} for a fork child (runtime `session` agent "fork")
 
     def disabled(self) -> set[str]:
         return set(json.loads(self.disabled_tools or "[]"))
+
+    def fork_info(self) -> dict[str, Any] | None:
+        """`{"parent_id", "inherited"}` for a fork: the parent it copied and how many leading messages it copied."""
+        return json.loads(self.fork) if self.fork else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -821,7 +827,7 @@ class Store:
         wanted = {
             "project": {"hidden": "integer not null default 0"},
             "session": {"kind": "text not null default 'user'", "topic": "text",
-                        "topic_seq": "integer not null default 0"},
+                        "topic_seq": "integer not null default 0", "fork": "text"},
             "message": {"origin": "text"},
         }
         project_columns = {row["name"] for row in self.db.execute("pragma table_info(project)")}
@@ -1188,7 +1194,11 @@ class Store:
                        effort: str | None = None, parent: Session | None = None, parent_call_id: str | None = None,
                        launched_by: str = "user", disabled_tools: list[str] | None = None,
                        snapshot: dict[str, Any] | None = None, directory: str | None = None,
-                       continued_from: str | None = None, kind: str = "user") -> Session:
+                       continued_from: str | None = None, kind: str = "user",
+                       fork: dict[str, Any] | None = None,
+                       inherit: list[StoredMessage] | None = None) -> Session:
+        """`inherit`: a fork's copy of its parent's messages, stored as its first messages in the same transaction
+        (original `created`, `delivery` and `origin` kept; not search-indexed again, the parent's copy is)."""
         now = time.time()
         directory = parent.directory if parent else (directory or project.path)
         disabled = json.dumps(sorted(set(disabled_tools or [])))
@@ -1196,18 +1206,24 @@ class Store:
             raise ValueError("kind must be 'user' or 'manager'")
         session = Session(new_id("ses"), project.id, directory, title, model, permission, now, now, effort, agent,
                           parent.id if parent else None, parent_call_id, launched_by, disabled, 0, 1, continued_from,
-                          kind)
+                          kind, fork=json.dumps(fork) if fork is not None else None)
         with self.db:
             self.db.execute(
                 "insert into session (id, project_id, directory, title, model, permission, created, updated, effort, agent,"
-                " parent_id, parent_call_id, launched_by, disabled_tools, continued_from, kind)"
-                " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " parent_id, parent_call_id, launched_by, disabled_tools, continued_from, kind, fork)"
+                " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (session.id, session.project_id, directory, session.title, model, permission, now, now, effort, agent,
-                 session.parent_id, parent_call_id, launched_by, disabled, continued_from, kind),
+                 session.parent_id, parent_call_id, launched_by, disabled, continued_from, kind, session.fork),
             )
             if snapshot is not None:
                 self.db.execute("insert into session_snapshot (session_id, data, created) values (?, ?, ?)",
                                 (session.id, json.dumps(snapshot), now))
+            for seq, item in enumerate(inherit or (), 1):
+                self.db.execute(
+                    "insert into message (id, session_id, seq, role, parts, created, event_id, origin, delivery)"
+                    " values (?, ?, ?, ?, ?, ?, null, ?, ?)",
+                    (new_id("msg"), session.id, seq, item.message.role,
+                     json.dumps(message_to_json(item.message)["parts"]), item.created, item.origin, item.delivery))
             self.db.execute("update project set updated = ? where id = ?", (now, project.id))
             self.db.execute("insert into session_diagnostics (session_id, migrated) values (?, 1)", (session.id,))
             self._index_title(session.id, session.title)

@@ -54,6 +54,7 @@ export const iconGlyphs: Record<IconName, string> = {
   code: verbGlyphs.code.unicode, ask: verbGlyphs.ask.unicode,
   session: verbGlyphs.session.unicode, web: verbGlyphs.web.unicode,
   mic: controlGlyphs.mic.unicode, diamond: statusGlyphs.waiting.unicode,
+  lock: "🔒", unlock: "🔓",
 };
 
 export function Icon(p: { name: IconName; size?: number; class?: string; selected?: boolean }) {

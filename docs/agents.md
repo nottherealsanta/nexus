@@ -12,7 +12,7 @@ mode: subagent                                   # primary | subagent | all (def
 model: copilot/claude-sonnet-5                   # preferred model
 effort: high                                     # preferred reasoning effort
 tools: [read, bash]                              # allowed task tools; omit for all
-control: [session]                               # control tools; none unless listed
+control: [session, fork]                        # control tools; none unless listed
 steps: 20                                        # max loop steps per turn (default 500)
 ---
 You review code. Point out bugs and risks; do not edit files.
@@ -26,7 +26,7 @@ You review code. Point out bugs and risks; do not edit files.
 | `model` | `provider/model` | A pin: a new root session with this agent starts with it (otherwise it starts with the remembered model, see [daemon.md](daemon.md#model-selection)); a subagent without a configured pool uses it. |
 | `effort` | string | Used when the session has no effort of its own. |
 | `tools` | list of tool names | The only tools the model is offered. Omit it for every tool. An unknown name makes session creation fail with a clear error. |
-| `control` | list | Control tools an agent may grant explicitly: only `session` today, which starts sub agents. Never implied: omitting `tools` does not grant it. Ignored in sub agents. The workspace controls are not granted here: new sessions always start with the `expose_workspace_tools` entry point (see below). |
+| `control` | list | Control tools an agent may grant explicitly: `session` (starts named sub agents) and `fork` (starts a fork of the calling session; `build` grants it). Never implied: omitting `tools` does not grant it. Ignored in sub agents. The workspace controls are not granted here: new sessions always start with the `expose_workspace_tools` entry point (see below). |
 | `steps` | 1–500 | Max model calls per turn. |
 | `permission` | map `rule: ask \| deny` | Rules that narrow what the user's config allows: `"bash(git push*)": deny`, `web_fetch: ask`. `allow` is refused here, since an agent never widens. Frozen into the session snapshot. See [tools.md](tools.md#permission-rules). |
 
@@ -45,7 +45,9 @@ Files are read when a session is created. An edit, addition or deletion applies
 to new sessions (roots and children), not to a session that already exists: its
 resolved configuration is stored as a snapshot (below). A file that fails to
 parse is listed under `problems` (`GET /api/agent`, `nexus agent`) with the
-reason; it is never skipped silently.
+reason; it is never skipped silently. The name `fork` is reserved (it is the
+`fork` tool's child, below): a file named `fork.md` is reported as a
+problem and not loaded.
 
 ## Session snapshots
 
@@ -255,6 +257,56 @@ A new parent picks up added agents, description changes and mode changes; an
 existing parent keeps its catalog. If an existing parent names a child agent
 that has since been deleted (or is no longer allowed as a child), the call
 fails with a clear error and never substitutes another agent.
+
+### `fork`
+
+`fork {prompt, wait?, title?}` is its own control tool, granted by an agent
+file's `control: [fork]` (built-in `build` has it). It is not an agent file and
+not a `session` agent value (a file brings its own prompt, which would break the
+shared prefix). Its description says: a copy of you with your full context so
+far does one task and reports back; cheap (shares your prompt cache); prefer a
+named agent for an independent opinion, since a fork inherits your assumptions;
+a fork cannot launch subagents or forks. `session` called with `agent: "fork"`
+is refused with a pointer to the tool. A fork is a child whose request repeats
+the parent's prefix, so its first request can be a prompt-cache hit:
+
+- **Snapshot:** a copy of the parent's (rendered prompt, tool definitions with
+  `fork` itself, skills, MCP, workspace and messaging state), origin `fork`.
+  Its tool list is the parent's, not a child's: it keeps `fork` (and `session`
+  if the parent has it) and gets no `escalate`.
+- **Model and effort:** the parent's resolved values, stored on the fork; no
+  pool pick, no fallback re-pick, no override. Permission and switches are the
+  parent's; the session's `agent` is the parent's agent name. The prompt-cache
+  key (`conversation_id`) is the parent's id. A fork cannot switch agents.
+- **History:** the parent's longest settled prefix (every tool call has its
+  result) is copied into the fork's own messages; the parent's unfinished
+  `session` call is left out. The task follows as a user message that starts
+  with the fixed marker `runtime.FORK_MARKER` (only the parent id varies, so
+  forks from one point share the prefix up to their task):
+  `[Nexus fork] You are a fork of session ‹id›: you have its context up to here.
+  Do only the task below, then reply with your report and stop. Do not continue
+  the parent's own work. You cannot launch subagents or forks: your `session`,
+  `fork` and `message_session` calls are refused, so do the task yourself.` followed by a blank line and `Task: ‹prompt›`.
+- **No subagents at all:** the marker tells the fork it cannot launch any, and
+  the daemon refuses its `session` and `fork` calls ("refused: a fork cannot
+  launch subagents or forks …") and its `message_session` calls ("refused: a
+  fork cannot message other sessions …"), with advice to do the task itself
+  and report back. The definitions stay for the cache.
+- **Context size:** the call is refused when the parent's context (measured
+  input, else the estimate) leaves less than 10% of the model's window, with a
+  hint to brief a named sub agent instead.
+- **Parallel writes:** a fork has the parent's tools and workspace, write tools
+  included, and no worktree of its own. A fork that edits while the parent (or
+  another fork) edits the same files can conflict; the per-file lock serialises
+  single writes, not whole tasks.
+
+When to prefer a named agent: an independent second opinion, since a fork
+inherits the parent's assumptions and mistakes.
+
+Verified with real providers on 2026-11-08: a fork's first request reads the
+parent's prefix from the cache on Codex, Copilot, OpenCode Go and Grok (96–100% of
+the reusable prefix; [reports/fork-cache](../reports/fork-cache/README.md)). The
+Claude provider was not checked.
 
 Use `nexus run|chat --disable bash,write` to save switches on a session;
 `--disable ''` clears them. In chat, `/tools` shows available and disabled tools.

@@ -329,6 +329,8 @@ pub struct AskDraft {
     pub page: usize,
     /// The reply is in flight; a second submit would only get a 409.
     pub sent: bool,
+    pub scroll: usize,
+    pub scroll_max: usize,
 }
 
 /// The page the card shows now: a question, or the review when `review()`.
@@ -2455,7 +2457,9 @@ impl App {
         if target == cur.page {
             return;
         }
-        self.ask_picks(&cur.wait.id, cur.total).page = target;
+        let draft = self.ask_picks(&cur.wait.id, cur.total);
+        draft.page = target;
+        draft.scroll = 0;
     }
 
     /// Enter on a question locks its answer and moves to the next page (the
@@ -2490,6 +2494,7 @@ impl App {
             *slot = pick;
         }
         d.page = cur.page + 1;
+        d.scroll = 0;
         if let Some(next) = cur.questions.get(d.page) {
             if next["options"].as_array().is_none_or(Vec::is_empty) {
                 if let Some(pick) = d.picks.get_mut(d.page) {
@@ -2536,6 +2541,13 @@ impl App {
         });
     }
 
+    fn ask_scroll(&mut self, down: bool) {
+        if let Some(cur) = self.ask_current() {
+            let draft = self.ask_picks(&cur.wait.id, cur.total);
+            draft.scroll = if down { (draft.scroll + 1).min(draft.scroll_max) } else { draft.scroll.saturating_sub(1) };
+        }
+    }
+
     fn ask_key(&mut self, ev: &KeyEvent, name: &str) {
         let Some(cur) = self.ask_current() else {
             return;
@@ -2546,6 +2558,7 @@ impl App {
         let n_opts = cur.options().len();
         let field = cur.field();
         match name {
+            "pageup" | "pagedown" => self.ask_scroll(name == "pagedown"),
             "alt+a" => self.ask_field(!field),
             "up" | "down" if n_opts == 0 || field => self.ask_input_key(ev, name),
             "up" => self.ask_move(false),
@@ -2799,15 +2812,39 @@ impl App {
             .collect()
     }
 
-    /// `(live kernels, running background shells)` for the location strip.
+    /// `(live kernels, running background shells without a terminal)` for the
+    /// location strip. A job linked to a terminal is counted by
+    /// `terminal_shell_count` instead, so the strip never counts it twice.
     pub fn resource_counts(&self) -> (usize, usize) {
         (
             self.view_kernels().len(),
             self.view_jobs()
                 .iter()
-                .filter(|job| job["status"].as_str() == Some("running"))
+                .filter(|job| {
+                    job["status"].as_str() == Some("running")
+                        && job["terminal_id"].as_str().is_none()
+                })
                 .count(),
         )
+    }
+
+    /// Terminal resources, plus linked background jobs whose terminal has not
+    /// reached the list yet. Once a job's `terminal_id` is in the list, it is
+    /// not counted again.
+    pub fn terminal_shell_count(&self) -> usize {
+        let listed: HashSet<&str> = self
+            .terminal_panel
+            .terminals
+            .iter()
+            .map(|terminal| terminal.id.as_str())
+            .collect();
+        let unlisted = self
+            .view_jobs()
+            .iter()
+            .filter_map(|job| job["terminal_id"].as_str())
+            .filter(|id| !listed.contains(id))
+            .count();
+        self.terminal_panel.terminals.len() + unlisted
     }
 
     pub fn side_entries(&self) -> Vec<SideEntry> {
@@ -6417,7 +6454,10 @@ impl App {
             }
             "session.resources" => {
                 self.effects.push(Effect::Sync(SyncCommand::Resources));
-                self.open_overlay(OverlayKind::Resources { top: 0 });
+                self.open_overlay(OverlayKind::Resources {
+                    top: 0,
+                    kind: crate::ui::ResourceKind::All,
+                });
             }
             "session.archive" | "session.unarchive" => {
                 if let Some(sid) = self.viewed_id().map(str::to_owned) {
@@ -6741,6 +6781,8 @@ impl App {
                 }
             }
             "waiting.submit_answers" => self.ask_submit(),
+            "waiting.scroll_up" => self.ask_scroll(false),
+            "waiting.scroll_down" => self.ask_scroll(true),
             "waiting.next" => {
                 self.ui.wait_idx += 1;
                 self.ui.wait_choice = 0;
@@ -10257,6 +10299,10 @@ impl App {
         match name.as_str() {
             "f6" => return self.cycle_focus(false),
             "shift+f6" => return self.cycle_focus(true),
+            "pageup" | "pagedown" if self.ui.focus == Focus::Waiting && self.ask_current().is_some() => {
+                self.ask_scroll(name == "pagedown");
+                return;
+            }
             "pageup" | "pagedown" if self.ui.view == View::Session => {
                 let page = self.ui.timeline_height.saturating_sub(1).max(1) as isize;
                 return self.scroll_timeline(if name == "pageup" { -page } else { page });
@@ -10706,7 +10752,7 @@ impl App {
             Some(
                 OverlayKind::Help { top }
                 | OverlayKind::AlertDetail { top, .. }
-                | OverlayKind::Resources { top },
+                | OverlayKind::Resources { top, .. },
             ) => {
                 *top = (*top as isize + delta).max(0) as usize;
             }
@@ -14730,7 +14776,13 @@ impl App {
             Target::ComposerWorktree => self.run_command("session.worktrees"),
             Target::ComposerResources => {
                 self.effects.push(Effect::Sync(SyncCommand::Resources));
-                self.open_overlay(OverlayKind::Resources { top: 0 });
+                self.open_overlay(OverlayKind::Resources {
+                    top: 0,
+                    kind: crate::ui::ResourceKind::Kernels,
+                });
+            }
+            Target::ComposerShells => {
+                self.execute("terminal.open");
             }
             Target::ComposerTerminals => self.execute("terminal.open"),
             Target::TerminalNew => self.execute("terminal.new"),

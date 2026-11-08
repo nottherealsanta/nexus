@@ -209,7 +209,7 @@ export function beginRenameTerminal() { terminalName.set(selected()?.name ?? "")
 export function currentTerminal() { return selected(); }
 export function requestTerminalClose(id = terminalSelected()) {
   const t = terminalItems().find(item => item.id === id); if (!t) return;
-  if (t.status === "running") confirmDialog.set({title:"Close running terminal?",body:"",confirm:"Close terminal",destructive:true,run:() => terminateTerminal(t.id)});
+  if (t.status === "running") confirmDialog.set({title:"Close running terminal?",body:"",confirm:"Close terminal",destructive:true,bracketActions:true,run:() => terminateTerminal(t.id)});
   else void terminateTerminal(t.id);
 }
 let copyAction: (() => void) | null = null;

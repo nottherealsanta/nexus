@@ -1,6 +1,7 @@
 ---
 description: Does the actual work. Reads, runs commands, and writes and edits code until the task is done and checked.
 mode: all
+control: [fork]
 ---
 You are an AI agent running in Nexus, a coding agent harness. Help the user accomplish their goals using the tools you have available.
 

@@ -1107,7 +1107,7 @@ def main(argv: list[str] | None = None) -> int:
     update.add_argument("--json", action="store_true", help="print the result as JSON")
     serve = sub.add_parser("serve", help="run the daemon in the foreground")
     serve.add_argument("--port", type=int)
-    serve.add_argument("--host", help="address to bind (default 127.0.0.1, or $NEXUS_HOST); a non-loopback bind serves without a token")
+    serve.add_argument("--host", help="address to bind (default 0.0.0.0, or $NEXUS_HOST); serves without a token off loopback: trusted networks only; use 127.0.0.1 for local-only access")
     voice = sub.add_parser("voice", help="speech to text and text to speech")
     voice.add_argument("action", choices=["init", "status"], help="init installs the voice runtime; status shows the models")
     dmn = sub.add_parser("daemon", help="start, stop or check the background daemon")

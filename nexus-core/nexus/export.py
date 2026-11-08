@@ -240,6 +240,7 @@ class ExportView:
             "parent_id": row["parent_id"],
             "parent_call_id": row["parent_call_id"],
             "launched_by": row["launched_by"],
+            "fork": json.loads(row["fork"]) if row.get("fork") else None,
             "disabled_tools": disabled,
             "archived": bool(row["archived"]),
             "created": row["created"],

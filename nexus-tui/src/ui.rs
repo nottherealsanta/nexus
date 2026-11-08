@@ -112,6 +112,13 @@ impl Default for Scroll {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceKind {
+    All,
+    Kernels,
+    Shells,
+}
+
 /// What an overlay replaced: the focus and the scroll positions it must give back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Restore {
@@ -236,6 +243,7 @@ pub enum OverlayKind {
     /// Live kernels and background shells of the viewed session tree.
     Resources {
         top: usize,
+        kind: ResourceKind,
     },
     /// The full text of one alert (a toast or a past notification), wrapped
     /// and scrollable (DESIGN_PLAN.md D15). `back` is the notifications row
@@ -678,6 +686,7 @@ pub enum Target {
     ComposerWorktree,
     /// The kernel and running-shell counts on the location strip.
     ComposerResources,
+    ComposerShells,
     ComposerTerminals,
     TerminalTab(usize),
     TerminalClose(usize),

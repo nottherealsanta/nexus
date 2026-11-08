@@ -26,3 +26,6 @@ const railClasses: Record<string, string> = {
 };
 export const agentColor = (name: string) => classes[agentSlot(name)];
 export const agentRailColor = (name: string) => railClasses[agentSlot(name)];
+
+/** The agent name a child session shows: a fork reads `fork`, whatever agent it inherited from its parent. */
+export const agentLabel = (s: { agent?: string | null; fork?: unknown } | null | undefined): string => (s?.fork ? "fork" : s?.agent ?? "");

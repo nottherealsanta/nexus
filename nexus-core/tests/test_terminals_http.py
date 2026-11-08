@@ -163,3 +163,30 @@ async def test_http_created_terminal_is_closed_on_shutdown(tmp_path, monkeypatch
             assert response.status_code == 201
             path = f"/api/terminal/{response.json()['id']}"
         assert (await client.get(path)).json()["status"] == "closed"
+
+
+async def test_background_job_uses_http_terminal_resource(tmp_path, monkeypatch):
+    from nexus.tools import ToolContext
+
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    runtime = make_runtime(Store(tmp_path / "db.sqlite"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    project = runtime.open_project(str(workspace))
+    session = runtime.create_session(project, title=None, model=None, permission=None)
+    finished = []
+    runtime._job_finished = finished.append
+    app = build_app(runtime, token="secret", url="http://test")
+    async with (httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                  headers={"Authorization": "Bearer secret"}) as client,
+                app.router.lifespan_context(app)):
+        await runtime._start_job(session, session, {"command": "sleep 30"}, ToolContext(workspace))
+        job = runtime.jobs.list()[0]
+        listing = await client.get("/api/terminal", params={"project_id": project.id})
+        resource = listing.json()[0]
+        assert resource["background_job_id"] == job.id and resource["id"] == job.json()["terminal_id"]
+        assert resource["session_id"] == session.id and resource["workspace"] == str(workspace.resolve())
+        response = await client.delete("/api/terminal/" + resource["id"])
+        assert response.status_code == 200
+        await asyncio.wait_for(asyncio.shield(job.task), 3)
+        assert job.status == "killed" and finished == [job]

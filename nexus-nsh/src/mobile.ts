@@ -47,11 +47,12 @@ export function desktopOnly(id: string): boolean {
 
 /**
  * The rows a phone session view keeps: the user's messages, the agent's replies (live ones too), the control that
- * loads older history, and failures, which are the session's status. Context, thoughts, tools, children,
+ * loads older history, a fork's inherited block, and failures, which are the session's status. Context, thoughts, tools, children,
  * handoffs, turn footers and other notices stay on the desktop.
  */
 export function phoneRow(row: { kind: string; tone?: string }): boolean {
-  if (row.kind === "user" || row.kind === "assistant" || row.kind === "older") return true;
+  // A fork's inherited block stays, folded with the desktop's wording; open, its messages are filtered like any other.
+  if (row.kind === "user" || row.kind === "assistant" || row.kind === "older" || row.kind === "fork") return true;
   return row.kind === "diag" && row.tone === "error";
 }
 

@@ -18,6 +18,9 @@ terminal, `c` takes control and `r` releases it; Enter on the selected row
 focuses its screen. Ctrl+] returns to the list and Esc from the list detaches.
 Input is sent only while this attachment has control. Terminal applications receive
 mouse events when they request them; hold Shift to select text instead.
+The compact dock toolbar offers new, rename, close, take/release control, copy and
+hide; hover a control for its label. Background shells linked to a terminal appear
+only once in the activity indicators, and terminal shells open the dock.
 
 **Open inspector** opens the native inspector modal (Inspector API v2), shared with NSH,
 instead of a browser. Views: `1` Timing (one shared-axis Gantt, lanes grouped by
@@ -411,6 +414,14 @@ counts. Durations read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Activity groups fold 
 `3 thoughts, 50 commands, 8 tools, 9 reads` with `+N −M` and `✕ N failed`; a live group is
 `Working` (shimmer) over its newest five members and `… N earlier`, and its glyph
 flashes the accent for six frames when it finishes (not with reduced motion).
+A fork (a child launched with `agent: "fork"`, whose session JSON carries
+`fork: {parent_id, inherited}`) is labelled `Fork` in the subagent strip and on
+its child card, coloured as that name. Its timeline folds the first `inherited`
+messages, copied from the parent, into one group row at the top,
+`▸ Forked from ‹parent title› · N messages` (the parent id when the parent is
+unknown), folded by default and toggled like a group (Enter/Space, a click,
+Left/Right). Open, the copied messages render as usual, three cells in under
+the chevron; the `[Nexus fork]` task message after them is a normal user band.
 Members lead with a verb glyph (`→ ← $ * λ ? ↳ ↗`, ASCII `> < $ * L ? ^ ^`,
 from `paint::verb_glyph` and `[glyphs.verb]` in `theme.toml`) that the status
 glyph replaces while running, failed, denied or waiting. Opening a member shows
@@ -673,8 +684,8 @@ Core does not offer show their reason). Toasts (D15) are top-right under the hea
 at a time with `+N more`; a click, or Enter on the focused toast (`F6` to it), opens
 the full text in a modal (`c` copies, Esc closes), and the notifications modal opens the
 same text for an entry. The `↓ N new · end` pill sits on the row above the composer card.
-The card also answers `ask` questions: `Alt+W` focuses it and the question wraps to at
-most two lines. Every page has a custom answer field in the card; typing in it answers in
+The card also answers `ask` questions: `Alt+W` focuses it; questions, option labels and
+previews wrap fully, and Page Up/Page Down scroll the card, including the review. Every page has a custom answer field in the card; typing in it answers in
 your own words or adds context to a selection, and each question keeps its own text. A
 number key (1-9, 0 for the tenth) or Up/Down picks an option, clicking an option picks
 it, and `Alt+A` moves between the option list and the answer field. Enter locks the
@@ -809,8 +820,9 @@ TUI can be driven by hand in a browser.
   row of top padding above the input and a half-height bottom edge. Its status
   shows the latest reported input tokens, the percentage of any known
   pricing-tier boundary and of the context window; hovering explains them. The
-  location strip keeps the current path and branch, a centred highlighted count
-  of live kernels and running background shells (click it for their details),
+  location strip keeps the current path and branch, centered gray indicators for a live
+  kernel, running background shells and terminal shells when present. The kernel and
+  background-shell indicators open separate detail lists; terminal shells open the dock,
   and a rule below it shows context occupancy when idle (against the first
   pricing tier until reached, then the window); during a turn an
   agent-coloured segment moves along it (stationary with reduced motion, a

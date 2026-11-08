@@ -27,7 +27,7 @@ def _free_port() -> int:
 def _listener(port: int) -> socket.socket:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("127.0.0.1", port))
+    sock.bind((daemon._host(), port))
     sock.listen(4)
     return sock
 
@@ -38,11 +38,15 @@ def _write(data: dict) -> None:
 
 def test_the_bind_address_comes_from_the_flag_then_the_environment(home_dir, monkeypatch):
     monkeypatch.delenv("NEXUS_HOST", raising=False)
-    assert daemon._host() == "127.0.0.1"
+    assert daemon._host() == "0.0.0.0"
+    assert daemon._host("127.0.0.1") == "127.0.0.1"
     assert daemon._host("0.0.0.0") == "0.0.0.0"
     monkeypatch.setenv("NEXUS_HOST", "100.64.0.5")
     assert daemon._host() == "100.64.0.5"
     assert daemon._host("192.168.1.20") == "192.168.1.20"
+    monkeypatch.setenv("NEXUS_HOST", "127.0.0.1")
+    assert daemon._host() == "127.0.0.1"
+    assert daemon._host("0.0.0.0") == "0.0.0.0"
     assert daemon.is_loopback("127.0.0.1") and daemon.is_loopback("::1") and daemon.is_loopback("localhost")
     assert not daemon.is_loopback("0.0.0.0") and not daemon.is_loopback("100.64.0.5")
 
@@ -94,7 +98,7 @@ def test_start_names_an_unregistered_process_holding_the_port(home_dir):
     port = int(os.environ["NEXUS_PORT"])
     holder = _listener(port)
     try:
-        with pytest.raises(OSError, match=f"127.0.0.1:{port} is already in use"):
+        with pytest.raises(OSError, match=f"{daemon._host()}:{port} is already in use"):
             daemon.start()
     finally:
         holder.close()

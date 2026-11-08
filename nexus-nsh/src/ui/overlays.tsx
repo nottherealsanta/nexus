@@ -256,8 +256,8 @@ export function Confirm() {
               <If when={d().error}><Text class={`${TS.base} text-error`}>{"✕ " + d().error}</Text></If>
             </View>
             <View class="flex-row justify-end gap-2">
-              <Btn label="Cancel" initial onPress={() => run("alert.cancel")} disabled={!!d().busy} testID="confirm-cancel" />
-              <Btn label={d().confirm} kind={d().destructive ? "danger" : "primary"} testID="confirm-ok" busy={!!d().busy}
+              <Btn label={d().bracketActions ? "[Cancel]" : "Cancel"} initial onPress={() => run("alert.cancel")} disabled={!!d().busy} testID="confirm-cancel" />
+              <Btn label={d().bracketActions ? (d().busy ? "[Working…]" : `[${d().confirm}]`) : d().confirm} kind={d().destructive ? "danger" : "primary"} testID="confirm-ok" busy={!!d().busy && !d().bracketActions} disabled={!!d().busy}
                 onPress={() => void runConfirm()} />
             </View>
             <ModalFooter hints={d().destructive ? "enter cancel · tab to the red button to confirm · esc cancel" : "enter confirm · esc cancel"} />

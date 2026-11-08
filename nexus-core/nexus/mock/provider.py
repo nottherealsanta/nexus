@@ -9,6 +9,8 @@ from collections.abc import AsyncIterator
 from ..llmhub.types import *
 from .dsl import Ctx, Dyn, Fail, Hang, Scenario, Turn
 
+FORK_PREFIX = "[Nexus fork]"  # the start of runtime.FORK_MARKER
+
 
 class MockProvider:
     name = "mock"
@@ -36,6 +38,12 @@ class MockProvider:
             raise ProviderError(f"mock: unknown scenario {self.scenario!r}")
         actor = "child" if "child" in scenario.actors and not any(tool.name == "session" for tool in req.tools) else "main"
         index = sum(1 for m in req.messages if m.role == "assistant")
+        # A fork keeps its parent's tools and history; its own steps count from its task message.
+        marker = next((i for i, m in enumerate(req.messages) if m.role == "user" and any(
+            isinstance(p, Text) and p.text.startswith(FORK_PREFIX) for p in m.parts)), None)
+        if "fork" in scenario.actors and marker is not None:
+            actor = "fork"
+            index = sum(1 for m in req.messages[marker:] if m.role == "assistant")
         steps = scenario.actors.get(actor, ())
         step: object = steps[index] if index < len(steps) else Turn(text=f"[mock] {scenario.name} script finished.")
         ctx = Ctx(scenario.name, actor, index, req.messages)

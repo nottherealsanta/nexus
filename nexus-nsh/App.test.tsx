@@ -174,7 +174,7 @@ describe("shell", () => {
     expect(app.shows("id:open-settings")).toBe(true);
     // tabs: Sessions and Files, in manifest order; docked, they sit in the header's left slot
     const labels = (manifest.navigation.left_sidebar.tab as readonly { id: string }[]).map((t) => t.id);
-    expect(labels).toEqual(["sessions", "files"]);
+    expect(labels).toEqual(["sessions", "files", "git"]);
     expect(app.shows("id:tab-sessions") && app.shows("id:tab-files") && !app.shows("id:tab-projects")).toBe(true);
     // the icons follow the left sidebar: closing it hides them, reopening shows them again
     await app.press("id:toggle-left");

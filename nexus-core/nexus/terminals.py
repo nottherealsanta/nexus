@@ -27,6 +27,7 @@ import pyte
 from .runtime import Conflict, NotFound
 
 MAX_TERMINALS = 16
+MAX_RETAINED_TERMINALS = 64
 MAX_ATTACHMENTS = 16
 RING_BYTES = 1024 * 1024
 MAX_INPUT = 16 * 1024
@@ -81,9 +82,14 @@ class Attachment:
 
 class Terminal:
     def __init__(self, *, project_id: str, workspace: str, creator: str, session_id: str | None,
-                 rows: int, cols: int, persist: Callable[[dict[str, Any]], None] | None = None) -> None:
+                 rows: int, cols: int, persist: Callable[[dict[str, Any]], None] | None = None,
+                 command: str | None = None, background_job_id: str | None = None,
+                 output_listener: Callable[[bytes], None] | None = None) -> None:
         self.id = secrets.token_urlsafe(18)
         self.name = DEFAULT_NAME
+        self.background_job_id = background_job_id
+        self.output_listener = output_listener
+        self.output_done = asyncio.Event()
         self.project_id, self.workspace, self.creator, self.session_id = project_id, workspace, creator, session_id
         self.created = time.time()
         self.ended: float | None = None
@@ -107,10 +113,13 @@ class Terminal:
             self._winsize(rows, cols)
             env = os.environ.copy()
             env["TERM"] = "xterm-256color"
-            shell = env.get("SHELL") or "/bin/sh"
+            shell = "/bin/bash" if command is not None else env.get("SHELL") or "/bin/sh"
             child = Path(__file__).with_name("_terminal_child.py")
+            argv = [sys.executable, "-I", str(child), shell]
+            if command is not None:
+                argv.append(command)
             self.process = subprocess.Popen(
-                [sys.executable, "-I", str(child), shell], cwd=workspace, env=env,
+                argv, cwd=workspace, env=env,
                 stdin=slave, stdout=slave, stderr=slave, start_new_session=True, close_fds=True,
             )
         except BaseException:
@@ -133,7 +142,8 @@ class Terminal:
 
     def metadata(self) -> dict[str, Any]:
         controller = self.attachments.get(self.controller or "")
-        return {"id": self.id, "name": self.name, "project_id": self.project_id, "workspace": self.workspace,
+        return {"id": self.id, "name": self.name, "background_job_id": self.background_job_id,
+                "project_id": self.project_id, "workspace": self.workspace,
                 "session_id": self.session_id, "creator": self.creator, "status": self.status,
                 "created": self.created, "ended": self.ended, "rows": self.rows, "cols": self.cols,
                 "exit_code": self.exit_code, "signal": self.signal,
@@ -175,21 +185,30 @@ class Terminal:
                         attachment.queue.get_nowait()
                     attachment.queue.put_nowait(None)
 
-    def _read(self) -> None:
+    def _read(self) -> bool:
         try:
             data = os.read(self.fd, 16384)
         except BlockingIOError:
-            return
+            return False
         except OSError:
             data = b""
         if not data:
             self.loop.remove_reader(self.fd)
-            return
+            self.output_done.set()
+            return False
+        if self.output_listener is not None:
+            self.output_listener(data)
         self.parser.feed(data)
         before = self.discarded
         self._emit("output", data=base64.b64encode(data).decode("ascii"))
         if self.discarded != before:
             self._emit("discard", bytes=self.discarded, floor=self.floor())
+        return True
+
+    def _drain(self) -> None:
+        for _ in range(256):
+            if not self._read():
+                break
 
     def floor(self) -> int:
         return self.frames[0][0]["seq"] if self.frames else self.seq + 1
@@ -204,6 +223,7 @@ class Terminal:
 
     async def _wait(self) -> None:
         status = await asyncio.to_thread(self.process.wait)
+        await self.output_done.wait()
         self.status = "exited" if self.status == "running" else self.status
         self.ended = time.time()
         if status >= 0:
@@ -301,7 +321,7 @@ class Terminal:
             await self._close()
 
     async def _close(self) -> None:
-        if self.status == "running":
+        if self.status == "running" or (self.background_job_id is not None and not self.output_done.is_set()):
             self.status = "closed"
             try:
                 foreground = os.tcgetpgrp(self.fd)
@@ -310,38 +330,45 @@ class Terminal:
             if foreground > 0 and foreground != self.pid:
                 try:
                     os.killpg(foreground, signal.SIGHUP)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     pass
                 try:
                     os.killpg(foreground, signal.SIGTERM)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     pass
             try:
                 os.killpg(self.pid, signal.SIGHUP)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
             try:
                 os.killpg(self.pid, signal.SIGTERM)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
             try:
                 await asyncio.wait_for(asyncio.shield(self.waiter), 1)
             except TimeoutError:
                 try:
                     os.killpg(self.pid, signal.SIGKILL)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     pass
+                self._drain()
+                self.loop.remove_reader(self.fd)
+                os.close(self.fd)
+                self._fd_closed = True
+                self.output_done.set()
                 await self.waiter
             if foreground > 0 and foreground != self.pid:
                 try:
                     if os.getsid(foreground) == self.pid:
                         os.killpg(foreground, signal.SIGKILL)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     pass
         if not self._fd_closed:
+            self._drain()
             self._fd_closed = True
             self.loop.remove_reader(self.fd)
             os.close(self.fd)
+            self.output_done.set()
         for aid in list(self.attachments):
             self.detach(aid)
 
@@ -354,6 +381,7 @@ def dimensions(rows: int, cols: int) -> None:
 class TerminalService:
     def __init__(self, db: sqlite3.Connection | None = None) -> None:
         self.terminals: dict[str, Terminal] = {}
+        self.retired: dict[str, dict[str, Any]] = {}
         self.db = db
         if db is not None:
             db.execute("create table if not exists terminal_resource (id text primary key, metadata text not null)")
@@ -372,7 +400,8 @@ class TerminalService:
 
     def list(self, project_id: str) -> list[dict[str, Any]]:
         if self.db is None:
-            return [t.metadata() for t in self.terminals.values() if t.project_id == project_id]
+            return ([t.metadata() for t in self.terminals.values() if t.project_id == project_id]
+                    + [m for m in self.retired.values() if m["project_id"] == project_id])
         rows = [row for (raw,) in self.db.execute("select metadata from terminal_resource")
                 if (row := json.loads(raw))["project_id"] == project_id]
         return [self.metadata(row["id"]) for row in rows]
@@ -380,6 +409,8 @@ class TerminalService:
     def metadata(self, terminal_id: str) -> dict[str, Any]:
         if terminal_id in self.terminals:
             return self.terminals[terminal_id].metadata()
+        if terminal_id in self.retired:
+            return self.retired[terminal_id]
         if self.db is not None:
             row = self.db.execute("select metadata from terminal_resource where id=?", (terminal_id,)).fetchone()
             if row:
@@ -402,18 +433,40 @@ class TerminalService:
             term._emit("rename", name=name)
             return term.metadata()
         metadata["name"] = name
+        if terminal_id in self.retired:
+            self.retired[terminal_id] = metadata
         self.save(metadata)
         return metadata
 
     def create(self, *, project_id: str, workspace: str, creator: str, session_id: str | None,
-               rows: int, cols: int) -> Terminal:
+               rows: int, cols: int, command: str | None = None,
+               background_job_id: str | None = None,
+               output_listener: Callable[[bytes], None] | None = None) -> Terminal:
         dimensions(rows, cols)
-        if len(self.terminals) >= MAX_TERMINALS:
+        if sum(t.status == "running" for t in self.terminals.values()) >= MAX_TERMINALS:
             raise Conflict("terminal limit reached")
+        if len(self.terminals) >= MAX_RETAINED_TERMINALS:
+            candidates = [t for t in self.terminals.values()
+                          if t.waiter.done() and not t.attachments and t.output_done.is_set()]
+            if not candidates:
+                raise Conflict("terminal retention limit reached")
+            old = min(candidates, key=lambda t: t.ended or t.created)
+            if not old._fd_closed:
+                old.loop.remove_reader(old.fd)
+                os.close(old.fd)
+                old._fd_closed = True
+            metadata = old.metadata()
+            self.save(metadata)
+            if self.db is None:
+                self.retired[old.id] = metadata
+                if len(self.retired) > MAX_RETAINED_TERMINALS:
+                    self.retired.pop(next(iter(self.retired)))
+            del self.terminals[old.id]
         if not Path(workspace).is_dir():
             raise ValueError("workspace does not exist")
         term = Terminal(project_id=project_id, workspace=workspace, creator=creator,
-                        session_id=session_id, rows=rows, cols=cols, persist=self.save)
+                        session_id=session_id, rows=rows, cols=cols, persist=self.save, command=command,
+                        background_job_id=background_job_id, output_listener=output_listener)
         self.terminals[term.id] = term
         return term
 

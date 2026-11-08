@@ -20,6 +20,8 @@ describe("mobile client rules", () => {
     for (const id of ["session.new", "waiting.allow_once", "waiting.deny", "waiting.submit_answers"]) expect(desktopOnly(id)).toBe(false);
     expect(["user", "assistant", "older", "tool", "context", "thought"].filter((kind) => phoneRow({ kind }))).toEqual(["user", "assistant", "older"]);
     expect(phoneRow({ kind: "diag", tone: "error" })).toBe(true);
+    // A fork's inherited block stays on a phone, folded with the desktop's wording.
+    expect(phoneRow({ kind: "fork" })).toBe(true);
   });
   test("summarizes approvals and prioritizes waiting status", () => {
     expect(compactApproval({ tool: "bash", args: { command: "ls\npwd" } })).toBe("ls …");

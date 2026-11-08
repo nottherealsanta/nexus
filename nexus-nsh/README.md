@@ -51,9 +51,12 @@ Narrow desktop/web headers show one flexible title instead of a fixed-width tab
 strip and add button, matching the Rust TUI's narrow header. Session switching and
 creation remain available through the sidebar and shortcuts.
 
+Question cards scroll to reveal all questions, choices and option previews. Free-text
+drafts stay with their question when the card is reopened.
+
 ## Workspace terminals
 
-Desktop and web expose Core-owned terminals in a bottom dock toggled by **<n> shell** in the activity strip; the separate **kernel** indicator has no count. Tabs show each terminal's name and status; **+** creates one and **×** closes it. The xterm.js screen is embedded in a WebView and is not part of the session or model context. Closing the dock detaches; closing a tab terminates its terminal, with confirmation if running. Opening a terminal attempts to take control; a read-only terminal offers **Take control**. A discarded-history notice means replay is lossy. Output cannot write the clipboard: select text and use **Copy**.
+Desktop and web expose Core-owned terminals in a bottom dock toggled by the terminal shell indicator in the activity strip; the separate **kernel** indicator has no count. Tabs show each terminal's name and status, with **×** to close it. The compact toolbar offers new, rename, close, take/release control, copy output and hide, in that order; hover an icon for its label. The xterm.js screen is embedded in a WebView and is not part of the session or model context. Hiding the dock detaches; closing a terminal terminates it, with confirmation if running. Opening a terminal attempts to take control; a read-only terminal offers **Take control**. A discarded-history notice means replay is lossy. Output cannot write the clipboard: select text and use **Copy output**.
 
 Keyboard routing assumes the focused WebView receives keys after NSH's keymap has been overridden with pass-through bindings. The web renderer uses a sandboxed iframe; the macOS host has a native key monitor that consumes matching shortcuts before dispatch, so simply ignoring shortcut callbacks is not sufficient. Ctrl+] moves focus to the tabs. Browser and OS reserved shortcuts remain platform-owned. Native focus and input routing require a real macOS verification.
 
@@ -146,6 +149,15 @@ app registers them before rendering. Child cards label background calls,
 distinguish failed and running status, and allow the full tool result to be
 expanded without navigating away from the parent session.
 
+A fork child (the `fork` agent, PLAN.md section 10; session JSON `fork: {parent_id,
+inherited}`) reads `Fork` instead of its inherited agent name on its child card and
+strip tab. Its timeline folds the first `inherited` messages (copied from the parent)
+into one row at the top, `Forked from ‹parent title› · N messages` (the parent's id
+while its title is unknown), collapsed by default and opened or closed by its chevron
+row like an activity group; open, the copied messages follow as ordinary timeline
+rows, indented under the chevron as a group's members are. The `[Nexus fork]` task message after it is an ordinary user message. A phone
+keeps the folded row with the same wording.
+
 Selecting a session loads, after the bounded snapshot view, every message, the
 frozen starting context and the turn summaries with the session's spend ledger
 (`GET /api/session/{id}/turn`: the newest 200, then `before=` pages to the oldest,
@@ -228,8 +240,9 @@ The agent (in its colour at regular weight), model with its muted provider, and 
 the input starts on the user band's 16 px text edge, and the mic and send buttons sit
 beside it on the input's bottom edge, with the dock padded tighter. The selector row
 ends with context usage. The location strip is its own row under the controls at every width: the
-muted home-shortened path and branch on the left, a centred highlighted count of live
-kernels and running background shells (it opens their details), a linked worktree
+muted home-shortened path and branch on the left, centered gray indicators for a live
+kernel, running background shells and terminal shells when present. The kernel and
+background-shell indicators open separate detail lists; terminal shells open the dock. A linked worktree
 adding `⑂`, and the context reading (`82k · 41%`) on the right. The activity line along the dock's foot sits on the text edges. While a turn runs it is a
 soft pulse in the agent's colour, a fifth of the width, gliding back and forth. At rest it stays
 hidden until context reaches 80% (warning) or 95% (error). Draft context is marked as an estimate.
@@ -475,14 +488,15 @@ No global shortcut is registered.
   shows the iPhone layout without one.
 - **Connecting natively.** A native build has no host process. On macOS it reads
   `~/.nexus/daemon.json` (the same 0600 file the TUI uses) and connects to the
-  local Core with that token automatically; `~/.nexus10` is read until the home is
+  local Core automatically (using its token if present); `~/.nexus10` is read until the home is
   migrated. There is no Connect screen or Core button: without a local Core the
   app starts offline and reconnects when `127.0.0.1:4747` (or the address in
   `daemon.json`) appears. iOS opens the Connect screen and enters the Mac's LAN
-  address; start Core there with
-  `NEXUS_HOST=0.0.0.0 nexus serve` (or `nexus daemon start` with `NEXUS_HOST` set),
-  because a non-loopback bind serves `/api/*` without a token. Only do this on a
-  trusted LAN or Tailscale/private network. `apiBase()`/`setApiBase()` in
+  address; start Core there with `nexus serve` or `nexus daemon start`.
+  Core defaults to `0.0.0.0` and serves `/api/*` without a token. **Anyone who
+  can reach it can use the API: use only a trusted LAN or Tailscale/private
+  network, or restrict access with a firewall.** Set `NEXUS_HOST=127.0.0.1`
+  for local-only, token-protected access. `apiBase()`/`setApiBase()` in
   `src/core/transport.ts` are the single place the origin changes; `localCore()`
   there reads the daemon file, and `apiUrl()` prefixes URLs the platform loads
   itself (artifact images).
@@ -519,12 +533,14 @@ local-network keys must be in `Info.plist` *before* that, so package without
 
    ```sh
    nexus daemon stop
-   NEXUS_HOST=0.0.0.0 nexus daemon start
+   nexus daemon start                  # defaults to 0.0.0.0, without a token
    curl http://<mac-ip>:4747/api/info      # JSON, no token
    ```
 
    `<mac-ip>` is the LAN address (`ipconfig getifaddr en0`) or the Tailscale
-   address (`100.x.y.z`). Check the same URL from the iPhone's Safari first;
+   address (`100.x.y.z`). Remove any existing loopback `NEXUS_HOST` override,
+   or explicitly set `NEXUS_HOST=0.0.0.0`. This exposes Core without
+   authentication; use only a trusted network or firewall. Check the same URL from the iPhone's Safari first;
    if it does not load, the problem is the network, not the app.
 
 2. **Find the signing assets.** `security find-identity -v -p codesigning` lists
@@ -590,7 +606,7 @@ local-network keys must be in `Info.plist` *before* that, so package without
 
    If it says Core is not reachable: check the Safari test from step 1, the
    Local Network switch for Nexus, and that Core is still bound to `0.0.0.0`
-   (a daemon restart without `NEXUS_HOST` goes back to loopback + token). A
+   (the default unless `NEXUS_HOST` or `--host` overrides it). A
    development profile expires; re-sign and reinstall when it does. The Connect
    screen now probes the address before saving it and prints the failure, so
    tap **Core**, re-enter the address and read the message. An App Transport

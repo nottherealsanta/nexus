@@ -6,7 +6,7 @@ import { RAIL_PX, SidebarTabs, attention, leftSidebarWidth } from "./sidebar";
 import { byId, closeTab, keyLabel, run, rightIsOpen, rightWidthHint, tabIds, waitItems } from "../commands";
 import { attention as attentionGlyph, statusGlyphs } from "../gen/theme";
 import { centre, config, connection, coreUrl, drawer, isNarrow, leftOpen, m, model, native, railShown, touch, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
-import { agentColor } from "../agent-color";
+import { agentColor, agentLabel } from "../agent-color";
 import { ManagerHeaderIndicator, managerHeaderIndicatorVisible } from "./manager/stage";
 import { call } from "../core/manager";
 import { coreEditing } from "./connect";
@@ -189,13 +189,13 @@ export function SubagentStrip() {
                   <Button
                     onPress={() => void selectSession(child().id)} selected={open()}
                     testID={`subagent-${child().id}`}
-                    accessibilityLabel={`${capitalize(child().agent)} ${child().title || "Untitled"}, ${state().label}${open() ? ", open" : ""}`}
+                    accessibilityLabel={`${capitalize(agentLabel(child()))} ${child().title || "Untitled"}, ${state().label}${open() ? ", open" : ""}`}
                     style={{ width: stripTab() }} class={`${tabBox()} gap-1.5 px-2.5 ${open() ? "bg-background" : "hover:bg-accent"} ${FOCUS}`}
                   >
                     <If when={state().spin} else={<Text class={`shrink-0 ${TS.base} ${state().tone}`} accessibilityLabel={state().label}>{state().glyph}</Text>}>
                       <Spinner class={`shrink-0 ${TS.base} ${state().tone}`} label={state().label} />
                     </If>
-                    <Text class={`shrink-0 ${TS.base} ${agentColor(child().agent)}`}>{capitalize(child().agent)}</Text>
+                    <Text class={`shrink-0 ${TS.base} ${agentColor(agentLabel(child()))}`}>{capitalize(agentLabel(child()))}</Text>
                     <Text testID={open() ? `subagent-current-${child().id}` : undefined} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base} ${open() ? "font-semibold text-foreground" : "text-foreground-secondary"}`}>{child().title || "Untitled"}</Text>
                   </Button>
                 );

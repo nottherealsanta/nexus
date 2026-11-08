@@ -1,9 +1,8 @@
-// The kernels and background shells of the viewed session tree: the counts on
-// the location strip open this one scrollable list.
+// The kernels and background shells of the viewed session tree.
 import { Scroll, Text, View } from "nsh";
 import { Heading, Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import { T } from "./kit";
-import { model, resourcesError, resourcesOpen, viewResources } from "../store";
+import { model, resourcesError, resourcesOpen, resourcesKind, viewResources } from "../store";
 import { fmtDuration } from "./timeline";
 
 const sessionLabel = (id?: string) => {
@@ -25,17 +24,18 @@ export function ResourcesModal() {
 function ResourcesBody() {
   const r = () => viewResources();
   const running = () => r().jobs.filter((job) => job.status === "running").length;
+  const title = () => resourcesKind() === "kernels" ? "Kernels" : resourcesKind() === "shells" ? "Shells" : "Kernels and shells";
   const close = () => resourcesOpen.set(false);
   return (
-    <Modal size="large" label="Kernels and shells" testID="resources" onCancel={close} onOpenChange={(open) => { if (!open) close(); }}>
+    <Modal size="large" label={title()} testID="resources" onCancel={close} onOpenChange={(open) => { if (!open) close(); }}>
       <View class="gap-3">
-        <ModalTitle title="Kernels and shells" />
+        <ModalTitle title={title()} />
         <If when={!!resourcesError()}>
           <Text class="text-xs leading-4 text-warning">Could not refresh: {resourcesError()}</Text>
         </If>
         <Scroll style={{ height: Math.min(480, modalBodyHeight()) }} testID="resources-list">
           <View class="gap-2">
-            <Heading text={`Kernels (${r().kernels.length})`} first />
+            <If when={resourcesKind() !== "shells"}><Heading text={`Kernels (${r().kernels.length})`} first />
             <If when={r().kernels.length === 0} else={
               <View class="gap-1">
                 <Each of={r().kernels} key={(kernel) => kernel.id}>
@@ -44,9 +44,9 @@ function ResourcesBody() {
               </View>
             }>
               <Text class={T.sec}>No live kernels.</Text>
-            </If>
+            </If></If>
 
-            <Heading text={`Background shells (${running()} live, ${r().jobs.length} kept)`} />
+            <If when={resourcesKind() !== "kernels"}><Heading text={`Background shells (${running()} live, ${r().jobs.length} kept)`} />
             <If when={r().jobs.length === 0} else={
               <View class="gap-1">
                 <Each of={r().jobs} key={(job) => job.id}>
@@ -55,7 +55,7 @@ function ResourcesBody() {
               </View>
             }>
               <Text class={T.sec}>No background shells.</Text>
-            </If>
+            </If></If>
           </View>
         </Scroll>
         <ModalFooter hints="esc close" />

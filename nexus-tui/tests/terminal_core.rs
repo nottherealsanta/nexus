@@ -21,7 +21,10 @@ async fn real_core_terminal_accepts_input_and_renders_output() {
     std::fs::create_dir_all(&home).unwrap();
     let script =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/terminal_core_server.py");
-    let child = Command::new("/usr/local/bin/python3.14")
+    let python = std::env::var_os("NEXUS_TEST_PYTHON").map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../nexus-core/.venv/bin/python"));
+    let child = Command::new(python)
         .arg(script)
         .env("NEXUS10_HOME", &home)
         .env("SHELL", "/bin/sh")

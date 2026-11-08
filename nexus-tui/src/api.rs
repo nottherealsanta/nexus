@@ -180,6 +180,16 @@ fn bool_or_int<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
     })
 }
 
+/// `fork` as an object, or as that object's JSON text (a raw snapshot row);
+/// anything else reads as no fork rather than failing the whole session.
+fn fork_info<'de, D: Deserializer<'de>>(d: D) -> Result<Option<ForkInfo>, D::Error> {
+    let value = match Value::deserialize(d)? {
+        Value::String(text) => serde_json::from_str(&text).unwrap_or(Value::Null),
+        other => other,
+    };
+    Ok(serde_json::from_value(value).ok())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub id: String,
@@ -248,9 +258,35 @@ pub struct Session {
     pub created: f64,
     #[serde(default)]
     pub updated: f64,
+    /// Set when this session is a fork of its parent (PLAN 10); `null` or
+    /// absent otherwise (older daemons never send it).
+    #[serde(default, deserialize_with = "fork_info")]
+    pub fork: Option<ForkInfo>,
     /// Everything else, unchanged (tools, snapshot, workspace, ...).
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// A fork's origin: the session it copied and how many of its first messages
+/// came from there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForkInfo {
+    #[serde(default)]
+    pub parent_id: String,
+    #[serde(default)]
+    pub inherited: usize,
+}
+
+impl Session {
+    /// The agent name the UI shows: `fork` for a fork (whose `agent` is the
+    /// parent's), else the session's agent.
+    pub fn agent_label(&self) -> &str {
+        if self.fork.is_some() {
+            "fork"
+        } else {
+            &self.agent
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

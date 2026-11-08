@@ -52,17 +52,22 @@ from .paths import home
 
 BUILTIN_DIR = Path(__file__).parent / "builtin_agents"
 DEFAULT_AGENT = "build"
+# The `fork` tool's child is a copy of the calling session (its prompt, tools, model and history), not an agent
+# file, so no file may take the name.
+FORK_AGENT = "fork"
+RESERVED_NAMES = (FORK_AGENT,)
 MAX_FILE_BYTES = 256 * 1024
 _NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _FIELDS = {"description", "mode", "color", "model", "effort", "tools", "control", "steps", "permission"}
 _COLOR = re.compile(r"#[0-9a-fA-F]{6}|[a-z][a-z-]{0,31}\Z")
 MODES = ("primary", "subagent", "all")
-CONTROL_TOOLS = ("session",)  # the control tools an agent file may grant
+FORK_TOOL = "fork"  # launches a fork of the calling session; granted by an agent file's `control`
+CONTROL_TOOLS = ("session", FORK_TOOL)  # the control tools an agent file may grant
 # Every control tool, whether granted by an agent or always available: none of these
 # is ever bound inside a `code` cell.
 MESSAGE_TOOL = "message_session"  # exposed to a session by its first `session` call, never granted by an agent file
 ESCALATE_TOOL = "escalate"  # every sub agent has it; a root session never does; never granted by an agent file
-NEXUS_CONTROL_TOOLS = ("session", MESSAGE_TOOL, ESCALATE_TOOL, "expose_workspace_tools", "change_session_directory", "worktree")
+NEXUS_CONTROL_TOOLS = ("session", FORK_TOOL, MESSAGE_TOOL, ESCALATE_TOOL, "expose_workspace_tools", "change_session_directory", "worktree")
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +115,9 @@ def parse(path: Path, source: str) -> AgentDef:
     name = path.stem
     if not _NAME.fullmatch(name):
         raise ValueError("file name must be lowercase letters, digits, '-' or '_'")
+    if name in RESERVED_NAMES:
+        raise ValueError(f"{name!r} is reserved: the {name!r} tool's child copies the calling session; "
+                         "rename this file")
     raw = path.read_bytes()
     if len(raw) > MAX_FILE_BYTES:
         raise ValueError("file is too large")

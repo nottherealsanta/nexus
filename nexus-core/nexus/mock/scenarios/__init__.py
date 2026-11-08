@@ -3,6 +3,7 @@
 from .bash_wait import SCENARIO as bash_wait
 from .cancel import SCENARIO as cancel
 from .context_pressure import SCENARIO as context_pressure
+from .fork_subagent import SCENARIO as fork_subagent
 from .hello import SCENARIO as hello
 from .manager_demo import SCENARIO as manager_demo
 from .parallel_subagents import SCENARIO as parallel_subagents
@@ -26,6 +27,7 @@ CATALOG = {
         stress,
         provider_failure,
         parallel_subagents,
+        fork_subagent,
         context_pressure,
         manager_demo,
     )

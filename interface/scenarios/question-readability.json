@@ -1,0 +1,27 @@
+{
+  "id": "qst_readability",
+  "session_id": "ses_1",
+  "call_id": "call_readability",
+  "created": 1,
+  "questions": [
+    {
+      "id": "first",
+      "question": "Which approach should we use for this migration?",
+      "options": [
+        {"id": "safe", "label": "Use the conservative migration with a staged rollout", "preview": "Keep the old path available until all checks have passed, and only then remove the compatibility layer."}
+      ],
+      "multiple": false,
+      "allow_free_text": true
+    },
+    {
+      "id": "second",
+      "question": "For the second question, explain how the deployment should behave when a partial failure occurs after the first phase has completed and before the remaining services have finished updating. Should the operation automatically roll back, or wait for an operator to review the state?",
+      "options": [
+        {"id": "rollback", "label": "Automatically roll back all completed changes and restore the previous service configuration", "preview": "The rollback includes previously migrated services and records the reason for the failure so that an operator can investigate the complete sequence afterward."},
+        {"id": "wait", "label": "Pause and wait for an operator to review the deployment", "preview": "Leave the completed work intact and present the remaining steps for an explicit decision."}
+      ],
+      "multiple": false,
+      "allow_free_text": true
+    }
+  ]
+}
