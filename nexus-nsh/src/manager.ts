@@ -9,6 +9,8 @@ export const WORDS = {
   muted: "Muted",
   reconnecting: "Reconnecting",
   placeholder: "Tell the Manager…",
+  liveUnsupported: "This device cannot carry a GPT-Live voice call yet.",
+  liveUnsupportedFix: "Type to the Manager here, or set Settings → Manager → Mode to pipeline to talk.",
   disabled: "Manager is off. Turn it on in Settings › Manager.",
   noVoice: "Voice isn't set up. Type instead, or set it up in Settings › Dictation.",
   gone: "That session no longer exists.",

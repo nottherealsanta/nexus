@@ -133,6 +133,11 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | POST | `/api/project/{id}/remove` | | `{id, removed: true, sessions_kept}`; unregisters the project and keeps its sessions stored, never touching files; 409 while a session is running or has pending work |
 | DELETE | `/api/project/{id}` | | 204; **permanently deletes** the project and its sessions (the rail uses `remove` instead) |
 | GET | `/api/project/{id}/worktrees` | | the project checkout's worktrees (`repository`, `main`, `worktrees[]`, `project_directory`); 400 outside Git |
+| GET | `/api/project/{id}/git` | `?worktree=` | registered checkout status and changed paths |
+| GET | `/api/project/{id}/git/diff` | `?path=`, `?worktree=` | staged and unstaged diffs for one path, capped at 1 MiB each |
+| GET | `/api/project/{id}/git/live` | `?worktree=` | working and idle sessions associated with the registered checkout |
+| POST | `/api/project/{id}/git/action` | keyed; `{action, worktree?, paths?, value?, confirmed_live?}` | stage, unstage, commit, fetch, pull, push, switch or branch action |
+| POST | `/api/project/{id}/files` | `?session=` | create, rename or delete a workspace entry |
 | GET | `/api/project/{id}/files` | `?path=`, `?session=` | one directory level ([Project files and Git](#project-files-and-git)) |
 | GET | `/api/project/{id}/file` | `?path=`, `?session=` | UTF-8 text, a SHA-256 `revision` and a language hint; binary or over 1 MiB is rejected |
 | PUT | `/api/project/{id}/file` | `?path=`, `?session=`; `{content, expected_revision}` | writes only if the revision still matches; `"new"` creates; 409 `stale_file` ([File writes](#file-writes-k10)) |
@@ -349,7 +354,7 @@ Archive state is per root tree: `POST …/archive` and `POST …/unarchive` appl
 to the named root and every descendant in one transaction and are idempotent.
 A child-only request gets 400 naming its root; the operation must start from
 the root. The response is the root `Session` with `archived` set. Repeating an
-operation that changes nothing returns 200 with no transition event.
+operation that changes nothing returns 200 with no transition event. Archive returns 409 if a background job in the tree is still running.
 
 `GET /api/session` filters by `archived`:
 
@@ -564,6 +569,7 @@ durable reconciliation for a lost HTTP response.
 | `DELETE /api/project/{id}` | yes | — | Replay is 204 even though the project and sessions are gone |
 | `POST /api/project/{id}/move` | yes | — | Applied against Core's current order (not a client's list); replay returns the original list; an unknown id is 400 |
 | `POST /api/project/{id}/remove` | yes | — | Replay returns the original answer; a project already removed is 404 |
+| `POST /api/project/{id}/git/action` | required | — | External effect: a pending outcome after a crash is `mutation_outcome_unknown`, never blindly replayed |
 | `POST /api/session` | yes | — | Replay returns the same session; a child is not created twice |
 | `PATCH /api/session/{id}` | yes | `If-Match` / `expected_revision` | Replay before recheck; stale revision 409 |
 | `DELETE /api/session/{id}` | yes | — | Replay is 204; tombstones already recorded |
@@ -571,6 +577,7 @@ durable reconciliation for a lost HTTP response.
 | `POST …/model`, `…/agent` | yes | yes | Replay is the original session; the new snapshot/notice is not rebuilt |
 | `POST …/workspace-tools` | yes | — | Activation is idempotent; replay returns the activated session |
 | `POST …/directory` | yes | — | Replay returns the original applied/pending result and does not move twice |
+| `POST /api/project/{id}/files` | yes (journal only) | — | Filesystem mutations are external effects: an interrupted intent returns `mutation_outcome_unknown`; inspect the workspace before retrying |
 | `POST …/worktrees` | yes (journal only) | — | SQLite intent/evidence only. Git create/delete is an external effect: a crash leaves a pending intent that becomes **409** `mutation_outcome_unknown` (and expires after the retention lifetime). Inspect the repository; never blindly repeat a failed create/delete |
 | `POST …/prompt` | yes | — | Acceptance + turn journal are atomic. A crash before the task starts is recovered as an interrupted turn, and replay returns the original `turn_id` |
 | `POST …/continue` | yes | — | Same as prompt; replay returns the original continuation provenance |
@@ -982,7 +989,9 @@ Older Cores omit both fields; clients then fall back to creation order and `curr
 | `permission.replied` | `{id, session_id?, allow, outcome: "allowed" or "denied" or "cancelled", reason?, scope?: "session", grant?, note?}`; a cancellation has `allow: false` ([Approvals](#approvals-k7)) |
 | `permission.grants_cleared` | `{session_id}` |
 | `artifact.added` | `{id, mime, name, bytes, source}` ([Artifacts](#artifacts-k8)) |
-| `files.changed` | `{project_id, path, revision, source: "editor"}` after a `PUT` of a project file ([File writes](#file-writes-k10)) |
+| `files.changed` | Global workspace invalidation: `{project_id, workspace, path?, paths?, revision?, source: "editor"/"user"/"disk", omitted?, polling?}`. Never carries a `session_id` |
+| `files.watch` | Global `{project_id, workspace, source: "disk", status: "polling", poll_seconds: 3}` when native watching falls back |
+| `git.changed` | Global `{project_id, workspace, source}` Git view invalidation; never session context |
 | `question.asked` | pending question request (`id`, `session_id`, `call_id`, `questions`, `created`) |
 | `question.replied` | `{id, session_id, call_id, outcome: "answered" or "cancelled", answers, reason?}` |
 | `turn.recovered` | a turn a daemon restart interrupted: its outcome, restored messages, tool classifications, cancelled waits and lost runtime state (see [Crash recovery](#crash-recovery)) |
@@ -1291,6 +1300,10 @@ a SHA-256 content revision and a MIME-based language hint. Reads reject binary
 or non-UTF-8 data and files over 1 MiB. Paths are relative to the selected root;
 the session must belong to the project. Writes are `PUT /api/project/{id}/file` and publish `files.changed` ([File writes](#file-writes-k10)).
 
+`GET /api/project/{id}/files?path=<directory>&count=true&session=` returns the number of descendant entries without following symlinks for a delete confirmation. Counting stops with an error after 50,000 entries or three seconds; it never presents a partial count as exact.
+
+`POST /api/project/{id}/files?session=` accepts `action` (`create_file`, `create_dir`, `rename`, or `delete`), workspace-relative `path` and, for rename, `to`. Rename refuses an existing destination; deletion is permanent and recursive for directories. Symlink entries and symlink traversal are rejected. Successful operations publish a global `files.changed` event with `source: "user"`; no session timeline receives it. These operations do not belong to task tools.
+
 `GET /api/project/{id}/files/search?q=&limit=&directories=&session=` returns
 `{"query", "paths"}`: visible file paths under the selected root (relative,
 POSIX, with a trailing `/` for directories when `directories=1` or `true`) whose
@@ -1323,6 +1336,36 @@ tracked line counts. Clients treat `"??"` as untracked.
 `GET /api/session/{id}/git/diff?path=` returns separate staged and unstaged
 diffs for a relative path. Untracked file contents are not included in diffs.
 
+
+`GET /api/project/{id}/git` and `/git/live` accept an optional absolute
+`worktree` path, defaulting to the checkout containing the project. The path must be a
+registered non-bare worktree in the project's repository. Status returns the
+porcelain branch header, NUL-safe changed paths and local/remote branch rows (`name`,
+`local`, `current`, `upstream`). Live returns `working` and
+`idle` session records; active turns, approvals, questions and running jobs
+count as working, including children of sessions in the checkout.
+
+`POST /api/project/{id}/git/action` requires `Idempotency-Key`. Its `action` is
+`stage` or `unstage` with a nonempty `paths` array, or `commit`, `fetch`,
+`pull`, `push`, `switch`, `branch_create`, `branch_delete`, `branch_delete_force`
+or `discard`. Commit and branch actions take `value`; discard takes `paths` and
+restores tracked worktree contents or deletes regular untracked files without
+following symlinks. Force branch deletion additionally requires `force_confirmed: true`. All except stage and unstage require `confirmed_live`,
+the IDs of working sessions shown in the confirmation. Core rechecks them
+under its worktree mutation lock and returns 409 `worktree_live` with the fresh
+lists if any new session is working. This is a pre-operation check, not an
+exclusive lock on subsequent session activity or external Git processes. Pull is
+fast-forward only and push never forces. When exactly one remote can be proposed
+for a branch without an upstream, status includes `push_upstream: {remote, branch}`;
+the confirmed push must pass that remote as `value`. Safe branch deletion uses
+`-d`, force deletion requires separate confirmation, and Git hooks run on commit. An in-progress merge, rebase or other sequencer operation blocks
+mutations. Local commands have a 120-second timeout; network commands get 300
+seconds. Git stdout is capped at 16 MiB and stderr at 64 KiB; exceeding either
+returns an error. Status exposes at most 10,000 changes and 10,000 branches, with
+`changes_omitted` and `branches_omitted` counts. Mutations publish global
+`git.changed`; switch, pull and discard also publish
+`files.changed`. These events do not enter a session timeline. The desktop Git
+surface and remaining actions are not yet implemented.
 
 ### Image prompts
 
@@ -1528,3 +1571,23 @@ snapshots; the API retains those details.
 The planned usage table shows a ten-cell usage gauge, percent left, reserve and expiry. Window `detail` remains
 available to other API consumers but is not shown in the table. Reserve is elapsed period percentage minus used
 percentage, calculated by the client only for periods of at least seven days with a future reset and known usage.
+
+### Leased workspace watching
+
+`POST /api/project/{id}/watch?session=` accepts `{client_id, action: "renew" | "release"}`.
+It uses the same project/session confinement as Files and returns `{status, lease_seconds: 60, poll_seconds: 3}`.
+This ephemeral lease needs no idempotency key: renewing the same client/workspace
+extends its expiry, and releasing it is harmless when already absent. Desktop
+clients renew every 20 seconds only while Files or the file editor is visible;
+closing the surface releases the lease. Mobile never leases a watcher. Core ends
+a watcher when all leases expire, on release, or during shutdown. Limits are 32
+watched workspaces and 256 client leases.
+
+Native events debounce for 250 ms, skip Git-ignored paths, and watch checkout
+metadata plus a linked worktree's common Git directory. A batch publishes at most
+256 workspace-relative paths; `omitted` announces further paths and tells clients
+to invalidate broadly. No file contents are stored in these global events. If
+the native watcher cannot start, `files.watch` announces polling and clients show
+**Polling every 3 seconds**. The fallback invalidates Files and Git every three
+seconds only while a lease is alive. A disk invalidation reloads clean editor
+text; a different disk revision marks unsaved edits stale without replacing them.

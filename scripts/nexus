@@ -10,7 +10,6 @@
 #   nexus dev web [flags]     run the hot-reloading web app and open it
 #   nexus macos [flags]       run the NSH app in a macOS window
 #   nexus gpui                experimental GPUI host for the same NSH app
-#   nexus nsh tui [flags]     run the NSH app in the terminal (upstream TUI backend)
 #   nexus ios [flags]         run the NSH app in an iOS simulator (Mac Catalyst when none is installed)
 #   nexus restart             restart the Core daemon
 #   nexus stop                stop the Core daemon
@@ -162,14 +161,6 @@ gpui() {
   cargo run --manifest-path "$ROOT/nexus-gpui/Cargo.toml" -- "$ROOT/nexus-gpui/build/bundle.js"
 }
 
-nsh_tui() {
-  ensure_home
-  ensure_uv
-  ensure_nsh
-  nsh run --help | grep -q -- '--points-per-cell' || die "nsh needs an update with TUI support (see nexus-nsh/README.md)"
-  core daemon start >/dev/null
-  (cd "$NSH" && python3 scripts/gen.py && nsh run App.tsx --target tui "$@")
-}
 
 web() {
   ensure_home
@@ -353,7 +344,7 @@ case "${1:-}" in
   once)                shift; tui --once "$@" ;;
   build|b)             shift; build_all "$@" ;;
   web|w)               shift; web "$@" ;;
-  nsh)                 shift; [ "${1:-}" = tui ] || die "usage: nexus nsh tui [flags]"; shift; nsh_tui "$@" ;;
+  nsh)                 die "nexus nsh tui is retired; use nexus tui (archive/nsh-terminal-backend preserves the old target)" ;;
   macos)               shift; native macos "$@" ;;
   gpui)                shift; gpui "$@" ;;
   ios)                 shift

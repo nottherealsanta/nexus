@@ -1,6 +1,5 @@
-import { platform } from "nsh";
 
-export const textCellPoints = () => platform.idiom === "terminal" ? 8 : 9.6;
+export const textCellPoints = () => 9.6;
 export const defaultLeftSidebarWidth = (width: number) => width >= 1280 ? 272 : 224;
 export const rightSidebarWidth = (width: number) => width >= 1280 ? 288 : 240;
 

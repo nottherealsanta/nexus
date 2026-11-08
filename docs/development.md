@@ -24,20 +24,13 @@ over the shared file by `nexus-nsh/scripts/gen.py`; check it with
 `python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml`. The TUI reads only the
 shared file.
 
-NSH uses Unicode text icons on every target, including web and iOS, so the terminal
-backend does not need image support for its controls. `src/ui/kit.tsx` maps icon names
-to generated glyph tables from `interface/theme.toml`; its interface font is
-Monaspace Argon and its reading column uses fixed compact gutters like the Rust TUI.
-The shared interface text size defaults to 14 px on web and macOS, and 16 px on iOS;
-the terminal backend retains its cell-based sizing.
-In the terminal backend the app shows and binds the manifest's `keys.tui` spellings
-(`ctrl+k`, `ctrl+,`) and uses the shared `⌕` search glyph; pixel-wide marks such as the
-Settings focus bar become their cell glyphs (`▌`).
+NSH uses bundled theme-tinted SVG control icons on web and native targets. Its
+interface font is Monaspace Argon; text defaults to 14 px on web and macOS and
+16 px on iOS. The shared reading column keeps compact gutters.
 
-`nsh test --target tui` runs the app's tests through upstream's terminal backend;
-`app.screenshot(path)` then writes the versioned cell JSON that the parity screenshots
-read. `nexus-nsh/terminal-parity.test.tsx` covers the terminal key labels, the search
-glyph and the focus bar. On a machine without Chrome, the normal web run needs
+The NSH terminal target is retired; `nexus tui` runs the maintained Rust client.
+The former target and its review captures are preserved in the Git tag
+`archive/nsh-terminal-backend`. On a machine without Chrome, web tests need
 `--browser <path>`, for example Playwright's `chrome-headless-shell`.
 
 The TUI and `nexus-mermaid` need Rust 1.97 or newer: the client enables the shared crate's
@@ -68,6 +61,7 @@ nexus/
   voice/             speech-to-text and text-to-speech
   workspace.py       control tools: expose, session-directory moves, worktree specs
   worktrees.py       Git worktree list/create/delete through argument arrays
+  git_ops.py         unexposed Git status and action primitives for registered worktrees
   questions.py       the ask contract: schema, bounds, validation, result text
   permissions.py     permission rules (config and agent frontmatter)
   shell_syntax.py    shell control-syntax detection for glob permission rules
@@ -117,6 +111,19 @@ tests/               offline tests (test_server.py drives the API with a scripte
 ```
 
 State lives in `~/.nexus` (`$NEXUS10_HOME`), once it is migrated (below). Use a scratch `$NEXUS10_HOME` for tests and experiments.
+
+## Building from source
+
+Install Git, uv, Rust 1.97 or newer, Node 22 or newer, npm and the matching NSH
+CLI. On Linux, install a C toolchain, `pkg-config` and ALSA development headers
+(`build-essential pkg-config libasound2-dev` on Debian/Ubuntu;
+`gcc pkgconf-pkg-config alsa-lib-devel` on Fedora). The source installer checks
+these prerequisites before installing anything. Monty starts through
+`/usr/bin/env -i`; Linux systems must provide `/usr/bin/env`.
+
+Release installs use the prebuilt TUI and need the ALSA runtime library on Linux,
+not its development headers. The full Linux x86_64/aarch64 platform matrix remains
+unverified on this macOS host.
 
 ## Vendored crates
 
@@ -169,6 +176,10 @@ The TUI wraps interactive redraws in synchronized-update sequences so supporting
 terminals show each completed frame instead of intermediate cursor movements.
 Terminals without support ignore the sequences and draw normally.
 
+The image capability query is skipped for `TERM=dumb`, `linux`, `vt100` and
+`ansi`, avoiding a one-second wait for terminals that cannot answer it. Other
+terminal types retain automatic image protocol and font-size detection.
+
 In the TUI timeline, drag over visible text to select it; releasing the mouse
 copies the selected screen cells via OSC 52. Selection is limited to the
 visible timeline, includes its displayed formatting and line breaks, and does
@@ -191,7 +202,6 @@ Then, from any directory:
 | `nexus dev web` | Start Core and the hot-reloading NSH web app, then open it through the API proxy; Ctrl-C stops both web servers (not Core). Use `--no-open`, `--port N` for the proxy, and `--dev-port N` for NSH (defaults 4820 and 8790). NSH's development host may also be reachable on the local network. |
 | `nexus macos` | Run the NSH app in a macOS (AppKit) window with hot reload (`nsh run App.tsx --target macos`; flags pass through). It needs the address of a Core on the network — see [the NSH README](../nexus-nsh/README.md#platform-notes) |
 | `nexus gpui` | Experimental additive GPUI host: generate and build the same NSH app, then `cargo run` the Rust host. Requires NSH 0.4.0, Node and Rust; it does not start Core. Uses the same native Core discovery as the AppKit app. Runtime rendering and connectivity are not yet verified; the AppKit launcher is unchanged. |
-| `nexus nsh tui` | Start Core and run the existing NSH TSX app in the terminal with upstream's TUI backend (`nsh run App.tsx --target tui`; flags pass through, e.g. `--fps` or `--points-per-cell 8x16`). Requires the updated NSH source CLI; see [the NSH README](../nexus-nsh/README.md#terminal-backend). `nexus tui` still runs the dedicated Rust client. |
 | `nexus ios` | Run the same app in an iOS simulator (`nsh run App.tsx --target ios`), or in an iPhone-sized Mac Catalyst window (`--target catalyst`) when no iOS runtime is installed. `npm run ios` in `nexus-nsh/` packages, patches and launches the simulator app instead. A physical iPhone needs signing: see [Install on an iPhone](../nexus-nsh/README.md#install-on-an-iphone) |
 | `nexus restart` | Stop and start the Core daemon |
 | `nexus stop` | Stop the Core daemon |

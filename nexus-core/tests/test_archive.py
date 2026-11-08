@@ -370,37 +370,26 @@ async def test_prompt_and_child_creation_require_unarchive(env):
     await _idle(rt, root["id"])
 
 
-async def test_background_completion_retains_notice_without_waking(env):
+async def test_archive_refuses_running_background_job(env):
     rt, client, provider, workspace = env
     root = await _create(client, workspace, permission="allow")
     provider.replies = [
         [ToolCall("b1", "bash", json.dumps({"command": "sleep 1.2; printf late", "background": True}))],
         [Text("started")],
+        [Text("finished")],
     ]
     await client.post(f"/api/session/{root['id']}/prompt", json={"text": "start"})
     await _idle(rt, root["id"])
-    assert (await client.post(f"/api/session/{root['id']}/archive")).status_code == 200
-    requests_before = len(provider.requests)
-
+    refused = await client.post(f"/api/session/{root['id']}/archive")
+    assert refused.status_code == 409 and "background job is running" in refused.json()["error"]
+    assert not rt.session(root["id"]).archived
     for _ in range(400):
         if any(e["type"] == "bash.finished" for e in rt.store.events(root["id"], limit=5000)):
             break
         await asyncio.sleep(0.01)
     assert any(e["type"] == "bash.finished" for e in rt.store.events(root["id"], limit=5000))
-    await asyncio.sleep(0.05)
-    assert root["id"] not in rt.turns and len(provider.requests) == requests_before
-    assert (await client.get(f"/api/session/{root['id']}")).json()["archived"] is True
-
-    messages = (await client.get(f"/api/session/{root['id']}/message")).json()
-    notice = next(text for text in _texts(messages) if "→ Background Shell Done:" in text)
-    assert "late" in notice and "bash_output" in notice
-
-    assert (await client.post(f"/api/session/{root['id']}/unarchive")).status_code == 200
-    assert not rt.turns and len(provider.requests) == requests_before
-    provider.replies = [[Text("resumed")]]
-    await client.post(f"/api/session/{root['id']}/prompt", json={"text": "continue"})
     await _idle(rt, root["id"])
-    assert any("→ Background Shell Done:" in p.text for m in provider.requests[-1].messages for p in m.parts if isinstance(p, Text))
+    assert (await client.post(f"/api/session/{root['id']}/archive")).status_code == 200
 
 
 async def test_api_authentication_and_error_responses(env):

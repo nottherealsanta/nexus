@@ -21,7 +21,7 @@ import type { ClientView } from "./view";
 import { playbackLevel, speakText, stopSpeaking } from "../speech";
 import { dictationLevel, dictationPhase } from "../voice-state";
 import { playNotificationCue } from "../cues";
-import { gptLiveLevels, gptLiveOpen, interruptGptLive, startGptLive, stopGptLive } from "./gptlive";
+import { gptLiveLevels, gptLiveOpen, gptLiveSupported, interruptGptLive, startGptLive, stopGptLive } from "./gptlive";
 
 /**
  * The microphone path (the client's dictation): injected by the app, so this module loads without the
@@ -355,13 +355,23 @@ let liveTimer: ReturnType<typeof setInterval> | null = null;
  */
 async function openLive(callId: string) {
   begin({ orb: true });
+  // A client that cannot capture and play the call's audio (NSH on iOS and desktop today) never opens Core's half:
+  // it would stay open with nobody on it, and every retry would be refused as busy.
+  if (!gptLiveSupported()) {
+    managerError.set({ code: "live_unsupported", message: WORDS.liveUnsupported, fix: WORDS.liveUnsupportedFix });
+    return;
+  }
   liveVoice.set(true);
+  let coreOpen = false;
   try {
     await request("POST", "/api/manager/live/start", { body: { stream_id: streamId } });
-    if (call()?.id !== callId || !audioRequested()) { hangUpLive(); return; }
+    coreOpen = true;
+    if (call()?.id !== callId || !audioRequested()) { hangUpLive(); void request("POST", "/api/manager/live/stop", { body: { stream_id: streamId } }).catch(() => {}); return; }
     await startGptLive(streamId ?? "", (why) => { hangUpLive(); managerError.set({ code: "live_lost", message: why, fix: "Start the call again." }); });
   } catch (e) {
     liveVoice.set(false);
+    // Core's half opened but this client's did not: close it, so starting again is not refused as busy.
+    if (coreOpen) { stopGptLive(); void request("POST", "/api/manager/live/stop", { body: { stream_id: streamId } }).catch(() => {}); }
     const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
     managerError.set({ code: e instanceof ApiError && e.code ? e.code : "live_failed", message, fix: "The call is still open for typing; start it again to retry the voice." });
     return;

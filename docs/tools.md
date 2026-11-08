@@ -466,10 +466,9 @@ daemon token is), but the tools refuse another tree's job id.
 
 ## edit
 
-`edit` and `patch` are two tools. `edit` replaces exact text in one file;
-`patch` changes several places or files at once. `edit` takes no `patch`
-argument (it says to use the `patch` tool), and `multiedit` no longer exists:
-several replacements in one file are a patch with several hunks.
+`edit` and `patch` are two tools. `edit` replaces text in one file, optionally
+with an ordered `edits` array. `patch` changes several places or files at once.
+`edit` takes no `patch` argument; `multiedit` no longer exists.
 
 ### `edit`
 
@@ -479,10 +478,20 @@ several replacements in one file are a patch with several hunks.
 | `old_string` | string | Non-empty text to find |
 | `new_string` | string | Replacement; must differ from `old_string` |
 | `replace_all` | boolean | Replace every occurrence |
+| `edits` | array | 1–64 replacement objects, each with `old_string`, `new_string` and optional `replace_all`; use instead of the top-level replacement fields |
 
-`old_string` must occur exactly once unless `replace_all` is true. Errors: not
-found, occurs N times (add context or set `replace_all`), identical strings, file
-does not exist. Result: `edited <path> (N replacement[s])`. No approval is requested.
+Exact matching takes priority. If no exact match exists, `edit` first tolerates
+curly quotes and en/em dashes, then also trailing line whitespace and CRLF/LF
+differences. It never strips indentation. At the first matching tier the match
+must be unique unless `replace_all` is true; ambiguity is an error, not a guess.
+Untouched bytes remain unchanged, and fallback replacements retain a CRLF-only
+file's newline convention. A fallback result says `normalized matching`.
+
+An `edits` array runs sequentially against an in-memory copy and writes only after
+every replacement validates. A later failure leaves the file unchanged. Top-level
+replacement fields cannot be mixed with `edits`. Errors include not found,
+ambiguous, identical strings, invalid replacement objects and missing file.
+Result: `edited <path> (N replacement[s])`. No approval is requested.
 
 ### `patch` (`apply_patch` format)
 

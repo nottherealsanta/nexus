@@ -216,9 +216,22 @@ fn filters_tree_selector_and_full_record() {
 }
 
 #[test]
-fn live_state_polls_head_cheaply_and_refetches_only_on_change() {
+fn live_state_checks_head_after_invalidation_and_refetches_only_on_change() {
     let mut app = ready();
     let t0 = Instant::now();
+    let invalidate = |app: &mut App, at: Instant| {
+        if let Some(OverlayKind::Inspector(inspector)) =
+            app.ui.overlay.as_mut().map(|overlay| &mut overlay.kind)
+        {
+            inspector.invalidate(at);
+        }
+    };
+    app.tick(t0 + Duration::from_secs(1));
+    assert!(
+        calls(&mut app).is_empty(),
+        "no periodic head poll without a session change"
+    );
+    invalidate(&mut app, t0 + Duration::from_secs(2));
     app.tick(t0 + Duration::from_secs(3));
     let heads = calls(&mut app);
     assert!(matches!(heads[0], ApiCall::InspectorHead { .. }));
@@ -230,6 +243,7 @@ fn live_state_polls_head_cheaply_and_refetches_only_on_change() {
     assert!(calls(&mut app).is_empty());
     assert!(shown(&mut app).contains("Live · updated"));
     // Changed head: exactly one refetch.
+    invalidate(&mut app, t0 + Duration::from_secs(11));
     app.tick(t0 + Duration::from_secs(12));
     let heads = calls(&mut app);
     answer(&mut app, &heads[0], scenario("head_changed"));
@@ -241,6 +255,7 @@ fn live_state_polls_head_cheaply_and_refetches_only_on_change() {
     press(&mut app, &["n"]);
     let older = calls(&mut app).remove(0);
     answer(&mut app, &older, scenario("timing"));
+    invalidate(&mut app, t0 + Duration::from_secs(19));
     app.tick(t0 + Duration::from_secs(20));
     let heads = calls(&mut app);
     let mut reset = scenario("head");
@@ -250,6 +265,7 @@ fn live_state_polls_head_cheaply_and_refetches_only_on_change() {
     assert!(!query(&refetch).iter().any(|(k, _)| k == "before"));
     // Disconnected never looks current; Refresh stays available.
     answer(&mut app, &refetch, scenario("timing"));
+    invalidate(&mut app, t0 + Duration::from_secs(29));
     app.tick(t0 + Duration::from_secs(30));
     let heads = calls(&mut app);
     fail(&mut app, &heads[0]);

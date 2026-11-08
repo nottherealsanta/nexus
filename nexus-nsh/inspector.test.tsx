@@ -178,7 +178,7 @@ describe("native inspector (API v2)", () => {
     expect(text(app)).not.toContain("assistant · 3 parts");
   });
 
-  test("live state polls the head, refetches only on change, shows disconnected and stops when closed", async () => {
+  test("stream invalidation checks the head, coalesces and stops when closed", async () => {
     const app = await fixture({ clock: {} });
     await see(app, "Live · updated");
     const heads = () => calls(app, "/inspect/head").length;
@@ -186,16 +186,21 @@ describe("native inspector (API v2)", () => {
     /** Move the manual clock in half-second steps until `done` holds (a poll's answer lands a step later). */
     const until = async (done: () => boolean) => { for (let i = 0; i < 20 && !done(); i++) await tick(app, 500); expect(done()).toBe(true); };
     const base = pages();
+    await tick(app, 2500);
+    expect(heads()).toBe(0); // no periodic polling
+    await app.keyboard.press("F12");
     await until(() => heads() === 1);
     await tick(app, 500);
     expect(pages()).toBe(base); // unchanged head: no refetch
     core.head = scenario.head_changed;
+    await app.keyboard.press("F12");
     await until(() => heads() === 2);
     await until(() => pages() === base + 1); // changed head: exactly one refetch
     await tick(app, 500);
     expect(pages()).toBe(base + 1);
     // Offline never looks current, and Refresh remains.
     core.headFails = true;
+    await app.keyboard.press("F12");
     await until(() => text(app).includes("Disconnected"));
     expect(text(app)).toContain("not current");
     expect(text(app)).not.toContain("● Live");

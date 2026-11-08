@@ -1,0 +1,9 @@
+{
+  "workspace": "/work/demo",
+  "path": "hello.txt",
+  "initial": "one\ntwo\n",
+  "updated": "disk content\n",
+  "draft": "my unsaved draft",
+  "polling_label": "Polling every 3 seconds",
+  "disconnected_label": "File watching disconnected"
+}

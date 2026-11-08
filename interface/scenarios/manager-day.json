@@ -1,0 +1,33 @@
+{
+  "overview": "what's going on?",
+  "read": "excerpt sidebar-polish",
+  "navigate": "open the first one",
+  "dismiss": "clear",
+  "session_title": "Sidebar polish",
+  "session_answer": "Changes are ready for review.",
+  "approval": "approval",
+  "approve": "yes",
+  "start": "start check the release in nexus",
+  "steer": "tell sidebar-polish check the tests",
+  "command": "alembic upgrade head",
+  "excerpt_card": {
+    "id": "day-excerpt",
+    "type": "excerpt",
+    "focused": true,
+    "session_id": "day-session",
+    "handle": "sidebar-polish",
+    "markdown": "Changes are ready for review.",
+    "clipped": false
+  },
+  "approval_card": {
+    "id": "day-approval",
+    "type": "approval",
+    "focused": true,
+    "session_id": "day-session",
+    "handle": "sidebar-polish",
+    "approval_id": "day-approval-id",
+    "summary": "bash",
+    "detail": "alembic upgrade head",
+    "clipped": false
+  }
+}

@@ -892,3 +892,40 @@ fn default_voice_starts_on_open_and_can_be_disabled_while_connecting() {
     assert!(a.hits.rect_of(&Target::ManagerVoice).is_some());
     assert!(!shown.contains('┌'));
 }
+
+#[test]
+fn scripted_day_applies_shared_cards_and_navigation() {
+    let day: Value =
+        serde_json::from_str(include_str!("../../interface/scenarios/manager-day.json")).unwrap();
+    let mut a = app();
+    start(&mut a);
+    let id = a.state.model.sessions.keys().next().unwrap().clone();
+    for (index, name) in ["excerpt_card", "approval_card"].iter().enumerate() {
+        let mut card = day[*name].clone();
+        card["session_id"] = json!(id);
+        send(
+            &mut a,
+            101 + index as i64,
+            "manager.card",
+            json!({"card": card}),
+        );
+        let expected = if *name == "excerpt_card" {
+            "session_answer"
+        } else {
+            "command"
+        };
+        assert!(text(&mut a).contains(day[expected].as_str().unwrap()));
+    }
+    a.effects.clear();
+    send(
+        &mut a,
+        103,
+        "manager.navigate",
+        json!({"request_id": "day-nav", "session": id}),
+    );
+    assert!(manager_calls(&a)
+        .iter()
+        .any(|c| c.0 == "/api/manager/navigate/result" && c.1.as_ref().unwrap()["ok"] == true));
+    send(&mut a, 104, "manager.card", json!({"card": null}));
+    assert!(a.ui.manager.card.is_none());
+}

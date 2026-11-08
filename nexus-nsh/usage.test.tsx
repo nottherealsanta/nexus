@@ -33,7 +33,7 @@ describe("provider usage", () => {
     await app.keyboard.press("mod+shift+u");
     await app.waitFor("text:Other Copilot note");
     const shown = app.texts().join("\n");
-    for (const text of ["Window", "Progress", "Left", "Reserve", "Expires", "██▃", "76%", "90%", "Other xAI note", "Other Copilot note", "Prepaid credits: $1.00"]) expect(shown.includes(text)).toBe(true);
+    for (const text of ["Window", "Progress", "Left", "Reserve", "Expires", "━━╴───────", "76%", "90%", "Other xAI note", "Other Copilot note", "Prepaid credits: $1.00"]) expect(shown.includes(text)).toBe(true);
     for (const text of ["Limit reached:", "of credits", "225 of 300 left", "Prepaid credits: $2.50", "AI credits used this period: 10", "Chat: unlimited", "Completions: unlimited"]) expect(shown.includes(text)).toBe(false);
   });
 

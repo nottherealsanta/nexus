@@ -194,6 +194,31 @@ def test_new_database_incremental_vacuum_is_bounded(storage):
     assert 0 < before["page_count"] - after["page_count"] <= 8
 
 
+def test_restart_reads_open_jobs_without_scanning_adopted_event_history(tmp_path):
+    path = tmp_path / "jobs.db"
+    store = Store(path)
+    project, _ = store.project_for_path(str(tmp_path))
+    session = store.create_session(project, title="jobs", agent="build")
+    bus = Bus()
+    bus.attach(store)
+    bus.publish("bash.started", {"id": "running"}, session_id=session.id)
+    bus.publish("bash.started", {"id": "finished"}, session_id=session.id)
+    bus.publish("bash.finished", {"id": "finished"}, session_id=session.id)
+    assert store.open_bash_jobs() == [(session.id, "running")]
+    with store.db:
+        store.db.execute("delete from event")
+    store.close()
+    restarted = Store(path)
+    statements = []
+    restarted.db.set_trace_callback(statements.append)
+    try:
+        assert restarted.open_bash_jobs() == [(session.id, "running")]
+        assert restarted.unfinished_bash_jobs(session.id) == ["running"]
+        assert not any("from event" in sql.lower() for sql in statements)
+    finally:
+        restarted.close()
+
+
 def test_offline_dry_run_lock_backup_and_swap(storage):
     store, bus, session = storage
     _announce(store, bus, session.id)

@@ -18,8 +18,6 @@ pub const VIEWS: [&str; 6] = [
     "Questions",
 ];
 pub const LIMIT: usize = 50;
-/// Seconds between cheap `/inspect/head` polls while the inspector is open.
-pub const POLL_SECS: u64 = 2;
 /// Rows drawn at once; the rest scroll in as the selection moves.
 pub const WINDOW: usize = 60;
 const DETAIL_LINES: usize = 120;
@@ -137,6 +135,7 @@ pub struct Inspector {
     pub info: bool,
     pub edit: Option<(Field, String)>,
     pub polled: Option<Instant>,
+    pub dirty_at: Option<Instant>,
 }
 
 fn n_text(v: &Value) -> String {
@@ -227,6 +226,7 @@ impl Inspector {
             info: false,
             edit: None,
             polled: None,
+            dirty_at: None,
         }
     }
     pub fn page(&self) -> Page {
@@ -575,14 +575,19 @@ impl Inspector {
     pub fn live(&self) -> bool {
         self.connected && !self.paused && self.newest()
     }
-    /// Time for a cheap head poll?
+    /// Coalesce durable event bursts before checking the inspection watermark.
+    pub fn invalidate(&mut self, now: Instant) {
+        if self.dirty_at.is_none() {
+            self.dirty_at = Some(now);
+        }
+    }
     pub fn should_poll(&self, now: Instant) -> bool {
         !self.paused
             && !self.loading
             && !self.head_inflight
             && self
-                .polled
-                .is_none_or(|at| now.duration_since(at).as_secs() >= POLL_SECS)
+                .dirty_at
+                .is_some_and(|at| now.duration_since(at).as_millis() >= 200)
     }
     /// Apply a head response. Returns true when the newest page must be refetched.
     pub fn on_head(&mut self, head: &Value) -> bool {
@@ -1163,5 +1168,25 @@ impl Gantt {
             bar.iter().collect::<String>(),
             lw = self.label_width
         )
+    }
+}
+
+#[cfg(test)]
+mod invalidation_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn events_are_coalesced_and_never_poll_without_invalidation() {
+        let mut inspector = Inspector::new("session".into());
+        inspector.loading = false;
+        let now = Instant::now();
+        assert!(!inspector.should_poll(now + Duration::from_secs(10)));
+        inspector.invalidate(now);
+        inspector.invalidate(now + Duration::from_millis(50));
+        assert!(!inspector.should_poll(now + Duration::from_millis(199)));
+        assert!(inspector.should_poll(now + Duration::from_millis(200)));
+        inspector.head_inflight = true;
+        assert!(!inspector.should_poll(now + Duration::from_secs(1)));
     }
 }

@@ -850,12 +850,13 @@ dependencies = [
  "objc2-avf-audio",
  "objc2-core-audio-types",
  "objc2-foundation",
+ "serde_json",
 ]
 
 [[package]]
 name = "nsh-core"
 version = "0.4.0"
-source = "git+https://github.com/longbridge/nsh?rev=3789a451f6d4935a3b13890fb1020a427d20a8ee#3789a451f6d4935a3b13890fb1020a427d20a8ee"
+source = "git+https://github.com/longbridge/nsh?rev=209cb8492705321315745f2745c8060816b6d378#209cb8492705321315745f2745c8060816b6d378"
 dependencies = [
  "cap-std",
  "crc32fast",
@@ -887,7 +888,7 @@ dependencies = [
 [[package]]
 name = "nsh-macros"
 version = "0.4.0"
-source = "git+https://github.com/longbridge/nsh?rev=3789a451f6d4935a3b13890fb1020a427d20a8ee#3789a451f6d4935a3b13890fb1020a427d20a8ee"
+source = "git+https://github.com/longbridge/nsh?rev=209cb8492705321315745f2745c8060816b6d378#209cb8492705321315745f2745c8060816b6d378"
 dependencies = [
  "imagesize 0.15.0",
  "proc-macro2",
@@ -900,7 +901,7 @@ dependencies = [
 [[package]]
 name = "nsh-updater"
 version = "0.4.0"
-source = "git+https://github.com/longbridge/nsh?rev=3789a451f6d4935a3b13890fb1020a427d20a8ee#3789a451f6d4935a3b13890fb1020a427d20a8ee"
+source = "git+https://github.com/longbridge/nsh?rev=209cb8492705321315745f2745c8060816b6d378#209cb8492705321315745f2745c8060816b6d378"
 dependencies = [
  "base64",
  "ed25519-dalek",

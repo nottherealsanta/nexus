@@ -1,3 +1,4 @@
+import fileWatchScenario from "../interface/scenarios/file-watch.json";
 // PLAN K10: the built-in editor over a project file.
 import { describe, expect, open, test } from "nsh/test";
 import { fileRows } from "./src/file-tree";
@@ -29,6 +30,7 @@ const network = {
   "GET */api/mcp*": { body: { servers: [] } },
   "GET */api/session/ses_1/message*": { body: { messages: [], more: false, oldest_seq: null } },
   "GET */api/project/prj_1/files*": { body: { path: "", entries: [{ name: "hello.txt", kind: "file", ignored: false }] } },
+  "POST */api/project/prj_1/watch": { body: { status: "watching" } },
   "GET */api/project/prj_1/file*": { body: { path: "hello.txt", content: "one\ntwo\n", revision: "rev1", language: "text" } },
   "PUT */api/project/prj_1/file*": { body: { path: "hello.txt", revision: "rev2" } },
   "GET */api/session/ses_0/message*": { body: [] },
@@ -63,7 +65,7 @@ describe("Built-in editor (K10)", () => {
     await app.waitFor("id:file-panel", { state: "gone" });
   });
 
-  test("a Markdown file opens as prose, with its source a click away", async () => {
+  test("Markdown opens in the editor and can preview the current draft", async () => {
     const app = await open("./App.tsx", {
       storage: core,
       network: {
@@ -78,16 +80,13 @@ describe("Built-in editor (K10)", () => {
     await app.press("id:tab-files");
     await app.waitFor("id:file-entry-AGENTS.md");
     await app.press("id:file-entry-AGENTS.md");
-    await app.waitFor("id:file-markdown");
-    expect(app.shows("id:file-editor")).toBe(false);
-    expect(app.shows("text:# Title")).toBe(false);
-    expect(app.shows("text:Some bold text.")).toBe(true);
-    await app.press("id:file-preview");
     await app.waitFor("id:file-editor");
     expect(app.shows("id:file-markdown")).toBe(false);
     expect(app.shows("text:# Title")).toBe(true);
     await app.press("id:file-preview");
     await app.waitFor("id:file-markdown");
+    expect(app.shows("id:file-editor")).toBe(false);
+    expect(app.shows("text:Some bold text.")).toBe(true);
     // Find reads the source, so it leaves the preview and opens the bar.
     await app.keyboard.press("mod+f");
     await app.waitFor("id:file-find-input");
@@ -95,7 +94,7 @@ describe("Built-in editor (K10)", () => {
     expect(app.shows("text:# Title")).toBe(true);
   });
 
-  test("a file opens read-only, edits, and saves against the revision it was read at", async () => {
+  test("a file opens editable and saves against the revision it was read at", async () => {
     const app = await open("./App.tsx", { network, storage: core, width: 1100, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
@@ -103,8 +102,8 @@ describe("Built-in editor (K10)", () => {
     await app.waitFor("id:file-entry-hello.txt");
     await app.press("id:file-entry-hello.txt");
     await app.waitUntil(() => app.texts().some((t) => t.includes("one")));
-    expect(app.shows("id:file-save")).toBe(false);
-    await app.press("id:file-edit");
+    expect(app.shows("id:file-save")).toBe(true);
+    expect(app.shows("id:file-edit")).toBe(false);
     await app.waitFor("id:file-editor");
     expect(app.shows("id:file-save")).toBe(true);
     await app.type("id:file-editor", "one\ntwo\nthree\n");
@@ -144,7 +143,6 @@ describe("Built-in editor (K10)", () => {
     await app.waitFor("id:file-entry-hello.txt");
     await app.press("id:file-entry-hello.txt");
     await app.waitFor("id:file-panel");
-    await app.press("id:file-edit");
     await app.waitFor("id:file-editor");
     await app.type("id:file-editor", "one\ntwo\nthree\n");
     await app.waitFor("text:● modified");
@@ -191,7 +189,6 @@ describe("Built-in editor (K10)", () => {
     await app.press("id:file-entry-big.rs");
     await app.waitFor("id:file-editor", { timeout: 15000 });
     expect(app.shows("id:file-editor")).toBe(true);
-    await app.press("id:file-edit");
     await app.waitFor("id:file-save", { timeout: 15000 });
   });
 });
@@ -240,5 +237,203 @@ describe("Files tree", () => {
     expect(fileRows(dirs, new Set(["src"])).map((r) => [r.path, r.depth, r.expanded])).toEqual([
       ["src", 0, true], ["src/nested", 1, false], ["src/main.rs", 1, false], ["a.txt", 0, false],
     ]);
+  });
+});
+
+
+describe("file operations", () => {
+  test("new file uses the shared command and sends the chosen path", async () => {
+    let sent: any = null;
+    const app = await open("./App.tsx", { network: { ...network, "POST */api/project/prj_1/files": (r: any) => { sent = JSON.parse(r.body); return { body: { path: "new.txt" } }; } }, width: 1500, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.keyboard.press("mod+p");
+    await app.type("id:palette-input", "New file");
+    await app.keyboard.press("enter");
+    await app.waitFor("id:file-operation-input");
+    await app.type("id:file-operation-input", "new.txt");
+    await app.press("id:file-operation-save");
+    await app.waitFor("id:file-operation-dialog", { state: "gone" });
+    expect(sent).toMatchObject({ action: "create_file", path: "new.txt" });
+  });
+});
+
+
+describe("file deletion", () => {
+  test("confirms before deleting the selected file", async () => {
+    let sent: any = null;
+    const app = await open("./App.tsx", { network: { ...network, "POST */api/project/prj_1/files": (r: any) => { sent = JSON.parse(r.body); return { body: {} }; } }, width: 1500, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:tab-files");
+    await app.waitFor("id:file-entry-hello.txt");
+    await app.press("id:file-entry-hello.txt");
+    await app.keyboard.press("mod+p");
+    await app.type("id:palette-input", "Delete file or folder");
+    await app.keyboard.press("enter");
+    await app.waitFor("id:confirm-dialog");
+    expect(sent).toBe(null);
+    await app.press("id:confirm-ok");
+    await app.waitFor("id:confirm-dialog", { state: "gone" });
+    expect(sent).toMatchObject({ action: "delete", path: "hello.txt" });
+  });
+});
+
+describe("leased file watching", () => {
+  test("visible Files leases a watcher, shows fallback mode, and releases on leaving", async () => {
+    const actions: string[] = [];
+    const app = await open("./App.tsx", { network: {
+      ...network,
+      "POST */api/project/prj_1/watch": (r: any) => {
+        const body = JSON.parse(r.body); actions.push(body.action);
+        return { body: { status: body.action === "release" ? "stopped" : "polling" } };
+      },
+    }, width: 1500, height: 768 });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:tab-files");
+    await app.waitFor(`text:${fileWatchScenario.polling_label}`);
+    await app.screenshot("/private/tmp/nexus-files-watch-polling.png");
+    expect(actions.includes("renew")).toBe(true);
+    await app.press("id:tab-sessions");
+    await app.waitUntil(() => actions.includes("release"));
+  });
+
+  test("a disk event updates clean text but preserves an unsaved draft", async () => {
+    let send = false, sent = false, disk = false;
+    const app = await open("./App.tsx", { network: {
+      ...network,
+      "POST */api/project/prj_1/watch": { body: { status: "watching" } },
+      "GET */api/event*": () => {
+        const event = send && !sent ? (sent = true, `event: files.changed\ndata: ${JSON.stringify({ id: 1, cursor: "log_t:1", session_id: null, type: "files.changed", data: { project_id: "prj_1", workspace: fileWatchScenario.workspace, source: "disk", paths: [fileWatchScenario.path] } })}\n\n`) : "";
+        return { body: connected + event, headers: { "content-type": "text/event-stream" }, delay: 150 };
+      },
+      "GET */api/project/prj_1/file*": () => ({ body: { path: "hello.txt", content: disk ? fileWatchScenario.updated : fileWatchScenario.initial, revision: disk ? "disk-rev" : "rev1", language: "text" } }),
+    }, width: 1500, height: 768 });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:tab-files");
+    await app.waitFor("id:file-entry-hello.txt");
+    await app.press("id:file-entry-hello.txt");
+    await app.waitFor("id:file-save");
+    await app.type("id:file-editor", fileWatchScenario.draft);
+    await app.waitFor("text:● modified");
+    expect(app.texts().join("\n")).toContain(fileWatchScenario.draft);
+    disk = true; send = true;
+    await app.waitFor("text:/changed on disk/");
+    expect(app.texts().join("\n")).toContain(fileWatchScenario.draft);
+    await app.screenshot("/private/tmp/nexus-files-watch-dirty.png");
+  });
+
+  test("a clean file follows a disk change", async () => {
+    let send = false, sent = false, disk = false;
+    const app = await open("./App.tsx", { network: {
+      ...network,
+      "GET */api/event*": () => {
+        const event = send && !sent ? (sent = true, `event: files.changed\ndata: ${JSON.stringify({ id: 1, cursor: "log_t:1", session_id: null, type: "files.changed", data: { project_id: "prj_1", workspace: fileWatchScenario.workspace, source: "disk", paths: [fileWatchScenario.path] } })}\n\n`) : "";
+        return { body: connected + event, headers: { "content-type": "text/event-stream" }, delay: 150 };
+      },
+      "GET */api/project/prj_1/file*": () => ({ body: { path: fileWatchScenario.path, content: disk ? fileWatchScenario.updated : fileWatchScenario.initial, revision: disk ? "disk-rev" : "rev1", language: "text" } }),
+    }, width: 1500, height: 768 });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:tab-files");
+    await app.waitFor(`id:file-entry-${fileWatchScenario.path}`);
+    await app.press(`id:file-entry-${fileWatchScenario.path}`);
+    await app.waitFor("text:one");
+    disk = true; send = true;
+    await app.waitUntil(() => sent, { timeout: 15000 });
+    await app.waitFor("text:disk content", { timeout: 15000 });
+  });
+
+});
+
+describe("Git sidebar", () => {
+  test("groups changes and stages a selected path", async () => {
+    let sent: any = null;
+    const app = await open("./App.tsx", { network: {
+      ...network,
+      "GET */api/project/prj_1/git*": { body: { worktree: "/work/demo", branch: "main", changes: [{ path: "hello.txt", status: " M", staged: false, unstaged: true }, { path: "new.txt", status: "??", staged: false, unstaged: true }], branches: [{ name: "main", local: true, current: true }] } },
+      "POST */api/project/prj_1/git/action": (r: any) => { sent = JSON.parse(r.body); return { body: {} }; },
+    }, width: 1500, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:tab-git");
+    await app.waitFor("id:git-unstaged-hello.txt");
+    expect(app.shows("id:git-untracked-new.txt")).toBe(true);
+    await app.press("id:git-unstaged-hello.txt");
+    await app.waitFor("id:git-diff-dialog");
+    await app.press("id:git-diff-close");
+    await app.keyboard.press("mod+p");
+    await app.type("id:palette-input", "Stage");
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => !!sent);
+    expect(sent).toMatchObject({ action: "stage", paths: ["hello.txt"] });
+  });
+  test("confirms live sessions before a Git operation", async () => {
+    let sent: any = null;
+    const app = await open("./App.tsx", { network: {
+      ...network,
+      "GET */api/project/prj_1/git": { body: { worktree: "/work/demo", branch: "main", changes: [], branches: [] } },
+      "GET */api/project/prj_1/git/live*": { body: { working: [{ id: "ses_1", title: "Refactor loader" }], idle: [] } },
+      "POST */api/project/prj_1/git/action": (r: any) => { sent = JSON.parse(r.body); return { body: {} }; },
+    }, width: 1500, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.keyboard.press("mod+p");
+    await app.type("id:palette-input", "Fetch");
+    await app.keyboard.press("enter");
+    await app.waitFor("id:confirm-dialog");
+    expect(sent).toBe(null);
+    await app.press("id:confirm-ok");
+    await app.waitUntil(() => !!sent);
+    expect(sent).toMatchObject({ action: "fetch", confirmed_live: ["ses_1"] });
+  });
+  test("discloses the proposed upstream and reopens confirmation on new activity", async () => {
+    let attempts = 0, liveReads = 0, sent: any = null;
+    const app = await open("./App.tsx", { network: {
+      ...network,
+      "GET */api/project/prj_1/git": { body: { worktree: "/work/demo", branch: "topic", changes: [], branches: [], push_upstream: { remote: "origin", branch: "topic" } } },
+      "GET */api/project/prj_1/git/live*": () => ({ body: { working: ++liveReads === 1 ? [] : [{ id: "ses_1", title: "Refactor loader" }], idle: [] } }),
+      "POST */api/project/prj_1/git/action": (r: any) => { sent = JSON.parse(r.body); return ++attempts === 1 ? { status: 409, body: { code: "worktree_live", error: "new session" } } : { body: {} }; },
+    }, width: 1500, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.keyboard.press("mod+p"); await app.type("id:palette-input", "Push"); await app.keyboard.press("enter");
+    await app.waitFor("text:/origin\\/topic/");
+    expect(sent).toBe(null);
+    await app.press("id:confirm-ok");
+    await app.waitUntil(() => liveReads >= 2);
+    await app.waitFor("text:/Working sessions: Refactor loader/");
+    expect(app.shows("id:confirm-dialog")).toBe(true);
+    await app.press("id:confirm-ok");
+    await app.waitUntil(() => attempts === 2);
+    expect(sent).toMatchObject({ action: "push", value: "origin", confirmed_live: ["ses_1"] });
+  });
+});
+
+import editorScenario from "../interface/scenarios/file-editor.json";
+describe("one editor mode and replacement", () => {
+  test("case-sensitive search, replace all and undo keep one editable draft", async () => {
+    const app = await open("./App.tsx", { network: {
+      ...network,
+      "GET */api/project/prj_1/files*": { body: { path: "", entries: [{ name: editorScenario.path, kind: "file", ignored: false }] } },
+      "GET */api/project/prj_1/file*": { body: { path: editorScenario.path, content: editorScenario.initial, revision: "rev1", language: "text" } },
+    }, width: 1100, height: 768 });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:tab-files");
+    await app.press(`id:file-entry-${editorScenario.path}`);
+    await app.waitFor("id:file-save");
+    expect(app.shows("id:file-edit")).toBe(false);
+    await app.keyboard.press("mod+f");
+    await app.type("id:file-find-input", editorScenario.query);
+    await app.waitFor("text:3 matches");
+    await app.press("id:file-find-case");
+    await app.waitFor("text:1 match");
+    await app.press("id:file-find-case");
+    await app.type("id:file-replace-input", editorScenario.replacement);
+    await app.press("id:file-replace-all");
+    await app.waitFor("text:beta beta");
+    await app.waitFor("text:beta");
+    await app.keyboard.press("escape");
+    await app.waitFor("id:file-find", { state: "gone" });
+    await app.keyboard.press("mod+z");
+    await app.waitFor("text:Alpha alpha");
+    await app.waitFor("text:ALPHA");
+    await app.waitFor("text:saved");
+    await app.keyboard.press("escape");
+    await app.waitFor("id:file-panel", { state: "gone" });
   });
 });

@@ -1,10 +1,11 @@
-import { Image, Scroll, Text, View, effect, keymap, platform, safeArea, signal, untracked, windowSize } from "nsh";
+import { Image, Scroll, Text, View, effect, keymap, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Shimmer, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
 import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
+import { compactApproval } from "../mobile";
 import {
   agentCatalog, contextBudget, contextDetail, draftContext, draftContextKey, draftPlanContext, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
   phone, projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast, annotating,
@@ -483,11 +484,11 @@ function EditableComposer() {
                 <Btn label="Continue" icon="play" kind="ghost" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
               </If>
             </View>
-            <If when={!!usageLabel()}><View class="shrink-0" testID="composer-meter"><Text style={{ numberOfLines: 1 }} class={T.meta} testID="composer-usage">{usageLabel()}</Text></View></If>
+            <If when={!!usageLabel() && !phone}><View class="shrink-0" testID="composer-meter"><Text style={{ numberOfLines: 1 }} class={T.meta} testID="composer-usage">{usageLabel()}</Text></View></If>
           </View>
           </View>
         </View>
-        <Text accessible={false} style={{ numberOfLines: 1 }} class="w-full font-mono leading-6 text-card" testID="composer-bottom-edge">{structure.card_bottom.unicode.repeat(Math.max(1, Math.min(4096, Math.floor(dockWidth() / (platform.idiom === "terminal" ? 8 : 9.6)))))}</Text>
+        <Text accessible={false} style={{ numberOfLines: 1 }} class="w-full font-mono leading-6 text-card" testID="composer-bottom-edge">{structure.card_bottom.unicode.repeat(Math.max(1, Math.min(4096, Math.floor(dockWidth() / 9.6))))}</Text>
         <LocationStrip working={working()} />
         <ActivityBar busy={busy()} fraction={usage()?.pct == null ? 0 : meterPct() / 100} slot={agentSlot(agent())} />
     </TimelineColumn>
@@ -611,7 +612,7 @@ function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
   // The 1 px track is always laid out, so the dock does not move when the line appears.
   return <View class="w-full">
       <View class="relative w-full" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`} onLayout={(b: any) => trackWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
-        <Text accessible={false} style={{ numberOfLines: 1 }} class="w-full font-mono leading-6 text-border">{structure.rule.unicode.repeat(Math.max(1, Math.min(4096, Math.floor(trackWidth() / (platform.idiom === "terminal" ? 8 : 9.6)))))}</Text>
+        <Text accessible={false} style={{ numberOfLines: 1 }} class="w-full font-mono leading-6 text-border">{structure.rule.unicode.repeat(Math.max(1, Math.min(4096, Math.floor(trackWidth() / 9.6))))}</Text>
         <If when={p.busy}>
           <View class={`absolute -top-px h-0.5 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
         </If>
@@ -756,7 +757,7 @@ function LocationStrip(p: { working: boolean }) {
     if (!w) return isNarrow() ? 24 : 54;
     const c = resourceCounts();
     const chip = c.kernels || c.shells ? 120 : 0;
-    const unit = platform.idiom === "terminal" ? 8 : 9.6;
+    const unit = 9.6;
     const reserved = 16 + (branch() ? (Array.from(branch()!).length + 3) * unit : 0) + (p.working ? 190 : 0) + chip + (linked() ? 16 : 0);
     return Math.max(12, Math.floor((w - reserved) / unit));
   };
@@ -785,10 +786,11 @@ function LocationStrip(p: { working: boolean }) {
     void loadResources();
   };
   return (
-    <If when={(project() && directory()) || p.working}>
+    <If when={phone ? p.working : (project() && directory()) || p.working}>
       <View class="w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 pb-1.5" testID="location-strip"
         onLayout={(b: any) => stripWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
-        <View class="flex-1 min-w-0 flex-row items-center gap-2">
+        {/* A phone keeps only the working status here: directory, branch, kernel and shell are desktop surfaces. */}
+        <View class={phone ? "flex-1 w-0 overflow-hidden opacity-0" : "flex-1 min-w-0 flex-row items-center gap-2"} accessible={!phone}>
           <If when={!!session()}>
             <Button
               disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
@@ -810,7 +812,7 @@ function LocationStrip(p: { working: boolean }) {
           </If>
           <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={T.mono}>⑂</Text></If>
         </View>
-        <If when={resourceCounts().kernels > 0}>
+        <If when={resourceCounts().kernels > 0 && !phone}>
           <Button onPress={openResources} accessibilityLabel="kernel" testID="location-resources"
             class={`rounded-(--radius) bg-selection px-2 min-h-6 justify-center hover:bg-accent ${FOCUS}`}>
             <Text style={{ numberOfLines: 1 }} class="text-xs leading-4 font-semibold text-primary">kernel</Text>
@@ -979,7 +981,9 @@ function ApprovalBody(p: { a: Approval }) {
   const rows = () => approvalChoices(a);
   return (
     <View class="gap-2.5">
-      <If when={parts().table.length > 0}>
+      {/* A phone shows a compact card: the command or path, not the parameter table or the diff. */}
+      <If when={phone}><View class="rounded-(--radius) bg-background px-3 py-2" testID="waiting-compact"><Text style={{ numberOfLines: 4, userSelect: "text" }} class={`${T.mono} text-foreground`}>{compactApproval(a)}</Text></View></If>
+      <If when={!phone && parts().table.length > 0}>
         <View class="rounded-(--radius) bg-background px-3 py-2 gap-0.5" testID="waiting-table">
           <Each of={parts().table} key={(r) => r[0]}>
             {(r) => (
@@ -991,7 +995,7 @@ function ApprovalBody(p: { a: Approval }) {
           </Each>
         </View>
       </If>
-      <If when={parts().diff.length > 0}>
+      <If when={!phone && parts().diff.length > 0}>
         <View class="rounded-(--radius) bg-background overflow-hidden" testID="waiting-diff">
           <DiffView lines={() => parts().diff} unified />
           <If when={parts().more > 0}><Text testID="waiting-diff-more" class={`${T.meta} px-3 py-1`}>{`${parts().more} more rows`}</Text></If>
@@ -1007,7 +1011,7 @@ function ApprovalBody(p: { a: Approval }) {
                 <Button onPress={() => r().run?.()} disabled={off()} testID={r().id}
                   accessibilityLabel={off() ? `${r().title}, unavailable: ${reason()}` : r().title}
                   class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-8"} ${i() === choice() && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-accent"} ${FOCUS}`}>
-                  <Text class={`shrink-0 w-5 text-center rounded-(--radius) bg-muted text-[16px] leading-6 font-medium ${off() ? "text-muted-foreground" : "text-foreground"}`}>{byId.get(r().cmd)?.keys?.tui ?? ""}</Text>
+                  <If when={!phone}><Text class={`shrink-0 w-5 text-center rounded-(--radius) bg-muted text-[16px] leading-6 font-medium ${off() ? "text-muted-foreground" : "text-foreground"}`}>{byId.get(r().cmd)?.keys?.tui ?? ""}</Text></If>
                   <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[16px] leading-6 ${off() ? "text-muted-foreground" : "text-foreground"}`}>{r().title}</Text>
                   <If when={off()}><Text testID={`${r().id}-reason`} class={T.meta}>{reason()}</Text></If>
                 </Button>
@@ -1023,7 +1027,7 @@ function ApprovalBody(p: { a: Approval }) {
 
 function AnswerHint() {
   const c = byId.get("waiting.focus");
-  return <If when={!!c}><Text class={T.meta} testID="waiting-answer-hint"><Text class="font-medium text-foreground">{c ? keyLabel(c) ?? "" : ""}</Text>{" answer"}</Text></If>;
+  return <If when={!!c && !phone}><Text class={T.meta} testID="waiting-answer-hint"><Text class="font-medium text-foreground">{c ? keyLabel(c) ?? "" : ""}</Text>{" answer"}</Text></If>;
 }
 
 /** A drawn radio mark: a 14 px ring with a filled centre when selected. */
@@ -1056,20 +1060,20 @@ function QuestionBody(p: { q: Question }) {
                 {(o, n) => (
                   <Button role={qq().multiple ? "checkbox" : "radio"} selected={sel(o().id)} accessibilityLabel={o().label}
                     onPress={() => upd(id(), (a) => ({ ...a, selected: qq().multiple ? (a.selected.includes(o().id) ? a.selected.filter((x) => x !== o().id) : [...a.selected, o().id]) : [o().id] }))}
-                    class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 min-h-8 hover:bg-accent ${sel(o().id) ? "bg-selection" : ""} ${FOCUS}`}>
+                    class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 ${phone ? "min-h-11" : "min-h-8"} hover:bg-accent ${sel(o().id) ? "bg-selection" : ""} ${FOCUS}`}>
                     <If when={qq().multiple} else={<Text testID={`choice-mark-${o().id}`} class={`shrink-0 w-3.5 text-center text-[16px] leading-6 ${sel(o().id) ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>}><CheckMark on={sel(o().id)} testID={`choice-mark-${o().id}`} /></If>
                     <Text class={`flex-1 text-[16px] leading-6 ${sel(o().id) ? "font-semibold text-foreground" : "text-foreground"}`}>{o().label}</Text>
                   </Button>
                 )}
               </Each>
-              <Input placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class="rounded-(--radius) bg-background px-2.5 h-8 text-[16px] text-foreground" />
+              <Input placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class={`rounded-(--radius) bg-background px-2.5 ${phone ? "h-11" : "h-8"} text-[16px] text-foreground`} />
             </View>
           );
         }}
       </Each>
       <View class="flex-row items-center gap-3">
         <Btn label="Submit answers" kind="primary" busy={busyWait()} onPress={() => void submitQuestion(q)} testID="submit-answers" disabled={!live()} />
-        <Text class={T.meta}>{`${keyLabel(byId.get("waiting.submit_answers")!) ?? "enter"} submit · tab next question`}</Text>
+        <If when={!phone}><Text class={T.meta}>{`${keyLabel(byId.get("waiting.submit_answers")!) ?? "enter"} submit · tab next question`}</Text></If>
         <AnswerHint />
       </View>
     </View>

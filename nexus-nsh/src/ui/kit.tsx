@@ -8,12 +8,12 @@ import { attention as attentionGlyphs, controlGlyphs, fold, sidebarGlyphs, struc
 import { statusGlyphs, attention, spinner as spinnerFrames, shimmerColors, shimmerMotion } from "../gen/theme";
 import { config, isNarrow } from "../store";
 
-// Screen typography keeps metadata quieter while preserving terminal cell sizing.
-const typeSize = platform.idiom !== "terminal" && (platform.os === "web" || platform.os === "macos")
+// Screen typography keeps metadata quieter.
+const typeSize = (platform.os === "web" || platform.os === "macos")
   ? "text-[14px] leading-6" : "text-[16px] leading-6";
-const titleSize = platform.idiom !== "terminal" && (platform.os === "web" || platform.os === "macos")
+const titleSize = (platform.os === "web" || platform.os === "macos")
   ? "text-[16px] leading-6" : typeSize;
-const metaSize = platform.idiom !== "terminal" && (platform.os === "web" || platform.os === "macos")
+const metaSize = (platform.os === "web" || platform.os === "macos")
   ? "text-[12px] leading-5" : typeSize;
 export const TS = {
   title: titleSize,
@@ -58,13 +58,7 @@ export const iconGlyphs: Record<IconName, string> = {
 
 export function Icon(p: { name: IconName; size?: number; class?: string; selected?: boolean }) {
   const size = p.size ?? 16;
-  const glyph = () => p.selected === false && p.name === "panel-left" ? sidebarGlyphs.left_closed.unicode : p.selected === false && p.name === "panel-right" ? sidebarGlyphs.right_closed.unicode : iconGlyphs[p.name];
-  if (platform.idiom !== "terminal") {
-    return <Image src={p.selected === false && (p.name === "panel-left" || p.name === "panel-right") ? panelClosed : icons[p.name]} style={{ width: size, height: size }} class={`shrink-0 ${p.class ?? "tint-foreground-secondary"}`} accessible={false} />;
-  }
-  return <View class="shrink-0 items-center justify-center" style={{ width: size, height: size }} accessible={false}>
-    <Text class={`font-mono text-center ${TS.base} ${(p.class ?? "tint-foreground-secondary").replaceAll("tint-", "text-")}`} accessible={false}>{glyph()}</Text>
-  </View>;
+  return <Image src={p.selected === false && (p.name === "panel-left" || p.name === "panel-right") ? panelClosed : icons[p.name]} style={{ width: size, height: size }} class={`shrink-0 ${p.class ?? "tint-foreground-secondary"}`} accessible={false} />;
 }
 
 export function IconButton(p: { icon: IconName; label: string; onPress?: () => void; disabled?: boolean; selected?: boolean; testID?: string; class?: string; tint?: string; reason?: string }) {
@@ -187,12 +181,8 @@ export function AttentionMark(p: { kind: keyof typeof attention }) {
   return <Text class={`w-3.5 text-center ${TS.base} ${TONE[g.token]}`} accessibilityLabel={p.kind}>{g.unicode}</Text>;
 }
 
-/**
- * The active Settings pane marker: a 2 px white bar (dark in the light theme). The terminal
- * backend draws whole cells, so there it is the Rust client's `▌` focus bar instead.
- */
+/** The active Settings pane marker. */
 export function FocusEdge(p: { testID?: string }) {
-  if (platform.idiom === "terminal") return <Text class="absolute left-0 top-0 text-foreground" accessible={false} testID={p.testID}>{structure.focus_bar.unicode}</Text>;
   return <View testID={p.testID} class="absolute left-0 top-0 bottom-0 w-[2px] bg-settings-focus" />;
 }
 

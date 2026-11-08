@@ -38,6 +38,7 @@ export const manifest = {
    "focus.assistant_block",
    "focus.code_block",
    "focus.file",
+   "focus.file_entry",
    "focus.project",
    "focus.session_row",
    "focus.child_card",
@@ -278,6 +279,12 @@ export const manifest = {
      "label": "Files",
      "command": "sidebar.tab.files",
      "order": 2
+    },
+    {
+     "id": "git",
+     "label": "Git",
+     "command": "sidebar.tab.git",
+     "order": 3
     }
    ]
   },
@@ -346,6 +353,34 @@ export const manifest = {
    "section_key": "left",
    "value_key": "right",
    "previous_value_key": "shift+right"
+  },
+  "mobile": {
+   "sections": [
+    "appearance",
+    "providers",
+    "dictation",
+    "manager",
+    "notifications",
+    "about"
+   ],
+   "rows": [
+    "appearance.theme",
+    "appearance.animations",
+    "appearance.session_scope",
+    "appearance.show_archived",
+    "dictation.stt_model",
+    "dictation.stt_download",
+    "dictation.tts_model",
+    "dictation.tts_download",
+    "manager.enabled",
+    "manager.mode",
+    "manager.model",
+    "manager.proactive",
+    "manager.privacy",
+    "notifications.sound",
+    "about.versions",
+    "about.daemon"
+   ]
   },
   "section": [
    {
@@ -2455,6 +2490,58 @@ export const manifest = {
    ]
   },
   {
+   "id": "files.new_file",
+   "title": "New file",
+   "category": "files",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Select a file or folder first.",
+   "placement": [
+    "palette",
+    "row_menu"
+   ]
+  },
+  {
+   "id": "files.new_folder",
+   "title": "New folder",
+   "category": "files",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Select a file or folder first.",
+   "placement": [
+    "palette",
+    "row_menu"
+   ]
+  },
+  {
+   "id": "files.rename",
+   "title": "Rename file or folder",
+   "category": "files",
+   "when": [
+    "focus.file_entry"
+   ],
+   "unavailable_reason": "Select a file or folder first.",
+   "placement": [
+    "palette",
+    "row_menu"
+   ]
+  },
+  {
+   "id": "files.delete",
+   "title": "Delete file or folder",
+   "category": "files",
+   "when": [
+    "focus.file_entry"
+   ],
+   "unavailable_reason": "Select a file or folder first.",
+   "placement": [
+    "palette",
+    "row_menu"
+   ]
+  },
+  {
    "id": "files.toggle_ignored",
    "title": "Show or hide ignored files",
    "category": "files",
@@ -2661,26 +2748,6 @@ export const manifest = {
    ]
   },
   {
-   "id": "editor.edit",
-   "title": "Edit file",
-   "category": "editor",
-   "keys": {
-    "tui": "e",
-    "nsh": "cmd+e"
-   },
-   "key_context": "editor",
-   "when": [
-    "panel.file",
-    "editor.readonly"
-   ],
-   "unavailable_reason": "No file is open, or it is already being edited.",
-   "placement": [
-    "panel",
-    "palette"
-   ],
-   "note": "Turns the file view into the editor. Saving writes with the revision the file was read at (PUT, K10)."
-  },
-  {
    "id": "editor.save",
    "title": "Save file",
    "category": "editor",
@@ -2723,16 +2790,15 @@ export const manifest = {
    "title": "Toggle Markdown preview",
    "category": "editor",
    "keys": {
-    "tui": "p",
+    "tui": "ctrl+shift+p",
     "nsh": "cmd+shift+p"
    },
    "key_context": "editor",
    "when": [
     "panel.file",
-    "editor.readonly",
     "editor.markdown"
    ],
-   "unavailable_reason": "No Markdown file is open, or the file is being edited.",
+   "unavailable_reason": "No Markdown file is open.",
    "placement": [
     "panel",
     "palette"
@@ -2770,6 +2836,167 @@ export const manifest = {
     "palette"
    ],
    "note": "Asks first if the file is dirty."
+  },
+  {
+   "id": "sidebar.tab.git",
+   "title": "Sidebar: Git",
+   "category": "navigation",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project first.",
+   "placement": [
+    "palette",
+    "sidebar"
+   ]
+  },
+  {
+   "id": "git.refresh",
+   "title": "Refresh Git",
+   "category": "git",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette",
+    "sidebar"
+   ]
+  },
+  {
+   "id": "git.stage",
+   "title": "Stage",
+   "category": "git",
+   "when": [
+    "focus.git_file"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette",
+    "row_menu"
+   ]
+  },
+  {
+   "id": "git.unstage",
+   "title": "Unstage",
+   "category": "git",
+   "when": [
+    "focus.git_file"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette",
+    "row_menu"
+   ]
+  },
+  {
+   "id": "git.commit",
+   "title": "Commit",
+   "category": "git",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "git.fetch",
+   "title": "Fetch",
+   "category": "git",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "git.pull",
+   "title": "Pull",
+   "category": "git",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "git.push",
+   "title": "Push",
+   "category": "git",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "git.switch",
+   "title": "Switch branch",
+   "category": "git",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "git.branch_create",
+   "title": "Create branch",
+   "category": "git",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "git.branch_delete",
+   "title": "Delete branch",
+   "category": "git",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "git.discard",
+   "title": "Discard changes",
+   "category": "git",
+   "when": [
+    "focus.git_file"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette",
+    "row_menu"
+   ]
+  },
+  {
+   "id": "git.branch_delete_force",
+   "title": "Force delete branch",
+   "category": "git",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project or select a changed file first.",
+   "placement": [
+    "palette"
+   ]
   },
   {
    "id": "git.open_diff",

@@ -23,13 +23,37 @@ Rules every item keeps:
 When an item lands, tick it, add a one-line record under [Landed](#landed) and update the docs it touches. Keep
 "not verified" honest.
 
+## Consolidation checkpoint — 2026-11-08
+
+The user requested consolidating all current work on `main`, updating this plan,
+and stopping. This checkpoint does **not** complete the remaining plan. Existing
+unchecked and partial items remain open; ZMX, browser work and CI stay deferred.
+
+Included in the consolidation: Files mutations and leased watching; the protected
+Git backend/API and initial paired Git UI; the vendored TUI editor and unified
+NSH editor with find/replace; mobile capability guards; terminal input/layout
+fixes; SSE-driven inspector invalidation; native Apple microphone/bootstrap
+services; edit-tool matching/multi-edit; step-budget notices; and release cleanup.
+
+**In progress, not release-verified:** the TUI editor's pointer/paste/find/replace
+and Esc behavior, paired Git grouping/navigation/safety flows, matching Git/editor
+screenshots, the full NSH suite on the consolidated tree, native audio/device and
+GPUI runtime checks. The new native bootstrap honors explicit `NEXUS10_HOME`
+without falling back to a personal daemon; its offline tests pass. No paid
+provider checks or real-home migration/deployment were performed.
+
+Final consolidation validation: Core **1255 passed, 1 skipped, 1 terminal-shutdown failure** (isolated rerun passes); TUI full run **825 passed, 15 failed, 9 ignored**, then three stale expectations corrected and their focused suites pass. **Twelve TUI shell/editor checks remain failing**. NSH editor/Git **17/18**, with the remaining focus/undo test passing after its fix; no final full rerun. Builds, Clippy, Ruff and shared manifest/theme checks pass. See [the exact consolidation report](reports/consolidation-2026-11-08.md) for commands, scope and remaining failures.
+Branch pruning and the release PR remain pending; no unique-history branches
+were removed. The local `main` matched freshly fetched `origin/main` before the
+consolidation commit.
+
 ## Status at a glance
 
 | # | Work | State | First step |
 | --- | --- | --- | --- |
-| 4 | Tests and lints | **Core and TUI green (816 TUI tests pass; fmt, clippy, ruff clean). NSH: 2 failing tests left** | [4](#4-fix-all-tests-and-lints), do this first |
-| 1 | Unmerged work | Local `main` is **34 commits ahead of `origin/main`, unpushed**; PR #100 open; PR #99 looks obsolete | [1](#1-merge-what-is-unmerged) |
-| 5 | Mobile cut-down client | Not started; phone build still renders the full timeline. Decided: mobile can approve and answer anything a client can | [5](#5-mobile-cut-down-client-sessions-manager-settings) |
+| 4 | Tests and lints | **11-07 checkpoint: Core 1227 passed/1 skipped; NSH full-run failures corrected in targeted tests. Final suites pending current slices** | [4](#4-fix-all-tests-and-lints), do this first |
+| 1 | Unmerged work | Local `main` matches the local `origin/main` ref; PR #100 is open with conflicts; PR #99 is already closed | [1](#1-merge-what-is-unmerged) |
+| 5 | Mobile cut-down client | Three-tab implementation and capability guards present for iPhone/iPad; 4 rule tests pass. Native/device and compact-card runtime verification pending | [5](#5-mobile-cut-down-client-sessions-manager-settings) |
 | 6 | ZMX mode (Claude Code, Antigravity) | **Later (user, 11-06).** Plan only, nothing built; kept here for reference | [6](#6-zmx-mode-for-claude-code-and-antigravity-later) |
 | 3 | Manager, finished and tested end to end | M1–M5 built; real GPT-Live call worked 11-04; evals, long calls, iOS/native audio and hands-free open | [3](#3-manager-finish-and-test-end-to-end) |
 | 2 | Terminal inside Nexus | Core PTY and HTTP/SSE slice; initial TUI terminal panel, not feature-complete | [2](#2-terminal-inside-nexus) |
@@ -58,7 +82,7 @@ Made (user):
 
 - [~] Added an independent `nexus-gpui` host and launcher. The NSH 0.4.0 bundle and host compile; window rendering, Core connectivity, theme and parity remain unverified. `nsh run App.tsx --target gpui --port 0` produced no output before a 45-second timeout, so its development host is not confirmed working.
 - The host pins the same NSH 0.4.0 revision as `nexus-nsh/native` and the installed CLI, rather than the tag, so their registry types match. It registers the app's native Mermaid, annotation and microphone modules. GPUI uses runtime Metal shaders.
-- GPUI now loads the built bundle's capabilities metadata: without it, the NSH runtime denies reading the local daemon file. Bundle loading has a regression test; a live GPUI/Core connection remains unverified. Native discovery still does not honor a custom `NEXUS10_HOME`.
+- GPUI now loads the built bundle's capabilities metadata: without it, the NSH runtime denies reading the local daemon file. Bundle loading has a regression test; a live GPUI/Core connection remains unverified. Native discovery now honors an explicit `NEXUS10_HOME`, refuses fallback to a personal daemon, and has bounded-bootstrap regression tests (8 native tests pass).
 - NSH documents GPUI differences including no blur/backdrop filter, different opacity, partial transforms and rounded clipping, macOS video placeholders, web views above NSH content without ancestor clipping, and limited accessibility actions. Manager consent now uses a translucent solid surface without backdrop blur. Verify the theme, assets, network/auth and native features against AppKit and the TUI before considering this more than a spike.
 
 Open (each has a default that holds unless the user objects):
@@ -80,29 +104,29 @@ Open (each has a default that holds unless the user objects):
 
 ## 1. Merge what is unmerged
 
-State on 2026-11-06 (`git fetch` done). Nothing below has been merged or deleted by this rewrite.
+Rechecked 2026-11-07 against the checkout and GitHub PR metadata. Local tracking refs were not refreshed.
 
 | Item | What it is | Verdict and action |
 | --- | --- | --- |
-| **Local `main`** | 34 commits ahead of `origin/main` and not pushed: inspector v2, project order/status/remove, overview, sidebar highlight, first-message pin, scroll bar, Settings segments, native inspector and others | [ ] Push after section 4 is green (or push now if the user prefers; the failing tests predate these commits) |
-| PR #100 `release 0.12.0` | Release-please bump (version files, changelog). PR #98 (0.11.0) already merged. `lint` fails (TUI fmt) | [ ] Merge after section 4; check the changelog; then the checks in 1.1 |
-| PR #99 `fix/ci-core` | Two Core test fixes plus `call.live` docs | **Looks obsolete:** `main` already expects `live: None`, documents `call.live` in `docs/api.md` and skips the inspector test without node; the Core suite is green. [ ] Confirm the diff is empty and close it |
-| `origin/fix/daemon-agents-restart` (`74daa3b`) | A clear error when no agent loads, and `install.sh` restarts a running daemon on update | **Real fix, not in `main`.** [ ] Cherry-pick (one conflict, `docs/development.md`), add a test, land |
+| **Local `main`** | Matches the local `origin/main` ref at `3984ea49`; earlier work is already present | [x] Previously listed commits are in the tracking ref. Current work is consolidated in the main checkpoint commit (11-08); incomplete verification remains recorded |
+| PR #100 `release 0.12.0` | Release-please bump (version files, changelog). PR #98 (0.11.0) already merged. GitHub reports merge conflicts (11-07) | [ ] Merge after section 4; check the changelog; then the checks in 1.1 |
+| PR #99 `fix/ci-core` | Two Core test fixes plus `call.live` docs | [x] Already closed without merge on 2026-11-06; confirmed through GitHub 11-07. Main contains the expected test/docs behavior |
+| `origin/fix/daemon-agents-restart` (`74daa3b`) | A clear error when no agent loads, and `install.sh` restarts a running daemon on update | **Already in `main`** (verified 2026-11-07: ancestor `74daa3b2`). Installer restart and missing-agent diagnostic regression tests pass (2026-11-07). |
 | `origin/ci/nsh` (`9c5a127`) | Lazy native microphone lookup, unverified | **Superseded:** `main`'s `dictation.ts` already looks it up lazily. [ ] Delete the branch |
 | `origin/feat/update-notice`, `fix/default-model-client`, `fix/native-binary-needs-host` | Sept/Oct branches from old Nexus's layout (`rust/tui`, `nexus/client`) | Do not apply to this tree. [ ] Decide whether the update notice is still wanted (it overlaps `nexus update`); otherwise delete |
-| Worktrees `design/void`, `design/void-impl`, `polish-timeline` (`.claude/worktrees/`) | 0 commits ahead of `main`, 61–79 behind | Stale. [ ] Remove the worktrees and branches |
-| 59 other local branches not in `main` | Old Nexus history | [ ] Review once and prune; ask before deleting anything with unique commits |
+| Worktrees `design/void`, `design/void-impl`, `polish-timeline` (`.claude/worktrees/`) | 0 commits ahead of `main`, 61–79 behind | [x] These worktrees are no longer registered. Their merged local branch refs remain pending prune approval |
+| 101 other local branches reviewed | [reports/plan-branch-audit.md](reports/plan-branch-audit.md): 42 have zero commits outside main; 59 contain unique history | [~] Review complete; automatic approval review blocked merged-branch pruning. User approval requested; no branches deleted |
 
 ### 1.1 Release and installation
 
 - [ ] After the 0.12.0 merge: the release has the four TUI binaries, the wheel and sdist, `install.sh` and
   `SHA256SUMS`; run the installer from the published release on macOS and Linux; plain `nexus` opens the TUI on a
   clean install; the release-download path of `install.sh` passes `--no-binary-package claude-agent-sdk`.
-- [ ] Linux: installer checks and `docs/development.md` list `pkg-config`, ALSA headers, a C toolchain, `git`, `uv`,
-  Rust, Node 22; confirm the Monty kernel launcher's `/usr/bin/env` path.
-- [ ] Remove `nexus-design-mockup/`; bump to the next `-dev` version; replace leftover `nexus10` branch wording in
-  `AGENTS.md` and `docs/development.md`.
-- [ ] **`nexus update`:** decide whether it installs or only reports (open decision below), then build it.
+- [x] Linux: installer checks and `docs/development.md` list `pkg-config`, ALSA headers, a C toolchain, `git`, `uv`,
+  Rust, Node 22; source install checks `/usr/bin/env`, which the Monty launcher explicitly executes. Real Linux kernel execution remains part of the platform matrix.
+- [x] Remove `nexus-design-mockup/` (11-07); no leftover `nexus10` branch wording remains in `AGENTS.md` or `docs/development.md`.
+- [ ] Bump to the next `-dev` version after the pending release merge.
+- [x] **`nexus update`:** reports only, following the default decision. Core CLI, launcher and offline update-check tests are implemented.
 - [ ] Platform matrix: macOS arm64 from a clean home, then Linux x86_64 and aarch64 (install, `nexus doctor`, daemon,
   TUI, NSH web, a scripted turn, a kernel run).
 
@@ -113,12 +137,12 @@ Decided 2026-11-06: retire it, keep the code somewhere safe. The complete code i
 `git checkout archive/nsh-terminal-backend -- <path>`.
 
 - [x] Tag the code (`archive/nsh-terminal-backend`, pushed 2026-11-06).
-- [ ] Remove `nexus nsh tui` from `scripts/nexus` and `npm run tui`, and the terminal-only code paths NSH grew for it
+- [x] Remove `nexus nsh tui` from `scripts/nexus` and `npm run tui`, and the terminal-only code paths NSH grew for it
   (the `--target tui` test target, terminal-only glyph/hint branches). Keep everything web and macOS use.
-- [ ] Remove `reports/parity-audit/` and the terminal parts of `reports/nsh-tui-parity/` (the tag keeps them); fix
+- [x] Remove `reports/parity-audit/` and the terminal parts of `reports/nsh-tui-parity/` (the tag keeps them); fix
   `nexus-nsh/README.md` and `docs/development.md` where they describe it. Launcher tests go too.
-- [ ] Keep the shared-parity work that landed (scroll bar, segmented Settings, rail, overview, sidebar highlight).
-- [ ] Ledger: record that the NSH terminal target is retired and where the code is.
+- [x] Keep the shared-parity work that landed (scroll bar, segmented Settings, rail, overview, sidebar highlight).
+- [x] Ledger: record that the NSH terminal target is retired and where the code is.
 
 ## 2. Terminal inside Nexus
 
@@ -166,7 +190,7 @@ Design: [docs/manager-design.md](docs/manager-design.md). Built: [docs/manager.m
 implemented and a real TUI GPT-Live call with delegated search/read tools worked on 2026-11-04. "Finished" means the
 checks below pass in the TUI and NSH and the iOS client (section 5 makes the Manager the mobile client's main surface).
 
-- [ ] **Define the end-to-end suite once, run it in each client:** a scripted day (start a session by voice, ask what is
+- [~] **Define the end-to-end suite once, run it in each client:** shared `manager-day.json`, a continuous scripted Core journey, and both client card consumers now pass offline. Live Core-driven client execution remains open. a scripted day (start a session by voice, ask what is
   running, read a result, approve a waiting action, steer a child, navigate, dismiss a card) with a scratch home and
   scripted provider, in `interface/scenarios/` so both clients share it. The injection and mishearing suite stays.
 - [ ] **M0 spikes still unrun:** (a) `pipeline_latency.py` STT → Luna → TTS timings (target under 1.5 s end of speech to
@@ -176,8 +200,7 @@ checks below pass in the TUI and NSH and the iOS client (section 5 makes the Man
 - [ ] **Real voice, each client:** pipeline and GPT-Live with a real microphone and speaker in the TUI and NSH; the
   recent audio-quality polish still needs a listening check.
 - [ ] **A 30-minute real call** per client surviving interruption, reconnect and a long delegation (M5 done-when).
-- [ ] **iOS and native NSH mic/speaker loop** (needed by section 5): native capture is not built (toast at
-  `commands.ts`); GPT-Live route decision from spike (d).
+- [~] **iOS and native NSH mic/speaker loop** (needed by section 5): Apple native WAV microphone bridge now builds for macOS and iOS; five offline native tests pass. Permission, real recording/playback, and GPT-Live transport remain unverified.
 - [ ] **Hands-free (M6):** VAD, barge-in, TUI echo cancellation, notices, optional API-key route for GPT-Live; a week of
   daily use before considering `enabled = true`.
 - [ ] **Known boundaries:** authority means "the user spoke" (`docs/manager.md` section 9) and needs a decision; check a
@@ -192,8 +215,9 @@ checks below pass in the TUI and NSH and the iOS client (section 5 makes the Man
 
 ## 4. Fix all tests and lints
 
-Status 2026-11-06: **Core and the TUI are green; NSH is still to do.** Each failure was triaged (code or test wrong?)
-rather than updated blindly.
+Checkpoint 2026-11-07: full Core rerun **1227 passed, 1 skipped** before later tool/provider/file slices; current targeted suites pass. NSH full run was **337/339**: one deleted retired-target test was discovered before deletion; the other expected old usage glyphs. Current usage suite passes **3/3** with the effective theme gauge asserted. NSH type check, all **11** host tests, manifest and **602** theme checks pass. Final full suites remain pending current concurrent slices.
+
+The 2026-11-06 baseline below is retained for comparison. Each failure was triaged (code or test wrong?) rather than updated blindly.
 
 | Suite | Result | Left |
 | --- | --- | --- |
@@ -240,19 +264,19 @@ and nothing else: no tool groups, no context header. Everything else (files, edi
 projects overview and the other desktop surfaces) is desktop/web only. Adding anything beyond this needs the user's
 approval. `AGENTS.md` is updated with this change.
 
-Not started: `phone` in `nexus-nsh/src/store.ts` still renders the full timeline and the desktop panels.
+Implemented in the working tree for iPhone and iPad: three tabs, reduced timeline, compact waiting cards and mobile-scoped Settings. Four pure rule tests and NSH type check pass. Runtime phone screenshots remain unverified: no simulator devices are installed, and the discovered physical iPhone is unavailable.
 
-- [ ] **Navigation:** a three-tab bar (Sessions, Manager, Settings) replaces the current phone pages; define the Manager
+- [~] **Navigation:** implemented; native runtime verification remains open. A three-tab bar (Sessions, Manager, Settings) replaces the current phone pages; define the Manager
   tab (the header indicator and dropdown become a full tab: caption, cards, typed input, voice; plus the read-only
   backend-session view only if the user wants it).
-- [ ] **Session view:** status, user messages, agent replies, composer. **Mobile can approve and answer everything a
+- [~] **Session view:** filtering and compact cards implemented; 390 px runtime verification remains open. Status, user messages, agent replies, composer. **Mobile can approve and answer everything a
   desktop client can** (user, 2026-11-06): allow once/always/deny, answer a question (options and free text), choose
   among offered choices, steer/queue/interrupt. It shows less, because the screen is small: a compact card with the
   command or question and the choices, not the full diff, parameter table or tool group. Define the compact card once
   and test it at 390 px. Allowed, since an answer is part of "status"; the other tool detail stays out.
-- [ ] **Settings:** decide which sections apply (Providers sign-in, Appearance, Notifications, Voice, About; hide Agents,
+- [x] **Settings:** mobile scope in the manifest selects the sections/rows that apply (Providers sign-in, Appearance, Notifications, Voice, About; hide Agents,
   Tools, Skills, MCP, Hooks, Files/Editor, Terminal). List them in the manifest under a `mobile` scope.
-- [ ] **Remove** from the phone build: Files tab, editor, Git, inspector, terminal, browser, overview, project rail
+- [x] **Remove** desktop capabilities from the iPhone/iPad build, including command and session-menu guards (4 rule tests pass). Excluded: Files tab, editor, Git, inspector, terminal, browser, overview, project rail
   management, row menus that reach them. Make them unreachable from the palette and shortcuts too.
 - [ ] Phone polish already listed in the archive (8.5 keyboard avoidance, 44 px targets, safe areas, gestures,
   Settings as pushed pages, Connect copy for a tailnet host, iPad decision); do the ones on the three tabs.
@@ -502,17 +526,19 @@ numbered section above when it is started.
 
 ### 9.2 File explorer, editor and Git page (old 4.1)
 
+**11-08 stop checkpoint:** initial paired Git UI and one-mode editor compile, but are not complete. Twelve TUI shell/editor checks remain failing; see the consolidation report above. No item below is complete merely because code exists.
+
 Desktop and web only; never mobile. Decisions: the editor stays small (highlighting, undo/redo, no tabs, language servers or Vim mode); Git scope is worktrees, changes and branches with actions (no merge, stash, rebase, conflict UI or hunk staging); both are silent to the model; no new auth. Files and diffs open in a centred modal.
 
-- [ ] Replace the TUI's `Composer` file buffer with the vendored editor. Checked 2026-11-04: `src/code_editor.rs`
+- [~] TUI `FileEdit` now uses the vendored `CodeBuffer` and compiles; pointer/paste/find/replace, behavior tests and screenshot verification remain. Historical starting point (2026-11-04): `src/code_editor.rs`
   (453 lines) is declared in `lib.rs` and used only by `examples/editor_demo.rs`; the app edits through `FileEdit`
   (`ui.rs:273`, drawn by `draw_file_edit`, `render.rs:530`, keys in `file_edit_key`, `app.rs:7560`: Ctrl+S, Tab
   inserts four spaces, Ctrl+Z/Ctrl+Y, arrows and pages) with no highlighting, folds or diff view. Map TUI keys to the crate's `apply(action)`; its crossterm 0.29
   input feature stays off. Copy through OSC 52 and paste from bracketed paste (`arboard` removed).
-- [ ] TUI find and replace on `set_marks` (today `/` searches only the read-only view, `file_search_key`,
+- [~] TUI find/replace handling is implemented but not fully verified; NSH has the paired two-row Find/Replace controls. Original requirement: find and replace on `set_marks` (today `/` searches only the read-only view, `file_search_key`,
   `app.rs:7783`; check what `ctrl+f` at `app.rs:8080` does while editing) with `editor.find` (`ctrl+f`): plain text and a case toggle, the same
   layout as NSH's find bar (`cmd+f`, next/previous, count, Esc closes it before the modal).
-- [ ] Reading and editing become one mode in both clients: drop the separate read-only view and `editor.edit`. A
+- [~] Both clients now open files in one editable mode; the shared `editor.edit` command was removed. TUI behavior verification remains incomplete. A
   clean file reloads when it changes on disk; a modified one shows "changed on disk".
 - [ ] Check the web bundle serves `nsh-syntaxes.bin` (syntaxes load on first use; plain text until then).
 - [ ] Measure the TUI binary before and after each language beyond the starting 13 (Rust, Python, JavaScript,
@@ -522,17 +548,17 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
 - [ ] Sidebar tabs: the manifest (`interface/manifest.toml:187–196`) lists only Sessions and Files, while NSH's
   `leftTab` also has `projects`; the manifest already names `sidebar.git`, `focus.git_file` and `git.open_diff` with
   no UI behind them. Make the manifest and both clients agree when the Git tab lands.
-- [ ] New file, new folder, rename and delete from the keyboard, the row menu and the palette. Delete asks first,
+- [~] New file, new folder, rename and delete are implemented in both clients through shared commands, row menus and prompts. Core confinement/count and focused client tests pass; new-file/delete dialog screenshots compared in `reports/files-operations/`. Broader rename/folder interaction coverage remains. Delete asks first,
   gives the item count for a folder, and is permanent.
-- [ ] Core: `POST /api/project/{id}/files?session=` with
+- [x] Core file mutations and folder counting implemented with confinement, symlink/race checks, shared tool/API file lock, global workspace events and focused tests: `POST /api/project/{id}/files?session=` with
   `{action: "create_file" | "create_dir" | "rename" | "delete", path, to?}`, the same confinement and no-symlink
   rules as `files.py`; publishes `files.changed`. Limits stay UTF-8 and 1 MiB; binary and oversized files say why
   they cannot open.
-- [ ] Watcher: `uv add watchfiles`; runs while a client has Files or Git open, on a 60 s lease the client renews;
+- [~] Watcher: `watchfiles` added, leased Files/editor service and both client renew/release paths implemented (60 s lease; 20 s renew), bounded ignore-aware global invalidations and visible polling fallback. Core watcher tests pass; final cross-client scenario checks pending. Original requirement: runs while Files or Git is open, on a 60 s lease;
   250 ms debounce; `files.changed` with `source: "disk"` and `git.changed` for `HEAD`, `index` and `refs`; skips
   Git-ignored paths. If it cannot start (e.g. inotify limits), fall back to a 3 s status poll while the tab is open
   and show that the view is polling.
-- [ ] New `nexus-core/nexus/git_ops.py` using `worktrees._git` (it reports stderr; `files._git` drops it);
+- [~] `nexus-core/nexus/git_ops.py` and protected project Git routes are implemented, with temporary-repository and API tests. Initial paired UI compiles; full safety-flow/parity verification remains. Uses `worktrees._git` (it reports stderr; `files._git` drops it);
   `worktrees.ENV` already sets `GIT_TERMINAL_PROMPT=0`. `worktree` must be a registered worktree of the project's
   repo; one lock per repo, as `worktree_lock`. Timeouts 120 s, 300 s for network actions; clients show progress and
   never give up first.
@@ -580,14 +606,8 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
 
 ### 9.4 TUI performance and launch time (old 6)
 
-- [ ] **Cold Core start scans the whole event log.** `open_bash_jobs()` (`store.py:2745`) selects `bash.started` /
-  `bash.finished` rows with no index led by `type`, so every daemon start scans all events (1.37 M then) and runs
-  `json_extract` on each: 1.9 s per cold start, 14.7 s with pending migrations. Add a partial index
-  `event_bash on event(type, session_id, id) where type in ('bash.started','bash.finished')` beside the other
-  deferred indexes, or keep open jobs in their own small table. Section 13 may remove the need.
-- [ ] **The terminal image probe costs up to 1 s on every launch** (`main.rs:526`,
-  `Picker::from_query_stdio()` waits for a reply some terminals never send). Skip it when the environment says it
-  will not answer, cache the result per terminal, or shorten the timeout.
+- [x] **Cold Core start no longer scans adopted event history.** `open_bash_jobs` reads the small `bash_job` table after one-time legacy adoption. A restart regression empties diagnostics and verifies open-job reads issue no event query (11-07).
+- [x] **Skip unsupported terminal image probes.** `TERM=dumb`, `linux`, `vt100` and `ansi` bypass the query, preserving half-block fallback; other terminals retain capability detection. Unit test passes (11-07).
 - [ ] **Paint-time animation overlay.** A viewed, running turn still rebuilds the timeline every frame because the
   spinner, shimmer and flash are baked into the lines. Record their cells and re-style them on a cache hit, if that
   shows up in a profile.
@@ -607,9 +627,8 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
 
 ### 9.5 Agent loop, tools and context (old 7)
 
-- [ ] **Tiered fuzzy matching in `edit`** (curly quotes, dashes, trailing whitespace, CRLF), as opencode does, and
-  a multi-edit input like pi's `edits[]`.
-- [ ] **Soft nudge at about 80% of `steps`**, and a default effort for `scout`/`quick`.
+- [x] **Tiered fuzzy matching in `edit`** (curly quotes, dashes, trailing whitespace, CRLF), and atomic ordered `edits[]`. Exact matches take precedence; ambiguity refuses; failed later replacements write nothing. Tool suite: 16 passed (2026-11-07).
+- [x] **Soft nudge at about 80% of `steps`**, and low default effort for `scout`/`quick`. Notice is canonical visible context, emitted once without disabling tools; targeted loop tests pass (2026-11-07).
 - [ ] **Code mode:** measure comparable real-provider tasks for correctness, requests, tokens and elapsed time
   ([docs/agents.md](docs/agents.md#choosing-code-mode)). The live `~/.nexus/agents/build.md` override needs the
   same guidance as `builtin_agents/build.md`.
@@ -740,9 +759,7 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
   both, including multiline drafts and images.
 - [ ] **Subagent parent card:** model/effort, elapsed time and completed token count; distinguish background
   completion from the start result.
-- [ ] **Background shells and archive** (was TODO 3). The count is shown in the location strip (11-02).
-  Auto-archive skips a tree with a live background job, but manual `archive_session` (`runtime.py`) does not
-  refuse one; make it refuse with a clear message, as it does for a busy kernel, and show why in both clients.
+- [x] **Background shells and archive** (was TODO 3). Manual archive now refuses a tree with a live background job before changing state. Both clients show the Core error. A real background-job regression test passes (2026-11-07).
 - [ ] Review both clients side by side in light and dark; establish large-session performance budgets; test
   keyboard-only paths; decide the focus-ring colour.
 - [ ] Agent cards show the file path but cannot open it (the editor reads project files only; global and built-in
@@ -845,14 +862,13 @@ The ZMX item is section 6.
 
 - [ ] **Real OpenAI and Ollama calls** (also in section 2).
 - [ ] **Claude (Agent SDK) remaining:**
-  - record the Claude Code CLI version in the wire request (hidden additions vary: ~175 more tokens on 2.1.314 than
-    on 2.1.285);
+  - [x] Record the installed Claude Code CLI version in wire metadata, without adding prompt text. Bounded cached lookup invalidates on binary change; 24 offline Claude tests pass (11-07).
   - decide whether to show the SDK's hidden additions (`sdk_adds`: two system lines, `StructuredOutput`, the
     account's email in the first user message, an `# Environment` message) in the clients' starting context, and
     whether sending the email is acceptable; the 420 tokens of fixed overhead are unexplained;
   - confirm the context window the clients show for `claude-haiku-5-5` (the CLI logs `unrecognized_model` but
     serves it);
-  - confirm cancelling a turn kills the worker's process group and the CLI child;
+  - [x] Confirm cancellation kills the worker process group and simulated CLI child: a real subprocess regression leaves no delayed child output (11-07; no provider call).
   - re-check in NSH; mark the provider `verified` after a multi-tool turn with a real model and add wire fixtures.
 - [ ] **J4 Anthropic Messages:** the Anthropic SDK as a plain client (Nexus owns the loop); preserve signed thinking
   blocks for lossless replay; cache-control breakpoints and tool-result media.
@@ -917,7 +933,7 @@ The native inspector first pass landed 11-06; these are the remaining gates.
   long JSON dumps the only way to understand Conversation, Steps or Requests. Bring pending/replied
   Questions and links to existing kernel/job details into the native inspector. Keep canonical model
   context distinct from diagnostic partials and resource views.
-- [~] **Incremental live data.** (Clients landed: `/inspect/head` poll every 2 s only while open, refetch only on head/generation change, one request in flight, stale responses ignored, Live/Paused/Disconnected state with manual Refresh. Not done: using the SSE session events instead of polling, durable-cursor replay.) Use existing session events to invalidate only affected inspector data;
+- [~] **Incremental live data.** (11-07: both clients coalesce invalidation from the existing SSE stream; no token-delta or known unrelated-tree refresh, closed inspectors do no work, snapshot resync invalidates. Existing stream owns durable cursor replay. NSH inspector suite: 11 passed. Reconnect/overflow scenario gate remains open.) Use existing session events to invalidate only affected inspector data;
   coalesce refreshes and cancel/ignore stale requests on navigation or close. Reuse durable cursors and
   explicit snapshot resync on overflow/retention changes. No second unbounded event log, no repeated
   full-tree fetch per token, and no background refresh while the inspector is closed. Keep a visible
@@ -1069,6 +1085,23 @@ Terminal evidence capture and agent-control policy apply to section 2 as well.
 
 
 ## Landed
+
+- **Consolidation checkpoint (11-08).** Current work collected on main at the user's request; incomplete editor/Git UI and verification gates remain explicitly open. No new feature work continues after this checkpoint.
+
+- 2026-11-08: Fixed a stale file-editor area call that prevented the TUI launcher from compiling.
+
+- **Files action dialogs and native capture build (11-07).** Both clients implement create/rename/delete prompts and counted permanent-delete confirmation; matching new-file/delete screenshots compared in `reports/files-operations/`. Apple microphone bridge builds for macOS and iOS; real device/audio verification remains open.
+
+- **Claude version diagnostics (11-07).** SDK wire requests record the installed CLI version (unknown when unavailable); cached off-loop lookup invalidates on executable changes. Offline adapter suite: 24 passed.
+
+- **Launch and release cleanup (11-07).** Removed the obsolete design mockup, documented and checked Linux source prerequisites, tested installer daemon restart and SDK source build, skipped image queries in known text terminals, and verified state-table job recovery after deleting diagnostic events. Branch history reviewed; pruning awaits approval after automatic review rejection.
+
+- **Conservative edit matching and multi-edit (11-07).** Exact-first typography/whitespace/CRLF tiers and ordered atomic `edits[]`; ambiguity and later failures preserve the file. All 16 tool tests pass.
+
+- **Step budget notice (11-07).** A visible notice at about 80% leaves tools enabled and asks the agent to finish and verify. Scout defaults to low effort, matching Quick. Loop and missing-install regression tests pass.
+
+- **NSH terminal target retired (11-07).** Removed its launcher, npm script, cell-only rendering/key branches, terminal parity test and archived captures; maintained Rust TUI and web/native paths remain. The archived tag preserves the retired target. NSH type check passes.
+- **Terminal cursor modes and archive guard (11-07).** TUI arrows/Home/End honor application cursor mode; Core rejects archiving trees with running background jobs. Targeted PTY, API and archive tests pass.
 
 Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](docs/archive/PLAN-2026-11-06.md#landed).
 

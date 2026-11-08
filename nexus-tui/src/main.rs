@@ -559,6 +559,10 @@ fn splash_lets_through(ev: &Event) -> bool {
     }
 }
 
+fn should_probe_images(term: Option<&str>) -> bool {
+    !matches!(term, Some("dumb" | "linux" | "vt100" | "ansi"))
+}
+
 async fn run(
     cfg: SyncConfig,
     home: PathBuf,
@@ -574,8 +578,12 @@ async fn run(
     // an answer, and the launch must not look blank while they do. The query
     // still runs before the input thread starts, so its replies are not eaten.
     draw_terminal(&mut terminal, &mut app)?;
-    let picker = ratatui_image::picker::Picker::from_query_stdio()
-        .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((10, 20)));
+    let picker = if should_probe_images(std::env::var("TERM").ok().as_deref()) {
+        ratatui_image::picker::Picker::from_query_stdio()
+            .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((10, 20)))
+    } else {
+        ratatui_image::picker::Picker::from_fontsize((10, 20))
+    };
     app.annotate_live.borrow_mut().configure(
         nexus_tui::annotate::ghostty_env(
             std::env::var("TERM_PROGRAM").ok().as_deref(),
@@ -1517,4 +1525,24 @@ async fn once(cfg: SyncConfig) -> i32 {
     }
     let _ = handle.commands.send(sync::Command::Shutdown);
     0
+}
+
+#[cfg(test)]
+mod image_probe_tests {
+    use super::should_probe_images;
+
+    #[test]
+    fn known_text_terminals_do_not_wait_for_image_query_replies() {
+        for term in ["dumb", "linux", "vt100", "ansi"] {
+            assert!(!should_probe_images(Some(term)));
+        }
+        for term in [
+            None,
+            Some("xterm-256color"),
+            Some("xterm-kitty"),
+            Some("foot"),
+        ] {
+            assert!(should_probe_images(term));
+        }
+    }
 }

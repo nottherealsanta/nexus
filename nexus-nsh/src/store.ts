@@ -1,3 +1,5 @@
+import { fileWatchStatus } from "./file-watch";
+import { mobileClient } from "./mobile";
 // Reactive app state: the model (a mutable cache, versioned by `rev`), connection, banners,
 // alerts (toasts + banner history), and view state (layout, tabs, centre view, overlays).
 import { Storage, computed, platform, signal, windowSize } from "nsh";
@@ -10,6 +12,7 @@ import type { ProjectMcpSummary } from "./project-mcp";
 import { emptyGlobalToastState, globalEventToast } from "./skills-mcp";
 import { receiveVoiceProgress } from "./voice-state";
 import { managerHooks } from "./core/manager-hooks";
+import { inspectorHooks } from "./core/inspector-hooks";
 import { playNotificationCue } from "./cues";
 import { splashDismiss, splashFinish, splashReach, splashStart } from "./ui/splash";
 
@@ -174,7 +177,7 @@ export const leftOpen = signal(true);
 /** The project rail stays beside the sidebar, open or closed, wherever the window has room for it. */
 export const railShown = () => !phone && width() >= 560;
 export const rightOpen = signal<boolean | null>(null); // null = default by width
-export const leftTab = signal<"sessions" | "files" | "projects">("sessions");
+export const leftTab = signal<"sessions" | "files" | "git" | "projects">("sessions");
 export const centre = signal<CentreView>("session");
 export const previousCentre = signal<CentreView>("session");
 export const currentProject = signal<string | null>(null);
@@ -285,8 +288,8 @@ export const toolOutputAll = signal<Record<string, boolean>>({});
 export const native = platform.os !== "web";
 /** A phone or tablet: hover-only affordances have to stay visible, and targets stay finger-sized. */
 export const touch = platform.idiom === "phone" || platform.idiom === "pad";
-export const phone = native && platform.idiom === "phone";
-export const phonePage = signal<"sessions" | "conversation" | "settings">("sessions");
+export const phone = mobileClient(native, platform.os, platform.idiom);
+export const phonePage = signal<import("./mobile").PhonePage>("sessions");
 /** The saved Core address; null until the Connect screen has one. */
 export const coreUrl = signal<string | null>(null);
 /** True once the saved address has been read (immediately on the web, which has none). */
@@ -635,7 +638,8 @@ const host: SyncHost = {
   addBanner(b) { banners.update((l) => [...l.filter((x) => x.kind !== b.kind), b]); },
   changed() { finishFirstPrompt(); bump(); reconcileSelection(); autoLoadOlder(); },
   streamed() { bumpStream(); },
-  snapshotApplied() { splashReach(2); reconcileSelection(); void loadConfig().catch(() => {}); void loadResources(); },
+  inspectorEvent(e) { inspectorHooks.event?.(e); },
+  snapshotApplied() { inspectorHooks.invalidate?.(); splashReach(2); reconcileSelection(); void loadConfig().catch(() => {}); void loadResources(); },
   configChanged() { void loadConfig().catch(() => {}); },
   resourcesChanged() { void loadResources(); },
   settingsEvent(e) {
@@ -803,13 +807,23 @@ function handleGlobalEvent(e: import("./core/api").CoreEvent) {
     const project = currentProject();
     if (project) void loadDraftContext(project, true);
   }
+  if (e.type === "files.watch") {
+    const d = e.data as { project_id?: string; workspace?: string; status?: string };
+    if (d.project_id === currentProject() && d.workspace === model.projects.get(d.project_id!)?.path) fileWatchStatus.set(d.status ?? "");
+  }
+  if (e.type === "git.changed" && leftTab() === "git") void loadGitPage();
   if (e.type === "files.changed") {
     const f = openFile();
-    const d = e.data as { project_id?: string; path?: string; revision?: string };
-    if (f && !f.saving && d.project_id === f.project && d.path === f.path && d.revision !== f.revision) {
-      if (!fileDirty()) void reloadFile();
-      else { openFile.set({ ...f, stale: true }); toast("warning", "The file changed on disk: reload before saving"); }
+    const d = e.data as { project_id?: string; workspace?: string; path?: string; paths?: string[]; revision?: string; polling?: boolean; all?: boolean; omitted?: number };
+    if (d.project_id === currentProject() && (!d.workspace || d.workspace === model.projects.get(d.project_id!)?.path)
+        && currentClientView().panel === "files") {
+      void loadFiles();
+      for (const path of filesExpanded()) void loadFiles(path);
     }
+    const root = f?.session ? model.sessions.get(f.session)?.directory : model.projects.get(f?.project ?? "")?.path;
+    if (f && !f.saving && d.project_id === f.project && (!d.workspace || d.workspace === root)
+        && (d.path === f.path || d.paths?.includes(f.path) || d.polling || d.all || (d.omitted ?? 0) > 0)
+        && (!d.revision || d.revision !== f.revision)) void refreshChangedFile();
   }
   if (e.type === "skills.changed" && pendingSkillInstalls) deferredSkillsChanged = true;
   const alert = globalEventToast(e.type, e.data, globalToastState);
@@ -819,6 +833,8 @@ function handleGlobalEvent(e: import("./core/api").CoreEvent) {
 export type FileEntry = { name: string; kind: string; git_status?: string | null; ignored: boolean };
 /** One directory of the Files tree, read from Core; `""` is the project root. */
 export type FileDir = { entries: FileEntry[]; error?: string; loading?: boolean };
+export const selectedFileEntry = signal<{ path: string; kind: string } | null>(null);
+export const fileOperation = signal<{ action: string; path: string } | null>(null);
 export const fileTree = signal<{ project: string | null; dirs: Record<string, FileDir> }>({ project: null, dirs: {} });
 /** Expanded directories of the Files tree, by project-relative path. Kept while the tab is open. */
 export const filesExpanded = signal<ReadonlySet<string>>(new Set());
@@ -836,12 +852,38 @@ export const isMarkdownPath = (path?: string) => !!path && /\.(md|markdown)$/i.t
 export const markdownFile = () => isMarkdownPath(openFile()?.path);
 export const fileDirty = () => { const f = openFile(); return !!f && f.draft !== undefined && f.draft !== f.content; };
 export const gitStatus = signal<{ session: string; data?: any; error?: string } | null>(null);
+export type GitChange = { path: string; status: string; old_path?: string; staged: boolean; unstaged: boolean };
+export type GitPageData = { worktree: string; branch: string; changes: GitChange[]; branches: { name: string; local: boolean; current: boolean; upstream?: string }[] };
+export const gitPage = signal<{ project: string; worktree?: string; data?: GitPageData; error?: string } | null>(null);
+export const selectedGitFile = signal<{ path: string; group: "Staged" | "Unstaged" | "Untracked" } | null>(null);
+export const gitDiff = signal<{ path: string; group: string; text?: string; clipped?: boolean; error?: string } | null>(null);
+export async function openGitDiff() {
+  const project = currentProject(), selected = selectedGitFile(); if (!project || !selected) return;
+  const { path, group } = selected;
+  gitDiff.set({ path, group });
+  if (group === "Untracked") { gitDiff.set({ path, group, text: "Untracked file: Git has no diff for it yet." }); return; }
+  try {
+    const data = await request<{ staged: string; unstaged: string; staged_clipped?: boolean; unstaged_clipped?: boolean }>("GET", `/api/project/${project}/git/diff`, { query: { path, worktree: currentWorktree()?.path } });
+    if (gitDiff()?.path === path && gitDiff()?.group === group) gitDiff.set({ path, group, text: group === "Staged" ? data.staged : data.unstaged, clipped: group === "Staged" ? data.staged_clipped : data.unstaged_clipped });
+  } catch (e) { if (gitDiff()?.path === path && gitDiff()?.group === group) gitDiff.set({ path, group, error: String(e) }); }
+}
+export const gitInput = signal<{ title: string; submit: (value: string) => void } | null>(null);
+let gitPageRequest = 0;
+export async function loadGitPage() {
+  const project = currentProject(), worktree = currentWorktree()?.path as string | undefined;
+  if (!project) { gitPage.set(null); return; }
+  const seq = ++gitPageRequest;
+  try {
+    const data = await request<GitPageData>("GET", `/api/project/${project}/git`, { query: { worktree } });
+    if (seq === gitPageRequest && currentProject() === project && currentWorktree()?.path === worktree) gitPage.set({ project, worktree, data });
+  } catch (e) { if (seq === gitPageRequest && currentProject() === project) gitPage.set({ project, worktree, error: String(e) }); }
+}
 const fileRequests = new Map<string, number>();
 /** Read one directory of the Files tree; expanding a folder keeps the ones already read. */
 export async function loadFiles(path = "") {
   const project = currentProject(), session = undefined;
   if (!project) { fileTree.set({ project: null, dirs: {} }); filesExpanded.set(new Set()); return; }
-  if (fileTree().project !== project) { fileTree.set({ project, dirs: {} }); filesExpanded.set(new Set()); }
+  if (fileTree().project !== project) { selectedFileEntry.set(null); fileTree.set({ project, dirs: {} }); filesExpanded.set(new Set()); }
   const seq = (fileRequests.get(path) ?? 0) + 1;
   fileRequests.set(path, seq);
   const put = (dir: FileDir) => {
@@ -865,12 +907,39 @@ export async function showFile(path: string) {
   const project = currentProject(), session = undefined;
   if (!project) return;
   const seq = ++fileOpenRequest;
-  openFile.set({ path, project, session }); centre.set("file"); drawer.set(null); fileFindOpen.set(false); fileSource.set(false);
+  openFile.set({ path, project, session }); centre.set("file"); drawer.set(null); fileFindOpen.set(false); fileSource.set(true);
   try {
     const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${project}/file`, { query: { path, session } });
-    if (seq === fileOpenRequest) openFile.set({ path, project, session, content: data.content, revision: data.revision });
+    if (seq === fileOpenRequest) openFile.set({ path, project, session, content: data.content, revision: data.revision, draft: data.content });
   } catch (e) { if (seq === fileOpenRequest) openFile.set({ path, project, session, error: String(e) }); }
 }
+let fileRefreshPending = false, fileRefreshAgain = false;
+/** A disk invalidation refreshes clean text; it never replaces an unsaved draft. */
+async function refreshChangedFile() {
+  fileRefreshAgain = true;
+  if (fileRefreshPending) return;
+  fileRefreshPending = true;
+  try {
+    while (fileRefreshAgain) {
+      fileRefreshAgain = false;
+      const f = openFile(); if (!f?.project || f.saving) continue;
+      try {
+        const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${f.project}/file`, { query: { path: f.path, session: f.session } });
+        const cur = openFile();
+        if (!cur || cur.project !== f.project || cur.session !== f.session || cur.path !== f.path || cur.saving || cur.revision !== f.revision) continue;
+        if (data.revision === cur.revision) continue;
+        if (cur.draft !== undefined && cur.draft !== cur.content) {
+          if (!cur.stale) toast("warning", "The file changed on disk: reload before saving");
+          openFile.set({ ...cur, stale: true });
+        } else openFile.set({ ...cur, content: data.content, revision: data.revision, draft: cur.draft !== undefined ? data.content : undefined, stale: false, error: undefined });
+      } catch (error) {
+        const cur = openFile();
+        if (cur?.project === f.project && cur?.path === f.path && cur?.session === f.session) openFile.set({ ...cur, stale: true, error: String(error) });
+      }
+    }
+  } finally { fileRefreshPending = false; }
+}
+
 /** Read the open file again; `keepEdit` leaves the editor open on the fresh text (reload), else a clean editor follows the file. */
 export async function reloadFile() {
   const f = openFile(); if (!f?.project) return;
@@ -879,11 +948,6 @@ export async function reloadFile() {
     const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${f.project}/file`, { query: { path: f.path, session: f.session } });
     if (openFile()?.path === f.path) openFile.set({ ...f, content: data.content, revision: data.revision, draft: editing ? data.content : undefined, stale: false, error: undefined });
   } catch (e) { toast("error", `Reload failed: ${e instanceof Error ? e.message : String(e)}`); }
-}
-export function editFile() {
-  const f = openFile(); if (!f || f.content === undefined || f.draft !== undefined) return;
-  if (!f.revision) { toast("warning", "Core did not report a revision for this file"); return; }
-  openFile.set({ ...f, draft: f.content });
 }
 export function setDraft(text: string) { const f = openFile(); if (f && f.draft !== undefined) openFile.set({ ...f, draft: text }); }
 /** `PUT …/file` with the revision the file was read at; a stale write keeps the text and says so. */

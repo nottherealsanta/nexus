@@ -9,7 +9,8 @@ publish = false
 crate-type = ["rlib"]
 
 [dependencies]
-nsh-core = { git = "https://github.com/longbridge/nsh", rev = "3789a451f6d4935a3b13890fb1020a427d20a8ee" }
+serde_json = "1"
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "209cb8492705321315745f2745c8060816b6d378" }
 
 # Every target uses the same compiler and PNG rasterizer. Native has no text
 # engine in its SVG backend; the web client uses the same PNG so both clients
@@ -17,7 +18,7 @@ nsh-core = { git = "https://github.com/longbridge/nsh", rev = "3789a451f6d4935a3
 nexus-annotate = { path = "../../nexus-annotate" }
 nexus-mermaid = { path = "../../nexus-mermaid", default-features = false, features = ["svg", "raster"] }
 
-[target.'cfg(target_os = "ios")'.dependencies]
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block2 = "0.6.2"
 futures-channel = "0.3"
 objc2 = "0.6.5"

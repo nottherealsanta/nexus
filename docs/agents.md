@@ -302,3 +302,6 @@ are task tools, not control tools; a sub agent sees its tree's jobs.
 
 - `temperature`/`top_p`.
 - Hidden or disabled agents.
+
+The built-in `quick` and `scout` agents default to low reasoning effort. Explicit
+session effort overrides still take precedence.

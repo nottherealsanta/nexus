@@ -147,6 +147,7 @@ pub struct AppState {
     /// old selection is ignored.
     pub file_scope: Option<(String, Option<String>)>,
     pub git: Option<(String, Result<serde_json::Value, String>)>,
+    pub project_git: Option<(String, Result<serde_json::Value, String>)>,
     pub file: Option<FileResponse>,
     /// Last diff read: session, path and the `/git/diff` body.
     pub diff: Option<(String, String, Result<serde_json::Value, String>)>,
@@ -182,6 +183,7 @@ impl Default for AppState {
             file_dirs: std::collections::BTreeMap::new(),
             file_scope: None,
             git: None,
+            project_git: None,
             diff: None,
             file: None,
         }

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import stat
+import sys
 import types
 
 import pytest
@@ -159,6 +161,36 @@ def test_worker_returns_structured_output_and_reports_failures():
 # -- the provider process -------------------------------------------------------
 
 
+def test_cli_version_cache_invalidates_when_binary_changes(tmp_path, monkeypatch):
+    binary = tmp_path / "claude"
+    binary.write_text("one")
+    calls = []
+
+    def version(argv, **kwargs):
+        calls.append(argv)
+        return types.SimpleNamespace(returncode=0, stdout=b"2.1.314 (Claude Code)\n")
+
+    claude_auth._cli_version.cache_clear()
+    monkeypatch.setattr(claude_auth.subprocess, "run", version)
+    assert claude_auth.cli_version(str(binary)) == "2.1.314"
+    assert claude_auth.cli_version(str(binary)) == "2.1.314"
+    assert len(calls) == 1
+    binary.write_text("changed-size")
+    assert claude_auth.cli_version(str(binary)) == "2.1.314"
+    assert len(calls) == 2
+    claude_auth._cli_version.cache_clear()
+
+
+@pytest.mark.parametrize("output", [b"", b"unexpected output", b"email@example.com"])
+def test_cli_version_does_not_record_arbitrary_cli_output(tmp_path, monkeypatch, output):
+    binary = tmp_path / "claude"
+    binary.touch()
+    claude_auth._cli_version.cache_clear()
+    monkeypatch.setattr(claude_auth.subprocess, "run", lambda *a, **kw: types.SimpleNamespace(returncode=0, stdout=output))
+    assert claude_auth.cli_version(str(binary)) is None
+    claude_auth._cli_version.cache_clear()
+
+
 def test_provider_reports_a_worker_error_with_wire_events(monkeypatch):
     async def run():
         async def fake_exec(*argv, **kw):
@@ -171,13 +203,56 @@ def test_provider_reports_a_worker_error_with_wire_events(monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "secret")
         monkeypatch.setenv("NEXUS10_CLAUDE_CLI", "/usr/bin/true")  # the provider needs some Claude Code to exist; the worker is faked
         monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr("nexus.llmhub.claude.cli_version", lambda executable: "2.1.314")
         seen = []
         with pytest.raises(ProviderError, match="nope"):
             async for event in ClaudeProvider().stream(request(Message("user", (Text("hi"),)))):
                 seen.append(type(event).__name__)
+                if type(event).__name__ == "WireRequest":
+                    assert event.body["claude_code_version"] == "2.1.314"
         return seen
 
     assert asyncio.run(run()) == ["WireRequest", "WireEvent"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX worker process groups")
+async def test_cancelling_provider_kills_worker_and_cli_child(tmp_path, monkeypatch):
+    ready, escaped = tmp_path / "ready", tmp_path / "escaped"
+    child = (
+        "from pathlib import Path; import sys,time; "
+        "Path(sys.argv[1]).touch(); time.sleep(0.5); Path(sys.argv[2]).touch()"
+    )
+    worker = (
+        "import subprocess,sys,time; "
+        "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2],sys.argv[3]]); time.sleep(60)"
+    )
+    real = asyncio.create_subprocess_exec
+
+    async def fake_exec(*argv, **kwargs):
+        return await real(sys.executable, "-c", worker, child, str(ready), str(escaped), **kwargs)
+
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("NEXUS10_CLAUDE_CLI", "/usr/bin/true")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    async def consume():
+        return [event async for event in ClaudeProvider().stream(request(Message("user", (Text("hi"),))))]
+
+    task = asyncio.create_task(consume())
+    try:
+        async with asyncio.timeout(5):
+            while not ready.exists():
+                await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.6)
+        assert not escaped.exists()
+    finally:
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
 
 # -- sign-in -------------------------------------------------------------------

@@ -22,7 +22,11 @@ fn terminal_command_opens_a_bottom_dock() {
     let dock = app.regions.terminal.unwrap();
     assert_eq!(dock.y, app.regions.composer.bottom());
     assert!(rows[dock.y as usize].contains("Terminals (0)"));
-    assert!(rows[dock.y as usize].contains('+'));
+    assert!(rows[(dock.y + 1) as usize].contains('+'));
+    let actions = &rows[(dock.y + 2) as usize];
+    for label in ["Rename", "Close", "Take control", "Copy"] {
+        assert!(actions.contains(label), "missing {label}");
+    }
 }
 
 #[test]
@@ -157,7 +161,7 @@ fn terminal_copy_requires_selection_and_explicit_action() {
     let mouse = |kind, column| MouseEvent {
         kind,
         column,
-        row: dock.y + 1,
+        row: dock.y + 4,
         modifiers: KeyModifiers::NONE,
     };
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), dock.x));
@@ -228,6 +232,21 @@ fn terminal_ctrl_c_goes_to_shell_and_ctrl_bracket_is_not_sent() {
     app.handle_key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
     assert!(!app.terminal_focused);
     assert_eq!(app.effects.len(), before);
+}
+
+#[test]
+fn terminal_list_r_releases_control() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.selected = Some("t1".into());
+    app.terminal_panel.attachment = Some("a1".into());
+    app.terminal_controlled = true;
+    app.effects.clear();
+    press(&mut app, &["r"]);
+    assert!(app.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Api(ApiCall::TerminalControl { acquire: false, .. })
+    )));
 }
 
 #[test]
@@ -5435,4 +5454,103 @@ fn project_rail_draws_a_three_cell_rule_under_a_project_without_counts() {
             app.theme.color("border.default").unwrap()
         );
     }
+}
+
+#[test]
+fn file_operations_prompt_and_confirm_before_mutation() {
+    use nexus_tui::actions::{ActionDone, Done};
+    use nexus_tui::sync::SyncMsg;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let project = app.current_project().unwrap();
+    app.execute("sidebar.tab.files");
+    app.apply_sync(SyncMsg::Files {
+        project: project.clone(),
+        session: None,
+        path: String::new(),
+        file: false,
+        data: Ok(serde_json::json!({"entries": [{"name": "folder", "kind": "directory"}]})),
+    });
+    app.execute("files.new_file");
+    typing(&mut app, "new.txt");
+    press(&mut app, &["enter"]);
+    assert!(app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::FileMutation { action, path, .. }) if action == "create_file" && path == "new.txt")));
+    app.effects.clear();
+    app.execute("files.delete");
+    let call = app
+        .effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::Api(c @ ApiCall::FileCount { .. }) => Some(c.clone()),
+            _ => None,
+        })
+        .unwrap();
+    app.effects.clear();
+    app.apply_done(ActionDone {
+        call,
+        result: Ok(Done {
+            file_count: Some(2),
+            ..Done::default()
+        }),
+    });
+    assert!(app
+        .ui
+        .dialog
+        .as_ref()
+        .unwrap()
+        .body
+        .iter()
+        .any(|line| line.contains("2 items")));
+    press(&mut app, &["right", "enter"]);
+    assert!(app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::FileMutation { action, path, .. }) if action == "delete" && path == "folder")));
+}
+
+#[test]
+fn disk_file_reads_follow_clean_edits_and_preserve_dirty_edits() {
+    use nexus_tui::sync::SyncMsg;
+    let scenario: serde_json::Value =
+        serde_json::from_str(include_str!("../../interface/scenarios/file-watch.json")).unwrap();
+    let mut app = open_file_view(scenario["initial"].as_str().unwrap());
+    press(&mut app, &["e"]);
+    let project = app.current_project().unwrap();
+    let read = |content: &str, revision: &str| SyncMsg::Files {
+        project: project.clone(),
+        session: None,
+        path: "hello.txt".into(),
+        file: true,
+        data: Ok(serde_json::json!({"content": content, "revision": revision})),
+    };
+    app.apply_sync(read(scenario["updated"].as_str().unwrap(), "rev-clean"));
+    assert_eq!(
+        app.ui.file_edit.as_ref().unwrap().buf.text(),
+        scenario["updated"].as_str().unwrap()
+    );
+    typing(&mut app, scenario["draft"].as_str().unwrap());
+    let draft = app.ui.file_edit.as_ref().unwrap().buf.text();
+    app.apply_sync(read("later disk text\n", "rev-later"));
+    let edit = app.ui.file_edit.as_ref().unwrap();
+    assert_eq!(edit.buf.text(), draft);
+    assert!(edit.stale && edit.dirty());
+}
+
+#[test]
+fn files_watch_is_leased_only_while_its_surface_is_visible() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("sidebar.tab.files");
+    app.effects.clear();
+    app.tick(app.clock);
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::FileWatch { release: false, .. }))));
+    app.effects.clear();
+    app.execute("sidebar.tab.sessions");
+    app.tick(app.clock);
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::FileWatch { release: true, .. }))));
+    app.file_watch_status = "polling".into();
+    app.execute("sidebar.tab.files");
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("Polling every 3 seconds"));
 }

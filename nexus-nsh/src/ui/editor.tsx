@@ -1,4 +1,4 @@
-import { Scroll, Text, View, platform, signal } from "nsh";
+import { Scroll, Text, View, platform, signal, effect } from "nsh";
 import { titleBar } from "nsh/desktop";
 import { Button, Dialog, DiffView as CodeDiffView, Editor, Input, TextView, type EditorRef } from "nsh/base";
 import { Btn, FOCUS, IconButton, PROSE, T } from "./kit";
@@ -12,18 +12,20 @@ const FONT = "Monaspace Argon";
 /** The modal is this wide at most, and keeps this margin from the window. */
 const MODAL_MAX = 1100;
 const MODAL_MARGIN = 32;
-/** The open project file, in a modal over the whole window: read-only, or the code editor once `draft` is set (K10). Long lines wrap. */
+/** One editable project-file modal; Markdown preview and diff retain the same draft. */
 export function FilePanel() {
   const f = () => openFile();
   const editing = () => f()?.draft !== undefined;
   const diff = signal(false);
   const query = signal("");
+  const replacement = signal("");
   const caseSensitive = signal(false);
   const found = signal<{ count: number; current?: number | null; error?: string | null }>({ count: 0 });
   let editor!: EditorRef;
   const showDiff = () => diff() && editing();
-  const preview = () => markdownFile() && !editing() && !fileSource();
-  const status = () => (f()?.saving ? "saving…" : f()?.stale ? "changed on disk · reload" : fileDirty() ? "● modified" : editing() ? "editing" : "");
+  const preview = () => markdownFile() && !fileSource();
+  effect(() => { if (!fileFindOpen() && !preview() && !showDiff()) editor?.focus(); });
+  const status = () => (f()?.saving ? "saving…" : f()?.stale ? "changed on disk · reload" : fileDirty() ? "● modified" : editing() ? "saved" : "");
   const can = (id: string) => availability(byId.get(id)!).ok;
   const loaded = () => editing() || f()?.content !== undefined;
   const matchCount = () => {
@@ -52,11 +54,8 @@ export function FilePanel() {
           <Text class="text-[12px] leading-4 font-medium text-warning" testID="file-panel-waiting">{`${waitItems().length} waiting`}</Text>
         </If>
         <If when={!!status()}><Text class={`${T.meta} ${f()?.stale ? "text-warning" : ""}`} testID="file-status">{status()}</Text></If>
-        <If when={markdownFile() && !editing()}>
+        <If when={markdownFile()}>
           <Btn label={fileSource() ? "Preview" : "Source"} kind="ghost" onPress={() => void run("editor.preview")} testID="file-preview" />
-        </If>
-        <If when={!editing()}>
-          <Btn label="Edit" kind="ghost" onPress={() => void run("editor.edit")} disabled={!can("editor.edit")} reason={availability(byId.get("editor.edit")!).reason} testID="file-edit" />
         </If>
         <If when={editing()}>
           <Btn label={diff() ? "Text" : "Diff"} kind="ghost" onPress={() => diff.set(!diff())} testID="file-diff" />
@@ -65,7 +64,8 @@ export function FilePanel() {
         </If>
       </View>
       <If when={fileFindOpen() && !preview()}>
-        <View class="flex-row items-center gap-2 px-3 min-h-9 border-b border-border bg-sidebar" testID="file-find">
+        <View class="px-3 py-1 gap-1 border-b border-border bg-sidebar" testID="file-find">
+        <View class="flex-row items-center gap-2 min-h-8">
           <Input autoFocus value={query()} onChange={({ value }) => query.set(value)} onSubmit={() => editor?.run("findNext")}
             placeholder="Find" accessibilityLabel="Find in file" testID="file-find-input"
             class="h-7 flex-1 min-w-0 rounded-(--radius) bg-background px-2 font-mono text-[12.5px] text-foreground" />
@@ -80,13 +80,20 @@ export function FilePanel() {
           <IconButton icon="chevron-down" label="Next match" onPress={() => editor?.run("findNext")} testID="file-find-next" />
           <IconButton icon="x" label="Close find" onPress={() => fileFindOpen.set(false)} testID="file-find-close" />
         </View>
+        <View class="flex-row items-center gap-2 min-h-8">
+          <Input value={replacement()} onChange={({ value }) => replacement.set(value)} placeholder="Replace" accessibilityLabel="Replace in file" testID="file-replace-input"
+            class="h-7 flex-1 min-w-0 rounded-(--radius) bg-background px-2 font-mono text-[12.5px] text-foreground" />
+          <Btn label="Replace" kind="ghost" disabled={!query() || !editing() || !found().count} onPress={() => editor?.replace(replacement())} testID="file-replace-next" />
+          <Btn label="All" kind="ghost" disabled={!query() || !editing() || !found().count} onPress={() => void editor?.replaceAll(replacement())} testID="file-replace-all" />
+        </View>
+        </View>
       </If>
       <View class="flex-1 min-h-0 pr-3" testID="file-view">
         <If when={!!f()?.error} else={
           <If when={!loaded()} else={
             <If when={preview()} else={
               <If when={showDiff()} else={
-                <Editor ref={(r) => (editor = r)} value={f()?.draft ?? f()?.content ?? ""} onChange={({ value }) => setDraft(value)} readOnly={!editing()} softWrap
+                <Editor ref={(r) => { editor = r; if (!fileFindOpen()) r.focus(); }} value={f()?.draft ?? f()?.content ?? ""} onChange={({ value }) => setDraft(value)} readOnly={!editing()} softWrap
                   search={{ query: query(), caseSensitive: caseSensitive() }} onSearchChange={({ result }) => found.set(result)}
                   language={f()?.path} fontFamily={FONT} accessibilityLabel={`Editing ${f()?.path ?? "file"}`}
                   class="flex-1 min-h-0 bg-background" testID="file-editor" />
@@ -96,7 +103,7 @@ export function FilePanel() {
               </If>
             }>
               <Scroll class="flex-1"><View class="px-6 py-4" testID="file-markdown">
-                <TextView selectable links="open" markdown={f()?.content ?? ""} classes={PROSE} />
+                <TextView selectable links="open" markdown={f()?.draft ?? f()?.content ?? ""} classes={PROSE} />
               </View></Scroll>
             </If>
           }>

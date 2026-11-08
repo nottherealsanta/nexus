@@ -423,6 +423,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     client_views = ClientViews()
     runtime.manager.attach_views(client_views)
     terminal_service = TerminalService(runtime.store.db)
+    from .file_watch import FileWatches
+
+    file_watches = FileWatches(runtime.bus.publish)
 
     async def config_api(request: Request) -> Response:
         nonlocal config_revision
@@ -1055,6 +1058,66 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                                         use_before=has_before)
         return JSONResponse({"projects": [project_json(x) for x in projects]})
 
+    async def project_git(request: Request) -> Response:
+        from . import git_ops
+
+        project = runtime.project(p(request, "id"))
+        target = request.query_params.get("worktree") or str(await git_ops.default_worktree(project.path))
+        return JSONResponse(await git_ops.status(project.path, target))
+
+    async def project_git_diff(request: Request) -> Response:
+        from . import git_ops
+
+        project = runtime.project(p(request, "id"))
+        target = request.query_params.get("worktree") or str(await git_ops.default_worktree(project.path))
+        return JSONResponse(await git_ops.diff(project.path, target, request.query_params.get("path", "")))
+
+    async def project_git_live(request: Request) -> Response:
+        from . import git_ops
+
+        project = runtime.project(p(request, "id"))
+        target = request.query_params.get("worktree") or str(await git_ops.default_worktree(project.path))
+        async with runtime.worktree_lock:
+            root = await git_ops.registered(project.path, target)
+            return JSONResponse(runtime.git_live_sessions(root))
+
+    async def project_git_action(request: Request) -> Response:
+        from . import git_ops
+
+        if _idempotency_key(request) is None:
+            raise ValueError("Idempotency-Key is required for Git actions")
+        body = await _body(request)
+        project = runtime.project(p(request, "id"))
+        target = body.get("worktree")
+        if target is None:
+            target = str(await git_ops.default_worktree(project.path))
+        if not isinstance(target, str):
+            raise TypeError("worktree must be a path")
+        action = body.get("action")
+        if not isinstance(action, str):
+            raise TypeError("action must be a string")
+        async with runtime.worktree_lock:
+            root = await git_ops.registered(project.path, target)
+            if action in ("stage", "unstage"):
+                result = await git_ops.index(project.path, root, action, body.get("paths"))
+            else:
+                confirmed = body.get("confirmed_live")
+                if not isinstance(confirmed, list) or not all(isinstance(sid, str) for sid in confirmed):
+                    raise ValueError("confirmed_live must be an array of session IDs")
+                live = runtime.git_live_sessions(root)
+                if {item["id"] for item in live["working"]} - set(confirmed):
+                    raise Conflict("worktree has newly working sessions", code="worktree_live", payload=live)
+                if action == "discard":
+                    result = await git_ops.discard(project.path, root, body.get("paths"))
+                else:
+                    if action == "branch_delete_force" and body.get("force_confirmed") is not True:
+                        raise ValueError("force_confirmed must be true for force deletion")
+                    result = await git_ops.action(project.path, root, action, value=body.get("value", ""))
+            runtime.bus.publish("git.changed", {"project_id": project.id, "worktree": str(root), "workspace": str(root), "source": "git", "action": action})
+            if action in ("switch", "pull", "discard"):
+                runtime.bus.publish("files.changed", {"project_id": project.id, "worktree": str(root), "workspace": str(root), "source": "git", "all": True})
+            return JSONResponse(result)
+
     async def project_worktrees(request: Request) -> Response:
         return JSONResponse(await runtime.list_project_worktrees(p(request, "id")))
 
@@ -1070,10 +1133,30 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
 
     async def project_files(request: Request) -> Response:
         from nexus import files
+        if request.method == "POST":
+            body = await _body(request)
+            action, path, destination = body.get("action"), body.get("path"), body.get("to")
+            if not isinstance(action, str) or not isinstance(path, str):
+                raise ValueError("action and path are required")
+            async with runtime.file_lock:
+                done = await asyncio.to_thread(files.mutate_path, file_root(request), action, path, destination)
+            runtime.bus.publish("files.changed", {"project_id": p(request, "id"), "workspace": str(file_root(request)), **done, "source": "user"})
+            return JSONResponse(done)
+        if request.query_params.get("count") == "true":
+            count = await asyncio.to_thread(files.count_entries, file_root(request), request.query_params.get("path", ""))
+            return JSONResponse({"count": count})
         try:
             return JSONResponse(await files.list_directory(file_root(request), request.query_params.get("path", "")))
         except ValueError as exc:
             raise (_missing(exc) or exc) from exc
+
+    async def project_watch(request: Request) -> Response:
+        body = await _body(request)
+        action = body.get("action", "renew")
+        if action not in ("renew", "release"):
+            raise ValueError("watch action must be renew or release")
+        return JSONResponse(file_watches.renew(p(request, "id"), file_root(request), body.get("client_id"),
+                                               release=action == "release"))
 
     async def project_file(request: Request) -> Response:
         from nexus import files
@@ -1094,13 +1177,14 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         project = runtime.project(p(request, "id"))
         root = file_root(request)
         try:
-            done = files.write_file(root, path, content, expected)
+            async with runtime.file_lock:
+                done = await asyncio.to_thread(files.write_file, root, path, content, expected)
         except files.StaleFile as exc:
             raise Conflict(str(exc), code="stale_file", payload={"path": path, "current_revision": exc.revision}) from exc
         except ValueError as exc:
             raise (_missing(exc) or exc) from exc
         runtime.bus.publish("files.changed", {"project_id": project.id, "path": path, "revision": done["revision"],
-                                              "source": "editor"}, session_id=request.query_params.get("session") or None)
+                                              "source": "editor", "workspace": str(root)})
         return JSONResponse(done)
 
     async def project_file_search(request: Request) -> Response:
@@ -1811,10 +1895,15 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/project/{id}/move", route(project_move), methods=["POST"]),
         Route("/api/project/{id}/remove", route(project_remove), methods=["POST"]),
         Route("/api/project/{id}/worktrees", route(project_worktrees)),
+        Route("/api/project/{id}/git", route(project_git)),
+        Route("/api/project/{id}/git/diff", route(project_git_diff)),
+        Route("/api/project/{id}/git/live", route(project_git_live)),
+        Route("/api/project/{id}/git/action", route(project_git_action), methods=["POST"]),
         Route("/api/project/{id}/mcp", route(project_mcp_list)),
         Route("/api/project/{id}/mcp/{name}/restart", route(project_mcp_restart), methods=["POST"]),
         Route("/api/project/{id}/mcp/{name}", route(project_mcp_one)),
-        Route("/api/project/{id}/files", route(project_files)),
+        Route("/api/project/{id}/files", route(project_files), methods=["GET", "POST"]),
+        Route("/api/project/{id}/watch", route(project_watch), methods=["POST"]),
         Route("/api/project/{id}/file", route(project_file), methods=["GET", "PUT"]),
         Route("/api/project/{id}/files/search", route(project_file_search)),
         Route("/api/project/{id}/prompts", route(project_prompts)),
@@ -1901,12 +1990,14 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             with suppress(asyncio.CancelledError):
                 await watcher
             await voice.close()
+            await file_watches.close()
             await terminal_service.shutdown()
             await runtime.shutdown()
 
     app = Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(GZipMiddleware)])
     # Raw per-stream registry for the future Manager; it does not choose a call holder.
     app.state.client_views = client_views
+    app.state.file_watches = file_watches
     return app
 
 

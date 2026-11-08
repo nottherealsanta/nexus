@@ -31,7 +31,7 @@ terms = [
   # timeline and focus
   "timeline.scrolled_up", "timeline.has_older", "tool.output_clipped_in_ui",
   "focus.turn", "focus.tool", "focus.user_message", "focus.assistant_block",
-  "focus.code_block", "focus.file", "focus.project", "focus.session_row",
+  "focus.code_block", "focus.file", "focus.file_entry", "focus.project", "focus.session_row",
   "focus.child_card", "focus.git_file",
   # views and overlays
   "panel.file", "panel.diff", "editor.dirty", "editor.readonly", "editor.markdown", "overlay.open", "dialog.open", "alert.open",
@@ -186,6 +186,11 @@ id = "files"
 label = "Files"
 command = "sidebar.tab.files"
 order = 2
+[[navigation.left_sidebar.tab]]
+id = "git"
+label = "Git"
+command = "sidebar.tab.git"
+order = 3
 
 [navigation.right_sidebar]
 remember_focus = true
@@ -253,6 +258,20 @@ shows_unread_count = true
 section_key = "left"
 value_key = "right"
 previous_value_key = "shift+right"
+
+# The mobile (phone) client's Settings tab (AGENTS.md: mobile is a cut-down client).
+# Only these sections show there, and inside them only these rows; page sections
+# (Providers) show whole. Everything else is desktop and web only. The TUI has no
+# phone target and ignores this table.
+[settings.mobile]
+sections = ["appearance", "providers", "dictation", "manager", "notifications", "about"]
+rows = [
+  "appearance.theme", "appearance.animations", "appearance.session_scope", "appearance.show_archived",
+  "dictation.stt_model", "dictation.stt_download", "dictation.tts_model", "dictation.tts_download",
+  "manager.enabled", "manager.mode", "manager.model", "manager.proactive", "manager.privacy",
+  "notifications.sound",
+  "about.versions", "about.daemon",
+]
 
 [[settings.section]]
 id = "appearance"
@@ -1633,6 +1652,38 @@ unavailable_reason = "Focus a file first."
 placement = ["sidebar"]
 
 [[command]]
+id = "files.new_file"
+title = "New file"
+category = "files"
+when = ["has_project"]
+unavailable_reason = "Select a file or folder first."
+placement = ["palette", "row_menu"]
+
+[[command]]
+id = "files.new_folder"
+title = "New folder"
+category = "files"
+when = ["has_project"]
+unavailable_reason = "Select a file or folder first."
+placement = ["palette", "row_menu"]
+
+[[command]]
+id = "files.rename"
+title = "Rename file or folder"
+category = "files"
+when = ["focus.file_entry"]
+unavailable_reason = "Select a file or folder first."
+placement = ["palette", "row_menu"]
+
+[[command]]
+id = "files.delete"
+title = "Delete file or folder"
+category = "files"
+when = ["focus.file_entry"]
+unavailable_reason = "Select a file or folder first."
+placement = ["palette", "row_menu"]
+
+[[command]]
 id = "files.toggle_ignored"
 title = "Show or hide ignored files"
 category = "files"
@@ -1758,17 +1809,6 @@ unavailable_reason = "Focus a project first."
 placement = ["sidebar"]
 
 [[command]]
-id = "editor.edit"
-title = "Edit file"
-category = "editor"
-keys = { tui = "e", nsh = "cmd+e" }
-key_context = "editor"
-when = ["panel.file", "editor.readonly"]
-unavailable_reason = "No file is open, or it is already being edited."
-placement = ["panel", "palette"]
-note = "Turns the file view into the editor. Saving writes with the revision the file was read at (PUT, K10)."
-
-[[command]]
 id = "editor.save"
 title = "Save file"
 category = "editor"
@@ -1793,10 +1833,10 @@ placement = ["panel", "palette"]
 id = "editor.preview"
 title = "Toggle Markdown preview"
 category = "editor"
-keys = { tui = "p", nsh = "cmd+shift+p" }
+keys = { tui = "ctrl+shift+p", nsh = "cmd+shift+p" }
 key_context = "editor"
-when = ["panel.file", "editor.readonly", "editor.markdown"]
-unavailable_reason = "No Markdown file is open, or the file is being edited."
+when = ["panel.file", "editor.markdown"]
+unavailable_reason = "No Markdown file is open."
 placement = ["panel", "palette"]
 note = "Renders Markdown files as prose; the source keeps line numbers and find."
 
@@ -1818,6 +1858,110 @@ when = ["panel.file"]
 unavailable_reason = "No file is open."
 placement = ["panel", "palette"]
 note = "Asks first if the file is dirty."
+
+[[command]]
+id = "sidebar.tab.git"
+title = "Sidebar: Git"
+category = "navigation"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["palette", "sidebar"]
+
+[[command]]
+id = "git.refresh"
+title = "Refresh Git"
+category = "git"
+when = ["has_project"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette", "sidebar"]
+
+[[command]]
+id = "git.stage"
+title = "Stage"
+category = "git"
+when = ["focus.git_file"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette", "row_menu"]
+
+[[command]]
+id = "git.unstage"
+title = "Unstage"
+category = "git"
+when = ["focus.git_file"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette", "row_menu"]
+
+[[command]]
+id = "git.commit"
+title = "Commit"
+category = "git"
+when = ["has_project"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette"]
+
+[[command]]
+id = "git.fetch"
+title = "Fetch"
+category = "git"
+when = ["has_project"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette"]
+
+[[command]]
+id = "git.pull"
+title = "Pull"
+category = "git"
+when = ["has_project"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette"]
+
+[[command]]
+id = "git.push"
+title = "Push"
+category = "git"
+when = ["has_project"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette"]
+
+[[command]]
+id = "git.switch"
+title = "Switch branch"
+category = "git"
+when = ["has_project"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette"]
+
+[[command]]
+id = "git.branch_create"
+title = "Create branch"
+category = "git"
+when = ["has_project"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette"]
+
+[[command]]
+id = "git.branch_delete"
+title = "Delete branch"
+category = "git"
+when = ["has_project"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette"]
+
+[[command]]
+id = "git.discard"
+title = "Discard changes"
+category = "git"
+when = ["focus.git_file"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette", "row_menu"]
+
+[[command]]
+id = "git.branch_delete_force"
+title = "Force delete branch"
+category = "git"
+when = ["has_project"]
+unavailable_reason = "Open a project or select a changed file first."
+placement = ["palette"]
 
 [[command]]
 id = "git.open_diff"

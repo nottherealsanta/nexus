@@ -50,6 +50,48 @@ impl std::fmt::Debug for Secret {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApiCall {
+    ProjectGit {
+        project: String,
+        worktree: Option<String>,
+    },
+    ProjectGitDiff {
+        project: String,
+        worktree: Option<String>,
+        path: String,
+    },
+    ProjectGitLive {
+        project: String,
+        worktree: Option<String>,
+        action: String,
+        value: String,
+        paths: Vec<String>,
+    },
+    ProjectGitAction {
+        project: String,
+        worktree: Option<String>,
+        action: String,
+        value: String,
+        paths: Vec<String>,
+        confirmed_live: Vec<String>,
+    },
+    FileWatch {
+        project: String,
+        session: Option<String>,
+        client: String,
+        release: bool,
+    },
+    FileMutation {
+        project: String,
+        session: Option<String>,
+        action: String,
+        path: String,
+        to: Option<String>,
+    },
+    FileCount {
+        project: String,
+        session: Option<String>,
+        path: String,
+    },
     TerminalControl {
         id: String,
         attachment: String,
@@ -384,6 +426,13 @@ impl ApiCall {
     /// Past-tense label for the success toast.
     pub fn done_label(&self) -> &'static str {
         match self {
+            ApiCall::FileWatch { .. } => "",
+            ApiCall::ProjectGit { .. }
+            | ApiCall::ProjectGitDiff { .. }
+            | ApiCall::ProjectGitLive { .. } => "",
+            ApiCall::ProjectGitAction { .. } => "Git updated",
+            ApiCall::FileMutation { .. } => "File updated",
+            ApiCall::FileCount { .. } => "",
             ApiCall::TerminalList { .. }
             | ApiCall::TerminalCreate { .. }
             | ApiCall::TerminalRename { .. }
@@ -486,6 +535,10 @@ pub struct ActionDone {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Done {
+    pub project_git: Option<Value>,
+    pub git_live: Option<Value>,
+    pub file_watch_status: Option<String>,
+    pub file_count: Option<u64>,
     pub terminals: Option<Vec<crate::terminal_api::TerminalResource>>,
     pub terminal: Option<crate::terminal_api::TerminalResource>,
     /// A session the app should open (new sessions).
@@ -565,6 +618,161 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
     let key = RequestId::new();
     let mut done = Done::default();
     match call {
+        ApiCall::ProjectGitDiff {
+            project,
+            worktree,
+            path,
+        } => {
+            let mut query = vec![("path", path.clone())];
+            if let Some(worktree) = worktree {
+                query.push(("worktree", worktree.clone()));
+            }
+            done.project_git = Some(
+                api.http
+                    .get(&format!("/api/project/{project}/git/diff"), &query)
+                    .await
+                    .map_err(e)?,
+            );
+        }
+        ApiCall::ProjectGitLive {
+            project, worktree, ..
+        } => {
+            done.git_live = Some(
+                api.http
+                    .get(
+                        &format!("/api/project/{project}/git/live"),
+                        &worktree
+                            .as_ref()
+                            .map(|w| vec![("worktree", w.clone())])
+                            .unwrap_or_default(),
+                    )
+                    .await
+                    .map_err(e)?,
+            );
+        }
+        ApiCall::ProjectGitAction {
+            project,
+            worktree,
+            action,
+            value,
+            paths,
+            confirmed_live,
+        } => {
+            let body = json!({"action": action, "value": value, "paths": paths, "confirmed_live": confirmed_live, "force_confirmed": action == "branch_delete_force", "worktree": worktree});
+            match api
+                .http
+                .call(
+                    reqwest::Method::POST,
+                    &format!("/api/project/{project}/git/action"),
+                    &[],
+                    Some(&body),
+                    Some(key.as_str()),
+                    None,
+                )
+                .await
+            {
+                Ok(reply) => {
+                    done.project_git = Some(
+                        reply
+                            .body
+                            .get("status")
+                            .filter(|s| s.is_object())
+                            .cloned()
+                            .unwrap_or(reply.body),
+                    )
+                }
+                Err(crate::transport::Error::Api(error))
+                    if error.code.as_deref() == Some("worktree_live") =>
+                {
+                    done.git_live = Some(error.body)
+                }
+                Err(error) => return Err(e(error)),
+            }
+        }
+        ApiCall::ProjectGit { project, worktree } => {
+            done.project_git = Some(
+                api.http
+                    .get(
+                        &format!("/api/project/{project}/git"),
+                        &worktree
+                            .as_ref()
+                            .map(|w| vec![("worktree", w.clone())])
+                            .unwrap_or_default(),
+                    )
+                    .await
+                    .map_err(e)?,
+            );
+        }
+        ApiCall::FileWatch {
+            project,
+            session,
+            client,
+            release,
+        } => {
+            let query = session
+                .as_ref()
+                .map(|s| vec![("session", s.clone())])
+                .unwrap_or_default();
+            let body =
+                json!({"client_id": client, "action": if *release { "release" } else { "renew" }});
+            let result = api
+                .http
+                .call(
+                    reqwest::Method::POST,
+                    &format!("/api/project/{project}/watch"),
+                    &query,
+                    Some(&body),
+                    None,
+                    None,
+                )
+                .await
+                .map_err(e)?;
+            done.file_watch_status = result.body["status"].as_str().map(str::to_owned);
+        }
+        ApiCall::FileMutation {
+            project,
+            session,
+            action,
+            path,
+            to,
+        } => {
+            let query = session
+                .as_ref()
+                .map(|s| vec![("session", s.clone())])
+                .unwrap_or_default();
+            let body = json!({"action": action, "path": path, "to": to});
+            api.http
+                .call(
+                    reqwest::Method::POST,
+                    &format!("/api/project/{project}/files"),
+                    &query,
+                    Some(&body),
+                    Some(key.as_str()),
+                    None,
+                )
+                .await
+                .map_err(e)?;
+        }
+        ApiCall::FileCount {
+            project,
+            session,
+            path,
+        } => {
+            let mut query = vec![("path", path.clone()), ("count", "true".into())];
+            if let Some(s) = session {
+                query.push(("session", s.clone()));
+            }
+            let result = api
+                .http
+                .get(&format!("/api/project/{project}/files"), &query)
+                .await
+                .map_err(e)?;
+            done.file_count = Some(
+                result["count"]
+                    .as_u64()
+                    .ok_or("Core did not return a folder count")?,
+            );
+        }
         ApiCall::TerminalControl {
             id,
             attachment,

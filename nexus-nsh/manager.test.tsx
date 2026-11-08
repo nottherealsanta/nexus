@@ -7,6 +7,7 @@ import {
 } from "./src/manager";
 import type { Card } from "./src/manager";
 import cards from "../interface/scenarios/manager-cards.json";
+import day from "../interface/scenarios/manager-day.json";
 import liveFailure from "../interface/scenarios/manager-live-failure.json";
 import liveSilence from "../interface/scenarios/manager-live-silence.json";
 import bargeScenario from "../interface/scenarios/manager-barge-in.json";
@@ -701,4 +702,19 @@ describe("Manager details modal and immediate connection", () => {
     expect(call()).toBe(null); expect(connecting()).toBe(false);
     (globalThis as any).fetch = original;
   });
+});
+
+
+test("scripted day applies the shared cards and dismissal", async () => {
+  const sent = await inACall();
+  await say(day.overview, "speech");
+  handleEvent(ev("manager.card", { card: day.excerpt_card }));
+  expect((card() as any)?.markdown).toBe(day.session_answer);
+  handleEvent(ev("manager.card", { card: day.approval_card }));
+  expect((card() as any)?.detail).toBe(day.command);
+  dismissCard();
+  await settleAsync();
+  expect(sent.find(s => s.path === "/api/manager/say")?.body.text).toBe(day.overview);
+  expect(sent.find(s => s.path === "/api/manager/card/dismiss")?.body.card_id).toBe(day.approval_card.id);
+  await reset();
 });

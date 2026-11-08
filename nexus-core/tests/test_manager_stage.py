@@ -385,3 +385,49 @@ async def test_an_approval_card_shows_what_the_session_really_asked_for(h):
     await h.say("yes")
     assert h.rt.approvals[aid][1].result() is True
     assert "Allowed once" in h.spoken()[-1]
+
+
+async def test_scripted_day_reads_a_result_and_navigates_after_confirmation(h):
+    """Exercise a continuous offline Manager call using the day fixture."""
+    import json
+    from pathlib import Path
+
+    day = json.loads((Path(__file__).resolve().parents[2] / "interface/scenarios/manager-day.json").read_text())
+    project = h.project("nexus")
+    session = seed(h.store, project, title=day["session_title"], user="Please review", answer=day["session_answer"],
+                   now=time.time(), age_days=0.2)
+    h.open_stream()
+    await h.start()
+    await h.say(day["overview"], source="speech")
+    assert any(row["session_id"] == session.id for column in h.card()["columns"].values() for row in column)
+    await h.say(day["read"])
+    assert h.card()["markdown"] == day["excerpt_card"]["markdown"]
+    await h.say(day["overview"])
+    task = asyncio.ensure_future(h.say(day["navigate"]))
+    await h.answer_navigation()
+    await task
+    assert h.of("manager.navigate")[-1]["data"]["session"] == session.id
+    await h.say(day["dismiss"])
+    assert h.card() is None
+
+    from nexus.store import new_id
+
+    aid = new_id("per")
+    request = {"id": aid, "session_id": session.id, "tool": "bash", "call_id": "c",
+               "args": {"command": day["command"]}, "grant": f"bash: {day['command']}"}
+    future = asyncio.get_running_loop().create_future()
+    h.rt.approvals[aid] = (session.id, future, request)
+    await h.say(day["approval"])
+    assert h.card()["detail"] == day["approval_card"]["detail"]
+    await h.say(day["approve"])
+    assert future.result() is True
+    del h.rt.approvals[aid]
+    await h.say(day["start"], source="speech")
+    assert any(row["tool"] == "start_session" and row["ok"] for row in h.store.audit())
+    created = next(s for s in h.store.sessions() if s.id != session.id)
+    first = h.store.messages(created.id)[0]
+    assert first.origin == "manager" and first.message.parts[0].text == "check the release"
+    await h.say(day["steer"])
+    assert any(row["tool"] == "send_to_session" and row["ok"] for row in h.store.audit())
+    await until(lambda: any(m.origin == "manager" for m in h.store.messages(session.id)))
+    assert any(m.message.parts[0].text == "check the tests" for m in h.store.messages(session.id) if m.origin == "manager")

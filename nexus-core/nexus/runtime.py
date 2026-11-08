@@ -1548,6 +1548,30 @@ class Runtime:
             raise ToolError(str(exc)) from exc
         return data | {"project_directory": project.path}
 
+    def git_live_sessions(self, root: Path) -> dict[str, Any]:
+        """Snapshot sessions and active work associated with a checkout."""
+        sessions = self.store.sessions(archived="exclude", kind="user")
+        by_id = {session.id: session for session in sessions}
+        included = {session.id for session in sessions if Path(session.directory).resolve().is_relative_to(root)}
+        # A child belongs to the warning even when its directory was changed.
+        changed = True
+        while changed:
+            before = len(included)
+            included |= {session.id for session in sessions if session.parent_id in included}
+            changed = len(included) != before
+        working = set(self.turns) | {sid for sid, _, _ in self.approvals.values()}
+        working |= {question.session_id for question in self.questions.values()}
+        jobs = [job for job in self.jobs.list() if job.finished is None]
+        included |= {job.session_id for job in jobs if job.session_id in by_id
+                     and Path(job.directory).resolve().is_relative_to(root)}
+        working |= {job.session_id for job in jobs if job.session_id in included}
+        def info(session_id: str) -> dict[str, Any]:
+            session = by_id[session_id]
+            return {"id": session.id, "title": session.title, "directory": session.directory}
+        active = sorted(included & working)
+        return {"worktree": str(root), "working": [info(sid) for sid in active],
+                "idle": [info(sid) for sid in sorted(included - working)]}
+
     async def create_worktree(self, session_id: str, path: Any, branch: Any = None, base: Any = None) -> dict[str, Any]:
         """Create or reuse a worktree; never changes the session directory."""
         if not isinstance(path, str) or not path.strip():
@@ -1681,7 +1705,7 @@ class Runtime:
 
         Nothing is interrupted: a running turn (or a pending question/approval)
         anywhere in the tree refuses the operation. Data, directories, worktrees,
-        snapshots and background jobs are untouched; idle owned kernels are released.
+        snapshots and background jobs are untouched; live jobs refuse archive and idle owned kernels are released.
         """
         session = self.session(session_id)
         if session.parent_id is not None:
@@ -1698,6 +1722,8 @@ class Runtime:
                 f"cannot {'archive' if archived else 'unarchive'} session tree {session_id}: session {busy} "
                 "is running a turn or waiting for the user; interrupt it first"
             )
+        if archived and any(job.root in ids and job.finished is None for job in self.jobs.list()):
+            raise Conflict("cannot archive session tree: a background job is running; wait for it or stop it first")
         if archived and any(k.lock.locked() for k in self.kernels.owned_by_tree(session_id, set(ids))):
             raise Conflict("cannot archive session tree: an owned kernel is busy; wait for its cell to finish")
         pending = [item for sid in ids for item in self.inputs.list(sid)] if archived else []

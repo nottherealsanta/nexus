@@ -26,7 +26,7 @@ Client rules (both clients, same behavior):
   oldest first; pages go newest to oldest.
 - **Render `summary`** as the row and show `detail` (exact JSON) on expand. If
   `detail_truncated`, offer "load full" which calls `/inspect/record`.
-- **Refresh only on change.** While open, react to session events (or poll),
+- **Refresh only on change.** While open, react to the existing session event stream, coalesce durable changes,
   call `/inspect/head`, and refetch only when `head` or `generation` differ from
   the last response. Coalesce bursts into one refetch, tag each request with a
   sequence number and ignore a response that is not the latest (navigation,

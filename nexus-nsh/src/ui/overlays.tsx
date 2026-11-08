@@ -5,7 +5,7 @@ import { Heading, Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./moda
 import type { JSX } from "nsh";
 import { Btn, Empty, IconButton, T, TS, FOCUS } from "./kit";
 import { availability, closeLearnChecklist, commands, escape, installLearnChecklist, keyLabel, renameSession, run, Cmd } from "../commands";
-import { patchConfig, config, addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, notifications, paletteOpen, picker, selectProject, toast, unread, renaming, viewed } from "../store";
+import { fileOperation, loadFiles, filesExpanded, selectedFileEntry, gitInput, gitDiff, patchConfig, config, addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, notifications, paletteOpen, picker, selectProject, toast, unread, renaming, viewed } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { LeftSidebar } from "./sidebar";
 import { RightSidebar } from "./right";
@@ -278,7 +278,7 @@ function ConfirmKeys() {
 async function runConfirm() {
   const d = confirmDialog(); if (!d) return;
   confirmDialog.update((x) => x && { ...x, busy: true, error: undefined });
-  try { await d.run(); confirmDialog.set(null); }
+  try { await d.run(); if (confirmDialog()?.run === d.run) confirmDialog.set(null); }
   catch (e) { confirmDialog.update((x) => x && { ...x, busy: false, error: e instanceof ApiError ? e.message : String(e) }); }
 }
 
@@ -408,4 +408,50 @@ function RenameSessionBody() {
       </View>
     </Modal>
   );
+}
+
+
+export function FileOperationDialog() {
+  return <><If when={fileOperation()}><FileOperationBody /></If><If when={gitInput()}><GitInputBody /></If><If when={gitDiff()}><GitDiffBody /></If></>;
+}
+function GitDiffBody() {
+  const close = () => gitDiff.set(null);
+  return <Modal size="large" label={`Git diff: ${gitDiff()?.path ?? ""}`} testID="git-diff-dialog" onCancel={close} onOpenChange={(open) => { if (!open) close(); }}><View class="gap-3">
+    <ModalTitle title={`${gitDiff()?.group ?? ""}: ${gitDiff()?.path ?? ""}`} />
+    <Scroll style={{ height: 400 }}><Text class={`${T.mono} text-foreground`}>{gitDiff()?.error ?? gitDiff()?.text ?? "Loading diff…"}</Text><If when={!!gitDiff()?.clipped}><Text class={T.meta}>Diff clipped</Text></If></Scroll>
+    <View class="flex-row justify-end"><Btn label="Close" onPress={close} testID="git-diff-close" /></View>
+  </View></Modal>;
+}
+function GitInputBody() {
+  const input = gitInput()!, value = signal("");
+  const cancel = () => gitInput.set(null);
+  const submit = () => { if (value().trim()) input.submit(value().trim()); };
+  return <Modal size="small" label={input.title} testID="git-input-dialog" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}><View class="gap-3">
+    <ModalTitle title={input.title} /><Input autoFocus onChange={({ value: v }) => value.set(v)} onSubmit={submit} submitBehavior="submit" accessibilityLabel={input.title} testID="git-input" class={`rounded-none bg-card px-3 h-10 ${TS.base} text-foreground`} />
+    <View class="flex-row justify-end gap-2"><Btn label="Cancel" onPress={cancel} /><Btn label="Continue" kind="primary" onPress={submit} disabled={!value().trim()} testID="git-input-submit" /></View>
+  </View></Modal>;
+}
+function FileOperationBody() {
+  const operation = fileOperation()!;
+  const text = signal(operation.path);
+  const busy = signal(false);
+  const title = operation.action === "create_file" ? "New file" : operation.action === "create_dir" ? "New folder" : "Rename file or folder";
+  const cancel = () => fileOperation.set(null);
+  const save = async () => {
+    const value = text().trim(), project = currentProject();
+    if (!value || !project || busy()) return;
+    busy.set(true);
+    try {
+      await request("POST", `/api/project/${project}/files`, { body: { action: operation.action, path: operation.action === "rename" ? operation.path : value, to: operation.action === "rename" ? value : undefined }, key: newKey() });
+      selectedFileEntry.set(null); cancel(); await Promise.all([loadFiles(), ...[...filesExpanded()].map((path) => loadFiles(path))]);
+    } catch (e) { toast("error", `File operation failed: ${String(e)}`); }
+    finally { busy.set(false); }
+  };
+  return <Modal size="small" label={title} testID="file-operation-dialog" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}>
+    <View class="gap-3"><ModalTitle title={title} />
+      <Input autoFocus defaultValue={operation.path} onChange={({ value }) => text.set(value)} onSubmit={() => void save()} submitBehavior="submit" accessibilityLabel="Path" testID="file-operation-input" class={`rounded-none bg-card px-3 h-10 ${TS.base} text-foreground`} />
+      <View class="flex-row justify-end gap-2"><Btn label="Cancel" onPress={cancel} /><Btn label="Save" kind="primary" onPress={() => void save()} disabled={!text().trim() || busy()} testID="file-operation-save" /></View>
+      <ModalFooter hints="enter save · esc cancel" />
+    </View>
+  </Modal>;
 }

@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import errno
 import hashlib
 import itertools
 import mimetypes
 import os
+import shutil
 import stat
+import sys
 import time
 from pathlib import Path, PurePosixPath
 
@@ -195,6 +199,101 @@ def write_file(root: Path, name: str, content: str, expected_revision: str) -> d
             pass
         os.close(parent)
     return {"path": name, "revision": "sha256:" + hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+
+
+
+
+def count_entries(root: Path, name: str) -> int:
+    """Count descendants without following symlinks, within a bounded budget."""
+    root_fd = _open(root, name, directory=True)
+    pending = [root_fd]
+    total = 0
+    deadline = time.monotonic() + 3
+    try:
+        while pending:
+            directory = pending.pop()
+            try:
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        total += 1
+                        if total > 50_000 or time.monotonic() > deadline:
+                            raise ValueError("folder is too large to count safely")
+                        if entry.is_dir(follow_symlinks=False):
+                            child = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                            pending.append(child)
+            finally:
+                os.close(directory)
+        return total
+    except OSError as exc:
+        raise ValueError(str(exc)) from exc
+    finally:
+        for fd in pending:
+            os.close(fd)
+
+
+def _rename_exclusive(src: int, leaf: str, dst: int, target: str) -> None:
+    """Rename without replacing a destination, atomically against other writers."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        rename = getattr(libc, "renameatx_np", None)
+        flag = 0x00000004  # RENAME_EXCL
+    elif sys.platform.startswith("linux"):
+        rename = getattr(libc, "renameat2", None)
+        flag = 1  # RENAME_NOREPLACE
+    else:
+        rename = None
+        flag = 0
+    if rename is None:
+        raise ValueError("exclusive rename is not supported on this platform")
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(src, os.fsencode(leaf), dst, os.fsencode(target), flag) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code) if code != errno.EEXIST else "destination already exists")
+
+
+def mutate_path(root: Path, action: str, name: str, destination: str | None = None) -> dict:
+    """Mutate an entry beneath a workspace without following symlinks."""
+    def parent(path: str) -> tuple[int, str]:
+        parts = Path(path).parts
+        if not parts or Path(path).is_absolute() or any(p in (".", "..") for p in parts):
+            raise ValueError("path must name an entry within the workspace")
+        return _open(root, str(Path(*parts[:-1])) if len(parts) > 1 else "", directory=True), parts[-1]
+
+    if action not in {"create_file", "create_dir", "rename", "delete"}:
+        raise ValueError("unknown file action")
+    src, leaf = parent(name)
+    dst = -1
+    try:
+        if action == "create_file":
+            fd = os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=src)
+            os.close(fd)
+        elif action == "create_dir":
+            os.mkdir(leaf, dir_fd=src)
+        else:
+            info = os.stat(leaf, dir_fd=src, follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                raise ValueError("symlinks cannot be mutated")
+            if action == "delete":
+                if stat.S_ISDIR(info.st_mode):
+                    shutil.rmtree(leaf, dir_fd=src)
+                elif stat.S_ISREG(info.st_mode):
+                    os.unlink(leaf, dir_fd=src)
+                else:
+                    raise ValueError("path is not a regular file or directory")
+            else:
+                if not isinstance(destination, str):
+                    raise ValueError("rename requires a destination")
+                dst, target = parent(destination)
+                _rename_exclusive(src, leaf, dst, target)
+    except OSError as exc:
+        raise ValueError(str(exc)) from exc
+    finally:
+        os.close(src)
+        if dst >= 0:
+            os.close(dst)
+    _git_cache.pop(str(root), None)
+    return {"action": action, "path": name, **({"to": destination} if action == "rename" else {})}
 
 
 async def git_status(root: Path) -> dict:

@@ -79,6 +79,11 @@ attached) for `POST …/prompt`, through the same turn lifecycle.
    5. Otherwise run the calls one by one, in order: yield `ToolStart(call, args)`,
       run it, yield `ToolEnd(call, result)`.
    6. Append one `tool` message with all the results, yield `MessageAdded`.
+At about 80% of the step budget (rounded up, with at least two steps), Core adds
+one ordinary user-context notice asking the agent to finish and verify its work.
+Tools remain enabled. The notice is emitted once, is visible in both clients,
+and is skipped if that step is already the final step.
+
 3. On the last step (`step == max_steps`, when `max_steps > 1`) the loop first adds a user notice,
    `[Nexus notice: step limit] …`, telling the model that tools are disabled and asking for a text-only
    summary: that the limit was reached, what was done, what remains and what to do next (opencode's

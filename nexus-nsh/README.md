@@ -27,8 +27,8 @@ Steps, Requests, Raw and Questions. Rows show Core's `summary`; pressing one exp
 `detail` JSON, and "Load full record" fetches `/inspect/record` when it was clipped. Older/Newer
 use cursors; the Sessions chips (or `[`/`]`) inspect another session of the tree; the search box,
 Kind/Status buttons and event-type box are filters sent to Core. A state line shows Live, Paused
-or Disconnected (offline data says "not current"); the modal polls `/inspect/head` every 2 s
-while open and refetches only on change, and Pause live/Refresh are always there. Selection,
+or Disconnected (offline data says "not current"); the modal coalesces session stream changes and checks `/inspect/head`
+while open, refetching only on change, and Pause live/Refresh are always there. Selection,
 expansion, scroll, zoom and filters are kept per session and view. The cache panel labels the
 session lifetime and the displayed page separately, with coverage, the hit-rate denominator,
 per-model rows and unknown writes; `omitted` and notes are listed. Keys are the `inspector.*`
@@ -57,53 +57,16 @@ Desktop and web expose Core-owned terminals in a bottom dock toggled by **<n> sh
 
 Keyboard routing assumes the focused WebView receives keys after NSH's keymap has been overridden with pass-through bindings. The web renderer uses a sandboxed iframe; the macOS host has a native key monitor that consumes matching shortcuts before dispatch, so simply ignoring shortcut callbacks is not sufficient. Ctrl+] moves focus to the tabs. Browser and OS reserved shortcuts remain platform-owned. Native focus and input routing require a real macOS verification.
 
-## Terminal backend
+## Native hosts
 
-`nexus nsh tui` starts Core and runs this same TSX app with upstream NSH's terminal
-backend, including hot reload. This is an experimental alternative to the dedicated
-Rust client (`nexus tui`), not a replacement. Keyboard and mouse rendering come from
-NSH's character-grid backend; no separate terminal UI is maintained here. Flags pass
-through, for example `nexus nsh tui --fps` or `--points-per-cell 8x16`.
-`npm run tui -- --fps` runs the backend directly when Core is already running.
+The native crate and CLI use NSH 0.4.0. The experimental `nexus gpui` host loads
+`capabilities.json` alongside `bundle.js`, including the filesystem grants needed
+for local Core discovery. The AppKit `nexus macos` launcher remains separate.
+Neither native launcher starts Core automatically.
 
-The About setting shows NSH 0.4.0. The native crate pins that release at
-`3789a451f6d4935a3b13890fb1020a427d20a8ee`. Use a matching source CLI; older
-builds (0.3.0 and earlier) have no `--target tui`:
-
-```sh
-git -C ~/.nsh/source fetch origin
-git -C ~/.nsh/source checkout --detach 3789a451f6d4935a3b13890fb1020a427d20a8ee
-cargo build --manifest-path ~/.nsh/source/Cargo.toml -p nsh-cli --release
-```
-
-`nsh --version` then prints `0.4.0 (3789a45)`; anything else needs the commands above.
-
-These commands assume the upstream source installer has already created
-`~/.nsh/source` and linked `nsh` to its release binary. Otherwise follow
-[upstream's source installation instructions](https://github.com/longbridge/nsh#quick-start).
-The first run builds a terminal host with Nexus's native services. Diagnostics go
-to `.nsh/tui.log`. On macOS, local Core discovery uses the same `~/.nexus/daemon.json`
-path as the native window; custom `NEXUS10_HOME` discovery is not supported by the
-native TSX transport yet.
-
-The experimental `nexus gpui` host loads the build's `capabilities.json` alongside
-`bundle.js`; without that file it fails to launch rather than silently dropping
-the filesystem grants needed for local daemon discovery. The AppKit `nexus macos`
-launcher remains separate. Neither native launcher starts Core automatically.
-
-The terminal app reads like the Rust client. The sidebar search uses the shared `⌕`
-control glyph, key hints show the TUI's spellings (`ctrl+k`, `ctrl+,`) and the
-manifest's `keys.tui` bindings are live as well as `keys.nsh`, because upstream maps
-the command key to Control in a terminal. Settings keeps the white active-pane marker
-by drawing the shared `▌` focus bar where a pixel-wide bar cannot exist; the command palette's
-selected row also carries that bar.
-`terminal-parity.test.tsx` checks those (`nsh test terminal-parity.test.tsx --target tui`).
-
-Known differences from `nexus tui` in the terminal backend: upstream frames modals (the user decided on 2026-11-06 that NSH drops the frame to match the TUI; it needs an upstream nsh option and is recorded in the porting ledger); NSH's
-composer keeps its voice and send buttons (approved by the user 2026-11-06). Settings uses
-the same segmented value controls as the TUI, and the timeline's scroll bar is shared:
-both draw it only while scrolling, then fade it out. The framed modals are the terminal
-backend's own rendering; removing them waits on upstream.
+The NSH terminal target is retired. Use `nexus tui` for the maintained Rust terminal
+client. Its former launcher, rendering branches and captures are preserved in the
+Git tag `archive/nsh-terminal-backend`.
 
 A new session's first message appears immediately below its context preview as
 `You · Sending…`. The chosen settings stay visible until Core's message and history
@@ -118,13 +81,15 @@ drafts). The same note stays in the sent context and model input. Empty or
 cancelled dictation does not mark a draft; OS keyboard dictation cannot be
 identified automatically. See [Voice](../docs/voice.md#transcript-provenance).
 
-On native phones, Sessions and Settings are bottom tabs. Sessions offers the
+On iOS and native phones, Sessions, Manager and Settings are bottom tabs. Sessions offers the
 project picker, project/all-project scope, search and archive filter; selecting a
-session opens the conversation full screen, with a back control to the list.
+session opens the conversation full screen, with a back control to the list. The
+conversation shows status, user messages and agent replies, with compact cards for
+approvals and questions. Desktop workspace surfaces are unavailable on phones.
+The Manager tab supports typed interaction; native voice capture remains unverified.
 Subtle dividers separate the touch-sized session rows, which show the branch or
 project and relative activity time without covering the title. The search field is
-dismissed before opening a session. Desktop and tablet keep
-the sidebar-based navigation.
+dismissed before opening a session. Desktop keeps the sidebar-based navigation.
 
 **Status (PLAN.md Step 12.5, in progress):** the shell, session list and filters,
 workspace session tabs, new-session view, timeline, waiting card, composer,
@@ -474,6 +439,14 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/ui/*` | Header, sidebars, the right panel and its icon rail, the docked composer (completion, Working row, location strip, activity bar) and waiting card, settings, overlays, alerts. |
 | `src/gen/*` | Generated from `interface/`; never edit. |
 
+## System tray
+
+On desktop (macOS, Windows, Linux) NSH shows a tray icon through `nsh/desktop`'s `Tray` (`installTray` in `App.tsx`,
+content in `src/tray-logic.ts`). Its menu lists each non-inactive project as a submenu of its root sessions with their
+status; choosing one focuses the window and opens it. The icon gains a dot while any session waits on an approval or
+question, and the tooltip says so. Web, mobile and the TUI ignore it (a client-specific difference, see the porting ledger).
+No global shortcut is registered.
+
 ## Platform notes
 
 - **Web.** Served same-origin by `scripts/serve.mjs`; the host proxies `/api`
@@ -524,9 +497,9 @@ e2e/down.sh /tmp/nsh-e2e
   and looks the native module up with `nativeModule("nexus/native")` when it is
   first needed, so importing the timeline for a pure helper does not load
   `nexus/native` outside the app bundle. `src/dictation.ts` does the same for
-  `Microphone` and treats a missing module as a client without capture. `src/mermaid-logic.ts` holds the
+  `Microphone` and treats a missing module as a client without capture. The Apple native bridge records 16 kHz mono WAV for dictation and Manager pipeline voice on macOS and iOS; packaged apps need `NSMicrophoneUsageDescription` (set by `scripts/native-info.mjs`). Device permission, recording and playback on macOS remain unverified. `src/mermaid-logic.ts` holds the
   closed-fence scan and tone classes.
-- **Type size.** Shared interface text defaults to 14 px on web and macOS and 16 px on iOS; the terminal backend retains its cell-based sizing. Explicitly sized text may differ.
+- **Type size.** Shared interface text defaults to 14 px on web and macOS and 16 px on iOS. Explicitly sized text may differ.
 - **Safe areas and touch.** The header pads by `safeArea().top`, the composer dock and
   the sidebar footer by `safeArea().bottom`, so the status bar and home indicator
   never cover chrome. Phone and tablet idioms (`platform.idiom`) keep hover-only
@@ -737,3 +710,15 @@ the client reads `/turn`, seeds the running partial, and merges newer deltas by
 request id and sequence. A completed part replaces its folded text; a saved
 assistant message clears scratch. Token deltas have no durable cursor. Finished
 session compaction leaves messages, starting context and turn summaries intact.
+
+
+The Files command palette offers New file, New folder, Rename file or folder,
+and Delete file or folder. Paths are relative to the displayed workspace root.
+Delete is permanent and asks for confirmation; a folder's descendant count is
+shown when Core can count it within its safety budget.
+
+Desktop Files and editor views renew a 60-second workspace watcher lease while
+visible and release it on close. Disk changes refresh the file tree; clean text
+follows its disk revision, while unsaved edits remain intact with a changed-on-disk
+notice. Native watcher failure shows **Polling every 3 seconds**. These global
+resource events never enter a session's model context.

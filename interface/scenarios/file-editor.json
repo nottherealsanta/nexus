@@ -1,0 +1,9 @@
+{
+  "path": "sample.txt",
+  "initial": "Alpha alpha\nALPHA",
+  "query": "alpha",
+  "replacement": "beta",
+  "case_sensitive_count": 1,
+  "case_insensitive_count": 3,
+  "replaced_all": "beta beta\nbeta"
+}

@@ -1,3 +1,4 @@
+import { inspectorHooks } from "./core/inspector-hooks";
 // The native session inspector (read-only), Inspector API v2. The Rust TUI keeps the same state machine
 // (`nexus-tui/src/inspector.rs`): state per (inspected session, view) so selection, expanded details, scroll,
 // zoom, filters and the cursor stack survive refreshes and a trip to another view or session; every
@@ -9,7 +10,7 @@ import { connection, model, toast, viewed } from "./store";
 export const inspectorViews = ["Timing", "Conversation", "Steps", "Requests", "Raw", "Questions"] as const;
 export const LIMIT = 50;
 /** Milliseconds between cheap `/inspect/head` polls while the inspector is open. */
-export const POLL_MS = 2000;
+export const POLL_MS = 200;
 /** Rows drawn at once. */
 export const WINDOW = 60;
 
@@ -173,6 +174,7 @@ export async function refreshInspector() {
     const gone = data.tree.length > 0 && !data.tree.some((n) => n.id === now.target);
     if (gone && now.target !== now.session) { now.target = now.session; inspector.set({ ...now }); void refreshInspector(); return; }
     inspector.set({ ...now });
+    if (dirty) invalidateInspector();
   } catch (e) {
     const now = inspector();
     if (!now || now.seq !== token || signal.aborted) return;
@@ -212,20 +214,34 @@ export function applyHead(s: InspectorState, head: { head: number; generation: s
   if (!moved) s.error = "";
   return moved;
 }
-/** One poll at a time: the next is scheduled when the last one has finished. */
-function startTimer() {
-  stopTimer();
-  const next = () => { timer = setTimeout(() => { void pollHead().finally(() => { if (inspector() && timer !== undefined) next(); }); }, POLL_MS); };
-  next();
+/** Coalesce stream bursts; preserve an invalidation that arrives during a request. */
+let dirty = false;
+function invalidateInspector() {
+  if (!inspector()) return;
+  dirty = true;
+  if (timer !== undefined) return;
+  timer = setTimeout(async () => {
+    timer = undefined;
+    if (!inspector()) return;
+    if (inspector()!.loading || headInflight || inspector()!.paused) return;
+    dirty = false;
+    await pollHead();
+    if (dirty) invalidateInspector();
+  }, POLL_MS);
 }
-function stopTimer() { if (timer !== undefined) clearTimeout(timer); timer = undefined; }
+function stopTimer() { if (timer !== undefined) clearTimeout(timer); timer = undefined; dirty = false; }
+inspectorHooks.invalidate = invalidateInspector;
+inspectorHooks.event = e => {
+  const state = inspector();
+  if (!state || !e.session_id || ["text_delta", "reasoning_delta", "wire_event", "wire_response"].includes(e.type)) return;
+  if (e.type === "session.created" || e.session_id === state.session || dataOf(state)?.tree.some(node => node.id === e.session_id)) invalidateInspector();
+};
 
 export function inspectSession(session?: string, view = 0) {
   const sid = session ?? viewed()?.id ?? model.sessions.keys().next().value;
   if (!sid) { toast("info", "Select a session to inspect"); return; }
   headInflight = false;
   inspector.set({ session: sid, target: sid, view, pages: {}, seq: 0, loading: true, loadingFull: null, error: "", paused: false, connected: true, newer: false, info: false });
-  startTimer();
   void refreshInspector();
 }
 /** No requests or polling continue once closed; a response in flight is aborted and ignored. */
@@ -283,7 +299,7 @@ export function clearFilters() {
 export function toggleLive() {
   const s = inspector(); if (!s) return;
   update((x) => { x.paused = !x.paused; });
-  if (!inspector()!.paused) { void refreshInspector(); }
+  if (!inspector()!.paused) { dirty = false; void refreshInspector(); }
 }
 export function indexOf(s: InspectorState): number {
   const rows = rowsOf(dataOf(s), s.view); const id = pageOf(s).selected;

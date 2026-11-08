@@ -41,6 +41,11 @@ from .tools import DEFAULT_TOOLS, Tool, ToolContext, ToolError
 
 MAX_STEPS = 500
 
+STEP_BUDGET_NOTICE = (
+    "[Nexus notice: step budget] About 80% of this turn's step budget has been used. "
+    "Finish the current task and verify the result with the remaining steps. "
+    "If work remains, explain what is done and what still needs attention.")
+
 STEP_LIMIT_NOTICE = (
     "[Nexus notice: step limit] The maximum number of steps allowed for this turn has been reached. "
     "Tools are disabled until the next user message. Respond with text only; do not call any tool. "
@@ -174,7 +179,7 @@ def default_instructions(workspace: Path) -> str:
         f"Workspace: {workspace}\n"
         f"Today: {datetime.now().astimezone().date().isoformat()}\n"
         "Tools: read (files, directories), bash (commands run in the workspace), "
-        "edit (exact replacement), patch (apply_patch), write (whole files), ask (questions to the user). "
+        "edit (text replacement), patch (apply_patch), write (whole files), ask (questions to the user). "
         "Keep answers short and say what you changed."
     )
 
@@ -297,6 +302,8 @@ class Agent:
             notices = [*(self.inbox() if self.inbox is not None else []), *self._flush_notes()]
             if final:
                 notices.append(STEP_LIMIT_NOTICE)
+            elif step == max(2, (self.max_steps * 4 + 4) // 5):
+                notices.append(STEP_BUDGET_NOTICE)
             if notices:
                 yield self._add(Message("user", tuple(Text(n) for n in notices)))
             steering = self.steering() if self.steering else []

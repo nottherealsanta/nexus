@@ -121,6 +121,23 @@ pub const WIRED: &[&str] = &[
     "copy.file_path",
     "file.open_external",
     "file.insert_mention",
+    "sidebar.tab.git",
+    "git.discard",
+    "git.branch_delete_force",
+    "git.refresh",
+    "git.stage",
+    "git.unstage",
+    "git.commit",
+    "git.fetch",
+    "git.pull",
+    "git.push",
+    "git.switch",
+    "git.branch_create",
+    "git.branch_delete",
+    "files.new_file",
+    "files.new_folder",
+    "files.rename",
+    "files.delete",
     "files.toggle_ignored",
     "files.root_toggle",
     "sidebar.focus",
@@ -216,7 +233,6 @@ pub const WIRED: &[&str] = &[
     "copy.tool_output",
     "copy.user_message",
     "turn.load_older",
-    "editor.edit",
     "editor.save",
     "editor.reload",
     "editor.find",
@@ -657,6 +673,9 @@ pub struct FileSearch {
     pub query: String,
     pub typing: bool,
     pub hit: Option<usize>,
+    pub replacement: String,
+    pub replace_focus: bool,
+    pub case_sensitive: bool,
 }
 
 /// The composer's as-you-type completion: what was asked of Core, what came back,
@@ -918,6 +937,9 @@ pub struct Ui {
 }
 
 pub struct App {
+    file_watch: Option<(String, Option<String>, Instant)>,
+    file_watch_client: String,
+    pub file_watch_status: String,
     pub manifest: Arc<Manifest>,
     pub theme: Theme,
     pub state: AppState,
@@ -1099,7 +1121,13 @@ impl App {
             return;
         };
         let width = r.width.min(500);
-        let height = r.height.saturating_sub(1).min(200);
+        let height = crate::terminal_panel::screen_area(
+            r,
+            !self.terminal_controlled && self.terminal_panel.selected.is_some(),
+            self.terminal_panel.screen.gap,
+        )
+        .height
+        .min(200);
         if width == 0 || height == 0 || self.terminal_panel.size == Some((height, width)) {
             return;
         }
@@ -1168,6 +1196,9 @@ impl App {
         let splash =
             crate::splash::Splash::new(Instant::now(), !theme.opts.reduced_motion && !theme.mono());
         App {
+            file_watch: None,
+            file_watch_client: format!("tui-{}", uuid::Uuid::new_v4()),
+            file_watch_status: String::new(),
             manifest,
             theme,
             state,
@@ -2952,6 +2983,7 @@ impl App {
             Tab::Sessions => self.side_entries().len(),
             Tab::Projects => self.state.model.projects.len(),
             Tab::Files => self.file_rows().len(),
+            Tab::Git => self.project_git_rows().len(),
         }
     }
 
@@ -3061,6 +3093,12 @@ impl App {
                         .and_then(|i| self.ui.timeline_blocks.get(i))
                         .is_some_and(|b| b.kind == crate::timeline::BlockKind::Code)
             }
+            "focus.file_entry" => {
+                self.ui.focus == Focus::Sidebar
+                    && self
+                        .selected_file()
+                        .is_some_and(|r| r.kind == "file" || r.kind == "directory")
+            }
             "focus.file" => {
                 self.ui.focus == Focus::Sidebar
                     && self
@@ -3068,7 +3106,11 @@ impl App {
                         .is_some_and(|row| row.kind != "directory" && row.kind != "error")
             }
             "focus.git_file" => {
-                self.ui.focus == Focus::Right && self.git_rows().get(self.ui.git_cursor).is_some()
+                (self.ui.tab == Tab::Git
+                    && self.ui.focus == Focus::Sidebar
+                    && self.project_git_rows().get(self.cursor(Tab::Git)).is_some())
+                    || (self.ui.focus == Focus::Right
+                        && self.git_rows().get(self.ui.git_cursor).is_some())
             }
             "focus.turn" | "focus.tool" | "focus.user_message" | "focus.child_card" => {
                 use crate::timeline::BlockKind as K;
@@ -3615,6 +3657,61 @@ impl App {
 
     /// Changed files of the viewed session in draw order: Staged, Unstaged,
     /// then Untracked. Empty until Core's Git status for it has arrived.
+    fn git_worktree(&self) -> Option<String> {
+        let project = self.current_project()?;
+        let session = self.viewed().filter(|s| s.project_id == project);
+        let directory = session.map(|s| s.directory.as_str()).or_else(|| {
+            self.state
+                .model
+                .projects
+                .get(&project)
+                .map(|p| p.path.as_str())
+        })?;
+        let listing = session
+            .and_then(|s| self.state.worktrees.get(&s.id))
+            .or_else(|| self.state.project_worktrees.get(&project))?;
+        listing["worktrees"]
+            .as_array()?
+            .iter()
+            .filter_map(|tree| tree["path"].as_str())
+            .filter(|path| std::path::Path::new(directory).starts_with(path))
+            .max_by_key(|path| path.len())
+            .map(str::to_owned)
+    }
+
+    pub fn project_git_rows(&self) -> Vec<GitRow> {
+        let Some((project, Ok(data))) = &self.state.project_git else {
+            return Vec::new();
+        };
+        if self.current_project().as_ref() != Some(project) {
+            return Vec::new();
+        }
+        let mut rows = Vec::new();
+        for group in [GitGroup::Staged, GitGroup::Unstaged, GitGroup::Untracked] {
+            for change in data["changes"].as_array().into_iter().flatten() {
+                let status = change["status"].as_str().unwrap_or("");
+                let untracked = status == "??";
+                let member = match group {
+                    GitGroup::Staged => change["staged"].as_bool().unwrap_or(false),
+                    GitGroup::Unstaged => {
+                        !untracked && change["unstaged"].as_bool().unwrap_or(false)
+                    }
+                    GitGroup::Untracked => untracked,
+                };
+                if member {
+                    rows.push(GitRow {
+                        group,
+                        path: change["path"].as_str().unwrap_or("").into(),
+                        status: status.into(),
+                        added: 0,
+                        removed: 0,
+                    });
+                }
+            }
+        }
+        rows
+    }
+
     pub fn git_rows(&self) -> Vec<GitRow> {
         let Some(id) = self.viewed_id() else {
             return Vec::new();
@@ -3656,6 +3753,31 @@ impl App {
     }
 
     /// Open the diff of a changed-file row in the centre column.
+    fn open_project_git_diff(&mut self, index: usize) {
+        let Some(row) = self.project_git_rows().get(index).cloned() else {
+            return;
+        };
+        let Some(project) = self.current_project() else {
+            return;
+        };
+        if self.edit_blocks() {
+            return;
+        }
+        self.ui.file_open = false;
+        self.ui.file_edit = None;
+        self.ui.diff_scroll = 0;
+        self.state.diff = None;
+        if row.group != GitGroup::Untracked {
+            self.api(ApiCall::ProjectGitDiff {
+                project,
+                worktree: self.git_worktree(),
+                path: row.path.clone(),
+            });
+        }
+        self.ui.diff_open = Some((row.path, row.group));
+        self.ui.focus = Focus::Timeline;
+    }
+
     fn open_git_diff(&mut self, index: usize) {
         let Some(row) = self.git_rows().get(index).cloned() else {
             return;
@@ -3742,6 +3864,14 @@ impl App {
         if tab == Tab::Files {
             self.request_files(String::new(), false);
         }
+        if tab == Tab::Git {
+            if let Some(project) = self.current_project() {
+                self.api(ApiCall::ProjectGit {
+                    project,
+                    worktree: self.git_worktree(),
+                });
+            }
+        }
         if self.narrow() {
             self.ui.drawer = Some(Side::Left);
         } else {
@@ -3791,11 +3921,20 @@ impl App {
             }
             PaletteMode::RowMenu => {
                 let projects = self.ui.tab == Tab::Projects;
+                let files = self.ui.tab == Tab::Files;
+                let git = self.ui.tab == Tab::Git;
                 for (i, c) in self.manifest.command.iter().enumerate().filter(|(_, c)| {
                     c.for_tui()
                         && c.placement.iter().any(|p| p == "row_menu")
-                        && c.id
-                            .starts_with(if projects { "project." } else { "session." })
+                        && c.id.starts_with(if files {
+                            "files."
+                        } else if git {
+                            "git."
+                        } else if projects {
+                            "project."
+                        } else {
+                            "session."
+                        })
                 }) {
                     let Some(score) = fuzzy(&q, &c.title) else {
                         continue;
@@ -5284,12 +5423,15 @@ impl App {
             return;
         }
         if self.ui.file_search.take().is_some() {
+            if let Some(edit) = &self.ui.file_edit {
+                edit.buf.clear_marks();
+            }
             return;
         }
         match self.ui.file_edit.as_ref().map(FileEdit::dirty) {
             Some(true) => self.ask_discard_edit(),
-            Some(false) => self.ui.file_edit = None,
-            None => {
+            Some(false) | None => {
+                self.ui.file_edit = None;
                 self.ui.file_open = false;
                 self.ui.diff_open = None;
             }
@@ -5798,6 +5940,9 @@ impl App {
                     self.ui.tab = Tab::Sessions;
                 }
             }
+            Tab::Git => {
+                self.open_project_git_diff(index);
+            }
             Tab::Files => {
                 let Some(row) = self.file_rows().get(index).cloned() else {
                     return;
@@ -6040,8 +6185,106 @@ impl App {
             "sidebar.right.toggle" => self.toggle_side(Side::Right),
             "sidebar.tab.sessions" => self.set_tab(Tab::Sessions),
             "sidebar.tab.files" => self.set_tab(Tab::Files),
+            "sidebar.tab.git" => self.set_tab(Tab::Git),
+            "git.stage"
+            | "git.unstage"
+            | "git.discard"
+            | "git.branch_delete_force"
+            | "git.commit"
+            | "git.fetch"
+            | "git.pull"
+            | "git.push"
+            | "git.switch"
+            | "git.branch_create"
+            | "git.branch_delete" => {
+                let Some(project) = self.current_project() else {
+                    return;
+                };
+                let worktree = self.git_worktree();
+                let action = id.trim_start_matches("git.").to_owned();
+                if action == "stage" || action == "unstage" {
+                    if let Some(row) = self.project_git_rows().get(self.cursor(Tab::Git)) {
+                        self.api(ApiCall::ProjectGitAction {
+                            project,
+                            worktree,
+                            action,
+                            value: String::new(),
+                            paths: vec![row.path.clone()],
+                            confirmed_live: vec![],
+                        });
+                    }
+                } else if action == "discard" {
+                    if let Some(row) = self.project_git_rows().get(self.cursor(Tab::Git)) {
+                        self.api(ApiCall::ProjectGitLive {
+                            project,
+                            worktree,
+                            action,
+                            value: String::new(),
+                            paths: vec![row.path.clone()],
+                        });
+                    }
+                } else if [
+                    "commit",
+                    "switch",
+                    "branch_create",
+                    "branch_delete",
+                    "branch_delete_force",
+                ]
+                .contains(&action.as_str())
+                {
+                    self.ui.edit = Some(TextEdit {
+                        label: match action.as_str() {
+                            "commit" => "Commit message",
+                            "switch" => "Switch branch",
+                            "branch_create" => "Create branch",
+                            _ => "Delete branch",
+                        }
+                        .into(),
+                        target: EditTarget::ProjectGitValue {
+                            project,
+                            worktree,
+                            action,
+                        },
+                        buf: Composer::new(),
+                        restore: self.restore_point(),
+                    });
+                } else {
+                    let value = if action == "push" {
+                        self.state
+                            .project_git
+                            .as_ref()
+                            .and_then(|(_, r)| r.as_ref().ok())
+                            .and_then(|d| d["push_upstream"]["remote"].as_str())
+                            .unwrap_or("")
+                            .to_owned()
+                    } else {
+                        String::new()
+                    };
+                    self.api(ApiCall::ProjectGitLive {
+                        project,
+                        worktree,
+                        action,
+                        value,
+                        paths: vec![],
+                    });
+                }
+            }
+            "git.refresh" => {
+                if let Some(project) = self.current_project() {
+                    self.api(ApiCall::ProjectGit {
+                        project,
+                        worktree: self.git_worktree(),
+                    });
+                }
+            }
             "sidebar.tab.projects" => self.set_tab(Tab::Projects),
-            "git.open_diff" => self.open_git_diff(self.ui.git_cursor),
+            "git.open_diff" => {
+                if self.ui.tab == Tab::Git && self.ui.focus == Focus::Sidebar {
+                    self.open_project_git_diff(self.cursor(Tab::Git));
+                } else {
+                    self.open_git_diff(self.ui.git_cursor);
+                }
+            }
             "sidebar.focus" => {
                 if self.narrow() {
                     self.ui.drawer = Some(Side::Left);
@@ -6361,6 +6604,57 @@ impl App {
                     self.effects.push(Effect::OpenEditor(path));
                 }
             }
+            "files.new_file" | "files.new_folder" | "files.rename" | "files.delete" => {
+                let Some(project) = self.current_project() else {
+                    return;
+                };
+                let session = self.files_session();
+                let row = self.selected_file();
+                if id == "files.delete" {
+                    if let Some(row) = row {
+                        if row.kind == "directory" {
+                            self.api(ApiCall::FileCount {
+                                project,
+                                session,
+                                path: row.path,
+                            });
+                        } else {
+                            self.ask_delete_file(project, session, row.path, None);
+                        }
+                    }
+                } else {
+                    let action = match id {
+                        "files.new_file" => "create_file",
+                        "files.new_folder" => "create_dir",
+                        _ => "rename",
+                    };
+                    let path = if action == "rename" {
+                        row.map(|r| r.path).unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    let mut buf = Composer::new();
+                    if action == "rename" {
+                        buf.set_text(&path);
+                    }
+                    self.ui.edit = Some(TextEdit {
+                        label: match action {
+                            "create_file" => "New file",
+                            "create_dir" => "New folder",
+                            _ => "Rename file or folder",
+                        }
+                        .into(),
+                        target: EditTarget::FilePath {
+                            project,
+                            session,
+                            action: action.into(),
+                            path,
+                        },
+                        buf,
+                        restore: self.restore_point(),
+                    });
+                }
+            }
             "files.toggle_ignored" => {
                 self.ui.files_hide_ignored = !self.ui.files_hide_ignored;
                 self.ui.cursor.insert(Tab::Files, 0);
@@ -6595,6 +6889,34 @@ impl App {
         });
     }
 
+    fn ask_delete_file(
+        &mut self,
+        project: String,
+        session: Option<String>,
+        path: String,
+        count: Option<u64>,
+    ) {
+        let mut body = vec![format!("Delete {path}?")];
+        if let Some(n) = count {
+            body.push(format!("Contains {n} items."));
+        }
+        body.push("This cannot be undone.".into());
+        self.ui.dialog = Some(Dialog {
+            title: "Delete file or folder".into(),
+            body,
+            cancel: "Cancel".into(),
+            confirm: "Delete".into(),
+            danger: true,
+            action: Confirmed::DeleteFile {
+                project,
+                session,
+                path,
+            },
+            button: 0,
+            restore: self.restore_point(),
+        });
+    }
+
     fn ask_delete(&mut self) {
         let Some(s) = self.viewed() else { return };
         let n = self.descendants(&s.id);
@@ -6656,6 +6978,68 @@ impl App {
         self.apply_restore(d.restore);
         if yes {
             match d.action {
+                Confirmed::ForceGitDelete {
+                    project,
+                    worktree,
+                    value,
+                    confirmed_live,
+                } => self.api(ApiCall::ProjectGitAction {
+                    project,
+                    worktree,
+                    action: "branch_delete_force".into(),
+                    value,
+                    paths: vec![],
+                    confirmed_live,
+                }),
+                Confirmed::ProjectGitAction {
+                    project,
+                    worktree,
+                    action,
+                    value,
+                    paths,
+                    confirmed_live,
+                } => {
+                    if action == "branch_delete_force" {
+                        self.ui.dialog = Some(Dialog {
+                            title: "Force delete branch".into(),
+                            body: vec![
+                                format!("Force delete {value} even if unmerged?"),
+                                "This cannot be undone.".into(),
+                            ],
+                            cancel: "Cancel".into(),
+                            confirm: "Force delete".into(),
+                            danger: true,
+                            action: Confirmed::ForceGitDelete {
+                                project,
+                                worktree,
+                                value,
+                                confirmed_live,
+                            },
+                            button: 0,
+                            restore: self.restore_point(),
+                        });
+                    } else {
+                        self.api(ApiCall::ProjectGitAction {
+                            project,
+                            worktree,
+                            action,
+                            value,
+                            paths,
+                            confirmed_live,
+                        });
+                    }
+                }
+                Confirmed::DeleteFile {
+                    project,
+                    session,
+                    path,
+                } => self.api(ApiCall::FileMutation {
+                    project,
+                    session,
+                    action: "delete".into(),
+                    path,
+                    to: None,
+                }),
                 Confirmed::CloseTerminal(id) => self.api(ApiCall::TerminalClose { id }),
                 Confirmed::ResumeArchived { session, mode } => {
                     if self.viewed_id() == Some(session.as_str()) {
@@ -6673,7 +7057,10 @@ impl App {
                     }
                 }
                 switch @ Confirmed::Switch { .. } => self.do_switch(switch),
-                Confirmed::DiscardEdit => self.ui.file_edit = None,
+                Confirmed::DiscardEdit => {
+                    self.ui.file_edit = None;
+                    self.ui.file_open = false;
+                }
                 Confirmed::ReloadEdit => self.reload_file(),
                 Confirmed::DeleteSession(id) => {
                     if self.writable() {
@@ -7231,6 +7618,33 @@ impl App {
             return self.manager_reply(&tag, result);
         }
         if let SyncMsg::Event(event) = &msg {
+            if event.session_id.is_some()
+                && !matches!(
+                    event.kind.as_str(),
+                    "text_delta" | "reasoning_delta" | "wire_event" | "wire_response"
+                )
+            {
+                let now = self.clock;
+                if let Some(i) = self.inspector_mut() {
+                    let relevant = event.kind == "session.created"
+                        || event.session_id.as_deref() == Some(i.session.as_str())
+                        || i.data()["tree"].as_array().is_some_and(|tree| {
+                            tree.iter()
+                                .any(|node| node["id"].as_str() == event.session_id.as_deref())
+                        });
+                    if relevant {
+                        i.invalidate(now);
+                    }
+                }
+            }
+        }
+        if matches!(&msg, SyncMsg::Snapshot { .. }) {
+            let now = self.clock;
+            if let Some(i) = self.inspector_mut() {
+                i.invalidate(now);
+            }
+        }
+        if let SyncMsg::Event(event) = &msg {
             if event.kind.starts_with("manager.") {
                 self.manager_event(event);
             }
@@ -7439,7 +7853,32 @@ impl App {
                             }
                         }
                     }
-                    "files.changed" => self.file_changed(&data),
+                    "git.changed" => {
+                        if self.ui.tab == Tab::Git
+                            && self.current_project().as_deref() == data["project_id"].as_str()
+                        {
+                            if let Some(project) = self.current_project() {
+                                self.api(ApiCall::ProjectGit {
+                                    project,
+                                    worktree: self.git_worktree(),
+                                });
+                            }
+                        }
+                    }
+                    "files.changed" => {
+                        self.disk_files_changed(&data);
+                        if data["source"].as_str() != Some("disk") {
+                            self.file_changed(&data);
+                        }
+                    }
+                    "files.watch" => {
+                        if self.current_project().as_deref() == data["project_id"].as_str()
+                            && self.files_root().as_deref() == data["workspace"].as_str()
+                        {
+                            self.file_watch_status =
+                                data["status"].as_str().unwrap_or("").to_owned();
+                        }
+                    }
                     "mcp.failed" => self.toast(
                         Level::Warning,
                         format!(
@@ -7538,6 +7977,165 @@ impl App {
         self.timeline_revision
             .set(self.timeline_revision.get().wrapping_add(1));
         match done.call.clone() {
+            ApiCall::ProjectGitDiff { project, path, .. } => {
+                self.state.diff = Some((
+                    format!("project:{project}"),
+                    path,
+                    done.result.map(|d| d.project_git.unwrap_or_default()),
+                ));
+                return;
+            }
+            ApiCall::ProjectGitLive {
+                project,
+                worktree,
+                action,
+                value,
+                paths,
+            } => {
+                match done.result {
+                    Ok(result) => {
+                        let data = result.git_live.unwrap_or_default();
+                        let working = data["working"].as_array().cloned().unwrap_or_default();
+                        let idle = data["idle"].as_array().cloned().unwrap_or_default();
+                        let ids = working
+                            .iter()
+                            .filter_map(|s| s["id"].as_str().map(str::to_owned))
+                            .collect();
+                        let target = if paths.is_empty() {
+                            value.clone()
+                        } else {
+                            paths.join(", ")
+                        };
+                        let mut body = vec![format!("{} {}?", action.replace('_', " "), target)];
+                        if action == "discard" {
+                            body.push("This cannot be undone.".into());
+                        }
+                        if action == "push" && !value.is_empty() {
+                            body.push(format!("Set upstream on {value}."));
+                        }
+                        for (label, sessions) in [("Working", working), ("Idle", idle)] {
+                            for session in sessions {
+                                body.push(format!(
+                                    "{}: {}",
+                                    label,
+                                    session["title"].as_str().unwrap_or("Untitled")
+                                ));
+                            }
+                        }
+                        self.ui.dialog = Some(Dialog {
+                            title: action.replace('_', " "),
+                            body,
+                            cancel: "Cancel".into(),
+                            confirm: "Continue".into(),
+                            danger: true,
+                            action: Confirmed::ProjectGitAction {
+                                project,
+                                worktree,
+                                action,
+                                value,
+                                paths,
+                                confirmed_live: ids,
+                            },
+                            button: 0,
+                            restore: self.restore_point(),
+                        });
+                    }
+                    Err(error) => {
+                        self.toast(Level::Error, format!("Could not check sessions: {error}"))
+                    }
+                }
+                return;
+            }
+            ApiCall::ProjectGitAction {
+                project,
+                worktree,
+                action,
+                value,
+                paths,
+                ..
+            } => {
+                match done.result {
+                    Ok(result) if result.git_live.is_some() => self.api(ApiCall::ProjectGitLive {
+                        project,
+                        worktree,
+                        action,
+                        value,
+                        paths,
+                    }),
+                    Ok(result) => {
+                        self.state.project_git =
+                            Some((project, Ok(result.project_git.unwrap_or_default())))
+                    }
+                    Err(error) if error.contains("worktree_live") => {
+                        self.api(ApiCall::ProjectGitLive {
+                            project,
+                            worktree,
+                            action,
+                            value,
+                            paths,
+                        })
+                    }
+                    Err(error) => self.toast(Level::Error, format!("Git action failed: {error}")),
+                }
+                return;
+            }
+            ApiCall::ProjectGit { project, worktree } => {
+                if self.current_project().as_ref() != Some(&project)
+                    || self.git_worktree() != worktree
+                {
+                    return;
+                }
+                self.state.project_git = Some((
+                    project,
+                    done.result.map(|d| d.project_git.unwrap_or_default()),
+                ));
+                return;
+            }
+            ApiCall::FileWatch {
+                project,
+                session,
+                release,
+                ..
+            } => {
+                if !release
+                    && self
+                        .file_watch
+                        .as_ref()
+                        .is_some_and(|(p, s, _)| p == &project && s == &session)
+                {
+                    self.file_watch_status = match done.result {
+                        Ok(result) => result.file_watch_status.unwrap_or_default(),
+                        Err(_) => "disconnected".into(),
+                    };
+                }
+                return;
+            }
+            ApiCall::FileCount {
+                project,
+                session,
+                path,
+            } => {
+                match done.result {
+                    Ok(result) => self.ask_delete_file(project, session, path, result.file_count),
+                    Err(error) => {
+                        self.toast(Level::Error, format!("Could not count folder: {error}"))
+                    }
+                }
+                return;
+            }
+            ApiCall::FileMutation { .. } => {
+                match done.result {
+                    Ok(_) => {
+                        self.state.file_dirs.clear();
+                        self.ui.files_expanded.clear();
+                        self.request_files(String::new(), false);
+                    }
+                    Err(error) => {
+                        self.toast(Level::Error, format!("File operation failed: {error}"))
+                    }
+                }
+                return;
+            }
             ApiCall::TerminalControl {
                 generation,
                 acquire,
@@ -8615,8 +9213,79 @@ impl App {
         }
     }
 
+    fn renew_file_watch(&mut self, now: Instant) {
+        let wanted =
+            self.state.connection.is_live() && matches!(self.panel_id(), Some("files" | "file"));
+        let target = if wanted {
+            self.current_project().map(|p| (p, self.files_session()))
+        } else {
+            None
+        };
+        let same = self
+            .file_watch
+            .as_ref()
+            .is_some_and(|(p, s, _)| target.as_ref() == Some(&(p.clone(), s.clone())));
+        if !same {
+            if let Some((project, session, _)) = self.file_watch.take() {
+                self.api(ApiCall::FileWatch {
+                    project,
+                    session,
+                    client: self.file_watch_client.clone(),
+                    release: true,
+                });
+            }
+            self.file_watch_status.clear();
+        }
+        if let Some((project, session)) = target {
+            if self
+                .file_watch
+                .as_ref()
+                .is_none_or(|(_, _, due)| now >= *due)
+            {
+                self.file_watch = Some((
+                    project.clone(),
+                    session.clone(),
+                    now + std::time::Duration::from_secs(20),
+                ));
+                self.api(ApiCall::FileWatch {
+                    project,
+                    session,
+                    client: self.file_watch_client.clone(),
+                    release: false,
+                });
+            }
+        }
+    }
+
+    fn disk_files_changed(&mut self, data: &Value) {
+        if self.current_project().as_deref() != data["project_id"].as_str()
+            || self.files_root().as_deref() != data["workspace"].as_str()
+        {
+            return;
+        }
+        if matches!(self.panel_id(), Some("files" | "file")) {
+            let mut dirs: Vec<String> = self.ui.files_expanded.iter().cloned().collect();
+            dirs.push(String::new());
+            for dir in dirs {
+                self.request_files(dir, false);
+            }
+        }
+        if let Some((_, _, path, _)) = self.open_file_ref() {
+            let changed = data["all"].as_bool() == Some(true)
+                || data["polling"].as_bool() == Some(true)
+                || data["omitted"].as_u64().unwrap_or(0) > 0
+                || data["paths"]
+                    .as_array()
+                    .is_some_and(|paths| paths.iter().any(|p| p.as_str() == Some(path.as_str())));
+            if changed {
+                self.request_files(path, true);
+            }
+        }
+    }
+
     pub fn tick(&mut self, now: Instant) -> bool {
         self.clock = now;
+        self.renew_file_watch(now);
         let mut changed = false;
         // The scroll bar fades out on the shared tick, then erases itself.
         if self.ui.scroll_mark.is_some() {
@@ -8801,10 +9470,7 @@ impl App {
 
     /// The rendered Markdown preview is what the file view shows.
     pub fn file_preview(&self) -> bool {
-        self.ui.file_open
-            && self.ui.file_edit.is_none()
-            && !self.ui.file_source
-            && self.file_is_markdown()
+        self.ui.file_open && !self.ui.file_source && self.file_is_markdown()
     }
 
     /// The preview's rows at `width`, cached until the text, width or theme changes.
@@ -8813,14 +9479,21 @@ impl App {
         width: usize,
     ) -> std::rc::Rc<Vec<ratatui::text::Line<'static>>> {
         let content = self
-            .state
-            .file
+            .ui
+            .file_edit
             .as_ref()
-            .and_then(|(_, _, _, data)| data.as_ref().ok())
-            .and_then(|data| data["content"].as_str())
-            .unwrap_or("");
+            .map(|edit| edit.buf.text())
+            .unwrap_or_else(|| {
+                self.state
+                    .file
+                    .as_ref()
+                    .and_then(|(_, _, _, data)| data.as_ref().ok())
+                    .and_then(|data| data["content"].as_str())
+                    .unwrap_or("")
+                    .to_owned()
+            });
         let palette = crate::markdown::Palette::from_theme(&self.theme);
-        self.layout.borrow_mut().document(content, width, &palette)
+        self.layout.borrow_mut().document(&content, width, &palette)
     }
 
     /// Indices of the open file's lines that contain the search query, ignoring ASCII case.
@@ -8855,59 +9528,24 @@ impl App {
     /// Keys of the editor (K10). Returns whether the key was taken; keys it does not
     /// know (global shortcuts) fall through.
     fn file_edit_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
-        let rect = self.view_rect();
-        let page = crate::paint::file_page(rect.height).max(1);
+        if name == "ctrl+s" {
+            self.save_file();
+            return true;
+        }
+        if name == "ctrl+f" {
+            self.open_file_find();
+            return true;
+        }
+        let area = crate::render::file_editor_area(self.view_rect(), self.ui.file_search.is_some());
         let Some(edit) = self.ui.file_edit.as_mut() else {
             return false;
         };
-        let room = crate::paint::file_text_room(rect.width, edit.buf.lines().len());
-        match name {
-            "ctrl+s" => {
-                self.save_file();
-                return true;
-            }
-            "enter" => edit.buf.insert_str("\n"),
-            "tab" => edit.buf.insert_str("    "),
-            "ctrl+z" => edit.buf.undo(),
-            "ctrl+y" | "ctrl+shift+z" => edit.buf.redo(),
-            "up" => edit.buf.vertical_wrapped(false, room),
-            "down" => edit.buf.vertical_wrapped(true, room),
-            "pageup" | "pagedown" => {
-                for _ in 0..page {
-                    edit.buf.vertical_wrapped(name == "pagedown", room);
-                }
-            }
-            _ => {
-                let editing = keys::printable(ev).is_some()
-                    || matches!(
-                        name,
-                        "backspace"
-                            | "delete"
-                            | "left"
-                            | "right"
-                            | "up"
-                            | "down"
-                            | "home"
-                            | "end"
-                            | "ctrl+a"
-                            | "ctrl+e"
-                            | "ctrl+u"
-                            | "alt+backspace"
-                            | "alt+left"
-                            | "alt+right"
-                            | "alt+b"
-                            | "alt+f"
-                            | "ctrl+home"
-                            | "ctrl+end"
-                    )
-                    || name.starts_with("shift+");
-                if !editing {
-                    return false;
-                }
-                edit_buffer(&mut edit.buf, ev, name, false);
+        if name == "ctrl+c" || name == "ctrl+x" {
+            if let Some(text) = edit.buf.selection() {
+                self.effects.push(Effect::Copy(text));
             }
         }
-        true
+        edit.buf.key(*ev, area)
     }
 
     /// The open file's project, session scope, path and read revision.
@@ -8925,7 +9563,7 @@ impl App {
         if self.ui.file_edit.is_some() {
             return;
         }
-        let Some((_, _, _, data)) = self.open_file_ref() else {
+        let Some((_, _, path, data)) = self.open_file_ref() else {
             self.toast(Level::Warning, "The file is not loaded");
             return;
         };
@@ -8936,14 +9574,14 @@ impl App {
             );
             return;
         };
-        if !self.writable() {
-            self.toast(Level::Warning, READ_ONLY);
-            return;
-        }
         let saved = data["content"].as_str().unwrap_or("").to_owned();
-        let mut buf = Composer::new();
-        buf.set_text(&saved);
-        buf.document_edge(false);
+        let buf = match crate::code_editor::CodeBuffer::new(&path, &saved, false, &self.theme) {
+            Ok(buf) => buf,
+            Err(error) => {
+                self.toast(Level::Error, format!("Could not open editor: {error}"));
+                return;
+            }
+        };
         self.ui.file_edit = Some(FileEdit {
             buf,
             revision,
@@ -8953,6 +9591,7 @@ impl App {
             reloading: false,
             stale: false,
         });
+        self.ui.file_source = true;
     }
 
     fn save_file(&mut self) {
@@ -8976,7 +9615,7 @@ impl App {
             project,
             session,
             path,
-            content: edit.buf.expanded_text(),
+            content: edit.buf.text(),
             revision: edit.revision.clone(),
         };
         self.api(call);
@@ -9025,9 +9664,24 @@ impl App {
         let Some((_, _, _, data)) = self.open_file_ref() else {
             return;
         };
-        let Some(edit) = self.ui.file_edit.as_mut().filter(|e| e.reloading) else {
+        if self.ui.file_edit.is_none() {
+            if self.ui.file_open {
+                self.start_edit();
+            }
+            return;
+        }
+        let Some(edit) = self.ui.file_edit.as_mut() else {
             return;
         };
+        if !edit.reloading {
+            if data["revision"].as_str() == Some(edit.revision.as_str()) {
+                return;
+            }
+            if edit.dirty() {
+                edit.stale = true;
+                return;
+            }
+        }
         edit.reloading = false;
         edit.stale = false;
         if let Some(revision) = data["revision"].as_str() {
@@ -9075,6 +9729,77 @@ impl App {
             Some((false, _)) => self.reload_file(),
             None => self.request_files(path, true),
         }
+    }
+
+    fn editor_find_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
+        if name == "esc" {
+            self.close_panel();
+            return true;
+        }
+        let Some(search) = self.ui.file_search.as_mut() else {
+            return false;
+        };
+        match name {
+            "tab" | "shift+tab" => search.replace_focus = !search.replace_focus,
+            "alt+c" => {
+                search.case_sensitive = !search.case_sensitive;
+                search.hit = None;
+            }
+            "backspace" => {
+                if search.replace_focus {
+                    search.replacement.pop();
+                } else {
+                    search.query.pop();
+                    search.hit = None;
+                }
+            }
+            "enter" | "shift+enter" | "ctrl+n" | "ctrl+p" | "ctrl+r" | "ctrl+shift+r" => {
+                let edit = self.ui.file_edit.as_ref().unwrap();
+                let ranges = edit.buf.find(&search.query, search.case_sensitive);
+                if !ranges.is_empty() {
+                    let i = match search.hit {
+                        Some(i) if name == "shift+enter" || name == "ctrl+p" => {
+                            (i + ranges.len() - 1) % ranges.len()
+                        }
+                        Some(i) if name == "ctrl+r" || name == "ctrl+shift+r" => {
+                            i.min(ranges.len() - 1)
+                        }
+                        Some(i) => (i + 1) % ranges.len(),
+                        None => 0,
+                    };
+                    if name == "ctrl+shift+r" {
+                        for &(a, b) in ranges.iter().rev() {
+                            edit.buf.replace(a, b, &search.replacement);
+                        }
+                        search.hit = None;
+                    } else if name == "ctrl+r" {
+                        let (a, b) = ranges[i];
+                        edit.buf.replace(a, b, &search.replacement);
+                        search.hit = None;
+                    } else {
+                        search.hit = Some(i);
+                        let (a, b) = ranges[i];
+                        edit.buf.select(a, b);
+                    }
+                }
+            }
+            _ => {
+                if let Some(c) = keys::printable(ev) {
+                    if search.replace_focus {
+                        search.replacement.push(c);
+                    } else {
+                        search.query.push(c);
+                        search.hit = None;
+                    }
+                } else {
+                    return false;
+                }
+            }
+        }
+        let edit = self.ui.file_edit.as_ref().unwrap();
+        edit.buf
+            .mark(&edit.buf.find(&search.query, search.case_sensitive));
+        true
     }
 
     fn file_search_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
@@ -9144,7 +9869,7 @@ impl App {
 
     /// Rendered prose or numbered source for a Markdown file.
     fn toggle_file_preview(&mut self) {
-        if !self.file_is_markdown() || self.ui.file_edit.is_some() {
+        if !self.file_is_markdown() {
             return;
         }
         self.ui.file_source = !self.ui.file_source;
@@ -9156,7 +9881,7 @@ impl App {
 
     /// Find reads the source, so a preview steps aside before the bar opens.
     fn open_file_find(&mut self) {
-        if !self.ui.file_open || self.ui.file_edit.is_some() {
+        if !self.ui.file_open {
             return;
         }
         if self.file_is_markdown() {
@@ -9215,7 +9940,10 @@ impl App {
             if ev.code == KeyCode::Char(']') && ev.modifiers.contains(KeyModifiers::CONTROL) {
                 self.terminal_focused = false;
                 self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::List;
-            } else if let Some(bytes) = crate::terminal_panel::key_bytes(ev) {
+            } else if let Some(bytes) = crate::terminal_panel::key_bytes(
+                ev,
+                self.terminal_panel.screen.screen().application_cursor(),
+            ) {
                 self.terminal_input(bytes);
             }
             return;
@@ -9243,7 +9971,7 @@ impl App {
                 }
                 "enter" if self.terminal_panel.cursor == 0 => self.execute("terminal.new"),
                 "c" => self.execute("terminal.acquire"),
-                "r" => self.execute("terminal.rename"),
+                "r" => self.execute("terminal.release"),
                 "enter" => self.terminal_select(self.terminal_panel.cursor - 1),
                 _ => {}
             }
@@ -9412,6 +10140,15 @@ impl App {
             }
         }
         if self.ui.file_edit.is_some()
+            && self.ui.file_search.is_some()
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+            && self.editor_find_key(&ev, &name)
+        {
+            return;
+        }
+        if self.ui.file_edit.is_some()
+            && !self.file_preview()
             && self.ui.overlay.is_none()
             && self.ui.dialog.is_none()
             && self.ui.edit.is_none()
@@ -9425,12 +10162,6 @@ impl App {
             }
             if name == "ctrl+f" {
                 return self.open_file_find();
-            }
-            if name == "e" && self.ui.file_edit.is_none() {
-                return self.run_command("editor.edit");
-            }
-            if name == "p" && self.file_is_markdown() && self.ui.file_edit.is_none() {
-                return self.run_command("editor.preview");
             }
             let page = crate::paint::file_page(self.view_rect().height);
             let max = self.file_scroll_limit();
@@ -9665,6 +10396,36 @@ impl App {
                     return;
                 }
                 match target {
+                    EditTarget::ProjectGitValue {
+                        project,
+                        worktree,
+                        action,
+                    } => self.api(ApiCall::ProjectGitLive {
+                        project,
+                        worktree,
+                        action,
+                        value: title,
+                        paths: vec![],
+                    }),
+                    EditTarget::FilePath {
+                        project,
+                        session,
+                        action,
+                        path,
+                    } => {
+                        let (path, to) = if action == "rename" {
+                            (path, Some(title))
+                        } else {
+                            (title, None)
+                        };
+                        self.api(ApiCall::FileMutation {
+                            project,
+                            session,
+                            action,
+                            path,
+                            to,
+                        });
+                    }
                     EditTarget::RenameSession { id, revision } => self.api(ApiCall::Rename {
                         session: id,
                         title,
@@ -10733,7 +11494,7 @@ impl App {
         }
     }
 
-    /// While open, ask Core for the head every few seconds; refetch only when it moved.
+    /// Check the head after a coalesced stream invalidation.
     fn inspector_poll(&mut self, now: Instant) {
         let Some(i) = self.inspector_mut() else {
             return;
@@ -10742,6 +11503,7 @@ impl App {
             return;
         }
         i.polled = Some(now);
+        i.dirty_at = None;
         i.head_inflight = true;
         let call = ApiCall::InspectorHead {
             session: i.session.clone(),
@@ -11083,7 +11845,7 @@ impl App {
             s.ui.cursor.insert(s.ui.tab, v.min(n.saturating_sub(1)));
         };
         match name {
-            "enter" if self.ui.tab == Tab::Files => self.sidebar_activate(c),
+            "enter" if matches!(self.ui.tab, Tab::Files | Tab::Git) => self.sidebar_activate(c),
             "up" | "k" => set(self, c.saturating_sub(1)),
             "down" | "j" => set(self, c + 1),
             "home" => set(self, 0),
@@ -11145,7 +11907,13 @@ impl App {
             .state
             .diff
             .as_ref()
-            .filter(|(session, p, _)| Some(session.as_str()) == self.viewed_id() && p == path)
+            .filter(|(session, p, _)| {
+                (Some(session.as_str()) == self.viewed_id()
+                    || self
+                        .current_project()
+                        .is_some_and(|id| session == &format!("project:{id}")))
+                    && p == path
+            })
             .map(|(_, _, result)| result)
         else {
             return Vec::new();
@@ -13345,6 +14113,37 @@ impl App {
         if self.manager_mouse(&ev) {
             return;
         }
+        if self.terminal_open
+            && self.terminal_focused
+            && self.terminal_controlled
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
+            && !ev.modifiers.contains(KeyModifiers::SHIFT)
+        {
+            if let Some(dock) = self.regions.terminal {
+                let area = crate::terminal_panel::screen_area(
+                    dock,
+                    !self.terminal_controlled && self.terminal_panel.selected.is_some(),
+                    self.terminal_panel.screen.gap,
+                );
+                if contains(area, ev.column, ev.row) {
+                    let screen = self.terminal_panel.screen.screen();
+                    if let Some(bytes) = crate::terminal_panel::mouse_bytes(
+                        ev,
+                        ev.column - area.x,
+                        ev.row - area.y,
+                        screen.mouse_protocol_mode(),
+                        screen.mouse_protocol_encoding(),
+                    ) {
+                        if !bytes.is_empty() {
+                            self.terminal_input(bytes);
+                        }
+                        return;
+                    }
+                }
+            }
+        }
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.terminal_open
@@ -13353,11 +14152,10 @@ impl App {
                     && self.ui.edit.is_none()
                 {
                     if let Some(dock) = self.regions.terminal {
-                        let area = Rect::new(
-                            dock.x,
-                            dock.y + 1,
-                            dock.width,
-                            dock.height.saturating_sub(1),
+                        let area = crate::terminal_panel::screen_area(
+                            dock,
+                            !self.terminal_controlled && self.terminal_panel.selected.is_some(),
+                            self.terminal_panel.screen.gap,
                         );
                         if area.width > 0
                             && area.height > 0
@@ -13788,6 +14586,7 @@ impl App {
                 let id = match tab {
                     Tab::Sessions => "sidebar.tab.sessions",
                     Tab::Files => "sidebar.tab.files",
+                    Tab::Git => "sidebar.tab.git",
                     Tab::Projects => "sidebar.tab.projects",
                 };
                 self.run_command(id);
@@ -13935,6 +14734,10 @@ impl App {
             }
             Target::ComposerTerminals => self.execute("terminal.open"),
             Target::TerminalNew => self.execute("terminal.new"),
+            Target::TerminalRename => self.execute("terminal.rename"),
+            Target::TerminalCloseSelected => self.execute("terminal.close"),
+            Target::TerminalReleaseControl => self.execute("terminal.release"),
+            Target::TerminalPanelClose => self.close_panel(),
             Target::TerminalCopy => self.execute("terminal.copy"),
             Target::TerminalTab(index) => {
                 self.terminal_panel.cursor = index + 1;
@@ -13953,6 +14756,31 @@ impl App {
             Target::PanelBack => self.close_panel(),
             Target::FilePreview => self.run_command("editor.preview"),
             Target::FileEdit => self.run_command("editor.edit"),
+            Target::EditorFindInput => {
+                if let Some(search) = self.ui.file_search.as_mut() {
+                    search.replace_focus = false;
+                }
+            }
+            Target::EditorReplaceInput => {
+                if let Some(search) = self.ui.file_search.as_mut() {
+                    search.replace_focus = true;
+                }
+            }
+            Target::EditorFindClose => self.close_panel(),
+            Target::EditorFindCase
+            | Target::EditorFindPrevious
+            | Target::EditorFindNext
+            | Target::EditorReplaceOne
+            | Target::EditorReplaceAll => {
+                let name = match t {
+                    Target::EditorFindCase => "alt+c",
+                    Target::EditorFindPrevious => "ctrl+p",
+                    Target::EditorFindNext => "ctrl+n",
+                    Target::EditorReplaceOne => "ctrl+r",
+                    _ => "ctrl+shift+r",
+                };
+                self.editor_find_key(&KeyEvent::new(KeyCode::Null, KeyModifiers::NONE), name);
+            }
             Target::Wait(b) => {
                 self.ui.focus = Focus::Waiting;
                 self.run_command(match b {
@@ -14366,6 +15194,12 @@ impl App {
 impl ActionDone {
     fn call_name(&self) -> &'static str {
         match self.call {
+            ApiCall::FileWatch { .. } => "File watching disconnected",
+            ApiCall::ProjectGit { .. }
+            | ApiCall::ProjectGitDiff { .. }
+            | ApiCall::ProjectGitLive { .. }
+            | ApiCall::ProjectGitAction { .. } => "Git operation failed",
+            ApiCall::FileMutation { .. } | ApiCall::FileCount { .. } => "File operation failed",
             ApiCall::TerminalList { .. }
             | ApiCall::TerminalCreate { .. }
             | ApiCall::TerminalRename { .. }

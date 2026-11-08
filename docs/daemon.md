@@ -298,7 +298,7 @@ log) with the tree ids; repeating the same state publishes nothing.
 
 - **Refusals.** A root or any descendant running a turn, or waiting for an
   approval or question, gives 409 and is left alone. A busy owned kernel (including use by another tree) also gives 409. Archive
-  releases idle owned kernels, and never removes a worktree, branch or background job.
+  releases idle owned kernels, and never removes a worktree, branch or background job. A running background job anywhere in the tree refuses archive with a clear error until it finishes or is stopped.
 - **Kernels.** Archive detaches kernels created by the tree (including children)
   and its default kernel immediately, then closes their workers asynchronously.
   It publishes `kernel.deleted` with the state-loss reason. Variables have no

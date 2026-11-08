@@ -203,6 +203,8 @@ it is given (the offline `mock` provider is exempt). `redact.py` masks secret-sh
 values, private keys, `password = ...` and quoted JSON-style credential keys) in session text before the model sees it, in every `manager.speech`
 sentence, and in `POST /api/voice/speak` text. It is a pattern pass, not a guarantee, and the notice says so.
 
+Native NSH on macOS and iOS provides the same WAV microphone bridge to the Manager pipeline as dictation. The macOS bridge builds, but permission, actual capture and speaker playback have not been verified on a device. GPT-Live native audio remains separate and unavailable.
+
 ## Speech (pipeline voice, server side)
 
 `manager.speech` events leave as the model writes: a sentence is published the moment its end is seen, not when the
@@ -391,3 +393,10 @@ The focused call puts the current caption, model context and latest tool in one 
 Live playback uses an adaptive jitter buffer (a continuous TUI source; NSH schedules contiguous packets), because Core delivers 20 ms frames in bursts. The cushion starts at 120 ms for each call. When playback runs dry mid-speech and more audio arrives within 1.5 s, the cushion grows by 60 ms, up to 300 ms, for the rest of that call; a longer silence is a normal end of utterance and does not grow it. Barge-in flush drops the queued audio but keeps the learned cushion, and the next call starts at 120 ms again. Playback fades in over 5 ms (120 samples) whenever it (re)starts, and the TUI also ramps the last sample to zero over 5 ms when it runs dry, so cuts do not click. Core's audio socket also tolerates a full outgoing queue when the client detaches. The speaking state holds through pauses shorter than 350 ms, so the waves keep their fastest, brightest setting there. These changes have offline tests; live sound quality still needs a listening check.
 
 Calling the Manager draws the header indicator immediately with “Connecting…” while Core and audio open. Esc cancels that pending start; a late reply cannot reopen it. Live voice barge-in follows the `nexus01` helper: without headphones the TUI echo guard still permits microphone RMS above 0.12 during audible playback, allowing the service to detect speech over its reply. NSH keeps browser echo cancellation and forwards that speech continuously. This is a threshold gate, not native acoustic echo cancellation.
+
+The offline Manager day fixture is `interface/scenarios/manager-day.json`. Core's
+`test_scripted_day_reads_a_result_and_navigates_after_confirmation` exercises a
+continuous scripted call through speech input, overview, result reading, approval,
+session creation, steering and acknowledged navigation. The TUI and NSH Manager
+tests also apply its card data to their client state. These client tests inject events;
+they are not yet a shared end-to-end run against the scripted Core or a real microphone.

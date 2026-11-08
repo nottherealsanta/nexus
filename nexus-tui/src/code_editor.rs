@@ -345,6 +345,95 @@ impl CodeEditor {
     }
 }
 
+/// Mutable editor state rendered from the shell's shared render reference.
+pub struct CodeBuffer(std::cell::RefCell<CodeEditor>);
+
+impl std::fmt::Debug for CodeBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodeBuffer").finish_non_exhaustive()
+    }
+}
+
+impl CodeBuffer {
+    pub fn new(path: &str, text: &str, ascii: bool, theme: &Theme) -> Result<Self, String> {
+        Ok(Self(std::cell::RefCell::new(CodeEditor::with_theme(
+            path,
+            text,
+            ascii,
+            Some(theme),
+        )?)))
+    }
+    pub fn text(&self) -> String {
+        self.0.borrow().text()
+    }
+    pub fn set_text(&self, text: &str) {
+        self.0.borrow_mut().set_text(text);
+    }
+    pub fn insert_str(&self, text: &str) {
+        self.0.borrow_mut().editor.apply(InsertText {
+            text: text.to_owned(),
+        });
+    }
+    pub fn key(&self, key: KeyEvent, area: Rect) -> bool {
+        self.0.borrow_mut().key(key, area)
+    }
+    pub fn mouse(&self, mouse: MouseEvent, area: Rect) -> bool {
+        self.0.borrow_mut().mouse(mouse, area)
+    }
+    pub fn render(&self, buf: &mut Buffer, area: Rect, theme: &Theme) {
+        let mut editor = self.0.borrow_mut();
+        editor.set_theme(theme);
+        editor.render_buffer(buf, area);
+    }
+    pub fn cursor(&self, area: Rect) -> Option<(u16, u16)> {
+        self.0.borrow().cursor(area)
+    }
+    pub fn selection(&self) -> Option<String> {
+        self.0.borrow_mut().editor.get_selection_text()
+    }
+    pub fn find(&self, query: &str, case_sensitive: bool) -> Vec<(usize, usize)> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let text = self.text();
+        let hay = if case_sensitive {
+            text.clone()
+        } else {
+            text.to_ascii_lowercase()
+        };
+        let needle = if case_sensitive {
+            query.to_owned()
+        } else {
+            query.to_ascii_lowercase()
+        };
+        hay.match_indices(&needle)
+            .map(|(start, found)| {
+                let from = text[..start].chars().count();
+                (from, from + found.chars().count())
+            })
+            .collect()
+    }
+    pub fn mark(&self, ranges: &[(usize, usize)]) {
+        self.0
+            .borrow_mut()
+            .editor
+            .set_marks(ranges.iter().map(|&(a, b)| (a, b, "#665900")).collect());
+    }
+    pub fn clear_marks(&self) {
+        self.0.borrow_mut().editor.remove_marks();
+    }
+    pub fn select(&self, start: usize, end: usize) {
+        self.0.borrow_mut().select(start, end);
+    }
+    pub fn replace(&self, start: usize, end: usize, text: &str) {
+        let mut editor = self.0.borrow_mut();
+        editor.select(start, end);
+        editor.editor.apply(InsertText {
+            text: text.to_owned(),
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

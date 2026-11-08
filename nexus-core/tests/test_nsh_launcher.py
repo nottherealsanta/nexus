@@ -1,4 +1,4 @@
-"""The development launcher can run the shared NSH app in a terminal."""
+"""The retired NSH terminal launcher directs users to the maintained TUI."""
 
 import os
 import subprocess
@@ -7,52 +7,26 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-LAUNCHER = ROOT / "scripts" / "nexus"
-
+LAUNCHER = Path(__file__).resolve().parents[2] / "scripts" / "nexus"
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or not LAUNCHER.is_file(),
     reason="the launcher is a POSIX shell script",
 )
 
 
-def launch(tmp_path, *args, supported=True):
+def test_retired_nsh_terminal_points_to_tui_without_starting_core(tmp_path):
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    for name, body in {
-        "uv": 'printf "uv %s\\n" "$*"',
-        "python3": 'printf "python3 %s\\n" "$*"',
-        "nsh": (
-            'if [ "$*" = "run --help" ]; then '
-            f'echo {"--points-per-cell" if supported else "old-cli"}; '
-            'else printf "nsh %s\\n" "$*"; fi'
-        ),
-    }.items():
-        path = bindir / name
-        path.write_text("#!/bin/sh\n" + body + "\n")
-        path.chmod(0o755)
-    return subprocess.run(
-        [str(LAUNCHER), *args],
-        env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}",
-             "NEXUS10_HOME": str(tmp_path / "home")},
+    marker = tmp_path / "uv-called"
+    uv = bindir / "uv"
+    uv.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    uv.chmod(0o755)
+    result = subprocess.run(
+        [str(LAUNCHER), "nsh", "tui"],
+        env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "NEXUS10_HOME": str(tmp_path / "home")},
         capture_output=True, text=True, check=False,
     )
-
-
-def test_nsh_tui_forwards_backend_flags(tmp_path):
-    result = launch(tmp_path, "nsh", "tui", "--fps", "--points-per-cell", "10x20")
-    assert result.returncode == 0, result.stderr
-    assert "python3 scripts/gen.py" in result.stdout
-    assert "nsh run App.tsx --target tui --fps --points-per-cell 10x20" in result.stdout
-
-
-def test_nsh_tui_requires_an_updated_cli(tmp_path):
-    result = launch(tmp_path, "nsh", "tui", supported=False)
     assert result.returncode != 0
-    assert "nsh needs an update with TUI support" in result.stderr
-
-
-def test_nsh_requires_the_tui_subcommand(tmp_path):
-    result = launch(tmp_path, "nsh", "unknown")
-    assert result.returncode != 0
-    assert "usage: nexus nsh tui [flags]" in result.stderr
+    assert "retired; use nexus tui" in result.stderr
+    assert "archive/nsh-terminal-backend" in result.stderr
+    assert not marker.exists()

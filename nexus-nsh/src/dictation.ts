@@ -380,7 +380,11 @@ function beginCapture(insert: (text: string) => void, expectedGeneration: number
           await mic.cancel();
           return;
         }
-        const timer = setInterval(() => dictationLevel.set(mic.level()), 100);
+        const started = Date.now();
+        const timer = setInterval(() => {
+          if ((Date.now() - started) / 1000 >= MAX_RECORDING_SECONDS) void stopDictation();
+          else dictationLevel.set(mic.level());
+        }, 100);
         move("ready");
         capture = {
           generation: expectedGeneration,
@@ -393,7 +397,7 @@ function beginCapture(insert: (text: string) => void, expectedGeneration: number
           active: true,
           cancelled: false,
           previewWarningShown: false,
-          native: { started: Date.now(), timer },
+          native: { started, timer },
         };
         dictationPreview.set("");
         dictationLevel.set(0);
@@ -561,7 +565,7 @@ export async function stopDictation() {
   let duration: number;
   if (current.native) {
     clearInterval(current.native.timer);
-    duration = (Date.now() - current.native.started) / 1000;
+    duration = Math.min(MAX_RECORDING_SECONDS, (Date.now() - current.native.started) / 1000);
     try {
       const mic = microphone();
       if (!mic) throw new Error("Microphone capture is not available in this client");
@@ -620,6 +624,7 @@ export async function stopDictation() {
 export function cancelDictation() {
   const phase: DictationPhase = dictationPhase();
   if (phase === "idle") return;
+  if (phase === "requesting") void microphone()?.cancel();
   const current = capture;
   generation++;
   if (current) {

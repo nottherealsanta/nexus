@@ -1,13 +1,15 @@
+import { fileWatchStatus } from "../file-watch";
 import type { JSX } from "nsh";
 import { List, PanResponder, Scroll, Text, View, effect, safeArea, signal } from "nsh";
 import { Button, ContextMenu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/base";
 import { Btn, Empty, FocusEdge, Icon, IconButton, Status, AttentionMark, T, TS, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
 import { manifest } from "../gen/manifest";
+import { desktopOnly } from "../mobile";
 import { availability, byId, commands, keyLabel, moveProject, newSession, run, setProjectStatus, toggleLeft } from "../commands";
 import { railDrag, archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, flowProject, flowSession, flowStage, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
-import { fileTree, filesExpanded, loadFiles, openFile, showFile, toggleFileDir } from "../store";
+import { fileTree, filesExpanded, loadFiles, openFile, showFile, toggleFileDir, selectedFileEntry, gitPage, loadGitPage, selectedGitFile, openGitDiff } from "../store";
 import { fileRows } from "../file-tree";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
@@ -20,7 +22,7 @@ const sidebarResized = signal(false);
 effect(() => { if (!sidebarResized()) leftSidebarWidth.set(defaultLeftSidebarWidth(width())); });
 /** The project rail's width. */
 export const RAIL_PX = 40;
-const tabs = manifest.navigation.left_sidebar.tab as unknown as { id: "sessions" | "files" | "projects"; label: string; command: string; order: number }[];
+const tabs = manifest.navigation.left_sidebar.tab as unknown as { id: "sessions" | "files" | "git" | "projects"; label: string; command: string; order: number }[];
 
 function hint(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
 
@@ -36,11 +38,11 @@ export function SidebarTabs(p: { labels?: boolean }) {
         {(t) => (
           <Tab
             selected={leftTab() === t().id} accessibilityLabel={t().label} testID={`tab-${t().id}`} disabled={false}
-            onPress={() => { leftTab.set(t().id); if (t().id === "files") void loadFiles(); savePrefs(); }}
+            onPress={() => { leftTab.set(t().id); if (t().id === "files") void loadFiles(); if (t().id === "git") void loadGitPage(); savePrefs(); }}
             tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{t().label}{hint(t().command) ? `  ${hint(t().command)}` : ""}</Text>}
             class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) px-2 hover:bg-accent active:bg-selection ${leftTab() === t().id ? "bg-background" : ""} ${isNarrow() ? "min-h-11" : "min-h-6"} ${FOCUS}`}
           >
-            <Icon name={t().id} size={14} class={leftTab() === t().id ? "tint-foreground" : "tint-muted-foreground"} />
+            <Icon name={(t().id === "git" ? "branch" : t().id) as IconName} size={14} class={leftTab() === t().id ? "tint-foreground" : "tint-muted-foreground"} />
             <Text class={`${TS.base} ${leftTab() === t().id ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{t().label}</Text>
           </Tab>
         )}
@@ -64,6 +66,7 @@ export function LeftSidebar(p: { drawer?: boolean }) {
       <View class="flex-1 min-h-0">
         <If when={leftTab() === "sessions"}><SessionsTab /></If>
         <If when={leftTab() === "files"}><FilesTab /></If>
+        <If when={leftTab() === "git"}><GitTab /></If>
         <If when={leftTab() === "projects"}><ProjectsTab /></If>
       </View>
       <View class="border-t border-border p-2" style={{ paddingBottom: safeArea().bottom + 8 }}>
@@ -79,6 +82,28 @@ export function LeftSidebar(p: { drawer?: boolean }) {
       <If when={!p.drawer}><View {...resize.panHandlers} class="absolute right-0 top-0 bottom-0 w-2" testID="left-sidebar-resize" accessibilityLabel="Resize left sidebar" /></If>
     </View>
   );
+}
+function GitTab() {
+  effect(() => { const project = currentProject(), worktree = currentWorktree()?.path; if (project && (gitPage()?.project !== project || gitPage()?.worktree !== worktree)) void loadGitPage(); });
+  const data = () => gitPage()?.data;
+  const groups = ["Staged", "Unstaged", "Untracked"] as const;
+  const rows = (group: typeof groups[number]) => (data()?.changes ?? []).filter((c) => group === "Staged" ? c.staged : group === "Untracked" ? c.status === "??" : c.status !== "??" && c.unstaged);
+  return <Scroll class="flex-1"><View class="p-2" testID="git-page">
+    <Text class={`${TS.base} font-medium text-foreground px-2 pb-2`}>Git</Text>
+    <If when={!!gitPage()?.error}><Text class={`${T.sec} px-2`}>{gitPage()?.error}</Text></If>
+    <If when={!!data()}>
+      <Text class={`${T.sec} px-2`}>{data()?.worktree ?? ""}</Text>
+      <Text class={`${TS.base} px-2 pb-2`}>{data()?.branch ?? ""}</Text>
+      <Each of={groups} key={(g) => g}>{(group) => <View>
+        <Text class={`${T.meta} px-2 pt-2`}>{group()}</Text>
+        <Each of={rows(group())} key={(c) => c.path}>{(change) => <ContextMenu onOpenChange={({ open }) => { if (open) selectedGitFile.set({ path: change().path, group: group() }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button testID={`git-${group().toLowerCase()}-${change().path}`} onPress={() => { selectedGitFile.set({ path: change().path, group: group() }); void openGitDiff(); }} class={`flex-row gap-2 px-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{group() === "Staged" ? change().status[0] : group() === "Untracked" ? "?" : change().status[1]}</Text><Text class={TS.base}>{change().path}</Text></Button>}>
+          <Each of={commands.filter((c) => ["git.stage", "git.unstage", "git.discard"].includes(c.id) && c.placement.includes("row_menu"))} key={(c) => c.id}>{(cmd) => <MenuItem onSelect={() => void run(cmd().id)} disabled={!availability(cmd()).ok} class="rounded-(--radius) px-2 py-1.5 hover:bg-accent"><Text class={TS.base}>{cmd().title}</Text></MenuItem>}</Each>
+        </ContextMenu>}</Each>
+      </View>}</Each>
+      <Text class={`${T.meta} px-2 pt-2`}>Branches</Text>
+      <Each of={data()?.branches ?? []} key={(b) => b.name}>{(branch) => <Text class={`${TS.base} px-2`}>{`${branch().current ? "● " : "  "}${branch().name}`}</Text>}</Each>
+    </If>
+  </View></Scroll>;
 }
 /** Compact project rail shown when the docked sidebar is collapsed. */
 export function SessionRail() {
@@ -290,14 +315,28 @@ function useWorktreeRefresh() {
   if (!worktreeTimer) worktreeTimer = setInterval(refreshWorktrees, 30000);
 }
 
+/** The current project (or all projects); pressing it opens the project picker. */
+function ArchivedToggle() {
+  return <IconButton icon="archive" label="Archived" testID="chip-archived" selected={archivedFilter()} tint={archivedFilter() ? "tint-multi" : "tint-muted-foreground"} onPress={() => run("sessions.archived_filter")} />;
+}
+
+export function ProjectSelector() {
+  return <Button onPress={() => run("project.switch")} accessibilityLabel="Current project" testID="project-selector" class={`flex-1 min-w-0 flex-row items-center gap-1.5 rounded-(--radius) hover:bg-accent ${phone ? "min-h-11 bg-raised px-4" : isNarrow() ? "min-h-11 px-2" : "min-h-8 px-2"} ${FOCUS}`}>
+    <Text style={{ numberOfLines: 1 }} class={`flex-1 ${phone ? T.title : `${TS.base} font-medium text-foreground`}`}>{scopeAll() ? "All projects" : currentProject() ? projectName(currentProject()!) : "No project"}</Text>
+    <Icon name="chevron-down" size={14} class="tint-muted-foreground" />
+  </Button>;
+}
+
+export function NewSessionButton() {
+  return <IconButton icon="plus" label="New session" testID="new-session" class={phone ? "bg-raised" : ""} onPress={() => { dismissSessionSearch(); if (phone) phonePage.set("conversation"); void run("session.new"); }} disabled={!availability(byId.get("session.new")!).ok} reason={availability(byId.get("session.new")!).ok ? hint("session.new") ?? undefined : availability(byId.get("session.new")!).reason} />;
+}
+
 export function SessionsTab() {
   useWorktreeRefresh();
   return (
     <View class="flex-1 min-h-0">
       <View class={phone ? "gap-3 px-4 pt-4 pb-3" : "gap-2 py-2 pr-2"}>
-        <View class="flex-row justify-end">
-          <IconButton icon="archive" label="Archived" testID="chip-archived" selected={archivedFilter()} tint={archivedFilter() ? "tint-multi" : "tint-muted-foreground"} onPress={() => run("sessions.archived_filter")} />
-        </View>
+        <If when={!phone}><View class="flex-row justify-end"><ArchivedToggle /></View></If>
         <View class={`w-full flex-row items-center gap-2 px-2 ${phone ? "h-11 bg-raised" : "h-8 bg-hover"}`}>
           <Icon name="search" size={14} class="tint-muted-foreground" />
           <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder={leftSidebarWidth() < 220 ? "Search" : "Search sessions"} accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`h-full flex-1 min-w-0 rounded-none px-0 ${TS.base} text-foreground placeholder:text-muted-foreground ${phone ? "bg-raised" : "bg-hover"}`} />
@@ -307,19 +346,18 @@ export function SessionsTab() {
             </View>
           </If>
         </View>
-        <If when={!railShown()}>
+        {/* A phone has the project selector in its top bar (PhoneProjectBar). */}
+        <If when={!railShown() && !phone}>
         <View class="flex-row items-center gap-2">
-          <Button onPress={() => run("project.switch")} accessibilityLabel="Current project" class={`flex-1 min-w-0 flex-row items-center gap-1.5 rounded-(--radius) hover:bg-accent ${phone ? "min-h-11 bg-raised px-4" : isNarrow() ? "min-h-11 px-2" : "min-h-8 px-2"} ${FOCUS}`}>
-            <Text style={{ numberOfLines: 1 }} class={`flex-1 ${TS.base} font-medium text-foreground`}>{scopeAll() ? "All projects" : currentProject() ? projectName(currentProject()!) : "No project"}</Text>
-            <Icon name="chevron-down" size={14} class="tint-muted-foreground" />
-          </Button>
-          <IconButton icon="plus" label="New session" testID="new-session" class={phone ? "bg-raised" : ""} onPress={() => { dismissSessionSearch(); if (phone) phonePage.set("conversation"); void run("session.new"); }} disabled={!availability(byId.get("session.new")!).ok} reason={availability(byId.get("session.new")!).ok ? hint("session.new") ?? undefined : availability(byId.get("session.new")!).reason} />
+          <ProjectSelector />
+          <NewSessionButton />
         </View>
         </If>
         <If when={!railShown()}>
           <View class="flex-row items-center gap-1">
             <Chip label="Project" on={!scopeAll()} onPress={() => scopeAll.set(false)} />
             <Chip label="All projects" on={scopeAll()} onPress={() => scopeAll.set(true)} />
+            <If when={phone}><View class="flex-1" /><ArchivedToggle /></If>
           </View>
         </If>
       </View>
@@ -434,7 +472,7 @@ function ActiveBar(p: { testID: string }) {
   return <View testID={p.testID} accessible={false} class="absolute left-0 top-0 bottom-0 w-0.5 bg-active-bar" style={{ pointerEvents: "none" }} />;
 }
 function RowMenuItems(p: { row: () => SidebarRowTarget }) {
-  const items = () => commands.filter((c) => c.placement.includes("row_menu") && c.id.startsWith(`${p.row().kind}.`));
+  const items = () => commands.filter((c) => c.placement.includes("row_menu") && c.id.startsWith(`${p.row().kind}.`) && (!phone || !desktopOnly(c.id)));
   const choose = (id: string) => {
     const row = p.row();
     sidebarRowMenu.set(null);
@@ -476,11 +514,13 @@ function FilesTab() {
           <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} font-medium text-foreground`}>{currentProject() ? projectName(currentProject()!) : "Files"}</Text>
           <If when={!!branch()}><Text style={{ numberOfLines: 1 }} class={T.meta}>{`⌥ ${branch()}`}</Text></If>
         </View>
+        <If when={fileWatchStatus() === "polling"}><Text class={`${T.meta} px-2`} testID="files-watch-status">Polling every 3 seconds</Text></If>
+        <If when={fileWatchStatus() === "disconnected"}><Text class={`${T.meta} px-2`} testID="files-watch-status">File watching disconnected</Text></If>
         <If when={root()?.error}><Text class={`${T.sec} px-2`}>{root()!.error!}</Text></If>
         <If when={!root()?.error && rows().length === 0}><Text class={`${T.sec} px-2 pt-1`} testID="files-empty">This folder is empty.</Text></If>
         <Each of={rows()} key={(row) => row.path}>{(row) =>
-          <View style={{ paddingLeft: 8 + row().depth * 16 }}>
-          <Button onPress={() => { const r = row(); if (r.kind === "directory") toggleFileDir(r.path); else if (r.kind === "file") void showFile(r.path); }}
+          <View style={{ paddingLeft: 8 + row().depth * 16 }} onFocus={() => selectedFileEntry.set({ path: row().path, kind: row().kind })}>
+          <ContextMenu onOpenChange={({ open }) => { if (open) selectedFileEntry.set({ path: row().path, kind: row().kind }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button onPress={() => { const r = row(); selectedFileEntry.set({ path: r.path, kind: r.kind }); if (r.kind === "directory") toggleFileDir(r.path); else if (r.kind === "file") void showFile(r.path); }}
             accessibilityLabel={row().name} testID={`file-entry-${row().path}`}
             class={`flex-row items-center gap-1.5 h-7 rounded-(--radius) pr-2 hover:bg-accent ${isOpen(row().path) ? "bg-selection" : ""} ${FOCUS}`}>
             <View class="w-3.5 shrink-0 items-center justify-center">
@@ -491,7 +531,9 @@ function FilesTab() {
             <View class="w-4 shrink-0 items-center justify-end">
               <If when={!!row().git_status && row().kind !== "directory"}><Text class={`${TS.base} font-medium ${GIT_TONE[(row().git_status ?? "").trim().slice(-1)] ?? "text-muted-foreground"}`}>{(row().git_status ?? "").trim().slice(-1)}</Text></If>
             </View>
-          </Button>
+          </Button>}>
+            <Each of={commands.filter((c) => c.id.startsWith("files.") && c.placement.includes("row_menu"))} key={(c) => c.id}>{(cmd) => <MenuItem onSelect={() => void run(cmd().id)} disabled={!availability(cmd()).ok} class="rounded-(--radius) px-2 py-1.5 hover:bg-accent"><Text class={TS.base}>{cmd().title}</Text></MenuItem>}</Each>
+          </ContextMenu>
           </View>
         }</Each>
       </View>}

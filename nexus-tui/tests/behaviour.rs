@@ -2739,8 +2739,8 @@ fn usage_ctrl_u_reads_plan_limits_into_a_table_modal() {
         "Left",
         "Reserve",
         "Expires",
-        "██████████",
-        "██▃░░░░░░░",
+        "━━━━━━━━━━",
+        "━━╴───────",
         "76%",
         "0%",
         "+26%",
@@ -2804,12 +2804,12 @@ fn usage_shared_scenario_renders_table_at_desktop_sizes() {
             "Reserve",
             "Expires",
             "ChatGPT (Codex)",
-            "██▃░░░░░░░",
+            "━━╴───────",
             "76%",
-            "██████████",
+            "━━━━━━━━━━",
             "0%",
             "Claude (Agent SDK)",
-            "███▅░░░░░░",
+            "━━━╸──────",
         ] {
             assert!(text.contains(expected), "missing {expected}: {text}");
         }

@@ -30,6 +30,7 @@ pub enum Side {
 pub enum Tab {
     Sessions,
     Files,
+    Git,
     Projects,
 }
 
@@ -38,6 +39,7 @@ impl Tab {
         match self {
             Tab::Sessions => "sessions",
             Tab::Files => "files",
+            Tab::Git => "git",
             Tab::Projects => "projects",
         }
     }
@@ -45,6 +47,7 @@ impl Tab {
         match id {
             "sessions" => Some(Tab::Sessions),
             "files" => Some(Tab::Files),
+            "git" => Some(Tab::Git),
             "projects" => Some(Tab::Projects),
             _ => None,
         }
@@ -294,9 +297,9 @@ pub struct Overlay {
 }
 
 /// The built-in editor over the open file (K10): the text being edited and the revision it was read at.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FileEdit {
-    pub buf: crate::composer::Composer,
+    pub buf: crate::code_editor::CodeBuffer,
     /// The `revision` the last read or save returned; a write is refused if the file moved on.
     pub revision: String,
     /// The text at that revision, to tell whether the buffer is dirty.
@@ -318,6 +321,25 @@ impl FileEdit {
 /// A deferred action that a confirm dialog performs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Confirmed {
+    ForceGitDelete {
+        project: String,
+        worktree: Option<String>,
+        value: String,
+        confirmed_live: Vec<String>,
+    },
+    ProjectGitAction {
+        project: String,
+        worktree: Option<String>,
+        action: String,
+        value: String,
+        paths: Vec<String>,
+        confirmed_live: Vec<String>,
+    },
+    DeleteFile {
+        project: String,
+        session: Option<String>,
+        path: String,
+    },
     CloseTerminal(String),
     ResumeArchived {
         session: String,
@@ -368,6 +390,17 @@ pub struct Dialog {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditTarget {
+    ProjectGitValue {
+        project: String,
+        worktree: Option<String>,
+        action: String,
+    },
+    FilePath {
+        project: String,
+        session: Option<String>,
+        action: String,
+        path: String,
+    },
     RenameTerminal {
         id: String,
     },
@@ -651,6 +684,10 @@ pub enum Target {
     TerminalNew,
     TerminalCopy,
     TerminalTakeControl,
+    TerminalReleaseControl,
+    TerminalRename,
+    TerminalCloseSelected,
+    TerminalPanelClose,
     /// The Files tree root line (project checkout / session worktree).
     FilesRoot,
     /// The panel header's `‹ Back`: close the file or diff panel.
@@ -659,6 +696,14 @@ pub enum Target {
     FilePreview,
     /// The panel header's `e edit`: start the file editor.
     FileEdit,
+    EditorFindInput,
+    EditorReplaceInput,
+    EditorFindCase,
+    EditorFindPrevious,
+    EditorFindNext,
+    EditorFindClose,
+    EditorReplaceOne,
+    EditorReplaceAll,
     Wait(WaitButton),
     /// Option `i` of the question the waiting card asks.
     WaitOption(usize),

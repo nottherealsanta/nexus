@@ -362,7 +362,7 @@ mod tests {
             .iter()
             .map(|t| t.id.as_str())
             .collect();
-        assert_eq!(tabs, ["sessions", "files"]);
+        assert_eq!(tabs, ["sessions", "files", "git"]);
     }
 
     #[test]

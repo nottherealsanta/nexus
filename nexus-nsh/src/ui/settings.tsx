@@ -4,8 +4,9 @@ import { Button, Input } from "nsh/base";
 import { Btn, FocusEdge, Icon, T, TS, FOCUS, Seg } from "./kit";
 import { Heading, Modal, ModalFooter, ModalTitle } from "./modal";
 import { manifest } from "../gen/manifest";
+import { mobileSettings } from "../mobile";
 import { byId, commands, copyText, escape, keyLabel, loadProviders, run } from "../commands";
-import { archivedFilter, leftOpen, rightOpen, scopeAll, catalogSource, info, compat, isNarrow, live, m, model, reloadModelCatalog, savePrefs, scrollBarOn, setScrollBar, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsReload, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker, providerDetail, providerLogins, confirmDialog, notificationSoundsOn, setNotificationSounds } from "../store";
+import { archivedFilter, leftOpen, rightOpen, scopeAll, catalogSource, info, compat, isNarrow, live, m, model, reloadModelCatalog, savePrefs, scrollBarOn, setScrollBar, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsReload, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker, providerDetail, providerLogins, confirmDialog, notificationSoundsOn, setNotificationSounds, phone } from "../store";
 import { CLIENT_API, CLIENT_VERSION } from "../core/api";
 import { request } from "../core/transport";
 import { voiceInfoLines, voiceActionReason } from "../voice-settings";
@@ -16,7 +17,7 @@ import type { VoiceTarget } from "../voice-state";
 
 interface Row { id: string; label: string; kind: string; scope: string; clients?: string; default?: unknown; options?: string[]; command?: string; note?: string; unavailable_reason?: string }
 interface Section { id: string; label: string; unavailable_reason?: string; page?: boolean; note?: string; row?: Row[] }
-const sections = manifest.settings.section as unknown as Section[];
+const sections = phone ? mobileSettings(manifest.settings.section as unknown as Section[]) : manifest.settings.section as unknown as Section[];
 const focusedSetting = signal<string | null>(null);
 const focusSetting = (id: string) => { settingsNavFocused.set(false); focusedSetting.set(id); };
 

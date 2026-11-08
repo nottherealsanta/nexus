@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
 
 from .errors import AuthError
@@ -49,6 +50,28 @@ def child_env() -> dict[str, str]:
     keep = ("HOME", "PATH", "USER", "LOGNAME", "LANG", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR",
             "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE")
     return {k: os.environ[k] for k in keep if k in os.environ}
+
+
+def cli_version(executable: str) -> str | None:
+    """Diagnostic version only; invalidate the bounded cache when the executable changes."""
+    try:
+        info = Path(executable).stat()
+        return _cli_version(executable, info.st_mtime_ns, info.st_size)
+    except OSError:
+        return None
+
+
+@lru_cache(maxsize=8)
+def _cli_version(executable: str, modified: int, size: int) -> str | None:
+    try:
+        result = subprocess.run([executable, "--version"], env=child_env(), stdin=subprocess.DEVNULL,
+                                capture_output=True, timeout=2, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    match = re.match(rb"(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)\b", result.stdout[:128].strip())
+    return match[1].decode("ascii") if match else None
 
 
 def status() -> dict | None:

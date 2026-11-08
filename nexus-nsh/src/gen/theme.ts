@@ -327,39 +327,39 @@ export const controlGlyphs = {
 } as const;
 export const usageGlyphs = {
   "full": {
-    "unicode": "\u2588",
+    "unicode": "\u2501",
     "ascii": "#"
   },
   "empty": {
-    "unicode": "\u2591",
+    "unicode": "\u2500",
     "ascii": "-"
   },
   "eighth_1": {
-    "unicode": "\u2581",
+    "unicode": "\u2574",
     "ascii": "#"
   },
   "eighth_2": {
-    "unicode": "\u2582",
+    "unicode": "\u2574",
     "ascii": "#"
   },
   "eighth_3": {
-    "unicode": "\u2583",
+    "unicode": "\u2574",
     "ascii": "#"
   },
   "eighth_4": {
-    "unicode": "\u2584",
+    "unicode": "\u2578",
     "ascii": "#"
   },
   "eighth_5": {
-    "unicode": "\u2585",
+    "unicode": "\u2578",
     "ascii": "#"
   },
   "eighth_6": {
-    "unicode": "\u2586",
+    "unicode": "\u2578",
     "ascii": "#"
   },
   "eighth_7": {
-    "unicode": "\u2587",
+    "unicode": "\u2578",
     "ascii": "#"
   }
 } as const;

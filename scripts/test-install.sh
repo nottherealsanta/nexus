@@ -27,6 +27,7 @@ printf 'binary\n' > "$REL/$TUI"
 cat > "$TMP/bin/uv" <<'EOF'
 #!/bin/sh
 printf 'uv %s\n' "$*" >> "$UV_LOG"
+if [ "$*" = 'tool dir --bin' ]; then printf '%s\n' "$FAKE_NEXUS_BIN"; fi
 EOF
 chmod +x "$TMP/bin/uv"
 
@@ -49,9 +50,22 @@ EOF
 
 run() { # prefix
   rm -f "$TMP/attempts"
-  UV_LOG="$TMP/uv.log" PATH="$TMP/bin:$PATH" PREFIX="$1" \
+  FAKE_NEXUS_BIN="$TMP/nexus-bin" NEXUS_TEST_DAEMON_STATE="${NEXUS_TEST_DAEMON_STATE:-stopped}" \
+    NEXUS_TEST_DAEMON_LOG="$TMP/daemon.log" UV_LOG="$TMP/uv.log" PATH="$TMP/bin:$PATH" PREFIX="$1" \
     NEXUS_RELEASE_BASE="file://$TMP/releases" sh "$ROOT/install.sh" --release "$VERSION"
 }
+
+mkdir -p "$TMP/nexus-bin"
+cat > "$TMP/nexus-bin/nexus" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$NEXUS_TEST_DAEMON_LOG"
+case "$*" in
+  'daemon status') printf '%s\n' "$NEXUS_TEST_DAEMON_STATE" ;;
+  'daemon stop'|'daemon start') exit 0 ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$TMP/nexus-bin/nexus"
 
 # A flaky edge: two 504s, then the real bytes.
 curl_stub 2
@@ -60,7 +74,14 @@ run "$TMP/one" > "$TMP/out" 2> "$TMP/err" || { cat "$TMP/err"; fail "a transient
 [ "$(cat "$TMP/one/bin/nexus-tui")" = binary ] || fail "the TUI was not installed"
 [ "$(cat "$TMP/attempts")" = 3 ] || fail "the TUI was downloaded $(cat "$TMP/attempts") times, not 3"
 grep -q 'retrying (2/3)' "$TMP/err" || { cat "$TMP/err"; fail "a retry was not announced"; }
-grep -q 'uv tool install .*'"$WHEEL" "$TMP/uv.log" || fail "the Core wheel was not installed"
+grep -q 'uv tool install .*--no-binary-package claude-agent-sdk .*'"$WHEEL" "$TMP/uv.log" || fail "the Core wheel must build Claude's SDK from source"
+[ "$(cat "$TMP/daemon.log")" = 'daemon status' ] || fail "install started a stopped daemon"
+
+# A running daemon must use the newly installed code, in stop/start order.
+curl_stub 1
+: > "$TMP/daemon.log"
+NEXUS_TEST_DAEMON_STATE=running run "$TMP/running" > "$TMP/out" 2> "$TMP/err" || fail "running-daemon update failed"
+[ "$(cat "$TMP/daemon.log")" = "$(printf 'daemon status\ndaemon stop\ndaemon start')" ] || fail "running daemon was not restarted in order"
 
 # Not flaky: one 504 that never clears must stop before anything is installed.
 curl_stub 0

@@ -57,6 +57,17 @@ async def test_token_is_required(setup):
     assert response.status_code == 401
 
 
+async def test_missing_agents_refuses_creation_with_install_diagnostic(setup, monkeypatch, tmp_path):
+    from nexus import agents
+
+    _, client, _, workspace = setup
+    monkeypatch.setattr(agents, "BUILTIN_DIR", tmp_path / "missing-agents")
+    response = await client.post("/api/session", json={"directory": str(workspace)})
+    assert response.status_code == 400
+    assert "no agent can run as a root session" in response.text
+    assert "built-in agents folder is missing" in response.text
+
+
 async def test_provider_usage_reads_saved_snapshot_and_refreshes_on_post(setup, monkeypatch):
     from nexus import provider_usage
 
@@ -949,8 +960,13 @@ async def test_file_put_needs_the_revision_it_read_and_announces_the_change(setu
     assert (await client.put(url, params={"path": "a.txt"}, json={"content": "x"})).status_code == 400
     assert not [n.name for n in workspace.iterdir() if n.name.endswith(".tmp")]
     events = (await client.get(f"/api/session/{sid}/event")).json()["events"]
-    changed = [e["data"] for e in events if e["type"] == "files.changed"]
-    assert [c["path"] for c in changed] == ["a.txt"] and changed[0]["revision"] == put.json()["revision"]
+    assert not [e for e in events if e["type"] == "files.changed"]
+    # Editor saves invalidate workspace views, never the model's session log.
+    changed = list(rt.store.db.execute("select session_id, data from event where type = 'files.changed' order by id"))
+    assert all(row["session_id"] is None for row in changed)
+    payloads = [json.loads(row["data"]) for row in changed]
+    assert [c["path"] for c in payloads] == ["a.txt", "sub/new.txt"]
+    assert payloads[0]["revision"] == put.json()["revision"]
 
 
 async def test_a_file_just_under_one_mib_saves_through_its_json_escape(setup):
@@ -1011,6 +1027,47 @@ async def test_project_order_status_and_snapshot_share_one_saved_order(setup):
     assert (await client.patch(f"/api/project/{ids[2]}", json={"status": "hidden"})).status_code == 400
     assert (await client.patch(f"/api/project/{ids[2]}", json={})).status_code == 400
     assert [p["status"] for p in (await client.get("/api/project")).json()] == ["current", "passive", "inactive"]
+
+
+async def test_project_move_replay_does_not_overwrite_a_later_move(setup):
+    rt, client, _provider, workspace = setup
+    ids = []
+    for name in ("one", "two", "three"):
+        path = workspace.parent / name
+        path.mkdir()
+        ids.append((await client.post("/api/project", json={"path": str(path)})).json()["id"])
+    path = f"/api/project/{ids[2]}/move"
+    headers = {"Idempotency-Key": "project-move-replay"}
+    head = rt.store.log_head()
+    first = await client.post(path, json={"before": ids[0]}, headers=headers)
+    assert [p["id"] for p in first.json()["projects"]] == [ids[2], ids[0], ids[1]]
+    later = await client.post(f"/api/project/{ids[1]}/move", json={"before": ids[2]})
+    assert [p["id"] for p in later.json()["projects"]] == [ids[1], ids[2], ids[0]]
+    replay = await client.post(path, json={"before": ids[0]}, headers=headers)
+    assert replay.json() == first.json()
+    snapshot = (await client.get("/api/snapshot")).json()
+    assert [p["id"] for p in snapshot["projects"]] == [ids[1], ids[2], ids[0]]
+    events = rt.store.replay(head, rt.store.log_head(), 100)
+    orders = [event["data"]["order"] for event in events if event["type"] == "project.reordered"]
+    assert orders == [[ids[2], ids[0], ids[1]], [ids[1], ids[2], ids[0]]]
+
+
+async def test_concurrent_project_moves_apply_to_current_order(setup):
+    _rt, client, _provider, workspace = setup
+    ids = []
+    for name in ("one", "two", "three"):
+        path = workspace.parent / name
+        path.mkdir()
+        ids.append((await client.post("/api/project", json={"path": str(path)})).json()["id"])
+    first, second = await asyncio.gather(
+        client.post(f"/api/project/{ids[2]}/move", json={"before": ids[0]}, headers={"Idempotency-Key": "move-a"}),
+        client.post(f"/api/project/{ids[1]}/move", json={"before": ids[2]}, headers={"Idempotency-Key": "move-b"}),
+    )
+    assert first.status_code == second.status_code == 200
+    final = [p["id"] for p in (await client.get("/api/project")).json()]
+    # Either serialization is valid; both moves must take effect in that order.
+    assert final in ([ids[1], ids[2], ids[0]], [ids[2], ids[0], ids[1]])
+    assert final in ([p["id"] for p in first.json()["projects"]], [p["id"] for p in second.json()["projects"]])
 
 
 async def test_project_order_survives_a_restart(setup):
@@ -1099,3 +1156,114 @@ async def test_old_store_without_order_or_status_columns_migrates_in_creation_or
     assert [p.position for p in migrated.projects()] == [0, 1, 2]
     assert {p.status for p in migrated.projects()} == {"current"}
     migrated.close()
+
+
+async def test_project_file_mutations_are_confined_and_replayed(setup):
+    rt, client, _, workspace = setup
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    url = f"/api/project/{project['id']}/files"
+    headers = {"Idempotency-Key": "file-create-test"}
+    body = {"action": "create_file", "path": "new.txt"}
+    subscription = rt.bus.open()
+    assert (await client.post(url, json=body, headers=headers)).status_code == 200
+    event = await subscription.get()
+    subscription.close()
+    assert event["type"] == "files.changed" and event["session_id"] is None
+    assert event["data"]["path"] == "new.txt" and event["data"]["source"] == "user"
+    replay = await client.post(url, json=body, headers=headers)
+    assert replay.status_code == 200 and replay.headers["idempotent-replayed"] == "true"
+    assert (await client.post(url, json={"action": "rename", "path": "new.txt", "to": "moved.txt"})).status_code == 200
+    assert (await client.post(url, json={"action": "create_file", "path": "../escape"})).status_code == 400
+    assert (await client.get(url, params={"path": "", "count": "true"})).json()["count"] == 1
+    assert (await client.post(url, json={"action": "delete", "path": "moved.txt"})).status_code == 200
+    assert not (workspace / "moved.txt").exists()
+
+
+async def test_file_watch_lease_rejects_cross_project_session_and_releases(setup, tmp_path):
+    _, client, _, workspace = setup
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    session = (await client.post("/api/session", json={"project": project["id"]})).json()
+    other_path = tmp_path / "other-watch"
+    other_path.mkdir()
+    other = (await client.post("/api/project", json={"path": str(other_path)})).json()
+    base = f"/api/project/{project['id']}/watch"
+    try:
+        leased = await client.post(base, json={"client_id": "watch-test"})
+        assert leased.status_code == 200 and leased.json()["lease_seconds"] == 60
+        assert (await client.post(base, json={"client_id": ""})).status_code == 400
+        assert (await client.post(f"/api/project/{other['id']}/watch", params={"session": session["id"]},
+                                  json={"client_id": "watch-test"})).status_code == 400
+        assert (await client.post(base, json={"client_id": "watch-test", "action": "release"})).json()["status"] == "stopped"
+    finally:
+        await client._transport.app.state.file_watches.close()
+
+
+async def test_project_git_live_guard_and_keyed_action(setup):
+    import subprocess
+
+    rt, client, _provider, workspace = setup
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=workspace, check=True, capture_output=True, text=True)
+
+    git("init", "-q")
+    git("config", "user.name", "Tester")
+    git("config", "user.email", "test@example.invalid")
+    (workspace / "file").write_text("before\n")
+    git("add", "file")
+    git("commit", "-qm", "initial")
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    session = (await client.post("/api/session", json={"project": project["id"]})).json()
+    base = f"/api/project/{project['id']}/git"
+    (workspace / "file").write_text("after\n")
+    assert (await client.get(base)).json()["changes"][0]["path"] == "file"
+    diff = await client.get(base + "/diff", params={"path": "file"})
+    assert diff.status_code == 200 and "+after" in diff.json()["unstaged"]
+    assert (await client.get(base + "/diff", params={"path": "../outside"})).status_code == 400
+    no_key = await client.post(base + "/action", json={"action": "stage", "paths": ["file"]})
+    assert no_key.status_code == 400
+    stage = await client.post(base + "/action", json={"action": "stage", "paths": ["file"]},
+                              headers={"Idempotency-Key": "stage-day"})
+    assert stage.status_code == 200 and stage.json()["changes"][0]["staged"]
+    request = {"id": "per_git", "session_id": session["id"], "tool": "bash", "call_id": "c", "args": {}}
+    rt.approvals["per_git"] = (session["id"], asyncio.get_running_loop().create_future(), request)
+    live = (await client.get(base + "/live")).json()
+    assert [s["id"] for s in live["working"]] == [session["id"]]
+    commit = {"action": "commit", "value": "save", "confirmed_live": []}
+    refused = await client.post(base + "/action", json=commit, headers={"Idempotency-Key": "refused-git"})
+    assert refused.status_code == 409 and refused.json()["code"] == "worktree_live"
+    assert git("log", "-1", "--format=%s").stdout.strip() == "initial"
+    commit["confirmed_live"] = [session["id"]]
+    done = await client.post(base + "/action", json=commit, headers={"Idempotency-Key": "commit-git"})
+    assert done.status_code == 200, done.text
+    replay = await client.post(base + "/action", json=commit, headers={"Idempotency-Key": "commit-git"})
+    assert replay.status_code == 200 and replay.headers["idempotent-replayed"] == "true"
+    assert git("log", "-1", "--format=%s").stdout.strip() == "save"
+    git("branch", "safe-delete")
+    force = {"action": "branch_delete_force", "value": "safe-delete", "confirmed_live": [session["id"]]}
+    rejected = await client.post(base + "/action", json=force, headers={"Idempotency-Key": "force-refused"})
+    assert rejected.status_code == 400 and "force_confirmed" in rejected.text
+    assert "safe-delete" in git("branch", "--list").stdout
+    force["force_confirmed"] = True
+    accepted = await client.post(base + "/action", json=force, headers={"Idempotency-Key": "force-approved"})
+    assert accepted.status_code == 200
+    assert "safe-delete" not in git("branch", "--list").stdout
+    events = rt.store.replay(0, rt.store.log_head(), 1000)
+    assert all(event["session_id"] is None for event in events if event["type"] == "git.changed")
+    del rt.approvals["per_git"]
+
+
+async def test_files_api_mutations_share_the_task_tool_file_lock(setup):
+    rt, client, _, workspace = setup
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    base = f"/api/project/{project['id']}"
+    for endpoint, payload, method in [
+        ("/files", {"action": "create_file", "path": "created"}, client.post),
+        ("/file?path=saved", {"content": "saved", "expected_revision": "new"}, client.put),
+    ]:
+        async with rt.file_lock:
+            task = asyncio.create_task(method(base + endpoint, json=payload))
+            await asyncio.sleep(0.02)
+            assert not task.done()
+        response = await asyncio.wait_for(task, timeout=3)
+        assert response.status_code == 200, response.text
+    assert (workspace / "created").is_file() and (workspace / "saved").read_text() == "saved"

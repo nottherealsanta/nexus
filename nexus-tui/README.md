@@ -16,8 +16,8 @@ existing layout or controls.
 and Enter to create a terminal or attach to a listed one. On an attached
 terminal, `c` takes control and `r` releases it; Enter on the selected row
 focuses its screen. Ctrl+] returns to the list and Esc from the list detaches.
-Input is sent only while this attachment has control. The terminal panel is
-still incomplete: rename, explicit close, selection and copy are not wired.
+Input is sent only while this attachment has control. Terminal applications receive
+mouse events when they request them; hold Shift to select text instead.
 
 **Open inspector** opens the native inspector modal (Inspector API v2), shared with NSH,
 instead of a browser. Views: `1` Timing (one shared-axis Gantt, lanes grouped by
@@ -28,7 +28,7 @@ records by cursor (never page numbers); `[`/`]` inspect another session of the
 tree without leaving the chat; `/` searches, `f`/`s` cycle the kind/status filter,
 `t` filters event types, `x` clears. `w` pauses live updates, `r` refreshes. The
 state line says `Live`, `Paused` or `Disconnected` (disconnected data says it is
-not current). While open the modal polls `/inspect/head` every 2 s and refetches
+not current). While open the modal coalesces session stream changes, checks `/inspect/head`, and refetches
 only when the head or generation moved; nothing runs while it is closed. Selection,
 expanded rows, zoom/pan, filters and the cursor stack are kept per session and view
 across refreshes and view switches. `+`/`-` zoom, `h`/`l` pan, `z` fits the selected
@@ -874,3 +874,18 @@ the client reads `/turn`, seeds the running partial, and merges newer deltas by
 request id and sequence. A completed part replaces its folded text; a saved
 assistant message clears scratch. Token deltas have no durable cursor. Finished
 session compaction leaves messages, starting context and turn summaries intact.
+
+
+The Files command palette offers New file, New folder, Rename file or folder,
+and Delete file or folder. Paths are relative to the displayed workspace root.
+Delete is permanent and asks for confirmation; a folder's descendant count is
+shown when Core can count it within its safety budget.
+
+Known text terminal types (`TERM=dumb`, `linux`, `vt100`, `ansi`) skip the image
+capability query at launch; other terminals keep automatic protocol detection.
+
+Desktop Files and editor views renew a 60-second workspace watcher lease while
+visible and release it on close. Disk changes refresh the file tree; clean text
+follows its disk revision, while unsaved edits remain intact with a changed-on-disk
+notice. Native watcher failure shows **Polling every 3 seconds**. These global
+resource events never enter a session's model context.

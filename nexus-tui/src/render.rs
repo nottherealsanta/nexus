@@ -510,48 +510,14 @@ pub fn buffer_rows(buf: &Buffer) -> Vec<String> {
         .collect()
 }
 
-/// Where the editor's text sits in the file view: the wrapped rows, the cursor among
-/// them, the gutter width, the first text row and column, the rows shown and the first
-/// row shown, and the line number each row starts, if it starts one.
-struct EditGeometry {
-    rows: Vec<String>,
-    numbers: Vec<Option<usize>>,
-    cursor: (usize, usize),
-    digits: usize,
-    top_y: u16,
-    base_x: u16,
-    page: usize,
-    first: usize,
-}
-
-fn edit_geometry(edit: &FileEdit, r: Rect) -> EditGeometry {
-    let lines = edit.buf.lines();
-    let room = paint::file_text_room(r.width, lines.len());
-    let (rows, cursor) = edit.buf.layout(room);
-    let digits = lines.len().to_string().len().max(3);
-    let page = paint::file_page(r.height).max(1);
-    let first = visible_first(rows.len(), cursor.0, page);
-    // A row starts a line when the rows before it used up the previous line.
-    let mut numbers = Vec::with_capacity(rows.len());
-    let (mut line, mut used) = (0, 0);
-    for row in &rows {
-        numbers.push((used == 0 && line < lines.len()).then_some(line + 1));
-        used += row.len();
-        if lines.get(line).is_some_and(|text| used >= text.len()) {
-            line += 1;
-            used = 0;
-        }
-    }
-    EditGeometry {
-        rows,
-        numbers,
-        cursor,
-        digits,
-        top_y: r.y + if r.height >= 8 { 2 } else { 1 },
-        base_x: r.x + 1 + digits as u16 + 1 + 2,
-        page,
-        first,
-    }
+/// The editor uses the modal body, leaving its header and footer visible.
+pub(crate) fn file_editor_area(r: Rect, finding: bool) -> Rect {
+    Rect::new(
+        r.x.saturating_add(1),
+        r.y.saturating_add(1),
+        r.width.saturating_sub(2),
+        r.height.saturating_sub(if finding { 4 } else { 2 }),
+    )
 }
 
 /// `modified`, `saved`, or why a save would be refused, right-aligned in the header.
@@ -565,54 +531,100 @@ fn edit_status(edit: &FileEdit) -> String {
 }
 
 /// The editor: the same gutter as the read-only view, the cursor line, and a hint row.
-fn draw_file_edit(cx: &Cx, buf: &mut Buffer, r: Rect, edit: &FileEdit) {
-    let g = edit_geometry(edit, r);
-    let gutter = format!("{} ", cx.t.structure("rail"));
-    let room = r.right().saturating_sub(g.base_x + 1);
-    for (i, line) in g.rows.iter().enumerate().skip(g.first).take(g.page) {
-        let y = g.top_y + (i - g.first) as u16;
-        let number_style = if i == g.cursor.0 {
-            cx.st(PRIMARY, CANVAS)
-        } else {
-            cx.st(MUTED, CANVAS)
-        };
-        let number = g.numbers[i].map_or_else(
-            || " ".repeat(g.digits + 1),
-            |n| format!("{n:>digits$} ", digits = g.digits),
-        );
-        let nx = put(
+fn draw_file_edit(cx: &Cx, buf: &mut Buffer, r: Rect, edit: &FileEdit, hits: &mut HitMap) {
+    let finding = cx.app.ui.file_search.as_ref();
+    edit.buf
+        .render(buf, file_editor_area(r, finding.is_some()), cx.t);
+    if let Some(search) = finding {
+        let count = edit.buf.find(&search.query, search.case_sensitive).len();
+        let y = r.bottom().saturating_sub(2);
+        let limit = r.right().saturating_sub(1);
+        let mut x = put(
             buf,
             r.x + 1,
             y,
-            &number,
-            number_style,
-            r.width.saturating_sub(1),
-        );
-        put(
-            buf,
-            nx,
-            y,
-            &gutter,
-            cx.st("border.default", CANVAS),
-            r.right().saturating_sub(nx),
-        );
-        put(buf, g.base_x, y, line, cx.st(PRIMARY, CANVAS), room);
-    }
-    if r.height >= 3 {
-        let y = r.bottom() - 1;
-        let hint = if edit.dirty() {
-            "ctrl+s save · esc discard"
-        } else {
-            "ctrl+s save · esc leave"
-        };
-        put(
-            buf,
-            r.x + 1,
-            y,
-            hint,
+            "Find ",
             cx.st(MUTED, CANVAS),
             r.width.saturating_sub(2),
         );
+        let input = format!("{} ", search.query);
+        let start = x;
+        x = put(
+            buf,
+            x,
+            y,
+            &input,
+            cx.st(PRIMARY, CANVAS),
+            limit.saturating_sub(x),
+        );
+        hits.add(
+            Rect::new(start, y, x.saturating_sub(start).max(1), 1),
+            Target::EditorFindInput,
+        );
+        for (label, target) in [
+            (format!(" {count} matches "), None),
+            (
+                format!("Aa:{} ", if search.case_sensitive { "on" } else { "off" }),
+                Some(Target::EditorFindCase),
+            ),
+            ("↑ ".into(), Some(Target::EditorFindPrevious)),
+            ("↓ ".into(), Some(Target::EditorFindNext)),
+            ("Close".into(), Some(Target::EditorFindClose)),
+        ] {
+            let start = x;
+            x = put(
+                buf,
+                x,
+                y,
+                &label,
+                cx.st(SECONDARY, CANVAS),
+                limit.saturating_sub(x),
+            );
+            if let Some(target) = target {
+                if x > start {
+                    hits.add(Rect::new(start, y, x - start, 1), target);
+                }
+            }
+        }
+        let y = r.bottom().saturating_sub(1);
+        let mut x = put(
+            buf,
+            r.x + 1,
+            y,
+            "Replace ",
+            cx.st(MUTED, CANVAS),
+            r.width.saturating_sub(2),
+        );
+        let start = x;
+        x = put(
+            buf,
+            x,
+            y,
+            &format!("{} ", search.replacement),
+            cx.st(PRIMARY, CANVAS),
+            limit.saturating_sub(x),
+        );
+        hits.add(
+            Rect::new(start, y, x.saturating_sub(start).max(1), 1),
+            Target::EditorReplaceInput,
+        );
+        for (label, target) in [
+            (" Replace ", Target::EditorReplaceOne),
+            ("All", Target::EditorReplaceAll),
+        ] {
+            let start = x;
+            x = put(
+                buf,
+                x,
+                y,
+                label,
+                cx.st(SECONDARY, CANVAS),
+                limit.saturating_sub(x),
+            );
+            if x > start {
+                hits.add(Rect::new(start, y, x - start, 1), target);
+            }
+        }
     }
 }
 
@@ -632,11 +644,22 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
         &app.ui.overlay,
         app.ui.view,
     ) {
-        let geo = edit_geometry(edit, g.panel.unwrap_or(g.timeline));
-        return Some(Position::new(
-            geo.base_x + geo.cursor.1 as u16,
-            geo.top_y + (geo.cursor.0 - geo.first) as u16,
-        ));
+        let r = g.panel.unwrap_or(g.timeline);
+        if let Some(search) = &app.ui.file_search {
+            let (prefix, value, y) = if search.replace_focus {
+                (9, &search.replacement, r.bottom().saturating_sub(1))
+            } else {
+                (6, &search.query, r.bottom().saturating_sub(2))
+            };
+            return Some(Position::new(
+                (r.x + prefix + width(value) as u16).min(r.right().saturating_sub(2)),
+                y,
+            ));
+        }
+        return edit
+            .buf
+            .cursor(file_editor_area(r, false))
+            .map(|(x, y)| Position::new(x, y));
     }
     // The file modal hides the page underneath, including the composer's
     // caret, unless the editor above is the one taking input.
@@ -1775,6 +1798,7 @@ fn draw_left(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     match a.ui.tab {
         Tab::Sessions => draw_sessions(cx, buf, body, focused, hits),
         Tab::Files => draw_files(cx, buf, body, focused, hits),
+        Tab::Git => draw_project_git(cx, buf, body, focused, hits),
         Tab::Projects => draw_projects(cx, buf, body, focused, hits),
     }
     if false && a.ui.tab == Tab::Sessions && body.width >= 8 && body.height >= 3 {
@@ -1822,6 +1846,7 @@ fn tab_icons(cx: &Cx, r: Rect) -> Vec<(Tab, Rect, String, &'static str)> {
         let glyph = match tab {
             Tab::Sessions => "tab_sessions",
             Tab::Files => "tab_files",
+            Tab::Git => "tab_files",
             Tab::Projects => "tab_projects",
         };
         let i = i as u16;
@@ -1866,6 +1891,7 @@ fn draw_tab_icons(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             Tab::Sessions => "[Sessions]",
             Tab::Projects => "[Projects]",
             Tab::Files => "[Files]",
+            Tab::Git => "[Git]",
         };
         put(buf, rect.x, rect.y, label, style, rect.width);
         if active && cx.t.mono() {
@@ -2180,6 +2206,95 @@ fn draw_rail_popup(cx: &Cx, buf: &mut Buffer, r: Rect, limit: Rect) {
     }
 }
 
+fn draw_project_git(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitMap) {
+    let app = cx.app;
+    let mut y = r.y;
+    let line = |buf: &mut Buffer, y: u16, value: &str, role: &str| {
+        if y < r.bottom() {
+            put(
+                buf,
+                r.x + 1,
+                y,
+                value,
+                cx.st(role, SIDEBAR),
+                r.width.saturating_sub(1),
+            );
+        }
+    };
+    line(buf, y, "Git", PRIMARY);
+    y += 1;
+    let Some((_, data)) = &app.state.project_git else {
+        line(buf, y, "Loading Git status…", MUTED);
+        return;
+    };
+    let data = match data {
+        Ok(data) => data,
+        Err(error) => {
+            line(buf, y, error, "status.error");
+            return;
+        }
+    };
+    line(buf, y, data["worktree"].as_str().unwrap_or(""), MUTED);
+    y += 1;
+    line(buf, y, data["branch"].as_str().unwrap_or(""), PRIMARY);
+    y += 1;
+    let rows = app.project_git_rows();
+    let cursor = app.cursor(Tab::Git);
+    for group in [GitGroup::Staged, GitGroup::Unstaged, GitGroup::Untracked] {
+        line(buf, y, group.label(), MUTED);
+        y += 1;
+        for (index, entry) in rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.group == group)
+        {
+            if y >= r.bottom() {
+                return;
+            }
+            let rect = Rect::new(r.x, y, r.width, 1);
+            let style = row_style(cx, focused && index == cursor, cx.hovered(rect));
+            clear(buf, rect, style);
+            let mark = match group {
+                GitGroup::Staged => entry.status.chars().next().unwrap_or(' '),
+                GitGroup::Unstaged => entry.status.chars().nth(1).unwrap_or(' '),
+                GitGroup::Untracked => '?',
+            };
+            put(
+                buf,
+                r.x + 1,
+                y,
+                &format!("{mark} {}", entry.path),
+                style,
+                r.width.saturating_sub(1),
+            );
+            hits.add(rect, Target::SideRow(index));
+            y += 1;
+        }
+    }
+    line(buf, y, "Branches", MUTED);
+    y += 1;
+    for branch in data["branches"].as_array().into_iter().flatten() {
+        if y >= r.bottom() {
+            break;
+        }
+        line(
+            buf,
+            y,
+            &format!(
+                "{} {}",
+                if branch["current"].as_bool().unwrap_or(false) {
+                    "●"
+                } else {
+                    " "
+                },
+                branch["name"].as_str().unwrap_or("")
+            ),
+            PRIMARY,
+        );
+        y += 1;
+    }
+}
+
 fn draw_files(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitMap) {
     let a = cx.app;
     let mut top = r.y;
@@ -2229,6 +2344,22 @@ fn draw_files(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitM
         if h.switchable {
             hits.add(row, Target::FilesRoot);
         }
+        top += 1;
+    }
+    let watch_notice = match a.file_watch_status.as_str() {
+        "polling" => Some("Polling every 3 seconds"),
+        "disconnected" => Some("File watching disconnected"),
+        _ => None,
+    };
+    if let Some(notice) = watch_notice.filter(|_| top < r.bottom()) {
+        put(
+            buf,
+            r.x + 1,
+            top,
+            notice,
+            cx.st(MUTED, SIDEBAR),
+            r.width.saturating_sub(2),
+        );
         top += 1;
     }
     let height = r.bottom().saturating_sub(top);
@@ -2365,10 +2496,36 @@ fn git_marker(code: &str) -> Option<(char, &'static str)> {
 
 fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     clear(buf, r, cx.st(PRIMARY, CANVAS));
+    let header = format!("Terminals ({})", cx.app.terminal_panel.terminals.len());
+    put(buf, r.x, r.y, &header, cx.st(PRIMARY, CANVAS), r.width);
+    let hint = if cx.app.terminal_focused {
+        "Ctrl+] tabs"
+    } else {
+        "Enter open  c take control  r release  Esc close"
+    };
+    let hint_x = r.x.saturating_add(width(&header) as u16 + 2);
+    put(
+        buf,
+        hint_x,
+        r.y,
+        hint,
+        cx.st(MUTED, CANVAS),
+        r.right().saturating_sub(hint_x),
+    );
+    let close = "Close panel";
+    if r.width >= width(close) as u16 {
+        let x = r.right() - width(close) as u16;
+        put(buf, x, r.y, close, cx.st(ACCENT, CANVAS), r.right() - x);
+        hits.add(
+            Rect::new(x, r.y, width(close) as u16, 1),
+            Target::TerminalPanelClose,
+        );
+    }
+    if r.height < 3 {
+        return;
+    }
     let mut x = r.x;
-    let header = format!("Terminals ({})  ", cx.app.terminal_panel.terminals.len());
-    put(buf, x, r.y, &header, cx.st(PRIMARY, CANVAS), r.width);
-    x = x.saturating_add(width(&header) as u16).min(r.right());
+    let tab_y = r.y + 1;
     for (index, terminal) in cx.app.terminal_panel.terminals.iter().enumerate() {
         let label = format!(
             "{} {} ",
@@ -2380,75 +2537,87 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             terminal.name
         );
         let remaining = r.right().saturating_sub(x);
-        put(buf, x, r.y, &label, cx.st(PRIMARY, CANVAS), remaining);
+        put(buf, x, tab_y, &label, cx.st(PRIMARY, CANVAS), remaining);
         hits.add(
-            Rect::new(x, r.y, (width(&label) as u16).min(remaining), 1),
+            Rect::new(x, tab_y, (width(&label) as u16).min(remaining), 1),
             Target::TerminalTab(index),
         );
         x = x.saturating_add(width(&label) as u16).min(r.right());
         if x < r.right() {
-            put(buf, x, r.y, "×", cx.st(MUTED, CANVAS), 1);
-            hits.add(Rect::new(x, r.y, 1, 1), Target::TerminalClose(index));
+            put(buf, x, tab_y, "×", cx.st(MUTED, CANVAS), 1);
+            hits.add(Rect::new(x, tab_y, 1, 1), Target::TerminalClose(index));
             x = (x + 2).min(r.right());
         }
     }
     put(
         buf,
         x,
-        r.y,
+        tab_y,
         "+",
         cx.st(ACCENT, CANVAS),
         r.right().saturating_sub(x),
     );
     hits.add(
-        Rect::new(x, r.y, r.right().saturating_sub(x).min(1), 1),
+        Rect::new(x, tab_y, r.right().saturating_sub(x).min(1), 1),
         Target::TerminalNew,
     );
-    x = x.saturating_add(2).min(r.right());
-    if cx
-        .app
-        .terminal_panel
-        .selection
-        .as_ref()
-        .is_some_and(|s| s.dragged())
-    {
+    let mut x = r.x;
+    let action_y = r.y + 2;
+    for (label, target) in [
+        ("Rename", Target::TerminalRename),
+        ("Close", Target::TerminalCloseSelected),
+        (
+            if cx.app.terminal_controlled {
+                "Release control"
+            } else {
+                "Take control"
+            },
+            if cx.app.terminal_controlled {
+                Target::TerminalReleaseControl
+            } else {
+                Target::TerminalTakeControl
+            },
+        ),
+        ("Copy", Target::TerminalCopy),
+    ] {
         let remaining = r.right().saturating_sub(x);
-        put(buf, x, r.y, "Copy", cx.st(ACCENT, CANVAS), remaining);
-        hits.add(Rect::new(x, r.y, remaining.min(4), 1), Target::TerminalCopy);
+        put(buf, x, action_y, label, cx.st(ACCENT, CANVAS), remaining);
+        hits.add(
+            Rect::new(x, action_y, (width(label) as u16).min(remaining), 1),
+            target,
+        );
+        x = x.saturating_add(width(label) as u16 + 2).min(r.right());
     }
-    if cx.app.terminal_panel.selected.is_some() && r.height > 1 {
-        let screen = Rect::new(r.x, r.y + 1, r.width, r.height - 1);
+    if cx.app.terminal_panel.selected.is_some() && r.height > 3 {
+        let read_only = !cx.app.terminal_controlled && cx.app.terminal_panel.selected.is_some();
+        let screen =
+            crate::terminal_panel::screen_area(r, read_only, cx.app.terminal_panel.screen.gap);
         cx.app.terminal_panel.screen.render(screen, buf);
         if let Some(selection) = &cx.app.terminal_panel.selection {
             if selection.dragged() && selection.area == screen {
                 selection.highlight(buf);
             }
         }
-        if !cx.app.terminal_controlled && cx.app.terminal_panel.attachment.is_some() {
-            let label = "Read-only · Take control";
+        if read_only {
+            let label = "Read-only — take control to type.";
             put(
                 buf,
-                screen.x,
-                screen.y,
+                r.x,
+                r.y + 3,
                 label,
                 cx.st("status.warning", CANVAS),
                 screen.width,
             );
             hits.add(
-                Rect::new(
-                    screen.x,
-                    screen.y,
-                    (width(label) as u16).min(screen.width),
-                    1,
-                ),
+                Rect::new(r.x, r.y + 3, (width(label) as u16).min(r.width), 1),
                 Target::TerminalTakeControl,
             );
         }
         if cx.app.terminal_panel.screen.gap {
             put(
                 buf,
-                screen.x,
-                screen.y,
+                r.x,
+                r.y + 3 + u16::from(read_only),
                 crate::terminal_screen::GAP_NOTICE,
                 cx.st("status.warning", CANVAS),
                 screen.width,
@@ -2547,7 +2716,7 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut Hit
     let text_room = paint::file_text_room(r.width, total);
     let preview = cx.app.file_preview();
     // A Markdown file offers `p source`, or `p preview` back from the source.
-    let toggle = (cx.app.file_is_markdown() && cx.app.ui.file_edit.is_none()).then(|| {
+    let toggle = cx.app.file_is_markdown().then(|| {
         let key = cx
             .app
             .manifest
@@ -2594,44 +2763,6 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut Hit
             hits.add(Rect::new(x, r.y, tw, 1), Target::FilePreview);
             right = x.saturating_sub(2);
         }
-    }
-    // `e edit`, so the read-only view says how to start typing.
-    let edit_key = cx
-        .app
-        .manifest
-        .command("editor.edit")
-        .and_then(|c| c.tui_key())
-        .unwrap_or("e")
-        .to_owned();
-    let edit_w = width(&edit_key) as u16 + 1 + width("edit") as u16;
-    if right > edit_w + 2 {
-        let x = right.saturating_sub(edit_w);
-        let kx = put(
-            buf,
-            x,
-            r.y,
-            &edit_key,
-            cx.st(ACCENT, CANVAS),
-            r.right().saturating_sub(x),
-        );
-        let lx = put(
-            buf,
-            kx,
-            r.y,
-            " ",
-            cx.st(MUTED, CANVAS),
-            r.right().saturating_sub(kx),
-        );
-        put(
-            buf,
-            lx,
-            r.y,
-            "edit",
-            cx.st(MUTED, CANVAS),
-            r.right().saturating_sub(lx),
-        );
-        hits.add(Rect::new(x, r.y, edit_w, 1), Target::FileEdit);
-        right = x.saturating_sub(2);
     }
     // `lines 1-38 of 38`, right-aligned and muted.
     let range = match result {
@@ -2689,9 +2820,7 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut Hit
     }
     // A long directory is cut in the middle and the basename is kept.
     let room = (r.width as usize)
-        .saturating_sub(
-            range_w as usize + toggle_w as usize + edit_w as usize + (x - r.x) as usize + 4,
-        )
+        .saturating_sub(range_w as usize + toggle_w as usize + (x - r.x) as usize + 4)
         .max(8);
     let (dir, base) = match display.rfind('/') {
         Some(i) => display.split_at(i + 1),
@@ -2715,8 +2844,8 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut Hit
         cx.st(PRIMARY, CANVAS).add_modifier(Modifier::BOLD),
         r.right().saturating_sub(x),
     );
-    if let Some(edit) = &cx.app.ui.file_edit {
-        draw_file_edit(cx, buf, r, edit);
+    if let (Some(edit), false) = (&cx.app.ui.file_edit, preview) {
+        draw_file_edit(cx, buf, r, edit, hits);
         return;
     }
     match result {
@@ -2978,12 +3107,14 @@ fn draw_diff_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut Hit
     if *group == GitGroup::Untracked {
         return note(buf, "Untracked file: Git has no diff for it yet.", MUTED);
     }
-    let loaded = cx
-        .app
-        .state
-        .diff
-        .as_ref()
-        .filter(|(session, p, _)| Some(session.as_str()) == cx.app.viewed_id() && p == path);
+    let loaded = cx.app.state.diff.as_ref().filter(|(session, p, _)| {
+        (Some(session.as_str()) == cx.app.viewed_id()
+            || cx
+                .app
+                .current_project()
+                .is_some_and(|id| session == &format!("project:{id}")))
+            && p == path
+    });
     match loaded {
         None => {
             let text = if cx.t.opts.ascii {

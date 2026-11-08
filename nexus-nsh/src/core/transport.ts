@@ -3,7 +3,7 @@
 // `apiBase()` at a Core on the network, which serves without a token; on macOS a loopback
 // Core is authenticated from ~/.nexus/daemon.json, the same file the TUI reads. Mirrors
 // nexus-tui/src/transport.rs.
-import { platform } from "nsh";
+import { nativeModule, platform } from "nsh";
 import { exists, readFile } from "fs/promises";
 import { homedir } from "os";
 
@@ -47,6 +47,13 @@ let daemon: { url: string; token: string } | null = null;
 /** Read the local daemon's address and token on macOS (0600, the same file the TUI reads). */
 export async function localCore(): Promise<{ url: string; token: string } | null> {
   if (platform.os !== "macos") return null;
+  try {
+    const bridge = nativeModule<{ Discovery?: { localCore(): { url: string; token: string } | null } }>("nexus/native").Discovery;
+    if (bridge) {
+      try { daemon = bridge.localCore(); } catch { daemon = null; }
+      return daemon;
+    }
+  } catch { /* older hosts use the filesystem bootstrap below */ }
   const home = homedir();
   // `~/.nexus` is 0.10's once `nexus migrate` marked it; before then `~/.nexus10` is.
   let migrated = false;

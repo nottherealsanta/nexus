@@ -4809,6 +4809,7 @@ dependencies = [
  "objc2-avf-audio",
  "objc2-core-audio-types",
  "objc2-foundation 0.3.2",
+ "serde_json",
 ]
 
 [[package]]
@@ -4868,7 +4869,7 @@ dependencies = [
 [[package]]
 name = "nsh-base"
 version = "0.4.0"
-source = "git+https://github.com/longbridge/nsh?rev=3789a451f6d4935a3b13890fb1020a427d20a8ee#3789a451f6d4935a3b13890fb1020a427d20a8ee"
+source = "git+https://github.com/longbridge/nsh?rev=209cb8492705321315745f2745c8060816b6d378#209cb8492705321315745f2745c8060816b6d378"
 dependencies = [
  "chrono",
  "html5ever 0.27.0",
@@ -4897,7 +4898,7 @@ dependencies = [
 [[package]]
 name = "nsh-core"
 version = "0.4.0"
-source = "git+https://github.com/longbridge/nsh?rev=3789a451f6d4935a3b13890fb1020a427d20a8ee#3789a451f6d4935a3b13890fb1020a427d20a8ee"
+source = "git+https://github.com/longbridge/nsh?rev=209cb8492705321315745f2745c8060816b6d378#209cb8492705321315745f2745c8060816b6d378"
 dependencies = [
  "cap-std",
  "crc32fast",
@@ -4933,7 +4934,7 @@ dependencies = [
 [[package]]
 name = "nsh-engine"
 version = "0.4.0"
-source = "git+https://github.com/longbridge/nsh?rev=3789a451f6d4935a3b13890fb1020a427d20a8ee#3789a451f6d4935a3b13890fb1020a427d20a8ee"
+source = "git+https://github.com/longbridge/nsh?rev=209cb8492705321315745f2745c8060816b6d378#209cb8492705321315745f2745c8060816b6d378"
 dependencies = [
  "crossbeam-channel",
  "libc",
@@ -4954,7 +4955,7 @@ dependencies = [
 [[package]]
 name = "nsh-js"
 version = "0.4.0"
-source = "git+https://github.com/longbridge/nsh?rev=3789a451f6d4935a3b13890fb1020a427d20a8ee#3789a451f6d4935a3b13890fb1020a427d20a8ee"
+source = "git+https://github.com/longbridge/nsh?rev=209cb8492705321315745f2745c8060816b6d378#209cb8492705321315745f2745c8060816b6d378"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
@@ -4975,7 +4976,7 @@ dependencies = [
 [[package]]
 name = "nsh-macros"
 version = "0.4.0"
-source = "git+https://github.com/longbridge/nsh?rev=3789a451f6d4935a3b13890fb1020a427d20a8ee#3789a451f6d4935a3b13890fb1020a427d20a8ee"
+source = "git+https://github.com/longbridge/nsh?rev=209cb8492705321315745f2745c8060816b6d378#209cb8492705321315745f2745c8060816b6d378"
 dependencies = [
  "imagesize 0.15.0",
  "proc-macro2",
@@ -4988,7 +4989,7 @@ dependencies = [
 [[package]]
 name = "nsh-package"
 version = "0.4.0"
-source = "git+https://github.com/longbridge/nsh?rev=3789a451f6d4935a3b13890fb1020a427d20a8ee#3789a451f6d4935a3b13890fb1020a427d20a8ee"
+source = "git+https://github.com/longbridge/nsh?rev=209cb8492705321315745f2745c8060816b6d378#209cb8492705321315745f2745c8060816b6d378"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
@@ -5003,7 +5004,7 @@ dependencies = [
 [[package]]
 name = "nsh-platform-gpui"
 version = "0.4.0"
-source = "git+https://github.com/longbridge/nsh?rev=3789a451f6d4935a3b13890fb1020a427d20a8ee#3789a451f6d4935a3b13890fb1020a427d20a8ee"
+source = "git+https://github.com/longbridge/nsh?rev=209cb8492705321315745f2745c8060816b6d378#209cb8492705321315745f2745c8060816b6d378"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -5036,7 +5037,7 @@ dependencies = [
 [[package]]
 name = "nsh-updater"
 version = "0.4.0"
-source = "git+https://github.com/longbridge/nsh?rev=3789a451f6d4935a3b13890fb1020a427d20a8ee#3789a451f6d4935a3b13890fb1020a427d20a8ee"
+source = "git+https://github.com/longbridge/nsh?rev=209cb8492705321315745f2745c8060816b6d378#209cb8492705321315745f2745c8060816b6d378"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",

@@ -30,7 +30,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..paths import home
-from .auth.claude import NOT_INSTALLED, cli_path
+from .auth.claude import NOT_INSTALLED, cli_path, cli_version
 from .types import (
     Done,
     Event,
@@ -185,6 +185,8 @@ class ClaudeProvider:
         executable = cli_path()
         if executable is None:
             raise ProviderError(f"{self.name}: {NOT_INSTALLED}", phase="transport")
+        # Version is wire metadata, not an addition to the model's prompt.
+        body = body | {"claude_code_version": await asyncio.to_thread(cli_version, executable)}
         payload = json.dumps(body | {"executable": executable}).encode()
         if len(payload) > MAX_BYTES:
             raise ProviderError(f"{self.name}: the request exceeds 8 MiB", phase="transport")

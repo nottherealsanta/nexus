@@ -13,7 +13,7 @@ SECTION_ORDER = [
     "appearance", "providers", "agents", "tools", "mcp",
     "context", "dictation", "manager", "keybindings", "notifications", "about",
 ]
-TABS = ["sessions", "files"]
+TABS = ["sessions", "files", "git"]
 RIGHT = ["session_info", "git_status"]
 ROW_KINDS = {"choice", "toggle", "number", "text", "list", "action", "info", "keymap"}
 SCOPES = {"core", "client"}
@@ -165,6 +165,21 @@ def main() -> int:
             err(f"settings section {s.get('id')}: no rows")
         if "page" in s and not isinstance(s["page"], bool):
             err(f"settings section {s.get('id')}: page must be a boolean")
+
+    mobile = m.get("settings", {}).get("mobile", {})
+    by_section = {s.get("id"): s for s in secs}
+    for sid in mobile.get("sections", []):
+        if sid not in by_section:
+            err(f"settings.mobile: unknown section {sid!r}")
+    for rid in mobile.get("rows", []):
+        if rid not in rows_seen:
+            err(f"settings.mobile: unknown row {rid!r}")
+        elif rid.split(".", 1)[0] not in mobile.get("sections", []):
+            err(f"settings.mobile: row {rid!r} is outside the mobile sections")
+    for sid in mobile.get("sections", []):
+        s = by_section.get(sid, {})
+        if not s.get("page") and not any(r.get("id") in mobile.get("rows", []) for r in s.get("row", [])):
+            err(f"settings.mobile: section {sid!r} has no mobile rows")
 
     # navigation
     nav = m.get("navigation", {})

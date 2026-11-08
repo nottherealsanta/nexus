@@ -503,6 +503,24 @@ describe("history", () => {
     expect(loads()).toBe(2);
   });
 
+  test("stream overflow reloads a snapshot before resuming", async () => {
+    let streams = 0;
+    const app = await open("./App.tsx", {
+      clock: {}, width: 1024, height: 768, platform: "web",
+      network: {
+        ...core(),
+        "GET */api/event*": () => ({
+          body: streams++ === 0 ? sse(connected, 'event: bus.overflow\ndata: {}\n\n') : connected,
+          headers: { "content-type": "text/event-stream" },
+        }),
+      },
+    });
+    await app.waitFor("text:Refactor loader");
+    for (let i = 0; i < 20 && (app.requests().filter(r => r.url.includes("/api/snapshot")).length < 2 || streams < 2); i++) { await app.clock!.fastForward(500); await app.wait(20); }
+    expect(app.requests().filter(r => r.url.includes("/api/snapshot")).length).toBeGreaterThanOrEqual(2);
+    expect(streams).toBeGreaterThanOrEqual(2);
+  });
+
   test("a daemon that will not start is started once per outage", async () => {
     const app = await open("./App.tsx", {
       clock: {},

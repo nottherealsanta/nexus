@@ -45,7 +45,16 @@ pub struct TerminalPanel {
     pub selecting: bool,
 }
 
-pub fn key_bytes(key: crossterm::event::KeyEvent) -> Option<Vec<u8>> {
+pub fn screen_area(
+    dock: ratatui::layout::Rect,
+    read_only: bool,
+    gap: bool,
+) -> ratatui::layout::Rect {
+    let top = (3 + u16::from(read_only) + u16::from(gap)).min(dock.height);
+    ratatui::layout::Rect::new(dock.x, dock.y + top, dock.width, dock.height - top)
+}
+
+pub fn key_bytes(key: crossterm::event::KeyEvent, application_cursor: bool) -> Option<Vec<u8>> {
     use crossterm::event::{KeyCode, KeyModifiers};
     let mut bytes = match key.code {
         KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) && c.is_ascii() => {
@@ -67,12 +76,12 @@ pub fn key_bytes(key: crossterm::event::KeyEvent) -> Option<Vec<u8>> {
         KeyCode::Backspace => vec![127],
         KeyCode::Tab => vec![b'\t'],
         KeyCode::BackTab => b"\x1b[Z".to_vec(),
-        KeyCode::Up => b"\x1b[A".to_vec(),
-        KeyCode::Down => b"\x1b[B".to_vec(),
-        KeyCode::Right => b"\x1b[C".to_vec(),
-        KeyCode::Left => b"\x1b[D".to_vec(),
-        KeyCode::Home => b"\x1b[H".to_vec(),
-        KeyCode::End => b"\x1b[F".to_vec(),
+        KeyCode::Up => cursor_key(b'A', application_cursor),
+        KeyCode::Down => cursor_key(b'B', application_cursor),
+        KeyCode::Right => cursor_key(b'C', application_cursor),
+        KeyCode::Left => cursor_key(b'D', application_cursor),
+        KeyCode::Home => cursor_key(b'H', application_cursor),
+        KeyCode::End => cursor_key(b'F', application_cursor),
         KeyCode::Delete => b"\x1b[3~".to_vec(),
         KeyCode::Insert => b"\x1b[2~".to_vec(),
         KeyCode::PageUp => b"\x1b[5~".to_vec(),
@@ -98,6 +107,77 @@ pub fn key_bytes(key: crossterm::event::KeyEvent) -> Option<Vec<u8>> {
         bytes.insert(0, 27);
     }
     Some(bytes)
+}
+
+/// Encode a mouse event in the application's requested xterm protocol.
+pub fn mouse_bytes(
+    event: crossterm::event::MouseEvent,
+    x: u16,
+    y: u16,
+    mode: vt100::MouseProtocolMode,
+    encoding: vt100::MouseProtocolEncoding,
+) -> Option<Vec<u8>> {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
+    use vt100::{MouseProtocolEncoding as Encoding, MouseProtocolMode as Mode};
+    if mode == Mode::None {
+        return None;
+    }
+    let button = |b| match b {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+    };
+    let (mut code, release) = match event.kind {
+        MouseEventKind::Down(b) => (button(b), false),
+        MouseEventKind::Up(b) if mode != Mode::Press => (button(b), true),
+        MouseEventKind::Drag(b) if matches!(mode, Mode::ButtonMotion | Mode::AnyMotion) => {
+            (button(b) + 32, false)
+        }
+        MouseEventKind::Moved if mode == Mode::AnyMotion => (35, false),
+        MouseEventKind::ScrollUp => (64, false),
+        MouseEventKind::ScrollDown => (65, false),
+        MouseEventKind::ScrollLeft => (66, false),
+        MouseEventKind::ScrollRight => (67, false),
+        _ => return Some(Vec::new()),
+    };
+    if event.modifiers.contains(KeyModifiers::SHIFT) {
+        code += 4;
+    }
+    if event.modifiers.contains(KeyModifiers::ALT) {
+        code += 8;
+    }
+    if event.modifiers.contains(KeyModifiers::CONTROL) {
+        code += 16;
+    }
+    let x = u32::from(x) + 1;
+    let y = u32::from(y) + 1;
+    if encoding == Encoding::Sgr {
+        return Some(
+            format!("\x1b[<{code};{x};{y}{}", if release { 'm' } else { 'M' }).into_bytes(),
+        );
+    }
+    if release {
+        code = (code & !3) | 3;
+    }
+    let mut out = b"\x1b[M".to_vec();
+    for n in [code + 32, x + 32, y + 32] {
+        if encoding == Encoding::Default {
+            if n > 255 {
+                return Some(Vec::new());
+            }
+            out.push(n as u8);
+        } else if let Some(c) = char::from_u32(n) {
+            let mut buf = [0; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        } else {
+            return Some(Vec::new());
+        }
+    }
+    Some(out)
+}
+
+fn cursor_key(final_byte: u8, application_cursor: bool) -> Vec<u8> {
+    vec![27, if application_cursor { b'O' } else { b'[' }, final_byte]
 }
 
 impl Default for TerminalPanel {
@@ -128,6 +208,47 @@ impl Default for TerminalPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_keys_follow_application_mode() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(key_bytes(up, false).unwrap(), b"\x1b[A");
+        assert_eq!(key_bytes(up, true).unwrap(), b"\x1bOA");
+    }
+
+    #[test]
+    fn mouse_reports_requested_modes_and_encoding() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use vt100::{MouseProtocolEncoding as E, MouseProtocolMode as M};
+        let mut event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(mouse_bytes(event, 4, 2, M::None, E::Sgr), None);
+        assert_eq!(
+            mouse_bytes(event, 4, 2, M::PressRelease, E::Sgr).unwrap(),
+            b"\x1b[<0;5;3M"
+        );
+        event.kind = MouseEventKind::Up(MouseButton::Left);
+        assert_eq!(
+            mouse_bytes(event, 4, 2, M::PressRelease, E::Sgr).unwrap(),
+            b"\x1b[<0;5;3m"
+        );
+        assert!(mouse_bytes(event, 4, 2, M::Press, E::Default)
+            .unwrap()
+            .is_empty());
+        event.kind = MouseEventKind::Drag(MouseButton::Left);
+        assert!(mouse_bytes(event, 4, 2, M::PressRelease, E::Sgr)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            mouse_bytes(event, 4, 2, M::ButtonMotion, E::Sgr).unwrap(),
+            b"\x1b[<32;5;3M"
+        );
+    }
 
     #[test]
     fn starts_with_empty_list_and_list_focus() {

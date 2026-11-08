@@ -60,6 +60,23 @@ async def test_step_limit_disables_tools_and_asks_for_a_summary(tmp_path):
     assert events[-1] == TurnEnd("max_steps", 2)
 
 
+async def test_step_budget_notice_is_visible_once_and_tools_still_run(tmp_path):
+    from nexus.loop import STEP_BUDGET_NOTICE, MessageAdded
+
+    provider = Scripted([
+        [ToolCall(f"c{i}", "write", f'{{"path": "step{i}.txt", "content": "ok"}}')]
+        for i in range(9)
+    ] + [[Text("done")]])
+    agent = Agent(provider, model="m", workspace=tmp_path, max_steps=10)
+    events = [e async for e in agent.turn("go")]
+    notices = [e for e in events if isinstance(e, MessageAdded) and Text(STEP_BUDGET_NOTICE) in e.message.parts]
+    assert len(notices) == 1
+    assert STEP_BUDGET_NOTICE not in str(provider.requests[6].messages)
+    assert STEP_BUDGET_NOTICE in str(provider.requests[7].messages)
+    assert (tmp_path / "step8.txt").read_text() == "ok"
+    assert events[-1] == TurnEnd("max_steps", 10)
+
+
 async def test_a_tool_call_after_the_step_limit_is_refused_and_not_run(tmp_path):
     provider = Scripted([
         [ToolCall("c1", "write", '{"path": "a.txt", "content": "a"}')],

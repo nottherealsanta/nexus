@@ -30,7 +30,7 @@ class WorktreeError(ValueError):
     """A Git or path validation failure, reported as a tool error or HTTP 400."""
 
 
-async def _git(*args: str, cwd: str | Path) -> str:
+async def _git(*args: str, cwd: str | Path, timeout: float = GIT_TIMEOUT) -> str:
     try:
         proc = await asyncio.create_subprocess_exec(
             "git", *args, cwd=str(cwd), env=ENV,
@@ -39,16 +39,34 @@ async def _git(*args: str, cwd: str | Path) -> str:
         )
     except OSError as exc:
         raise WorktreeError(f"git is not available: {exc}") from exc
+    async def read_limited(stream: asyncio.StreamReader, limit: int, label: str) -> bytes:
+        chunks: list[bytes] = []
+        size = 0
+        while chunk := await stream.read(65536):
+            size += len(chunk)
+            if size > limit:
+                raise WorktreeError(f"git {args[0]} {label} exceeded {limit} bytes")
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    assert proc.stdout is not None and proc.stderr is not None
+    readers = [asyncio.create_task(read_limited(proc.stdout, 16 * 1024 * 1024, "stdout")),
+               asyncio.create_task(read_limited(proc.stderr, 64 * 1024, "stderr"))]
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=GIT_TIMEOUT)
-    except (TimeoutError, asyncio.CancelledError) as exc:
+        async with asyncio.timeout(timeout):
+            out, err = await asyncio.gather(*readers)
+            await proc.wait()
+    except (TimeoutError, asyncio.CancelledError, WorktreeError) as exc:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        for reader in readers:
+            reader.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
         await proc.communicate()
         if isinstance(exc, TimeoutError):
-            raise WorktreeError(f"git {args[0]} timed out after {GIT_TIMEOUT:g} s") from exc
+            raise WorktreeError(f"git {args[0]} timed out after {timeout:g} s") from exc
         raise
     if proc.returncode != 0:
         message = err.decode("utf-8", "replace").strip() or out.decode("utf-8", "replace").strip() or "no output"

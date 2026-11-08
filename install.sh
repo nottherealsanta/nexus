@@ -73,8 +73,17 @@ done_message() {
 install_source() {
   need uv "https://docs.astral.sh/uv/"
   need cargo "https://rustup.rs"
+  need git
+  need node "Node 22 or newer"
+  node -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' || die "Node 22 or newer is required"
   need npm
   need nsh "npm install -g nsh"
+  if [ "$(uname -s)" = Linux ]; then
+    need cc "install a C toolchain (build-essential on Debian/Ubuntu)"
+    need pkg-config
+    pkg-config --exists alsa || die "ALSA development headers are missing (libasound2-dev on Debian/Ubuntu, alsa-lib-devel on Fedora)"
+    [ -x /usr/bin/env ] || die "the Monty kernel launcher requires /usr/bin/env"
+  fi
 
   step "Core (uv tool)"
   uv tool install --force --reinstall --no-binary-package claude-agent-sdk "$ROOT/nexus-core"

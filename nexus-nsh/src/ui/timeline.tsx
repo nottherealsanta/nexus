@@ -1,6 +1,7 @@
 import { agentColor } from "../agent-color";
-import { List, Scroll, computed, effect, platform, signal, Text, untracked, View } from "nsh";
-import { Canvas, Image } from "nsh";
+import { List, Scroll, computed, effect, signal, Text, untracked, View } from "nsh";
+import { phoneRow } from "../mobile";
+import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
 import { FOCUS, Icon, IconButton, PROSE, Shimmer, Status, StatusRail, T, TS } from "./kit";
@@ -9,7 +10,7 @@ import { disabledOf, startingSections, StartingContext } from "./newsession";
 import type { CtxSection } from "./newsession";
 import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
-import { config, contextDetail, firstPin, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed } from "../store";
+import { config, contextDetail, firstPin, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
 import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import { apiUrl } from "../core/transport";
@@ -987,7 +988,7 @@ function CodeFence(p: { block: TextViewCodeBlock }) {
  */
 export function MermaidFence(p: { block: TextViewCodeBlock; /** Scale the picture down to fit this height (the Manager's diagram card). */ maxHeight?: number; centered?: boolean }) {
   const measured = signal(0);
-  const columns = () => Math.max(8, Math.floor((measured() || 640) / (platform.idiom === "terminal" ? 8 : 7.75)));
+  const columns = () => Math.max(8, Math.floor((measured() || 640) / 7.75));
   return (
     <View class={`w-full my-1 ${p.centered ? "items-center" : ""}`} testID="mermaid-fence"
       onLayout={(b: any) => measured.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
@@ -1008,21 +1009,7 @@ export function MermaidFence(p: { block: TextViewCodeBlock; /** Scale the pictur
                   ))}
                 </View>
               )
-              : picture?.cells ? (
-                <Canvas testID="mermaid-diagram" accessibilityLabel="Mermaid diagram" style={{ width: picture.width, height: picture.height }} draw={(cx) => {
-                  picture.cells!.forEach((row, y) => {
-                    let x = 0;
-                    row.runs.forEach((run) => {
-                      const width = run.text.length * 8;
-                      cx.fillStyle = run.foreground;
-                      cx.fillRect(x, y * 16, width, 8);
-                      cx.fillStyle = run.background;
-                      cx.fillRect(x, y * 16 + 8, width, 8);
-                      x += width;
-                    });
-                  });
-                }} />
-              ) : (
+              : (
                 <Image src={picture!.url} style={fitPicture(picture!, p.maxHeight)}
                   accessibilityLabel="Mermaid diagram" testID="mermaid-diagram" />
               )}
@@ -1451,7 +1438,9 @@ export function Timeline() {
     streamRev();
     const sel = model.selected;
     if (!sel) return [];
-    return (lastRows = keepIdentity(lastRows, groupActivities(withStreaming(stable(), model.streaming.get(sel.sessionId), sel.sessionId), model.running.has(sel.sessionId))));
+    const all = groupActivities(withStreaming(stable(), model.streaming.get(sel.sessionId), sel.sessionId), model.running.has(sel.sessionId));
+    // A phone shows the session's status, the user's messages and the agent's replies, and nothing else.
+    return (lastRows = keepIdentity(lastRows, phone ? all.filter(phoneRow) : all));
   });
   const below = computed(() => newBelow(rows(), viewId()));
   // Follow state, as in the TUI: an open session and the jump follow the end, any scroll up leaves it, and only

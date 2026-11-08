@@ -109,6 +109,8 @@ pub fn rows(usage: &Value, now: f64) -> Vec<Row> {
         let id = p["id"].as_str().unwrap_or_default();
         if out.is_empty() {
             out.push(Row::Header);
+        } else {
+            out.push(Row::Gap);
         }
         out.push(Row::Provider {
             name: p["label"]

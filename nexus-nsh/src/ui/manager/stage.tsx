@@ -10,7 +10,7 @@ import {
   detailsScroll, scrollDetails, fieldText, inCall, listening, liveVoice, managerCaption, managerError, notice,
   phase, reducedMotion, modelPreview, connecting, speaking, stopManagerVoice, submitField, transcribing, userCaption, visual,
 } from "../../core/manager";
-import { isNarrow, live } from "../../store";
+import { isNarrow, live, phone } from "../../store";
 import { run } from "../../commands";
 const SHADOW = "0 18px 48px rgb(0 0 0 / 0.32)";
 /** Everything outside an open Manager panel recedes; the panel itself stays opaque. */
@@ -90,7 +90,11 @@ function caption(): { text: string; dim: boolean } | null {
   return null;
 }
 
-function Layer() {
+/** The Manager's caption, card, typed field and voice controls: the header dropdown on a desktop, the whole Manager tab on a phone. */
+/** Talk opens the microphone; while it listens the same button sends; a live call stops. */
+const talkLabel = () => listening() ? "Send" : liveVoice() ? "Stop" : "Talk";
+
+export function ManagerPanel(p: { full?: boolean }) {
   let scroll: any = null, offset = 0, limit = Infinity, lastRequest = detailsScroll();
   effect(() => {
     const next = detailsScroll(), delta = next - lastRequest; lastRequest = next;
@@ -102,14 +106,8 @@ function Layer() {
     const down = keymap.bind("pagedown", () => scrollDetails(200), { when: "always" });
     return () => { up(); down(); };
   });
-  return <Overlay class="inset-0" style={{ pointerEvents: "box-none" }} testID="manager-stage">
-    <If when={dropdownOpen()}>{() => <>
-      {/* The whole viewport recedes behind the panel; the panel is opaque above it. */}
-      <View class={`absolute inset-0 ${DIM}`} style={{ pointerEvents: "none" }} accessible={false} testID="manager-backdrop" />
-      <View class="absolute left-0 right-0 bottom-0" style={{ top: isNarrow() ? 56 : 44 }} onPress={closeManagerDropdown} />
-      <View class="absolute right-3 bg-popover p-4 gap-3" style={{ top: isNarrow() ? 56 : 44, width: Math.min(560, windowSize().width - 24), boxShadow: SHADOW }} testID="manager-dropdown">
-        <Text class={T.section}>Manager</Text>
-        <Scroll ref={(node: any) => { scroll = node; }} onScroll={(event) => { offset = event.offset.y; limit = Math.max(0, event.contentSize.height - event.size.height); }} style={{ maxHeight: Math.max(100, windowSize().height - 230) }}>
+  return <>
+        <Scroll ref={(node: any) => { scroll = node; }} onScroll={(event) => { offset = event.offset.y; limit = Math.max(0, event.contentSize.height - event.size.height); }} class={p.full ? "flex-1 min-h-0" : ""} style={p.full ? {} : { maxHeight: Math.max(100, windowSize().height - 230) }}>
           <View class="gap-3">
             <Text class={T.body} style={{ userSelect: "text" }} testID="manager-caption">{connecting() ? "Connecting…" : caption()?.text ?? (speaking() ? "Speaking" : listening() ? "Listening" : phase() !== "idle" ? "Thinking" : "Ready")}</Text>
             <If when={!!modelPreview()?.lines?.length}>{() => <Text class={T.meta} style={{ userSelect: "text" }}>{`Model context · excerpt\n${modelPreview()?.lines.join("\n")}`}</Text>}</If>
@@ -121,8 +119,26 @@ function Layer() {
           onFocus={() => dropdownInteractive.set(true)} onChange={({ value }) => fieldText.set(value)} onSubmit={submitField} submitBehavior="submit" class={`h-12 w-full bg-card px-3 ${TS.body} text-popover-foreground`} />
         <View class="flex-row justify-between items-center gap-3">
         <Button onPress={() => void run("manager.audio_toggle")} class={`flex-row items-center gap-2 rounded-(--radius) px-2 py-2 hover:bg-accent active:bg-selection ${FOCUS}`} testID="manager-voice-toggle" accessibilityLabel={voiceEnabled() ? "Voice on" : "Voice off"}><Icon name="mic" size={14} /><Text class={T.body}>{voiceEnabled() ? "Voice: on" : "Voice: off"}</Text></Button>
-        <Button onPress={() => void run("manager.open_session")}  class={`flex-row items-center gap-2 rounded-(--radius) px-2 py-2 hover:bg-accent active:bg-selection ${FOCUS}`} testID="manager-open-session"><Icon name="session" size={14} /><Text class={T.body}>Open Manager session</Text></Button>
+        <If when={phone}><Button onPress={() => void (liveVoice() ? stopManagerVoice() : run("manager.talk"))} class={`flex-row items-center gap-2 rounded-(--radius) bg-primary px-4 min-h-11 ${FOCUS}`} testID="manager-talk" accessibilityLabel={talkLabel()}><Icon name={listening() ? "arrow-up" : liveVoice() ? "stop" : "mic"} size={16} class="tint-on-accent" /><Text class={`${TS.body} text-on-accent font-semibold`}>{talkLabel()}</Text></Button></If>
+        <If when={!phone}><Button onPress={() => void run("manager.open_session")}  class={`flex-row items-center gap-2 rounded-(--radius) px-2 py-2 hover:bg-accent active:bg-selection ${FOCUS}`} testID="manager-open-session"><Icon name="session" size={14} /><Text class={T.body}>Open Manager session</Text></Button></If>
         </View>
+  </>;
+}
+
+/** The phone's Manager tab (AGENTS.md: mobile talks and types to the Manager here; there is no header indicator). */
+export function ManagerTab() {
+  return <View class="flex-1 min-h-0 bg-popover p-4 gap-3" testID="manager-tab"><ManagerPanel full /></View>;
+}
+
+function Layer() {
+  return <Overlay class="inset-0" style={{ pointerEvents: "box-none" }} testID="manager-stage">
+    <If when={dropdownOpen() && !phone}>{() => <>
+      {/* The whole viewport recedes behind the panel; the panel is opaque above it. */}
+      <View class={`absolute inset-0 ${DIM}`} style={{ pointerEvents: "none" }} accessible={false} testID="manager-backdrop" />
+      <View class="absolute left-0 right-0 bottom-0" style={{ top: isNarrow() ? 56 : 44 }} onPress={closeManagerDropdown} />
+      <View class="absolute right-3 bg-popover p-4 gap-3" style={{ top: isNarrow() ? 56 : 44, width: Math.min(560, windowSize().width - 24), boxShadow: SHADOW }} testID="manager-dropdown">
+        <Text class={T.section}>Manager</Text>
+        <ManagerPanel />
       </View>
     </>}</If>
     <If when={consent() !== null}>{() => <>

@@ -81,12 +81,50 @@ async def test_edit_and_patch_are_separate_tools(ctx):
     from nexus.tools.patch import TOOL as PATCH
 
     assert [t.spec.name for t in DEFAULT_TOOLS if t.spec.name in ("edit", "patch", "multiedit")] == ["edit", "patch"]
-    assert EDIT.spec.parameters["required"] == ["path", "old_string", "new_string"]
+    assert EDIT.spec.parameters["required"] == ["path"]
+    assert EDIT.spec.parameters["anyOf"] == [{"required": ["old_string", "new_string"]}, {"required": ["edits"]}]
     assert "patch" not in EDIT.spec.parameters["properties"]
     assert PATCH.spec.parameters["required"] == ["patch"]
     (ctx.workspace / "f.py").write_text("x = 1\n")
     with pytest.raises(ToolError, match="use the `patch` tool"):
         await edit({"patch": "*** Begin Patch\n*** End Patch"}, ctx)
+
+
+@pytest.mark.parametrize("original,old,new,expected", [
+    ('say “hello”—now\n', 'say "hello"-now', 'done', 'done\n'),
+    ('one  \r\ntwo\r\n', 'one\ntwo', 'three\nfour', 'three\r\nfour\r\n'),
+    ('one  \ntwo\n', 'one\ntwo', 'done', 'done\n'),
+    ('“x” and "x"\n', '"x"', 'exact', '“x” and exact\n'),
+])
+async def test_edit_matching_tiers_preserve_unmatched_bytes(ctx, original, old, new, expected):
+    path = ctx.workspace / "f.txt"
+    path.write_text(original, newline="")
+    await edit({"path": "f.txt", "old_string": old, "new_string": new}, ctx)
+    assert path.read_text(newline="") == expected
+
+
+async def test_edit_fuzzy_ambiguity_is_refused(ctx):
+    path = ctx.workspace / "f.txt"
+    path.write_text('“x” and ”x“\n')
+    with pytest.raises(ToolError, match="occurs 2 times"):
+        await edit({"path": "f.txt", "old_string": '"x"', "new_string": 'y'}, ctx)
+    assert path.read_text() == '“x” and ”x“\n'
+
+
+async def test_multi_edit_is_ordered_and_atomic(ctx):
+    path = ctx.workspace / "f.txt"
+    path.write_text("one two\n")
+    with pytest.raises(ToolError, match="not found"):
+        await edit({"path": "f.txt", "edits": [
+            {"old_string": "one", "new_string": "three"},
+            {"old_string": "missing", "new_string": "four"},
+        ]}, ctx)
+    assert path.read_text() == "one two\n"
+    await edit({"path": "f.txt", "edits": [
+        {"old_string": "one", "new_string": "three"},
+        {"old_string": "three two", "new_string": "done"},
+    ]}, ctx)
+    assert path.read_text() == "done\n"
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16

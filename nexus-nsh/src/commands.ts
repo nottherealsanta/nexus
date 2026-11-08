@@ -1,4 +1,5 @@
-import { loadFiles, loadOlderMessages, rememberNewSession } from "./store";
+import { loadFiles, loadOlderMessages, phone, rememberNewSession, selectedFileEntry, fileOperation, filesExpanded, selectedGitFile, loadGitPage, gitInput, openGitDiff } from "./store";
+import { PHONE_UNAVAILABLE, desktopOnly } from "./mobile";
 import type { UsageProvider } from "./store";
 // Command registry built from interface/manifest.toml (generated to src/gen/manifest.ts).
 // Ids, titles, keys, `when` rules, reasons and placements come from the manifest; this file
@@ -6,7 +7,7 @@ import type { UsageProvider } from "./store";
 import { Clipboard, effect, keymap, openUrl, platform } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
-  editFile, fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
+  fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   firstPrompts, pendingInputs, contextDetail, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   composerFocused, flowProject, flowSession, flowStage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, loadResources,
@@ -83,6 +84,8 @@ function evalTerm(t: string): boolean {
   switch (t) {
     case "always": return true;
     case "has_project": return !!currentProject();
+    case "focus.file_entry": return leftTab() === "files" && !!selectedFileEntry() && ["file", "directory"].includes(selectedFileEntry()!.kind);
+    case "focus.git_file": return leftTab() === "git" && !!selectedGitFile();
     case "project.current": case "project.passive": case "project.inactive": {
       const p = targetProject() ? model.projects.get(targetProject()!) : undefined;
       return !!p && projectStatus(p) === t.slice("project.".length);
@@ -117,7 +120,6 @@ function evalTerm(t: string): boolean {
     case "panel.file": return openFile() !== null;
     case "panel.diff": return false;
     case "editor.dirty": return fileDirty();
-    case "editor.readonly": return openFile() !== null && openFile()?.draft === undefined && openFile()?.content !== undefined;
     case "editor.markdown": return openFile() !== null && markdownFile();
     case "overlay.open": return !!inspector() || !!projectsOverview() || paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview() || !!annotating();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
@@ -182,10 +184,10 @@ export function openSettings() {
 }
 on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
 on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
-function tab(t: "sessions" | "files" | "projects") {
-  if (t === "files") void loadFiles(); leftTab.set(t);
+function tab(t: "sessions" | "files" | "git" | "projects") {
+  if (t === "files") void loadFiles(); if (t === "git") void loadGitPage(); leftTab.set(t);
   // As in the TUI, the sidebar tab holds the keys: Esc and Right step back, Left goes further in.
-  flowStage.set(t === "files" ? null : t);
+  flowStage.set(t === "files" || t === "git" ? null : t);
   if (t === "projects") flowProject.set(currentProject() ?? null); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true);
 }
 
@@ -607,6 +609,41 @@ on("sidebar.left.toggle", toggleLeft);
 on("sidebar.right.toggle", () => toggleRight(rightWidthHint.w));
 on("sidebar.tab.sessions", () => tab("sessions"));
 on("sidebar.tab.files", () => tab("files"));
+on("sidebar.tab.git", () => tab("git"));
+on("git.refresh", () => loadGitPage(), true);
+on("git.open_diff", () => openGitDiff(), true);
+for (const action of ["stage", "unstage"] as const) on(`git.${action}`, async () => {
+  const project = currentProject(), file = selectedGitFile(); if (!project || !file) return;
+  try { await request("POST", `/api/project/${project}/git/action`, { body: { action, paths: [file.path], worktree: currentWorktree()?.path }, key: newKey() }); await loadGitPage(); }
+  catch (e) { toast("error", `Git ${action} failed: ${String(e)}`); }
+}, true);
+async function confirmGit(action: string, value?: string, paths?: string[]) {
+  const project = currentProject(), worktree = currentWorktree()?.path as string | undefined; if (!project) return;
+  const ask = async () => {
+    const [live, status] = await Promise.all([
+      request<{ working: { id: string; title?: string }[]; idle: { id: string; title?: string }[] }>("GET", `/api/project/${project}/git/live`, { query: { worktree } }),
+      action === "push" ? request<{ push_upstream?: { remote: string; branch: string } | null }>("GET", `/api/project/${project}/git`, { query: { worktree } }) : Promise.resolve(null),
+    ]);
+    const proposal = status?.push_upstream;
+    const confirmedValue = proposal ? proposal.remote : value;
+    const names = (list: { id: string; title?: string }[]) => list.map((s) => s.title ? `${s.title} (${s.id})` : s.id).join(", ") || "none";
+    const detail = proposal ? `Set upstream to ${proposal.remote}/${proposal.branch}\n` : paths ? `Discard changes to ${paths.join(", ")}? This cannot be undone.\n` : value ? `${value}${action === "branch_delete_force" ? " (force delete; unmerged commits may be lost)" : ""}\n` : "";
+    confirmDialog.set({ title: `Git ${action.replaceAll("_", " ")}`, body: `${detail}Working sessions: ${names(live.working)}\nIdle sessions: ${names(live.idle)}`, confirm: "Continue", destructive: true, run: async () => {
+      try { await request("POST", `/api/project/${project}/git/action`, { body: { action, value: confirmedValue, paths, worktree, confirmed_live: live.working.map((s) => s.id), force_confirmed: action === "branch_delete_force" ? true : undefined }, key: newKey() }); await loadGitPage(); }
+      catch (e) { if (e instanceof ApiError && e.code === "worktree_live") { await ask(); return; } throw e; }
+    } });
+  };
+  try { await ask(); } catch (e) { toast("error", `Git ${action} failed: ${String(e)}`); }
+}
+for (const action of ["fetch", "pull", "push"] as const) on(`git.${action}`, () => confirmGit(action), true);
+on("git.discard", () => { const file = selectedGitFile(); if (file) void confirmGit("discard", undefined, [file.path]); }, true);
+for (const action of ["commit", "switch", "branch_create", "branch_delete", "branch_delete_force"] as const) on(`git.${action}`, () => {
+  gitInput.set({ title: action === "commit" ? "Commit message" : action === "switch" ? "Switch branch" : action === "branch_create" ? "Create branch" : action === "branch_delete_force" ? "Force delete branch" : "Delete branch", submit: (value) => {
+    gitInput.set(null);
+    if (action === "branch_delete_force") confirmDialog.set({ title: "Force delete branch", body: `Force deleting ${value} can permanently lose unmerged commits. Continue to the live-session confirmation?`, confirm: "Continue", destructive: true, run: () => confirmGit(action, value) });
+    else void confirmGit(action, value);
+  } });
+}, true);
 on("sidebar.tab.projects", () => tab("projects"));
 on("sidebar.focus", () => { if (isNarrow()) drawer.set("left"); else leftOpen.set(true); });
 on("composer.focus", () => focusComposer.fn());
@@ -625,7 +662,6 @@ export function openSessionSwitcher() {
   switcherOpen.set(true);
 }
 on("session.switch", openSessionSwitcher);
-on("editor.edit", () => editFile());
 on("editor.find", () => { if (openFile()) { if (markdownFile()) fileSource.set(true); fileFindOpen.set(true); } });
 on("editor.preview", () => { if (openFile() && markdownFile()) { fileSource.set(!fileSource()); fileFindOpen.set(false); } });
 on("editor.save", () => saveFile(), true);
@@ -633,13 +669,11 @@ on("editor.reload", () => {
   if (!fileDirty()) { void reloadFile(); return; }
   confirmDialog.set({ title: "Reload file", body: "Reading the file again replaces your unsaved changes.", confirm: "Reload", destructive: true, run: async () => { confirmDialog.set(null); await reloadFile(); } });
 });
-/** Esc / Close editor: a dirty editor asks first; a clean one leaves editing, then the file. */
+/** Esc closes a clean file; an unsaved draft asks before it is discarded. */
 function closeEditor() {
-  const f = openFile();
   const leave = () => {
     fileFindOpen.set(false);
-    if (f?.draft !== undefined) openFile.set({ ...f, draft: undefined, stale: false });
-    else { openFile.set(null); centre.set(viewed() ? "session" : "new_session"); }
+    openFile.set(null); centre.set(viewed() ? "session" : "new_session");
   };
   if (!fileDirty()) { leave(); return; }
   confirmDialog.set({ title: "Discard changes", body: "The file has unsaved changes. Leaving the editor drops them.", confirm: "Discard", destructive: true, run: () => { confirmDialog.set(null); leave(); } });
@@ -667,6 +701,23 @@ on("project.remove", () => askRemoveProject());
 on("project.move_up", () => moveProjectStep(-1), true);
 on("project.move_down", () => moveProjectStep(1), true);
 for (const status of Object.values(PROJECT_STATUS)) on(`project.status.${status}`, () => setCurrentProjectStatus(status), true);
+for (const id of ["new_file", "new_folder", "rename"]) on(`files.${id}`, () => {
+  const path = id === "rename" ? selectedFileEntry()?.path ?? "" : "";
+  fileOperation.set({ action: id === "new_file" ? "create_file" : id === "new_folder" ? "create_dir" : "rename", path });
+}, true);
+on("files.delete", async () => {
+  const entry = selectedFileEntry(), project = currentProject();
+  if (!entry || !project) return;
+  let count: number | null = null;
+  if (entry.kind === "directory") {
+    try { count = (await request<{count: number}>("GET", `/api/project/${project}/files`, { query: { path: entry.path, count: "true" } })).count; }
+    catch (e) { toast("error", `Could not count folder: ${String(e)}`); return; }
+  }
+  confirmDialog.set({ title: "Delete file or folder", body: `Delete ${entry.path}?${count === null ? "" : `\nContains ${count} items.`}\nThis cannot be undone.`, confirm: "Delete", destructive: true, run: async () => {
+    await request("POST", `/api/project/${project}/files`, { body: { action: "delete", path: entry.path }, key: newKey() });
+    selectedFileEntry.set(null); await Promise.all([loadFiles(), ...[...filesExpanded()].map((path) => loadFiles(path))]);
+  } });
+}, true);
 on("sidebar.row_menu", openFocusedSidebarMenu);
 on("session.rename", () => renaming.set(true), true);
 on("skills.learn", () => toast("info", "Type /learn followed by owner/repo, a GitHub URL or ./folder"), true);
@@ -902,6 +953,7 @@ const BLOCKED: Record<string, string> = {
 
 export interface Availability { ok: boolean; reason?: string }
 export function availability(c: Cmd): Availability {
+  if (phone && desktopOnly(c.id)) return { ok: false, reason: PHONE_UNAVAILABLE };
   if (c.status === "blocked_core") return { ok: false, reason: BLOCKED[c.id] ?? c.unavailable_reason ?? "Not available yet." };
   if (c.status === "deferred") return { ok: false, reason: `Deferred: ${c.unavailable_reason ?? "not built yet"}` };
   const voiceReason = voiceCommandReason(c.id);
@@ -931,15 +983,12 @@ export async function run(id: string) {
 /** `cmd` becomes `mod` (Cmd on Apple platforms, Ctrl elsewhere). */
 export const toKeystroke = (k: string) => k.replace(/^cmd(\+|$)/, "mod$1").replace("+cmd+", "+mod+");
 export function keyLabel(c: Cmd): string | null {
-  // In the terminal backend the TUI's keys are the ones that reach the app (upstream maps cmd to ctrl),
-  // so show their spelling, as the Rust client does.
-  if (platform.idiom === "terminal") return c.keys?.tui ?? null;
   const k = c.keys?.nsh; if (!k) return null;
   if (k === "esc") return "esc";
   try { return keymap.label(toKeystroke(k)); } catch { return k; }
 }
 
-const shortcutLabel = (k: string) => platform.idiom === "terminal" ? k : (() => { try { return keymap.label(toKeystroke(k)); } catch { return k; } })();
+const shortcutLabel = (k: string) => (() => { try { return keymap.label(toKeystroke(k)); } catch { return k; } })();
 /** The manifest's keys as text for `?`: the Ctrl+X leader first, then every direct NSH shortcut. */
 export function shortcutText(): string {
   const leaders = commands.flatMap((c) => (c.leader ?? []).map((k) => `${shortcutLabel(k).padEnd(8)} ${c.title}`));
@@ -1039,8 +1088,8 @@ export function bindKeys(): () => void {
   const offs: (() => void)[] = [];
   for (const c of commands) {
     if (c.id === "app.quit") continue; // platform-owned
-    // The terminal backend reaches the TUI's keys, and shows them (keyLabel), so both are live there.
-    const keys = platform.idiom === "terminal" ? [c.keys?.tui, c.keys?.nsh] : [c.keys?.nsh];
+    if (phone && desktopOnly(c.id)) continue; // a phone has no desktop surfaces to reach
+    const keys = [c.keys?.nsh];
     for (const k of new Set(keys)) {
       if (!k || k === "esc" || !GLOBAL_CONTEXTS.has(c.key_context ?? "") || !hasModifier(k)) continue;
       try { offs.push(keymap.bind(toKeystroke(k), () => { if (!terminalFocused()) void run(c.id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
@@ -1048,7 +1097,7 @@ export function bindKeys(): () => void {
   }
   for (const id of ["sidebar.row_menu", "tool.raw_toggle", "tool.show_all_output"]) {
     const c = byId.get(id);
-    for (const k of new Set(platform.idiom === "terminal" ? [c?.keys?.tui, c?.keys?.nsh] : [c?.keys?.nsh])) {
+    for (const k of new Set([c?.keys?.nsh])) {
       if (!k) continue;
       try {
         offs.push(keymap.bind(toKeystroke(k), () => {
@@ -1061,9 +1110,9 @@ export function bindKeys(): () => void {
   }
   // The editor's own keys act only while a file is open (cmd+s saves; cmd+e starts editing;
   // cmd+f opens the find bar). A bare terminal key (e) must not be taken from a text field.
-  for (const id of ["editor.save", "editor.edit", "editor.find", "editor.preview"]) {
+  for (const id of ["editor.save", "editor.find", "editor.preview"]) {
     const c = byId.get(id);
-    for (const k of new Set(platform.idiom === "terminal" ? [c?.keys?.tui, c?.keys?.nsh] : [c?.keys?.nsh])) {
+    for (const k of new Set([c?.keys?.nsh])) {
       if (!k) continue;
       try { offs.push(keymap.bind(toKeystroke(k), () => { if (openFile()) void run(id); }, { when: hasModifier(k) ? "always" : "notEditing" })); } catch { /* the platform keeps this keystroke */ }
     }

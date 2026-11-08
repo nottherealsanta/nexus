@@ -141,6 +141,8 @@ both exist) and nothing is stored for it. Headers: `authorization: Bearer <key>`
 
 ## claude
 
+Use **Claude Code 2.1.248 or newer** with Nexus. SDK wire diagnostics record the installed CLI version; version lookup is cached and does not make a provider request.
+
 Methods: `cli`. `llmhub/auth/claude.py` never reads token files; the CLI owns the credential store. Signed in means
 `claude auth status --json` reports `loggedIn: true` with `authMethod: claude.ai` (a subscription; an API-key login does not
 count). The answer is cached for 30 s because `connected()` asks often. The CLI is the user's own Claude Code (`$NEXUS10_CLAUDE_CLI`, else `claude` on `PATH`, else its usual install

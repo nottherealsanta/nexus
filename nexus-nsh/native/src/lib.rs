@@ -3,17 +3,19 @@
 
 use nsh_core::prelude::*;
 
-#[cfg(target_os = "ios")]
+mod discovery;
+
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 mod ios;
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 pub use ios::Microphone;
 
 /// Microphone capture for the composer's dictation flow.
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
 #[module]
 pub struct Microphone;
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
 #[module]
 impl Microphone {
     /// Whether this build can capture audio (iOS only).
@@ -137,75 +139,6 @@ impl Mermaid {
             css_height: raster.css_height,
         })
     }
-
-    /// The shared PNG rendered as terminal half-block runs, rather than an
-    /// image box the NSH terminal backend cannot paint.
-    pub fn render_terminal(
-        source: String,
-        columns: u32,
-        max_rows: u32,
-        theme: MermaidTheme,
-    ) -> Result<Vec<MermaidTerminalRow>, String> {
-        let columns = columns.clamp(8, 160);
-        let max_rows = max_rows.clamp(1, 80);
-        let background = theme
-            .background
-            .strip_prefix('#')
-            .ok_or("Invalid canvas colour")?;
-        if background.len() != 6 || !background.as_bytes().iter().all(u8::is_ascii_hexdigit) {
-            return Err("Invalid canvas colour".into());
-        }
-        let background: [u8; 3] =
-            [0, 2, 4].map(|at| u8::from_str_radix(&background[at..at + 2], 16).unwrap_or(0));
-        let raster = nexus_mermaid::raster::render_png(
-            &source,
-            &theme.into(),
-            &nexus_mermaid::raster::RasterOptions {
-                width: columns * 10,
-                max_height: max_rows * 20,
-                ..Default::default()
-            },
-        )
-        .map_err(|e| e.to_string())?;
-        let rows = nexus_mermaid::raster::terminal_cells(&raster, columns, max_rows, background)
-            .map_err(|e| e.to_string())?;
-        let hex = |rgb: [u8; 3]| format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                let mut runs: Vec<MermaidTerminalRun> = Vec::new();
-                for cell in row {
-                    let foreground = hex(cell.upper);
-                    let background = hex(cell.lower);
-                    if let Some(run) = runs
-                        .last_mut()
-                        .filter(|run| run.foreground == foreground && run.background == background)
-                    {
-                        run.text.push('▀');
-                    } else {
-                        runs.push(MermaidTerminalRun {
-                            text: "▀".into(),
-                            foreground,
-                            background,
-                        });
-                    }
-                }
-                MermaidTerminalRow { runs }
-            })
-            .collect())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, JsObject)]
-pub struct MermaidTerminalRow {
-    pub runs: Vec<MermaidTerminalRun>,
-}
-
-#[derive(Debug, Clone, PartialEq, JsObject)]
-pub struct MermaidTerminalRun {
-    pub text: String,
-    pub foreground: String,
-    pub background: String,
 }
 
 /// One row of the shared text renderer.
@@ -351,6 +284,7 @@ impl Annotate {
 #[native_module("nexus/native")]
 fn native(registry: &mut Registry) {
     registry.module::<Microphone>();
+    registry.module::<discovery::Discovery>();
     registry.module::<Mermaid>();
     registry.module::<Annotate>();
 }

@@ -282,7 +282,13 @@ persistence. Nexus tools are offered as SDK MCP tools whose handlers only record
 tool call, before the SDK can treat it as a result, and Nexus approves and runs it like any other. The next request carries
 the real result in the history.
 
-`provider.body(request)` is the wire request (`WireRequest("SDK", "claude-agent-sdk://query", {}, body)`):
+`provider.body(request)` describes the SDK input. At dispatch, the wire request
+adds `claude_code_version` (the installed CLI's `--version`, or null when
+unavailable). This diagnostic field is not model prompt text. Version lookup runs
+off the event loop, times out after two seconds and caches at most eight binaries,
+invalidating when a binary's size or modification time changes.
+
+`WireRequest("SDK", "claude-agent-sdk://query", {}, body)` includes:
 
 ```json
 {
@@ -297,6 +303,9 @@ the real result in the history.
   "effort": "high"
 }
 ```
+
+Cancellation kills the isolated worker's entire POSIX process group, including
+the CLI child; an offline real-subprocess regression verifies this.
 
 The reply is one `WireEvent("result", ...)` followed by `TextDelta`, `ToolCallStarted`, `ToolArgsDelta`, `PartDone`, `Usage` and
 `Done`. The whole batch is validated before any call is exposed: only offered tool names, at most 32 calls, arguments a JSON

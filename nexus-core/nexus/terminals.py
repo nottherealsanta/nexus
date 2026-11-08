@@ -390,7 +390,7 @@ class TerminalService:
 
     def rename(self, terminal_id: str, name: Any) -> dict[str, Any]:
         if not isinstance(name, str):
-            raise ValueError("invalid terminal name")
+            raise TypeError("invalid terminal name")
         name = name.strip()
         if not name or len(name) > MAX_NAME or any(unicodedata.category(c).startswith("C") for c in name):
             raise ValueError("terminal name must be 1..80 characters without control characters")

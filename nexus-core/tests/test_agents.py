@@ -61,6 +61,15 @@ def test_unknown_agent_names_the_options():
         agents.load(None).get("nope")
 
 
+def test_missing_builtin_install_is_reported(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    missing = tmp_path / "moved-install" / "builtin_agents"
+    monkeypatch.setattr(agents, "BUILTIN_DIR", missing)
+    found = agents.load(None)
+    assert not found.agents
+    assert found.problems == [{"path": str(missing), "error": "built-in agents folder is missing"}]
+
+
 @pytest.mark.parametrize("body", ["Before\n\n{{tools}}\n\nAfter", "Before\n\nAfter"])
 def test_render_prompt_does_not_list_tools(tmp_path, body):
     from dataclasses import replace

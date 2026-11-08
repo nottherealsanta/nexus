@@ -36,7 +36,7 @@ the terminal rather than global Nexus shortcuts. **Ctrl+]** returns focus to the
 resource list without sending that key to the shell; from the list, Esc closes
 the panel. Paste goes only to the focused terminal, using bracketed paste when
 requested by the application. Mouse interaction is owned by the terminal screen
-when focused and by Nexus otherwise; selection and an explicit **Copy** action
+when focused and by Nexus otherwise. Applications that request mouse reports receive them; hold Shift to select text instead. Selection and an explicit **Copy** action
 are required before emitting OSC 52. Escape sequences in terminal output never
 write the clipboard or open URLs or files by themselves. Resizing the screen
 resizes the PTY only while this attachment has control. Terminal contents are
