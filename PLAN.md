@@ -1129,6 +1129,13 @@ pi-subagents' fork spec. No peer-reviewed work on the pattern found.
   of the window; skipped when the window is unknown.
 - [x] **Parallel writes:** decided: forks get the parent's tools and workspace, no read-only restriction and no
   worktree; the conflict risk is documented in docs/agents.md.
+- [x] **Usage audit (2026-11-08):** 7 real fork calls (2 sessions, `codex/gpt-6.1-sol`, effort low) behaved
+  correctly in Core, but the parent ran two forks on `nexus-tui/src/app.rs` and a later session took a fork's
+  uncommitted edits for user work. Fixed in guidance: the tool description asks for one owner per file across
+  running forks, named in the task, and for the parent to say which fork changed what; `FORK_MARKER` asks the fork
+  to edit only its files and list them in its report.
+- [ ] **Watch:** parents re-tasking a finished fork with new scope via `message_session`, terse task prompts, and
+  fork use on other models (only one model seen so far). Re-audit after more sessions before changing anything.
 - [x] **UI (both clients):** child card and strip labelled `Fork`; the fork's timeline opens with one collapsed
   `Forked from ‹parent› · N messages` group (key `fork:<sid>`, existing group fold), inherited rows indented when
   open; phone keeps the folded row. TUI and NSH tests pass (11-08).

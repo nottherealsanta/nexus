@@ -132,7 +132,8 @@ TITLE_CHARS = 60
 # share their request prefix up to the task itself.
 FORK_MARKER = (
     "[Nexus fork] You are a fork of session {parent}: you have its context up to here. Do only the task below, then "
-    "reply with your report and stop. Do not continue the parent's own work. You cannot launch subagents or forks: "
+    "reply with your report and stop; the report lists every file you changed. Do not continue the parent's own "
+    "work, and edit only the files your task gives you. You cannot launch subagents or forks: "
     "your `session`, `fork` and `message_session` calls are refused, so do the task yourself.\n\nTask: "
 )
 FORK_MIN_FREE = 0.10  # a fork needs this share of the model's context window left for its task
@@ -801,7 +802,11 @@ class Runtime:
                 "Fork yourself: a copy of you with your full context so far does one task in a sub agent the user can "
                 "open, then reports back. Cheap (it shares your prompt cache), and it needs no briefing beyond the "
                 "task. Prefer `session` with a named agent for an independent opinion, since a fork inherits your "
-                "assumptions. A fork cannot launch subagents or forks itself. wait=true (default) returns its report; "
+                "assumptions. A fork cannot launch subagents or forks itself. Forks share your workspace (no worktree "
+                "of their own), so give each fork that writes files of its own: never let two running forks, or a "
+                "fork and you, edit the same file, and name the files it owns in its prompt. Forks leave their changes "
+                "uncommitted: when you report, say which fork changed which files, so later work does not mistake "
+                "them for the user's. wait=true (default) returns its report; "
                 "wait=false returns at once and the report arrives as a message when it finishes; you may end your "
                 "turn then, and you are called again when it does, so never sleep or poll to wait. The first "
                 "successful call also exposes the `message_session` tool, which sends a further message to a child you "

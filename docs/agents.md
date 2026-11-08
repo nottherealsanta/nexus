@@ -266,7 +266,11 @@ not a `session` agent value (a file brings its own prompt, which would break the
 shared prefix). Its description says: a copy of you with your full context so
 far does one task and reports back; cheap (shares your prompt cache); prefer a
 named agent for an independent opinion, since a fork inherits your assumptions;
-a fork cannot launch subagents or forks. `session` called with `agent: "fork"`
+a fork cannot launch subagents or forks; forks share your workspace, so give
+each fork that writes files of its own (never two running forks, or a fork and
+you, on one file) and name them in its prompt; forks leave changes
+uncommitted, so say in your report which fork changed which files, so later
+work does not mistake them for the user's. `session` called with `agent: "fork"`
 is refused with a pointer to the tool. A fork is a child whose request repeats
 the parent's prefix, so its first request can be a prompt-cache hit:
 
@@ -284,8 +288,9 @@ the parent's prefix, so its first request can be a prompt-cache hit:
   with the fixed marker `runtime.FORK_MARKER` (only the parent id varies, so
   forks from one point share the prefix up to their task):
   `[Nexus fork] You are a fork of session ‹id›: you have its context up to here.
-  Do only the task below, then reply with your report and stop. Do not continue
-  the parent's own work. You cannot launch subagents or forks: your `session`,
+  Do only the task below, then reply with your report and stop; the report lists
+  every file you changed. Do not continue the parent's own work, and edit only
+  the files your task gives you. You cannot launch subagents or forks: your `session`,
   `fork` and `message_session` calls are refused, so do the task yourself.` followed by a blank line and `Task: ‹prompt›`.
 - **No subagents at all:** the marker tells the fork it cannot launch any, and
   the daemon refuses its `session` and `fork` calls ("refused: a fork cannot
@@ -298,7 +303,12 @@ the parent's prefix, so its first request can be a prompt-cache hit:
 - **Parallel writes:** a fork has the parent's tools and workspace, write tools
   included, and no worktree of its own. A fork that edits while the parent (or
   another fork) edits the same files can conflict; the per-file lock serialises
-  single writes, not whole tasks.
+  single writes, not whole tasks. The tool description and the marker carry
+  the rules that follow from this: one owner per file across running forks,
+  named in the task; each fork reports the files it changed; the parent says
+  which fork changed what, since the changes stay uncommitted. Added
+  2026-11-08 after a session ran two forks on `nexus-tui/src/app.rs` and a
+  later session took one session's fork edits for user work.
 
 When to prefer a named agent: an independent second opinion, since a fork
 inherits the parent's assumptions and mistakes.
